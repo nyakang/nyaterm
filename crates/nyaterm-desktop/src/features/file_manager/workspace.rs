@@ -235,7 +235,7 @@ impl FileManagerWorkspace {
                 pane.disconnected = disconnected;
                 if disconnected {
                     pane.loading = false;
-                    pane.status = "Disconnected".to_string();
+                    pane.status = rust_i18n::t!("fileManager.disconnected").into_owned();
                 }
             }
         }

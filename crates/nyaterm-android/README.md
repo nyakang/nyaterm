@@ -11,6 +11,13 @@ Android helper IPC/process supervision. Transport owns terminal runtime, files
 owns file operations, and desktop owns GPUI presentation and view orchestration.
 Only `nyaterm-android-helper` links FFmpeg and parses scrcpy video/control bytes.
 
+The connection editor keeps the TCP host and numeric port on one row when space
+allows. Screen settings have their own category: maximum edge (128–2560 pixels),
+maximum FPS (1–120), and bit rate (100000–100000000 bits/s). Defaults are
+1280 pixels, 30 FPS and 8000000 bits/s. Screen sessions always enable the scrcpy
+control channel; there is no read-only mode. Desktop localizes Android labels,
+status codes and typed backend errors in all six supported languages.
+
 ## Bundled dependencies
 
 Release packages include ADB, its companions, the Android helper and LGPL dynamic

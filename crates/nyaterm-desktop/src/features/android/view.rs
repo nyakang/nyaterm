@@ -1,3 +1,4 @@
+use super::labels::AndroidError;
 use crate::features::NyaTermApp;
 use crate::widgets::small_button;
 use gpui::{
@@ -6,6 +7,7 @@ use gpui::{
 };
 use nyaterm_android::ipc::Control;
 use nyaterm_core::models::android::{AndroidViewKind, screen_point};
+use rust_i18n::t;
 use std::time::{Duration, Instant};
 
 impl NyaTermApp {
@@ -19,7 +21,11 @@ impl NyaTermApp {
                 .file_manager
                 .workspace(&format!("sftp-{id}"))
                 .map(|w| w.into_any_element())
-                .unwrap_or_else(|| div().child("Android files unavailable").into_any_element());
+                .unwrap_or_else(|| {
+                    div()
+                        .child(t!("android.filesUnavailable"))
+                        .into_any_element()
+                });
         }
         let app = cx.weak_entity();
         self.android
@@ -59,13 +65,13 @@ impl NyaTermApp {
                     changed = true;
                 }
                 Control::Fatal { code } => {
-                    screen.error = Some(code);
+                    screen.error = Some(AndroidError::Fatal(code));
                     screen.drag = false;
                     screen.physical_keys.clear();
                     changed = true;
                 }
                 Control::Disconnected => {
-                    screen.error = Some("Device disconnected; reconnect manually".into());
+                    screen.error = Some(AndroidError::Disconnected);
                     changed = true;
                 }
                 _ => {}
@@ -139,7 +145,7 @@ impl NyaTermApp {
             Ok(())
         };
         if result.is_err() {
-            screen.error = Some("Android texture upload failed".into());
+            screen.error = Some(AndroidError::TextureUpload);
             if let Some(handle) = &screen.handle {
                 handle.close();
             }
@@ -155,16 +161,13 @@ impl NyaTermApp {
     ) -> gpui::AnyElement {
         let palette = self.theme_palette();
         let Some(screen) = self.android.screens.get(&id) else {
-            return div().child("Android screen closed").into_any_element();
+            return div().child(t!("android.screenClosed")).into_any_element();
         };
         let texture = screen.texture;
         let dimensions = screen.dimensions;
         let geometry_generation = screen.generation;
         let zoom = screen.zoom;
-        let error = screen.error.clone();
-        let view_only = self
-            .android_config_for_session(&id)
-            .is_some_and(|c| c.screen.view_only);
+        let error = screen.error.as_ref().map(AndroidError::message);
         let mut toolbar = div()
             .flex()
             .items_center()
@@ -172,11 +175,15 @@ impl NyaTermApp {
             .h(px(36.))
             .px_2()
             .bg(rgb(palette.surface));
-        for (label, keycode) in [("Back", 4), ("Home", 3), ("Recent", 187)] {
+        for (action, label, keycode) in [
+            ("back", t!("android.back"), 4),
+            ("home", t!("android.home"), 3),
+            ("recent", t!("android.recent"), 187),
+        ] {
             let target = id.clone();
             toolbar = toolbar.child(small_button(
                 palette,
-                format!("android-{label}-{id}"),
+                format!("android-{action}-{id}"),
                 label,
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
@@ -194,7 +201,7 @@ impl NyaTermApp {
             .child(small_button(
                 palette,
                 format!("android-rotate-{id}"),
-                "Rotate",
+                t!("android.rotate"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
                     app.android_send(&rotate, Control::Rotate);
@@ -203,7 +210,7 @@ impl NyaTermApp {
             .child(small_button(
                 palette,
                 format!("android-fit-{id}"),
-                "Fit",
+                t!("android.fit"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
                     if let Some(screen) = app.android.screens.get_mut(&fit) {
@@ -215,7 +222,7 @@ impl NyaTermApp {
             .child(small_button(
                 palette,
                 format!("android-zoom-{id}"),
-                "Zoom",
+                t!("android.zoom"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
                     if let Some(screen) = app.android.screens.get_mut(&zoom_in) {
@@ -227,7 +234,7 @@ impl NyaTermApp {
             .child(small_button(
                 palette,
                 format!("android-paste-{id}"),
-                "Paste",
+                t!("menu.paste"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
@@ -244,19 +251,12 @@ impl NyaTermApp {
             .child(small_button(
                 palette,
                 format!("android-reconnect-{id}"),
-                "Reconnect",
+                t!("android.reconnect"),
                 cx.listener(move |app, _, window, cx| {
                     cx.stop_propagation();
                     app.reconnect_session(reconnect.clone(), window, cx);
                 }),
             ));
-        if view_only {
-            toolbar = toolbar.child(
-                div()
-                    .text_color(rgb(palette.text_dimmed))
-                    .child("Read only"),
-            );
-        }
         let app = cx.weak_entity();
         let bounds_id = id.clone();
         let image = canvas(
@@ -407,13 +407,6 @@ impl NyaTermApp {
             .into_any_element()
     }
     fn android_send(&self, id: &str, control: Control) {
-        if self
-            .android_config_for_session(id)
-            .is_some_and(|c| c.screen.view_only)
-            && !matches!(control, Control::ReleaseInputs)
-        {
-            return;
-        }
         if let Some(handle) = self.android.screens.get(id).and_then(|s| s.handle.as_ref()) {
             let _ = handle.send(control);
         }

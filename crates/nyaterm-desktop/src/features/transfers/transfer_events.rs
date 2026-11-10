@@ -371,7 +371,11 @@ impl NyaTermApp {
                             } else {
                                 TransferJobStatus::Failed
                             };
-                            job.detail = error;
+                            job.detail = if job.status == TransferJobStatus::Cancelled {
+                                t!("fileTransfer.cancelled").into_owned()
+                            } else {
+                                error
+                            };
                             if job.status == TransferJobStatus::Failed {
                                 self.notify_background_operation(
                                     "file-operation-error",

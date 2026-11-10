@@ -56,6 +56,7 @@ impl ConnectionKindTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionEditorSection {
     Basic,
+    AndroidScreen,
     Network,
     Terminal,
     Sftp,
@@ -73,7 +74,7 @@ pub(crate) enum ConnectionEditorSection {
 impl ConnectionEditorSection {
     pub(crate) fn for_kind(kind: ConnectionKindTab) -> &'static [Self] {
         match kind {
-            ConnectionKindTab::Adb => &[Self::Basic],
+            ConnectionKindTab::Adb => &[Self::Basic, Self::AndroidScreen],
             ConnectionKindTab::Ssh => &[
                 Self::Basic,
                 Self::Network,
@@ -105,6 +106,7 @@ impl ConnectionEditorSection {
     pub(crate) fn id(self) -> &'static str {
         match self {
             Self::Basic => "basic",
+            Self::AndroidScreen => "androidScreen",
             Self::Network => "network",
             Self::Terminal => "terminal",
             Self::Sftp => "sftp",
@@ -123,6 +125,7 @@ impl ConnectionEditorSection {
     pub(crate) fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
             Self::Basic => t!("dialog.editorSections.basic"),
+            Self::AndroidScreen => t!("android.screenSettings"),
             Self::Network => t!("dialog.editorSections.network"),
             Self::Terminal => t!("dialog.editorSections.terminal"),
             Self::Sftp => t!("dialog.editorSections.sftp"),
@@ -263,7 +266,7 @@ impl ConnectionEditorField {
     pub(crate) fn section(self) -> ConnectionEditorSection {
         match self {
             Self::AndroidMaxSize | Self::AndroidFps | Self::AndroidBitRate => {
-                ConnectionEditorSection::Basic
+                ConnectionEditorSection::AndroidScreen
             }
             Self::Name
             | Self::NewTag

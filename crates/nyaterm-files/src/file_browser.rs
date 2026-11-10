@@ -85,7 +85,9 @@ impl FileBrowserService {
                 name,
             ))),
             Self::Remote(service) => service.child_path(directory, name),
-            Self::Adb(service) => service.child_path(directory, name),
+            Self::Adb(service) => service
+                .child_path(directory, name)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -154,9 +156,9 @@ impl FileBrowserService {
                     }
                 }
             }
-            (Self::Adb(origin), Self::Adb(target)) => {
-                origin.validate_copy_destination(source, target, destination, directory)?
-            }
+            (Self::Adb(origin), Self::Adb(target)) => origin
+                .validate_copy_destination(source, target, destination, directory)
+                .map_err(crate::adb::file_error)?,
             _ => {}
         }
         Ok(())
@@ -172,7 +174,9 @@ impl FileBrowserService {
                 service.create_dir(resolve_local_path(&path.display_path), mode)
             }
             Self::Remote(service) => service.create_dir_remote_path(path, mode),
-            Self::Adb(service) => service.create_dir_remote_path(path, mode),
+            Self::Adb(service) => service
+                .create_dir_remote_path(path, mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -186,7 +190,9 @@ impl FileBrowserService {
                 service.create_file(resolve_local_path(&path.display_path), mode)
             }
             Self::Remote(service) => service.create_file_remote_path(path, mode),
-            Self::Adb(service) => service.create_file_remote_path(path, mode),
+            Self::Adb(service) => service
+                .create_file_remote_path(path, mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -231,7 +237,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.list_dir(resolve_local_path(path.as_ref())),
             Self::Remote(service) => service.list_dir(path),
-            Self::Adb(service) => service.list_dir_path(&RemoteFilePath::new(path.as_ref())),
+            Self::Adb(service) => service
+                .list_dir_path(&RemoteFilePath::new(path.as_ref()))
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -239,7 +247,7 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.list_dir(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.list_dir_path(path),
-            Self::Adb(service) => service.list_dir_path(path),
+            Self::Adb(service) => service.list_dir_path(path).map_err(crate::adb::file_error),
         }
     }
 
@@ -247,9 +255,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.create_dir(resolve_local_path(path.as_ref()), mode),
             Self::Remote(service) => service.create_dir_path(path, mode),
-            Self::Adb(service) => {
-                service.create_dir_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
-            }
+            Self::Adb(service) => service
+                .create_dir_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -257,9 +265,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.create_file(resolve_local_path(path.as_ref()), mode),
             Self::Remote(service) => service.create_file_path(path, mode),
-            Self::Adb(service) => {
-                service.create_file_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
-            }
+            Self::Adb(service) => service
+                .create_file_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -280,7 +288,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.delete(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.delete_remote_path(path),
-            Self::Adb(service) => service.delete_remote_path(path),
+            Self::Adb(service) => service
+                .delete_remote_path(path)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -295,7 +305,9 @@ impl FileBrowserService {
                 resolve_local_path(&new_path.display_path),
             ),
             Self::Remote(service) => service.rename_remote_paths(old_path, new_path),
-            Self::Adb(service) => service.rename_remote_paths(old_path, new_path),
+            Self::Adb(service) => service
+                .rename_remote_paths(old_path, new_path)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -311,7 +323,9 @@ impl FileBrowserService {
                 &resolve_local_path(&destination.display_path),
             ),
             Self::Remote(service) => service.rename_remote_paths_no_replace(source, destination),
-            Self::Adb(service) => service.rename_remote_paths_no_replace(source, destination),
+            Self::Adb(service) => service
+                .rename_remote_paths_no_replace(source, destination)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -322,7 +336,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.properties(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.remote_file_properties(path),
-            Self::Adb(service) => service.remote_file_properties(path),
+            Self::Adb(service) => service
+                .remote_file_properties(path)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -349,7 +365,9 @@ impl FileBrowserService {
                 service.read_text_file(resolve_local_path(&path.display_path), max_bytes)
             }
             Self::Remote(service) => service.read_text_file_path(path, max_bytes),
-            Self::Adb(service) => service.read_text_file_path(path, max_bytes),
+            Self::Adb(service) => service
+                .read_text_file_path(path, max_bytes)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -363,7 +381,9 @@ impl FileBrowserService {
                 service.read_text_document(resolve_local_path(&path.display_path), max_bytes)
             }
             Self::Remote(service) => service.read_text_document_path(path, max_bytes),
-            Self::Adb(service) => service.read_text_document_path(path, max_bytes),
+            Self::Adb(service) => service
+                .read_text_document_path(path, max_bytes)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -384,9 +404,9 @@ impl FileBrowserService {
             Self::Remote(service) => {
                 service.write_text_document_path(path, content, expected_revision, force)
             }
-            Self::Adb(service) => {
-                service.write_text_document_path(path, content, expected_revision, force)
-            }
+            Self::Adb(service) => service
+                .write_text_document_path(path, content, expected_revision, force)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -400,7 +420,9 @@ impl FileBrowserService {
                 service.read_file_bytes(resolve_local_path(&path.display_path), max_bytes)
             }
             Self::Remote(service) => service.read_file_bytes_path(path, max_bytes),
-            Self::Adb(service) => service.read_file_bytes_path(path, max_bytes),
+            Self::Adb(service) => service
+                .read_file_bytes_path(path, max_bytes)
+                .map_err(crate::adb::file_error),
         }
     }
 

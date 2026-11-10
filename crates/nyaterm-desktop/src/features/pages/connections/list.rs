@@ -1659,7 +1659,7 @@ pub(super) fn connection_detail_rows(
             device, directory, ..
         } => vec![
             copyable_value_detail_row("Android".into(), device.serial()),
-            copyable_text_detail_row("Directory".into(), directory),
+            copyable_text_detail_row(t!("android.directory").into_owned(), directory),
         ],
         nyaterm_core::ConnectionType::Ssh {
             host,

@@ -56,7 +56,8 @@ impl NyaTermApp {
         let service = match self.active_remote_file_service() {
             Ok(service) => service,
             Err(error) => {
-                self.shell.set_status(error.to_string());
+                self.shell
+                    .set_status(crate::features::android::labels::file_error_message(&error));
                 cx.notify();
                 return false;
             }
@@ -129,7 +130,7 @@ impl NyaTermApp {
                         },
                     )
                     .map(TransferJobOutput::Summary)
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| crate::features::android::labels::file_error_message(&error));
                 let _ = finished_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -211,7 +212,8 @@ impl NyaTermApp {
             if let Err(error) = &result {
                 log_sftp_upload_job_failure(&id, error);
             }
-            let result = result.map_err(|error| error.to_string());
+            let result = result
+                .map_err(|error| crate::features::android::labels::file_error_message(&error));
             let _ = finished_tx.unbounded_send(TransferJobResult {
                 id,
                 event: TransferJobEvent::Finished(result),
@@ -431,7 +433,8 @@ impl NyaTermApp {
             match result {
                 Ok(service) => service,
                 Err(error) => {
-                    self.shell.set_status(error.to_string());
+                    self.shell
+                        .set_status(crate::features::android::labels::file_error_message(&error));
                     cx.notify();
                     return;
                 }
@@ -528,7 +531,9 @@ impl NyaTermApp {
                                 },
                             )
                             .map(TransferJobOutput::Summary)
-                            .map_err(|error| error.to_string());
+                            .map_err(|error| {
+                                crate::features::android::labels::file_error_message(&error)
+                            });
                         let _ = finished_tx.unbounded_send(TransferJobResult {
                             id: job_id,
                             event: TransferJobEvent::Finished(result),
@@ -607,7 +612,9 @@ impl NyaTermApp {
                         if let Err(error) = &result {
                             log_sftp_upload_job_failure(&job_id, error);
                         }
-                        let result = result.map_err(|error| error.to_string());
+                        let result = result.map_err(|error| {
+                            crate::features::android::labels::file_error_message(&error)
+                        });
                         let _ = finished_tx.unbounded_send(TransferJobResult {
                             id: job_id,
                             event: TransferJobEvent::Finished(result),

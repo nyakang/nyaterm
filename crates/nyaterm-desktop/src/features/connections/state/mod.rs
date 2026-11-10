@@ -945,11 +945,6 @@ impl ConnectionFeatureState {
             draft.android_usb = value;
         }
     }
-    pub(in crate::features) fn set_android_editor_read_only(&mut self, value: bool) {
-        if let Some(draft) = self.editor.draft.as_mut() {
-            draft.android_screen.view_only = value;
-        }
-    }
 
     pub fn begin_editor_agent_preview(&mut self) -> Option<(u64, ConnectionEditorState)> {
         let editor = self.editor.draft.as_mut()?;
@@ -2462,7 +2457,26 @@ fn connection_editor_number_options(field: ConnectionEditorField) -> Option<NyaN
         ConnectionEditorField::Port => Some(
             NyaNumberInputOptions::default()
                 .range(1.0, 65_535.0)
-                .step(1.0),
+                .step(1.0)
+                .decimal_places(0),
+        ),
+        ConnectionEditorField::AndroidMaxSize => Some(
+            NyaNumberInputOptions::default()
+                .range(128.0, 2560.0)
+                .step(1.0)
+                .decimal_places(0),
+        ),
+        ConnectionEditorField::AndroidFps => Some(
+            NyaNumberInputOptions::default()
+                .range(1.0, 120.0)
+                .step(1.0)
+                .decimal_places(0),
+        ),
+        ConnectionEditorField::AndroidBitRate => Some(
+            NyaNumberInputOptions::default()
+                .range(100_000.0, 100_000_000.0)
+                .step(100_000.0)
+                .decimal_places(0),
         ),
         ConnectionEditorField::SftpShellDetectionTimeout => Some(
             NyaNumberInputOptions::default()

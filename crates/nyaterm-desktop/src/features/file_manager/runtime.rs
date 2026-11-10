@@ -57,7 +57,9 @@ impl NyaTermApp {
                             endpoint,
                             path,
                             snapshot,
-                            result: Err(error.to_string()),
+                            result: Err(crate::features::android::labels::file_error_message(
+                                &error,
+                            )),
                         },
                         show_hidden,
                     );
@@ -73,19 +75,33 @@ impl NyaTermApp {
             move |_| {
                 service.list_dir_path(&path).map_err(|error| {
                     let missing = error.chain().any(|cause| {
-                        cause
+                        matches!(
+                            cause.downcast_ref::<nyaterm_android::error::AdbError>(),
+                            Some(nyaterm_android::error::AdbError::FileMissing)
+                        ) || cause
                             .downcast_ref::<std::io::Error>()
                             .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                    }) || error.to_string().contains("No such file")
-                        || error.to_string().contains("no such file");
-                    (missing, error.to_string())
+                    }) || (!matches!(service, FileBrowserService::Adb(_))
+                        && (error.to_string().contains("No such file")
+                            || error.to_string().contains("no such file")));
+                    (
+                        missing,
+                        crate::features::android::labels::file_error_message(&error),
+                    )
                 })
             }
         });
         cx.spawn(async move |this, cx| {
             let result = match await_blocking_job(task).await {
                 Ok(result) => result,
-                Err(error) => Err((false, error)),
+                Err(error) => Err((
+                    false,
+                    if matches!(endpoint, PaneEndpoint::Adb(_)) {
+                        t!("android.errors.operationFailed").into_owned()
+                    } else {
+                        error
+                    },
+                )),
             };
             let missing = result.as_ref().err().is_some_and(|(missing, _)| *missing);
             let success = result.is_ok();
@@ -141,7 +157,7 @@ impl NyaTermApp {
                     let pane = workspace.pane_mut(pane_id);
                     pane.disconnected = true;
                     pane.loading = false;
-                    pane.error = Some(error.to_string());
+                    pane.error = Some(crate::features::android::labels::file_error_message(&error));
                     cx.notify();
                 });
                 return;
@@ -158,7 +174,9 @@ impl NyaTermApp {
         let task = self
             .blocking_jobs
             .submit_task("file-manager-home", move |_| {
-                service.home_dir().map_err(|error| error.to_string())
+                service
+                    .home_dir()
+                    .map_err(|error| crate::features::android::labels::file_error_message(&error))
             });
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task).await.and_then(|result| result);

@@ -202,6 +202,35 @@ mod tests {
     }
 
     #[test]
+    fn every_android_label_and_error_is_translated_in_all_six_catalogs() {
+        let english = flatten(EN_JSON);
+        let keys: Vec<_> = english
+            .keys()
+            .filter(|key| key.starts_with("android."))
+            .collect();
+        assert!(keys.len() >= 60);
+        for (locale, json) in CATALOGS {
+            let catalog = flatten(json);
+            for key in &keys {
+                let value = catalog
+                    .get(*key)
+                    .unwrap_or_else(|| panic!("{locale}: missing {key}"));
+                assert!(!value.trim().is_empty(), "{locale}: {key}");
+                assert_eq!(
+                    placeholder_names(value),
+                    placeholder_names(&english[*key]),
+                    "{locale}: {key}"
+                );
+                assert_eq!(
+                    rust_i18n::t!(key.as_str(), locale = *locale),
+                    value.as_str(),
+                    "{locale}: {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn resolves_tauri_locale_keys_and_normalizes_chinese_ids() {
         assert_eq!(text("en", "menu.file"), "File");
         assert_eq!(text("zh-CN", "menu.file"), "文件");

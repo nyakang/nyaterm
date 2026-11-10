@@ -18,7 +18,10 @@ use crate::models::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConnectionEditorValidationError {
     HostRequired,
-    AndroidSettings(&'static str),
+    AndroidSettings(nyaterm_core::models::android::AndroidScreenValidationError),
+    AndroidDeviceRequired,
+    AndroidHostInvalid,
+    AndroidDirectoryInvalid,
     PortInvalid,
     TelnetKeepAliveIntervalInvalid,
     UsernameRequired,
@@ -681,7 +684,11 @@ pub(super) fn build_saved_connection_from_editor(
         ConnectionKindTab::Adb => {
             let host = editor.host.trim().to_string();
             if host.is_empty() {
-                return Err(ConnectionEditorValidationError::HostRequired);
+                return Err(if editor.android_usb {
+                    ConnectionEditorValidationError::AndroidDeviceRequired
+                } else {
+                    ConnectionEditorValidationError::AndroidHostInvalid
+                });
             }
             let device = if editor.android_usb {
                 nyaterm_core::models::android::AdbDeviceSelector::Usb { serial: host }
@@ -691,16 +698,20 @@ pub(super) fn build_saved_connection_from_editor(
                     port: parse_port(&editor.port)?,
                 }
             };
-            device
-                .validate()
-                .map_err(|_| ConnectionEditorValidationError::HostRequired)?;
+            device.validate().map_err(|_| {
+                if editor.android_usb {
+                    ConnectionEditorValidationError::AndroidDeviceRequired
+                } else {
+                    ConnectionEditorValidationError::AndroidHostInvalid
+                }
+            })?;
             let directory = if editor.working_dir.is_empty() {
                 "/sdcard/".into()
             } else {
                 editor.working_dir.clone()
             };
             if !directory.starts_with('/') || directory.contains('\0') {
-                return Err(ConnectionEditorValidationError::HostRequired);
+                return Err(ConnectionEditorValidationError::AndroidDirectoryInvalid);
             }
             editor
                 .android_screen
@@ -1102,6 +1113,27 @@ mod tests {
         ConnectionEditorValidationError, build_saved_connection_from_editor,
         connection_editor_from_saved, validate_editor_account,
     };
+
+    #[test]
+    fn android_editor_round_trips_usb_tcp_and_screen_settings() {
+        for device in [
+            serde_json::json!({"kind":"usb","serial":"fixture-usb"}),
+            serde_json::json!({"kind":"tcp","host":"example.test","port":5555}),
+        ] {
+            let original: SavedConnection = serde_json::from_value(serde_json::json!({
+                "id":"android", "name":"Android", "type":"adb", "device":device,
+                "directory":"/sdcard/", "screen":{"max_size":1920,"max_fps":60,"bit_rate":12_000_000}
+            })).unwrap();
+            let editor = connection_editor_from_saved(original.clone(), false);
+            let saved = build_saved_connection_from_editor(&editor).unwrap();
+            assert_eq!(saved.config, original.config);
+            let reopened = connection_editor_from_saved(saved, false);
+            assert_eq!(reopened.android_screen, editor.android_screen);
+            assert_eq!(reopened.android_usb, editor.android_usb);
+            assert_eq!(reopened.host, editor.host);
+            assert_eq!(reopened.port, editor.port);
+        }
+    }
 
     #[test]
     fn connection_editor_round_trip_preserves_icon() {

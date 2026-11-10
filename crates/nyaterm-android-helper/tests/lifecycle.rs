@@ -25,7 +25,7 @@ fn hello(child: &mut Child) {
     ));
 }
 #[test]
-fn handshake_idle_video_heartbeat_and_normal_disconnect() {
+fn handshake_control_input_idle_video_heartbeat_and_normal_disconnect() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -39,6 +39,16 @@ fn handshake_idle_video_heartbeat_and_normal_disconnect() {
         socket
             .write_all(&[0x80, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 8])
             .unwrap();
+        let (mut control, _) = listener.accept().unwrap();
+        control
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut key = [0; 14];
+        control.read_exact(&mut key).unwrap();
+        assert_eq!(key, [0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // Disconnect releases held keys through the always-enabled control channel.
+        control.read_exact(&mut key).unwrap();
+        assert_eq!(key, [0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]);
         let _ = socket.read(&mut [0; 1]);
     });
     let mut child = spawn();
@@ -54,10 +64,7 @@ fn handshake_idle_video_heartbeat_and_normal_disconnect() {
         &Packet::Control(Control::Connect {
             binding,
             endpoint,
-            settings: AndroidScreenSettings {
-                view_only: true,
-                ..Default::default()
-            },
+            settings: AndroidScreenSettings::default(),
         }),
     )
     .unwrap();
@@ -78,6 +85,16 @@ fn handshake_idle_video_heartbeat_and_normal_disconnect() {
         read_packet(child.stdout.as_mut().unwrap()).unwrap(),
         Some(Packet::Control(Control::Pong { sequence: 17 }))
     ));
+    write_packet(
+        child.stdin.as_mut().unwrap(),
+        &Packet::Control(Control::Key {
+            action: 0,
+            keycode: 4,
+            repeat: 0,
+            metastate: 0,
+        }),
+    )
+    .unwrap();
     write_packet(
         child.stdin.as_mut().unwrap(),
         &Packet::Control(Control::Disconnect),

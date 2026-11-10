@@ -93,7 +93,7 @@ impl NyaTermApp {
                 let result = service
                     .list_dir_path(&path)
                     .map(TransferJobOutput::TreeEntries)
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| crate::features::android::labels::file_error_message(&error));
                 let _ = tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),

@@ -142,7 +142,7 @@ impl SessionManager {
             &config.binding,
             self.event_queue.clone(),
         )
-        .map_err(|source| SessionError::Worker(std::io::Error::other(source.to_string())))?;
+        .map_err(SessionError::Adb)?;
         self.sessions
             .lock()
             .map_err(|_| SessionError::LockPoisoned)?

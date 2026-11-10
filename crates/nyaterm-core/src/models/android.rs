@@ -41,7 +41,6 @@ pub struct AndroidScreenSettings {
     pub max_size: u32,
     pub max_fps: u32,
     pub bit_rate: u32,
-    pub view_only: bool,
 }
 
 impl Default for AndroidScreenSettings {
@@ -50,18 +49,30 @@ impl Default for AndroidScreenSettings {
             max_size: 1280,
             max_fps: 30,
             bit_rate: 8_000_000,
-            view_only: false,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AndroidScreenValidationError {
+    #[error("Android screen maximum edge must be between 128 and 2560")]
+    MaxSize,
+    #[error("Android screen maximum FPS must be between 1 and 120")]
+    MaxFps,
+    #[error("Android screen bit rate must be between 100000 and 100000000")]
+    BitRate,
+}
+
 impl AndroidScreenSettings {
-    pub fn validate(self) -> Result<(), &'static str> {
-        if !(128..=2560).contains(&self.max_size)
-            || !(1..=120).contains(&self.max_fps)
-            || !(100_000..=100_000_000).contains(&self.bit_rate)
-        {
-            return Err("Android screen settings are out of range");
+    pub fn validate(self) -> Result<(), AndroidScreenValidationError> {
+        if !(128..=2560).contains(&self.max_size) {
+            return Err(AndroidScreenValidationError::MaxSize);
+        }
+        if !(1..=120).contains(&self.max_fps) {
+            return Err(AndroidScreenValidationError::MaxFps);
+        }
+        if !(100_000..=100_000_000).contains(&self.bit_rate) {
+            return Err(AndroidScreenValidationError::BitRate);
         }
         Ok(())
     }
@@ -232,5 +243,99 @@ mod compatibility_tests {
             port: 5555,
         };
         assert_eq!(selector.serial(), "[::1]:5555");
+    }
+}
+
+#[cfg(test)]
+mod screen_settings_tests {
+    use crate::models::SavedConnection;
+    use crate::models::android::{AndroidScreenSettings, AndroidScreenValidationError};
+    use serde_json::json;
+
+    #[test]
+    fn screen_settings_validate_each_boundary_and_identify_the_invalid_field() {
+        for settings in [
+            AndroidScreenSettings {
+                max_size: 128,
+                max_fps: 1,
+                bit_rate: 100_000,
+            },
+            AndroidScreenSettings {
+                max_size: 2560,
+                max_fps: 120,
+                bit_rate: 100_000_000,
+            },
+        ] {
+            assert_eq!(settings.validate(), Ok(()));
+        }
+        for (settings, expected) in [
+            (
+                AndroidScreenSettings {
+                    max_size: 127,
+                    ..Default::default()
+                },
+                AndroidScreenValidationError::MaxSize,
+            ),
+            (
+                AndroidScreenSettings {
+                    max_size: 2561,
+                    ..Default::default()
+                },
+                AndroidScreenValidationError::MaxSize,
+            ),
+            (
+                AndroidScreenSettings {
+                    max_fps: 0,
+                    ..Default::default()
+                },
+                AndroidScreenValidationError::MaxFps,
+            ),
+            (
+                AndroidScreenSettings {
+                    max_fps: 121,
+                    ..Default::default()
+                },
+                AndroidScreenValidationError::MaxFps,
+            ),
+            (
+                AndroidScreenSettings {
+                    bit_rate: 99_999,
+                    ..Default::default()
+                },
+                AndroidScreenValidationError::BitRate,
+            ),
+            (
+                AndroidScreenSettings {
+                    bit_rate: 100_000_001,
+                    ..Default::default()
+                },
+                AndroidScreenValidationError::BitRate,
+            ),
+        ] {
+            assert_eq!(settings.validate(), Err(expected));
+        }
+    }
+
+    #[test]
+    fn android_connections_drop_removed_prerelease_flag_and_preserve_future_fields() {
+        for device in [
+            json!({"kind":"usb","serial":"fixture-usb"}),
+            json!({"kind":"tcp","host":"example.test","port":5555}),
+        ] {
+            let connection: SavedConnection = serde_json::from_value(json!({
+                "id":"android", "name":"Android", "type":"adb", "device":device,
+                "screen":{"view_only":true,"future_option":"kept"}, "future_root":{"x":1}
+            }))
+            .unwrap();
+            let serialized = serde_json::to_value(&connection).unwrap();
+            assert!(serialized["screen"].get("view_only").is_none());
+            assert_eq!(serialized["screen"]["max_size"], 1280);
+            assert_eq!(serialized["screen"]["max_fps"], 30);
+            assert_eq!(serialized["screen"]["bit_rate"], 8_000_000);
+            assert_eq!(serialized["screen"]["future_option"], "kept");
+            assert_eq!(serialized["future_root"]["x"], 1);
+            let loaded: SavedConnection = serde_json::from_value(serialized).unwrap();
+            assert_eq!(loaded, connection);
+        }
     }
 }

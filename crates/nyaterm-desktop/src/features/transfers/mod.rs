@@ -179,7 +179,7 @@ impl NyaTermApp {
         match self.session.file_browser_backend_for_session(session_id) {
             Some(nyaterm_files::file_browser::FileBrowserBackendKind::Adb) => self
                 .android_config_for_session(session_id)
-                .ok_or_else(|| anyhow::anyhow!("Android device disconnected"))
+                .ok_or_else(|| anyhow::Error::new(nyaterm_android::error::AdbError::Offline))
                 .and_then(|config| self.android.file_service(&config.device_key))
                 .map(FileBrowserService::Adb),
             Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local) => {

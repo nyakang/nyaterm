@@ -63,15 +63,16 @@ pub(super) fn session_info_from_metadata(
         | SessionLaunchConfig::AdbFiles(config)
         | SessionLaunchConfig::AdbScreen(config) => SessionInfo {
             id: session_id.to_string(),
-            name: format!(
-                "{} · {}",
-                config.name,
-                match metadata.launch_config {
-                    SessionLaunchConfig::AdbShell(_) => "Shell",
-                    SessionLaunchConfig::AdbFiles(_) => "Files",
-                    _ => "Screen",
+            name: match metadata.launch_config {
+                SessionLaunchConfig::AdbShell(_) => {
+                    rust_i18n::t!("android.shellTitle", name = config.name)
                 }
-            ),
+                SessionLaunchConfig::AdbFiles(_) => {
+                    rust_i18n::t!("android.filesTitle", name = config.name)
+                }
+                _ => rust_i18n::t!("android.screenTitle", name = config.name),
+            }
+            .into_owned(),
             kind: match metadata.launch_config {
                 SessionLaunchConfig::AdbShell(_) => SessionKind::AdbShell,
                 SessionLaunchConfig::AdbFiles(_) => SessionKind::AdbFiles,

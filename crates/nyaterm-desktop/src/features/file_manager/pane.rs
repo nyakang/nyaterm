@@ -266,7 +266,11 @@ impl BrowserPaneState {
         self.history_target = None;
         self.restore_navigation(snapshot);
         self.loading = false;
-        self.status = format!("directory load failed: {error}");
+        self.status = if matches!(endpoint, PaneEndpoint::Adb(_)) {
+            rust_i18n::t!("android.directoryLoadFailed", error = error).into_owned()
+        } else {
+            format!("directory load failed: {error}")
+        };
         self.error = Some(error);
         true
     }

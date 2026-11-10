@@ -75,7 +75,7 @@ impl AdbTerminalTransport {
                     if result.is_err() {
                         writer_events.push(SessionEvent::Error {
                             session_id: writer_id.clone(),
-                            message: "Android shell input failed".into(),
+                            message: "AndroidShellInputFailed".into(),
                         });
                         writer_stop.store(true, Ordering::Release);
                         let _ = writer.shutdown(Shutdown::Both);
@@ -91,12 +91,12 @@ impl AdbTerminalTransport {
             move || {
                 let mut decoder = ShellDecoder::default();
                 let mut bytes = [0; 8192];
-                let mut reason = "Android device disconnected".to_owned();
+                let mut reason = "AndroidDeviceDisconnected".to_owned();
                 'read: while !reader_stop.load(Ordering::Acquire) {
                     match reader.read(&mut bytes) {
                         Ok(0) => {
                             if decoder.finish().is_err() {
-                                reason = "Android shell stream was truncated".into();
+                                reason = "AndroidShellTruncated".into();
                             }
                             break;
                         }
@@ -109,21 +109,18 @@ impl AdbTerminalTransport {
                                             data: packet.data,
                                         }),
                                         EXIT => {
-                                            reason = format!(
-                                                "Android shell exited ({})",
-                                                packet.data[0]
-                                            );
+                                            reason = format!("AndroidShellExit:{}", packet.data[0]);
                                             break 'read;
                                         }
                                         _ => {
-                                            reason = "Android shell protocol failed".into();
+                                            reason = "AndroidShellProtocolFailed".into();
                                             break 'read;
                                         }
                                     }
                                 }
                             }
                             Err(_) => {
-                                reason = "Android shell protocol failed".into();
+                                reason = "AndroidShellProtocolFailed".into();
                                 break;
                             }
                         },
@@ -300,7 +297,7 @@ mod tests {
                 match event {
                     SessionEvent::Output { data, .. } => received.extend(data),
                     SessionEvent::Exited { reason, .. } => {
-                        assert!(reason.ends_with("(7)"));
+                        assert_eq!(reason, "AndroidShellExit:7");
                         exited = true;
                     }
                     _ => {}

@@ -971,7 +971,7 @@ impl NyaTermApp {
         match kind {
             Some(SessionKind::AdbShell | SessionKind::AdbFiles | SessionKind::AdbScreen) => {
                 self.shell
-                    .set_status("Upload using the Android file browser".to_string());
+                    .set_status(rust_i18n::t!("android.uploadUsingBrowser").into_owned());
                 cx.notify();
             }
             Some(SessionKind::LocalPty) | None => {

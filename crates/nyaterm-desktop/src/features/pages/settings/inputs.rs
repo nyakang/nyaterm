@@ -127,7 +127,7 @@ impl NyaTermApp {
                 self.ensure_text_input(
                     "settings.android.adb-path",
                     &self.settings.summary().android_adb_path.clone(),
-                    TextInputSetup::placeholder("Bundled ADB"),
+                    TextInputSetup::placeholder(rust_i18n::t!("android.bundledAdb")),
                     cx,
                 );
             }

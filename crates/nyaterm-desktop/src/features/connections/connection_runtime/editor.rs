@@ -103,7 +103,18 @@ impl NyaTermApp {
             ConnectionEditorValidationError::MissingAccount => {
                 t!("passwordManager.missingAccount").into()
             }
-            ConnectionEditorValidationError::AndroidSettings(message) => message.to_string(),
+            ConnectionEditorValidationError::AndroidSettings(error) => {
+                crate::features::android::labels::screen_validation_message(*error)
+            }
+            ConnectionEditorValidationError::AndroidDeviceRequired => {
+                t!("android.errors.deviceRequired").into()
+            }
+            ConnectionEditorValidationError::AndroidHostInvalid => {
+                t!("android.errors.hostInvalid").into()
+            }
+            ConnectionEditorValidationError::AndroidDirectoryInvalid => {
+                t!("android.errors.directoryInvalid").into()
+            }
             ConnectionEditorValidationError::HostRequired => t!("dialog.hostRequired").into(),
             ConnectionEditorValidationError::PortInvalid => t!("dialog.portInvalid").into(),
             ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {

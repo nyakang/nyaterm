@@ -69,8 +69,16 @@ impl NyaTermApp {
             transfer_tx.clone(),
             move || {
                 let result = resolve_initial_directory(
-                    || service.home_dir().map_err(|error| error.to_string()),
-                    |path| service.list_dir(path).map_err(|error| error.to_string()),
+                    || {
+                        service.home_dir().map_err(|error| {
+                            crate::features::android::labels::file_error_message(&error)
+                        })
+                    },
+                    |path| {
+                        service.list_dir(path).map_err(|error| {
+                            crate::features::android::labels::file_error_message(&error)
+                        })
+                    },
                 );
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
@@ -149,7 +157,7 @@ impl NyaTermApp {
                         remote_path,
                         entries,
                     })
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| crate::features::android::labels::file_error_message(&error));
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -254,7 +262,7 @@ impl NyaTermApp {
                         },
                         None => TransferJobOutput::Entries(entries),
                     })
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| crate::features::android::labels::file_error_message(&error));
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -316,7 +324,9 @@ impl NyaTermApp {
             transfer_tx.clone(),
             move || {
                 let result = (|| {
-                    let home_dir = service.home_dir().map_err(|error| error.to_string())?;
+                    let home_dir = service.home_dir().map_err(|error| {
+                        crate::features::android::labels::file_error_message(&error)
+                    })?;
                     Ok(TransferJobOutput::HomeDir(home_dir))
                 })();
                 let _ = transfer_tx.unbounded_send(TransferJobResult {

@@ -573,7 +573,7 @@ impl NyaTermApp {
             | SessionLaunchConfig::AdbFiles(_)
             | SessionLaunchConfig::AdbScreen(_) => {
                 self.shell
-                    .set_status("Android saved connection is unavailable");
+                    .set_status(rust_i18n::t!("android.connectionUnavailable").into_owned());
             }
             SessionLaunchConfig::Local(mut config) => {
                 self.apply_desired_geometry_to_local_config(&mut config);

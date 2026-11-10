@@ -158,7 +158,9 @@ impl ScreenHandle {
         settings: AndroidScreenSettings,
         helper: &Path,
     ) -> AdbResult<Self> {
-        settings.validate().map_err(AdbError::Protocol)?;
+        settings
+            .validate()
+            .map_err(|_| AdbError::Protocol("screen settings"))?;
         if hex::encode(Sha256::digest(SERVER)) != SCRCPY_SHA256 {
             return Err(AdbError::Protocol("server checksum"));
         }
@@ -205,7 +207,7 @@ impl ScreenHandle {
             .map_err(|_| AdbError::Protocol("forward port"))?;
         let mut command = b"echo $$; CLASSPATH=".to_vec();
         command.extend_from_slice(&quote(resources.cleanup.remote_path.as_bytes())?);
-        command.extend_from_slice(format!(" exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={} tunnel_forward=true audio=false control={} video_codec=h264 max_size={} max_fps={} video_bit_rate={} clipboard_autosync=false cleanup=false power_on=false log_level=error", resources.cleanup.scid, !settings.view_only, settings.max_size, settings.max_fps, settings.bit_rate).as_bytes());
+        command.extend_from_slice(format!(" exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={} tunnel_forward=true audio=false control=true video_codec=h264 max_size={} max_fps={} video_bit_rate={} clipboard_autosync=false cleanup=false power_on=false log_level=error", resources.cleanup.scid, settings.max_size, settings.max_fps, settings.bit_rate).as_bytes());
         let mut server = open_shell(&binding, &command, false)?;
         let mut decoder = ShellDecoder::default();
         let mut buffer = [0; 4096];

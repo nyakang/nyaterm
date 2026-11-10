@@ -198,7 +198,8 @@ impl NyaTermApp {
         let (source_service, target_service) = match services {
             Ok(services) => services,
             Err(error) => {
-                self.shell.set_status(error.to_string());
+                self.shell
+                    .set_status(crate::features::android::labels::file_error_message(&error));
                 cx.notify();
                 return;
             }
@@ -295,17 +296,40 @@ impl NyaTermApp {
         self.submit_bulk_transfer_job("file-operation", id.clone(), tx.clone(), move || {
             let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
             let target_session_id = context.request.endpoints_target_session_id();
-            let result = context.request.into_service_request().and_then(|request| {
-                execute_file_operation(
-                    request,
-                    source_service,
-                    target_service,
-                    control,
-                    options,
-                    move |value| progress.send(value),
-                )
-                .map(|result| file_operation_output(result, target_session_id))
-            });
+            let android = matches!(
+                source_service,
+                nyaterm_files::file_browser::FileBrowserService::Adb(_)
+            ) || matches!(
+                target_service,
+                nyaterm_files::file_browser::FileBrowserService::Adb(_)
+            );
+            let cancelled = control.clone();
+            let result = context
+                .request
+                .into_service_request()
+                .map_err(anyhow::Error::msg)
+                .and_then(|request| {
+                    execute_file_operation(
+                        request,
+                        source_service,
+                        target_service,
+                        control,
+                        options,
+                        move |value| progress.send(value),
+                    )
+                    .map(|result| file_operation_output(result, target_session_id))
+                })
+                .map_err(|error| {
+                    if cancelled.is_cancelled() {
+                        nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED.into()
+                    } else if android {
+                        crate::features::android::labels::file_error_message(
+                            &error.context(nyaterm_files::adb::AdbFileError),
+                        )
+                    } else {
+                        error.to_string()
+                    }
+                });
             let _ = tx.unbounded_send(TransferJobResult {
                 id,
                 event: TransferJobEvent::Finished(result),

@@ -98,7 +98,7 @@ impl PromisedFileProvider for RemoteDownloadProvider {
                 Ok(summary)
             }))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("drag download failed")))
-            .map_err(|error| error.to_string());
+            .map_err(|error| crate::features::android::labels::file_error_message(&error));
         match result {
             Ok(summary) => {
                 send(TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(

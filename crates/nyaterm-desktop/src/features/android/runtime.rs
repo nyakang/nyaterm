@@ -1,3 +1,4 @@
+use super::labels::AndroidError;
 use super::{AndroidView, DeviceLease, ScreenState};
 use crate::features::file_manager::{FileManagerSeed, FileManagerWorkspace, PaneEndpoint, PaneId};
 use crate::features::{
@@ -14,6 +15,7 @@ use nyaterm_core::models::android::AndroidViewKind;
 use nyaterm_core::{AiExecutionProfile, ConnectionType, SavedConnection, uuid};
 use nyaterm_files::adb::AdbFileService;
 use nyaterm_files::sftp::RemoteFilePath;
+use rust_i18n::t;
 use std::sync::Arc;
 
 impl NyaTermApp {
@@ -68,13 +70,10 @@ impl NyaTermApp {
         let task_key = key.clone();
         let task = self.blocking_jobs.submit_task("android-bind", move |_| {
             let client =
-                AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))
-                    .map_err(|e| e.to_string())?;
-            tracker.ensure(&client).map_err(|e| e.to_string())?;
-            let binding = client
-                .bind(&device, generation)
-                .map_err(|e| e.to_string())?;
-            Ok::<_, String>(AndroidSessionConfig {
+                AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?;
+            tracker.ensure(&client)?;
+            let binding = client.bind(&device, generation)?;
+            Ok::<_, nyaterm_android::error::AdbError>(AndroidSessionConfig {
                 name,
                 device_key: task_key,
                 device,
@@ -87,10 +86,10 @@ impl NyaTermApp {
             })
         });
         self.shell
-            .set_status(format!("Connecting Android · {}", connection.name));
+            .set_status(t!("android.connecting", name = connection.name).into_owned());
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = await_blocking_job(task).await.and_then(|v| v);
+            let result = await_blocking_job(task).await.map_err(|_| AndroidError::JobFailed).and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
                 if app.android.pending.get(&key) != Some(&generation) {
                     return;
@@ -169,7 +168,7 @@ impl NyaTermApp {
                             app.open_android_view(config, AndroidViewKind::Shell, options, cx);
                         }
                     }
-                    Err(error) => app.shell.set_status(error),
+                    Err(error) => app.shell.set_status(error.message()),
                 }
                 cx.notify();
             });
@@ -198,7 +197,7 @@ impl NyaTermApp {
         }
         if kind == AndroidViewKind::Shell {
             self.begin_background_session_start(
-                format!("{} · Shell", config.name),
+                t!("android.shellTitle", name = config.name).into_owned(),
                 SessionLaunchConfig::AdbShell(config.clone()),
                 Some(config.device_key),
                 AiExecutionProfile::SendOnly,
@@ -314,10 +313,12 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("android-screen-start", move |_| {
                 ScreenHandle::start(config.client, config.binding, config.screen)
-                    .map_err(|e| e.to_string())
             });
         cx.spawn(async move |this, cx| {
-            let result = await_blocking_job(task).await.and_then(|v| v);
+            let result = await_blocking_job(task)
+                .await
+                .map_err(|_| AndroidError::JobFailed)
+                .and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
                 let valid = app
                     .android
@@ -461,15 +462,17 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("android-discovery", move |_| {
                 let client =
-                    AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))
-                        .map_err(|e| e.to_string())?;
-                tracker.ensure(&client).map_err(|e| e.to_string())
+                    AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?;
+                tracker.ensure(&client)
             });
         cx.spawn(async move |this, cx| {
-            let result = await_blocking_job(task).await.and_then(|v| v);
+            let result = await_blocking_job(task)
+                .await
+                .map_err(|_| AndroidError::JobFailed)
+                .and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
                 if let Err(error) = result {
-                    app.shell.set_status(error);
+                    app.shell.set_status(error.message());
                 }
                 cx.notify();
             });

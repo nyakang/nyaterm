@@ -54,10 +54,8 @@ impl SettingsPanel {
             .gap_3()
             .child(settings_form_row(
                 palette,
-                "ADB executable",
-                Some(SharedString::from(
-                    "Leave empty to use bundled ADB. An explicit path must be valid.",
-                )),
+                rust_i18n::t!("android.adbExecutable"),
+                Some(SharedString::from(rust_i18n::t!("android.adbPathHint"))),
                 self.existing_text_input_box("settings.android.adb-path", false),
             ))
             .child(settings_form_section(

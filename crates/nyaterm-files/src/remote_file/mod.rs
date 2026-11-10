@@ -1272,7 +1272,7 @@ impl FileCopyRequest {
         if matches!(self.source, FileTransferEndpoint::Adb { .. })
             || matches!(self.destination, FileTransferEndpoint::Adb { .. })
         {
-            return crate::adb::copy::execute(self, progress);
+            return crate::adb::copy::execute(self, progress).map_err(crate::adb::file_error);
         }
         let browser_endpoint = |endpoint: &FileTransferEndpoint| match endpoint {
             FileTransferEndpoint::Local(path) => (

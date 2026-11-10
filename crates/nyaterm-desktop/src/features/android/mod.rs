@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
+pub(in crate::features) mod labels;
 mod runtime;
 mod surface;
 #[cfg(test)]
@@ -37,7 +38,7 @@ pub(super) struct ScreenState {
     generation: u64,
     dimensions: (u32, u32),
     drag: bool,
-    error: Option<String>,
+    error: Option<labels::AndroidError>,
     last_render: Instant,
     zoom: f32,
 }
@@ -81,13 +82,13 @@ impl AndroidFeatureState {
         self.devices
             .get(key)
             .map(|device| device.files.clone())
-            .ok_or_else(|| anyhow::anyhow!("reconnect the Android device before browsing"))
+            .ok_or_else(|| anyhow::Error::new(nyaterm_android::error::AdbError::Offline))
     }
     pub(in crate::features) fn device_name(&self, key: &str) -> String {
         self.devices
             .get(key)
             .map(|d| d.config.name.clone())
-            .unwrap_or_else(|| "Android · disconnected".into())
+            .unwrap_or_else(|| rust_i18n::t!("android.disconnectedTitle").into_owned())
     }
     pub(in crate::features) fn kind(&self, id: &str) -> Option<AndroidViewKind> {
         self.views.get(id).map(|v| v.kind)

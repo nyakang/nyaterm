@@ -35,6 +35,7 @@ fn run(
         SftpPathTransferOptions::new(SftpDuplicatePolicy::Skip, None, Default::default()),
         |_| {},
     )
+    .map_err(|error| error.to_string())
 }
 
 fn fixture(label: &str) -> TestTempDir {
@@ -142,7 +143,8 @@ fn cancelled_delete_keeps_file_and_a_fresh_retry_deletes_it() {
             Default::default(),
             |_| {},
         )
-        .unwrap_err(),
+        .unwrap_err()
+        .to_string(),
         crate::sftp::SFTP_TRANSFER_CANCELLED,
     );
     assert_eq!(fs::read(&path).unwrap(), b"keep until retry");
@@ -215,7 +217,7 @@ fn recursive_destination_is_rejected_before_any_copy() {
         Default::default(),
         |_| {},
     );
-    assert!(result.unwrap_err().contains("overlap"));
+    assert!(result.unwrap_err().to_string().contains("overlap"));
     assert!(!root.join("source/item/child/item").exists());
 }
 
@@ -269,6 +271,6 @@ fn verified_move_keeps_source_if_it_changes_during_copy() {
         "copy did not reach the source mutation: {:?}",
         result.as_ref().err()
     );
-    assert!(result.unwrap_err().contains("source changed"));
+    assert!(result.unwrap_err().to_string().contains("source changed"));
     assert!(root.join("source/item").exists());
 }

@@ -1,0 +1,198 @@
+//! Presentation-only localization for Android backend errors and status codes.
+use nyaterm_android::adb::client::DeviceStatus;
+use nyaterm_android::error::AdbError;
+use nyaterm_core::models::android::AndroidScreenValidationError;
+use rust_i18n::t;
+use std::borrow::Cow;
+
+pub(in crate::features) fn device_status_label(status: DeviceStatus) -> Cow<'static, str> {
+    match status {
+        DeviceStatus::Online => t!("android.deviceStatus.online"),
+        DeviceStatus::Offline => t!("android.deviceStatus.offline"),
+        DeviceStatus::Unauthorized => t!("android.deviceStatus.unauthorized"),
+        DeviceStatus::Unavailable => t!("android.deviceStatus.unavailable"),
+    }
+}
+
+pub(in crate::features) fn screen_validation_message(
+    error: AndroidScreenValidationError,
+) -> String {
+    match error {
+        AndroidScreenValidationError::MaxSize => t!("android.errors.maxSize"),
+        AndroidScreenValidationError::MaxFps => t!("android.errors.maxFps"),
+        AndroidScreenValidationError::BitRate => t!("android.errors.bitRate"),
+    }
+    .into_owned()
+}
+
+pub(super) enum AndroidError {
+    Backend(AdbError),
+    Fatal(String),
+    Disconnected,
+    TextureUpload,
+    JobFailed,
+}
+
+impl AndroidError {
+    pub(super) fn message(&self) -> String {
+        match self {
+            Self::Backend(error) => adb_error_message(error),
+            Self::Fatal(code) => fatal_message(code).into_owned(),
+            Self::Disconnected => t!("android.errors.disconnected").into_owned(),
+            Self::TextureUpload => t!("android.errors.textureUpload").into_owned(),
+            Self::JobFailed => t!("android.errors.operationFailed").into_owned(),
+        }
+    }
+}
+
+pub(in crate::features) fn adb_error_message(error: &AdbError) -> String {
+    match error {
+        AdbError::FileMissing => t!("android.errors.fileMissing"),
+        AdbError::Io(_) => t!("android.errors.io"),
+        AdbError::ExecutableMissing => t!("android.errors.executableMissing"),
+        AdbError::IncompatibleServer => t!("android.errors.incompatibleServer"),
+        AdbError::Unauthorized => t!("android.errors.unauthorized"),
+        AdbError::Offline => t!("android.errors.offline"),
+        AdbError::Rejected => t!("android.errors.rejected"),
+        AdbError::Protocol(_) => t!("android.errors.protocol"),
+        AdbError::Cancelled => t!("android.errors.cancelled"),
+        AdbError::Timeout => t!("android.errors.timeout"),
+        AdbError::ShellExit(code) => t!("android.errors.shellExit", code = code),
+    }
+    .into_owned()
+}
+
+pub(in crate::features) fn fatal_message(code: &str) -> Cow<'static, str> {
+    match code {
+        "DeviceDisconnected" => t!("android.errors.disconnected"),
+        "HelperVersionMismatch" => t!("android.errors.helperVersion"),
+        "HelperInputFailed" => t!("android.errors.inputFailed"),
+        "HelperHung" | "DecoderHung" => t!("android.errors.helperHung"),
+        "HelperExited" => t!("android.errors.helperExited"),
+        "ServerExited" | "VideoEnded" => t!("android.errors.videoEnded"),
+        "ServerProtocolFailed" => t!("android.errors.protocol"),
+        "DecoderPanic" | "VideoFailed" | "HelperPanic" | "HelperFailed" => {
+            t!("android.errors.decoderFailed")
+        }
+        _ => t!("android.errors.operationFailed"),
+    }
+}
+
+/// Preserve unrelated backends' diagnostics; Android errors never expose raw device output.
+pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
+    if let Some(error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<AdbError>())
+    {
+        return adb_error_message(error);
+    }
+    if error
+        .downcast_ref::<nyaterm_files::adb::AdbFileError>()
+        .is_some()
+    {
+        return t!("android.errors.fileOperationFailed").into_owned();
+    }
+    if error
+        .downcast_ref::<nyaterm_transport::SessionError>()
+        .is_some_and(|error| matches!(error, nyaterm_transport::SessionError::Adb(_)))
+    {
+        return t!("android.errors.operationFailed").into_owned();
+    }
+    error.to_string()
+}
+
+pub(in crate::features) fn session_start_error_message(
+    error: nyaterm_transport::SessionError,
+) -> String {
+    let error = anyhow::Error::new(error);
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<AdbError>())
+        .map(adb_error_message)
+        .unwrap_or_else(|| t!("android.errors.operationFailed").into_owned())
+}
+
+pub(in crate::features) fn shell_event_message(code: &str) -> String {
+    match code {
+        "AndroidShellInputFailed" => t!("android.errors.inputFailed").into_owned(),
+        "AndroidDeviceDisconnected" => t!("android.errors.disconnected").into_owned(),
+        "AndroidShellTruncated" | "AndroidShellProtocolFailed" => {
+            t!("android.errors.protocol").into_owned()
+        }
+        _ => code
+            .strip_prefix("AndroidShellExit:")
+            .and_then(|code| code.parse::<u8>().ok())
+            .map(|code| t!("android.errors.shellExit", code = code).into_owned())
+            .unwrap_or_else(|| t!("android.errors.operationFailed").into_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{adb_error_message, fatal_message, file_error_message, shell_event_message};
+    use nyaterm_android::error::AdbError;
+
+    #[test]
+    fn android_errors_translate_machine_codes_without_exposing_backend_details() {
+        assert!(
+            !adb_error_message(&AdbError::Protocol("sensitive backend context"))
+                .contains("sensitive")
+        );
+        for code in [
+            "DeviceDisconnected",
+            "HelperVersionMismatch",
+            "HelperInputFailed",
+            "HelperHung",
+            "DecoderHung",
+            "HelperExited",
+            "ServerExited",
+            "VideoEnded",
+            "ServerProtocolFailed",
+            "DecoderPanic",
+            "VideoFailed",
+            "HelperPanic",
+            "HelperFailed",
+            "unknown-future-code",
+        ] {
+            let message = fatal_message(code);
+            assert!(!message.is_empty());
+            assert_ne!(message, code);
+            assert!(!message.starts_with("android."));
+        }
+        for code in [
+            "AndroidShellInputFailed",
+            "AndroidDeviceDisconnected",
+            "AndroidShellTruncated",
+            "AndroidShellProtocolFailed",
+            "unknown-future-code",
+        ] {
+            let message = shell_event_message(code);
+            assert_ne!(message, code);
+            assert!(!message.starts_with("android."));
+        }
+        assert!(shell_event_message("AndroidShellExit:42").contains("42"));
+        let error =
+            anyhow::Error::new(AdbError::Unauthorized).context(nyaterm_files::adb::AdbFileError);
+        assert_eq!(
+            file_error_message(&error),
+            adb_error_message(&AdbError::Unauthorized)
+        );
+        let unrelated = anyhow::Error::new(nyaterm_transport::SessionError::NotFound(
+            "other backend".into(),
+        ));
+        assert_eq!(file_error_message(&unrelated), unrelated.to_string());
+        assert_eq!(
+            super::session_start_error_message(nyaterm_transport::SessionError::Adb(
+                anyhow::Error::new(AdbError::Unauthorized)
+            )),
+            adb_error_message(&AdbError::Unauthorized)
+        );
+        let unknown =
+            anyhow::anyhow!("sensitive backend context").context(nyaterm_files::adb::AdbFileError);
+        assert!(!file_error_message(&unknown).contains("sensitive"));
+        assert_eq!(
+            file_error_message(&anyhow::anyhow!("other backend")),
+            "other backend"
+        );
+    }
+}

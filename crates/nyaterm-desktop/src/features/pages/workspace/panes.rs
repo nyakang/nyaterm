@@ -151,24 +151,27 @@ impl NyaTermApp {
         };
         let content = if self.android.kind(&session_id).is_some() {
             let mut bar = div().flex().items_center().gap_1().px_2().h(px(30.));
-            for (label, kind) in [
+            for (action, label, kind) in [
                 (
-                    "Files",
+                    "files",
+                    rust_i18n::t!("android.files"),
                     nyaterm_core::models::android::AndroidViewKind::Files,
                 ),
                 (
-                    "Shell",
+                    "shell",
+                    rust_i18n::t!("android.shell"),
                     nyaterm_core::models::android::AndroidViewKind::Shell,
                 ),
                 (
-                    "Screen",
+                    "screen",
+                    rust_i18n::t!("android.screen"),
                     nyaterm_core::models::android::AndroidViewKind::Screen,
                 ),
             ] {
                 let id = session_id.clone();
                 bar = bar.child(small_button(
                     self.theme_palette(),
-                    format!("android-open-{label}-{id}"),
+                    format!("android-open-{action}-{id}"),
                     label,
                     cx.listener(move |app, _, _, cx| {
                         cx.stop_propagation();
@@ -180,7 +183,7 @@ impl NyaTermApp {
             bar = bar.child(small_button(
                 self.theme_palette(),
                 format!("android-close-device-{id}"),
-                "Close device",
+                rust_i18n::t!("android.closeDevice"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
                     app.close_android_device(&id, cx);

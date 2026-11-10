@@ -10,7 +10,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use nyaterm_android::ipc::{Control, Frame, PROTOCOL_VERSION, Packet, read_packet, write_packet};
-use nyaterm_core::models::android::AndroidScreenSettings;
 
 #[derive(Default)]
 struct OutputState {
@@ -187,16 +186,12 @@ fn video_loop(
 struct Inputs {
     keys: HashSet<u32>,
     touch: Option<Control>,
-    socket: Option<TcpStream>,
+    socket: TcpStream,
     geometry: Geometry,
-    settings: AndroidScreenSettings,
 }
 
 impl Inputs {
     fn send(&mut self, control: &Control) -> io::Result<()> {
-        if self.settings.view_only {
-            return Ok(());
-        }
         if let Control::Touch {
             width,
             height,
@@ -217,10 +212,7 @@ impl Inputs {
             }
         }
         let bytes = protocol::encode(control)?;
-        self.socket
-            .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "control socket"))?
-            .write_all(&bytes)?;
+        self.socket.write_all(&bytes)?;
         match control {
             Control::Key {
                 action: 0, keycode, ..
@@ -239,9 +231,7 @@ impl Inputs {
         Ok(())
     }
     fn release(&mut self) -> io::Result<()> {
-        let Some(socket) = self.socket.as_mut() else {
-            return Ok(());
-        };
+        let socket = &mut self.socket;
         for keycode in self.keys.drain() {
             socket.write_all(&protocol::encode(&Control::Key {
                 action: 1,
@@ -275,9 +265,7 @@ impl Inputs {
 impl Drop for Inputs {
     fn drop(&mut self) {
         let _ = self.release();
-        if let Some(socket) = &self.socket {
-            let _ = socket.shutdown(Shutdown::Both);
-        }
+        let _ = self.socket.shutdown(Shutdown::Both);
     }
 }
 
@@ -307,14 +295,9 @@ fn run() -> io::Result<()> {
         .validate()
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
     let video = connect_video(endpoint)?;
-    let control = if settings.view_only {
-        None
-    } else {
-        let socket = TcpStream::connect_timeout(&endpoint, Duration::from_secs(5))?;
-        socket.set_nodelay(true)?;
-        socket.set_write_timeout(Some(Duration::from_millis(500)))?;
-        Some(socket)
-    };
+    let control = TcpStream::connect_timeout(&endpoint, Duration::from_secs(5))?;
+    control.set_nodelay(true)?;
+    control.set_write_timeout(Some(Duration::from_millis(500)))?;
     let output = Arc::new(Output::default());
     let geometry = Arc::new(Mutex::new((0, 0, 0)));
     let busy = Arc::new(Mutex::new(None));
@@ -348,23 +331,17 @@ fn run() -> io::Result<()> {
                 worker_output.control(Control::Fatal { code: code.into() });
             }
         })?;
-    let clipboard_shutdown = control.as_ref().map(TcpStream::try_clone).transpose()?;
+    let clipboard_shutdown = control.try_clone()?;
+    let mut reader = control.try_clone()?;
+    let clipboard_output = Arc::clone(&output);
     let clipboard_worker =
-        if let Some(mut reader) = control.as_ref().map(TcpStream::try_clone).transpose()? {
-            let output = Arc::clone(&output);
-            Some(nyaterm_core::runtime::worker::spawn(
-                "android-helper-clipboard".into(),
-                move || {
-                    while let Ok(message) = protocol::read_device_message(&mut reader) {
-                        if let Some(message) = message {
-                            output.control(message);
-                        }
-                    }
-                },
-            )?)
-        } else {
-            None
-        };
+        nyaterm_core::runtime::worker::spawn("android-helper-clipboard".into(), move || {
+            while let Ok(message) = protocol::read_device_message(&mut reader) {
+                if let Some(message) = message {
+                    clipboard_output.control(message);
+                }
+            }
+        })?;
     let worker_busy = Arc::clone(&busy);
     let worker_stopped = Arc::clone(&stopped);
     let worker_output = Arc::clone(&output);
@@ -390,7 +367,6 @@ fn run() -> io::Result<()> {
         touch: None,
         socket: control,
         geometry,
-        settings,
     };
     let result = (|| {
         while let Some(packet) = read_packet(&mut stdin)? {
@@ -427,13 +403,9 @@ fn run() -> io::Result<()> {
     drop(inputs);
     stopped.store(true, Ordering::Release);
     let _ = video_shutdown.shutdown(Shutdown::Both);
-    if let Some(socket) = clipboard_shutdown {
-        let _ = socket.shutdown(Shutdown::Both);
-    }
+    let _ = clipboard_shutdown.shutdown(Shutdown::Both);
     let _ = video_worker.join();
-    if let Some(worker) = clipboard_worker {
-        let _ = worker.join();
-    }
+    let _ = clipboard_worker.join();
     let _ = watchdog.join();
     output.control(Control::Disconnected);
     output.close();

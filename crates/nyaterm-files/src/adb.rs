@@ -16,6 +16,15 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) mod copy;
 
+/// Marks failures from an Android file operation without exposing device data.
+#[derive(Debug, thiserror::Error)]
+#[error("Android file operation failed")]
+pub struct AdbFileError;
+
+pub(crate) fn file_error(error: anyhow::Error) -> anyhow::Error {
+    error.context(AdbFileError)
+}
+
 #[derive(Clone, Debug)]
 pub struct AdbFileService {
     pub binding: DeviceBinding,
