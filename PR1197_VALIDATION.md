@@ -63,6 +63,40 @@
 
 本轮代码提交：`31c2b6131`（正常执行保留后台服务及异常清理顺序）、`5cb32f0b1`（信号、读取失败、launchd 用户域和真实适配器回归）。推送目标仍为原 PR 的 `WerVa/nyaterm:feat/host-tools-upstream`，不强制覆盖源分支。
 
+## 第三轮：Ports／Services 默认隐藏与按需采集
+
+从已推送的 `c3336f331` 继续，使用原 worktree 和分支。没有新增设置字段、独立开关、数据库转换或依赖 revision。
+
+- core/store 的默认右上列表移除 Ports／Services。桌面纯布局方法 `ensure_host_tool_entries()` 为自定义菜单补齐隐藏槽位：Ports 在 Docker 后、Services 在 Ports 后；锚点不在右上时追加。已有条目视为用户配置，保留位置、排序和显示状态；旧 `ports`／`services` 别名归一化并保留隐藏状态。
+- 默认构造、初始化和通用缺失 ID 恢复前补齐槽位；初始化同步既有设置摘要的四个区和隐藏集合。全量回归发现并修正设置草稿的兼容问题：冲突校验双方使用与启动相同的纯布局补齐，避免将缺失的隐藏槽位误判为外部改动；新增测试确认真正的跨窗口显示／位置变化仍阻止覆盖。保存流程与序列化字段不变，未知 ID 和未知配置字段继续保留。
+- 显示入口只改变布局。刷新、日志、详情与时钟都检查当前 demand；停靠、浮动、多面板、折叠、隐藏、移动、模式切换和移动端抽屉完成后立即同步 `panel_is_rendered()` 对应的需求。关闭时撤销轮询、取消排队读取，已运行读取按期限结束，已开始操作正常收尾。面板注册、导航和后端接口继续可用。
+- 配置回归覆盖新安装、缺字段、旧默认、空布局、别名、重复规范化、保存／重新打开数据库和应用、移动／显示／隐藏，以及恢复默认后重新隐藏。菜单回归确认默认 unchecked 且可启用。受控执行器验证未开面板时会话切换／显示入口／推进时钟产生零读取，打开后采集，关闭及各种布局变更立即撤销需求，排队取消不会调用执行器。
+
+检查上一轮 Windows runner 时发现两个相关失败，另行修正：PowerShell 的 `-Command -` stdin 模式可能不执行 EOF 前的多行块，改为将完整脚本作为一个参数传入，新增无尾部空行、非零退出和 Unicode 回归；Windows 后台生命周期夹具显式取消测试程序原始 stdout/stderr 句柄的继承，避免仅重定向子进程 stdio 时仍携带原管道。生产 Job 正常释放及异常清理策略未改变。这两项修正仍需新 Windows runner 验证。
+
+| 第三轮检查 | 结果 | 日志 |
+| --- | --- | --- |
+| core/store 全部测试 | 1069 通过、2 忽略 | `/tmp/pr1197-opt-in-core-store.log` |
+| desktop 相关布局／菜单／host-tools／设置草稿回归 | 99 通过（含 38 项设置草稿测试） | `/tmp/pr1197-opt-in-focused-desktop-final.log` |
+| desktop workspace 单元测试 | 2765 通过、15 忽略 | `/tmp/pr1197-opt-in-workspace-tests.log` |
+| remote-ops 全部测试 | 90 通过 | `/tmp/pr1197-opt-in-remote-ops.log` |
+| `cargo check --workspace --locked` | 通过 | `/tmp/pr1197-opt-in-check.log` |
+| `cargo test --workspace --locked --no-fail-fast` | 6053 通过、2 失败、37 忽略；失败为既有 files root 权限用例和 transport shell 环境超时；desktop 全部通过 | `/tmp/pr1197-opt-in-workspace-tests.log` |
+| `cargo fmt --all -- --check` | 通过 | `/tmp/pr1197-opt-in-format.log` |
+| `cargo clippy --workspace --all-targets --locked` | 通过 | `/tmp/pr1197-opt-in-clippy.log` |
+| `python3 scripts/ci/check_architecture.py` | 通过 | `/tmp/pr1197-opt-in-architecture.log` |
+| transport 包级复测 | 471 通过、4 项实际 shell 初始化超时、9 忽略；源码未修改 | `/tmp/pr1197-opt-in-transport-retest.log` |
+| `c3336f331` transport 同命令基线对照 | 474 通过、同一 missing-variable 用例超时、9 忽略；临时独立 worktree 执行 `cargo test -p nyaterm-transport --locked --lib` | `/tmp/pr1197-opt-in-transport-baseline.log` |
+| transport 超时用例单独复测 | 1 通过（8.95 秒，接近原 10 秒期限） | `/tmp/pr1197-opt-in-transport-timeout-probe.log` |
+| 普通用户 files 权限回归 | 同一测试二进制以 nobody 运行，1 项通过 | `/tmp/pr1197-opt-in-files-unprivileged.log` |
+| Windows 监督器夹具交叉编译 | 通过；独立临时契约桩检查，不代表 Windows 行为验证 | `/tmp/pr1197-opt-in-windows-compile.log` |
+
+本轮代码提交：`45fc2b1ae`（Windows 脚本执行及平台回归夹具）、`e462bcf14`（默认隐藏、布局兼容和按需采集）、`334b3a366`（设置草稿使用相同布局兼容转换）。推送继续使用原 PR 源分支，推送前核对 head 并保持正常 fast-forward。
+
+新 head 的平台 CI 结果待 runner 回报；实时状态见 [PR #1197 检查页](https://github.com/nyakang/nyaterm/pull/1197/checks)。上轮已经执行的 runner 结果和无关排除项分别记录在下方，不能用 Linux 或交叉编译结果替代 Windows/macOS 行为验证。
+
+GPUI 使用命令级 `RUST_MIN_STACK=16777216`；构建继续复用 `/data/kang/nyaterm-gpui/target`，原工作区 tracked 文件未修改。
+
 ## 第一轮本机验证记录
 
 | 检查 | 结果 | 本机日志 |
@@ -127,8 +161,8 @@ Windows runner 上运行 `cargo test -p nyaterm-remote-ops --locked` 会自动�
 ## 平台验证边界
 
 - Linux：本地执行器、面板状态、GPUI 菜单和 workspace 检查在本机运行。
-- Windows：第一轮受控子进程和 host-tools 状态/菜单测试已在 [CI 42748387363](https://github.com/nyakang/nyaterm/actions/runs/42748387363/job/129605973210) 通过，覆盖信号拒绝、显式 KILL、Job 回收、继承管道、大输入、双路输出和输出上限。第二轮新增的正常 Job 释放、panic 和 PowerShell 错误分类用例待新 head 的 Windows runner 执行。独立监督器编译通过仅证明编译，**不是 Windows 行为验证**。
-- macOS：第一轮 workspace 测试已在 [macOS-arm64 CI](https://github.com/nyakang/nyaterm/actions/runs/42748387363/job/129605973266) 通过。第二轮 launchd UID 脚本夹具已在 Linux 通过，实际 macOS 执行及提权后的原生交互仍待 runner/实机验证。
+- Windows：第一轮受控子进程和 host-tools 状态/菜单测试已在 [CI 42748387363](https://github.com/nyakang/nyaterm/actions/runs/42748387363/job/129605973210) 通过，覆盖信号拒绝、显式 KILL、Job 回收、继承管道、大输入、双路输出和输出上限。第二轮 [Windows CI](https://github.com/nyakang/nyaterm/actions/runs/42762757380/job/129652182097) 的 remote-ops 为 64 通过、2 失败：正常后台工作夹具超时、PowerShell 错误夹具得到未执行脚本的空成功。panic、信号限制及其余监督器用例通过。第三轮已修正这两项，待新 head runner 复验。独立监督器编译通过仅证明编译，**不是 Windows 行为验证**。
+- macOS：第一轮 workspace 测试已在 [macOS-arm64 CI](https://github.com/nyakang/nyaterm/actions/runs/42748387363/job/129605973266) 通过。第二轮 [macOS-arm64 CI](https://github.com/nyakang/nyaterm/actions/runs/42762757380/job/129652182029) 的 desktop 与 remote-ops 用例通过，包括 launchd UID 脚本夹具；workspace 因无关 transport 超时夹具失败。真实 launchd 提权交互仍待实机验证，第三轮布局和采集用例待新 head runner。
 - 已运行的读取使用 SSH 原有期限或修复后的本地期限结束；取消句柄用于阻止排队读取与丢弃过期结果，不承诺即时终止已运行的 SSH 调用。已开始的控制操作正常收尾。
 
 ## 单列的无关阻塞
@@ -136,5 +170,9 @@ Windows runner 上运行 `cargo test -p nyaterm-remote-ops --locked` 会自动�
 - 上述第一轮 CI 的 Linux/macOS workspace 测试通过，但 Windows workspace 在未改动的 translation-client `rejected_http_status_and_malformed_payload_are_returned_to_the_caller` 失败：Windows 接受的 socket 继承非阻塞属性，`read().unwrap()` 收到 Win32 10035。已比对 CI 合并提交与主分支，该测试不属于 PR 修改。
 - 同次 [Lint CI](https://github.com/nyakang/nyaterm/actions/runs/42748387363/job/129605973361) 在主分支已有的 `completion_runtime.rs` 两处测试线程创建触发架构白名单检查。相同命令在主分支 `ec9e97528` 可复现；本轮 worktree 的架构检查通过。
 - 本机 root 身份下既有 files 只读权限测试失败，原 PR 基线同命令已复现；对应文件在本轮和原 PR 基线间无修改。第一轮以普通用户运行同一测试二进制通过，详情见上方记录。
+
+- 第三轮 Linux 全量中的 `transport::environment::test::missing_variable_is_cached_until_refresh` 超时；包级复测另有 3 项真实 shell 环境加载超时。以 `c3336f331` 建立临时独立 worktree，执行同一包级命令也复现 missing-variable 超时（474 通过、1 失败、9 忽略），对应 transport 源码完全相同。单独执行该用例通过但耗时 8.95 秒；保留完整失败数字，不把定向复测累计为全量通过。
+- 第二轮 macOS-arm64 CI 的 `transport::network_route::tests::stalled_proxy_handshake_has_a_network_timeout` 在准备阶段读取到 EOF，尚未进入预期握手断言。对应源码与原 PR 基线完全相同，本轮没有修改；该平台夹具失败单列，未声称 macOS workspace 通过。
+- 第二轮 Windows CI 再次确认 translation-client 的三项测试因 Win32 10035 失败；Lint CI 再次确认相同主分支架构白名单问题。相关 remote-ops 失败单列在第三轮修正说明中，不作为无关排除项。
 
 以上问题按本轮明确范围保留，不能将整个 CI 描述为通过。
