@@ -1109,7 +1109,7 @@ __nyaterm_emit_command(){
 }
 __nyaterm_cwd_prompt(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//\%/%25}"
 }
 __nyaterm_cwd_preexec(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
@@ -1126,7 +1126,7 @@ __nyaterm_precmd_d(){
 }
 __nyaterm_prompt(){
   [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//\%/%25}"
   printf '\033]133;A\007'
   [[ "$PS1" == *$'\033]133;B\007'* ]] || PS1="$PS1"$'%{\033]133;B\007%}'
 }
@@ -1313,7 +1313,7 @@ __nyaterm_emit_command(){
 }
 __nyaterm_cwd_prompt(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
-  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
+  printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//\%/%25}"
 }
 __nyaterm_cwd_preexec(){
   [ -n "${NYATERM_ZSH_CWD_READY:-}" ] || return 0
@@ -1748,6 +1748,21 @@ mod tests {
             let pop = script.find("fc -P 2>/dev/null").unwrap();
             assert!(ready < pop);
             assert!(script.contains("unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P"));
+        }
+    }
+
+    #[test]
+    fn zsh_scripts_escape_percent_in_pwd_substitution() {
+        // In zsh a leading `%` in a `//` pattern anchors the match at the end
+        // of the string, so `${PWD//%/%25}` appends `%25` to the path instead
+        // of encoding literal percent signs; the pattern must be `\%`. Bash
+        // has no such anchor and keeps the plain `%` pattern.
+        for script in [super::ZSH_PERSISTENT_SCRIPT, super::ZSH_CWD_ONLY_SCRIPT] {
+            assert!(script.contains("${PWD//\\%/%25}"));
+            assert!(!script.contains("${PWD//%/%25}"));
+        }
+        for script in [super::BASH_PERSISTENT_SCRIPT, super::BASH_CWD_ONLY_SCRIPT] {
+            assert!(script.contains("${PWD//%/%25}"));
         }
     }
 
