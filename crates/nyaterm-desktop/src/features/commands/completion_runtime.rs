@@ -780,18 +780,22 @@ mod tests {
 
         let (started, waiting) = channel();
         let (release, blocked) = channel();
-        let blocker = std::thread::spawn(move || {
-            store.request_fn(StoreDomain::Commands, move |_db| {
-                started.send(()).unwrap();
-                let _ = blocked.recv_timeout(Duration::from_secs(10));
-                Ok(())
+        let blocker =
+            crate::thread_owner::spawn_joinable("completion-store-blocker-test", move || {
+                store.request_fn(StoreDomain::Commands, move |_db| {
+                    started.send(()).unwrap();
+                    let _ = blocked.recv_timeout(Duration::from_secs(10));
+                    Ok(())
+                })
             })
-        });
+            .unwrap();
         waiting.recv_timeout(Duration::from_secs(5)).unwrap();
         let (finished, result) = channel();
-        let searcher = std::thread::spawn(move || {
-            let _ = finished.send(futures::executor::block_on(runtime.search(query())));
-        });
+        let searcher =
+            crate::thread_owner::spawn_joinable("completion-cache-search-test", move || {
+                let _ = finished.send(futures::executor::block_on(runtime.search(query())));
+            })
+            .unwrap();
         let cached = result.recv_timeout(Duration::from_secs(5));
         // Release before asserting so a regression cannot strand the actor.
         let _ = release.send(());
