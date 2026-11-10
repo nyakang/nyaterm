@@ -275,6 +275,16 @@ impl NyaTermApp {
             })
     }
 
+    /// The last full search stays valid as a count while new output invalidates
+    /// its positions, and the full search itself waits for output to settle.
+    pub(in crate::features) fn terminal_buffer_last_full_search_count(
+        &self,
+    ) -> Option<TerminalSearchCount> {
+        let key = self.terminal_search_key()?;
+        let view = self.terminal.view.views.get(self.session.active_id()?)?;
+        terminal_last_full_search_count(view.search_result.as_ref(), &key)
+    }
+
     pub(in crate::features) fn terminal_buffer_search_needs_wake(&self) -> bool {
         self.terminal.search.open
             && self.terminal.search.mode == TerminalSearchMode::Buffer
@@ -781,6 +791,65 @@ impl NyaTermApp {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::features) struct TerminalSearchCount {
+    occurrences: usize,
+    truncated: bool,
+}
+
+fn terminal_last_full_search_count(
+    result: Option<&TerminalFrameSearchResult>,
+    key: &TerminalFrameSearchKey,
+) -> Option<TerminalSearchCount> {
+    result
+        .filter(|result| &result.key == key && !result.occurrences.is_empty())
+        .map(|result| TerminalSearchCount {
+            occurrences: result.occurrences.len(),
+            truncated: result.truncated,
+        })
+}
+
+fn terminal_search_position_label(active_index: usize, count: TerminalSearchCount) -> String {
+    let label = if count.truncated {
+        "1000+".to_string()
+    } else {
+        count.occurrences.to_string()
+    };
+    format!(
+        "{}/{label}",
+        active_index.min(count.occurrences.saturating_sub(1)) + 1
+    )
+}
+
+/// While output keeps invalidating results, a known total stays on screen so the
+/// label does not alternate between a partial count and "searching".
+pub(in crate::features) fn terminal_buffer_search_count_status(
+    active_index: usize,
+    occurrences: usize,
+    truncated: bool,
+    complete: bool,
+    last_full_search: Option<TerminalSearchCount>,
+) -> String {
+    if !complete && let Some(count) = last_full_search {
+        return terminal_search_position_label(active_index, count);
+    }
+    if occurrences == 0 {
+        return if complete { "not found" } else { "searching" }.to_string();
+    }
+    let position = terminal_search_position_label(
+        active_index,
+        TerminalSearchCount {
+            occurrences,
+            truncated,
+        },
+    );
+    if complete {
+        position
+    } else {
+        format!("{position} searching")
+    }
+}
+
 fn terminal_search_next_index(
     current: usize,
     direction: isize,
@@ -882,6 +951,69 @@ mod tests {
     };
     use crate::terminal::TerminalBufferMatch;
     use std::collections::HashMap;
+
+    fn count(occurrences: usize, truncated: bool) -> super::TerminalSearchCount {
+        super::TerminalSearchCount {
+            occurrences,
+            truncated,
+        }
+    }
+
+    #[test]
+    fn search_count_keeps_the_known_total_while_output_invalidates_results() {
+        use super::terminal_buffer_search_count_status as status;
+        let known = Some(count(40, false));
+
+        assert_eq!(status(2, 0, false, false, known), "3/40");
+        assert_eq!(status(2, 3, false, false, known), "3/40");
+        assert_eq!(status(99, 3, false, false, known), "40/40");
+        assert_eq!(
+            status(0, 0, false, false, Some(count(1000, true))),
+            "1/1000+"
+        );
+        assert_eq!(
+            status(2, 7, false, true, known),
+            "3/7",
+            "a finished search wins"
+        );
+    }
+
+    #[test]
+    fn search_count_without_a_known_total_reports_progress() {
+        use super::terminal_buffer_search_count_status as status;
+
+        assert_eq!(status(0, 0, false, false, None), "searching");
+        assert_eq!(status(0, 3, false, false, None), "1/3 searching");
+        assert_eq!(status(0, 0, false, true, None), "not found");
+        assert_eq!(status(4, 5, true, true, None), "5/1000+");
+    }
+
+    #[test]
+    fn last_full_search_count_survives_new_revisions_for_the_same_query_only() {
+        use super::terminal_last_full_search_count as last;
+        let key = |query: &str| crate::models::TerminalFrameSearchKey {
+            query: query.to_string(),
+            case_sensitive: false,
+            regex: false,
+            whole_word: false,
+            limit: 1000,
+            request_generation: 0,
+        };
+        let matches = vec![TerminalBufferMatch {
+            line_index: 1,
+            start_col: 0,
+            end_col: 3,
+        }];
+        let mut result =
+            crate::models::TerminalFrameSearchResult::new(key("needle"), 7, Ok(matches));
+        result.occurrences = std::iter::once(0..1).collect();
+        let empty = crate::models::TerminalFrameSearchResult::new(key("needle"), 7, Ok(Vec::new()));
+
+        assert_eq!(last(Some(&result), &key("needle")), Some(count(1, false)));
+        assert_eq!(last(Some(&result), &key("other")), None);
+        assert_eq!(last(Some(&empty), &key("needle")), None);
+        assert_eq!(last(None, &key("needle")), None);
+    }
 
     #[test]
     fn search_navigation_wraps_by_default_and_stops_when_disabled() {

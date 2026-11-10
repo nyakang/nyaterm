@@ -10,6 +10,8 @@ use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::models::TerminalSearchMode;
 use crate::theme::ThemePalette;
 
+use crate::features::terminal::terminal_search_runtime::terminal_buffer_search_count_status;
+
 use super::{
     TERMINAL_SCROLLBAR_COLUMN_WIDTH, TERMINAL_SCROLLBAR_MIN_THUMB_HEIGHT,
     TERMINAL_SCROLLBAR_TRACK_PADDING_RIGHT, TERMINAL_SCROLLBAR_TRACK_PADDING_Y,
@@ -196,35 +198,16 @@ impl NyaTermApp {
         let (status, is_error) = match self.terminal.search.mode {
             TerminalSearchMode::Buffer => match &buffer_matches {
                 Ok(_) if self.terminal.search.query.trim().is_empty() => (String::new(), false),
-                Ok(_) if buffer_occurrence_count == 0 && !buffer_search_complete => {
-                    ("searching".to_string(), false)
-                }
-                Ok(_) if buffer_occurrence_count == 0 => ("not found".to_string(), false),
-                Ok(_) => {
-                    let count = buffer_occurrence_count;
-                    let count_label = if buffer_search_truncated {
-                        "1000+".to_string()
-                    } else {
-                        count.to_string()
-                    };
-                    (
-                        format!(
-                            "{}/{}{}",
-                            self.terminal
-                                .search
-                                .active_index
-                                .min(count.saturating_sub(1))
-                                + 1,
-                            count_label,
-                            if buffer_search_complete {
-                                ""
-                            } else {
-                                " searching"
-                            },
-                        ),
-                        false,
-                    )
-                }
+                Ok(_) => (
+                    terminal_buffer_search_count_status(
+                        self.terminal.search.active_index,
+                        buffer_occurrence_count,
+                        buffer_search_truncated,
+                        buffer_search_complete,
+                        self.terminal_buffer_last_full_search_count(),
+                    ),
+                    false,
+                ),
                 Err(error) => (truncate_preview(error, 40), true),
             },
             TerminalSearchMode::History if history_pending => ("searching".to_string(), false),
