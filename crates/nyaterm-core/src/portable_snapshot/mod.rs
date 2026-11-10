@@ -253,6 +253,7 @@ pub fn project_sync_settings(settings: &mut serde_json::Value) {
         return;
     };
     root.remove("cloud_sync");
+    root.remove("android");
     root.remove("keybindings");
     if let Some(ui) = root
         .get_mut("ui")
@@ -290,7 +291,12 @@ pub fn preserve_device_local_sync_settings(
     incoming: &mut serde_json::Value,
     current: &serde_json::Value,
 ) {
-    for field in ["cloud_sync", "keybindings"] {
+    for field in ["cloud_sync", "keybindings", "android"] {
+        if field == "android"
+            && let Some(root) = incoming.as_object_mut()
+        {
+            root.remove(field);
+        }
         if let Some(value) = current.get(field) {
             incoming[field] = value.clone();
         }

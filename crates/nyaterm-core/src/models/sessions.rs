@@ -145,6 +145,7 @@ impl SavedConnection {
 
     pub fn kind_label(&self) -> &'static str {
         match self.config {
+            ConnectionType::Adb { .. } => "ADB",
             ConnectionType::Ssh { .. } => "SSH",
             ConnectionType::LocalTerminal { .. } => "Local",
             ConnectionType::Telnet { .. } => "Telnet",
@@ -156,6 +157,7 @@ impl SavedConnection {
 
     pub fn endpoint(&self) -> String {
         match &self.config {
+            ConnectionType::Adb { device, .. } => device.serial(),
             ConnectionType::Ssh {
                 host,
                 port,

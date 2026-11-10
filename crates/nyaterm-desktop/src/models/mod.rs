@@ -12,7 +12,7 @@ mod prompts;
 pub(crate) mod recording;
 mod remote;
 mod security;
-mod session;
+pub(crate) mod session;
 mod session_event_bridge;
 pub(crate) mod terminal;
 mod transfer_preview;

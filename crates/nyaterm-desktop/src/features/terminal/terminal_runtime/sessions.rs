@@ -121,7 +121,15 @@ impl NyaTermApp {
         let mut closed_any = false;
         for close_id in &close_ids {
             let disconnected = self.session.is_disconnected(close_id);
-            let close_result = if self.remote_desktop.is_session(close_id) {
+            let close_result = if matches!(
+                self.android.kind(close_id),
+                Some(
+                    nyaterm_core::models::android::AndroidViewKind::Files
+                        | nyaterm_core::models::android::AndroidViewKind::Screen
+                )
+            ) {
+                Ok(())
+            } else if self.remote_desktop.is_session(close_id) {
                 self.close_remote_desktop_runtime(close_id)
             } else {
                 self.session

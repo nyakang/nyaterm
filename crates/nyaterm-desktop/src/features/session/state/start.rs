@@ -117,6 +117,7 @@ pub(in crate::features) enum SessionStartEventRequest {
 
 #[derive(Clone, Default)]
 pub(in crate::features) struct SavedConnectionStartOptions {
+    pub android_view: Option<nyaterm_core::models::android::AndroidViewKind>,
     pub(in crate::features) mcp_open_operation_id: Option<String>,
     pub ssh_runtime_mode: Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
     pub custom_name: Option<String>,

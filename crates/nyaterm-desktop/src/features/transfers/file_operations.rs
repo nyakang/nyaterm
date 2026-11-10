@@ -23,6 +23,7 @@ use rust_i18n::t;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::features) enum FileOperationEndpoint {
     Local,
+    Adb(String),
     Session(String),
     /// A saved source with no live session. It must never fall back to local I/O.
     OfflineConnection(String),
@@ -39,6 +40,7 @@ impl FileOperationEndpoint {
     pub(in crate::features) fn kind(&self) -> FileBrowserBackendKind {
         match self {
             Self::Local => FileBrowserBackendKind::Local,
+            Self::Adb(_) => FileBrowserBackendKind::Adb,
             _ => FileBrowserBackendKind::Remote,
         }
     }

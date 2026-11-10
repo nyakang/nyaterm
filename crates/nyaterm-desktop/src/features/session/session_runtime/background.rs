@@ -329,6 +329,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            android_view: _,
             mcp_open_operation_id,
             ssh_runtime_mode: _,
             custom_name,
@@ -459,6 +460,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            android_view: _,
             mcp_open_operation_id,
             ssh_runtime_mode,
             custom_name,
@@ -594,6 +596,7 @@ impl NyaTermApp {
         }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
+            android_view: _,
             mcp_open_operation_id,
             ssh_runtime_mode: _,
             custom_name,
@@ -1170,6 +1173,9 @@ impl NyaTermApp {
 
 fn session_kind_for_launch_config(config: &SessionLaunchConfig) -> SessionKind {
     match config {
+        SessionLaunchConfig::AdbShell(_) => SessionKind::AdbShell,
+        SessionLaunchConfig::AdbFiles(_) => SessionKind::AdbFiles,
+        SessionLaunchConfig::AdbScreen(_) => SessionKind::AdbScreen,
         SessionLaunchConfig::Local(_) => SessionKind::LocalPty,
         SessionLaunchConfig::Ssh(_) => SessionKind::Ssh,
         SessionLaunchConfig::Telnet(config) if config.raw_tcp => SessionKind::RawTcp,
@@ -1189,6 +1195,23 @@ fn create_session_from_launch_config(
     launch_config: SessionLaunchConfig,
 ) -> Result<SessionStartSuccess, String> {
     match launch_config {
+        SessionLaunchConfig::AdbShell(config) => session_manager
+            .create_adb_session(nyaterm_transport::adb_shell::AdbShellConfig {
+                name: format!("{} · Shell", config.name),
+                binding: config.binding.clone(),
+                cols: config.cols,
+                rows: config.rows,
+            })
+            .map(|session_info| SessionStartSuccess {
+                session_info,
+                multiplex_handle: None,
+                cleanup: None,
+                launch_config: Some(SessionLaunchConfig::AdbShell(config)),
+            })
+            .map_err(|e| e.to_string()),
+        SessionLaunchConfig::AdbFiles(_) | SessionLaunchConfig::AdbScreen(_) => {
+            unreachable!("Android non-terminal views own no terminal transport")
+        }
         SessionLaunchConfig::Local(config) => session_manager
             .create_local_session(config)
             .map(|session_info| SessionStartSuccess {
@@ -1237,6 +1260,9 @@ fn create_session_from_launch_config(
 
 fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
     match info.kind {
+        SessionKind::AdbShell | SessionKind::AdbFiles | SessionKind::AdbScreen => {
+            unreachable!("Android metadata is supplied by its launcher")
+        }
         SessionKind::LocalPty => SessionLaunchConfig::Local(LocalSessionConfig {
             name: info.name.clone(),
             shell_path: None,

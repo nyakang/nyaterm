@@ -24,6 +24,12 @@ impl ConnectionEditorValidationError {
             algorithm_tab: None,
         };
         match self {
+            Self::AndroidSettings(_) => {
+                return location(
+                    ConnectionEditorSection::Basic,
+                    ConnectionEditorFocusTarget::Heading,
+                );
+            }
             Self::RdpRelayUnsupported | Self::RdpMstscRelayUnsupported => {
                 return location(
                     ConnectionEditorSection::Network,
@@ -142,6 +148,7 @@ impl ConnectionEditorValidationError {
             }
             ConnectionEditorValidationError::RdpWindowsAuthenticationRequired
             | ConnectionEditorValidationError::RdpRelayUnsupported
+            | ConnectionEditorValidationError::AndroidSettings(_)
             | ConnectionEditorValidationError::RdpMstscRelayUnsupported
             | ConnectionEditorValidationError::SshAgentEndpoint(_)
             | ConnectionEditorValidationError::SshAgentForwarding { .. }

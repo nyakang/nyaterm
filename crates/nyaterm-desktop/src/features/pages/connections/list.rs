@@ -1655,6 +1655,12 @@ pub(super) fn connection_detail_rows(
         .unwrap_or_else(|| t!("savedConnections.noDescription").to_string());
 
     let mut rows = match &connection.config {
+        nyaterm_core::ConnectionType::Adb {
+            device, directory, ..
+        } => vec![
+            copyable_value_detail_row("Android".into(), device.serial()),
+            copyable_text_detail_row("Directory".into(), directory),
+        ],
         nyaterm_core::ConnectionType::Ssh {
             host,
             port,

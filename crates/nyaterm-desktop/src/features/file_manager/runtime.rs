@@ -20,6 +20,7 @@ impl NyaTermApp {
     ) -> anyhow::Result<FileBrowserService> {
         match endpoint {
             PaneEndpoint::Local => Ok(FileBrowserService::local()),
+            PaneEndpoint::Adb(key) => self.android.file_service(key).map(FileBrowserService::Adb),
             PaneEndpoint::Session(id) => self.file_browser_service_for_session(id),
             PaneEndpoint::OfflineConnection(_) => {
                 anyhow::bail!("reconnect the source before browsing files")
@@ -251,6 +252,9 @@ impl NyaTermApp {
                         .file_browser_backend_support_for_session(session)
                         == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
                 }
+                PaneEndpoint::Adb(key) => self
+                    .android_config_for_session(session)
+                    .is_some_and(|config| config.device_key == *key),
                 PaneEndpoint::Session(id) => *session == id,
                 PaneEndpoint::OfflineConnection(_) => false,
             })
@@ -267,6 +271,10 @@ impl NyaTermApp {
                 self.session.active_file_browser_backend()
                     == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
             }
+            PaneEndpoint::Adb(key) => active
+                .as_deref()
+                .and_then(|id| self.android_config_for_session(id))
+                .is_some_and(|config| config.device_key == *key),
             PaneEndpoint::Session(id) => active.as_ref() == Some(id),
             PaneEndpoint::OfflineConnection(_) => false,
         };

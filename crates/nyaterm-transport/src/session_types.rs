@@ -17,6 +17,9 @@ pub struct SessionInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
+    AdbShell,
+    AdbFiles,
+    AdbScreen,
     LocalPty,
     Ssh,
     Telnet,

@@ -23,6 +23,7 @@ pub(crate) enum ConnectionKindTab {
     Serial,
     Rdp,
     Vnc,
+    Adb,
 }
 
 impl ConnectionKindTab {
@@ -34,6 +35,7 @@ impl ConnectionKindTab {
             Self::Serial => "Serial",
             Self::Rdp => "RDP",
             Self::Vnc => "VNC",
+            Self::Adb => "Android (ADB)",
         }
     }
 
@@ -45,6 +47,7 @@ impl ConnectionKindTab {
             nyaterm_core::ConnectionType::Serial { .. } => Self::Serial,
             nyaterm_core::ConnectionType::Rdp { .. } => Self::Rdp,
             nyaterm_core::ConnectionType::Vnc { .. } => Self::Vnc,
+            nyaterm_core::ConnectionType::Adb { .. } => Self::Adb,
         }
     }
 }
@@ -70,6 +73,7 @@ pub(crate) enum ConnectionEditorSection {
 impl ConnectionEditorSection {
     pub(crate) fn for_kind(kind: ConnectionKindTab) -> &'static [Self] {
         match kind {
+            ConnectionKindTab::Adb => &[Self::Basic],
             ConnectionKindTab::Ssh => &[
                 Self::Basic,
                 Self::Network,
@@ -223,6 +227,9 @@ pub(crate) enum ConnectionEditorField {
     ShellPath,
     ShellArgs,
     WorkingDir,
+    AndroidMaxSize,
+    AndroidFps,
+    AndroidBitRate,
     SerialPort,
     BaudRate,
     PostLoginCommand,
@@ -255,6 +262,9 @@ pub(crate) enum ConnectionEditorFocusTarget {
 impl ConnectionEditorField {
     pub(crate) fn section(self) -> ConnectionEditorSection {
         match self {
+            Self::AndroidMaxSize | Self::AndroidFps | Self::AndroidBitRate => {
+                ConnectionEditorSection::Basic
+            }
             Self::Name
             | Self::NewTag
             | Self::NewGroupName
@@ -292,6 +302,8 @@ impl ConnectionEditorField {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConnectionEditorState {
+    pub(crate) android_usb: bool,
+    pub(crate) android_screen: nyaterm_core::models::android::AndroidScreenSettings,
     pub(crate) id: Option<String>,
     pub(crate) kind: ConnectionKindTab,
     pub(crate) section: ConnectionEditorSection,

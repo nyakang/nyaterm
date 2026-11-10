@@ -86,6 +86,17 @@ jobs:
       - name: Install Linux system dependencies
         uses: ./.github/actions/install-linux-deps
 
+      - name: Prepare Android native dependencies
+        shell: bash
+        run: |
+          python3 scripts/release/prepare_android.py
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          target = subprocess.check_output(['rustc', '-vV'], text=True).split('host: ')[1].splitlines()[0]
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'FFMPEG_DIR={(Path("target/android-deps/ffmpeg") / target).resolve()}\n')
+          PY
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -122,6 +133,24 @@ jobs:
         with:
           extra_packages: zsh fish
 
+      - name: Install Android build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+      - name: Install Android build tools (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install make llvm -y --no-progress
+      - name: Prepare Android native dependencies
+        shell: bash
+        run: |
+          python scripts/release/prepare_android.py
+          python - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          target = subprocess.check_output(['rustc', '-vV'], text=True).split('host: ')[1].splitlines()[0]
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'FFMPEG_DIR={(Path("target/android-deps/ffmpeg") / target).resolve()}\n')
+          PY
       # Keep lifecycle regressions independent of unrelated workspace failures.
       - name: Test Windows local shell lifecycle
         if: runner.os == 'Windows'

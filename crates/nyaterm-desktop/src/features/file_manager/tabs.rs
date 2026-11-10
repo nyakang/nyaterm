@@ -289,7 +289,7 @@ impl NyaTermApp {
         FileManagerPaneRestore {
             source: match &pane.endpoint {
                 PaneEndpoint::Local => FileManagerSourceRestore::Local,
-                PaneEndpoint::OfflineConnection(id) => {
+                PaneEndpoint::Adb(id) | PaneEndpoint::OfflineConnection(id) => {
                     FileManagerSourceRestore::Connection { id: id.clone() }
                 }
                 PaneEndpoint::Session(session_id) => {
@@ -332,7 +332,7 @@ impl NyaTermApp {
         let mut remember = |endpoint: &PaneEndpoint, path: &RemoteFilePath| {
             let source = match endpoint {
                 PaneEndpoint::Local => FileManagerSourceRestore::Local,
-                PaneEndpoint::OfflineConnection(id) => {
+                PaneEndpoint::Adb(id) | PaneEndpoint::OfflineConnection(id) => {
                     FileManagerSourceRestore::Connection { id: id.clone() }
                 }
                 PaneEndpoint::Session(session) => {
@@ -381,7 +381,7 @@ impl NyaTermApp {
         };
         let source = match &endpoint {
             PaneEndpoint::Local => Some(FileManagerSourceRestore::Local),
-            PaneEndpoint::OfflineConnection(id) => {
+            PaneEndpoint::Adb(id) | PaneEndpoint::OfflineConnection(id) => {
                 Some(FileManagerSourceRestore::Connection { id: id.clone() })
             }
             PaneEndpoint::Session(session) => self
@@ -454,7 +454,7 @@ impl NyaTermApp {
     ) {
         match endpoint {
             PaneEndpoint::Session(session) => self.reconnect_session(session, window, cx),
-            PaneEndpoint::OfflineConnection(connection) => {
+            PaneEndpoint::Adb(connection) | PaneEndpoint::OfflineConnection(connection) => {
                 if let Some(saved) = self.connection_state.connection_by_id(&connection).cloned() {
                     self.start_saved_connection(saved, window, cx);
                 } else {
@@ -496,6 +496,7 @@ impl NyaTermApp {
     pub(in crate::features) fn endpoint_label(&self, endpoint: &PaneEndpoint) -> String {
         match endpoint {
             PaneEndpoint::Local => t!("fileManager.local").to_string(),
+            PaneEndpoint::Adb(key) => self.android.device_name(key),
             PaneEndpoint::OfflineConnection(id) => self
                 .connection_state
                 .connection_by_id(id)

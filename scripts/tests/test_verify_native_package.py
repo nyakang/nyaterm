@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import json
+import hashlib
 import plistlib
 import struct
 import sys
@@ -49,6 +51,32 @@ def fake_macho(cpu_type: int) -> bytes:
     return b"\xcf\xfa\xed\xfe" + cpu_type.to_bytes(4, "little") + bytes(504)
 
 
+def android_fixture(target):
+    import prepare_android
+    entries = {"adb/SOURCE.json": b"{}", "adb/NOTICE.txt": b"license", "android-libs/SOURCE.json": b"{}", "android-libs/LICENSE.txt": b"license"}
+    if "windows" in target:
+        entries.update({name: fake_pe(0x14C) for name in ["adb/adb.exe", "adb/AdbWinApi.dll", "adb/AdbWinUsbApi.dll"]})
+        machine = 0xAA64 if target.startswith("aarch64") else 0x8664
+        entries.update({name: fake_pe(machine) for name in ["avcodec-62.dll", "avformat-62.dll", "avutil-60.dll", "swscale-9.dll"]})
+    elif "apple" in target:
+        entries["adb/adb"] = b"\xca\xfe\xba\xbe" + (2).to_bytes(4,"big") + b"".join(cpu.to_bytes(4,"big") + bytes(16) for cpu in [0x01000007, 0x0100000C])
+        entries.update({f"android-libs/lib{name}.{version}.dylib": fake_macho(0x0100000C if target.startswith("aarch64") else 0x01000007) for name, version in [("avcodec",62),("avformat",62),("avutil",60),("swscale",9)]})
+    else:
+        elf = bytearray(64); elf[:6] = b"\x7fELF\x02\x01"; elf[18:20] = (183 if target.startswith("aarch64") else 62).to_bytes(2,"little")
+        entries["adb/adb"] = bytes(elf)
+        entries.update({f"android-libs/lib{name}.so.{version}": bytes(elf) for name, version in [("avcodec",62),("avformat",62),("avutil",60),("swscale",9)]})
+    manifest = {"schema":1,"target":target,"dependencies":prepare_android.METADATA,"files":{name:hashlib.sha256(data).hexdigest() for name,data in entries.items()}}
+    entries["android-resources.json"] = json.dumps(manifest).encode()
+    return entries
+
+
+def stage_android_fixture(destination, target):
+    paths = []
+    for name, data in android_fixture(target).items():
+        path = destination / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(data); paths.append(path)
+    return paths
+
+
 def newc_entry(name: str, content: bytes) -> bytes:
     encoded_name = name.encode("utf-8") + b"\0"
     fields = [0, 0, 0, 0, 1, 0, len(content), 0, 0, 0, 0, len(encoded_name), 0]
@@ -72,6 +100,7 @@ def write_portable(
     """Build a portable zip whose layout matches package_native's output."""
     root = "NyaTerm-portable"
     with zipfile.ZipFile(path, "w") as archive:
+        for name, data in android_fixture(target).items(): archive.writestr(f"{root}/{name}", data)
         archive.writestr(
             f"{root}/NyaTerm.exe",
             fake_pe(machine, subsystem=2, resource_ids=application_resources),
@@ -120,6 +149,7 @@ def verify_installer_fixture(
                 **{name: fake_pe(0x8664)
                    for name in verify_native_package.helper_filenames(target)},
             }
+            entries.update(android_fixture(target))
             for relative in package_native.conpty_files(target):
                 if relative.as_posix() == missing_conpty:
                     continue
@@ -144,6 +174,19 @@ def verify_installer_fixture(
 
 
 class VerifyNativePackageTests(unittest.TestCase):
+    def test_android_resource_hashes_and_windows_adb_x86_are_enforced(self):
+        target="aarch64-pc-windows-msvc"
+        entries=android_fixture(target)
+        verify_native_package.verify_android_resources(entries.__getitem__,target)
+        entries["adb/AdbWinApi.dll"]=fake_pe(0xAA64)
+        with self.assertRaisesRegex(RuntimeError,"checksum"):
+            verify_native_package.verify_android_resources(entries.__getitem__,target)
+        manifest=json.loads(entries["android-resources.json"])
+        manifest["files"]["adb/AdbWinApi.dll"]=hashlib.sha256(entries["adb/AdbWinApi.dll"]).hexdigest()
+        entries["android-resources.json"]=json.dumps(manifest).encode()
+        with self.assertRaisesRegex(RuntimeError,"PE architecture"):
+            verify_native_package.verify_android_resources(entries.__getitem__,target)
+
     def setUp(self) -> None:
         # Synthetic PE fixtures only contain directory headers. Test metadata
         # comparisons separately; the Windows resource build test uses real PEs.
@@ -346,6 +389,7 @@ class VerifyNativePackageTests(unittest.TestCase):
                     "CFBundleURLTypes": [{"CFBundleURLSchemes": list(identity.url_schemes)}],
                 }
                 entries = {
+                    **{f"{bundle}/Contents/MacOS/{name}": data for name, data in android_fixture("aarch64-apple-darwin").items()},
                     f"{bundle}/Contents/MacOS/NyaTerm": fake_macho(0x0100000C),
                     **{f"{bundle}/Contents/MacOS/{name}": fake_macho(0x0100000C)
                        for name in verify_native_package.helper_filenames("aarch64-apple-darwin")},

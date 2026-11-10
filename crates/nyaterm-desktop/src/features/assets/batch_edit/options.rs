@@ -226,6 +226,7 @@ pub(super) fn batch_kind_label(kind: ConnectionBatchKind) -> SharedString {
         ConnectionBatchKind::Telnet => "Telnet".into(),
         ConnectionBatchKind::Rdp => "RDP".into(),
         ConnectionBatchKind::Vnc => "VNC".into(),
+        ConnectionBatchKind::Adb => "Android".into(),
         ConnectionBatchKind::LocalTerminal => t!("dialog.localTerminal").into(),
         ConnectionBatchKind::Serial => t!("dialog.serial").into(),
     }

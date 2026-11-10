@@ -17,19 +17,21 @@ OUTPUTS = ("run_rust", "run_tmux", "run_plugin_sdk", "run_python", "run_workflow
 # Explicit registration makes a new crate fail closed until its CI impact is reviewed.
 KNOWN_CRATES = frozenset({
     "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
-    "nyaterm-app", "nyaterm-core", "nyaterm-desktop", "nyaterm-mcp",
+    "nyaterm-app", "nyaterm-core",
+    "nyaterm-android", "nyaterm-desktop", "nyaterm-mcp",
     "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
     "nyaterm-mcp-protocol", "nyaterm-otp", "nyaterm-plugin-api",
     "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-windows-rdp",
     "nyaterm-remote-desktop", "nyaterm-store", "nyaterm-sync", "nyaterm-terminal",
     "nyaterm-terminal-gpui", "nyaterm-transport", "nyaterm-ui", "nyaterm-vnc-helper",
+    "nyaterm-android-helper",
 })
 
 # Include transitive local dependencies, not reverse dependencies. The real tmux
 # tests exercise transport; the SDK job also builds the host and tests the store.
 # Manifest-closure tests guard both sets against dependency drift.
 TMUX_CRATES = frozenset({
-    "nyaterm-transport", "nyaterm-terminal", "nyaterm-core",
+    "nyaterm-transport", "nyaterm-terminal", "nyaterm-core", "nyaterm-android",
     "nyaterm-plugin-api", "nyaterm-mcp-protocol",
 })
 PLUGIN_SDK_CRATES = frozenset({

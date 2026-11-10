@@ -70,6 +70,37 @@ impl NyaTermApp {
         let workspace_split = self.session.start_take_pending_workspace_split();
 
         match metadata.launch_config.clone() {
+            SessionLaunchConfig::AdbShell(config) => {
+                self.open_android_view(
+                    config,
+                    nyaterm_core::models::android::AndroidViewKind::Shell,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        after_session_id: Some(source_session_id),
+                        workspace_split,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            }
+            SessionLaunchConfig::AdbFiles(config) | SessionLaunchConfig::AdbScreen(config) => {
+                let kind = match metadata.launch_config {
+                    SessionLaunchConfig::AdbFiles(_) => {
+                        nyaterm_core::models::android::AndroidViewKind::Files
+                    }
+                    _ => nyaterm_core::models::android::AndroidViewKind::Screen,
+                };
+                self.open_android_view(
+                    config,
+                    kind,
+                    SavedConnectionStartOptions {
+                        workspace_split,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            }
             SessionLaunchConfig::Local(mut config) => {
                 if let Some(working_dir) = working_dir {
                     config.working_dir = Some(working_dir);
@@ -268,7 +299,16 @@ impl NyaTermApp {
 
         self.session.begin_disconnect_action(session_id.clone());
         // Backend may already be gone (race with Exited); still mark disconnected.
-        if self.remote_desktop.is_session(&session_id) {
+        if matches!(
+            self.android.kind(&session_id),
+            Some(
+                nyaterm_core::models::android::AndroidViewKind::Files
+                    | nyaterm_core::models::android::AndroidViewKind::Screen
+            )
+        ) {
+            self.android.release_inputs(&session_id);
+            self.android.stop_screen(&session_id);
+        } else if self.remote_desktop.is_session(&session_id) {
             let _ = self.close_remote_desktop_runtime(&session_id);
         } else if let Err(error) = self.session.manager().close_detached(&session_id) {
             self.session.finish_busy_action(&session_id);
@@ -486,6 +526,18 @@ impl NyaTermApp {
                 connection,
                 SavedConnectionStartOptions {
                     ssh_runtime_mode,
+                    android_view: match metadata.launch_config {
+                        SessionLaunchConfig::AdbShell(_) => {
+                            Some(nyaterm_core::models::android::AndroidViewKind::Shell)
+                        }
+                        SessionLaunchConfig::AdbFiles(_) => {
+                            Some(nyaterm_core::models::android::AndroidViewKind::Files)
+                        }
+                        SessionLaunchConfig::AdbScreen(_) => {
+                            Some(nyaterm_core::models::android::AndroidViewKind::Screen)
+                        }
+                        _ => None,
+                    },
                     custom_name,
                     tab_color: custom_color,
                     locked,
@@ -517,6 +569,12 @@ impl NyaTermApp {
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
         match launch_config {
+            SessionLaunchConfig::AdbShell(_)
+            | SessionLaunchConfig::AdbFiles(_)
+            | SessionLaunchConfig::AdbScreen(_) => {
+                self.shell
+                    .set_status("Android saved connection is unavailable");
+            }
             SessionLaunchConfig::Local(mut config) => {
                 self.apply_desired_geometry_to_local_config(&mut config);
                 self.begin_background_session_start(

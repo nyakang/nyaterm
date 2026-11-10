@@ -133,13 +133,68 @@ impl NyaTermApp {
                 .workspace_reconnect_failed_state(session_id, error, cx)
                 .into_any_element();
         }
-        let content = if self.remote_desktop.is_session(&session_id) {
+        let content = if matches!(
+            self.android.kind(&session_id),
+            Some(
+                nyaterm_core::models::android::AndroidViewKind::Files
+                    | nyaterm_core::models::android::AndroidViewKind::Screen
+            )
+        ) {
+            self.android_view(session_id.clone(), cx)
+        } else if self.remote_desktop.is_session(&session_id) {
             self.remote_desktop_view(session_id.clone(), cx)
         } else if self.session_is_sftp_only(&session_id) {
             self.sftp_session_content(&session_id)
         } else {
             self.terminal_canvas_for(session_id.clone(), cx)
                 .into_any_element()
+        };
+        let content = if self.android.kind(&session_id).is_some() {
+            let mut bar = div().flex().items_center().gap_1().px_2().h(px(30.));
+            for (label, kind) in [
+                (
+                    "Files",
+                    nyaterm_core::models::android::AndroidViewKind::Files,
+                ),
+                (
+                    "Shell",
+                    nyaterm_core::models::android::AndroidViewKind::Shell,
+                ),
+                (
+                    "Screen",
+                    nyaterm_core::models::android::AndroidViewKind::Screen,
+                ),
+            ] {
+                let id = session_id.clone();
+                bar = bar.child(small_button(
+                    self.theme_palette(),
+                    format!("android-open-{label}-{id}"),
+                    label,
+                    cx.listener(move |app, _, _, cx| {
+                        cx.stop_propagation();
+                        app.android_open_from_session(&id, kind, cx);
+                    }),
+                ));
+            }
+            let id = session_id.clone();
+            bar = bar.child(small_button(
+                self.theme_palette(),
+                format!("android-close-device-{id}"),
+                "Close device",
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.close_android_device(&id, cx);
+                }),
+            ));
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(bar)
+                .child(div().flex_1().min_h_0().min_w_0().child(content))
+                .into_any_element()
+        } else {
+            content
         };
         self.with_session_notice_bar(&session_id, content, cx)
     }
@@ -193,7 +248,16 @@ impl NyaTermApp {
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_workspace_pane(focus_id.clone(), cx);
-                        if this.remote_desktop.is_session(&focus_id) {
+                        if this.android.kind(&focus_id)
+                            == Some(nyaterm_core::models::android::AndroidViewKind::Files)
+                        {
+                            return;
+                        }
+                        if this.android.kind(&focus_id)
+                            == Some(nyaterm_core::models::android::AndroidViewKind::Screen)
+                        {
+                            this.focus_android_screen(window, cx);
+                        } else if this.remote_desktop.is_session(&focus_id) {
                             window.focus(this.remote_desktop.focus(), cx);
                         } else if !this.session_is_sftp_only(&focus_id) {
                             window.focus(this.terminal.input_focus(), cx);

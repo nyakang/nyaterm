@@ -62,6 +62,11 @@ impl NyaTermApp {
         }
 
         match &metadata.launch_config {
+            SessionLaunchConfig::AdbShell(config)
+            | SessionLaunchConfig::AdbFiles(config)
+            | SessionLaunchConfig::AdbScreen(config) => {
+                details.push((t!("sessionInfo.host"), config.device.serial()));
+            }
             SessionLaunchConfig::Local(config) => {
                 details.push((
                     t!("sessionInfo.launch"),
@@ -331,6 +336,7 @@ impl NyaTermApp {
         }
         let target_is_rdp = self.remote_desktop.is_session(session_id);
         if switching_sessions && let Some(previous_session_id) = previous_session_id.as_deref() {
+            self.android.release_inputs(previous_session_id);
             self.release_remote_keys(previous_session_id);
             self.clear_remote_composition(previous_session_id, cx);
         }

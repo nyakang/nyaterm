@@ -287,6 +287,10 @@ fn ssh_algorithm_lists_keep_rows_full_height_and_scroll_inside_the_viewport() {
 
 fn protocol_selectors(kind: ConnectionKindTab) -> (&'static str, &'static str) {
     match kind {
+        ConnectionKindTab::Adb => (
+            "connection-editor-adb-section",
+            "connection-editor-adb-advanced",
+        ),
         ConnectionKindTab::Ssh => (
             "connection-editor-ssh-section",
             "connection-editor-ssh-advanced",
@@ -327,6 +331,8 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> ConnectionEditorState {
     ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         id: None,
         kind: ConnectionKindTab::Ssh,
         name: String::new(),

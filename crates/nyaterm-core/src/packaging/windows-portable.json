@@ -2,13 +2,32 @@
   "root": "NyaTerm-portable",
   "marker": "nyaterm-portable",
   "data_placeholder": "data/.keep",
-  "program_files": ["NyaTerm.exe", "LICENSE", "VERSION"],
+  "program_files": [
+    "NyaTerm.exe",
+    "LICENSE",
+    "VERSION"
+  ],
   "helper_files": [
     "nyaterm-rdp-helper.exe",
     "nyaterm-vnc-helper.exe",
-    "nyaterm-mcp.exe"
+    "nyaterm-mcp.exe",
+    "nyaterm-android-helper.exe"
   ],
-  "support_files": ["conpty/LICENSE.txt"],
+  "support_files": [
+    "conpty/LICENSE.txt",
+    "adb/adb.exe",
+    "adb/AdbWinApi.dll",
+    "adb/AdbWinUsbApi.dll",
+    "adb/NOTICE.txt",
+    "adb/SOURCE.json",
+    "android-libs/SOURCE.json",
+    "android-libs/LICENSE.txt",
+    "android-resources.json",
+    "avcodec-62.dll",
+    "avformat-62.dll",
+    "avutil-60.dll",
+    "swscale-9.dll"
+  ],
   "conpty_files": {
     "x86_64-pc-windows-msvc": [
       "conpty/x64/conpty.dll",

@@ -1482,6 +1482,9 @@ fn fit_wallpaper_tile_size(viewport: (f32, f32), intrinsic: (f32, f32)) -> (f32,
 
 impl Render for NyaTermApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for texture in self.android.retired_textures.drain(..) {
+            window.remove_dynamic_texture(texture);
+        }
         let render_started_at = Instant::now();
         // Reconcile viewport size and cell metrics here rather than on the runtime
         // tick. `render` already holds the window, and the chrome built below reads

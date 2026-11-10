@@ -38,7 +38,8 @@ fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarge
         ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {
             SessionStartFocusTarget::RemoteDesktop
         }
-        ConnectionType::Ssh { .. }
+        ConnectionType::Adb { .. }
+        | ConnectionType::Ssh { .. }
         | ConnectionType::LocalTerminal { .. }
         | ConnectionType::Telnet { .. }
         | ConnectionType::Serial { .. } => SessionStartFocusTarget::Terminal,
@@ -242,6 +243,12 @@ impl NyaTermApp {
                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 &t!("settings.configurationReplacementInProgress"),
             );
+            return;
+        }
+
+        if matches!(connection.config, ConnectionType::Adb { .. }) {
+            let kind = options.android_view;
+            self.start_android_connection(connection, options, kind, cx);
             return;
         }
 
@@ -526,6 +533,9 @@ impl NyaTermApp {
         let tab_placement = options.tab_placement;
         let fallback_insert_index = options.insert_index.filter(|_| tab_placement.is_none());
         match connection.config.clone() {
+            ConnectionType::Adb { .. } => {
+                unreachable!("Android start is routed before credential resolution")
+            }
             ConnectionType::LocalTerminal {
                 shell_path,
                 shell_args,
@@ -975,6 +985,7 @@ impl NyaTermApp {
         }
 
         let SavedConnectionStartOptions {
+            android_view: _,
             mcp_open_operation_id,
             ssh_runtime_mode,
             custom_name,

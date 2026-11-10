@@ -1,0 +1,476 @@
+use crate::features::NyaTermApp;
+use crate::widgets::small_button;
+use gpui::{
+    Bounds, Context, DevicePixels, IntoElement, KeyDownEvent, MouseButton, Pixels, Point, Size,
+    Window, canvas, div, prelude::*, px, rgb,
+};
+use nyaterm_android::ipc::Control;
+use nyaterm_core::models::android::{AndroidViewKind, screen_point};
+use std::time::{Duration, Instant};
+
+impl NyaTermApp {
+    pub(in crate::features) fn android_view(
+        &mut self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if self.android.kind(&id) == Some(AndroidViewKind::Files) {
+            return self
+                .file_manager
+                .workspace(&format!("sftp-{id}"))
+                .map(|w| w.into_any_element())
+                .unwrap_or_else(|| div().child("Android files unavailable").into_any_element());
+        }
+        let app = cx.weak_entity();
+        self.android
+            .surfaces
+            .entry(id.clone())
+            .or_insert_with(|| cx.new(|cx| super::surface::AndroidSurface::new(app, id, cx)))
+            .clone()
+            .into_any_element()
+    }
+    pub(super) fn poll_android_screen(&mut self, id: &str) -> bool {
+        let expected_binding = self
+            .android_config_for_session(id)
+            .map(|config| config.binding.generation);
+        let Some(screen) = self.android.screens.get_mut(id) else {
+            return false;
+        };
+        let Some(handle) = screen.handle.as_ref() else {
+            return false;
+        };
+        let mut changed = false;
+        for event in handle.events() {
+            match event {
+                Control::Ready {
+                    width,
+                    height,
+                    generation,
+                } if generation > screen.generation => {
+                    let _ = handle.send(Control::ReleaseInputs);
+                    screen.drag = false;
+                    screen.physical_keys.clear();
+                    screen.bounds = None;
+                    screen.generation = generation;
+                    screen.dimensions = (width, height);
+                    if let Some(frame) = screen.frame.take() {
+                        handle.acknowledge(frame.sequence);
+                    }
+                    changed = true;
+                }
+                Control::Fatal { code } => {
+                    screen.error = Some(code);
+                    screen.drag = false;
+                    screen.physical_keys.clear();
+                    changed = true;
+                }
+                Control::Disconnected => {
+                    screen.error = Some("Device disconnected; reconnect manually".into());
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if let Some(frame) = handle.take_frame() {
+            if Some(frame.binding_generation) != expected_binding
+                || frame.generation < screen.generation
+            {
+                handle.acknowledge(frame.sequence);
+                return changed;
+            }
+            if frame.generation != screen.generation {
+                let _ = handle.send(Control::ReleaseInputs);
+                screen.drag = false;
+            }
+            screen.generation = frame.generation;
+            screen.dimensions = (frame.width, frame.height);
+            if let Some(old) = screen.frame.replace(frame) {
+                handle.acknowledge(old.sequence);
+            }
+            // Invisible surfaces retain one latest CPU frame and return credit.
+            if screen.last_render.elapsed() > Duration::from_millis(100)
+                && let Some(frame) = &screen.frame
+            {
+                handle.acknowledge(frame.sequence);
+            }
+            changed = true;
+        }
+        if screen.error.is_some()
+            && let Some(metadata) = self.session.metadata_mut(id)
+        {
+            metadata.disconnected = true;
+        }
+        changed
+    }
+    pub(super) fn prepare_android_texture(&mut self, id: &str, window: &mut Window) {
+        for texture in self.android.retired_textures.drain(..) {
+            window.remove_dynamic_texture(texture);
+        }
+        let Some(screen) = self.android.screens.get_mut(id) else {
+            return;
+        };
+        screen.last_render = Instant::now();
+        let Some(frame) = screen.frame.take() else {
+            return;
+        };
+        let dimensions = (frame.width, frame.height);
+        let size = Size::new(
+            DevicePixels(frame.width as i32),
+            DevicePixels(frame.height as i32),
+        );
+        let result = if screen.texture_size != Some(dimensions) {
+            if let Some(texture) = screen.texture.take() {
+                window.remove_dynamic_texture(texture);
+            }
+            window
+                .create_dynamic_texture(size, &frame.pixels, frame.stride)
+                .map(|texture| {
+                    screen.texture = Some(texture);
+                    screen.texture_size = Some(dimensions);
+                })
+        } else if let Some(texture) = screen.texture {
+            window.update_dynamic_texture(
+                texture,
+                Bounds::new(Point::new(DevicePixels(0), DevicePixels(0)), size),
+                &frame.pixels,
+                frame.stride,
+            )
+        } else {
+            Ok(())
+        };
+        if result.is_err() {
+            screen.error = Some("Android texture upload failed".into());
+            if let Some(handle) = &screen.handle {
+                handle.close();
+            }
+        }
+        if let Some(handle) = &screen.handle {
+            handle.acknowledge(frame.sequence);
+        }
+    }
+    pub(super) fn android_screen_content(
+        &mut self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let palette = self.theme_palette();
+        let Some(screen) = self.android.screens.get(&id) else {
+            return div().child("Android screen closed").into_any_element();
+        };
+        let texture = screen.texture;
+        let dimensions = screen.dimensions;
+        let geometry_generation = screen.generation;
+        let zoom = screen.zoom;
+        let error = screen.error.clone();
+        let view_only = self
+            .android_config_for_session(&id)
+            .is_some_and(|c| c.screen.view_only);
+        let mut toolbar = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .h(px(36.))
+            .px_2()
+            .bg(rgb(palette.surface));
+        for (label, keycode) in [("Back", 4), ("Home", 3), ("Recent", 187)] {
+            let target = id.clone();
+            toolbar = toolbar.child(small_button(
+                palette,
+                format!("android-{label}-{id}"),
+                label,
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.android_key(&target, keycode, 0, 0);
+                    app.android_key(&target, keycode, 1, 0);
+                }),
+            ));
+        }
+        let rotate = id.clone();
+        let paste = id.clone();
+        let reconnect = id.clone();
+        let fit = id.clone();
+        let zoom_in = id.clone();
+        toolbar = toolbar
+            .child(small_button(
+                palette,
+                format!("android-rotate-{id}"),
+                "Rotate",
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.android_send(&rotate, Control::Rotate);
+                }),
+            ))
+            .child(small_button(
+                palette,
+                format!("android-fit-{id}"),
+                "Fit",
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(screen) = app.android.screens.get_mut(&fit) {
+                        screen.zoom = 1.0;
+                    }
+                    cx.notify();
+                }),
+            ))
+            .child(small_button(
+                palette,
+                format!("android-zoom-{id}"),
+                "Zoom",
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(screen) = app.android.screens.get_mut(&zoom_in) {
+                        screen.zoom = (screen.zoom * 1.25).min(4.0);
+                    }
+                    cx.notify();
+                }),
+            ))
+            .child(small_button(
+                palette,
+                format!("android-paste-{id}"),
+                "Paste",
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        app.android_send(
+                            &paste,
+                            Control::Paste {
+                                text,
+                                sequence: nyaterm_core::models::android::next_paste_sequence(),
+                            },
+                        );
+                    }
+                }),
+            ))
+            .child(small_button(
+                palette,
+                format!("android-reconnect-{id}"),
+                "Reconnect",
+                cx.listener(move |app, _, window, cx| {
+                    cx.stop_propagation();
+                    app.reconnect_session(reconnect.clone(), window, cx);
+                }),
+            ));
+        if view_only {
+            toolbar = toolbar.child(
+                div()
+                    .text_color(rgb(palette.text_dimmed))
+                    .child("Read only"),
+            );
+        }
+        let app = cx.weak_entity();
+        let bounds_id = id.clone();
+        let image = canvas(
+            move |bounds, window, cx| {
+                let scale = (f32::from(bounds.size.width) / dimensions.0.max(1) as f32)
+                    .min(f32::from(bounds.size.height) / dimensions.1.max(1) as f32)
+                    * zoom;
+                let width = px(dimensions.0 as f32 * scale);
+                let height = px(dimensions.1 as f32 * scale);
+                let image = Bounds::new(
+                    Point::new(
+                        bounds.origin.x + (bounds.size.width - width) / 2.0,
+                        bounds.origin.y + (bounds.size.height - height) / 2.0,
+                    ),
+                    Size::new(width, height),
+                );
+                let app = app.clone();
+                let bounds_id = bounds_id.clone();
+                window.defer(cx, move |_, cx| {
+                    let _ = app.update(cx, |app, _| {
+                        if let Some(screen) = app.android.screens.get_mut(&bounds_id) {
+                            screen.bounds = Some(image);
+                            screen.bounds_generation = geometry_generation;
+                        }
+                    });
+                });
+                image
+            },
+            move |_, image, window, _| {
+                if let Some(texture) = texture {
+                    let _ = window.paint_dynamic_texture(image, texture);
+                }
+            },
+        )
+        .size_full();
+        let down = id.clone();
+        let up = id.clone();
+        let movement = id.clone();
+        let scroll = id.clone();
+        let keyboard = id.clone();
+        let key_up = id.clone();
+        let outside_up = id.clone();
+        let focus = self.android.focus.clone();
+        let surface = div()
+            .id(format!("android-input-{id}"))
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .bg(rgb(0))
+            .track_focus(&focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |app, event: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    app.activate_workspace_pane(down.clone(), cx);
+                    app.focus_android_screen(window, cx);
+                    app.android_pointer(&down, event.position, 0);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |app, event: &gpui::MouseUpEvent, _, cx| {
+                    cx.stop_propagation();
+                    app.android_pointer(&up, event.position, 1);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(move |app, _: &gpui::MouseUpEvent, _, _| {
+                    app.android.release_inputs(&outside_up);
+                }),
+            )
+            .on_mouse_move(cx.listener(move |app, event: &gpui::MouseMoveEvent, _, _| {
+                if app.android.screens.get(&movement).is_some_and(|s| s.drag) {
+                    app.android_pointer(&movement, event.position, 2);
+                }
+            }))
+            .on_scroll(cx.listener(move |app, event: &gpui::ScrollEvent, _, cx| {
+                cx.stop_propagation();
+                if let Some((x, y, width, height, generation)) =
+                    app.android_position(&scroll, event.position)
+                {
+                    let delta = event.delta.pixel_delta(px(20.));
+                    app.android_send(
+                        &scroll,
+                        Control::Scroll {
+                            x,
+                            y,
+                            width,
+                            height,
+                            generation,
+                            horizontal: f32::from(delta.x) / 40.0,
+                            vertical: f32::from(delta.y) / 40.0,
+                        },
+                    );
+                }
+            }))
+            .on_key_down(cx.listener(move |app, event: &KeyDownEvent, _, cx| {
+                cx.stop_propagation();
+                let mods = event.keystroke.modifiers;
+                let metastate = u32::from(mods.shift)
+                    | (u32::from(mods.alt) << 1)
+                    | (u32::from(mods.control) << 12)
+                    | (u32::from(mods.platform) << 16);
+                if !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && let Some(text) = event
+                        .keystroke
+                        .key_char
+                        .as_ref()
+                        .filter(|s| s.is_ascii() && !s.chars().any(char::is_control))
+                {
+                    app.android_send(&keyboard, Control::Text { text: text.clone() });
+                } else if let Some(code) =
+                    nyaterm_core::models::android::android_keycode(&event.keystroke.key)
+                {
+                    if let Some(screen) = app.android.screens.get_mut(&keyboard) {
+                        screen.physical_keys.insert(code);
+                    }
+                    app.android_key(&keyboard, code, 0, metastate);
+                }
+            }))
+            .on_key_up(cx.listener(move |app, event: &gpui::KeyUpEvent, _, cx| {
+                cx.stop_propagation();
+                if let Some(code) =
+                    nyaterm_core::models::android::android_keycode(&event.keystroke.key)
+                    && app
+                        .android
+                        .screens
+                        .get_mut(&key_up)
+                        .is_some_and(|screen| screen.physical_keys.remove(&code))
+                {
+                    app.android_key(&key_up, code, 1, 0);
+                }
+            }))
+            .child(image);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .when_some(error, |el, error| {
+                el.child(div().px_2().text_color(rgb(palette.danger)).child(error))
+            })
+            .child(surface)
+            .into_any_element()
+    }
+    fn android_send(&self, id: &str, control: Control) {
+        if self
+            .android_config_for_session(id)
+            .is_some_and(|c| c.screen.view_only)
+            && !matches!(control, Control::ReleaseInputs)
+        {
+            return;
+        }
+        if let Some(handle) = self.android.screens.get(id).and_then(|s| s.handle.as_ref()) {
+            let _ = handle.send(control);
+        }
+    }
+    fn android_key(&self, id: &str, code: u32, action: u8, metastate: u32) {
+        self.android_send(
+            id,
+            Control::Key {
+                action,
+                keycode: code,
+                repeat: 0,
+                metastate,
+            },
+        );
+    }
+    fn android_position(
+        &self,
+        id: &str,
+        position: Point<Pixels>,
+    ) -> Option<(u32, u32, u32, u32, u64)> {
+        let screen = self.android.screens.get(id)?;
+        if screen.bounds_generation != screen.generation {
+            return None;
+        }
+        let bounds = screen.bounds?;
+        let (width, height) = screen.dimensions;
+        let (x, y) = screen_point(
+            f32::from(position.x - bounds.origin.x),
+            f32::from(position.y - bounds.origin.y),
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+            width,
+            height,
+        )?;
+        Some((x, y, width, height, screen.generation))
+    }
+    fn android_pointer(&mut self, id: &str, position: Point<Pixels>, action: u8) {
+        if let Some((x, y, width, height, generation)) = self.android_position(id, position) {
+            if let Some(screen) = self.android.screens.get_mut(id) {
+                screen.drag = action != 1;
+            }
+            self.android_send(
+                id,
+                Control::Touch {
+                    action,
+                    x,
+                    y,
+                    width,
+                    height,
+                    generation,
+                },
+            );
+        } else if action == 1 {
+            self.android_send(id, Control::ReleaseInputs);
+            if let Some(screen) = self.android.screens.get_mut(id) {
+                screen.drag = false;
+            }
+        }
+    }
+}

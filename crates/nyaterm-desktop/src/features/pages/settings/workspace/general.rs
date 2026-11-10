@@ -52,6 +52,14 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap_3()
+            .child(settings_form_row(
+                palette,
+                "ADB executable",
+                Some(SharedString::from(
+                    "Leave empty to use bundled ADB. An explicit path must be valid.",
+                )),
+                self.existing_text_input_box("settings.android.adb-path", false),
+            ))
             .child(settings_form_section(
                 palette,
                 None,

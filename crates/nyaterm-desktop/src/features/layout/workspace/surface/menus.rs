@@ -69,6 +69,7 @@ fn new_session_connection_protocol(connection: &SavedConnection) -> &'static str
         ConnectionType::Rdp { .. } => "rdp",
         ConnectionType::Ssh { .. } => "ssh",
         ConnectionType::Vnc { .. } => "vnc",
+        ConnectionType::Adb { .. } => "adb",
     }
 }
 
@@ -346,6 +347,9 @@ impl NyaTermApp {
                         nyaterm_transport::SessionKind::RawTcp => "SSH",
                         nyaterm_transport::SessionKind::Rdp => "RDP",
                         nyaterm_transport::SessionKind::Vnc => "VNC",
+                        nyaterm_transport::SessionKind::AdbShell
+                        | nyaterm_transport::SessionKind::AdbFiles
+                        | nyaterm_transport::SessionKind::AdbScreen => "Android",
                     },
                     SavedConnection::kind_label,
                 );

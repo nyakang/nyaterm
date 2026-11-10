@@ -594,6 +594,7 @@ pub(super) fn set_connection_editor_kind(
                 editor.port.clone()
             }
         }
+        ConnectionKindTab::Adb => "5555".to_string(),
         ConnectionKindTab::Vnc => {
             if editor.port.trim().is_empty()
                 || editor.port == "22"
@@ -891,6 +892,24 @@ pub(super) fn editor_field_seeds(
     use ConnectionEditorPlaceholder::{Empty, I18n, Literal};
 
     vec![
+        (
+            ConnectionEditorField::AndroidMaxSize,
+            draft.android_screen.max_size.to_string(),
+            false,
+            Literal("1280"),
+        ),
+        (
+            ConnectionEditorField::AndroidFps,
+            draft.android_screen.max_fps.to_string(),
+            false,
+            Literal("30"),
+        ),
+        (
+            ConnectionEditorField::AndroidBitRate,
+            draft.android_screen.bit_rate.to_string(),
+            false,
+            Literal("8000000"),
+        ),
         (
             ConnectionEditorField::Name,
             draft.name.clone(),
@@ -1258,6 +1277,15 @@ pub(super) fn set_connection_editor_field_text(
         ConnectionEditorField::ShellPath => draft.shell_path = text,
         ConnectionEditorField::ShellArgs => draft.shell_args = text,
         ConnectionEditorField::WorkingDir => draft.working_dir = text,
+        ConnectionEditorField::AndroidMaxSize => {
+            draft.android_screen.max_size = text.parse().unwrap_or(0)
+        }
+        ConnectionEditorField::AndroidFps => {
+            draft.android_screen.max_fps = text.parse().unwrap_or(0)
+        }
+        ConnectionEditorField::AndroidBitRate => {
+            draft.android_screen.bit_rate = text.parse().unwrap_or(0)
+        }
         ConnectionEditorField::SerialPort => draft.serial_port = text,
         ConnectionEditorField::BaudRate => draft.baud_rate = text,
         ConnectionEditorField::PostLoginCommand => draft.post_login_command = text,

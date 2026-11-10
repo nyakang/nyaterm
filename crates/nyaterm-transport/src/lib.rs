@@ -58,6 +58,7 @@ use session::default_local_shell_path;
 mod ssh_worker;
 #[cfg(test)]
 use ssh_worker::drain_deferred_ssh_open_commands;
+pub mod adb_shell;
 pub mod connection_attempt;
 #[cfg(windows)]
 pub mod local_conpty;

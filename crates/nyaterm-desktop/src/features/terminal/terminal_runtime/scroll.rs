@@ -969,6 +969,11 @@ impl NyaTermApp {
             .collect();
         let has_dirs = paths.iter().any(|p| p.is_dir());
         match kind {
+            Some(SessionKind::AdbShell | SessionKind::AdbFiles | SessionKind::AdbScreen) => {
+                self.shell
+                    .set_status("Upload using the Android file browser".to_string());
+                cx.notify();
+            }
             Some(SessionKind::LocalPty) | None => {
                 if path_strings.is_empty() {
                     self.shell

@@ -246,6 +246,7 @@ pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconD
         "Serial" => "serial",
         "RDP" => "rdp",
         "VNC" => "vnc",
+        "Android" | "Android (ADB)" => "android",
         _ => DEFAULT_CONNECTION_ICON,
     };
     lookup(key).expect("protocol defaults must be registered connection icons")

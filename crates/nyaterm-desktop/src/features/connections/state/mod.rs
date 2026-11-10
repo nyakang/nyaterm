@@ -940,6 +940,16 @@ impl ConnectionFeatureState {
     pub fn active_editor_draft(&self) -> Option<ConnectionEditorState> {
         self.editor.active_draft()
     }
+    pub(in crate::features) fn set_android_editor_usb(&mut self, value: bool) {
+        if let Some(draft) = self.editor.draft.as_mut() {
+            draft.android_usb = value;
+        }
+    }
+    pub(in crate::features) fn set_android_editor_read_only(&mut self, value: bool) {
+        if let Some(draft) = self.editor.draft.as_mut() {
+            draft.android_screen.view_only = value;
+        }
+    }
 
     pub fn begin_editor_agent_preview(&mut self) -> Option<(u64, ConnectionEditorState)> {
         let editor = self.editor.draft.as_mut()?;

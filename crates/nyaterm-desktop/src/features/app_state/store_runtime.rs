@@ -156,6 +156,7 @@ impl NyaTermApp {
         self.remote_desktop.routes.clear();
         self.remote_desktop.prepared_routes.clear();
         self.shutdown_remote_desktop_workers();
+        self.android.shutdown();
         #[cfg(windows)]
         let native_hosts = self.remote_desktop.take_native_hosts_for_shutdown();
         let session_shutdown = self.session.take_shutdown();

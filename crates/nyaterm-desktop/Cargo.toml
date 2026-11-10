@@ -19,6 +19,7 @@ keyring.workspace = true
 nyaterm-ai-client.workspace = true
 nyaterm-cloud-storage.workspace = true
 nyaterm-core.workspace = true
+nyaterm-android.workspace = true
 nyaterm-mcp-protocol.workspace = true
 nyaterm-otp.workspace = true
 nyaterm-preview.workspace = true

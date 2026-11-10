@@ -9055,3 +9055,51 @@ fn large_database_bootstrap_and_maintenance_benchmark() {
         result.bytes_after
     );
 }
+
+#[test]
+fn android_connections_and_adb_path_survive_database_reopen() {
+    let dir = unique_temp_dir("android-compatibility");
+    let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({"id":"android-test","name":"Android","type":"adb","device":{"kind":"tcp","host":"example.test","port":5555},"screen":{"max_fps":60,"future":true},"future_root":{"keep":1}})).unwrap();
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        store.save_connection(&connection).unwrap();
+        // Saving assigns the existing connection catalog's timestamps.
+        connection = store.get_connection("android-test").unwrap().unwrap();
+        store
+            .save_settings_value(&serde_json::json!({"android":{"adb_path":"/custom/adb"}}))
+            .unwrap();
+        let mut snapshot = store
+            .build_raw_portable_snapshot(
+                nyaterm_core::PortableSnapshotKind::Backup,
+                "fixture",
+                "2.0.4",
+            )
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let target_dir = unique_temp_dir("android-backup-target");
+        let target = ConnectionStore::open(&target_dir).unwrap();
+        target.apply_raw_portable_snapshot(&snapshot).unwrap();
+        let mut restored = target.get_connection("android-test").unwrap().unwrap();
+        // Importing is a catalog write and advances updated_at_ms by design.
+        assert!(restored.updated_at_ms >= connection.updated_at_ms);
+        restored.updated_at_ms = connection.updated_at_ms;
+        assert_eq!(
+            serde_json::to_value(restored).unwrap(),
+            serde_json::to_value(&connection).unwrap()
+        );
+        drop(target);
+        std::fs::remove_dir_all(target_dir).unwrap();
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert_eq!(
+        store.load_settings_value().unwrap()["android"]["adb_path"],
+        "/custom/adb"
+    );
+    let loaded = store.get_connection("android-test").unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(loaded).unwrap(),
+        serde_json::to_value(connection).unwrap()
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}

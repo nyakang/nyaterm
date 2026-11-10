@@ -48,6 +48,7 @@ fn asset_batch_kind_slot(kind: ConnectionBatchKind) -> usize {
         ConnectionBatchKind::Serial => 3,
         ConnectionBatchKind::Rdp => 4,
         ConnectionBatchKind::Vnc => 5,
+        ConnectionBatchKind::Adb => 6,
     }
 }
 
@@ -1039,6 +1040,7 @@ pub(in crate::features) fn batch_kind_value(kind: ConnectionBatchKind) -> &'stat
         ConnectionBatchKind::Telnet => "telnet",
         ConnectionBatchKind::Rdp => "rdp",
         ConnectionBatchKind::Vnc => "vnc",
+        ConnectionBatchKind::Adb => "adb",
         ConnectionBatchKind::LocalTerminal => "local",
         ConnectionBatchKind::Serial => "serial",
     }

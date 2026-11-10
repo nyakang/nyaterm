@@ -221,6 +221,18 @@ jobs:
       - name: Install Linux system dependencies
         if: inputs.source_run_id == ''
         uses: ./.github/actions/install-linux-deps
+      - name: Prepare Android native dependencies
+        if: inputs.source_run_id == ''
+        shell: bash
+        run: |
+          python3 scripts/release/prepare_android.py
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          target = subprocess.check_output(['rustc', '-vV'], text=True).split('host: ')[1].splitlines()[0]
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'FFMPEG_DIR={(Path("target/android-deps/ffmpeg") / target).resolve()}\n')
+          PY
       - name: Test workspace
         if: inputs.source_run_id == ''
         run: cargo test --workspace --locked --no-fail-fast

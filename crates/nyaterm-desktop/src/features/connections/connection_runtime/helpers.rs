@@ -18,6 +18,7 @@ use crate::models::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConnectionEditorValidationError {
     HostRequired,
+    AndroidSettings(&'static str),
     PortInvalid,
     TelnetKeepAliveIntervalInvalid,
     UsernameRequired,
@@ -133,6 +134,8 @@ pub(super) fn connection_editor_from_saved(
     };
     let icon_auto_detect = connection.icon_auto_detect_enabled();
     let mut editor = ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         id: Some(connection.id),
         kind: ConnectionKindTab::from_connection_type(&connection.config),
         name: connection.name,
@@ -280,6 +283,28 @@ pub(super) fn connection_editor_from_saved(
     };
 
     match connection.config {
+        ConnectionType::Adb {
+            device,
+            directory,
+            screen,
+        } => {
+            editor.android_usb = matches!(
+                device,
+                nyaterm_core::models::android::AdbDeviceSelector::Usb { .. }
+            );
+            match device {
+                nyaterm_core::models::android::AdbDeviceSelector::Usb { serial } => {
+                    editor.host = serial;
+                    editor.port.clear();
+                }
+                nyaterm_core::models::android::AdbDeviceSelector::Tcp { host, port } => {
+                    editor.host = host;
+                    editor.port = port.to_string();
+                }
+            }
+            editor.working_dir = directory;
+            editor.android_screen = screen;
+        }
         ConnectionType::Ssh {
             host,
             port,
@@ -653,6 +678,40 @@ pub(super) fn build_saved_connection_from_editor(
                 reconnect: editor.rdp_reconnect.clone(),
             }
         }
+        ConnectionKindTab::Adb => {
+            let host = editor.host.trim().to_string();
+            if host.is_empty() {
+                return Err(ConnectionEditorValidationError::HostRequired);
+            }
+            let device = if editor.android_usb {
+                nyaterm_core::models::android::AdbDeviceSelector::Usb { serial: host }
+            } else {
+                nyaterm_core::models::android::AdbDeviceSelector::Tcp {
+                    host,
+                    port: parse_port(&editor.port)?,
+                }
+            };
+            device
+                .validate()
+                .map_err(|_| ConnectionEditorValidationError::HostRequired)?;
+            let directory = if editor.working_dir.is_empty() {
+                "/sdcard/".into()
+            } else {
+                editor.working_dir.clone()
+            };
+            if !directory.starts_with('/') || directory.contains('\0') {
+                return Err(ConnectionEditorValidationError::HostRequired);
+            }
+            editor
+                .android_screen
+                .validate()
+                .map_err(ConnectionEditorValidationError::AndroidSettings)?;
+            ConnectionType::Adb {
+                device,
+                directory,
+                screen: editor.android_screen,
+            }
+        }
         ConnectionKindTab::Vnc => {
             let host = editor.host.trim().to_string();
             if host.is_empty() {
@@ -752,6 +811,7 @@ pub(super) fn build_saved_connection_from_editor(
             }
             ConnectionType::LocalTerminal { .. } => "Local Terminal".to_string(),
             ConnectionType::Serial { port_name, .. } => port_name.clone(),
+            ConnectionType::Adb { device, .. } => device.serial(),
         }
     } else {
         editor.name.trim().to_string()

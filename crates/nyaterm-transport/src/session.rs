@@ -43,6 +43,7 @@ pub struct SessionManager {
 }
 
 pub(crate) enum ManagedSession {
+    Adb(crate::adb_shell::AdbTerminalTransport),
     Local(LocalPtyTransport),
     Ssh(SshChannelTransport),
     Tcp(Box<TelnetTransport>),
@@ -123,6 +124,31 @@ pub(crate) fn should_use_interactive_login_args(program: &str) -> bool {
 }
 
 impl SessionManager {
+    pub fn create_adb_session(
+        &self,
+        config: crate::adb_shell::AdbShellConfig,
+    ) -> Result<SessionInfo, SessionError> {
+        self.ensure_reaper()?;
+        let info = SessionInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: config.name,
+            kind: SessionKind::AdbShell,
+            working_dir: None,
+            cols: config.cols,
+            rows: config.rows,
+        };
+        let transport = crate::adb_shell::AdbTerminalTransport::open(
+            info.clone(),
+            &config.binding,
+            self.event_queue.clone(),
+        )
+        .map_err(|source| SessionError::Worker(std::io::Error::other(source.to_string())))?;
+        self.sessions
+            .lock()
+            .map_err(|_| SessionError::LockPoisoned)?
+            .insert(info.id.clone(), ManagedSession::Adb(transport));
+        Ok(info)
+    }
     pub fn new() -> Self {
         Self::with_ssh_services(SshSessionServices::default())
     }
@@ -183,6 +209,7 @@ impl SessionManager {
                 // Clear pending input before waiting behind other cleanup jobs.
                 // Native cancellation and joins remain on the reaper worker.
                 match &session {
+                    ManagedSession::Adb(adb) => adb.stop(),
                     ManagedSession::Local(local) => local.writer.command_tx.stop(),
                     ManagedSession::Tcp(tcp) => tcp.writer.command_tx.stop(),
                     ManagedSession::Serial(serial) => serial.writer.command_tx.stop(),
@@ -851,7 +878,7 @@ impl SessionManager {
             // Output already queued by an exited session still needs protocol filtering.
             // Session existence is checked by the eventual writer, not this policy gate.
             match sessions.get(session_id) {
-                Some(ManagedSession::TmuxPane(_)) => false,
+                Some(ManagedSession::TmuxPane(_) | ManagedSession::Adb(_)) => false,
                 Some(ManagedSession::Ssh(ssh)) if ssh.tmux_active.load(Ordering::Acquire) => false,
                 Some(ManagedSession::Serial(serial)) => {
                     serial.flow_control
@@ -872,7 +899,7 @@ impl SessionManager {
             Some(ManagedSession::Serial(s)) => s.writer.command_tx.peak_bytes(),
             Some(ManagedSession::Ssh(s)) => s.command_tx.peak_bytes(),
             Some(ManagedSession::TmuxPane(pane)) => pane.tmux_tx.peak_bytes(),
-            None => 0,
+            Some(ManagedSession::Adb(_)) | None => 0,
         }
     }
 
@@ -971,7 +998,7 @@ impl SessionManager {
                             Some(ManagedSession::Ssh(s)) => {
                                 WriteCapacity::Ssh(s.command_tx.clone())
                             }
-                            Some(ManagedSession::TmuxPane(_)) => {
+                            Some(ManagedSession::TmuxPane(_) | ManagedSession::Adb(_)) => {
                                 return Err(SessionError::Write {
                                     session_id: session_id.into(),
                                     source: tmux_modem_unsupported().into(),
@@ -1253,6 +1280,7 @@ impl SessionManager {
 impl ManagedSession {
     pub(crate) fn info(&self) -> SessionInfo {
         match self {
+            Self::Adb(session) => session.info.clone(),
             Self::Local(session) => session.info.clone(),
             Self::Ssh(session) => session.info.clone(),
             Self::Tcp(session) => session.info.clone(),
@@ -1263,6 +1291,7 @@ impl ManagedSession {
 
     pub(crate) fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
         match self {
+            Self::Adb(session) => session.write(data),
             Self::Local(session) => session.write(data),
             Self::Tcp(session) => session.write(data),
             Self::Ssh(session) => session.write(data),
@@ -1273,6 +1302,7 @@ impl ManagedSession {
 
     pub(crate) fn write_raw(&mut self, data: &[u8]) -> anyhow::Result<()> {
         match self {
+            Self::Adb(session) => session.write_raw(data),
             Self::Local(session) => session.write_raw(data),
             Self::Tcp(session) => session.write_raw(data),
             Self::Ssh(session) => session.write_raw(data),
@@ -1289,6 +1319,7 @@ impl ManagedSession {
         pixel_height: u16,
     ) -> anyhow::Result<()> {
         match self {
+            Self::Adb(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Local(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Tcp(session) => session.resize(cols, rows, pixel_width, pixel_height),
             Self::Ssh(session) => session.resize(cols, rows, pixel_width, pixel_height),
@@ -1299,6 +1330,9 @@ impl ManagedSession {
 
     pub(crate) fn close(&mut self) {
         match self {
+            Self::Adb(session) => {
+                let _ = session.close();
+            }
             Self::Local(session) => {
                 let _ = session.close();
             }

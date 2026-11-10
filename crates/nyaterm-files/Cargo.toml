@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 nyaterm-core.workspace = true
+nyaterm-android.workspace = true
 nyaterm-transport.workspace = true
 anyhow.workspace = true
 base64.workspace = true

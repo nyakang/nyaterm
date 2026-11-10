@@ -1231,6 +1231,10 @@ impl RemoteFileService {
 #[derive(Debug, Clone)]
 pub enum FileTransferEndpoint {
     Local(PathBuf),
+    Adb {
+        service: Arc<crate::adb::AdbFileService>,
+        path: RemoteFilePath,
+    },
     Remote {
         service: Arc<RemoteFileService>,
         path: RemoteFilePath,
@@ -1265,6 +1269,11 @@ impl FileCopyRequest {
     where
         F: FnMut(SftpTransferProgress) + Send + 'static,
     {
+        if matches!(self.source, FileTransferEndpoint::Adb { .. })
+            || matches!(self.destination, FileTransferEndpoint::Adb { .. })
+        {
+            return crate::adb::copy::execute(self, progress);
+        }
         let browser_endpoint = |endpoint: &FileTransferEndpoint| match endpoint {
             FileTransferEndpoint::Local(path) => (
                 crate::file_browser::FileBrowserService::local(),
@@ -1272,6 +1281,10 @@ impl FileCopyRequest {
             ),
             FileTransferEndpoint::Remote { service, path } => (
                 crate::file_browser::FileBrowserService::Remote(service.clone()),
+                path.clone(),
+            ),
+            FileTransferEndpoint::Adb { service, path } => (
+                crate::file_browser::FileBrowserService::Adb(service.clone()),
                 path.clone(),
             ),
         };
@@ -1319,6 +1332,9 @@ impl FileCopyRequest {
         let control = self.control;
         let options = self.options;
         match (self.source, self.destination) {
+            (FileTransferEndpoint::Adb { .. }, _) | (_, FileTransferEndpoint::Adb { .. }) => {
+                unreachable!("Android copies use the isolated copy adapter")
+            }
             (FileTransferEndpoint::Local(source), FileTransferEndpoint::Local(destination)) => {
                 let Some(destination) = resolve_copy_local_target(
                     &source,

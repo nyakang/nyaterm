@@ -59,6 +59,28 @@ pub(super) fn session_info_from_metadata(
     metadata: &SessionRuntimeMetadata,
 ) -> SessionInfo {
     match &metadata.launch_config {
+        SessionLaunchConfig::AdbShell(config)
+        | SessionLaunchConfig::AdbFiles(config)
+        | SessionLaunchConfig::AdbScreen(config) => SessionInfo {
+            id: session_id.to_string(),
+            name: format!(
+                "{} · {}",
+                config.name,
+                match metadata.launch_config {
+                    SessionLaunchConfig::AdbShell(_) => "Shell",
+                    SessionLaunchConfig::AdbFiles(_) => "Files",
+                    _ => "Screen",
+                }
+            ),
+            kind: match metadata.launch_config {
+                SessionLaunchConfig::AdbShell(_) => SessionKind::AdbShell,
+                SessionLaunchConfig::AdbFiles(_) => SessionKind::AdbFiles,
+                _ => SessionKind::AdbScreen,
+            },
+            working_dir: None,
+            cols: config.cols,
+            rows: config.rows,
+        },
         SessionLaunchConfig::Local(config) => SessionInfo {
             id: session_id.to_string(),
             name: config.name.clone(),
@@ -451,6 +473,9 @@ impl SessionFeatureState {
         session_id: &str,
     ) -> Option<FileBrowserBackendKind> {
         match self.session_info(session_id)?.kind {
+            SessionKind::AdbShell | SessionKind::AdbFiles | SessionKind::AdbScreen => {
+                Some(FileBrowserBackendKind::Adb)
+            }
             SessionKind::LocalPty => Some(FileBrowserBackendKind::Local),
             SessionKind::Ssh => self
                 .metadata(session_id)
@@ -783,6 +808,9 @@ impl SessionFeatureState {
     pub(in crate::features) fn endpoint(&self, session_id: &str) -> Option<String> {
         let metadata = self.metadata(session_id)?;
         match &metadata.launch_config {
+            SessionLaunchConfig::AdbShell(config)
+            | SessionLaunchConfig::AdbFiles(config)
+            | SessionLaunchConfig::AdbScreen(config) => Some(config.device.serial()),
             SessionLaunchConfig::Local(config) => {
                 let shell = config
                     .shell_path

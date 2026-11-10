@@ -8,6 +8,8 @@ pub(in crate::features) enum TabSessionCapability {
     Serial,
     Rdp,
     Vnc,
+    AdbShell,
+    AdbView,
 }
 
 impl TabSessionCapability {
@@ -19,11 +21,16 @@ impl TabSessionCapability {
             SessionLaunchConfig::Serial(_) => Self::Serial,
             SessionLaunchConfig::Rdp(_) => Self::Rdp,
             SessionLaunchConfig::Vnc(_) => Self::Vnc,
+            SessionLaunchConfig::AdbShell(_) => Self::AdbShell,
+            SessionLaunchConfig::AdbFiles(_) | SessionLaunchConfig::AdbScreen(_) => Self::AdbView,
         }
     }
 
     pub(in crate::features) fn supports_terminal_actions(self) -> bool {
-        matches!(self, Self::Local | Self::Ssh | Self::Telnet | Self::Serial)
+        matches!(
+            self,
+            Self::Local | Self::Ssh | Self::Telnet | Self::Serial | Self::AdbShell
+        )
     }
 }
 
@@ -91,11 +98,11 @@ impl TabActionPolicy {
                 && input.has_copyable_ssh_host,
             session_spawn: supports_terminal_actions,
             ssh_multiplex: input.session == TabSessionCapability::Ssh,
-            reconnect: supports_terminal_actions,
-            disconnect: supports_terminal_actions,
+            reconnect: supports_terminal_actions || input.session == TabSessionCapability::AdbView,
+            disconnect: supports_terminal_actions || input.session == TabSessionCapability::AdbView,
             ai: supports_terminal_actions,
             rdp_secure_attention: input.session == TabSessionCapability::Rdp,
-            split: supports_terminal_actions,
+            split: supports_terminal_actions || input.session == TabSessionCapability::AdbView,
             session_info: input.has_source_connection,
         };
         let availability = TabActionAvailability {

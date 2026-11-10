@@ -377,6 +377,9 @@ fn protocol_key(kind: SessionKind) -> &'static str {
         SessionKind::Serial => "serial",
         SessionKind::Rdp => "rdp",
         SessionKind::Vnc => "vnc",
+        SessionKind::AdbShell => "adb shell",
+        SessionKind::AdbFiles => "adb files",
+        SessionKind::AdbScreen => "adb screen",
     }
 }
 

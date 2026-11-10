@@ -354,6 +354,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         // A tmux host closing takes its virtual pane sessions with it —
+        self.android.close_view(session_id);
         // detached or not, they only exist as projections of this session.
         // The converse (a pane leaf being removed) drops its host-side index
         // entry so `pane_for_session` cannot resurrect it.

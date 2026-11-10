@@ -1,3 +1,4 @@
+pub mod adb;
 pub mod download_path;
 pub mod drag_export;
 pub mod file_browser;

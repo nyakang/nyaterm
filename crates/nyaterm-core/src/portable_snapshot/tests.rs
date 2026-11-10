@@ -339,3 +339,13 @@ fn user_content_detection_ignores_defaults_and_settings() {
     );
     assert!(!with_history.has_user_content());
 }
+
+#[test]
+fn custom_adb_executable_is_device_local_in_legacy_sync_snapshots() {
+    let current = serde_json::json!({"android":{"adb_path":"/local/adb","future":true},"general":{"startup_behavior":"empty"}});
+    let mut remote = serde_json::json!({"android":{"adb_path":"/remote/adb"},"general":{"startup_behavior":"restore"}});
+    project_sync_settings(&mut remote);
+    assert!(remote.get("android").is_none());
+    preserve_device_local_sync_settings(&mut remote, &current);
+    assert_eq!(remote["android"], current["android"]);
+}

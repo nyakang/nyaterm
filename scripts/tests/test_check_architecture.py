@@ -17,7 +17,7 @@ class PluginDependencyTests(unittest.TestCase):
             )
             crates = (
                 "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
-                "nyaterm-core", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
+                "nyaterm-core", "nyaterm-android", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
                 "nyaterm-remote-desktop", "nyaterm-desktop", "nyaterm-plugin-api", "nyaterm-plugin-host",
                 "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
             )
