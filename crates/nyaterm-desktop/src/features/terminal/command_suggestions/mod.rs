@@ -145,6 +145,19 @@ fn command_suggestion_input_candidate_chars(state: &TerminalInputState) -> usize
     state.value.trim_start().chars().count()
 }
 
+/// Whether the tracked line holds any actual command text.
+///
+/// Remote pagers on switches consume keys such as Space without echoing them,
+/// so the local tracker can hold nothing but separators while the remote screen
+/// owns the cursor. That is not a command context: the token completer reads a
+/// trailing separator as an empty first token and answers with the whole
+/// catalog, and the whole-line search treats it as the manual empty query and
+/// answers with recent history. Requiring real text keeps this structural
+/// instead of matching any vendor's pager prompt.
+fn command_suggestion_input_has_command_text(state: &TerminalInputState) -> bool {
+    !state.value.trim().is_empty()
+}
+
 #[cfg(test)]
 fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> Option<String> {
     let submitted = if text.contains('\r') || text.contains('\n') {
@@ -331,6 +344,25 @@ impl NyaTermApp {
             }
             timing.hide_popup = hide_started_at.elapsed();
             finish!("below_min_chars", 0);
+        }
+
+        // Automatic suggestions need real command text. A pager keypress (for
+        // example Space on a switch's `--More--` prompt) reaches the tracker as
+        // ordinary input, and only whitespace means no local command line grew.
+        if self.terminal.assist.command_suggestion_mode == CompletionMode::Token
+            && !command_suggestion_input_has_command_text(self.terminal.editing.assist_input())
+        {
+            let hide_started_at = Instant::now();
+            self.terminal.assist.command_suggestion_search_gen = self
+                .terminal
+                .assist
+                .command_suggestion_search_gen
+                .saturating_add(1);
+            if self.terminal.assist.command_suggestions.take().is_some() {
+                cx.notify();
+            }
+            timing.hide_popup = hide_started_at.elapsed();
+            finish!("blank_input", 0);
         }
 
         let pattern_started_at = Instant::now();
@@ -596,7 +628,8 @@ impl NyaTermApp {
         let pattern_chars = pattern.chars().count();
         timing.pattern = pattern_started_at.elapsed();
         if !command_suggestion_input_can_defer_refresh(self.terminal.editing.assist_input())
-            || (mode == CompletionMode::Token && pattern.is_empty())
+            || (mode == CompletionMode::Token
+                && !command_suggestion_input_has_command_text(self.terminal.editing.assist_input()))
         {
             let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
@@ -1962,6 +1995,106 @@ mod tests {
             app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
             assert!(app.apply_selected_command_suggestion(true, cx));
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
+    }
+
+    #[test]
+    fn startup_layout_resize_keeps_first_line_input_eligible_for_suggestions() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-first-line-resize");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            // Selecting the new session activates editing state, then the first
+            // paint fits the pane to its real bounds before the user can type.
+            app.terminal.activate_shell_editing_session("s1");
+            app.terminal.invalidate_shell_editing_session("s1");
+            app.note_shell_editing_input(b"git", cx);
+            assert!(!app.terminal.editing.predicted_input().desynced);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
+        });
+    }
+
+    #[test]
+    fn layout_resize_with_tracked_text_still_desyncs_the_line() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-resize-tracked");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.note_shell_editing_input(b"git", cx);
+            app.terminal.invalidate_shell_editing_session("s1");
+            app.note_shell_editing_input(b"x", cx);
+            assert!(app.terminal.editing.predicted_input().desynced);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    2,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn pager_space_without_command_text_cannot_start_suggestions() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-pager-space");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            // A remote pager consumes Space itself and echoes nothing, so the
+            // local tracker holds only a separator while the screen repaints.
+            app.note_shell_editing_input(b" ", cx);
+            assert_eq!(app.terminal.editing.assist_input().value, " ");
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+
+            // The same signal hides a popup left over from an earlier line.
+            app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
+            app.note_command_suggestion_input(b" ", cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+
+            // A separator after real command text still offers suggestions.
+            app.note_shell_editing_input(b"git ", cx);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    2,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
         });
     }
 

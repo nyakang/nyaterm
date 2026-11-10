@@ -209,9 +209,17 @@ impl super::state::TerminalFeatureState {
 
     pub(in crate::features) fn invalidate_shell_editing_session(&mut self, session_id: &str) {
         if let Some(state) = self.editing.sessions.get_mut(session_id) {
+            // Only a line that already holds tracked text has an echo that the
+            // new geometry can invalidate. The first pane layout also resizes an
+            // untouched line; marking that empty tracker desynced would leave
+            // the first line of a new session ineligible for suggestions until
+            // an Enter reset the flag.
+            let tracked_text = !state.model.input.value.is_empty();
             state.invalidate();
             state.model.clear_input();
-            state.model.input.desynced = true;
+            if tracked_text {
+                state.model.input.desynced = true;
+            }
         }
     }
 }
