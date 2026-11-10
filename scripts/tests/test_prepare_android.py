@@ -168,7 +168,8 @@ class PrepareAndroidTests(unittest.TestCase):
                         self.assertIn(f"/DEF:{(prefix / 'lib' / f'{name}-{major}.def').resolve()}", command)
                         output = Path(next(arg[5:] for arg in command if arg.startswith("/OUT:")))
                         self.assertTrue(output.is_absolute())
-                        self.assertEqual(Path(call.kwargs["cwd"]), output.parent)
+                        # Windows TMP can use an 8.3 user path; /OUT is canonical.
+                        self.assertEqual(Path(call.kwargs["cwd"]).resolve(), output.parent.resolve())
                         self.assertTrue(call.kwargs["check"])
                 self.assert_complete(prefix)
 
