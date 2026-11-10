@@ -42,6 +42,24 @@ impl std::fmt::Display for HostCommandError {
 }
 impl std::error::Error for HostCommandError {}
 
+/// A failed read must not look like empty data. Return only a diagnostic line,
+/// never captured stdout, which may contain command lines or service logs.
+pub(crate) fn ensure_host_command_success(
+    output: RemoteCommandOutput,
+    fallback: &str,
+) -> anyhow::Result<RemoteCommandOutput> {
+    if output.exit_status.is_some_and(|code| code != 0) {
+        let detail = output
+            .stderr
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or(fallback);
+        bail!("{detail}");
+    }
+    Ok(output)
+}
+
 /// Operating-system family of a target, which selects the backend scripts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HostOs {
@@ -374,9 +392,47 @@ pub fn sh_quote(value: &str) -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{Elevation, HostOs, HostTarget, looks_like_permission_error};
+    use super::{
+        Elevation, HostOs, HostTarget, ensure_host_command_success, looks_like_permission_error,
+    };
     use nyaterm_core::SecretString;
     use std::time::Duration;
+
+    #[test]
+    fn failed_reads_return_one_stderr_line_without_exposing_stdout() {
+        use nyaterm_transport::ssh_execution::RemoteCommandOutput;
+        for stderr in ["\n denied\nsecond line", ""] {
+            let error = ensure_host_command_success(
+                RemoteCommandOutput {
+                    stdout: "private command or log".into(),
+                    stderr: stderr.into(),
+                    exit_status: Some(1),
+                },
+                "read failed",
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                if stderr.is_empty() {
+                    "read failed"
+                } else {
+                    "denied"
+                }
+            );
+        }
+        for exit_status in [Some(0), None] {
+            let output = ensure_host_command_success(
+                RemoteCommandOutput {
+                    stdout: "valid data".into(),
+                    stderr: String::new(),
+                    exit_status,
+                },
+                "read failed",
+            )
+            .unwrap();
+            assert_eq!(output.stdout, "valid data");
+        }
+    }
 
     #[test]
     fn local_sh_runs_scripts_with_quotes_and_reports_exit_status() {

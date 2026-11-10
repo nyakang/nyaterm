@@ -264,6 +264,7 @@ impl SshProcessService {
         let signal = normalize_process_signal(signal.as_ref())?;
         crate::process_control::ProcessControlCapabilities::for_os(self.target.os_hint())
             .ensure_signal(signal)?;
+        anyhow::ensure!(pid != 0, "process PID must be nonzero");
         if self.native_windows() {
             crate::local_process::kill_local_process(pid, signal == "KILL")?;
             return Ok(RemoteCommandOutput {
@@ -273,7 +274,7 @@ impl SshProcessService {
             });
         }
         let output = self.exec_command_bytes(
-            format!("kill -{signal} -- {pid}").into_bytes(),
+            format!("kill -{signal} {pid}").into_bytes(),
             PROCESS_TIMEOUT,
         )?;
         ensure_remote_command_success(output, "Failed to signal process")

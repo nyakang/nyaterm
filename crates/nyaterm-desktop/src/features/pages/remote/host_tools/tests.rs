@@ -726,3 +726,125 @@ fn an_action_during_a_running_refresh_discards_old_data_then_runs_one_followup()
     });
     assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
 }
+
+#[cfg(unix)]
+#[test]
+fn native_adapter_reads_finish_loading_and_recover_authorization() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::process::Command;
+    let directory = tempfile::tempdir().unwrap();
+    symlink("/bin/sh", directory.path().join("sh")).unwrap();
+    let write_tool = |name: &str, body: &str| {
+        let path = directory.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    };
+    let failure = r#"
+case "$NYATERM_NATIVE_ADAPTER_FIXTURE" in
+  command-error) printf 'PRIVATE command or log\n'; printf 'fixture: permission denied\nsecond line\n' >&2; exit 2;;
+  empty) exit 0;;
+esac
+"#;
+    write_tool(
+        "ps",
+        &format!("{failure}\nprintf 'fixture-user /fixture-command\\n'"),
+    );
+    write_tool("journalctl", &format!("{failure}\nprintf 'fixture log\\n'"));
+    write_tool(
+        "sudo",
+        r#"
+case "$NYATERM_NATIVE_ADAPTER_FIXTURE" in
+  required) printf 'sudo: a password is required\nsecond line\n' >&2; exit 1;;
+  password) printf 'sudo: incorrect password\nsecond line\n' >&2; exit 1;;
+esac
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = sh ]; then exec "$@"; fi
+  shift
+done
+exit 2
+"#,
+    );
+    for mode in ["required", "password", "command-error", "success", "empty"] {
+        // Set PATH only on the child process; production adapters and real jobs
+        // are exercised there without racing other GPUI or subprocess tests.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "features::pages::remote::host_tools::tests::native_adapter_child_fixture",
+                "--nocapture",
+            ])
+            .env("PATH", directory.path())
+            .env("NYATERM_NATIVE_ADAPTER_FIXTURE", mode)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "native adapter fixture was not run"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_adapter_child_fixture() {
+    let Ok(mode) = std::env::var("NYATERM_NATIVE_ADAPTER_FIXTURE") else {
+        return;
+    };
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let (_app, panel) = setup(&mut cx, Arc::new(ControlledExecutor::default()));
+    cx.update_entity(&panel, |panel, cx| {
+        panel.executor = Arc::new(super::executor::NativeExecutor);
+        panel.elevated = true;
+        panel.sudo_password = Some(SecretString::new("synthetic-secret"));
+        panel
+            .sudo_input
+            .update(cx, |input, cx| input.set_content("synthetic-draft", cx));
+        panel.services_backend = Some(ServiceBackend::Systemd);
+        panel.open_logs(service("system"), cx);
+        panel.port_details = Some(super::PortDetailsState {
+            key: "fixture".into(),
+            details: ProcessDetails::default(),
+            error: None,
+        });
+        panel.submit_job(Lane::Details, "fixture".into(), Request::Details(42), cx);
+    });
+    wait_for(&mut cx, &panel, |panel| {
+        !panel.jobs.pending(Lane::Logs) && !panel.jobs.pending(Lane::Details)
+    });
+    cx.update_entity(&panel, |panel, cx| {
+        let expected = match mode.as_str() {
+            "required" => Some("sudo: a password is required"),
+            "password" => Some("sudo: incorrect password"),
+            "command-error" => Some("fixture: permission denied"),
+            _ => None,
+        };
+        let details = panel.port_details.as_ref().unwrap();
+        let logs = panel.logs.as_ref().unwrap();
+        if let Some(expected) = expected {
+            assert_eq!(details.error.as_deref(), Some(expected));
+            assert_eq!(logs.lines[0].as_ref(), expected);
+            assert!(panel.sudo_password.is_none());
+            assert!(panel.sudo_input.read(cx).value(cx).is_empty());
+            assert!(panel.sudo_prompt.is_some());
+        } else {
+            assert!(details.error.is_none());
+            if mode == "empty" {
+                assert!(details.details.user.is_none());
+                assert_eq!(logs.lines[0], super::t!("hostTools.noLogs").to_string());
+            } else {
+                assert_eq!(details.details.user.as_deref(), Some("fixture-user"));
+                assert_eq!(logs.lines[0].as_ref(), "fixture log");
+            }
+        }
+        assert!(panel.cancellations.is_empty());
+        assert!(panel.busy_label().is_none());
+        assert!(panel.can_refresh());
+    });
+}

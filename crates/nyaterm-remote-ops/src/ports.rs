@@ -188,10 +188,11 @@ pub fn process_details(
         });
     }
     let output = target.run_sh(
-        &format!("ps -o user=,args= -p {pid} 2>/dev/null"),
+        &format!("ps -o user=,args= -p {pid}"),
         elevation,
         PORTS_TIMEOUT,
     )?;
+    let output = crate::host::ensure_host_command_success(output, "process details unavailable")?;
     Ok(parse_process_details(&output.stdout))
 }
 

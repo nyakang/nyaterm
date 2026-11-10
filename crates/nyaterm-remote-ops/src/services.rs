@@ -7,6 +7,10 @@
 
 use crate::host::{Elevation, HostOs, HostTarget, sh_quote};
 
+#[cfg(all(test, unix))]
+mod regression_tests;
+#[cfg(all(test, windows))]
+mod windows_log_tests;
 #[cfg(windows)]
 mod windows_scm;
 use anyhow::bail;
@@ -130,6 +134,13 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
 elif [ "$(uname -s)" = "Darwin" ]; then
   echo "@@FORMAT launchd"
   uid=$(id -u)
+  # sudo changes the effective user, but not the GUI domain being inspected.
+  if [ "$uid" = 0 ]; then
+    case "${SUDO_UID-}" in
+      ''|*[!0-9]*) ;;
+      *) uid=$SUDO_UID ;;
+    esac
+  fi
   for domain in system "gui/$uid"; do
     echo "@@DOMAIN $domain"
     launchctl print "$domain" 2>/dev/null | awk '/^\tservices = \{/{f=1;next} f&&/^\t\}/{f=0} f{print}'
@@ -698,40 +709,92 @@ pub fn fetch_logs(
     let lines = lines.clamp(10, 2000);
     let output = match backend {
         _ if matches!(os, HostOs::Windows) => {
-            let name = powershell_quote(&entry.name);
-            target.run_powershell(
-                &format!(
-                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
-                     Get-WinEvent -FilterHashtable @{{LogName='System'; ProviderName={name}}} -MaxEvents {lines} -ErrorAction SilentlyContinue | \
-                     ForEach-Object {{ '{{0}} {{1}}' -f $_.TimeCreated.ToString('s'), ($_.Message -replace '\\s+', ' ') }}"
-                ),
-                ACTION_TIMEOUT,
-            )?
+            target.run_powershell(&windows_logs_script(&entry.name, lines), ACTION_TIMEOUT)?
         }
         _ => {
             let command = match backend {
                 ServiceBackend::Systemd => format!(
-                    "journalctl -u {} -n {lines} --no-pager -o short-iso 2>&1",
+                    "journalctl -u {} -n {lines} --no-pager -o short-iso",
                     sh_quote(&format!("{}.service", entry.name))
                 ),
                 ServiceBackend::Launchd => format!(
-                    "launchctl print {} 2>&1",
+                    "launchctl print {}",
                     sh_quote(&format!("{}/{}", entry.scope, entry.name))
                 ),
-                _ => format!(
-                    "grep -i -- {} /var/log/messages /var/log/syslog 2>/dev/null | tail -n {lines}",
-                    sh_quote(&entry.name)
+                _ => file_logs_command(
+                    &entry.name,
+                    lines,
+                    &["/var/log/messages", "/var/log/syslog"],
                 ),
             };
             target.run_sh(&command, elevation, ACTION_TIMEOUT)?
         }
     };
+    let output = crate::host::ensure_host_command_success(output, "service logs unavailable")?;
     let text = if output.stdout.trim().is_empty() {
         output.stderr
     } else {
         output.stdout
     };
     Ok(text)
+}
+
+fn windows_logs_script(name: &str, lines: u32) -> String {
+    let name = powershell_quote(name);
+    format!(
+        r#"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+try {{
+  Get-WinEvent -FilterHashtable @{{LogName='System'; ProviderName={name}}} -MaxEvents {lines} -ErrorAction Stop |
+    ForEach-Object {{ '{{0}} {{1}}' -f $_.TimeCreated.ToString('s'), ($_.Message -replace '\s+', ' ') }}
+}} catch {{
+  if (($_.FullyQualifiedErrorId -split ',')[0] -eq 'NoMatchingEventsFound') {{ exit 0 }}
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}}
+"#
+    )
+}
+
+fn file_logs_command(name: &str, lines: u32, paths: &[&str]) -> String {
+    let paths = paths
+        .iter()
+        .map(|path| sh_quote(path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let name = sh_quote(name);
+    // A pipeline would hide the reader's exit status behind tail. The ring
+    // buffer retains only the requested lines, and awk errors remain failures.
+    format!(
+        r#"
+set --
+for file in {paths}; do
+  if [ -e "$file" ]; then
+    if [ ! -f "$file" ]; then
+      printf 'service log file is not a regular file\n' >&2
+      exit 1
+    fi
+    if [ ! -r "$file" ]; then
+      printf 'permission denied: service log file is not readable\n' >&2
+      exit 1
+    fi
+    set -- "$@" "$file"
+  fi
+done
+if [ "$#" -eq 0 ]; then
+  printf 'service log files are unavailable\n' >&2
+  exit 1
+fi
+NYATERM_LOG_FILTER={name} awk -v limit={lines} '
+BEGIN {{ needle = tolower(ENVIRON["NYATERM_LOG_FILTER"]) }}
+index(tolower($0), needle) {{ records[count % limit] = $0; count++ }}
+END {{
+  start = count > limit ? count - limit : 0
+  for (i = start; i < count; i++) print records[i % limit]
+}}' "$@"
+"#
+    )
 }
 
 #[cfg(test)]
