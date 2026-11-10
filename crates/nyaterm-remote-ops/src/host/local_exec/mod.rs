@@ -18,6 +18,19 @@ use zeroize::Zeroizing;
 const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 const CHUNK: usize = 64 * 1024;
 
+struct Supervisor {
+    process: platform::Process,
+    input: Option<platform::Input>,
+}
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // This ordering also applies during setup failures and panic unwinding.
+        // A blocked Windows writer must lose its readers before we join it.
+        self.process.terminate();
+        drop(self.input.take());
+    }
+}
+
 struct Output<R> {
     pipe: R,
     bytes: Vec<u8>,
@@ -70,12 +83,18 @@ pub(super) fn run_local(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut owner = platform::Process::spawn(command)?;
-    // Always tear down the process tree before dropping the input writer.
-    let mut input = platform::Input::new(owner.child.stdin.take(), input_bytes)?;
+    let mut owner = Supervisor {
+        process: platform::Process::spawn(command)?,
+        input: None,
+    };
+    owner.input = Some(platform::Input::new(
+        owner.process.child.stdin.take(),
+        input_bytes,
+    )?);
     let result = (|| {
         let mut stdout = Output::new(
             owner
+                .process
                 .child
                 .stdout
                 .take()
@@ -83,6 +102,7 @@ pub(super) fn run_local(
         )?;
         let mut stderr = Output::new(
             owner
+                .process
                 .child
                 .stderr
                 .take()
@@ -90,13 +110,14 @@ pub(super) fn run_local(
         )?;
         let mut status = None;
         let mut delay = Duration::from_millis(1);
+        let input = owner.input.as_mut().expect("supervisor input initialized");
         loop {
             if Instant::now() >= deadline {
                 return Err(HostCommandError::Timeout(timeout).into());
             }
             let progress = stdout.pump()? | stderr.pump()? | input.pump()?;
             if status.is_none() {
-                status = owner.child.try_wait()?;
+                status = owner.process.child.try_wait()?;
             }
             if let Some(status) = status
                 && stdout.eof
@@ -117,15 +138,18 @@ pub(super) fn run_local(
             }
         }
     })();
-    owner.terminate();
-    drop(input);
+    if result.is_ok() {
+        // Detached-pipe descendants may be services intentionally started by
+        // this command. Only supervision failures warrant killing the tree.
+        owner.process.complete()?;
+    }
     result
 }
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::run_local;
-    use std::process::Command;
+    use super::{Supervisor, platform, run_local};
+    use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     fn run(
@@ -142,6 +166,71 @@ mod tests {
         let error = run("sleep 10 & printf done", None, Duration::from_millis(150)).unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn completed_command_preserves_background_work_with_redirected_pipes() {
+        let directory = tempfile::tempdir().unwrap();
+        for code in [0, 7] {
+            let marker = directory.path().join(format!("completed-{code}"));
+            let release = directory.path().join(format!("release-{code}"));
+            let script = format!(
+                "(attempt=0; while [ ! -e {} ]; do [ $attempt -lt 300 ] || exit 1; attempt=$((attempt+1)); sleep 0.01; done; touch {}) </dev/null >/dev/null 2>&1 & exit {code}",
+                crate::host::sh_quote(release.to_str().unwrap()),
+                crate::host::sh_quote(marker.to_str().unwrap())
+            );
+            let output = run(&script, None, Duration::from_secs(2)).unwrap();
+            assert_eq!(output.exit_status, Some(code));
+            // Let the descendant finish only after the supervisor has returned.
+            std::fs::write(release, b"released").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !marker.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(marker.exists(), "normal completion killed background work");
+        }
+    }
+
+    #[test]
+    fn panic_unwinding_reaps_the_tree_before_dropping_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("escaped");
+        let ready = directory.path().join("ready");
+        let script = format!(
+            "(sleep 0.6; touch {}) & printf ready > {}; wait",
+            crate::host::sh_quote(marker.to_str().unwrap()),
+            crate::host::sh_quote(ready.to_str().unwrap())
+        );
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", &script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut owner = Supervisor {
+            process: platform::Process::spawn(&mut command).unwrap(),
+            input: None,
+        };
+        owner.input = Some(
+            platform::Input::new(
+                owner.process.child.stdin.take(),
+                zeroize::Zeroizing::new(vec![b'x'; 4_000_000]),
+            )
+            .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ready.exists());
+        let result = std::panic::catch_unwind(move || {
+            let _owner = owner;
+            panic!("controlled supervisor panic");
+        });
+        assert!(result.is_err());
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(!marker.exists());
+        assert!(run("exit 0", None, Duration::from_secs(2)).is_ok());
     }
 
     #[test]

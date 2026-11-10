@@ -52,6 +52,7 @@ pub(super) fn read_pipe(
 pub(super) struct Process {
     pub(super) child: Child,
     job: job::Job,
+    armed: bool,
 }
 impl Process {
     pub(super) fn spawn(command: &mut Command) -> io::Result<Self> {
@@ -60,14 +61,24 @@ impl Process {
         let owner = Self {
             child: command.spawn()?,
             job,
+            armed: true,
         };
         owner.job.assign_and_resume(&owner.child)?;
         Ok(owner)
     }
     pub(super) fn terminate(&mut self) {
+        if !self.armed {
+            return;
+        }
         self.job.terminate();
         let _ = self.child.kill();
         let _ = self.child.wait();
+        self.armed = false;
+    }
+    pub(super) fn complete(&mut self) -> io::Result<()> {
+        self.job.release()?;
+        self.armed = false;
+        Ok(())
     }
 }
 impl Drop for Process {
@@ -223,6 +234,25 @@ mod job {
         pub(super) fn terminate(&self) {
             // SAFETY: terminate only the private job owning this CLI and descendants.
             unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) };
+        }
+
+        pub(super) fn release(&self) -> io::Result<()> {
+            // Clearing the only configured limit prevents closing our last
+            // job handle from killing services with no inherited pipes.
+            let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            // SAFETY: the handle is owned and limits has the required layout.
+            if unsafe {
+                SetInformationJobObject(
+                    self.0.as_raw_handle(),
+                    JobObjectExtendedLimitInformation,
+                    (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of_val(&limits) as u32,
+                )
+            } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
         }
     }
 }

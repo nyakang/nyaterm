@@ -50,15 +50,20 @@ impl Process {
         })
     }
     pub(super) fn terminate(&mut self) {
-        if self.group != 0 {
-            // The child entered its private group before exec, never our group.
-            unsafe {
-                libc::kill(-self.group, libc::SIGKILL);
-            }
-            self.group = 0;
+        if self.group == 0 {
+            return;
         }
+        // The child entered its private group before exec, never our group.
+        unsafe {
+            libc::kill(-self.group, libc::SIGKILL);
+        }
+        self.group = 0;
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+    pub(super) fn complete(&mut self) -> io::Result<()> {
+        self.group = 0;
+        Ok(())
     }
 }
 impl Drop for Process {
