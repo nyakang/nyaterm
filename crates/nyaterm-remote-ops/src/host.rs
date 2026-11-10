@@ -296,14 +296,16 @@ impl HostTarget {
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            "-",
+            script,
         ]);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        run_local(&mut command, Some(script.to_string()), timeout)
+        // Stdin command mode parses interactive statements and can leave the
+        // final multiline block unexecuted at EOF. Pass one complete script.
+        run_local(&mut command, None, timeout)
     }
 }
 

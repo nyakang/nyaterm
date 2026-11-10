@@ -4,6 +4,7 @@ use crate::host::{Elevation, HostCommandError, HostOs, HostTarget, signal_pid};
 use crate::process_control::UnsupportedProcessControl;
 use crate::remote_process::SshProcessService;
 use std::io::{Read, Write};
+use std::os::windows::io::AsRawHandle;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,24 @@ fn controlled_child() {
     };
     match mode.as_str() {
         "background-success" | "background-nonzero" => {
+            // Windows inherits every inheritable handle, including the
+            // harness's original pipes even with redirected child stdio.
+            // Model a daemon that has relinquished those original handles.
+            for handle in [
+                std::io::stdout().as_raw_handle(),
+                std::io::stderr().as_raw_handle(),
+            ] {
+                assert_ne!(
+                    unsafe {
+                        windows_sys::Win32::Foundation::SetHandleInformation(
+                            handle,
+                            windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
+                            0,
+                        )
+                    },
+                    0
+                );
+            }
             command("detached-marker")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
