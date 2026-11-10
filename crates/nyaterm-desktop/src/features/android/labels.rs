@@ -82,6 +82,18 @@ pub(in crate::features) fn fatal_message(code: &str) -> Cow<'static, str> {
 pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
     if let Some(error) = error
         .chain()
+        .find_map(|cause| cause.downcast_ref::<nyaterm_files::adb::AdbFileValidationError>())
+    {
+        use nyaterm_files::adb::AdbFileValidationError;
+        return match error {
+            AdbFileValidationError::InvalidPath => t!("android.errors.invalidFilePath"),
+            AdbFileValidationError::InvalidPathToken => t!("android.errors.invalidPathToken"),
+            AdbFileValidationError::InvalidFilename => t!("android.errors.invalidFilename"),
+        }
+        .into_owned();
+    }
+    if let Some(error) = error
+        .chain()
         .find_map(|cause| cause.downcast_ref::<AdbError>())
     {
         return adb_error_message(error);
@@ -99,6 +111,67 @@ pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
         return t!("android.errors.operationFailed").into_owned();
     }
     error.to_string()
+}
+
+/// Classify failures without formatting the error chain, which can contain user data.
+pub(in crate::features) fn file_error_code(error: &anyhow::Error) -> &'static str {
+    use nyaterm_files::adb::AdbFileValidationError;
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<AdbFileValidationError>() {
+            return match error {
+                AdbFileValidationError::InvalidPath => "InvalidPath",
+                AdbFileValidationError::InvalidPathToken => "InvalidPathToken",
+                AdbFileValidationError::InvalidFilename => "InvalidFilename",
+            };
+        }
+        if let Some(error) = cause.downcast_ref::<AdbError>() {
+            return match error {
+                AdbError::FileMissing => "FileMissing",
+                AdbError::Io(error) => io_error_code(error),
+                AdbError::ExecutableMissing => "ExecutableMissing",
+                AdbError::IncompatibleServer => "IncompatibleServer",
+                AdbError::Unauthorized => "Unauthorized",
+                AdbError::Offline => "Offline",
+                AdbError::Rejected => "Rejected",
+                AdbError::Protocol(_) => "Protocol",
+                AdbError::Cancelled => "Cancelled",
+                AdbError::Timeout => "Timeout",
+                AdbError::ShellExit(_) => "ShellExit",
+            };
+        }
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            return io_error_code(error);
+        }
+    }
+    if error
+        .chain()
+        .any(|cause| cause.to_string() == nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED)
+    {
+        "Cancelled"
+    } else {
+        "OperationFailed"
+    }
+}
+
+fn io_error_code(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "FileMissing",
+        std::io::ErrorKind::PermissionDenied => "PermissionDenied",
+        std::io::ErrorKind::TimedOut => "Timeout",
+        _ => "Io",
+    }
+}
+
+pub(in crate::features) fn log_file_error(
+    operation: &'static str,
+    backend: nyaterm_files::file_browser::FileBrowserBackendKind,
+    request_id: &str,
+    error: &anyhow::Error,
+) {
+    let code = file_error_code(error);
+    if code != "Cancelled" {
+        tracing::warn!(operation, backend = ?backend, request_id, error_code = code, "File browser operation failed");
+    }
 }
 
 pub(in crate::features) fn session_start_error_message(
@@ -193,6 +266,99 @@ mod tests {
         assert_eq!(
             file_error_message(&anyhow::anyhow!("other backend")),
             "other backend"
+        );
+    }
+    #[test]
+    fn typed_file_validation_errors_have_translations_in_all_six_locales() {
+        use nyaterm_files::adb::{AdbFileError, AdbFileValidationError};
+        for (error, key) in [
+            (
+                AdbFileValidationError::InvalidPath,
+                "android.errors.invalidFilePath",
+            ),
+            (
+                AdbFileValidationError::InvalidPathToken,
+                "android.errors.invalidPathToken",
+            ),
+            (
+                AdbFileValidationError::InvalidFilename,
+                "android.errors.invalidFilename",
+            ),
+        ] {
+            let error = anyhow::Error::new(error).context(AdbFileError);
+            assert_ne!(
+                file_error_message(&error),
+                rust_i18n::t!("android.errors.fileOperationFailed")
+            );
+            for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "fr"] {
+                let message = rust_i18n::t!(key, locale = locale);
+                assert!(!message.is_empty());
+                assert_ne!(message, key);
+                assert!(!message.contains("%{"));
+            }
+        }
+    }
+
+    #[test]
+    fn file_diagnostics_include_stable_failure_codes_without_sensitive_error_context_or_cancellation()
+     {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct LogWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for LogWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let sink = LogWriter(bytes.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || sink.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let error = anyhow::Error::new(nyaterm_files::adb::AdbFileValidationError::InvalidPath)
+                .context("sensitive path, device and output");
+            super::log_file_error(
+                "list-directory",
+                nyaterm_files::file_browser::FileBrowserBackendKind::Adb,
+                "request-1",
+                &error,
+            );
+            super::log_file_error(
+                "list-directory",
+                nyaterm_files::file_browser::FileBrowserBackendKind::Adb,
+                "request-cancelled",
+                &anyhow::Error::new(AdbError::Cancelled),
+            );
+        });
+        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("list-directory"));
+        assert!(logs.contains("Adb"));
+        assert!(logs.contains("request-1"));
+        assert!(logs.contains("InvalidPath"));
+        assert!(!logs.contains("sensitive"));
+        assert!(!logs.contains("request-cancelled"));
+        assert_eq!(
+            super::file_error_code(&anyhow::Error::new(AdbError::Unauthorized)),
+            "Unauthorized"
+        );
+        assert_eq!(
+            super::file_error_code(&anyhow::Error::new(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied
+            ))),
+            "PermissionDenied"
+        );
+        assert_eq!(
+            super::file_error_code(&anyhow::anyhow!("unknown sensitive detail")),
+            "OperationFailed"
         );
     }
 }

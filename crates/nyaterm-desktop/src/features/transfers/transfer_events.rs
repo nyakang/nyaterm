@@ -109,11 +109,17 @@ impl TransferFeatureState {
 
 impl NyaTermApp {
     fn load_transfer_browser_event_session(&mut self, session_id: &str) {
+        self.validate_android_browser_cache(session_id);
         let Some(cache) = self.transfer.browser.session_cache.get(session_id).cloned() else {
-            self.transfer.set_remote_path(".");
-            self.transfer.browser.path = ".".to_string();
+            let path = self
+                .android_file_initial_directory(session_id)
+                .unwrap_or_else(|| ".".into());
+            self.transfer.set_remote_path(path.clone());
+            self.transfer.browser.path = path;
             self.transfer.browser.raw_path_token = None;
-            self.transfer.browser.home_dir.clear();
+            self.transfer.browser.home_dir = self
+                .android_file_initial_directory(session_id)
+                .unwrap_or_default();
             self.transfer.browser.home_dir_pending = false;
             self.transfer.browser.entries = Arc::new(Vec::new());
             self.transfer.browser.loading = false;
@@ -271,6 +277,22 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let event = TransferJobResult {
+            id: event.id,
+            event: match event.event {
+                TransferJobEvent::FileFinished(result) => {
+                    TransferJobEvent::Finished(result.map_err(|error| {
+                        if crate::features::android::labels::file_error_code(&error) == "Cancelled"
+                        {
+                            SFTP_TRANSFER_CANCELLED.into()
+                        } else {
+                            crate::features::android::labels::file_error_message(&error)
+                        }
+                    }))
+                }
+                event => event,
+            },
+        };
         if let TransferJobEvent::DragExportOpened {
             session_id,
             remote_path,
@@ -1413,6 +1435,9 @@ impl NyaTermApp {
                 } else {
                     zmodem_upload_after_probe = Some((session_id, files, overwrite));
                 }
+            }
+            TransferJobEvent::FileFinished(_) => {
+                unreachable!("file errors are localized at event entry")
             }
             TransferJobEvent::Finished(Err(error)) => {
                 if matches!(

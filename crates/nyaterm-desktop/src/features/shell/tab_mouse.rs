@@ -702,6 +702,7 @@ impl NyaTermApp {
         let pane_id = self.active_pane_for_tab_root(&tab_root);
         let policy = self.tab_action_policy_for(&pane_id, &tab_root);
         match action {
+            "android_screen" => policy.is_some_and(|policy| policy.availability.android_screen),
             "none" => false,
             "rename_tab" | "copy_tab_name" => true,
             "copy_server_ip" => policy.is_some_and(|policy| policy.support.copy_ssh_host),
@@ -736,6 +737,16 @@ impl NyaTermApp {
         }
 
         match action.as_str() {
+            "android_screen" => {
+                let tab_root = self.tab_root_for_session(&session_id);
+                let pane_id = self.active_pane_for_tab_root(&tab_root);
+                self.android_open_from_session(
+                    &pane_id,
+                    nyaterm_core::models::android::AndroidViewKind::Screen,
+                    cx,
+                );
+            }
+
             "none" => {}
             "rename_tab" => self.open_rename_session(tab_root, window, cx),
             "copy_tab_name" => self.copy_session_name(&tab_root, cx),

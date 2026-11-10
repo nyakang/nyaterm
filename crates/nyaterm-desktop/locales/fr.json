@@ -1,6 +1,5 @@
 {
   "android": {
-    "closeDevice": "Fermer l’appareil",
     "directoryLoadFailed": "Échec du chargement du répertoire : %{error}",
 
     "screenSettings": "Paramètres de l’écran",
@@ -67,7 +66,10 @@
       "helperExited": "L’assistant d’écran Android s’est arrêté",
       "videoEnded": "Le flux vidéo Android est terminé",
       "decoderFailed": "Le décodage vidéo Android a échoué",
-      "fileOperationFailed": "L’opération sur les fichiers Android a échoué"
+      "fileOperationFailed": "L’opération sur les fichiers Android a échoué",
+      "invalidFilePath": "Utilisez un chemin Android absolu commençant par /.",
+      "invalidPathToken": "Les données du chemin Android sont invalides. Actualisez le dossier et réessayez.",
+      "invalidFilename": "Le nom de fichier Android est invalide."
     }
   },
   "mcp": {

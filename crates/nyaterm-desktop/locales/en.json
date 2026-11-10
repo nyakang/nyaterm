@@ -1,6 +1,5 @@
 {
   "android": {
-    "closeDevice": "Close device",
     "directoryLoadFailed": "Directory load failed: %{error}",
 
     "screenSettings": "Screen settings",
@@ -67,7 +66,10 @@
       "helperExited": "Android screen helper exited",
       "videoEnded": "Android video stream ended",
       "decoderFailed": "Android video decoder failed",
-      "fileOperationFailed": "Android file operation failed"
+      "fileOperationFailed": "Android file operation failed",
+      "invalidFilePath": "Use an absolute Android path starting with /.",
+      "invalidPathToken": "The Android path data is invalid. Refresh the directory and try again.",
+      "invalidFilename": "The Android filename is invalid."
     }
   },
   "mcp": {

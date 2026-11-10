@@ -527,6 +527,8 @@ pub(crate) enum TransferJobEvent {
         local_path: PathBuf,
     },
     Progress(SftpTransferProgress),
+    /// File adapters retain typed errors until the desktop event boundary.
+    FileFinished(Result<TransferJobOutput, anyhow::Error>),
     Finished(Result<TransferJobOutput, String>),
 }
 

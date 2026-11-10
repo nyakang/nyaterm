@@ -1,6 +1,5 @@
 {
   "android": {
-    "closeDevice": "기기 닫기",
     "directoryLoadFailed": "디렉터리 로드 실패: %{error}",
 
     "screenSettings": "화면 설정",
@@ -67,7 +66,10 @@
       "helperExited": "Android 화면 도우미가 종료되었습니다",
       "videoEnded": "Android 동영상 스트림이 종료되었습니다",
       "decoderFailed": "Android 동영상 디코딩에 실패했습니다",
-      "fileOperationFailed": "Android 파일 작업에 실패했습니다"
+      "fileOperationFailed": "Android 파일 작업에 실패했습니다",
+      "invalidFilePath": "/로 시작하는 Android 절대 경로를 사용하세요.",
+      "invalidPathToken": "Android 경로 데이터가 잘못되었습니다. 디렉터리를 새로 고친 후 다시 시도하세요.",
+      "invalidFilename": "Android 파일 이름이 잘못되었습니다."
     }
   },
   "mcp": {

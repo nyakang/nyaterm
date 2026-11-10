@@ -1,6 +1,5 @@
 {
   "android": {
-    "closeDevice": "关闭设备",
     "directoryLoadFailed": "目录加载失败：%{error}",
 
     "screenSettings": "屏幕设置",
@@ -67,7 +66,10 @@
       "helperExited": "Android 投屏辅助进程已退出",
       "videoEnded": "Android 视频流已结束",
       "decoderFailed": "Android 视频解码失败",
-      "fileOperationFailed": "Android 文件操作失败"
+      "fileOperationFailed": "Android 文件操作失败",
+      "invalidFilePath": "请使用以 / 开头的 Android 绝对路径。",
+      "invalidPathToken": "Android 路径数据无效，请刷新目录后重试。",
+      "invalidFilename": "Android 文件名无效。"
     }
   },
   "mcp": {

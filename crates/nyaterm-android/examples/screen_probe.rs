@@ -14,7 +14,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cycles: u32 = args.get(3).map(|v| v.parse()).transpose()?.unwrap_or(1);
     let fps = args.get(4).map(|v| v.parse()).transpose()?.unwrap_or(30);
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-    let client = AdbClient::local(Some(&root.join("adb/adb")))?;
+    let client = AdbClient::local(Some(
+        &root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)),
+    ))?;
     for cycle in 0..cycles {
         let binding = client.bind(
             &AdbDeviceSelector::Tcp {
@@ -30,7 +32,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_fps: fps,
                 ..Default::default()
             },
-            &root.join("nyaterm-android-helper"),
+            &root.join(format!(
+                "nyaterm-android-helper{}",
+                std::env::consts::EXE_SUFFIX
+            )),
         )?;
         let started = Instant::now();
         let mut frames = 0u64;

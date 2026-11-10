@@ -1,4 +1,5 @@
 //! Device acceptance in a unique directory; prints no device filenames or contents.
+use anyhow::Context as _;
 use nyaterm_android::adb::client::AdbClient;
 use nyaterm_core::models::android::AdbDeviceSelector;
 use nyaterm_files::adb::AdbFileService;
@@ -11,7 +12,9 @@ fn main() -> anyhow::Result<()> {
         .rsplit_once(':')
         .ok_or_else(|| anyhow::anyhow!("host:port required"))?;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-    let client = AdbClient::local(Some(&root.join("adb/adb")))?;
+    let client = AdbClient::local(Some(
+        &root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)),
+    ))?;
     let files = AdbFileService::new(client.bind(
         &AdbDeviceSelector::Tcp {
             host: host.into(),
@@ -19,8 +22,17 @@ fn main() -> anyhow::Result<()> {
         },
         1,
     )?);
-    let directory = RemoteFilePath::new(format!("/sdcard/nyaterm-test-{}", uuid::Uuid::new_v4()));
-    files.create_dir_remote_path(&directory, None)?;
+    files
+        .list_dir_path(&RemoteFilePath::new("/sdcard/"))
+        .context("list shared storage")?;
+    let test_root = std::env::args().nth(2).unwrap_or_else(|| "/sdcard".into());
+    let directory = files.child_path(
+        &RemoteFilePath::new(test_root),
+        &format!("nyaterm-test-{}", uuid::Uuid::new_v4()),
+    )?;
+    files
+        .create_dir_remote_path(&directory, None)
+        .context("create acceptance directory")?;
     let result = (|| {
         let local = tempfile::tempdir()?;
         let input = local.path().join("input");
@@ -36,9 +48,13 @@ fn main() -> anyhow::Result<()> {
         ];
         for (number, name) in names.into_iter().enumerate() {
             let path = files.child_path(&directory, name)?;
-            files.upload(&input, &path, false, &SftpTransferControl::new(), |_| {})?;
+            files
+                .upload(&input, &path, false, &SftpTransferControl::new(), |_| {})
+                .with_context(|| format!("upload case {number}"))?;
             let output = local.path().join(format!("output-{number}"));
-            files.download(&path, &output, false, &SftpTransferControl::new(), |_| {})?;
+            files
+                .download(&path, &output, false, &SftpTransferControl::new(), |_| {})
+                .with_context(|| format!("download case {number}"))?;
             anyhow::ensure!(
                 std::fs::read(&output)? == data,
                 "device round trip mismatch"
@@ -50,7 +66,9 @@ fn main() -> anyhow::Result<()> {
                 "exclusive commit replaced target"
             );
             let renamed = files.child_path(&directory, &format!("renamed-{number}"))?;
-            files.rename_remote_paths_no_replace(&path, &renamed)?;
+            files
+                .rename_remote_paths_no_replace(&path, &renamed)
+                .with_context(|| format!("rename case {number}"))?;
             files.delete_remote_path(&renamed)?;
         }
         let target = files.child_path(&directory, "cancel-target")?;

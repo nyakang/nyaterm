@@ -1,6 +1,5 @@
 {
   "android": {
-    "closeDevice": "デバイスを閉じる",
     "directoryLoadFailed": "ディレクトリの読み込みに失敗しました：%{error}",
 
     "screenSettings": "画面設定",
@@ -67,7 +66,10 @@
       "helperExited": "Android 画面ヘルパーが終了しました",
       "videoEnded": "Android の映像ストリームが終了しました",
       "decoderFailed": "Android の映像デコードに失敗しました",
-      "fileOperationFailed": "Android のファイル操作に失敗しました"
+      "fileOperationFailed": "Android のファイル操作に失敗しました",
+      "invalidFilePath": "/ で始まる Android の絶対パスを使用してください。",
+      "invalidPathToken": "Android のパス情報が無効です。ディレクトリを更新して再試行してください。",
+      "invalidFilename": "Android のファイル名が無効です。"
     }
   },
   "mcp": {

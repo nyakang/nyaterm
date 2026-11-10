@@ -710,7 +710,7 @@ fn browser_navigation_and_filters_reset_horizontal_scroll() {
         .browser
         .horizontal_scroll
         .set_offset(point(px(-24.), px(0.)));
-    transfer.reset_browser_for_session(true);
+    transfer.reset_browser_for_session(true, None);
     assert_eq!(transfer.browser.horizontal_scroll.offset().x, px(0.));
 }
 

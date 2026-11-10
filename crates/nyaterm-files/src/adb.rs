@@ -21,6 +21,17 @@ pub(crate) mod copy;
 #[error("Android file operation failed")]
 pub struct AdbFileError;
 
+/// Local validation failures carry no paths or device-controlled output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AdbFileValidationError {
+    #[error("Android requires an absolute path without NUL")]
+    InvalidPath,
+    #[error("Invalid Android raw path token")]
+    InvalidPathToken,
+    #[error("Invalid Android filename")]
+    InvalidFilename,
+}
+
 pub(crate) fn file_error(error: anyhow::Error) -> anyhow::Error {
     error.context(AdbFileError)
 }
@@ -33,11 +44,12 @@ pub struct AdbFileService {
 
 pub fn raw_path(path: &RemoteFilePath) -> anyhow::Result<Vec<u8>> {
     let raw = path
-        .raw_path()?
+        .raw_path()
+        .map_err(|_| AdbFileValidationError::InvalidPathToken)?
         .unwrap_or_else(|| path.display_path.as_bytes().to_vec());
     anyhow::ensure!(
         raw.starts_with(b"/") && !raw.contains(&0),
-        "Android requires an absolute path without NUL"
+        AdbFileValidationError::InvalidPath
     );
     Ok(raw)
 }
@@ -68,7 +80,7 @@ impl AdbFileService {
     ) -> anyhow::Result<RemoteFilePath> {
         anyhow::ensure!(
             !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0']),
-            "invalid Android filename"
+            AdbFileValidationError::InvalidFilename
         );
         let mut raw = raw_path(parent)?;
         if raw.last() != Some(&b'/') {
@@ -122,7 +134,7 @@ impl AdbFileService {
                     !entry.name.is_empty()
                         && !entry.name.contains(&b'/')
                         && !entry.name.contains(&0),
-                    "invalid Android directory entry"
+                    AdbFileValidationError::InvalidFilename
                 );
                 let mut raw = parent.clone();
                 if raw.last() != Some(&b'/') {
@@ -562,7 +574,7 @@ impl Write for LimitedWriter {
 fn normalized_path(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     anyhow::ensure!(
         raw.starts_with(b"/") && !raw.contains(&0),
-        "invalid Android path"
+        AdbFileValidationError::InvalidPath
     );
     let mut components = Vec::new();
     for component in raw.split(|b| *b == b'/') {
@@ -595,5 +607,41 @@ mod tests {
         assert_eq!(raw_path(&path).unwrap(), raw);
         assert_eq!(normalized_path(b"/a//b/.././c").unwrap(), b"/a/c");
         assert!(raw_path(&RemoteFilePath::new("relative")).is_err());
+    }
+    #[test]
+    fn invalid_android_paths_tokens_and_names_have_typed_redacted_errors() {
+        use crate::adb::{AdbFileService, AdbFileValidationError};
+        for path in ["relative", ".", r"C:\Users\fixture", "/sdcard/\0secret"] {
+            let error = raw_path(&RemoteFilePath::new(path)).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<AdbFileValidationError>(),
+                Some(&AdbFileValidationError::InvalidPath)
+            );
+            assert!(!error.to_string().contains("fixture"));
+        }
+        let error = raw_path(&RemoteFilePath {
+            display_path: "/sdcard/".into(),
+            raw_path_token: Some("invalid-token".into()),
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<AdbFileValidationError>(),
+            Some(&AdbFileValidationError::InvalidPathToken)
+        );
+        let service = AdbFileService::new(nyaterm_android::adb::client::DeviceBinding {
+            server: "127.0.0.1:1".parse().unwrap(),
+            serial: "synthetic".into(),
+            transport_id: None,
+            generation: 1,
+        });
+        for name in ["", ".", "..", "a/b", "a\0b"] {
+            let error = service
+                .child_path(&RemoteFilePath::new("/sdcard/"), name)
+                .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<AdbFileValidationError>(),
+                Some(&AdbFileValidationError::InvalidFilename)
+            );
+        }
     }
 }

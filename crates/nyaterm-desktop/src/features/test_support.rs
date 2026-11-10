@@ -59,6 +59,69 @@ pub(crate) fn app_with_visible_local_session(
     )
 }
 
+pub(crate) fn android_session_config_for_test(
+    directory: &str,
+) -> crate::models::session::AndroidSessionConfig {
+    crate::models::session::AndroidSessionConfig {
+        name: "Android fixture".into(),
+        device_key: "android-device".into(),
+        device: nyaterm_core::models::android::AdbDeviceSelector::Usb {
+            serial: "synthetic".into(),
+        },
+        directory: directory.into(),
+        screen: Default::default(),
+        binding: nyaterm_android::adb::client::DeviceBinding {
+            server: "127.0.0.1:1".parse().unwrap(),
+            serial: "synthetic".into(),
+            transport_id: Some(7),
+            generation: 1,
+        },
+        client: nyaterm_android::adb::client::AdbClient {
+            executable: "unused".into(),
+            server: "127.0.0.1:1".parse().unwrap(),
+        },
+        cols: 80,
+        rows: 24,
+    }
+}
+
+pub(crate) fn app_with_visible_android_session(
+    cx: &mut TestAppContext,
+    root: &Path,
+    session_id: &str,
+    directory: &str,
+) -> Entity<NyaTermApp> {
+    let config = android_session_config_for_test(directory);
+    let app = app_with_visible_session(
+        cx,
+        root,
+        session_id,
+        SessionLaunchConfig::AdbShell(config.clone()),
+        None,
+    );
+    app.update(cx, |app, _| {
+        app.android.devices.insert(
+            config.device_key.clone(),
+            crate::features::android::DeviceLease {
+                files: std::sync::Arc::new(nyaterm_files::adb::AdbFileService::new(
+                    config.binding.clone(),
+                )),
+                config: config.clone(),
+                observed: true,
+                owners: std::sync::Arc::new(()),
+            },
+        );
+        app.android.views.insert(
+            session_id.into(),
+            crate::features::android::AndroidView {
+                device_key: config.device_key,
+                kind: nyaterm_core::models::android::AndroidViewKind::Shell,
+            },
+        );
+    });
+    app
+}
+
 /// Build a visible SSH terminal session for GPUI tests.
 ///
 /// Unlike a local shell this session holds a backend, so tests that need a

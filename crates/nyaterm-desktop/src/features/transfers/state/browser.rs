@@ -490,10 +490,16 @@ impl TransferFeatureState {
         Some(remote_path)
     }
 
-    pub(in crate::features) fn reset_browser_for_session(&mut self, browser_available: bool) {
-        self.browser.path = ".".to_string();
+    pub(in crate::features) fn reset_browser_for_session(
+        &mut self,
+        browser_available: bool,
+        initial_directory: Option<String>,
+    ) {
+        let path = initial_directory.clone().unwrap_or_else(|| ".".into());
+        self.set_remote_path(path.clone());
+        self.browser.path = path;
         self.browser.raw_path_token = None;
-        self.browser.home_dir.clear();
+        self.browser.home_dir = initial_directory.unwrap_or_default();
         self.browser.home_dir_pending = false;
         self.browser.path_draft.clear();
         self.browser.path_editing = false;

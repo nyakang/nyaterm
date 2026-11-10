@@ -43,6 +43,7 @@ pub(in crate::features) struct TabActionSupport {
     pub disconnect: bool,
     pub ai: bool,
     pub rdp_secure_attention: bool,
+    pub android_screen: bool,
     pub split: bool,
     pub session_info: bool,
 }
@@ -55,6 +56,7 @@ pub(in crate::features) struct TabActionAvailability {
     pub disconnect: bool,
     pub use_ai: bool,
     pub rdp_secure_attention: bool,
+    pub android_screen: bool,
     pub split: bool,
     pub close_tab: bool,
     pub close_inactive: bool,
@@ -102,6 +104,10 @@ impl TabActionPolicy {
             disconnect: supports_terminal_actions || input.session == TabSessionCapability::AdbView,
             ai: supports_terminal_actions,
             rdp_secure_attention: input.session == TabSessionCapability::Rdp,
+            android_screen: matches!(
+                input.session,
+                TabSessionCapability::AdbShell | TabSessionCapability::AdbView
+            ),
             split: supports_terminal_actions || input.session == TabSessionCapability::AdbView,
             session_info: input.has_source_connection,
         };
@@ -120,6 +126,10 @@ impl TabActionPolicy {
                 && !input.is_disconnected,
             rdp_secure_attention: support.rdp_secure_attention
                 && input.rdp_secure_attention_available,
+            android_screen: support.android_screen
+                && !input.is_busy
+                && !input.is_disconnected
+                && !input.reconnect_pending,
             split: support.split,
             close_tab: !input.locked,
             close_inactive: input.tab_count > 1,
@@ -152,6 +162,7 @@ impl TabActionPolicy {
             || self.support.disconnect
             || self.support.ai
             || self.support.rdp_secure_attention
+            || self.support.android_screen
     }
 
     pub(in crate::features) fn supports_submenu(self, submenu: TabActionsSubmenu) -> bool {
@@ -374,5 +385,42 @@ mod tests {
         assert_eq!(groups.last(), Some(&TabActionMenuGroup::Close));
         assert!(groups.windows(2).all(|pair| pair[0] != pair[1]));
         assert_eq!(groups.len() - 1, 3);
+    }
+    #[test]
+    fn android_screen_is_protocol_specific_and_disabled_during_disconnect_or_connection_work() {
+        for session in [
+            TabSessionCapability::Local,
+            TabSessionCapability::Ssh,
+            TabSessionCapability::Telnet,
+            TabSessionCapability::Serial,
+            TabSessionCapability::Rdp,
+            TabSessionCapability::Vnc,
+        ] {
+            assert!(
+                !TabActionPolicy::from_input(input(session))
+                    .support
+                    .android_screen
+            );
+        }
+        for session in [
+            TabSessionCapability::AdbShell,
+            TabSessionCapability::AdbView,
+        ] {
+            let context = input(session);
+            assert!(
+                TabActionPolicy::from_input(context)
+                    .availability
+                    .android_screen
+            );
+            for condition in 0..3 {
+                let mut unavailable = context;
+                unavailable.is_busy = condition == 0;
+                unavailable.is_disconnected = condition == 1;
+                unavailable.reconnect_pending = condition == 2;
+                let policy = TabActionPolicy::from_input(unavailable);
+                assert!(policy.support.android_screen);
+                assert!(!policy.availability.android_screen);
+            }
+        }
     }
 }

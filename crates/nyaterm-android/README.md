@@ -1,10 +1,18 @@
 # Native Android connections
 
-Saved Android connections open an equal Files/Shell horizontal split and focus
-Shell. Screen opens from the toolbar in a separate tab. Views have independent
-channels; closing Files retains submitted transfers, while closing the device
-cancels its transfers and closes its views. Disconnect retains directories,
-terminal history and layout. Reconnect is manual and never replays commands.
+Saved Android connections open a terminal. Files use the existing sidebar and
+its dual-pane file-manager entry; an existing manager retains its browsing state.
+Android Screen opens from an Android session tab's context menu in a separate tab,
+or focuses that device's existing screen. The action is disabled while the session
+is disconnected or connecting. Views have independent channels, and closing a view
+retains submitted transfers. Disconnect retains directories, terminal history and
+layout. Reconnect is manual and never replays commands. Previously saved Android
+Files views and layouts still restore, with both file-manager panes initialized.
+
+The sidebar starts at the connection's device directory (default `/sdcard/`),
+never the host computer's home directory. File-browser failures emit structured
+operation/backend/request/error-code diagnostics without paths, device identities
+or device output; expected cancellation is not logged as a failure.
 
 `nyaterm-android` owns ADB server channels, shared discovery, basic Sync and
 Android helper IPC/process supervision. Transport owns terminal runtime, files
@@ -57,9 +65,8 @@ See [scrcpy notices](assets/NOTICE.md) and [license](assets/LICENSE.scrcpy).
 Defaults are H.264, maximum edge 1280, 30 FPS and 8 Mbps. BGRA frames are capped
 at 16 MiB, media packets at 8 MiB, and native decoding limits pixel allocation
 before parsing SPS dimensions. The helper retains one in-flight frame and one
-latest pending frame. Rotation invalidates old coordinates. View-only input is
-enforced in both the application and helper. Blur, close and input overflow
-release held input.
+latest pending frame. Rotation invalidates old coordinates. Android screen sessions
+always enable control. Blur, close and input overflow release held input.
 
 Unicode uses explicit paste or the device input method. Host IME does not
 automatically replace the device clipboard. A clipboard acknowledgement proves
@@ -75,14 +82,16 @@ properties survive saves. Clients opening ADB data must support the new type.
 Run from the repository root with an explicitly authorized test device:
 
 ```sh
-cargo run -p nyaterm-files --example adb_probe -- HOST:PORT
-cargo run -p nyaterm-transport --example adb_probe -- HOST:PORT
+cargo run -p nyaterm-files --example android_files_probe -- HOST:PORT /data/local/tmp
+cargo run -p nyaterm-transport --example android_shell_probe -- HOST:PORT
 cargo run -p nyaterm-android --example screen_probe -- HOST:PORT SECONDS CYCLES FPS
 cargo run -p nyaterm-android --example screen_control_probe -- HOST:PORT
 ```
 
-The file probe cleans a unique `/sdcard` directory and verifies special names,
-content, overwrite protection and cancellation. The PTY probe checks resize,
+The file probe lists `/sdcard/`, then cleans a unique directory under its optional
+second argument (default `/sdcard`) and verifies special names, content, overwrite
+protection and cancellation. Use `/data/local/tmp` for the full filename cases when
+emulated shared storage rejects quotes or control characters. The PTY probe checks resize,
 Ctrl+C, exit status and independent channels. The control probe opens Android
 Settings, tests tap/drag/scroll, rotation and frame credit, and sends synthetic
 Unicode clipboard text. Probes retain no device frames or clipboard contents.

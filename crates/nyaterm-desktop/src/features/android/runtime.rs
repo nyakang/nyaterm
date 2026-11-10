@@ -5,9 +5,7 @@ use crate::features::{
     NyaTermApp, runtime_jobs::await_blocking_job, session::SavedConnectionStartOptions,
 };
 use crate::models::session::AndroidSessionConfig;
-use crate::models::{
-    NavItem, SessionLaunchConfig, SessionRuntimeMetadata, WorkspaceSplitDirection,
-};
+use crate::models::{NavItem, SessionLaunchConfig, SessionRuntimeMetadata};
 use gpui::{AppContext, Context, Window};
 use nyaterm_android::adb::client::AdbClient;
 use nyaterm_android::screen::ScreenHandle;
@@ -22,10 +20,11 @@ impl NyaTermApp {
     pub(in crate::features) fn start_android_connection(
         &mut self,
         connection: SavedConnection,
-        mut options: SavedConnectionStartOptions,
+        options: SavedConnectionStartOptions,
         kind: Option<AndroidViewKind>,
         cx: &mut Context<Self>,
     ) {
+        let kind = kind.unwrap_or(AndroidViewKind::Shell);
         self.ensure_android_clock(cx);
         let ConnectionType::Adb {
             device,
@@ -37,25 +36,15 @@ impl NyaTermApp {
         };
         let key = connection.id.clone();
         if options.reconnect_session_id.is_none()
-            && let Some(lease) = self.android.devices.get(&key)
+            && let Some(lease) = self.android.devices.get_mut(&key)
+            && lease.config.device == device
             && lease.files.control.check_cancelled().is_ok()
         {
+            lease.config.name = connection.name.clone();
+            lease.config.directory = directory;
+            lease.config.screen = screen;
             let config = lease.config.clone();
-            if let Some(kind) = kind {
-                self.open_android_view(config, kind, options, cx);
-            } else {
-                let files = self.open_android_view(
-                    config.clone(),
-                    AndroidViewKind::Files,
-                    SavedConnectionStartOptions::default(),
-                    cx,
-                );
-                if options.workspace_split.is_none() {
-                    options.workspace_split =
-                        files.map(|id| (WorkspaceSplitDirection::Horizontal, id));
-                }
-                self.open_android_view(config, AndroidViewKind::Shell, options, cx);
-            }
+            self.open_android_view(config, kind, options, cx);
             return;
         }
         if self.android.pending.contains_key(&key) {
@@ -152,21 +141,7 @@ impl NyaTermApp {
                                 }
                             },
                         );
-                        if let Some(kind) = kind {
-                            app.open_android_view(config, kind, options, cx);
-                        } else {
-                            let files = app.open_android_view(
-                                config.clone(),
-                                AndroidViewKind::Files,
-                                SavedConnectionStartOptions::default(),
-                                cx,
-                            );
-                            if options.workspace_split.is_none() {
-                                options.workspace_split =
-                                    files.map(|id| (WorkspaceSplitDirection::Horizontal, id));
-                            }
-                            app.open_android_view(config, AndroidViewKind::Shell, options, cx);
-                        }
+                        app.open_android_view(config, kind, options, cx);
                     }
                     Err(error) => app.shell.set_status(error.message()),
                 }
@@ -252,17 +227,21 @@ impl NyaTermApp {
             let key = config.device_key.clone();
             let seed = FileManagerSeed {
                 left: PaneEndpoint::Adb(key),
-                left_path: Some(RemoteFilePath::new(config.directory.clone())),
+                left_path: Some(RemoteFilePath::new(if config.directory.is_empty() {
+                    nyaterm_core::models::android::default_android_directory()
+                } else {
+                    config.directory.clone()
+                })),
                 right: PaneEndpoint::Local,
                 right_path: None,
             };
             if self.file_manager.workspace(&manager_id).is_none() {
                 let workspace =
                     cx.new(|cx| FileManagerWorkspace::new(app, manager_id.clone(), seed, cx));
-                workspace.update(cx, |w, _| w.single_pane = true);
                 self.file_manager.insert_android(id.clone(), workspace);
             }
-            self.refresh_file_manager_pane(manager_id, PaneId::Left, cx);
+            self.refresh_file_manager_pane(manager_id.clone(), PaneId::Left, cx);
+            self.refresh_file_manager_pane(manager_id, PaneId::Right, cx);
         } else {
             self.begin_android_screen(id.clone(), config, cx);
         }
@@ -415,44 +394,6 @@ impl NyaTermApp {
                 );
         }
         window.focus(&self.android.focus, cx);
-    }
-    pub(in crate::features) fn close_android_device(
-        &mut self,
-        session_id: &str,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(key) = self
-            .android
-            .views
-            .get(session_id)
-            .map(|v| v.device_key.clone())
-        else {
-            return;
-        };
-        self.android.pending.remove(&key);
-        if let Some(device) = self.android.devices.remove(&key) {
-            device.files.cancel();
-        }
-        let ids: Vec<String> = self
-            .android
-            .views
-            .iter()
-            .filter(|(_, v)| v.device_key == key)
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in ids {
-            let _ = self.session.manager().close_detached(&id);
-            self.remove_session_state(&id, cx);
-        }
-        self.prune_workspace_split();
-        self.rebuild_session_tab_owners();
-        self.reconcile_terminal_windows();
-        if let Some(next) = self.session.next_live_session() {
-            self.activate_session_id(&next, cx);
-        }
-        self.persist_open_tabs();
-        self.persist_workspace_pane_layout();
-        cx.notify();
     }
     pub(in crate::features) fn prepare_android_tracker(&mut self, cx: &mut Context<Self>) {
         self.ensure_android_clock(cx);

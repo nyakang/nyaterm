@@ -35,7 +35,9 @@ fn main() -> Result<()> {
     let endpoint = std::env::args().nth(1).ok_or("host:port required")?;
     let (host, port) = endpoint.rsplit_once(':').ok_or("host:port required")?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-    let client = AdbClient::local(Some(&root.join("adb/adb")))?;
+    let client = AdbClient::local(Some(
+        &root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)),
+    ))?;
     let selector = AdbDeviceSelector::Tcp {
         host: host.into(),
         port: port.parse()?,
@@ -50,7 +52,10 @@ fn main() -> Result<()> {
         client.clone(),
         binding,
         AndroidScreenSettings::default(),
-        &root.join("nyaterm-android-helper"),
+        &root.join(format!(
+            "nyaterm-android-helper{}",
+            std::env::consts::EXE_SUFFIX
+        )),
     )?;
     let initial = next_frame(&screen, 1)?;
     let touch = |action, x, y| Control::Touch {

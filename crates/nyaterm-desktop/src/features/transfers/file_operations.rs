@@ -303,6 +303,11 @@ impl NyaTermApp {
                 target_service,
                 nyaterm_files::file_browser::FileBrowserService::Adb(_)
             );
+            let backend = if android {
+                FileBrowserBackendKind::Adb
+            } else {
+                target_service.kind()
+            };
             let cancelled = control.clone();
             let result = context
                 .request
@@ -321,18 +326,24 @@ impl NyaTermApp {
                 })
                 .map_err(|error| {
                     if cancelled.is_cancelled() {
-                        nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED.into()
+                        anyhow::Error::new(nyaterm_android::error::AdbError::Cancelled)
                     } else if android {
-                        crate::features::android::labels::file_error_message(
-                            &error.context(nyaterm_files::adb::AdbFileError),
-                        )
+                        error.context(nyaterm_files::adb::AdbFileError)
                     } else {
-                        error.to_string()
+                        error
                     }
                 });
+            if let Err(error) = &result {
+                crate::features::android::labels::log_file_error(
+                    "file-operation",
+                    backend,
+                    &id,
+                    error,
+                );
+            }
             let _ = tx.unbounded_send(TransferJobResult {
                 id,
-                event: TransferJobEvent::Finished(result),
+                event: TransferJobEvent::FileFinished(result),
             });
         });
         cx.notify();

@@ -35,7 +35,9 @@ fn main() -> anyhow::Result<()> {
         .rsplit_once(':')
         .ok_or_else(|| anyhow::anyhow!("host:port required"))?;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-    let client = AdbClient::local(Some(&root.join("adb/adb")))?;
+    let client = AdbClient::local(Some(
+        &root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)),
+    ))?;
     let binding = client.bind(
         &AdbDeviceSelector::Tcp {
             host: host.into(),
@@ -71,7 +73,7 @@ fn main() -> anyhow::Result<()> {
             if let SessionEvent::Exited { session_id, reason } = event
                 && session_id == second.id
             {
-                anyhow::ensure!(reason.ends_with("(7)"), "wrong Android exit status");
+                anyhow::ensure!(reason == "AndroidShellExit:7", "wrong Android exit status");
                 exited = true;
             }
         }

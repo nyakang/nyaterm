@@ -149,56 +149,6 @@ impl NyaTermApp {
             self.terminal_canvas_for(session_id.clone(), cx)
                 .into_any_element()
         };
-        let content = if self.android.kind(&session_id).is_some() {
-            let mut bar = div().flex().items_center().gap_1().px_2().h(px(30.));
-            for (action, label, kind) in [
-                (
-                    "files",
-                    rust_i18n::t!("android.files"),
-                    nyaterm_core::models::android::AndroidViewKind::Files,
-                ),
-                (
-                    "shell",
-                    rust_i18n::t!("android.shell"),
-                    nyaterm_core::models::android::AndroidViewKind::Shell,
-                ),
-                (
-                    "screen",
-                    rust_i18n::t!("android.screen"),
-                    nyaterm_core::models::android::AndroidViewKind::Screen,
-                ),
-            ] {
-                let id = session_id.clone();
-                bar = bar.child(small_button(
-                    self.theme_palette(),
-                    format!("android-open-{action}-{id}"),
-                    label,
-                    cx.listener(move |app, _, _, cx| {
-                        cx.stop_propagation();
-                        app.android_open_from_session(&id, kind, cx);
-                    }),
-                ));
-            }
-            let id = session_id.clone();
-            bar = bar.child(small_button(
-                self.theme_palette(),
-                format!("android-close-device-{id}"),
-                rust_i18n::t!("android.closeDevice"),
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    app.close_android_device(&id, cx);
-                }),
-            ));
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .child(bar)
-                .child(div().flex_1().min_h_0().min_w_0().child(content))
-                .into_any_element()
-        } else {
-            content
-        };
         self.with_session_notice_bar(&session_id, content, cx)
     }
 

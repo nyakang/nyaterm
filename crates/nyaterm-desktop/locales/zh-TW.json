@@ -1,6 +1,5 @@
 {
   "android": {
-    "closeDevice": "關閉裝置",
     "directoryLoadFailed": "目錄載入失敗：%{error}",
 
     "screenSettings": "螢幕設定",
@@ -67,7 +66,10 @@
       "helperExited": "Android 螢幕輔助處理程序已結束",
       "videoEnded": "Android 視訊串流已結束",
       "decoderFailed": "Android 視訊解碼失敗",
-      "fileOperationFailed": "Android 檔案操作失敗"
+      "fileOperationFailed": "Android 檔案操作失敗",
+      "invalidFilePath": "請使用以 / 開頭的 Android 絕對路徑。",
+      "invalidPathToken": "Android 路徑資料無效，請重新整理目錄後再試。",
+      "invalidFilename": "Android 檔案名稱無效。"
     }
   },
   "mcp": {

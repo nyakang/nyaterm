@@ -82,7 +82,18 @@ impl NyaTermApp {
             display_path: path,
             raw_path_token: self.transfer.browser_view().raw_path_token.clone(),
         });
-        let endpoint = if self
+        let path = if self.android_file_initial_directory(session_id).is_some() {
+            path.filter(|path| nyaterm_files::adb::raw_path(path).is_ok())
+                .or_else(|| {
+                    self.android_file_initial_directory(session_id)
+                        .map(RemoteFilePath::new)
+                })
+        } else {
+            path
+        };
+        let endpoint = if let Some(config) = self.android_config_for_session(session_id) {
+            PaneEndpoint::Adb(config.device_key)
+        } else if self
             .session
             .file_browser_backend_support_for_session(session_id)
             == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
