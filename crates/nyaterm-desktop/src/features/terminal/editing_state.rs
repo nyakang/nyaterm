@@ -3,8 +3,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use nyaterm_core::terminal::editing::{EditCapability, EditPhase, ShellEditState};
+use nyaterm_core::terminal::editing::{
+    EditCapability, EditPhase, ShellEditState, supports_scalar_editing,
+};
 use nyaterm_core::terminal::input_tracker::TerminalInputState;
+use nyaterm_core::terminal::shell_prompt::ShellPrompt;
 use nyaterm_terminal::editing::InputMapping;
 use nyaterm_terminal::{ShellInputAnchor, TerminalLineId, TerminalSnapshot};
 use zeroize::Zeroize;
@@ -26,6 +29,7 @@ pub(super) struct SessionEditingState {
     pub(super) echo_line_editor: bool,
     pub(super) launched_line_editor: bool,
     pub(super) line_editor_prompt: Option<String>,
+    pub(super) editor_evidence: Option<ShellPrompt>,
     pub(super) mapping: Option<InputMapping>,
     pub(super) selection: Option<(TerminalSelection, u64)>,
     pub(super) selection_origin_version: Option<u64>,
@@ -77,6 +81,19 @@ impl SnapshotEvidence {
 }
 
 impl SessionEditingState {
+    pub(super) fn confirmed_input_at_end(&self) -> bool {
+        let input = &self.model.input;
+        !self.awaiting_snapshot
+            && self.model.phase == EditPhase::Ready
+            && self.mapping.is_some()
+            && !input.desynced
+            && !input.line_rewrite_required
+            && !input.multiline
+            && !input.paste_mode
+            && input.cursor == input.value.len()
+            && supports_scalar_editing(&input.value)
+    }
+
     pub(super) fn cancel_stale_suggestion_fill(&mut self, now: Instant, sync_revision: u64) {
         if self.suggestion_fill.as_ref().is_some_and(|request| {
             request.request_id != self.confirmation_id
@@ -113,6 +130,14 @@ impl SessionEditingState {
         self.capability.allows_editing(self.echo_line_editor)
     }
 
+    pub(super) fn observe_editor_evidence(&mut self, backend: Option<ShellPrompt>) {
+        if self.editor_evidence != backend {
+            self.editor_evidence = backend;
+            self.model.version = self.model.version.wrapping_add(1);
+            self.suggestion_fill = None;
+        }
+    }
+
     fn deactivate(&mut self) {
         self.model.deactivate(self.allows_editing());
         self.invalidate();
@@ -122,6 +147,7 @@ impl SessionEditingState {
         self.suggestion_fill = None;
         self.model.invalidate();
         self.capability = EditCapability::None;
+        self.editor_evidence = None;
         self.mapping = None;
         self.selection = None;
         self.selection_origin_version = None;
@@ -151,6 +177,9 @@ impl TerminalEditingState {
 
     pub(super) fn state(&self) -> Option<&SessionEditingState> {
         self.sessions.get(&self.active)
+    }
+    pub(super) fn is_active(&self, session_id: &str) -> bool {
+        self.active == session_id
     }
     pub(super) fn state_mut(&mut self) -> &mut SessionEditingState {
         self.sessions.entry(self.active.clone()).or_default()
@@ -209,9 +238,17 @@ impl super::state::TerminalFeatureState {
 
     pub(in crate::features) fn invalidate_shell_editing_session(&mut self, session_id: &str) {
         if let Some(state) = self.editing.sessions.get_mut(session_id) {
+            // Only a line that already holds tracked text has an echo that the
+            // new geometry can invalidate. The first pane layout also resizes an
+            // untouched line; marking that empty tracker desynced would leave
+            // the first line of a new session ineligible for suggestions until
+            // an Enter reset the flag.
+            let tracked_text = !state.model.input.value.is_empty();
             state.invalidate();
             state.model.clear_input();
-            state.model.input.desynced = true;
+            if tracked_text {
+                state.model.input.desynced = true;
+            }
         }
     }
 }

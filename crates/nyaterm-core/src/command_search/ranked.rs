@@ -3,7 +3,7 @@ use crate::command_search::{
 };
 use crate::completion::matching::TextMatcher;
 use crate::completion::types::{
-    CandidateKind, CandidateSource, CompletionCandidate, CompletionScope,
+    CandidateKind, CandidateSource, CompletionCandidate, CompletionFillPolicy, CompletionScope,
     supports_full_command_fill,
 };
 use crate::completion::whole_history::{
@@ -26,6 +26,8 @@ pub struct RankedCommandSourceQuery<'a> {
     pub min_history_command_length: Option<usize>,
     pub max_history_command_length: Option<usize>,
     pub now_ms: u64,
+    /// None preserves unrestricted catalog search, including unfillable entries.
+    pub fill_policy: Option<CompletionFillPolicy>,
 }
 
 fn bonus(statistics: HistoryStatistics, current_scope: bool, now_ms: u64) -> u32 {
@@ -148,6 +150,12 @@ fn within_limits(entry: HistorySearchEntry<'_>, query: &RankedCommandSourceQuery
             .is_none_or(|max| entry.char_count <= max)
 }
 
+fn eligible_target(command: &str, query: &RankedCommandSourceQuery<'_>) -> bool {
+    query
+        .fill_policy
+        .is_none_or(|policy| policy.allows(query.pattern, command))
+}
+
 fn best_items(mut items: Vec<Item<'_>>, limit: usize) -> Vec<Item<'_>> {
     // All candidates have been scored. Partition before sorting to bound work
     // for a large global catalog while keeping the same deterministic top rows.
@@ -190,7 +198,7 @@ pub fn search_ranked_command_sources_using(
     let mut items = Vec::new();
     let mut quick_rows = HashMap::<&str, usize>::new();
     for entry in query.history.iter(query.scope) {
-        if !within_limits(entry, &query) {
+        if !within_limits(entry, &query) || !eligible_target(entry.command, &query) {
             continue;
         }
         let score = match entry.prepared {
@@ -216,6 +224,9 @@ pub fn search_ranked_command_sources_using(
         items.push(item);
     }
     for quick in query.quick_commands {
+        if !eligible_target(&quick.command, &query) {
+            continue;
+        }
         let display = if quick.label.trim().is_empty() {
             quick.command.as_str()
         } else {
@@ -262,6 +273,7 @@ fn empty_suggestions(
         .history
         .iter(query.scope)
         .filter(|entry| within_limits(*entry, query))
+        .filter(|entry| eligible_target(entry.command, query))
         .map(|entry| {
             let mut item = Item::new(
                 entry.command,
@@ -284,6 +296,7 @@ fn empty_suggestions(
         .quick_commands
         .iter()
         .filter(|quick| !quick.command.trim().is_empty())
+        .filter(|quick| eligible_target(&quick.command, query))
         .collect();
     quick.sort_by_key(|quick| std::cmp::Reverse(quick_command_rank(quick)));
     for quick in quick
@@ -320,7 +333,8 @@ mod tests {
     };
     use crate::completion::matching::TextMatcher;
     use crate::completion::types::{
-        CandidateKind, CandidateSource, CompletionScope, ScopedHistoryRecord, ShellDialect,
+        CandidateKind, CandidateSource, CompletionFillPolicy, CompletionScope, ScopedHistoryRecord,
+        ShellDialect,
     };
     use crate::completion::whole_history::{HistoryStatistics, WholeCommandHistoryIndex};
     use crate::models::quick_commands::{CommandHistoryEntry, QuickCommand};
@@ -345,6 +359,7 @@ mod tests {
         quick: &'a [QuickCommand],
     ) -> RankedCommandSourceQuery<'a> {
         RankedCommandSourceQuery {
+            fill_policy: None,
             history: index,
             scope,
             quick_commands: quick,
@@ -354,6 +369,81 @@ mod tests {
             max_history_command_length: Some(64),
             now_ms: 100 * DAY_MS,
         }
+    }
+
+    #[test]
+    fn fill_policy_filters_real_targets_before_limits_and_keeps_multiline_review() {
+        let scope = CompletionScope::new(&["fill-policy"]);
+        let mut index = WholeCommandHistoryIndex::default();
+        index.reconcile(
+            &[],
+            &[
+                record(&scope, "mv source destination"),
+                record(&scope, "vim file"),
+            ],
+        );
+        let mut quick: Vec<QuickCommand> = (0..20)
+            .map(|n| {
+                serde_json::from_value(serde_json::json!({
+                    "id": format!("bad-{n}"), "label": "mv", "command": format!("mv\x1b[{n}m")
+                }))
+                .unwrap()
+            })
+            .collect();
+        for (id, label, command) in [
+            ("alias", "mv", "cat file"),
+            ("script", "mv", "echo first\necho second"),
+            ("valid", "mv alias", "mv actual destination"),
+        ] {
+            quick.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": id, "label": label, "command": command
+                }))
+                .unwrap(),
+            );
+        }
+        let mut search = query(&index, &scope, "mv", &quick);
+        search.limit = 3;
+        search.fill_policy = Some(CompletionFillPolicy::AppendOnly);
+        let results = search_ranked_command_sources_using(&mut TextMatcher::default(), search);
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|item| item.fillable));
+        for target in [
+            "mv source destination",
+            "mv actual destination",
+            "echo first\necho second",
+        ] {
+            assert!(
+                results.iter().any(|item| item.insert_text == target),
+                "{target}"
+            );
+        }
+        let mut search = query(&index, &scope, "mv", &quick);
+        search.fill_policy = Some(CompletionFillPolicy::ReplaceAllowed);
+        let results = search_ranked_command_sources_using(&mut TextMatcher::default(), search);
+        assert!(results.iter().any(|item| item.insert_text == "cat file"));
+        assert!(results.iter().all(|item| item.fillable));
+        let results = search_ranked_command_sources_using(
+            &mut TextMatcher::default(),
+            query(&index, &scope, "mv", &quick),
+        );
+        assert!(results.iter().any(|item| !item.fillable));
+    }
+
+    #[test]
+    fn empty_history_search_applies_fill_policy_before_history_and_quick_quotas() {
+        let scope = CompletionScope::new(&["empty-fill-policy"]);
+        let mut index = WholeCommandHistoryIndex::default();
+        let mut records: Vec<_> = (0..20)
+            .map(|n| record(&scope, &format!("bad-{n}\x1b")))
+            .collect();
+        records.push(record(&scope, "echo valid"));
+        index.reconcile(&[], &records);
+        let mut search = query(&index, &scope, "", &[]);
+        search.fill_policy = Some(CompletionFillPolicy::AppendOnly);
+        let results = search_ranked_command_sources_using(&mut TextMatcher::default(), search);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].insert_text, "echo valid");
     }
 
     #[test]

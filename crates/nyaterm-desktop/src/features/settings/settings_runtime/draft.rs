@@ -2,6 +2,7 @@ use crate::features::NyaTermApp;
 use crate::features::app_state::SettingsDraftSnapshot;
 use crate::models::TranslationSecretDraft;
 use gpui::Context;
+use nyaterm_core::AppSettingsSummary;
 use nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy;
 use nyaterm_store::StoreDomain;
 use rust_i18n::t;
@@ -43,7 +44,7 @@ impl NyaTermApp {
             return false;
         };
         let master_password = self.settings.master_password();
-        snapshot.settings != *self.settings.summary()
+        !settings_draft_matches(&snapshot.settings, self.settings.summary())
             || !self.ai.settings_draft_matches(
                 &snapshot.ai_settings,
                 &snapshot.ai_model_draft,
@@ -592,7 +593,8 @@ impl NyaTermApp {
         }
         self.settings.theme_designer_mut().reset();
         self.hide_ai_provider_secret(cx);
-        if let Some(snapshot) = self.shell.take_settings_draft_snapshot() {
+        if let Some(mut snapshot) = self.shell.take_settings_draft_snapshot() {
+            copy_settings_shell_state(&mut snapshot.settings, self.settings.summary());
             self.apply_gpui_settings(snapshot.settings, cx);
             self.ai.restore_settings_draft(
                 snapshot.ai_settings,
@@ -698,6 +700,180 @@ impl NyaTermApp {
             .set_status(t!("settings.settingsClosed").to_string());
         cx.notify();
     }
+}
+
+/// Compare a draft against the live settings while ignoring shell state.
+///
+/// `AppSettingsSummary` doubles as the durable home of layout and session state:
+/// `persist_ui_layout` writes panel visibility/collapse/stack state, dock sizes,
+/// the active panels, list sorting and expansion, the activity-bar arrangement
+/// and the launch surface into it whenever a panel is opened or closed, a divider
+/// is dragged, a group is expanded or a list is sorted. A settings draft clones
+/// the whole struct, so a direct comparison reports those navigation writes as
+/// unsaved setting edits even though the settings page was never touched.
+///
+/// The fields neutralised below are restored at launch but cannot be edited from
+/// the settings page, so they have no place in the draft's dirty state. Every
+/// value a settings tab can edit, including the header-status and file-manager
+/// preferences that share the same struct, stays in the comparison.
+fn settings_draft_matches(snapshot: &AppSettingsSummary, live: &AppSettingsSummary) -> bool {
+    shell_state_neutral_settings(snapshot.clone(), live) == *live
+}
+
+fn shell_state_neutral_settings(
+    mut settings: AppSettingsSummary,
+    live: &AppSettingsSummary,
+) -> AppSettingsSummary {
+    // Normalize just the draft to the current layout; rebuilding defaults and
+    // cloning both complete settings would add allocations to every dirty check.
+    copy_settings_shell_state(&mut settings, live);
+    settings
+}
+
+/// The same projection serves comparison and rollback, so a navigation field
+/// ignored by dirty tracking cannot be accidentally restored from an old draft.
+fn copy_settings_shell_state(settings: &mut AppSettingsSummary, live: &AppSettingsSummary) {
+    settings
+        .ui_quick_cmd_view_mode
+        .clone_from(&live.ui_quick_cmd_view_mode);
+    settings
+        .ui_quick_cmd_sort_mode
+        .clone_from(&live.ui_quick_cmd_sort_mode);
+    settings
+        .ui_quick_cmd_selected_category
+        .clone_from(&live.ui_quick_cmd_selected_category);
+    settings
+        .ui_saved_connections_sort_mode
+        .clone_from(&live.ui_saved_connections_sort_mode);
+    settings
+        .ui_saved_connections_expanded_group_ids
+        .clone_from(&live.ui_saved_connections_expanded_group_ids);
+    settings
+        .ui_start_workspace_mode
+        .clone_from(&live.ui_start_workspace_mode);
+    settings
+        .ui_asset_sort_key
+        .clone_from(&live.ui_asset_sort_key);
+    settings
+        .ui_asset_sort_direction
+        .clone_from(&live.ui_asset_sort_direction);
+    settings
+        .ui_file_explorer_show_hidden_files
+        .clone_from(&live.ui_file_explorer_show_hidden_files);
+    settings
+        .ui_file_explorer_view_mode
+        .clone_from(&live.ui_file_explorer_view_mode);
+    settings
+        .ui_file_explorer_auto_sync_cwd_connection_ids
+        .clone_from(&live.ui_file_explorer_auto_sync_cwd_connection_ids);
+    settings
+        .ui_file_explorer_favorite_dirs_by_connection_id
+        .clone_from(&live.ui_file_explorer_favorite_dirs_by_connection_id);
+    settings
+        .ui_file_manager
+        .open
+        .clone_from(&live.ui_file_manager.open);
+    settings
+        .ui_file_manager
+        .left
+        .clone_from(&live.ui_file_manager.left);
+    settings
+        .ui_file_manager
+        .right
+        .clone_from(&live.ui_file_manager.right);
+    settings
+        .ui_file_manager
+        .split_percent
+        .clone_from(&live.ui_file_manager.split_percent);
+    settings
+        .ui_file_manager
+        .active_pane
+        .clone_from(&live.ui_file_manager.active_pane);
+    settings
+        .ui_file_manager
+        .queue_expanded
+        .clone_from(&live.ui_file_manager.queue_expanded);
+    settings
+        .ui_file_manager
+        .queue_height
+        .clone_from(&live.ui_file_manager.queue_height);
+    settings
+        .ui_file_manager
+        .left_view
+        .clone_from(&live.ui_file_manager.left_view);
+    settings
+        .ui_file_manager
+        .right_view
+        .clone_from(&live.ui_file_manager.right_view);
+    settings
+        .ui_left_panel_width
+        .clone_from(&live.ui_left_panel_width);
+    settings
+        .ui_right_panel_width
+        .clone_from(&live.ui_right_panel_width);
+    settings
+        .ui_transfer_height
+        .clone_from(&live.ui_transfer_height);
+    settings
+        .ui_quick_cmd_height
+        .clone_from(&live.ui_quick_cmd_height);
+    settings
+        .ui_quick_cmd_visible
+        .clone_from(&live.ui_quick_cmd_visible);
+    settings
+        .ui_serial_send_height
+        .clone_from(&live.ui_serial_send_height);
+    settings
+        .ui_serial_send_clear_after_send
+        .clone_from(&live.ui_serial_send_clear_after_send);
+    settings
+        .ui_serial_send_visible
+        .clone_from(&live.ui_serial_send_visible);
+    settings
+        .ui_active_left_panel
+        .clone_from(&live.ui_active_left_panel);
+    settings
+        .ui_active_right_panel
+        .clone_from(&live.ui_active_right_panel);
+    settings
+        .ui_left_panel_collapsed
+        .clone_from(&live.ui_left_panel_collapsed);
+    settings
+        .ui_right_panel_collapsed
+        .clone_from(&live.ui_right_panel_collapsed);
+    settings
+        .ui_activity_bar_left_top
+        .clone_from(&live.ui_activity_bar_left_top);
+    settings
+        .ui_activity_bar_left_bottom
+        .clone_from(&live.ui_activity_bar_left_bottom);
+    settings
+        .ui_activity_bar_right_top
+        .clone_from(&live.ui_activity_bar_right_top);
+    settings
+        .ui_activity_bar_right_bottom
+        .clone_from(&live.ui_activity_bar_right_bottom);
+    settings
+        .ui_activity_bar_show_labels
+        .clone_from(&live.ui_activity_bar_show_labels);
+    settings
+        .ui_activity_bar_hidden_items
+        .clone_from(&live.ui_activity_bar_hidden_items);
+    settings
+        .ui_panel_multi_open
+        .clone_from(&live.ui_panel_multi_open);
+    settings
+        .ui_panel_open_mode
+        .clone_from(&live.ui_panel_open_mode);
+    settings
+        .ui_left_open_panels
+        .clone_from(&live.ui_left_open_panels);
+    settings
+        .ui_right_open_panels
+        .clone_from(&live.ui_right_open_panels);
+    settings
+        .ui_panel_stack_sizes
+        .clone_from(&live.ui_panel_stack_sizes);
 }
 
 fn drive_validation_key(
@@ -2478,5 +2654,94 @@ mod tests {
                 "refreshing must not silently drop the user's edit"
             );
         });
+    }
+
+    /// Opening another panel must not make an untouched settings draft dirty.
+    ///
+    /// Navigation writes the active panel, its collapse state, the open-panel
+    /// stack and the dock sizes into the live summary through `persist_ui_layout`.
+    /// A draft compares against the clone taken when it opened, so a wholesale
+    /// comparison treats that navigation as an unsaved setting edit and the tab
+    /// close starts asking to discard changes.
+    #[test]
+    fn switching_panels_leaves_an_untouched_settings_draft_clean() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            assert!(!app.settings_draft_dirty());
+
+            app.open_page(crate::models::NavItem::Connections, cx);
+            assert!(
+                !app.settings_draft_dirty(),
+                "opening the saved-connections panel must not dirty the draft"
+            );
+
+            app.open_page(crate::models::NavItem::Notes, cx);
+            assert!(
+                !app.settings_draft_dirty(),
+                "switching panels must not dirty the draft"
+            );
+
+            // The guard has to stay able to see real edits, or a permanently
+            // clean draft would pass the assertions above.
+            app.set_transfer_internal_editor_font_size(19, cx);
+            assert!(
+                app.settings_draft_dirty(),
+                "a real settings edit must still mark the draft dirty"
+            );
+        });
+    }
+    #[test]
+    fn cancelling_settings_restores_real_edits_and_preserves_live_navigation() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            let original_font = app.settings.summary().transfer_internal_editor_font_size;
+            app.begin_settings_draft(cx);
+            app.open_page(crate::models::NavItem::Notes, cx);
+            let live = app.settings.summary().clone();
+            app.set_transfer_internal_editor_font_size(19, cx);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert_eq!(
+                app.settings.summary().transfer_internal_editor_font_size,
+                original_font
+            );
+            assert_eq!(
+                app.settings.summary().ui_active_left_panel,
+                live.ui_active_left_panel
+            );
+            assert_eq!(
+                app.settings.summary().ui_left_open_panels,
+                live.ui_left_open_panels
+            );
+            assert_eq!(
+                app.settings.summary().ui_left_panel_width,
+                live.ui_left_panel_width
+            );
+        });
+    }
+
+    #[test]
+    fn header_and_file_manager_preferences_still_dirty_the_whole_settings_comparison() {
+        let baseline = nyaterm_core::AppSettingsSummary::default();
+        for field in 0..4 {
+            let mut edited = baseline.clone();
+            match field {
+                0 => edited.ui_header_status_visible = !edited.ui_header_status_visible,
+                1 => edited.ui_highlight_line_roles = !edited.ui_highlight_line_roles,
+                2 => {
+                    edited.ui_file_manager.auto_collapse_sidebar =
+                        !edited.ui_file_manager.auto_collapse_sidebar
+                }
+                _ => {
+                    edited.ui_file_manager.remember_layout = !edited.ui_file_manager.remember_layout
+                }
+            }
+            assert!(!super::settings_draft_matches(&baseline, &edited));
+        }
     }
 }

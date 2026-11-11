@@ -1,3 +1,4 @@
+use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
 use rust_i18n::t;
 
 use std::collections::HashMap;
@@ -826,6 +827,7 @@ impl NyaTermApp {
         session_id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        self.reconcile_command_suggestion_availability(cx);
         let session_id = session_id
             .filter(|id| !id.is_empty())
             .map(str::to_string)
@@ -1079,7 +1081,10 @@ impl NyaTermApp {
         if started {
             // Outer command execution suppresses suggestions, not nested-shell editing.
             self.terminal.assist.command_suggestions = None;
-            self.terminal.assist.command_suggestions_suppressed = true;
+            self.terminal
+                .assist
+                .command_suggestion_suppression
+                .command_started();
             self.terminal.assist.command_suggestion_search_gen = self
                 .terminal
                 .assist
@@ -1088,7 +1093,8 @@ impl NyaTermApp {
         }
         if finished {
             // Command finished: re-enable suggestions; editor input has its own lifecycle.
-            self.terminal.assist.command_suggestions_suppressed = false;
+            self.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::None;
             self.terminal.assist.command_suggestions = None;
             self.terminal.assist.command_suggestion_search_gen = self
                 .terminal

@@ -120,12 +120,37 @@ pub(crate) struct PendingSshIntegrationUpload {
     pub(crate) join: tokio::task::JoinHandle<ssh_shell_integration::ScriptUploadOutcome>,
 }
 
+/// Worker readiness must not let tmux publish projections before its host is registered.
+async fn confirm_ssh_registration(
+    ready: &mpsc::Sender<Result<(), String>>,
+    registered: tokio::sync::oneshot::Receiver<()>,
+) -> bool {
+    ready.send(Ok(())).is_ok() && registered.await.is_ok()
+}
+
+async fn discard_open_ssh_shell(session_id: &str, session: OpenSshShellSession) {
+    let _ = tokio::time::timeout(Duration::from_millis(250), async {
+        let _ = session.channel.eof().await;
+        let _ = session.channel.close().await;
+    })
+    .await;
+    disconnect_open_ssh_shell(
+        session_id,
+        &session.handle,
+        session.jump_handles,
+        session.disconnect_on_close,
+        session.x11_multiplex_registration,
+    )
+    .await;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
     command_rx: ssh_mailbox::Receiver,
     ready_tx: mpsc::Sender<Result<(), String>>,
+    registered_rx: tokio::sync::oneshot::Receiver<()>,
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
     shell_environment: Arc<ShellEnvironmentCache>,
@@ -159,7 +184,9 @@ pub(crate) fn run_ssh_worker(
             .await;
             match result {
                 Ok(()) => {
-                    let _ = ready_tx.send(Ok(()));
+                    if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                        return;
+                    }
                     run_sftp_only_session(
                         &session_id,
                         command_rx,
@@ -180,6 +207,7 @@ pub(crate) fn run_ssh_worker(
                 config,
                 command_rx,
                 ready_tx,
+                registered_rx,
                 event_queue,
                 multiplex,
                 shell_environment,
@@ -197,7 +225,10 @@ pub(crate) fn run_ssh_worker(
             match open_ssh_shell(&session_id, &config, multiplex.as_ref(), shell_environment).await
             {
                 Ok(session) => {
-                    let _ = ready_tx.send(Ok(()));
+                    if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                        discard_open_ssh_shell(&session_id, session).await;
+                        return;
+                    }
                     session
                 }
                 Err(_)
@@ -220,7 +251,9 @@ pub(crate) fn run_ssh_worker(
                         return;
                     }
                     config.attempt.record_shell_reply(false);
-                    let _ = ready_tx.send(Ok(()));
+                    if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                        return;
+                    }
                     run_sftp_only_session(
                         &session_id,
                         command_rx,
@@ -256,6 +289,7 @@ pub(crate) async fn run_deferred_ssh_worker(
     config: SshSessionConfig,
     mut command_rx: ssh_mailbox::Receiver,
     ready_tx: mpsc::Sender<Result<(), String>>,
+    registered_rx: tokio::sync::oneshot::Receiver<()>,
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
     shell_environment: Arc<ShellEnvironmentCache>,
@@ -268,7 +302,10 @@ pub(crate) async fn run_deferred_ssh_worker(
     let pending_session =
         match open_pending_ssh_shell(&config, multiplex.as_ref(), shell_environment).await {
             Ok(session) => {
-                let _ = ready_tx.send(Ok(()));
+                if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                    disconnect_pending_ssh_shell(session).await;
+                    return;
+                }
                 session
             }
             Err(error) => {

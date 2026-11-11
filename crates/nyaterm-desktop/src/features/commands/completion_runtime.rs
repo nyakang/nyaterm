@@ -5,7 +5,8 @@ use nyaterm_core::command_search::{RankedCommandSourceQuery, search_ranked_comma
 use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::types::{
-    CompletionCandidate, CompletionMode, CompletionResult, ShellCommandContext,
+    CompletionCandidate, CompletionFillPolicy, CompletionMode, CompletionResult,
+    ShellCommandContext,
 };
 use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
 use nyaterm_core::completion::{CompletionEngine, TokenCompletionRequest};
@@ -33,6 +34,7 @@ pub(in crate::features) struct CompletionQuery {
     pub quick: Arc<[QuickCommand]>,
     pub min: usize,
     pub max: usize,
+    pub fill_policy: Option<CompletionFillPolicy>,
 }
 
 enum Request {
@@ -241,6 +243,7 @@ fn search_candidates(
         .filter_map(|(index, item)| item.target_line(&query.input).map(|line| (line, index)))
         .collect();
     let tokens = engine.complete(TokenCompletionRequest {
+        fill_policy: query.fill_policy,
         input: &query.input,
         cursor: query.input.len(),
         dialect: query.context.dialect,
@@ -275,6 +278,7 @@ fn full_history(
     search_ranked_command_sources_using(
         matcher,
         RankedCommandSourceQuery {
+            fill_policy: query.fill_policy,
             history: index,
             scope: &query.context.scope,
             quick_commands: &query.quick,
@@ -358,6 +362,7 @@ mod tests {
         }))
         .unwrap();
         let mut query = CompletionQuery {
+            fill_policy: None,
             context: ShellCommandContext {
                 scope: CompletionScope::new(&["multiline"]),
                 dialect: ShellDialect::Bash,
@@ -419,6 +424,7 @@ mod tests {
         }))
         .unwrap();
         let mut query = CompletionQuery {
+            fill_policy: None,
             context: ShellCommandContext {
                 scope,
                 dialect: ShellDialect::Bash,
@@ -481,6 +487,7 @@ mod tests {
         }))
         .unwrap();
         let mut query = CompletionQuery {
+            fill_policy: None,
             context: ShellCommandContext {
                 scope: CompletionScope::legacy(),
                 dialect: ShellDialect::Bash,
@@ -547,6 +554,7 @@ mod tests {
             });
         }
         let mut query = CompletionQuery {
+            fill_policy: None,
             context: ShellCommandContext {
                 scope,
                 dialect: ShellDialect::Bash,
@@ -596,6 +604,7 @@ mod tests {
         }))
         .unwrap();
         let query = CompletionQuery {
+            fill_policy: None,
             context: ShellCommandContext {
                 scope,
                 dialect: ShellDialect::Bash,
@@ -633,6 +642,7 @@ mod tests {
             command_events: true,
         };
         let query = |context| CompletionQuery {
+            fill_policy: None,
             context,
             input: "internal-t".into(),
             mode: CompletionMode::Token,
@@ -713,6 +723,7 @@ mod tests {
         for scope in [a, b] {
             for mode in [CompletionMode::Token, CompletionMode::History] {
                 let query = CompletionQuery {
+                    fill_policy: None,
                     context: ShellCommandContext {
                         scope: scope.clone(),
                         dialect: ShellDialect::Bash,
@@ -761,6 +772,7 @@ mod tests {
         let (events, _rx) = unbounded();
         let runtime = CompletionRuntime::new(store.clone(), events);
         let query = || CompletionQuery {
+            fill_policy: None,
             context: ShellCommandContext {
                 scope: CompletionScope::new(&["host-b"]),
                 dialect: ShellDialect::Bash,
@@ -828,6 +840,7 @@ mod tests {
             ..context.clone()
         };
         let query = |input: &str| CompletionQuery {
+            fill_policy: None,
             context: other.clone(),
             input: input.into(),
             mode: CompletionMode::Token,

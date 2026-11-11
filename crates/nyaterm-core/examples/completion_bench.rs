@@ -116,6 +116,7 @@ fn main() {
                 black_box(search_ranked_command_sources_using(
                     &mut weighted_matcher,
                     RankedCommandSourceQuery {
+                        fill_policy: None,
                         history: &whole,
                         scope: &scope,
                         quick_commands: &[],
@@ -175,6 +176,7 @@ fn main() {
     for query in ["dock", "docker r", "docker run --na", "docker run im"] {
         measure("context", 5000, query, || {
             black_box(engine.complete(TokenCompletionRequest {
+                fill_policy: None,
                 input: query,
                 cursor: query.len(),
                 dialect: ShellDialect::Bash,

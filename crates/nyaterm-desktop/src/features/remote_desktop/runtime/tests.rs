@@ -110,6 +110,10 @@ fn saved_rdp_retry_keeps_the_password_entered_in_its_prompt() {
         let _ = window.draw(cx);
     });
     cx.simulate_keystrokes("p a s s");
+    let (request_id, attempt) = cx.update(|_, cx| {
+        let session = &app.read(cx).remote_desktop.sessions["rdp"];
+        (session.start_token.clone(), session.start_attempt.clone())
+    });
     let confirm = cx.debug_bounds("nya-dialog-action-button").unwrap();
     cx.simulate_click(confirm.center(), Modifiers::default());
     cx.run_until_parked();
@@ -121,6 +125,11 @@ fn saved_rdp_retry_keeps_the_password_entered_in_its_prompt() {
             panic!("RDP");
         };
         assert_eq!(config.password.as_deref(), Some("pass"));
+        assert_eq!(
+            app.read(cx).remote_desktop.sessions["rdp"].start_token,
+            request_id
+        );
+        assert!(!attempt.is_cancelled());
     });
 }
 
@@ -427,6 +436,7 @@ fn an_unmeasured_panel_holds_the_connect_and_the_first_measurement_sizes_it() {
             "the panel desktop is the one being negotiated, not one to be resized to later"
         );
         let negotiated_or_reported = app.remote_desktop.manager.state(session_id).is_some()
+            || app.remote_desktop.helper_launches.contains_key(session_id)
             || session.state == RemoteDesktopViewState::Failed;
         assert!(
             negotiated_or_reported,
@@ -483,7 +493,7 @@ fn vnc_auth_retry_without_password_opens_and_cancels_dialog_without_leasing_root
                     shared: true,
                     view_only: false,
                 });
-            app.remote_desktop.insert_connecting("vnc-retry".into());
+            app.remote_desktop.insert_disconnected("vnc-retry".into());
             app.retry_rdp_runtime("vnc-retry", cx);
         });
     });
@@ -1445,7 +1455,7 @@ fn native_shutdown_cancels_pending_initialization_and_rejects_late_launches() {
                 .is_some()
         );
         app.remote_desktop.insert_connecting("queued-native".into());
-        app.launch_rdp_runtime("queued-native", config.clone());
+        app.launch_rdp_runtime("queued-native", config.clone(), cx);
         assert!(
             app.remote_desktop.sessions["queued-native"]
                 .native_rdp_config
@@ -1468,7 +1478,7 @@ fn native_shutdown_cancels_pending_initialization_and_rejects_late_launches() {
                 .is_none()
         );
         app.begin_rdp_runtime("pending-native", config.clone(), cx);
-        app.launch_rdp_runtime("queued-native", config);
+        app.launch_rdp_runtime("queued-native", config, cx);
         assert!(
             app.remote_desktop.sessions["pending-native"]
                 .deferred_start
@@ -1523,13 +1533,15 @@ fn legacy_native_settings_are_normalized_before_start_launch_and_retry() {
                 .0;
             assert_eq!(deferred.clipboard.mode, RdpClipboardMode::TextAndFiles);
             assert_eq!(deferred.windows_authentication.as_deref(), Some("system"));
-            app.launch_rdp_runtime("legacy-native", config);
+            app.launch_rdp_runtime("legacy-native", config, cx);
             let native = app.remote_desktop.sessions["legacy-native"]
                 .native_rdp_config
                 .as_ref()
                 .unwrap();
             assert_eq!(native.clipboard.mode, RdpClipboardMode::TextAndFiles);
             assert_eq!(native.windows_authentication.as_deref(), Some("system"));
+            app.remote_desktop
+                .insert_disconnected("legacy-native".into());
             app.retry_rdp_runtime("legacy-native", cx);
             let SessionLaunchConfig::Rdp(launch) =
                 &app.session.metadata("legacy-native").unwrap().launch_config
@@ -1581,6 +1593,8 @@ fn builtin_legacy_clipboard_modes_enable_full_clipboard_before_start_and_retry()
                 .unwrap()
                 .0;
             assert_eq!(deferred.clipboard.mode, RdpClipboardMode::TextAndFiles);
+            app.remote_desktop
+                .insert_disconnected("legacy-builtin".into());
             app.retry_rdp_runtime("legacy-builtin", cx);
             let SessionLaunchConfig::Rdp(launch) = &app
                 .session

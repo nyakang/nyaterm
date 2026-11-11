@@ -1711,7 +1711,7 @@
     "newLocalTerminal": "新規ローカル",
     "newSession": "新規セッション",
     "newWindow": "新しいウィンドウ",
-    "newSshConnection": "新規 SSH",
+    "newSshConnection": "新規接続",
     "panels": "パネル",
     "paste": "貼り付け",
     "redo": "やり直し",
@@ -2687,7 +2687,7 @@
     "close": "閉じる",
     "connecting": "接続中",
     "move": "移動",
-    "newSsh": "新規 SSH",
+    "newSsh": "新規接続",
     "noMatches": "検索に一致するセッションや保存接続がありません",
     "noSessions": "開いているセッションや保存接続がありません",
     "open": "開く",
@@ -3634,6 +3634,7 @@
     "memUsage": "メモリ使用率"
   },
   "suggestions": {
+    "openPasteReview": "貼り付けの確認を開く",
     "acceptSelected": "選択候補を確定",
     "legacyHistory": "以前のグローバル履歴",
     "multiline": "複数行",

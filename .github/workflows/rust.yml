@@ -198,6 +198,12 @@ jobs:
 
       # Cold PowerShell startup must not compete with thousands of parallel UI
       # and worker tests. Keep real ConPTY execution covered in its own step.
+      - name: Test Windows command replacement and submission
+        if: runner.os == 'Windows'
+        run: >-
+          cargo test -p nyaterm-transport --lib windows_command_input_tests
+          --locked -- --ignored --test-threads=1
+
       - name: Test Windows shared terminal execution
         if: runner.os == 'Windows'
         run: >-

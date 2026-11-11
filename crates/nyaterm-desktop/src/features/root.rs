@@ -410,6 +410,7 @@ impl NyaTermApp {
                     this.update_asset_column_resize(f32::from(event.position.x), cx);
                     this.update_panel_resize(event, cx);
                     this.update_transfer_height_resize(event, cx);
+                    this.update_ai_composer_resize(event, cx);
                     this.update_bottom_panel_resize(event, cx);
                     this.update_panel_stack_resize(event, cx);
                     this.update_workspace_split_resize(event, cx);
@@ -430,6 +431,7 @@ impl NyaTermApp {
                     this.finish_asset_column_resize(cx);
                     this.finish_panel_resize(cx);
                     this.finish_transfer_height_resize(cx);
+                    this.finish_ai_composer_resize(cx);
                     this.finish_bottom_panel_resize(cx);
                     this.finish_panel_stack_resize(cx);
                     this.finish_workspace_split_resize(cx);
@@ -954,9 +956,9 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.path_menu_open, |this| {
-                this.child(regional_overlay_layer(
+                this.child(full_window_overlay_layer(
                     "transfer-path-menu-input-layer",
-                    self.transfer_browser_path_menu_overlay(cx),
+                    self.transfer_browser_path_menu_overlay(window, cx),
                 ))
             })
             .when(overlay.upload_menu_open, |this| {

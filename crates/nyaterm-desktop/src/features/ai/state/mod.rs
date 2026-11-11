@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::time::Instant;
 
-use gpui::FocusHandle;
+use gpui::{FocusHandle, Pixels};
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAgentKind, AiCommandCard, AiMessage, AiMessageRole, AiMode,
     AiSession, AiSettings, truncate_preview, uuid,
@@ -284,6 +284,19 @@ struct AiPanelState {
     panel_refresh_requested: bool,
     stream_refresh_generation: u64,
     stream_refresh_pending: bool,
+    /// Manual floor for the composer prompt box. `0` leaves the content-driven
+    /// auto-grow untouched, which also doubles as the resize's lower bound.
+    composer_min_height: f32,
+    composer_resize: Option<AiComposerResize>,
+}
+
+/// Pointer-driven composer height drag. `start_height` is the box's measured
+/// height at press so the floor tracks the visible top edge, not a stale floor.
+#[derive(Clone, Copy)]
+struct AiComposerResize {
+    start_y: Pixels,
+    start_height: Pixels,
+    start_floor: f32,
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -445,6 +458,8 @@ impl AiFeatureState {
                 panel_refresh_requested: false,
                 stream_refresh_generation: 0,
                 stream_refresh_pending: false,
+                composer_min_height: 0.,
+                composer_resize: None,
             },
         }
     }
@@ -2137,6 +2152,36 @@ impl AiFeatureState {
         self.panel.execution_menu_open
     }
 
+    pub(in crate::features) fn composer_min_height(&self) -> f32 {
+        self.panel.composer_min_height
+    }
+
+    pub(in crate::features) fn composer_is_resizing(&self) -> bool {
+        self.panel.composer_resize.is_some()
+    }
+
+    pub(in crate::features) fn start_composer_resize(
+        &mut self,
+        start_y: Pixels,
+        start_height: Pixels,
+    ) {
+        self.panel.start_composer_resize(start_y, start_height);
+    }
+
+    pub(in crate::features) fn update_composer_resize(
+        &mut self,
+        current_y: Pixels,
+        natural_height: Pixels,
+        maximum_height: Pixels,
+    ) -> Option<f32> {
+        self.panel
+            .update_composer_resize(current_y, natural_height, maximum_height)
+    }
+
+    pub(in crate::features) fn finish_composer_resize(&mut self) -> bool {
+        self.panel.finish_composer_resize()
+    }
+
     pub(in crate::features) fn toggle_execution_menu(&mut self) -> bool {
         self.history.open = false;
         self.history.query.clear();
@@ -2224,6 +2269,43 @@ impl AiChatState {
 }
 
 impl AiPanelState {
+    fn start_composer_resize(&mut self, start_y: Pixels, start_height: Pixels) {
+        self.composer_resize = Some(AiComposerResize {
+            start_y,
+            start_height,
+            start_floor: self.composer_min_height,
+        });
+    }
+
+    fn update_composer_resize(
+        &mut self,
+        current_y: Pixels,
+        natural_height: Pixels,
+        maximum_height: Pixels,
+    ) -> Option<f32> {
+        let state = self.composer_resize?;
+        let delta = f32::from(state.start_y - current_y);
+        let maximum = maximum_height
+            .max(gpui::px(0.))
+            .min(super::panel::layout::COMPOSER_HEIGHT_MAX);
+        let floor = (f32::from(state.start_height) + delta).min(f32::from(maximum));
+        // A click or an upward drag already at the ceiling must not overwrite
+        // a taller runtime preference hidden by the current panel size.
+        self.composer_min_height =
+            if delta == 0. || (delta > 0. && floor <= f32::from(state.start_height)) {
+                state.start_floor
+            } else if delta < 0. && floor <= f32::from(natural_height.min(maximum)) {
+                0.
+            } else {
+                floor
+            };
+        Some(self.composer_min_height)
+    }
+
+    fn finish_composer_resize(&mut self) -> bool {
+        self.composer_resize.take().is_some()
+    }
+
     pub(in crate::features) fn dismiss_detected_error(&mut self) {
         self.detected_error = None;
         self.status = "terminal error notice dismissed".to_string();

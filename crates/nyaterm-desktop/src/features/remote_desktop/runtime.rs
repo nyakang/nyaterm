@@ -5,6 +5,7 @@ mod clipboard;
 mod errors;
 mod events;
 mod framebuffer;
+mod helper_start;
 mod input;
 mod lifecycle;
 mod resize;

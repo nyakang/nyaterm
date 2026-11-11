@@ -1,7 +1,7 @@
 use super::components::agent_kind_display_name;
 use super::{
-    AiAgentStepPresentation, AiHeaderPresentation, AiMentionCandidate, AiModelChoice,
-    AiPanelChrome, AiPanelSnapshot, AiTargetSession, harness,
+    AI_COMPOSER_RESIZE_HANDLE_ID, AiAgentStepPresentation, AiHeaderPresentation,
+    AiMentionCandidate, AiModelChoice, AiPanelChrome, AiPanelSnapshot, AiTargetSession, harness,
 };
 use crate::features::NyaTermApp;
 use crate::features::formatting::short_id;
@@ -373,6 +373,11 @@ impl NyaTermApp {
             discovery_index: self.ai.discovery_index(),
             prompt_draft,
             prompt_input,
+            composer_min_height: self.ai.composer_min_height(),
+            composer_resizing: self.ai.composer_is_resizing(),
+            composer_handle_active: self.shell.resize_handle_is_highlighted(
+                &gpui::SharedString::from(AI_COMPOSER_RESIZE_HANDLE_ID),
+            ),
             model_search_input,
             history_search_input,
             file_action_ready: self

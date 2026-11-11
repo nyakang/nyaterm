@@ -91,6 +91,8 @@ mod telnet_codec;
 mod telnet_input;
 mod telnet_prompts;
 pub mod tmux;
+#[cfg(all(test, windows))]
+mod windows_command_input_tests;
 mod writer_mailbox;
 #[cfg(test)]
 use ssh_algorithms::defaults_from_preferred;

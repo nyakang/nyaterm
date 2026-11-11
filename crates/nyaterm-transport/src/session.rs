@@ -674,10 +674,6 @@ impl SessionManager {
                 source: anyhow::Error::msg(message),
             })?;
         self.ensure_reaper()?;
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| SessionError::LockPoisoned)?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let addr = format!("{}:{}", config.host, config.port);
         validate_ssh_algorithm_preferences(config.ssh_algorithms.as_ref()).map_err(|source| {
@@ -694,6 +690,7 @@ impl SessionManager {
         // every command lands on one ordered control channel.
         let worker_tmux_tx = tmux_tx.clone();
         let (ready_tx, ready_rx) = mpsc::channel();
+        let (registered_tx, registered_rx) = tokio::sync::oneshot::channel();
         let event_queue = self.event_queue.clone();
         let attempt = multiplex
             .as_ref()
@@ -711,6 +708,7 @@ impl SessionManager {
                     worker_config,
                     command_rx,
                     ready_tx,
+                    registered_rx,
                     event_queue,
                     multiplex,
                     shell_environment,
@@ -726,6 +724,7 @@ impl SessionManager {
         match ready_rx.recv() {
             Ok(Ok(())) => {}
             Ok(Err(message)) => {
+                drop(registered_tx);
                 let _ = worker_thread.join();
                 return Err(SessionError::CreateSsh {
                     addr,
@@ -733,6 +732,7 @@ impl SessionManager {
                 });
             }
             Err(error) => {
+                drop(registered_tx);
                 let _ = worker_thread.join();
                 return Err(SessionError::CreateSsh {
                     addr,
@@ -749,7 +749,8 @@ impl SessionManager {
             cols: config.cols,
             rows: config.rows,
         };
-        let session = SshChannelTransport {
+        let request_attempt = config.attempt.clone();
+        let mut session = SshChannelTransport {
             info: info.clone(),
             shell_enabled: config.runtime_mode
                 != nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp,
@@ -764,8 +765,34 @@ impl SessionManager {
             worker_thread: Some(worker_thread),
         };
 
-        sessions.insert(session_id, ManagedSession::Ssh(session));
-
+        if let Err(message) = request_attempt.check() {
+            drop(registered_tx);
+            let _ = session.close();
+            return Err(SessionError::CreateSsh {
+                addr,
+                source: anyhow::anyhow!(message),
+            });
+        }
+        // Dialling and readiness above are independent of the registry. A worker
+        // cannot publish tmux panes until the short registration commit succeeds.
+        match self.sessions.lock() {
+            Ok(mut sessions) => {
+                sessions.insert(session_id.clone(), ManagedSession::Ssh(session));
+            }
+            Err(error) => {
+                drop(error);
+                drop(registered_tx);
+                let _ = session.close();
+                return Err(SessionError::LockPoisoned);
+            }
+        }
+        if registered_tx.send(()).is_err() {
+            let _ = self.close(&session_id);
+            return Err(SessionError::CreateSsh {
+                addr,
+                source: anyhow::anyhow!("SSH worker exited before registration"),
+            });
+        }
         Ok(info)
     }
 

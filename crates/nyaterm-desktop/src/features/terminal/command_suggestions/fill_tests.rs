@@ -7,8 +7,11 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Render,
     TestAppContext, Window,
 };
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
-use nyaterm_transport::{SessionManager, TelnetSessionConfig};
+use nyaterm_core::completion::types::{
+    CompletionFillPolicy, CompletionMode, CompletionScope, ShellCommandContext, ShellDialect,
+};
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase, ShellLineEditing};
+use nyaterm_transport::{SerialSessionConfig, SessionManager, TelnetSessionConfig};
 
 use super::fill::SuggestionSubmitResult;
 use super::tests::show_surface_for_session;
@@ -104,6 +107,15 @@ impl Fixture {
             self.suggest(current, target);
         }
         self.update(|app, cx, id| {
+            let launch = app
+                .session
+                .metadata("fixture")
+                .unwrap()
+                .launch_config
+                .clone();
+            let mut metadata = app.session.metadata(id).unwrap().clone();
+            metadata.launch_config = launch;
+            app.session.register_session_metadata(id, metadata);
             app.terminal.seed_session_view(
                 id.into(),
                 format!("$ \x1b]133;B\x07{current}"),
@@ -156,6 +168,318 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn expanded_prompts_offer_replacement_in_shell_sessions_and_append_in_telnet_and_serial() {
+    let mut f = Fixture::new();
+    for kind in 0..4 {
+        for prompt in [
+            "fuxi:/sdcard # ",
+            "host:~$ ",
+            "~/src ❯ ",
+            "➜ ~/src ",
+            "~ % ",
+        ] {
+            f.suggest("mv", "mv source destination");
+            f.update(|app, cx, id| {
+                let launch = match kind {
+                    0 => app
+                        .session
+                        .metadata("fixture")
+                        .unwrap()
+                        .launch_config
+                        .clone(),
+                    1 => SessionLaunchConfig::Ssh(Box::default()),
+                    2 => SessionLaunchConfig::Telnet(TelnetSessionConfig::default()),
+                    _ => SessionLaunchConfig::Serial(SerialSessionConfig::default()),
+                };
+                app.session.metadata_mut(id).unwrap().launch_config = launch;
+                app.terminal
+                    .seed_session_view(id.into(), format!("{prompt}mv"), "UTF-8");
+                app.reconcile_shell_editing(id, cx);
+                let expected = if kind < 2 {
+                    CompletionFillPolicy::ReplaceAllowed
+                } else {
+                    CompletionFillPolicy::AppendOnly
+                };
+                assert_eq!(app.command_suggestion_fill_policy(id), expected, "{prompt}");
+                let request = app
+                    .prepare_command_suggestion_search(
+                        app.terminal.assist.command_suggestion_search_gen,
+                        CompletionMode::Token,
+                        cx,
+                    )
+                    .unwrap();
+                let revision = app.commands.completion_runtime().revision();
+                let mut results = super::tests::history_search_fixture("cat file", "mv", revision);
+                results.candidates.extend(
+                    super::tests::history_search_fixture("mv source destination", "mv", revision)
+                        .candidates,
+                );
+                results.candidates.extend(
+                    super::tests::history_search_fixture("echo first\necho second", "mv", revision)
+                        .candidates,
+                );
+                app.publish_command_suggestion_search(request, results, Duration::ZERO, cx);
+                let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+                assert_eq!(popup.items.len(), if kind < 2 { 3 } else { 2 });
+                assert!(popup.items.iter().all(|item| item.fillable));
+                assert_eq!(
+                    popup.items.iter().any(|item| item.command == "cat file"),
+                    kind < 2
+                );
+                assert!(popup.items.iter().any(|item| item.command.contains('\n')));
+            });
+        }
+    }
+    f.assert_quiet();
+}
+
+#[test]
+fn android_shell_prompt_replacement_writes_only_edit_keys_and_waits_for_confirmation() {
+    let mut f = Fixture::new();
+    f.suggest("mv", "mv source destination");
+    f.update(|app, cx, id| {
+        app.session.metadata_mut(id).unwrap().launch_config = app
+            .session
+            .metadata("fixture")
+            .unwrap()
+            .launch_config
+            .clone();
+        app.terminal
+            .seed_session_view(id.into(), "fuxi:/sdcard # mv".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        popup(app, id, "cat file");
+        assert_eq!(
+            app.submit_selected_command_suggestion(true, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        assert_eq!(app.terminal.editing.predicted_input().value, "cat file");
+        assert_eq!(
+            app.terminal.editing.state().unwrap().model.phase,
+            EditPhase::Pending
+        );
+        assert!(app.session.command_history_for(id).is_none());
+    });
+    f.receive(b"\x7f\x7fcat file");
+    f.assert_quiet();
+}
+
+#[test]
+fn delayed_echo_hides_candidates_then_schedules_a_refresh_when_input_is_confirmed() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("mv", "mv source destination");
+    f.update(|app, cx, id| {
+        app.note_shell_editing_input(b"x", cx);
+        app.terminal.assist.command_suggestion_refresh_task = None;
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        assert!(
+            app.prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx
+            )
+            .is_none()
+        );
+        echo(app, cx, id, "mvx");
+        assert!(app.command_suggestion_input_is_confirmed());
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn unconfirmed_or_nonterminal_line_input_never_enters_candidate_search() {
+    let mut f = Fixture::new();
+    for scenario in 0..8 {
+        f.suggest_in_shell("mv", "mv source destination");
+        f.update(|app, cx, _| {
+            let state = app.terminal.editing.state_mut();
+            match scenario {
+                0 => state.awaiting_snapshot = true,
+                1 => state.mapping = None,
+                2 => state.model.phase = EditPhase::Pending,
+                3 => state.model.input.cursor = 0,
+                4 => state.model.input.multiline = true,
+                5 => state.model.input.paste_mode = true,
+                6 => state.model.input.line_rewrite_required = true,
+                _ => state.model.input.desynced = true,
+            }
+            app.reconcile_command_suggestion_availability(cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+            app.terminal.editing.state_mut().awaiting_snapshot = false;
+        });
+    }
+    f.assert_quiet();
+}
+
+#[test]
+fn restricted_terminal_states_never_publish_or_select_candidates() {
+    let mut f = Fixture::new();
+    for scenario in 0..8 {
+        f.suggest_in_shell("mv", "mv source destination");
+        f.update(|app, cx, id| {
+            let request = app
+                .prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx,
+                )
+                .unwrap();
+            match scenario {
+                0 => {
+                    app.toggle_broadcast_to_all(cx);
+                }
+                1 => app.terminal.assist.credential_prompt_input_until_ms = u64::MAX,
+                2 => app.security.activate_screen_lock("test lock".into()),
+                3 => {
+                    app.terminal
+                        .view
+                        .views
+                        .get_mut(id)
+                        .unwrap()
+                        .protocol_state
+                        .alternate_screen = true
+                }
+                4 => {
+                    app.terminal
+                        .view
+                        .views
+                        .get_mut(id)
+                        .unwrap()
+                        .protocol_state
+                        .mouse_reporting = true
+                }
+                5 => app.session.metadata_mut(id).unwrap().disconnected = true,
+                6 => {
+                    app.session.select_active_session("fixture");
+                }
+                _ => {
+                    let view = app.terminal.view.views.get_mut(id).unwrap();
+                    view.append_bytes_unprotected("\r\n".repeat(80).as_bytes());
+                    view.scroll_offset = 1;
+                    assert_eq!(app.active_terminal_display_offset(), 1);
+                }
+            }
+            app.reconcile_command_suggestion_availability(cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            app.publish_command_suggestion_search(
+                request,
+                super::tests::history_search_fixture(
+                    "mv source destination",
+                    "mv",
+                    app.commands.completion_runtime().revision(),
+                ),
+                Duration::ZERO,
+                cx,
+            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+            if app.sync_input.broadcast_to_all() {
+                app.toggle_broadcast_to_all(cx);
+            }
+            app.terminal.assist.credential_prompt_input_until_ms = 0;
+            app.security.deactivate_screen_lock();
+            app.session.metadata_mut(id).unwrap().disconnected = false;
+            let view = app.terminal.view.views.get_mut(id).unwrap();
+            view.protocol_state.alternate_screen = false;
+            view.protocol_state.mouse_reporting = false;
+            view.scroll_offset = 0;
+            app.session.select_active_session(id);
+        });
+    }
+    f.assert_quiet();
+}
+
+#[test]
+fn policy_changes_filter_existing_candidates_and_discard_pending_results() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("mv", "cat file");
+    f.update(|app, cx, id| {
+        let request = app
+            .prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx,
+            )
+            .unwrap();
+        app.session.metadata_mut(id).unwrap().launch_config =
+            SessionLaunchConfig::Serial(SerialSessionConfig::default());
+        app.reconcile_command_suggestion_availability(cx);
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        app.publish_command_suggestion_search(
+            request,
+            super::tests::history_search_fixture(
+                "cat file",
+                "mv",
+                app.commands.completion_runtime().revision(),
+            ),
+            Duration::ZERO,
+            cx,
+        );
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn tightening_policy_preserves_selection_of_a_remaining_append_candidate() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("mv", "cat file");
+    f.update(|app, cx, id| {
+        let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+        let mut append = popup.items[0].clone();
+        append.command = "mv source destination".into();
+        append.display = append.command.clone();
+        popup.items.push(append);
+        popup.selected_index = Some(1);
+        app.session.metadata_mut(id).unwrap().launch_config =
+            SessionLaunchConfig::Telnet(TelnetSessionConfig::default());
+        app.reconcile_command_suggestion_availability(cx);
+        let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+        assert_eq!(popup.items.len(), 1);
+        assert_eq!(popup.items[0].command, "mv source destination");
+        assert_eq!(popup.selected_index, Some(0));
+    });
+    f.assert_quiet();
+}
+
+fn set_encoding(launch: &mut SessionLaunchConfig, encoding: &str) {
+    let field = match launch {
+        SessionLaunchConfig::Local(config) => &mut config.encoding,
+        SessionLaunchConfig::Ssh(config) => &mut config.encoding,
+        SessionLaunchConfig::Telnet(config) => &mut config.encoding,
+        SessionLaunchConfig::Serial(config) => &mut config.encoding,
+        _ => panic!("encoding fixture requires a terminal session"),
+    };
+    *field = encoding.into();
+}
+
 fn key(name: &str) -> KeyDownEvent {
     KeyDownEvent {
         keystroke: gpui::Keystroke {
@@ -185,6 +509,13 @@ fn echo(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>, id: &str, value: &st
 }
 
 fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
+    // These tests install exact rows; snapshot-triggered searches must not replace them.
+    app.terminal.assist.command_suggestion_refresh_task = None;
+    app.terminal.assist.command_suggestion_search_gen = app
+        .terminal
+        .assist
+        .command_suggestion_search_gen
+        .saturating_add(1);
     let state = app.terminal.editing.state().unwrap();
     app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
         mode: nyaterm_core::completion::types::CompletionMode::History,
@@ -207,6 +538,172 @@ fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
         cursor_row: 0,
         cursor_col: 0,
     });
+}
+
+fn set_popup_space(app: &mut NyaTermApp, id: &str, width: f32, space_below: f32) {
+    let bounds = gpui::Bounds::new(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::size(gpui::px(width), gpui::px(400.)),
+    );
+    app.terminal
+        .layout
+        .session_surface_bounds
+        .insert(id.into(), bounds);
+    let insets = app.terminal_content_insets_for_bounds(Some(id), bounds);
+    let row = app
+        .terminal
+        .assist
+        .command_suggestions
+        .as_ref()
+        .unwrap()
+        .cursor_row;
+    let cursor_bottom = insets.top + (row + 1) as f32 * app.terminal_cell_size().1;
+    app.shell
+        .set_viewport_size_for_test((width, cursor_bottom + 4. + space_below + 8.));
+}
+
+fn draw_popup(app: &Entity<NyaTermApp>, cx: &mut gpui::VisualTestContext) {
+    for _ in 0..2 {
+        cx.update(|window, cx| {
+            app.update(cx, |_, cx| cx.notify());
+            window.refresh();
+            _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+    }
+}
+
+#[test]
+fn shortened_popup_keeps_keyboard_selection_visible_after_resize() {
+    let mut f = Fixture::new();
+    f.suggest("mv", "mv source destination");
+    f.update(|app, _, id| {
+        let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+        popup.items = vec![popup.items[0].clone(); 12];
+        popup.selected_index = None;
+        popup.cursor_row = 20;
+        set_popup_space(app, id, 800., 250.);
+    });
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    draw_popup(&app, cx);
+    assert_eq!(
+        cx.debug_bounds("command-suggestions-overlay")
+            .unwrap()
+            .size
+            .height,
+        gpui::px(250.)
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            for _ in 0..12 {
+                assert!(app.handle_command_suggestion_key(&key("down"), cx));
+            }
+        })
+    });
+    draw_popup(&app, cx);
+    for space_below in [250., 106.] {
+        cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 800., space_below)));
+        draw_popup(&app, cx);
+        let scroll = app.read_with(cx, |app, _| {
+            app.terminal.assist.command_suggestion_scroll.clone()
+        });
+        let selected = scroll.bounds_for_item(11).unwrap();
+        let offset = scroll.offset();
+        assert!(offset.y < gpui::px(0.));
+        assert!(selected.top() + offset.y >= scroll.bounds().top());
+        assert!(
+            selected.bottom() + offset.y <= scroll.bounds().bottom(),
+            "space={space_below}, item={selected:?}, offset={offset:?}, viewport={:?}",
+            scroll.bounds()
+        );
+        assert_eq!(
+            cx.debug_bounds("command-suggestions-overlay")
+                .unwrap()
+                .size
+                .height,
+            gpui::px(space_below)
+        );
+    }
+    let scroll = app.read_with(cx, |app, _| {
+        app.terminal.assist.command_suggestion_scroll.clone()
+    });
+    scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+    draw_popup(&app, cx);
+    assert_eq!(
+        scroll.offset().y,
+        gpui::px(0.),
+        "redrawing preserves manual scrolling"
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            // Leave the selection, then re-enter at the first candidate.
+            assert!(app.handle_command_suggestion_key(&key("down"), cx));
+            assert!(app.handle_command_suggestion_key(&key("down"), cx));
+        })
+    });
+    draw_popup(&app, cx);
+    let scroll = app.read_with(cx, |app, _| {
+        app.terminal.assist.command_suggestion_scroll.clone()
+    });
+    assert_eq!(scroll.offset().y, gpui::px(0.));
+}
+
+#[test]
+fn long_command_preview_stays_beyond_popup_and_inside_narrow_window() {
+    let mut f = Fixture::new();
+    f.suggest("mv", &"mv source destination ".repeat(80));
+    f.update(|app, _, id| {
+        app.terminal
+            .assist
+            .command_suggestions
+            .as_mut()
+            .unwrap()
+            .cursor_row = 20;
+        set_popup_space(app, id, 300., 300.);
+    });
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    for (space_below, above) in [(300., false), (0., true)] {
+        cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 300., space_below)));
+        draw_popup(&app, cx);
+        let menu = cx.debug_bounds("command-suggestions-overlay").unwrap();
+        let preview = cx.debug_bounds("command-suggestion-preview").unwrap();
+        let (_, height) = app.read_with(cx, |app, _| app.shell.viewport_size());
+        assert_eq!(menu.size.width, gpui::px(284.));
+        assert_eq!(preview.size.width, menu.size.width);
+        assert!(preview.size.height <= gpui::px(120.));
+        assert!(preview.top() >= gpui::px(8.));
+        assert!(preview.bottom() <= gpui::px(height - 8.));
+        if above {
+            assert!(preview.bottom() <= menu.top() - gpui::px(6.));
+        } else {
+            assert!(preview.top() >= menu.bottom() + gpui::px(6.));
+        }
+    }
+    cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 300., 100.)));
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestion-preview").is_none());
+}
+
+#[test]
+fn insufficient_space_hides_popup_without_discarding_candidates() {
+    let mut f = Fixture::new();
+    f.suggest("mv", "mv source destination");
+    f.update(|app, _, id| set_popup_space(app, id, 800., 30.));
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestions-overlay").is_none());
+    assert!(app.read_with(cx, |app, _| {
+        app.terminal.assist.command_suggestions.is_some()
+    }));
+    cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 800., 300.)));
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestions-overlay").is_some());
 }
 
 #[test]
@@ -410,9 +907,7 @@ fn replacement_uses_native_keyboard_encoding_and_the_session_charset() {
             .protocol_state
             .kitty_keyboard_report_all_keys_as_esc = true;
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(false, cx),
@@ -455,9 +950,7 @@ fn replacement_encoding_failure_never_deletes_the_original_input() {
     f.suggest_in_shell("dkr", "echo 😀");
     f.update(|app, cx, id| {
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(false, cx),
@@ -693,9 +1186,7 @@ fn encoding_and_bracketed_paste_never_add_control_sequences_to_the_suffix() {
     f.suggest("echo ", "echo 😀");
     f.update(|app, cx, id| {
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(true, cx),
@@ -878,7 +1369,7 @@ fn unselected_token_keys_reach_the_session_with_its_native_encoding() {
 }
 
 #[test]
-fn typing_and_backspace_clear_selection_before_the_debounced_refresh() {
+fn typing_and_backspace_close_stale_candidates_before_the_debounced_refresh() {
     for (input, expected) in [(b"x".as_slice(), "dockx"), (b"\x7f".as_slice(), "doc")] {
         let mut f = Fixture::new();
         f.suggest("dock", "docker");
@@ -901,15 +1392,7 @@ fn typing_and_backspace_clear_selection_before_the_debounced_refresh() {
                     .command_suggestion_refresh_task
                     .is_some()
             );
-            assert_eq!(
-                app.terminal
-                    .assist
-                    .command_suggestions
-                    .as_ref()
-                    .unwrap()
-                    .selected_index,
-                None
-            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
             assert!(!app.handle_command_suggestion_key(&key("enter"), cx));
             assert!(!app.handle_command_suggestion_key(&key("tab"), cx));
         });
@@ -1291,9 +1774,7 @@ fn multiline_paste_encoding_failure_does_not_erase_the_query() {
             SuggestionSubmitResult::PasteReviewRequested
         );
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
     });
     f.with_window(|app, window, cx, _| {
@@ -1316,9 +1797,7 @@ fn multiline_paste_uses_native_delete_keys_and_encodes_only_the_paste_body() {
         protocol.kitty_keyboard_report_event_types = true;
         protocol.kitty_keyboard_report_all_keys_as_esc = true;
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(false, cx),
@@ -1398,6 +1877,419 @@ fn clicking_a_multiline_candidate_opens_review_even_without_shell_editing_capabi
             "echo first\necho second"
         );
         assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
+    });
+    f.assert_quiet();
+}
+
+fn make_cmd_session(
+    app: &mut NyaTermApp,
+    cx: &mut Context<NyaTermApp>,
+    id: &str,
+    typed: &str,
+    echo: &str,
+) {
+    let launch = app
+        .session
+        .metadata("fixture")
+        .unwrap()
+        .launch_config
+        .clone();
+    app.session.metadata_mut(id).unwrap().launch_config = launch;
+    app.commands.set_command_context(
+        id.to_string(),
+        ShellCommandContext {
+            scope: CompletionScope::legacy(),
+            dialect: ShellDialect::Cmd,
+            command_events: false,
+        },
+    );
+    app.terminal.editing.state_mut().awaiting_snapshot = false;
+    app.terminal.editing.clear_active();
+    app.terminal
+        .seed_session_view(id.into(), String::new(), "UTF-8");
+    app.note_shell_editing_input(typed.as_bytes(), cx);
+    app.terminal
+        .seed_session_view(id.into(), format!("C:\\Users\\DYQ>{echo}"), "UTF-8");
+    app.reconcile_shell_editing(id, cx);
+    assert_eq!(
+        app.terminal.editing.state().unwrap().model.phase,
+        EditPhase::Ready
+    );
+}
+
+#[test]
+fn cmd_completion_appends_and_waits_for_confirmed_echo() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pi", "pi");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        let state = app.terminal.editing.state().unwrap();
+        assert_eq!(state.model.input.value, "ping 172.22.222.149");
+        assert!(
+            state.suggestion_fill.is_some(),
+            "unmarked console input still needs a fresh echo acknowledgement"
+        );
+    });
+    f.receive(b"ng 172.22.222.149");
+    f.update(|app, cx, id| {
+        app.terminal.seed_session_view(
+            id.into(),
+            "C:\\Users\\DYQ>ping 172.22.222.149".into(),
+            "UTF-8",
+        );
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        assert!(app.command_suggestion_input_is_confirmed());
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn cmd_completion_rewrites_the_line_with_console_backspaces() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_some()
+        );
+        assert_eq!(
+            app.terminal.editing.state().unwrap().model.phase,
+            EditPhase::Pending
+        );
+    });
+    let mut expected = vec![0x08; "pong".len()];
+    expected.extend_from_slice(b"ping 172.22.222.149");
+    f.receive(&expected);
+    f.assert_quiet();
+}
+
+fn redraw_console_line(app: &mut NyaTermApp, id: &str, prompt: &str, value: &str) {
+    let view = app.terminal.view.views.get_mut(id).unwrap();
+    // Preserve the live stream's monotonic row revisions. Recreating a screen
+    // for equal-length text would look like the same old frame to the gate.
+    view.screen
+        .advance_decoded_text(&format!("\r\x1b[2K{prompt}{value}"));
+    view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+}
+
+#[test]
+fn nested_windows_prompt_changes_invalidate_candidates_and_select_current_delete_encoding() {
+    let mut f = Fixture::new();
+    for launch in [ShellDialect::Cmd, ShellDialect::PowerShell] {
+        f.update(|app, cx, id| {
+            make_cmd_session(app, cx, id, "pong", "pong");
+            app.commands.set_command_context(
+                id.into(),
+                ShellCommandContext {
+                    scope: CompletionScope::legacy(),
+                    dialect: launch,
+                    command_events: false,
+                },
+            );
+        });
+        for (prompt, backend, erase) in [
+            ("PS C:\\Users> ", ShellLineEditing::AnsiLineEditor, 0x7f),
+            ("C:\\Users>", ShellLineEditing::LegacyConsole, 0x08),
+            ("PS C:\\Users> ", ShellLineEditing::AnsiLineEditor, 0x7f),
+        ] {
+            f.update(|app, cx, id| {
+                popup(app, id, "ping");
+                redraw_console_line(app, id, prompt, "pong");
+                app.reconcile_shell_editing(id, cx);
+                assert!(app.terminal.assist.command_suggestions.is_none());
+                assert_eq!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .editor_evidence
+                        .map(|evidence| evidence.line_editing),
+                    Some(backend)
+                );
+                assert_eq!(
+                    app.command_suggestion_context(id).dialect,
+                    if backend == ShellLineEditing::LegacyConsole {
+                        ShellDialect::Cmd
+                    } else {
+                        ShellDialect::PowerShell
+                    }
+                );
+                let request = app
+                    .prepare_command_suggestion_search(
+                        app.terminal.assist.command_suggestion_search_gen,
+                        CompletionMode::Token,
+                        cx,
+                    )
+                    .unwrap();
+                assert_eq!(request.fill_policy, CompletionFillPolicy::ReplaceAllowed);
+                let revision = app.commands.completion_runtime().revision();
+                app.publish_command_suggestion_search(
+                    request,
+                    super::tests::history_search_fixture("ping", "pong", revision),
+                    Duration::ZERO,
+                    cx,
+                );
+                assert!(
+                    app.terminal
+                        .assist
+                        .command_suggestions
+                        .as_ref()
+                        .unwrap()
+                        .items
+                        .iter()
+                        .any(|item| item.command == "ping")
+                );
+                popup(app, id, "ping");
+                assert_eq!(
+                    app.submit_selected_command_suggestion(true, cx),
+                    SuggestionSubmitResult::Submitted
+                );
+                assert!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .suggestion_fill
+                        .is_some()
+                );
+            });
+            let mut expected = vec![erase; 4];
+            expected.extend_from_slice(b"ping");
+            f.receive(&expected);
+            f.update(|app, cx, id| {
+                redraw_console_line(app, id, prompt, "ping");
+                app.reconcile_shell_editing(id, cx);
+                assert!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .suggestion_fill
+                        .is_none()
+                );
+                app.note_shell_editing_input(b"\r", cx);
+                app.note_shell_editing_input(b"pong", cx);
+                redraw_console_line(app, id, prompt, "pong");
+                app.reconcile_shell_editing(id, cx);
+            });
+            f.assert_quiet();
+        }
+    }
+}
+
+#[test]
+fn unclassified_windows_editor_filters_replacement_and_rejects_stale_fill() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        app.terminal.editing.state_mut().launched_line_editor = true;
+        app.terminal
+            .seed_session_view(id.into(), "custom> pong".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(app.command_suggestion_input_is_confirmed());
+        assert_eq!(
+            app.command_suggestion_fill_policy(id),
+            CompletionFillPolicy::AppendOnly
+        );
+        let request = app
+            .prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx,
+            )
+            .unwrap();
+        let revision = app.commands.completion_runtime().revision();
+        app.publish_command_suggestion_search(
+            request,
+            super::tests::history_search_fixture("ping", "pong", revision),
+            Duration::ZERO,
+            cx,
+        );
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        popup(app, id, "ping");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Rejected
+        );
+        popup(app, id, "pong extra");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+    });
+    f.receive(b" extra");
+    f.assert_quiet();
+}
+
+#[test]
+fn unclassified_remote_editor_never_infers_ansi_from_a_shell_launch() {
+    let mut f = Fixture::new();
+    for dialect in [ShellDialect::Unknown, ShellDialect::Bash] {
+        f.update(|app, cx, id| {
+            make_cmd_session(app, cx, id, "pong", "pong");
+            app.session.metadata_mut(id).unwrap().launch_config =
+                SessionLaunchConfig::Ssh(Box::default());
+            app.commands.set_command_context(
+                id.into(),
+                ShellCommandContext {
+                    scope: CompletionScope::legacy(),
+                    dialect,
+                    command_events: false,
+                },
+            );
+            app.terminal.editing.state_mut().launched_line_editor = true;
+            redraw_console_line(app, id, "custom> ", "pong");
+            app.reconcile_shell_editing(id, cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert_eq!(
+                app.command_suggestion_fill_policy(id),
+                CompletionFillPolicy::AppendOnly
+            );
+            popup(app, id, "ping");
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Rejected
+            );
+            popup(app, id, "pong extra");
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Submitted
+            );
+        });
+        f.receive(b" extra");
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn cmd_fill_is_cancelled_by_mismatched_echo_and_never_executes() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping");
+        assert_eq!(
+            app.submit_selected_command_suggestion(true, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        app.terminal
+            .seed_session_view(id.into(), "C:\\Users>pinq".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        app.terminal
+            .seed_session_view(id.into(), "C:\\Users>ping".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+    });
+    f.receive(b"\x08\x08\x08\x08ping");
+    f.assert_quiet();
+}
+
+#[test]
+fn cmd_replacement_requires_confirmed_input_and_editor_capability() {
+    let mut f = Fixture::new();
+    for condition in 0..4 {
+        f.update(|app, cx, id| {
+            make_cmd_session(app, cx, id, "pong", "pong");
+            if condition == 1 {
+                app.note_shell_editing_input(b"x", cx);
+            }
+            let state = app.terminal.editing.state_mut();
+            match condition {
+                0 => state.awaiting_snapshot = true,
+                1 => assert_eq!(state.model.phase, EditPhase::Pending),
+                2 => state.model.input.cursor = 0,
+                _ => state.model.input.desynced = true,
+            }
+            assert_eq!(
+                app.command_suggestion_fill_policy(id),
+                CompletionFillPolicy::AppendOnly
+            );
+            popup(app, id, "ping");
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Rejected
+            );
+        });
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn cmd_replacement_confirmation_timeout_cancels_the_fill_before_late_echo() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping");
+        assert_eq!(
+            app.submit_selected_command_suggestion(true, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        app.terminal.editing.state_mut().model.last_input_at =
+            Some(Instant::now() - Duration::from_secs(3));
+    });
+    f.receive(b"\x08\x08\x08\x08ping");
+    f.cx.run_until_parked();
+    f.cx.executor().advance_clock(Duration::from_secs(3));
+    f.cx.run_until_parked();
+    f.update(|app, cx, id| {
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        assert_eq!(
+            app.terminal.editing.state().unwrap().model.phase,
+            EditPhase::Uncertain
+        );
+        app.terminal
+            .seed_session_view(id.into(), "C:\\Users>ping".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
     });
     f.assert_quiet();
 }

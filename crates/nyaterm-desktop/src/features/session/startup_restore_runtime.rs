@@ -962,17 +962,16 @@ mod tests {
         cx.update(|window, cx| {
             restored.update(cx, |app, cx| {
                 let placement = app.session.start.allocate_tab_placement(2);
-                assert!(
-                    app.session
-                        .start_reserve_saved_connection("preparing", placement)
-                );
+                let preparing_id = app
+                    .session
+                    .simulate_saved_preparation("preparing", placement);
                 assert!(app.session.start_is_busy());
-                assert!(!app.session.start_has_pending());
+                assert!(app.session.start_has_pending());
                 app.resume_startup_restore_if_unlocked(window, cx);
                 app.pump_startup_restore_queue(window, cx);
                 assert!(!app.pump_startup_restore_queue_if_ready(window, cx));
                 assert!(!app.session.restore_is_complete());
-                app.session.start_release_saved_connection("preparing");
+                app.session.start.close_pending(&preparing_id);
                 app.remote_desktop.restore_pending = Some("pending-remote-desktop".to_string());
                 assert!(!app.pump_startup_restore_queue_if_ready(window, cx));
                 assert!(!app.session.restore_is_complete());

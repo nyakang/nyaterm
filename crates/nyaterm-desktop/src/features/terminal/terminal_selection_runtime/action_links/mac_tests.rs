@@ -10,7 +10,7 @@ use nyaterm_core::{ActionLinksMatcherSettings, mac_address::MacAddressFormat};
 use nyaterm_transport::TelnetSessionConfig;
 use nyaterm_ui::nya_root;
 
-use crate::action_links::{ActionLinkTarget, actions_for_match};
+use crate::action_links::{ActionLinkPlatform, ActionLinkTarget, actions_for_match_on};
 use crate::features::NyaTermApp;
 use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
 use crate::models::{ActionLinkMenuAction, ActionLinkMenuState, SessionLaunchConfig};
@@ -30,7 +30,7 @@ fn menu(session_id: &str, generation: u64) -> ActionLinkMenuState {
         y: px(700.),
         kind_label: "MAC".into(),
         value: item.value.clone(),
-        actions: actions_for_match(&item)
+        actions: actions_for_match_on(&item, ActionLinkPlatform::default())
             .into_iter()
             .map(|action| ActionLinkMenuAction {
                 id: action.id,

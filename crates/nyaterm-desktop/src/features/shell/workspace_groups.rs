@@ -265,6 +265,7 @@ mod tests {
         placement: Option<crate::features::session::SessionStartTabPlacement>,
     ) -> PendingSessionStart {
         PendingSessionStart {
+            preparing: false,
             mcp_open_operation_id: None,
             requested_ssh_runtime_mode: None,
             attempt: Default::default(),

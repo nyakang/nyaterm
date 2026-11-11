@@ -4,7 +4,8 @@ use rust_i18n::t;
 
 use gpui::{
     Context, Entity, FontWeight, IntoElement, MouseButton, RenderImage, Rgba, ScrollHandle,
-    SharedString, WeakEntity, Window, deferred, div, img, prelude::*, px, rgb, rgba, svg,
+    SharedString, Subscription, WeakEntity, Window, deferred, div, img, prelude::*, px, rgb, rgba,
+    svg,
 };
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAgentKind, AiCommandCard, AiMessage, AiModelConfigItem,
@@ -36,15 +37,19 @@ mod context_bar;
 mod execution;
 pub(super) mod harness;
 mod index;
-mod layout;
+pub(super) mod layout;
 mod messages;
 mod snapshot;
 mod texts;
 mod tool_call;
 mod transcript;
 use components::ai_setup_step;
-use layout::AiPanelLayout;
+use layout::{AiComposerLayout, AiPanelLayout, COMPOSER_HEIGHT_MAX};
 use transcript::{AiTranscriptRow, AiTranscriptUpdate};
+
+/// Handle id shared by the snapshot chrome flags and the shell's delayed-hover
+/// machinery, which lives on the app rather than inside this entity.
+pub(in crate::features) const AI_COMPOSER_RESIZE_HANDLE_ID: &str = "ai-composer-height-resize";
 
 #[derive(Clone, Copy)]
 pub(in crate::features) struct AiPanelChrome {
@@ -114,6 +119,11 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub discovery_index: usize,
     pub prompt_draft: String,
     pub prompt_input: Entity<nyaterm_ui::NyaInputState>,
+    /// Manual height floor dragged in from the composer's top edge; `0` is the
+    /// content-driven default.
+    pub composer_min_height: f32,
+    pub composer_resizing: bool,
+    pub composer_handle_active: bool,
     pub model_search_input: Option<Entity<nyaterm_ui::NyaInputState>>,
     pub history_search_input: Option<Entity<nyaterm_ui::NyaInputState>>,
     pub file_action_ready: bool,
@@ -175,6 +185,8 @@ pub(in crate::features) struct AiPanel {
     picker_reveal_pending: bool,
     focused_question: Option<(String, String)>,
     layout: AiPanelLayout,
+    composer_layout: AiComposerLayout,
+    prompt_observation: Option<Subscription>,
     #[cfg(test)]
     paint_count: usize,
     #[cfg(test)]
@@ -201,6 +213,8 @@ impl AiPanel {
             picker_reveal_pending: false,
             focused_question: None,
             layout: AiPanelLayout::default(),
+            composer_layout: AiComposerLayout::default(),
+            prompt_observation: None,
             #[cfg(test)]
             paint_count: 0,
             #[cfg(test)]
@@ -213,6 +227,14 @@ impl AiPanel {
         mut snapshot: AiPanelSnapshot,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .snapshot
+            .as_ref()
+            .is_none_or(|previous| previous.prompt_input != snapshot.prompt_input)
+        {
+            self.prompt_observation =
+                Some(cx.observe(&snapshot.prompt_input, |_, _, cx| cx.notify()));
+        }
         snapshot.index = Arc::new(index::AiSnapshotIndex::build(&snapshot));
         self.refresh_content(&snapshot, cx);
         self.refresh_command_syntax(&snapshot, cx);
@@ -327,11 +349,28 @@ impl AiPanel {
             .expect("AI panel render requires a snapshot")
     }
 
+    pub(in crate::features) fn composer_height_limit(&self, cx: &gpui::App) -> gpui::Pixels {
+        let minimum = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.prompt_input.read(cx).textarea_min_height(cx))
+            .unwrap_or(px(38.));
+        self.composer_layout
+            .limits(minimum)
+            .map_or(COMPOSER_HEIGHT_MAX, |limits| limits.prompt)
+    }
+
+    pub(in crate::features) fn composer_visible_height(&self) -> gpui::Pixels {
+        self.composer_layout.prompt_height
+    }
+
     fn render_panel(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(snapshot) = self.snapshot.clone() else {
             return div().size_full().into_any_element();
         };
         let panel_entity = cx.weak_entity();
+        let viewport_entity = panel_entity.clone();
+        let has_banner = snapshot.detected_error.is_some();
 
         div()
             .tab_group()
@@ -346,6 +385,22 @@ impl AiPanel {
                 let Some(panel) = panel_entity.upgrade() else {
                     return;
                 };
+                let banner_height = if has_banner {
+                    bounds[0].size.height
+                } else {
+                    px(0.)
+                };
+                if panel.read(cx).composer_layout.banner_height != banner_height {
+                    let measured_panel = panel.clone();
+                    cx.defer(move |cx| {
+                        measured_panel.update(cx, |panel, cx| {
+                            if panel.composer_layout.banner_height != banner_height {
+                                panel.composer_layout.banner_height = banner_height;
+                                cx.notify();
+                            }
+                        })
+                    });
+                }
                 // Every in-flow child spans the panel, so the widest child is
                 // the panel's own width regardless of the window viewport.
                 let width =
@@ -417,7 +472,32 @@ impl AiPanel {
                             .child(self.ai_transcript_body(&snapshot, cx)),
                     ),
             )
+            .child(self.ai_composer_resize_handle(&snapshot, cx))
             .child(self.ai_composer(&snapshot, cx))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        let Some(panel) = viewport_entity.upgrade() else {
+                            return;
+                        };
+                        let height = bounds.size.height;
+                        if panel.read(cx).composer_layout.panel_height == height {
+                            return;
+                        }
+                        cx.defer(move |cx| {
+                            panel.update(cx, |panel, cx| {
+                                if panel.composer_layout.panel_height != height {
+                                    panel.composer_layout.panel_height = height;
+                                    cx.notify();
+                                }
+                            })
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             // Absolute popovers must paint after the transcript and composer;
             // later siblings otherwise cover an open menu even though its
             // position is correct.

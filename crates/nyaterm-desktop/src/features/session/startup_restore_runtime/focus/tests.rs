@@ -153,16 +153,14 @@ fn startup_focus_waits_for_session_preparation_and_both_layouts() {
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_ssh_session(&mut cx, root.path(), "left");
-    app.update(&mut cx, |app, cx| {
+    let preparing_id = app.update(&mut cx, |app, cx| {
         begin_restore(app, cx);
         let metadata = app.session.metadata("left").unwrap().clone();
         app.register_session("right", metadata);
         app.activate_session_id("right", cx);
         let placement = app.session.start.allocate_tab_placement(2);
-        assert!(
-            app.session
-                .start_reserve_saved_connection("preparing", placement)
-        );
+        app.session
+            .simulate_saved_preparation("preparing", placement)
     });
     let (_, cx) = focus_window(&mut cx, &app);
     draw_handoff(cx);
@@ -170,7 +168,7 @@ fn startup_focus_waits_for_session_preparation_and_both_layouts() {
         app.update(cx, |app, cx| {
             assert!(!app.terminal.input_focus().is_focused(window));
             assert!(!app.pump_startup_restore_queue_if_ready(window, cx));
-            app.session.start_release_saved_connection("preparing");
+            app.session.start.close_pending(&preparing_id);
             finish_restore(app, window, cx);
             // Simulate the asynchronous compatibility-reader path after the
             // sessions finish. Neither layout is ready to hand off input yet.

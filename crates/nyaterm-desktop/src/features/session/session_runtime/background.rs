@@ -23,7 +23,7 @@ use crate::features::{
     runtime_jobs::submit_session_start_job, session::PendingSessionStart,
     session::SavedConnectionStartOptions, session::SessionStartEventRequest,
 };
-use crate::models::{NavItem, SessionLaunchConfig, SessionRuntimeMetadata};
+use crate::models::{NavItem, SessionLaunchConfig, SessionRuntimeMetadata, WorkspaceTabId};
 
 struct BackgroundSessionStartRequest {
     connection_name: String,
@@ -34,11 +34,29 @@ struct BackgroundSessionStartRequest {
 }
 
 impl NyaTermApp {
+    pub(in crate::features::session) fn session_start_should_activate(
+        &self,
+        was_active: bool,
+    ) -> bool {
+        // Editors, files and settings can own the selected tab without an active
+        // terminal. The first-session fallback must respect that selection too.
+        let fallback_allowed = self.session.active_id().is_none()
+            && self.active_workspace_tab().is_none_or(|tab| {
+                matches!(
+                    WorkspaceTabId::from_layout_key(&tab),
+                    WorkspaceTabId::Session(_)
+                )
+            });
+        self.session
+            .start
+            .complete_success(was_active, fallback_allowed)
+    }
+
     pub(in crate::features) fn prepare_session_start_options(
         &mut self,
         mut options: SavedConnectionStartOptions,
     ) -> SavedConnectionStartOptions {
-        if let Some(request_id) = options.retry_request_id.as_ref()
+        if let Some(request_id) = options.request_id.as_ref()
             && let Some((_, pending)) = self
                 .session
                 .start
@@ -119,6 +137,26 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    pub(in crate::features) fn wake_startup_restore_after_preparation(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session.restore_is_complete() {
+            return;
+        }
+        let Some(window) = self.shell.main_window() else {
+            return;
+        };
+        let app = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    app.pump_startup_restore_queue_if_ready(window, cx);
+                });
+            });
+        });
+    }
+
     pub(in crate::features) fn close_pending_session_start(
         &mut self,
         request_id: String,
@@ -132,6 +170,7 @@ impl NyaTermApp {
             pending_session_start_display_name(&pending)
         ));
         self.settle_session_start_tab_placements_if_idle();
+        self.wake_startup_restore_after_preparation(cx);
         cx.notify();
     }
 
@@ -165,6 +204,7 @@ impl NyaTermApp {
             failed_session_start_display_name(&failed)
         ));
         self.settle_session_start_tab_placements_if_idle();
+        self.wake_startup_restore_after_preparation(cx);
         cx.notify();
     }
 
@@ -173,13 +213,9 @@ impl NyaTermApp {
         registration: PendingSessionStartRegistration,
         cx: &mut Context<Self>,
     ) -> String {
-        let request_id = self
-            .session
-            .start
-            .preparing_retry_request(registration.tab_placement)
-            .map(str::to_string)
-            .unwrap_or_else(uuid);
+        let request_id = registration.request_id.clone().unwrap_or_else(uuid);
         let PendingSessionStartRegistration {
+            request_id: _,
             mcp_open_operation_id,
             requested_ssh_runtime_mode,
             connection_name,
@@ -201,7 +237,6 @@ impl NyaTermApp {
             status_message,
             append_start_log,
         } = registration;
-        self.session.start.finish_retry_preparation(&request_id);
         let requested_at = self
             .session
             .start
@@ -214,6 +249,7 @@ impl NyaTermApp {
         let reconnecting = self.session.start.register_pending(
             request_id.clone(),
             PendingSessionStart {
+                preparing: false,
                 mcp_open_operation_id,
                 requested_ssh_runtime_mode,
                 attempt: Default::default(),
@@ -311,6 +347,7 @@ impl NyaTermApp {
         if !matches!(launch_config, SessionLaunchConfig::Local(_))
             && self.remote_start_blocked_by_configuration_replacement(cx)
         {
+            self.fail_start_preparation(&options, "configuration replacement".into(), cx);
             return;
         }
 
@@ -318,13 +355,13 @@ impl NyaTermApp {
             && let Err(error) = nyaterm_core::character_encoding::CharacterEncoding::parse(label)
         {
             let error = crate::features::terminal::encoding_error_text(error);
-            self.fail_retry_preparation(&options, error.clone(), cx);
+            self.fail_start_preparation(&options, error.clone(), cx);
             self.shell.set_status(error);
             cx.notify();
             return;
         }
 
-        if !self.session.start.retry_is_pending(&options) {
+        if !self.session.start.request_can_start(&options) {
             return;
         }
         let options = self.prepare_session_start_options(options);
@@ -342,13 +379,14 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
-            retry_request_id: _,
+            request_id,
         } = options;
         let kind = session_kind_for_launch_config(&launch_config);
         let multiplex_key = matches!(launch_config, SessionLaunchConfig::Ssh(_))
             .then(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                request_id,
                 mcp_open_operation_id,
                 requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
@@ -441,10 +479,11 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.remote_start_blocked_by_configuration_replacement(cx) {
+            self.fail_start_preparation(&options, "configuration replacement".into(), cx);
             return;
         }
 
-        if !self.session.start.retry_is_pending(&options) {
+        if !self.session.start.request_can_start(&options) {
             return;
         }
         config.runtime_mode = config.effective_runtime_mode();
@@ -477,7 +516,7 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
-            retry_request_id: _,
+            request_id,
         } = options;
         config.deferred_pty = true;
         let geometry_session_hint = after_session_id
@@ -494,6 +533,7 @@ impl NyaTermApp {
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                request_id,
                 mcp_open_operation_id,
                 requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
@@ -575,6 +615,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.remote_start_blocked_by_configuration_replacement(cx) {
+            self.fail_start_preparation(&request.options, "configuration replacement".into(), cx);
             return;
         }
 
@@ -587,7 +628,7 @@ impl NyaTermApp {
             existing_multiplex,
             existing_multiplex_key,
         } = request;
-        if !self.session.start.retry_is_pending(&options) {
+        if !self.session.start.request_can_start(&options) {
             return;
         }
         config.runtime_mode = config.effective_runtime_mode();
@@ -613,7 +654,7 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
-            retry_request_id: _,
+            request_id,
         } = options;
         config.deferred_pty = true;
         let geometry_session_hint = after_session_id
@@ -632,6 +673,7 @@ impl NyaTermApp {
             .unwrap_or_else(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                request_id,
                 mcp_open_operation_id,
                 requested_ssh_runtime_mode: None,
                 connection_name: connection_name.clone(),
@@ -792,6 +834,10 @@ impl NyaTermApp {
                     was_active,
                 } => (pending, was_active),
             };
+        if pending.is_none() {
+            // Closed preparations and already-delivered requests cannot resurrect a tab.
+            return;
+        }
         let connection_name = event.connection_name.clone();
         let kind = pending
             .as_ref()
@@ -998,10 +1044,7 @@ impl NyaTermApp {
                     self.session
                         .move_session_after(&session_id, &after_session_id);
                 }
-                let should_activate = self
-                    .session
-                    .start
-                    .complete_success(was_active_pending, self.session.active_id().is_none());
+                let should_activate = self.session_start_should_activate(was_active_pending);
                 if should_activate {
                     self.activate_session_id(&session_id, cx);
                     self.load_transfer_browser_for_active_session_if_needed(cx);
@@ -1171,11 +1214,7 @@ impl NyaTermApp {
                 self.start_auto_tunnels_for_connection(connection_id, cx);
             }
         }
-        if self
-            .session
-            .start
-            .complete_success(false, self.session.active_id().is_none())
-        {
+        if self.session_start_should_activate(false) {
             self.activate_session_id(new_id, cx);
             self.load_transfer_browser_for_active_session_if_needed(cx);
         }
@@ -1391,6 +1430,7 @@ mod focus_tests {
                     );
                     let request_id = app.register_pending_session_start(
                         PendingSessionStartRegistration {
+                            request_id: None,
                             mcp_open_operation_id: None,
                             requested_ssh_runtime_mode: None,
                             connection_name: "SSH".into(),

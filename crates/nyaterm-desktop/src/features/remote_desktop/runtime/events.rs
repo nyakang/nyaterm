@@ -350,7 +350,7 @@ impl NyaTermApp {
         };
         #[cfg(not(windows))]
         let mut dirty = false;
-        dirty |= self.drive_deferred_rdp_starts();
+        dirty |= self.drive_deferred_rdp_starts(cx);
         dirty |= self.drive_rdp_resize_debounce();
         dirty |= self.drive_rdp_reconnects(cx);
         self.settle_remote_desktop_restore(cx);

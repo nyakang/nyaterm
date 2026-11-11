@@ -48,29 +48,25 @@ fn leading_env_prefix() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\(([^()\r\n]+)\)\s*").expect("env prefix"))
 }
 
-fn bracket_prompt_prefix() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\[[^\]\r\n]+\]\s*[#$]\s*").expect("bracket prompt"))
-}
-
-fn posix_prompt_prefix() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[^\s@]+@[^:\s]+:[^#$\r\n]*[#$]\s*").expect("posix prompt"))
-}
-
-fn powershell_prompt_prefix() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^PS\s+[^>\r\n]+>\s*").expect("powershell prompt"))
-}
-
-fn windows_prompt_prefix() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Za-z]:(?:[\\/][^>\r\n]*)?>\s*").expect("windows prompt"))
-}
-
-fn simple_prompt_prefix() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[#$]\s+").expect("simple prompt"))
+fn prompt_matchers() -> &'static [Regex; 9] {
+    static MATCHERS: OnceLock<[Regex; 9]> = OnceLock::new();
+    MATCHERS.get_or_init(|| {
+        // Consume one separator after the terminator, preserving command spacing.
+        // Specific structures precede bare theme arrows (e.g. `➜ ~/src cmd`).
+        [
+            r"^\[[^\]\r\n]+\] *[#$%](?: |$)",
+            r"^[^\s@]+@[^:\s]+:[^#$%\r\n]*[#$%](?: |$)",
+            // Windows prompts historically support `C:\path>command` without a separator.
+            r"^PS +[^>\r\n]+> ?",
+            r"^[A-Za-z]:(?:[\\/][^>\r\n]*)?> ?",
+            r"^[A-Za-z0-9_.-]+:(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*) *[#$%](?: |$)",
+            r"^(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*) +[#$%❯➜→›](?: |$)",
+            r"^[❯➜→›] +(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*)(?: |$)",
+            r"^[❯➜→›](?: |$)",
+            r"^[#$%](?: |$)",
+        ]
+        .map(|pattern| Regex::new(pattern).expect("terminal prompt"))
+    })
 }
 
 /// Compile prompt matchers before the first interactive submission.
@@ -80,11 +76,7 @@ fn simple_prompt_prefix() -> &'static Regex {
 /// cost, which is visible as an input hitch.
 pub fn warm_terminal_input_tracker() {
     let _ = leading_env_prefix();
-    let _ = bracket_prompt_prefix();
-    let _ = posix_prompt_prefix();
-    let _ = powershell_prompt_prefix();
-    let _ = windows_prompt_prefix();
-    let _ = simple_prompt_prefix();
+    let _ = prompt_matchers();
 }
 
 fn strip_leading_env_prefixes(input: &str) -> String {
@@ -101,13 +93,7 @@ fn strip_leading_env_prefixes(input: &str) -> String {
 /// The exact recognized prompt prefix; navigation may use it as position evidence.
 /// This does not grant permission to edit an unknown foreground program's input.
 pub fn known_terminal_prompt_prefix(input: &str) -> Option<&str> {
-    for matcher in [
-        bracket_prompt_prefix(),
-        posix_prompt_prefix(),
-        powershell_prompt_prefix(),
-        windows_prompt_prefix(),
-        simple_prompt_prefix(),
-    ] {
+    for matcher in prompt_matchers() {
         if let Some(found) = matcher.find(input) {
             return Some(&input[..found.end()]);
         }
@@ -116,18 +102,8 @@ pub fn known_terminal_prompt_prefix(input: &str) -> Option<&str> {
 }
 
 fn strip_known_prompt_prefix(input: &str) -> String {
-    for matcher in [
-        bracket_prompt_prefix(),
-        posix_prompt_prefix(),
-        powershell_prompt_prefix(),
-        windows_prompt_prefix(),
-        simple_prompt_prefix(),
-    ] {
-        if let Some(m) = matcher.find(input) {
-            return input[m.end()..].to_string();
-        }
-    }
-    input.to_string()
+    let start = known_terminal_prompt_prefix(input).map_or(0, str::len);
+    input[start..].to_string()
 }
 
 /// Remove known shell prompt prefixes while preserving command spacing.
@@ -565,8 +541,9 @@ mod tests {
         MAX_TRACKED_INPUT_BYTES, TerminalInputState, apply_terminal_input_data,
         apply_terminal_input_data_in_place, build_move_input_cursor_data,
         can_suggest_from_tracked_command, can_suggest_from_tracker, delete_terminal_input_range,
-        get_tracked_command, get_tracked_submission_command, resync_from_terminal_line,
-        sanitize_terminal_command, terminal_input_tracker_below_min_chars,
+        get_tracked_command, get_tracked_submission_command, known_terminal_prompt_prefix,
+        resync_from_terminal_line, sanitize_terminal_command, strip_terminal_command_prompt,
+        terminal_input_tracker_below_min_chars,
     };
 
     #[test]
@@ -598,6 +575,80 @@ mod tests {
     }
 
     #[test]
+    fn common_and_themed_prompts_share_exact_boundaries_and_preserve_command_spacing() {
+        for prompt in [
+            "fuxi:/sdcard # ",
+            "host:~$ ",
+            "/tmp $ ",
+            "~ % ",
+            "user@host:~% ",
+            "[user@host ~]% ",
+            "% ",
+            "❯ ",
+            "➜ ",
+            "→ ",
+            "› ",
+            "~/src ❯ ",
+            "/tmp ➜ ",
+            "➜ ~/src ",
+            "➜ ~ ",
+            "❯ /tmp ",
+            "# ",
+            "$ ",
+            "PS C:\\Users> ",
+        ] {
+            let line = format!("{prompt} echo  hi ");
+            assert_eq!(
+                known_terminal_prompt_prefix(&line),
+                Some(prompt),
+                "{prompt}"
+            );
+            assert_eq!(
+                strip_terminal_command_prompt(&line),
+                " echo  hi ",
+                "{prompt}"
+            );
+            assert_eq!(sanitize_terminal_command(&line), "echo  hi", "{prompt}");
+        }
+        for prompt in ["#", "$", "%", "❯", "host:~$", "fuxi:/sdcard #"] {
+            assert_eq!(known_terminal_prompt_prefix(prompt), Some(prompt));
+        }
+        assert_eq!(
+            known_terminal_prompt_prefix("C:\\Users>dir"),
+            Some("C:\\Users>")
+        );
+        assert_eq!(strip_terminal_command_prompt("C:\\Users>dir"), "dir");
+    }
+
+    #[test]
+    fn prompt_expansion_does_not_strip_commands_challenges_or_arbitrary_output() {
+        for text in [
+            "echo $HOME",
+            "echo $(pwd)",
+            "$HOME",
+            "${HOME}",
+            "echo > file",
+            "cat < file",
+            "#comment",
+            "%value",
+            "❯command",
+            "Password: ",
+            "Token: ",
+            "mysql> select",
+            "postgres=# select",
+            "ordinary output # command",
+            "result → command",
+            "host:label # cmd",
+            "host:~relative$ cmd",
+            "src ❯ command",
+            "~relative ➜ command",
+        ] {
+            assert!(known_terminal_prompt_prefix(text).is_none(), "{text}");
+            assert_eq!(strip_terminal_command_prompt(text), text, "{text}");
+        }
+    }
+
+    #[test]
     fn resyncs_after_tab_desync_from_terminal_line() {
         let mut state = TerminalInputState::new();
         state = apply_terminal_input_data(&state, "doc");
@@ -617,6 +668,9 @@ mod tests {
             "[root@rocky9 ~]# vi install-node-exporter.sh",
             "$ vi install-node-exporter.sh",
             "PS C:\\Users> vi install-node-exporter.sh",
+            "fuxi:/sdcard # vi install-node-exporter.sh",
+            "➜ ~/src vi install-node-exporter.sh",
+            "~ % vi install-node-exporter.sh",
         ] {
             let recovered = resync_from_terminal_line(&state, line).expect("recover");
             assert_eq!(recovered.value, "vi install-node-exporter.sh");

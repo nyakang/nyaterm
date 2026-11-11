@@ -21,7 +21,8 @@ pub(in crate::features) fn logo_mark(palette: ThemePalette) -> impl IntoElement 
 }
 
 pub(in crate::features) use nyaterm_ui::resize_handle::{
-    horizontal_resize_handle_visual, vertical_resize_handle_visual,
+    horizontal_resize_handle_borderless, horizontal_resize_handle_visual,
+    vertical_resize_handle_visual,
 };
 
 pub(in crate::features) fn window_control_button(

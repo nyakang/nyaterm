@@ -105,12 +105,9 @@ fn mstsc_launch_result_updates_usage_only_on_success_and_never_registers_a_sessi
             assert_eq!(app.session.session_order(), &["existing"]);
             assert_eq!(app.session.active_id(), Some("existing"));
             assert!(!app.session.start_has_pending());
-            assert!(
-                !app.session
-                    .start_saved_connection_is_pending_or_preparing(&connection())
-            );
+            assert!(!app.session.saved_connection_is_starting(&connection().id));
             assert!(!app.remote_desktop.has_sessions());
-            assert!(app.remote_desktop.prepared_routes.is_empty());
+            assert!(app.remote_desktop.routes.is_empty());
             assert!(app.session.prompt_active_credential().is_none());
         });
         let persisted = store
@@ -145,7 +142,7 @@ fn mstsc_rejects_relay_before_reserving_tabs_loading_credentials_or_calling_laun
         );
         assert!(!app.session.start_has_pending());
         assert_eq!(app.session.session_order(), &["existing"]);
-        assert!(app.remote_desktop.prepared_routes.is_empty());
+        assert!(app.remote_desktop.routes.is_empty());
         assert!(!app.remote_desktop.has_sessions());
         let key = if cfg!(windows) {
             "dialog.rdpMstscRelayUnsupported"

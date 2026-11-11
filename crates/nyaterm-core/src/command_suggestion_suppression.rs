@@ -4,6 +4,36 @@ use crate::sanitize_terminal_command;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+/// One authoritative suppression reason. An outer OSC command can hand input
+/// to a child shell, but a known pager must not be released by prompt-like echo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CommandSuggestionSuppression {
+    #[default]
+    None,
+    CommandRunning,
+    InteractiveProgram,
+}
+
+impl CommandSuggestionSuppression {
+    pub fn is_suppressed(self) -> bool {
+        self != Self::None
+    }
+
+    pub fn command_started(&mut self) {
+        if *self != Self::InteractiveProgram {
+            *self = Self::CommandRunning;
+        }
+    }
+
+    pub fn release_at_shell_prompt(&mut self) -> bool {
+        if *self != Self::CommandRunning {
+            return false;
+        }
+        *self = Self::None;
+        true
+    }
+}
+
 fn interactive_commands() -> &'static HashSet<&'static str> {
     static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
     SET.get_or_init(|| {
@@ -310,6 +340,21 @@ pub fn is_pager_single_key_input(data: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::command_suggestion_suppression::CommandSuggestionSuppression;
+
+    #[test]
+    fn confirmed_child_prompt_releases_only_outer_command_suppression() {
+        let mut state = CommandSuggestionSuppression::None;
+        state.command_started();
+        assert!(state.release_at_shell_prompt());
+        assert!(!state.is_suppressed());
+
+        state = CommandSuggestionSuppression::InteractiveProgram;
+        state.command_started();
+        assert!(!state.release_at_shell_prompt());
+        assert!(state.is_suppressed());
+    }
+
     use super::{
         command_starts_suggestion_suppressing_program, is_pager_search_or_command_input,
         is_pager_single_key_input,

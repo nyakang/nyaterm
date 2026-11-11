@@ -1711,7 +1711,7 @@
     "newLocalTerminal": "Nouveau local",
     "newSession": "Nouvelle session",
     "newWindow": "Nouvelle fenêtre",
-    "newSshConnection": "Nouvelle SSH",
+    "newSshConnection": "Nouvelle connexion",
     "panels": "Panneaux",
     "paste": "Coller",
     "redo": "Rétablir",
@@ -2687,7 +2687,7 @@
     "close": "fermer",
     "connecting": "Connexion en cours",
     "move": "déplacer",
-    "newSsh": "Nouvelle SSH",
+    "newSsh": "Nouvelle connexion",
     "noMatches": "Aucune session ou connexion enregistrée ne correspond à votre recherche",
     "noSessions": "Aucune session ouverte ou connexion enregistrée",
     "open": "ouvrir",
@@ -3634,6 +3634,7 @@
     "memUsage": "Utilisation de la mémoire"
   },
   "suggestions": {
+    "openPasteReview": "Ouvrir la vérification du collage",
     "acceptSelected": "accepter la sélection",
     "legacyHistory": "Ancien historique global",
     "multiline": "Multiligne",

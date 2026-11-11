@@ -194,7 +194,9 @@ async fn posix_shell_upload_preserves_metadata_through_public_entry_points() {
             for mode in ["755", "640", "6755", "7644"] {
                 for with_progress in [false, true] {
                     *prefix.lock().unwrap() = String::new();
-                    setup(&format!("printf old > original && chmod {mode} original"));
+                    // A prior case may leave a foreign-owned, non-writable file.
+                    // Reset the fixture through its writable parent directory.
+                    setup(&format!("rm -f original && printf old > original && chmod {mode} original"));
                     if root_user { setup(&format!("chown 65534:65533 original && chmod {mode} original")); }
                     let before = setup("stat -c '%u:%g:%a' original");
                     if with_progress {
@@ -202,6 +204,9 @@ async fn posix_shell_upload_preserves_metadata_through_public_entry_points() {
                             SftpTransferControl::new(), SftpTransferOptions::default().with_default_file_permissions("644"), |_| {}).unwrap();
                     } else { service.upload_file(&local, "original").unwrap(); }
                     assert_eq!(setup("stat -c '%u:%g:%a' original"), before);
+                    // Ownership was checked above. Make the fixture readable by
+                    // its creator even when root cannot bypass file permissions.
+                    if root_user { setup("chown 0:0 original"); }
                     assert_eq!(posix(&format!("cat {}/original", shell_quote(&root)), &[]).stdout, b"new\0data");
                 }
             }
@@ -223,7 +228,7 @@ async fn posix_shell_upload_preserves_metadata_through_public_entry_points() {
             }
             if root_user {
                 for failure in ["chown() { return 1; }", "chown() { return 0; }"] {
-                    setup("printf old > original && chown 65534:65533 original && chmod 6755 original");
+                    setup("rm -f original && printf old > original && chown 65534:65533 original && chmod 6755 original");
                     *prefix.lock().unwrap() = failure.into();
                     assert!(service.upload_file(&local, "original").is_err());
                     assert_eq!(setup("cat original"), "old");

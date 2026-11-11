@@ -2,7 +2,7 @@ use super::{TranslationEndpoints, translate_using};
 use nyaterm_core::{TranslationSettings, baidu_translate_signature, youdao_translate_signature};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 
@@ -39,7 +39,7 @@ fn serve(
                     Err(error) => panic!("fixture accept failed: {error}"),
                 }
             };
-            // Windows accepted sockets inherit the listener's nonblocking mode.
+            // Windows accepted sockets may inherit the listener's nonblocking mode.
             stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
@@ -98,6 +98,36 @@ fn settings() -> TranslationSettings {
         youdao_app_key: "fixture-key".into(),
         ..Default::default()
     }
+}
+
+#[test]
+fn fixture_waits_for_delayed_headers_and_fragmented_request_body() {
+    let (endpoints, worker) = serve(vec![(200, "ok")]);
+    let address = endpoints
+        .root
+        .as_deref()
+        .unwrap()
+        .strip_prefix("http://")
+        .unwrap();
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    thread::sleep(Duration::from_millis(50));
+    let headers = stream
+        .write_all(b"POST /fixture HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhe");
+    thread::sleep(Duration::from_millis(50));
+    let body = stream.write_all(b"llo");
+    let mut response = String::new();
+    let received = stream.read_to_string(&mut response);
+    let requests = worker.join().unwrap();
+    headers.unwrap();
+    body.unwrap();
+    received.unwrap();
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/fixture");
+    assert_eq!(requests[0].body, "hello");
+    assert!(response.ends_with("\r\n\r\nok"));
 }
 
 #[test]

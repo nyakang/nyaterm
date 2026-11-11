@@ -1711,7 +1711,7 @@
     "newLocalTerminal": "新建本地终端",
     "newSession": "新建会话",
     "newWindow": "新建窗口",
-    "newSshConnection": "新建 SSH 连接",
+    "newSshConnection": "新建连接",
     "panels": "面板",
     "paste": "粘贴",
     "redo": "重做",
@@ -2687,7 +2687,7 @@
     "close": "关闭",
     "connecting": "连接中",
     "move": "移动",
-    "newSsh": "新建 SSH",
+    "newSsh": "新建连接",
     "noMatches": "没有匹配搜索条件的会话或已保存连接",
     "noSessions": "暂无打开的会话或已保存连接",
     "open": "打开",
@@ -3634,6 +3634,7 @@
     "memUsage": "内存占用"
   },
   "suggestions": {
+    "openPasteReview": "打开粘贴审查",
     "acceptSelected": "接受所选",
     "legacyHistory": "旧全局历史",
     "multiline": "多行",

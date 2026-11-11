@@ -1711,7 +1711,7 @@
     "newLocalTerminal": "New Local",
     "newSession": "New Session",
     "newWindow": "New Window",
-    "newSshConnection": "New SSH",
+    "newSshConnection": "New Connection",
     "panels": "Panels",
     "paste": "Paste",
     "redo": "Redo",
@@ -2687,7 +2687,7 @@
     "close": "close",
     "connecting": "Connecting",
     "move": "move",
-    "newSsh": "New SSH",
+    "newSsh": "New Connection",
     "noMatches": "No sessions or saved connections matched your search",
     "noSessions": "No open sessions or saved connections",
     "open": "open",
@@ -3634,6 +3634,7 @@
     "memUsage": "Memory Usage"
   },
   "suggestions": {
+    "openPasteReview": "Open paste review",
     "acceptSelected": "accept selected",
     "legacyHistory": "Legacy global history",
     "multiline": "Multiline",

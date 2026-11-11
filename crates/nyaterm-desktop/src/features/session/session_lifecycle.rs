@@ -404,7 +404,9 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        if self.session.start_reconnect_is_pending(&session_id) {
+        if self.session.start_reconnect_is_pending(&session_id)
+            || self.remote_desktop.start_is_pending(&session_id)
+        {
             self.shell
                 .set_status("session is already reconnecting".to_string());
             cx.notify();

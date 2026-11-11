@@ -266,10 +266,26 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) {
-        if !self.session.start.retry_is_pending(&options) {
+        if !self.session.start.request_can_start(&options) {
             return;
         }
-        let options = self.prepare_session_start_options(options);
+        if options
+            .reconnect_session_id
+            .as_ref()
+            .is_some_and(|id| self.session.start_reconnect_is_pending(id))
+            && options.request_id.is_none()
+        {
+            return;
+        }
+        let mut options = self.prepare_session_start_options(options);
+        options.request_id = Some(
+            self.session
+                .start
+                .begin_saved_preparation(&connection, &options),
+        );
+        self.shell.show_workspace();
+        self.ensure_pending_session_status_clock(cx);
+        cx.notify();
         if let ConnectionType::Rdp { backend, .. } = &connection.config {
             let has_relay = connection.network.as_ref().is_some_and(|network| {
                 network.proxy_id.is_some() || network.proxy_jump_id.is_some()
@@ -278,7 +294,7 @@ impl NyaTermApp {
                 parse_rdp_backend(backend).and_then(|backend| backend.validate_route(has_relay))
             {
                 let message = error.to_string();
-                self.fail_retry_preparation(&options, message.clone(), cx);
+                self.fail_start_preparation(&options, message.clone(), cx);
                 self.complete_mcp_session_open_failure(
                     options.mcp_open_operation_id.as_deref().unwrap_or(""),
                     &message,
@@ -293,42 +309,6 @@ impl NyaTermApp {
                 return;
             }
         }
-        let placement = options.tab_placement.or_else(|| {
-            options.reconnect_session_id.as_ref().map(|id| {
-                self.session
-                    .start
-                    .allocate_tab_placement(self.session.session_index(id).unwrap_or(0))
-            })
-        });
-        let Some(placement) = placement else {
-            self.complete_mcp_session_open_failure(
-                options.mcp_open_operation_id.as_deref().unwrap_or(""),
-                "could not reserve a tab position",
-            );
-            self.shell.set_status(format!(
-                "{} could not reserve a tab position",
-                connection.name
-            ));
-            self.shell.show_workspace();
-            cx.notify();
-            return;
-        };
-        if options.retry_request_id.is_none()
-            && !self
-                .session
-                .start_reserve_saved_connection(&connection.id, placement)
-        {
-            self.complete_mcp_session_open_failure(
-                options.mcp_open_operation_id.as_deref().unwrap_or(""),
-                "connection is already starting",
-            );
-            self.shell
-                .set_status(format!("{} is already connecting", connection.name));
-            self.shell.show_workspace();
-            cx.notify();
-            return;
-        }
-
         if matches!(connection.config, ConnectionType::Telnet { .. })
             && connection.auth.as_ref().is_some_and(|auth| {
                 auth.mode == "password"
@@ -346,8 +326,7 @@ impl NyaTermApp {
                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 &message,
             );
-            self.session.start_release_saved_connection(&connection.id);
-            self.fail_retry_preparation(&options, message.clone(), cx);
+            self.fail_start_preparation(&options, message.clone(), cx);
             self.shell.set_status(message);
             cx.notify();
             return;
@@ -355,7 +334,6 @@ impl NyaTermApp {
         if let Some(password_id) = saved_connection_password_id(&connection) {
             let telnet_auth = matches!(connection.config, ConnectionType::Telnet { .. })
                 .then(|| connection.auth.clone().unwrap_or_default());
-            let connection_id = connection.id.clone();
             let connection_name = connection.name.clone();
             self.shell
                 .set_status(format!("loading saved credentials for {connection_name}"));
@@ -369,7 +347,7 @@ impl NyaTermApp {
                     }
                 }),
                 move |this, event, cx| {
-                    if !this.session.start.retry_is_pending(&options) { return; }
+                    if !this.session.start.request_can_start(&options) { return; }
                     let mut connection = connection;
                     let password = match event.outcome {
                         Ok(Some(entry)) => {
@@ -382,13 +360,12 @@ impl NyaTermApp {
                                             auth.password = password;
                                             auth.has_password = false;
                                         }
-                                        this.start_saved_connection_ready(connection, options, cx);
+                                        this.start_saved_connection_ready(connection, options, None, cx);
                                     }
                                     Err(error) => {
                                         let error = account_auth_error_message(error);
-                                        this.fail_retry_preparation(&options, error.clone(), cx);
+                                        this.fail_start_preparation(&options, error.clone(), cx);
                                         this.complete_mcp_session_open_failure(options.mcp_open_operation_id.as_deref().unwrap_or(""), &error);
-                                        this.session.start_release_saved_connection(&connection_id);
                                         this.shell.set_status(
                                             t!(
                                                 "savedConnections.startFailed",
@@ -405,13 +382,11 @@ impl NyaTermApp {
                             entry.password.filter(|password| !password.trim().is_empty())
                         },
                         Ok(None) => {
-                            this.fail_retry_preparation(&options, "saved password was not found".to_string(), cx);
+                            this.fail_start_preparation(&options, "saved password was not found".to_string(), cx);
                             this.complete_mcp_session_open_failure(
                                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                                 "saved password was not found",
                             );
-                            this.session
-                                .start_release_saved_connection(&connection_id);
                             this.shell.set_status(format!(
                                 "failed to start {connection_name}: saved password was not found"
                             ));
@@ -419,13 +394,11 @@ impl NyaTermApp {
                             return;
                         }
                         Err(error) => {
-                            this.fail_retry_preparation(&options, format!("could not load saved password: {error}"), cx);
+                            this.fail_start_preparation(&options, format!("could not load saved password: {error}"), cx);
                             this.complete_mcp_session_open_failure(
                                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                                 &format!("could not load saved password: {error}"),
                             );
-                            this.session
-                                .start_release_saved_connection(&connection_id);
                             this.shell.set_status(format!(
                                 "failed to start {connection_name}: could not load saved password: {error}"
                             ));
@@ -434,13 +407,11 @@ impl NyaTermApp {
                         }
                     };
                     let Some(password) = password else {
-                        this.fail_retry_preparation(&options, "saved password is empty or locked".to_string(), cx);
+                        this.fail_start_preparation(&options, "saved password is empty or locked".to_string(), cx);
                         this.complete_mcp_session_open_failure(
                             options.mcp_open_operation_id.as_deref().unwrap_or(""),
                             "saved password is empty or locked",
                         );
-                        this.session
-                            .start_release_saved_connection(&connection_id);
                         this.shell.set_status(format!(
                             "failed to start {connection_name}: saved password is empty or locked"
                         ));
@@ -451,7 +422,7 @@ impl NyaTermApp {
                         auth.password = Some(password);
                         auth.has_password = false;
                     }
-                    this.start_saved_connection_ready(connection, options, cx);
+                    this.start_saved_connection_ready(connection, options, None, cx);
                 },
                 cx,
             );
@@ -459,16 +430,17 @@ impl NyaTermApp {
             return;
         }
 
-        self.start_saved_connection_ready(connection, options, cx);
+        self.start_saved_connection_ready(connection, options, None, cx);
     }
 
     fn start_saved_connection_ready(
         &mut self,
         connection: SavedConnection,
         options: SavedConnectionStartOptions,
+        route: Option<Arc<nyaterm_transport::network_route::NetworkRoute>>,
         cx: &mut Context<Self>,
     ) {
-        if !self.session.start.retry_is_pending(&options) {
+        if !self.session.start.request_can_start(&options) {
             return;
         }
         let options = self.prepare_session_start_options(options);
@@ -479,56 +451,42 @@ impl NyaTermApp {
             .network
             .as_ref()
             .is_some_and(|network| network.proxy_id.is_some() || network.proxy_jump_id.is_some())
-            && !self
-                .remote_desktop
-                .prepared_routes
-                .contains_key(&connection.id)
+            && route.is_none()
         {
-            let pending_connection = connection.clone();
+            let attempt = self
+                .session
+                .start
+                .attempt(options.request_id.as_deref().expect("saved request"));
             self.prepare_remote_route(
                 connection.clone(),
-                move |app, result, cx| match result {
-                    Ok(route) => {
-                        if !app.session.start.retry_is_pending(&options) {
-                            return;
-                        }
-                        app.remote_desktop
-                            .prepared_routes
-                            .insert(pending_connection.id.clone(), route);
-                        app.start_saved_connection_ready(
-                            pending_connection.clone(),
-                            options.clone(),
-                            cx,
-                        );
+                attempt,
+                move |app, result, cx| {
+                    if !app.session.start.request_can_start(&options) {
+                        return;
                     }
-                    Err(error) => {
-                        if !app.session.start.retry_is_pending(&options) {
-                            return;
-                        }
-                        app.fail_retry_preparation(&options, error.clone(), cx);
-                        app.session
-                            .start_release_saved_connection(&pending_connection.id);
-                        app.shell.set_status(error.clone());
-                        app.notify_operation(
-                            "remote-route",
-                            nyaterm_ui::notification::NyaNotificationKind::Error,
-                            error,
+                    match result {
+                        Ok(route) => app.start_saved_connection_ready(
+                            connection.clone(),
+                            options.clone(),
+                            Some(route),
                             cx,
-                        );
+                        ),
+                        Err(error) => {
+                            app.fail_start_preparation(&options, error.clone(), cx);
+                            app.shell.set_status(error.clone());
+                            app.notify_operation(
+                                "remote-route",
+                                nyaterm_ui::notification::NyaNotificationKind::Error,
+                                error,
+                                cx,
+                            );
+                        }
                     }
                 },
                 cx,
             );
             return;
         }
-        if matches!(
-            connection.config,
-            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. }
-        ) && let Some(request_id) = &options.retry_request_id
-        {
-            let _ = self.session.start.take_event_request(request_id);
-        }
-        let connection_id = connection.id.clone();
         let workspace_split = options.workspace_split.clone();
         let tab_placement = options.tab_placement;
         let fallback_insert_index = options.insert_index.filter(|_| tab_placement.is_none());
@@ -550,12 +508,11 @@ impl NyaTermApp {
                         Err(_) => {
                             let message =
                                 rust_i18n::t!("dialog.shellArgsUnclosedQuote").to_string();
-                            self.fail_retry_preparation(&options, message.clone(), cx);
+                            self.fail_start_preparation(&options, message.clone(), cx);
                             self.complete_mcp_session_open_failure(
                                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                                 &message,
                             );
-                            self.session.start_release_saved_connection(&connection.id);
                             self.shell.set_status(message.clone());
                             self.notify_operation(
                                 "shell-arguments",
@@ -684,24 +641,41 @@ impl NyaTermApp {
                     cx,
                 );
             }
-            ConnectionType::Rdp { .. } => {
-                let config = match self.saved_remote_desktop_launch_config(&connection) {
-                    Ok(SessionLaunchConfig::Rdp(config)) => config,
-                    Ok(_) => unreachable!("RDP connection"),
+            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {
+                let relay = route.as_ref().map(|route| route.endpoint.clone());
+                let config = match self.saved_remote_desktop_launch_config(&connection, relay) {
+                    Ok(config) => config,
                     Err(error) => {
-                        self.fail_retry_preparation(&options, error.clone(), cx);
-                        self.complete_mcp_session_open_failure(
-                            options.mcp_open_operation_id.as_deref().unwrap_or(""),
-                            &error,
-                        );
-                        self.session.start_release_saved_connection(&connection.id);
+                        self.fail_start_preparation(&options, error.clone(), cx);
                         self.shell.set_status(error);
                         cx.notify();
                         return;
                     }
                 };
-                let session_id = self.schedule_rdp_runtime(config.clone(), cx);
-                if let Some(route) = self.remote_desktop.prepared_routes.remove(&connection.id) {
+                let request_id = options.request_id.as_deref().expect("saved request");
+                let crate::features::session::SessionStartEventRequest::Pending {
+                    pending: Some(pending),
+                    was_active,
+                } = self.session.start.take_event_request(request_id)
+                else {
+                    return;
+                };
+                let session_id = match &config {
+                    SessionLaunchConfig::Rdp(config) => self.schedule_rdp_runtime(
+                        config.clone(),
+                        request_id.to_string(),
+                        pending.attempt.clone(),
+                        cx,
+                    ),
+                    SessionLaunchConfig::Vnc(config) => self.schedule_vnc_runtime(
+                        config.clone(),
+                        request_id.to_string(),
+                        pending.attempt.clone(),
+                        cx,
+                    ),
+                    _ => unreachable!("remote desktop config"),
+                };
+                if let Some(route) = route {
                     self.remote_desktop.routes.insert(session_id.clone(), route);
                 }
                 self.register_session_for_start(
@@ -711,130 +685,34 @@ impl NyaTermApp {
                         ssh_multiplex_key: None,
                         source_connection_id: Some(connection.id.clone()),
                         ai_execution_profile: AiExecutionProfile::Disabled,
-                        launch_config: SessionLaunchConfig::Rdp(config),
+                        launch_config: config,
                         disconnected: false,
                     },
                     tab_placement,
                     fallback_insert_index,
                 );
-                if let Some(custom_name) = options.custom_name {
-                    self.session
-                        .set_custom_name(session_id.clone(), custom_name);
+                if let Some(name) = pending.custom_name {
+                    self.session.set_custom_name(session_id.clone(), name);
                 }
-                if let Some(color) = options.tab_color {
-                    self.session.set_tab_color(&session_id, Some(color));
+                self.session.set_tab_color(&session_id, pending.tab_color);
+                self.session.set_tab_locked(&session_id, pending.locked);
+                self.persist_connection_used(connection.id, cx);
+                if self.session_start_should_activate(was_active) {
+                    self.activate_session_id(&session_id, cx);
                 }
-                if options.locked {
-                    self.session.set_tab_locked(&session_id, true);
-                }
-                if tab_placement.is_none()
-                    && fallback_insert_index.is_none()
-                    && let Some(after_session_id) = options.after_session_id
-                {
-                    self.session
-                        .move_session_after(&session_id, &after_session_id);
-                }
-                self.persist_connection_used(connection.id.clone(), cx);
-                self.activate_session_id(&session_id, cx);
-                self.apply_workspace_split_for_duplicate(cx, workspace_split.clone(), &session_id);
+                self.apply_workspace_split_for_duplicate(cx, workspace_split, &session_id);
                 self.shell
-                    .set_status(format!("connecting RDP {}", connection.name));
-                self.shell.show_workspace();
-                cx.notify();
-            }
-            ConnectionType::Vnc { .. } => {
-                let config = match self.saved_remote_desktop_launch_config(&connection) {
-                    Ok(SessionLaunchConfig::Vnc(config)) => config,
-                    _ => unreachable!("VNC connection"),
-                };
-                match self.create_vnc_runtime(config.clone()) {
-                    Ok(session_id) => {
-                        if let Some(route) =
-                            self.remote_desktop.prepared_routes.remove(&connection.id)
-                        {
-                            self.remote_desktop.routes.insert(session_id.clone(), route);
-                        }
-                        self.register_session_for_start(
-                            &session_id,
-                            crate::models::SessionRuntimeMetadata {
-                                ssh_config: None,
-                                ssh_multiplex_key: None,
-                                source_connection_id: Some(connection.id.clone()),
-                                ai_execution_profile: AiExecutionProfile::Disabled,
-                                launch_config: SessionLaunchConfig::Vnc(config),
-                                disconnected: false,
-                            },
-                            tab_placement,
-                            fallback_insert_index,
-                        );
-                        if let Some(custom_name) = options.custom_name {
-                            self.session
-                                .set_custom_name(session_id.clone(), custom_name);
-                        }
-                        if let Some(color) = options.tab_color {
-                            self.session.set_tab_color(&session_id, Some(color));
-                        }
-                        if options.locked {
-                            self.session.set_tab_locked(&session_id, true);
-                        }
-                        if tab_placement.is_none()
-                            && fallback_insert_index.is_none()
-                            && let Some(after_session_id) = options.after_session_id
-                        {
-                            self.session
-                                .move_session_after(&session_id, &after_session_id);
-                        }
-                        self.persist_connection_used(connection.id.clone(), cx);
-                        self.activate_session_id(&session_id, cx);
-                        self.apply_workspace_split_for_duplicate(
-                            cx,
-                            workspace_split.clone(),
-                            &session_id,
-                        );
-                        self.shell
-                            .set_status(format!("connecting VNC {}", connection.name));
-                    }
-                    Err(error) => {
-                        let message = format!("VNC connection failed: {error}");
-                        let session_id = self.create_failed_vnc_runtime(error);
-                        self.register_session_for_start(
-                            &session_id,
-                            crate::models::SessionRuntimeMetadata {
-                                ssh_config: None,
-                                ssh_multiplex_key: None,
-                                source_connection_id: Some(connection.id.clone()),
-                                ai_execution_profile: AiExecutionProfile::Disabled,
-                                launch_config: SessionLaunchConfig::Vnc(config),
-                                disconnected: false,
-                            },
-                            tab_placement,
-                            fallback_insert_index,
-                        );
-                        if let Some(custom_name) = options.custom_name {
-                            self.session
-                                .set_custom_name(session_id.clone(), custom_name);
-                        }
-                        if let Some(color) = options.tab_color {
-                            self.session.set_tab_color(&session_id, Some(color));
-                        }
-                        if options.locked {
-                            self.session.set_tab_locked(&session_id, true);
-                        }
-                        self.activate_session_id(&session_id, cx);
-                        self.shell.set_status(message);
-                    }
-                }
-                self.shell.show_workspace();
+                    .set_status(format!("connecting {}", connection.name));
+                self.settle_session_start_tab_placements_if_idle();
                 cx.notify();
             }
         }
-        self.remote_desktop.prepared_routes.remove(&connection_id);
-        self.session.start_release_saved_connection(&connection_id);
     }
 
     pub(in crate::features) fn saved_remote_desktop_launch_config(
         &self,
         connection: &SavedConnection,
+        relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
     ) -> Result<SessionLaunchConfig, String> {
         match connection.config.clone() {
             ConnectionType::Rdp {
@@ -850,11 +728,7 @@ impl NyaTermApp {
             } => {
                 let backend = parse_rdp_backend(&backend).map_err(|error| error.to_string())?;
                 let mut config = RdpSessionConfig {
-                    relay: self
-                        .remote_desktop
-                        .prepared_routes
-                        .get(&connection.id)
-                        .map(|route| route.endpoint.clone()),
+                    relay,
                     backend,
                     windows_authentication: security.windows_authentication.clone(),
                     name: connection.name.clone(),
@@ -891,11 +765,7 @@ impl NyaTermApp {
             } => {
                 let config = VncSessionConfig {
                     username: username.clone(),
-                    relay: self
-                        .remote_desktop
-                        .prepared_routes
-                        .get(&connection.id)
-                        .map(|route| route.endpoint.clone()),
+                    relay,
                     name: connection.name.clone(),
                     host,
                     port,
@@ -925,6 +795,7 @@ impl NyaTermApp {
     pub(in crate::features) fn prepare_remote_route(
         &mut self,
         connection: SavedConnection,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
         callback: impl Fn(
             &mut Self,
             Result<Arc<nyaterm_transport::network_route::NetworkRoute>, String>,
@@ -932,10 +803,22 @@ impl NyaTermApp {
         ) + 'static,
         cx: &mut Context<Self>,
     ) {
-        let context = self.ssh_session_config_build_context();
+        let mut context = self.ssh_session_config_build_context();
+        context.attempt = attempt;
+        context.host_key_prompts = Arc::new(
+            context
+                .host_key_prompts
+                .for_attempt(context.attempt.clone()),
+        );
+        context.credential_prompts = Arc::new(
+            context
+                .credential_prompts
+                .for_attempt(context.attempt.clone()),
+        );
         let task = self
             .blocking_jobs
             .submit_task("remote-desktop-route", move |_| {
+                context.attempt.check()?;
                 let (host, port) = match &connection.config {
                     ConnectionType::Rdp { host, port, .. }
                     | ConnectionType::Vnc { host, port, .. } => (host.clone(), *port),
@@ -949,7 +832,7 @@ impl NyaTermApp {
                 } else {
                     None
                 };
-                nyaterm_transport::network_route::NetworkRoute::start(
+                let route = nyaterm_transport::network_route::NetworkRoute::start(
                     nyaterm_transport::network_route::NetworkRouteConfig {
                         host,
                         port,
@@ -957,7 +840,9 @@ impl NyaTermApp {
                         proxy,
                     },
                 )
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+                context.attempt.check()?;
+                Ok(route)
             });
         cx.spawn(async move |this, cx| {
             let result = crate::features::runtime_jobs::await_blocking_job(task)
@@ -980,7 +865,7 @@ impl NyaTermApp {
                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 "configuration replacement",
             );
-            self.session.start_release_saved_connection(&connection.id);
+            self.fail_start_preparation(&options, "configuration replacement".into(), cx);
             return;
         }
 
@@ -998,7 +883,7 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
-            retry_request_id: _,
+            request_id,
         } = options;
         let connection_name = connection.name.clone();
         let source_connection_id = Some(connection.id.clone());
@@ -1011,6 +896,7 @@ impl NyaTermApp {
         let multiplex_key = format!("ssh-session:{}", uuid());
         let request_id = self.register_pending_session_start(
             PendingSessionStartRegistration {
+                request_id,
                 mcp_open_operation_id,
                 requested_ssh_runtime_mode: ssh_runtime_mode,
                 connection_name: connection_name.clone(),
@@ -1638,6 +1524,9 @@ fn load_proxy_jump_config_with_context(
 
 #[cfg(test)]
 mod mstsc_tests;
+
+#[cfg(test)]
+mod request_tests;
 
 #[cfg(test)]
 mod tests {

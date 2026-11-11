@@ -486,6 +486,128 @@ fn state(cx: &TestAppContext) -> AiFeatureState {
 }
 
 #[test]
+fn composer_resize_floors_at_auto_grow_and_caps_at_max() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let natural = gpui::px(136.);
+    let maximum = gpui::px(480.);
+
+    assert_eq!(state.composer_min_height(), 0.);
+    assert_eq!(
+        state.update_composer_resize(gpui::px(0.), natural, maximum),
+        None
+    );
+
+    state.start_composer_resize(gpui::px(400.), natural);
+    assert!(state.composer_is_resizing());
+
+    // Upward drag adds height anchored at the pressed box height.
+    assert_eq!(
+        state.update_composer_resize(gpui::px(350.), natural, maximum),
+        Some(186.)
+    );
+    // Past the cap the floor stops following the pointer.
+    assert_eq!(
+        state.update_composer_resize(gpui::px(0.), natural, maximum),
+        Some(480.)
+    );
+    // At or below the natural height the override drops back to auto-grow.
+    assert_eq!(
+        state.update_composer_resize(gpui::px(400.), natural, maximum),
+        Some(0.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(800.), natural, maximum),
+        Some(0.)
+    );
+
+    assert!(state.finish_composer_resize());
+    assert!(!state.composer_is_resizing());
+    assert_eq!(
+        state.update_composer_resize(gpui::px(0.), natural, maximum),
+        None
+    );
+    assert!(!state.finish_composer_resize());
+}
+
+#[test]
+fn composer_resize_preserves_hidden_floor_until_the_user_drags_down() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let natural = gpui::px(80.);
+    state.start_composer_resize(gpui::px(400.), natural);
+    assert_eq!(
+        state.update_composer_resize(gpui::px(0.), natural, gpui::px(480.)),
+        Some(480.)
+    );
+    state.finish_composer_resize();
+
+    // A small panel displays 120px but preserves the original 480px floor.
+    state.start_composer_resize(gpui::px(400.), gpui::px(120.));
+    assert_eq!(
+        state.update_composer_resize(gpui::px(400.), natural, gpui::px(120.)),
+        Some(480.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(300.), natural, gpui::px(120.)),
+        Some(480.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(401.), natural, gpui::px(120.)),
+        Some(119.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(440.), natural, gpui::px(120.)),
+        Some(0.)
+    );
+    state.finish_composer_resize();
+
+    // A ceiling below natural height is the reset threshold for a downward drag.
+    state.start_composer_resize(gpui::px(400.), gpui::px(60.));
+    assert_eq!(
+        state.update_composer_resize(gpui::px(399.), natural, gpui::px(60.)),
+        Some(0.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(401.), natural, gpui::px(60.)),
+        Some(0.)
+    );
+}
+
+#[test]
+fn composer_resize_remains_continuous_after_natural_height_outgrows_the_floor() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    state.start_composer_resize(gpui::px(400.), gpui::px(80.));
+    assert_eq!(
+        state.update_composer_resize(gpui::px(370.), gpui::px(80.), gpui::px(480.)),
+        Some(110.)
+    );
+    state.finish_composer_resize();
+    state.start_composer_resize(gpui::px(400.), gpui::px(136.));
+    assert_eq!(
+        state.update_composer_resize(gpui::px(400.), gpui::px(136.), gpui::px(300.)),
+        Some(110.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(399.), gpui::px(136.), gpui::px(300.)),
+        Some(137.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(0.), gpui::px(136.), gpui::px(300.)),
+        Some(300.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(399.), gpui::px(200.), gpui::px(300.)),
+        Some(137.),
+        "content growing during an upward drag must not clear the floor"
+    );
+}
+
+#[test]
 fn conversation_title_uses_the_first_nonempty_user_message_without_cutting_unicode() {
     let cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);

@@ -1,4 +1,5 @@
 mod approvals;
+mod composer_height;
 mod history_and_streaming;
 mod native_decisions;
 mod pickers;
@@ -645,6 +646,25 @@ fn ai_prompt_grows_with_its_lines_up_to_six_rows() {
     );
     assert!(three < four && four < six, "{three:?} {four:?} {six:?}");
     assert_eq!(six, many, "the prompt stops growing at six rows");
+}
+
+#[test]
+fn ai_composer_min_height_raises_the_prompt_box() {
+    let root = TestConfigDir::new("nyaterm-ai-composer-floor");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let (app, vcx) = compact_host(&mut cx, root.path());
+    let natural = vcx.debug_bounds("ai-prompt").unwrap().size.height;
+    let floor = natural + px(120.);
+
+    edit_panel_snapshot(&app, vcx, |snapshot| {
+        snapshot.composer_min_height = f32::from(floor);
+    });
+    let raised = vcx.debug_bounds("ai-prompt").unwrap().size.height;
+    assert_eq!(
+        raised, floor,
+        "a dragged composer height pins the prompt box exactly"
+    );
 }
 
 fn assert_inside(outer: Bounds<Pixels>, inner: Bounds<Pixels>, what: &str) {

@@ -1,7 +1,7 @@
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    SharedString, StatefulInteractiveElement as _, Styled as _, deferred,
-    prelude::FluentBuilder as _,
+    App, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, deferred,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::features::{
@@ -21,6 +21,7 @@ impl NyaTermApp {
     ) {
         if !hovered {
             if self.shell.leave_resize_handle_hover(&id) {
+                self.repaint_resize_handle_target(&id, cx);
                 cx.notify();
             }
             return;
@@ -35,6 +36,7 @@ impl NyaTermApp {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.shell.activate_resize_handle_hover(&id, generation) {
+                    this.repaint_resize_handle_target(&id, cx);
                     cx.notify();
                 }
             });
@@ -42,12 +44,21 @@ impl NyaTermApp {
         .detach();
     }
 
+    /// Snapshot-rendered surfaces do not see `cx.notify()` on the app; a
+    /// handle inside one needs a snapshot flush to repaint its highlight.
+    fn repaint_resize_handle_target(&mut self, id: &SharedString, cx: &mut Context<Self>) {
+        if id.as_ref() == crate::features::ai::AI_COMPOSER_RESIZE_HANDLE_ID {
+            self.defer_ai_panel_snapshot_flush(cx);
+        }
+    }
+
     pub(in crate::features) fn activate_resize_handle_immediately(
         &mut self,
         id: SharedString,
         cx: &mut Context<Self>,
     ) {
-        self.shell.activate_resize_handle_immediately(id);
+        self.shell.activate_resize_handle_immediately(id.clone());
+        self.repaint_resize_handle_target(&id, cx);
         cx.notify();
     }
 
@@ -262,6 +273,60 @@ impl NyaTermApp {
                 self.transfer.panel_height().round()
             ));
             self.defer_transfer_panel_snapshot_flush(cx);
+            cx.notify();
+        }
+    }
+}
+
+impl NyaTermApp {
+    /// The composer's content-driven height; the drag clamps its floor
+    /// against this so the box can never drop below the default layout.
+    fn ai_composer_natural_height(&self, cx: &App) -> Pixels {
+        self.existing_text_input("ai.chat.prompt")
+            .and_then(|input| input.read(cx).auto_grow_height(cx))
+            .unwrap_or(px(0.))
+    }
+
+    pub(in crate::features) fn start_ai_composer_resize(
+        &mut self,
+        event: &MouseDownEvent,
+        start_height: Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        // Anchor on the laid-out box, including natural growth and the current
+        // panel budget, rather than a preference hidden by either constraint.
+        if start_height <= px(0.) {
+            return;
+        }
+        self.ai
+            .start_composer_resize(event.position.y, start_height);
+        self.shell.set_status("resizing AI composer".to_string());
+        self.defer_ai_panel_snapshot_flush(cx);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn update_ai_composer_resize(
+        &mut self,
+        event: &MouseMoveEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let natural_height = self.ai_composer_natural_height(cx);
+        let maximum_height = self.ai_panel.read(cx).composer_height_limit(cx);
+        let Some(height) =
+            self.ai
+                .update_composer_resize(event.position.y, natural_height, maximum_height)
+        else {
+            return;
+        };
+        self.shell
+            .set_status(format!("AI composer: {:.0}px", height.round()));
+        self.defer_ai_panel_snapshot_flush(cx);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn finish_ai_composer_resize(&mut self, cx: &mut Context<Self>) {
+        if self.ai.finish_composer_resize() {
+            self.defer_ai_panel_snapshot_flush(cx);
             cx.notify();
         }
     }

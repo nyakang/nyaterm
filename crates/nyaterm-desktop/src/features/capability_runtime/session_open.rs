@@ -323,7 +323,7 @@ impl NyaTermApp {
                 continue;
             };
             if op.started {
-                if !self.session.saved_connection_is_starting(&op.connection.id) {
+                if !self.session.start_mcp_operation_is_pending(&id) {
                     self.mcp
                         .capabilities
                         .complete_session_open_failure(&id, "start ended without delivery");

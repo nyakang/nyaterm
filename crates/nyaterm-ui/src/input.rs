@@ -84,6 +84,11 @@ impl Default for NyaInputLabels {
 struct InputLabelsProvider(Box<dyn Fn() -> NyaInputLabels>);
 impl gpui::Global for InputLabelsProvider {}
 
+/// Vertical chrome a framed medium multi-line input adds around its editor
+/// element: `input_py` padding above and below plus the 1px border on each
+/// side (8 + 8 + 1 + 1).
+const MULTI_LINE_FRAME_HEIGHT: f32 = 18.;
+
 /// Resolve labels at render time so existing inputs follow language changes.
 pub fn set_nya_input_label_provider(provider: impl Fn() -> NyaInputLabels + 'static, cx: &mut App) {
     cx.set_global(InputLabelsProvider(Box::new(provider)));
@@ -313,6 +318,7 @@ pub struct NyaInputState {
     language: Option<SharedString>,
     rows: Option<usize>,
     auto_grow: Option<(usize, usize)>,
+    bounded_auto_grow: bool,
     disabled: bool,
     readonly: bool,
     error: bool,
@@ -347,6 +353,7 @@ impl NyaInputState {
             language: None,
             rows: None,
             auto_grow: None,
+            bounded_auto_grow: false,
             disabled: false,
             readonly: false,
             error: false,
@@ -383,7 +390,9 @@ impl NyaInputState {
             return;
         }
         self.auto_grow = Some(rows);
-        if let Some(ComponentState::Textarea(state)) = &self.state {
+        if let Some(ComponentState::Textarea(state)) = &self.state
+            && !self.bounded_auto_grow
+        {
             state.update(cx, |state, cx| state.set_auto_grow(rows.0, rows.1, cx));
         }
         cx.notify();
@@ -577,6 +586,50 @@ impl NyaInputState {
         match self.state.as_ref() {
             Some(ComponentState::Input(state)) => Some(state.clone()),
             _ => None,
+        }
+    }
+
+    /// Height the auto-grow layout gives this textarea for its current
+    /// content, frame included. Independent of any outer height constraint,
+    /// so callers can clamp manual sizing against the "natural" box without
+    /// reading back what their own constraint produced.
+    pub fn auto_grow_height(&self, cx: &App) -> Option<gpui::Pixels> {
+        let (min_rows, max_rows) = self.auto_grow?;
+        let ComponentState::Textarea(state) = self.state.as_ref()? else {
+            return None;
+        };
+        let state = state.read(cx);
+        let line_height = state.line_height()?;
+        let rows = state
+            .display_map()
+            .wrap_row_count()
+            .clamp(min_rows, max_rows) as f32;
+        (line_height > px(0.)).then(|| px(rows * f32::from(line_height) + MULTI_LINE_FRAME_HEIGHT))
+    }
+
+    /// One visible editing row, including the medium textarea's frame.
+    pub fn textarea_min_height(&self, cx: &App) -> Option<gpui::Pixels> {
+        let ComponentState::Textarea(state) = self.state.as_ref()? else {
+            return None;
+        };
+        let line_height = state.read(cx).line_height()?;
+        (line_height > px(0.)).then(|| line_height + px(MULTI_LINE_FRAME_HEIGHT))
+    }
+
+    fn set_bounded_auto_grow(&mut self, bounded: bool, cx: &mut Context<Self>) {
+        let Some(rows) = self.auto_grow else {
+            return;
+        };
+        if self.bounded_auto_grow == bounded {
+            return;
+        }
+        self.bounded_auto_grow = bounded;
+        if let Some(ComponentState::Textarea(state)) = &self.state {
+            // The shell owns the constrained height. Leave the editor a one-row
+            // minimum so its scroll viewport cannot overflow a shorter frame.
+            // Natural sizing still reads the display map and the original rows.
+            let (min, max) = if bounded { (1, 1) } else { rows };
+            state.update(cx, |state, cx| state.set_auto_grow(min, max, cx));
         }
     }
 
@@ -954,6 +1007,7 @@ pub struct NyaInputShell {
     search: bool,
     framed: bool,
     height: Option<gpui::Pixels>,
+    height_limits: Option<(gpui::Pixels, gpui::Pixels)>,
     fill_height: bool,
     trailing: Vec<AnyElement>,
     footer: Option<AnyElement>,
@@ -974,6 +1028,7 @@ impl NyaInputShell {
             search: false,
             framed: true,
             height: None,
+            height_limits: None,
             fill_height: false,
             trailing: Vec::new(),
             footer: None,
@@ -1005,6 +1060,17 @@ impl NyaInputShell {
 
     pub fn height(mut self, height: gpui::Pixels) -> Self {
         self.height = Some(height);
+        self.height_limits = None;
+        self.fill_height = false;
+        self
+    }
+
+    /// Constrain an auto-growing textarea while preserving its natural row
+    /// range. The ceiling wins over the floor, with at least one editing row.
+    /// Like `height` and `fill_height`, the last sizing setter wins.
+    pub fn height_limits(mut self, lower: gpui::Pixels, upper: gpui::Pixels) -> Self {
+        self.height_limits = Some((lower.max(px(0.)), upper.max(px(0.))));
+        self.height = None;
         self.fill_height = false;
         self
     }
@@ -1012,6 +1078,7 @@ impl NyaInputShell {
     /// Fill a definite-height parent instead of using the default textarea height.
     pub fn fill_height(mut self) -> Self {
         self.height = None;
+        self.height_limits = None;
         self.fill_height = true;
         self
     }
@@ -1079,7 +1146,8 @@ impl RenderOnce for NyaInputShell {
             multi_line,
             search,
             framed,
-            height,
+            mut height,
+            height_limits,
             fill_height,
             trailing,
             footer,
@@ -1092,9 +1160,26 @@ impl RenderOnce for NyaInputShell {
         let owner = state.clone();
         let kind = owner.read(cx).kind;
         let masked = owner.read(cx).masked;
-        let content_height = owner.read(cx).auto_grow.is_some() && height.is_none() && !fill_height;
         let (state, disabled, readonly, state_multi_line) =
             prepare_input_component(&state, window, cx);
+        let height_limits = height_limits.filter(|_| {
+            owner.read(cx).auto_grow.is_some() && matches!(&state, ComponentState::Textarea(_))
+        });
+        owner.update(cx, |input, cx| {
+            input.set_bounded_auto_grow(height_limits.is_some(), cx);
+        });
+        if let Some((lower, upper)) = height_limits {
+            let input = owner.read(cx);
+            let minimum = input.textarea_min_height(cx).unwrap_or(px(38.));
+            let natural = input.auto_grow_height(cx).unwrap_or_else(|| {
+                // Before the first text layout, preserve the configured row
+                // minimum rather than briefly painting a one-row prompt.
+                let rows = input.auto_grow.map_or(1, |(minimum, _)| minimum);
+                (minimum - px(MULTI_LINE_FRAME_HEIGHT)) * rows as f32 + px(MULTI_LINE_FRAME_HEIGHT)
+            });
+            height = Some(natural.max(lower).min(upper.max(minimum)));
+        }
+        let content_height = owner.read(cx).auto_grow.is_some() && height.is_none() && !fill_height;
         state.set_context_menu_enabled(context_menu_labels.is_none(), cx);
         let menu_state = state.clone();
         let capture_focus_state = state.clone();
@@ -1131,7 +1216,7 @@ impl RenderOnce for NyaInputShell {
                 }
                 input = configure_secret_input(
                     input,
-                    owner,
+                    owner.clone(),
                     SecretInputPresentation {
                         kind,
                         masked,
@@ -1214,6 +1299,7 @@ impl RenderOnce for NyaInputShell {
             .debug_selector(move || debug_selector.clone())
             .w_full()
             .min_w_0()
+            .relative()
             .when(fill_height, |this| this.h_full().min_h_0())
             .capture_any_mouse_down(move |event, window, cx| {
                 preserve_nya_input_focus_on_pointer_down(cx);
@@ -1260,7 +1346,34 @@ impl RenderOnce for NyaInputShell {
                     }
                 });
         }
-        let container = container.child(input);
+        let container = container
+            .child(input)
+            .when_some(height_limits, |this, (lower, upper)| {
+                let measured_owner = owner.clone();
+                this.child(
+                    gpui::canvas(
+                        move |bounds, _, cx| {
+                            let input = measured_owner.read(cx);
+                            let Some(natural) = input.auto_grow_height(cx) else {
+                                return;
+                            };
+                            let minimum = input.textarea_min_height(cx).unwrap_or(px(38.));
+                            let desired = natural.max(lower).min(upper.max(minimum));
+                            if (desired - bounds.size.height).abs() <= px(0.5) {
+                                return;
+                            }
+                            // Wrapping/font metrics become available in prepaint.
+                            // Notify the owner after measurement, never during it.
+                            cx.defer(move |cx| {
+                                measured_owner.update(cx, |_, cx| cx.notify());
+                            });
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+            });
         if let Some(labels) = context_menu_labels {
             NyaContextMenu::new_dynamic(container, move |_, cx| {
                 let capabilities = menu_state.context_menu_capabilities(cx);
@@ -1362,9 +1475,9 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use gpui::{
-        AppContext as _, ClipboardItem, InteractiveElement as _, IntoElement, MouseButton,
-        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, point,
-        prelude::FluentBuilder as _, px,
+        AppContext as _, ClipboardItem, Focusable as _, InteractiveElement as _, IntoElement,
+        MouseButton, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
+        div, point, prelude::FluentBuilder as _, px,
     };
 
     use gpui_kit::component::highlighter::LanguageRegistry;
@@ -1706,6 +1819,173 @@ mod tests {
 
     struct AutoGrowFixture {
         field: gpui::Entity<NyaInputState>,
+    }
+
+    struct BoundedAutoGrowFixture {
+        field: gpui::Entity<NyaInputState>,
+        limits: Option<(gpui::Pixels, gpui::Pixels)>,
+        width: gpui::Pixels,
+        _observation: gpui::Subscription,
+    }
+
+    impl Render for BoundedAutoGrowFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().w(self.width).child(
+                NyaInputShell::new("bounded-auto-grow", &self.field)
+                    .multi_line()
+                    .when_some(self.limits, |this, (lower, upper)| {
+                        this.height_limits(lower, upper)
+                    }),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn bounded_auto_grow_preserves_natural_growth_and_the_real_editing_viewport(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| {
+            let field = cx.new(|cx| NyaInputState::new(cx, "one").auto_grow(3, 6));
+            let observation = cx.observe(&field, |_, _, cx| cx.notify());
+            BoundedAutoGrowFixture {
+                field,
+                limits: Some((px(110.), px(480.))),
+                width: px(320.),
+                _observation: observation,
+            }
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        let draw = |cx: &mut VisualTestContext| {
+            for _ in 0..4 {
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.refresh();
+                    _ = window.draw(cx);
+                });
+            }
+            cx.debug_bounds("bounded-auto-grow").unwrap()
+        };
+        assert_eq!(draw(cx).size.height, px(110.));
+        field.update(cx, |field, cx| field.set_content("1\n2\n3\n4\n5\n6", cx));
+        let six = draw(cx).size.height;
+        assert!(six > px(110.));
+        assert_eq!(
+            field.read_with(cx, |field, cx| field.auto_grow_height(cx)),
+            Some(six)
+        );
+        field.update(cx, |field, cx| field.set_content("one", cx));
+        assert_eq!(draw(cx).size.height, px(110.));
+
+        let text = vec!["long line"; 30].join("\n");
+        field.update(cx, |field, cx| field.set_content(&text, cx));
+        draw(cx);
+        let component = field.read_with(cx, |field, _| {
+            let Some(ComponentState::Textarea(component)) = &field.state else {
+                panic!("textarea must be mounted");
+            };
+            component.clone()
+        });
+        cx.update(|window, cx| {
+            component.update(cx, |state, cx| {
+                state.set_selected_range(0..4, cx);
+                state.set_scroll_offset(point(px(0.), px(-100.)), cx);
+            });
+            let focus = component.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        });
+        for upper in [px(60.), px(38.), px(180.)] {
+            fixture.update(cx, |fixture, cx| {
+                fixture.limits = Some((px(110.), upper));
+                cx.notify();
+            });
+            let shell = draw(cx);
+            let expected = six.max(px(110.)).min(upper);
+            assert_eq!(shell.size.height, expected);
+            component.read_with(cx, |state, _| {
+                let editing = state.input_bounds();
+                assert!(editing.top() >= shell.top());
+                assert!(
+                    editing.bottom() <= shell.bottom(),
+                    "editor {editing:?} must fit shell {shell:?}"
+                );
+                assert!(editing.size.height > px(0.));
+                assert_eq!(state.selected_range(), 0..4);
+                assert_eq!(state.value().as_str(), text);
+                assert!(
+                    state.scroll_offset().y < px(0.),
+                    "overflowing text must have a scrollable viewport"
+                );
+            });
+            cx.update(|window, cx| assert!(component.read(cx).focus_handle(cx).is_focused(window)));
+        }
+
+        fixture.update(cx, |fixture, cx| {
+            fixture.limits = None;
+            cx.notify();
+        });
+        assert_eq!(
+            draw(cx).size.height,
+            six,
+            "removing limits restores the six-row natural height"
+        );
+    }
+
+    #[gpui::test]
+    fn bounded_auto_grow_recomputes_wrapping_after_width_changes(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| {
+            let field = cx.new(|cx| NyaInputState::new(cx, "words ".repeat(25)).auto_grow(3, 6));
+            let observation = cx.observe(&field, |_, _, cx| cx.notify());
+            BoundedAutoGrowFixture {
+                field,
+                limits: Some((px(0.), px(480.))),
+                width: px(480.),
+                _observation: observation,
+            }
+        });
+        let height = |cx: &mut VisualTestContext| {
+            for _ in 0..4 {
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.refresh();
+                    _ = window.draw(cx);
+                });
+            }
+            cx.debug_bounds("bounded-auto-grow").unwrap().size.height
+        };
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let initial = cx.debug_bounds("bounded-auto-grow").unwrap().size.height;
+        let wide = height(cx);
+        assert_eq!(
+            initial, wide,
+            "the first paint must preserve the configured three-row minimum"
+        );
+        fixture.update(cx, |fixture, cx| {
+            fixture.width = px(160.);
+            cx.notify();
+        });
+        let narrow = height(cx);
+        assert!(
+            narrow > wide,
+            "wrapped content grows the bounded shell: {wide:?} {narrow:?}"
+        );
+        fixture.update(cx, |fixture, cx| {
+            fixture.width = px(480.);
+            cx.notify();
+        });
+        assert_eq!(height(cx), wide);
+        cx.update(|window, _| window.set_rem_size(px(24.)));
+        assert!(
+            height(cx) > wide,
+            "font metrics must update constrained natural height"
+        );
     }
 
     impl Render for AutoGrowFixture {

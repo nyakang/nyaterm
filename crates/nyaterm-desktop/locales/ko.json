@@ -1711,7 +1711,7 @@
     "newLocalTerminal": "새 로컬 터미널",
     "newSession": "새 세션",
     "newWindow": "새 창",
-    "newSshConnection": "새 SSH",
+    "newSshConnection": "새 연결",
     "panels": "패널",
     "paste": "붙여넣기",
     "redo": "다시 실행",
@@ -2687,7 +2687,7 @@
     "close": "닫기",
     "connecting": "연결 중",
     "move": "이동",
-    "newSsh": "새 SSH",
+    "newSsh": "새 연결",
     "noMatches": "검색과 일치하는 세션 또는 저장된 연결이 없습니다",
     "noSessions": "열린 세션이나 저장된 연결이 없습니다",
     "open": "열기",
@@ -3634,6 +3634,7 @@
     "memUsage": "메모리 사용량"
   },
   "suggestions": {
+    "openPasteReview": "붙여넣기 검토 열기",
     "acceptSelected": "선택 항목 적용",
     "legacyHistory": "이전 전역 기록",
     "multiline": "여러 줄",

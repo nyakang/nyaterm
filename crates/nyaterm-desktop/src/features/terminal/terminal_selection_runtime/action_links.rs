@@ -5,17 +5,23 @@ use gpui::{
 };
 
 use crate::action_links::{
-    ActionLinkAction, ActionLinkMatch, ActionLinkTarget, actions_for_match, match_at_offset,
+    ActionLinkAction, ActionLinkMatch, ActionLinkPlatform, ActionLinkTarget, actions_for_match_on,
+    match_at_offset,
 };
 use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_runtime::{
     TERMINAL_INPUT_LATENCY_WINDOW, TERMINAL_USER_SCROLL_ACTIVE_WINDOW,
 };
 use crate::models::{
-    ActionLinkMenuAction, ActionLinkMenuState, ActionLinkTooltipState, TerminalPerformanceMode,
-    terminal_action_link_matcher_key, terminal_expensive_interactions_enabled,
+    ActionLinkMenuAction, ActionLinkMenuState, ActionLinkTooltipState, SessionLaunchConfig,
+    TerminalPerformanceMode, terminal_action_link_matcher_key,
+    terminal_expensive_interactions_enabled,
 };
 use crate::terminal::terminal_byte_index_for_cell_col;
+use nyaterm_core::terminal::input_tracker::known_terminal_prompt_prefix;
+use nyaterm_core::terminal::shell_prompt::classify_shell_prompt;
+use nyaterm_remote_ops::host::HostOs;
+use nyaterm_transport::local_shell::LocalShellPathStyle;
 
 fn action_link_hover_should_yield_to_terminal_latency(
     last_input_at: Option<Instant>,
@@ -222,6 +228,59 @@ impl NyaTermApp {
         }
     }
 
+    /// Platform whose command spelling applies to an action link.
+    ///
+    /// This is about where the command executes, not where NyaTerm runs: a
+    /// Current prompt evidence precedes launch hints: local WSL and nested SSH
+    /// commands can execute on a different platform than the application.
+    fn action_link_platform_for_session(&self, session_id: Option<&str>) -> ActionLinkPlatform {
+        let Some(session_id) = session_id.filter(|id| !id.is_empty()) else {
+            return ActionLinkPlatform::default();
+        };
+        let snapshot = self.terminal_snapshot_for_session(Some(session_id), 0);
+        let prompt_row = self
+            .terminal
+            .editing
+            .sessions
+            .get(session_id)
+            .and_then(|state| state.mapping.as_ref())
+            .and_then(|mapping| mapping.cells.first())
+            .map_or(snapshot.cursor.row, |cell| cell.row);
+        if let Some(platform) = snapshot
+            .row(prompt_row)
+            .and_then(|row| known_terminal_prompt_prefix(&row.text))
+            .and_then(classify_shell_prompt)
+            .and_then(|prompt| prompt.platform)
+        {
+            return platform;
+        }
+        if let Some(platform) = self
+            .commands
+            .command_context(session_id)
+            .and_then(|context| context.dialect.action_link_platform())
+        {
+            return platform;
+        }
+        if self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(&metadata.launch_config, SessionLaunchConfig::Local(config)
+                if config.shell_path.as_deref().is_some_and(|program|
+                    LocalShellPathStyle::from_program(program) == LocalShellPathStyle::Wsl))
+        }) {
+            return ActionLinkPlatform::Posix;
+        }
+        let local_session = self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(metadata.launch_config, SessionLaunchConfig::Local(_))
+        });
+        if local_session {
+            return if HostOs::local() == HostOs::Windows {
+                ActionLinkPlatform::Windows
+            } else {
+                ActionLinkPlatform::Posix
+            };
+        }
+        ActionLinkPlatform::default()
+    }
+
     pub(in crate::features) fn action_link_at_point(
         &self,
         position: Point<Pixels>,
@@ -291,7 +350,8 @@ impl NyaTermApp {
                 let matchers = &self.settings.summary().terminal_action_links_matchers;
                 match_at_offset(line, byte_offset, matchers)
             })?;
-        let actions = actions_for_match(&item);
+        let actions =
+            actions_for_match_on(&item, self.action_link_platform_for_session(session_id));
         Some((item, actions))
     }
 
@@ -607,6 +667,65 @@ mod tests {
     use crate::features::test_support::{app_with_visible_local_session, editor_document};
     use crate::models::{SmartSplitMode, TerminalWindowNode, WorkspaceTabId};
     use crate::test_support::TestAppCleanup;
+
+    #[test]
+    fn action_links_use_current_windows_remote_and_posix_powershell_prompts() {
+        use crate::models::SessionLaunchConfig;
+        use nyaterm_core::action_links::ActionLinkPlatform;
+        use nyaterm_core::completion::types::{CompletionScope, ShellCommandContext, ShellDialect};
+
+        let dir = TestTempDir::new("nyaterm-action-link-platform");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, _| {
+            let mut wsl_launch = app.session.metadata("s1").unwrap().launch_config.clone();
+            for local in [false, true] {
+                let launch = app.session.metadata("s1").unwrap().launch_config.clone();
+                if !local {
+                    app.session.metadata_mut("s1").unwrap().launch_config =
+                        SessionLaunchConfig::Ssh(Box::default());
+                }
+                app.commands.set_command_context(
+                    "s1".into(),
+                    ShellCommandContext {
+                        scope: CompletionScope::legacy(),
+                        dialect: ShellDialect::Unknown,
+                        command_events: false,
+                    },
+                );
+                for (prompt, expected) in [
+                    ("PS C:\\Users> ", ActionLinkPlatform::Windows),
+                    ("C:\\Users>", ActionLinkPlatform::Windows),
+                    ("PS /home/user> ", ActionLinkPlatform::Posix),
+                    ("user@host:~$ ", ActionLinkPlatform::Posix),
+                ] {
+                    app.terminal
+                        .seed_session_view("s1".into(), prompt.into(), "UTF-8");
+                    assert_eq!(app.action_link_platform_for_session(Some("s1")), expected);
+                }
+                app.session.metadata_mut("s1").unwrap().launch_config = launch;
+            }
+            app.session.metadata_mut("s1").unwrap().launch_config =
+                SessionLaunchConfig::Ssh(Box::default());
+            app.terminal
+                .seed_session_view("s1".into(), "custom> ".into(), "UTF-8");
+            assert_eq!(
+                app.action_link_platform_for_session(Some("s1")),
+                ActionLinkPlatform::Posix
+            );
+            if let SessionLaunchConfig::Local(config) = &mut wsl_launch {
+                config.shell_path = Some("C:\\Windows\\System32\\wsl.exe".into());
+            }
+            app.session.metadata_mut("s1").unwrap().launch_config = wsl_launch;
+            app.terminal
+                .seed_session_view("s1".into(), String::new(), "UTF-8");
+            assert_eq!(
+                app.action_link_platform_for_session(Some("s1")),
+                ActionLinkPlatform::Posix
+            );
+        });
+    }
 
     use super::{
         ActionLinkTooltipState, action_link_hover_should_yield_to_terminal_latency,

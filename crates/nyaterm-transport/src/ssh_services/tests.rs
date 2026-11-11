@@ -253,3 +253,5 @@ async fn file_session_without_an_injected_probe_returns_a_configuration_error() 
     assert!(error.contains("file session probe is not configured"));
     server.abort();
 }
+
+mod concurrent_start;
