@@ -954,9 +954,9 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.path_menu_open, |this| {
-                this.child(regional_overlay_layer(
+                this.child(full_window_overlay_layer(
                     "transfer-path-menu-input-layer",
-                    self.transfer_browser_path_menu_overlay(cx),
+                    self.transfer_browser_path_menu_overlay(window, cx),
                 ))
             })
             .when(overlay.upload_menu_open, |this| {

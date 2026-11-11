@@ -366,6 +366,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn transfer_browser_path_menu_overlay(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
@@ -393,12 +394,26 @@ impl NyaTermApp {
                 TransferBrowserChildrenMenuStatus::Error(_) => 112.,
             },
         };
+        let content_height = preferred_height;
         let preferred_height = preferred_height.min(324.);
-        let (viewport_w, viewport_h) = self.shell.viewport_size();
+        let viewport = window.viewport_size();
+        let (viewport_w, viewport_h) = (f32::from(viewport.width), f32::from(viewport.height));
+        let font = self.gpui_ui_font().font();
+        let padding = f32::from(window.rem_size()) / 4.;
+        // The scrollbar overlays the viewport; leave room in the content instead
+        // of reserving a second scrollbar gutter on the scrolling element.
+        let scrollbar_clearance =
+            if content_height > preferred_height.min((viewport_h - 16.).max(80.)) {
+                12.
+            } else {
+                0.
+            };
+        let menu_width =
+            transfer_browser_path_menu_width(&menu.kind, &font, scrollbar_clearance, window);
         let (menu_x, menu_y, menu_max_height) = transfer_menu_position(
             f32::from(menu.x),
             f32::from(menu.y),
-            280.,
+            menu_width,
             preferred_height,
             viewport_w,
             viewport_h,
@@ -419,6 +434,7 @@ impl NyaTermApp {
                     .px_2()
                     .py_2()
                     .text_xs()
+                    .truncate()
                     .text_color(rgb(palette.text_muted))
                     .child(t!("fileExplorer.loadingChildDirectories"))
                     .into_any_element(),
@@ -431,14 +447,18 @@ impl NyaTermApp {
                     .child(
                         div()
                             .text_xs()
+                            .truncate()
                             .text_color(rgb(palette.danger))
                             .child(t!("fileExplorer.childDirectoriesFailed")),
                     )
                     .child(
                         div()
                             .text_xs()
+                            .truncate()
                             .text_color(rgb(palette.text_muted))
-                            .child(truncate_preview(&error, 120)),
+                            .child(transfer_browser_path_menu_label(&truncate_preview(
+                                &error, 120,
+                            ))),
                     )
                     .child(
                         div()
@@ -453,6 +473,7 @@ impl NyaTermApp {
                             .cursor_pointer()
                             .hover(|this| this.bg(rgb(palette.hover)))
                             .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
                                 this.retry_transfer_browser_children_menu(cx);
                                 this.defer_transfer_panel_snapshot_flush(cx);
                             }))
@@ -463,6 +484,7 @@ impl NyaTermApp {
                     .px_2()
                     .py_2()
                     .text_xs()
+                    .truncate()
                     .text_color(rgb(palette.text_muted))
                     .child(t!("fileExplorer.noChildDirectories"))
                     .into_any_element(),
@@ -493,6 +515,7 @@ impl NyaTermApp {
             .left_0()
             .right_0()
             .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
                 this.close_transfer_browser_path_menu(cx);
             }))
             .child(
@@ -502,22 +525,32 @@ impl NyaTermApp {
                     .absolute()
                     .top(px(menu_y))
                     .left(px(menu_x))
-                    .w(px(280.))
+                    .w(px(menu_width))
                     .h(px(menu_height))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(self.shell_surface_color(palette.bg))
                     .shadow_lg()
+                    .font(font)
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_up(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_move(|_, _, cx| cx.stop_propagation())
+                    .on_scroll(|_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
                             .id("transfer-browser-path-menu-scroll")
                             .debug_selector(|| "transfer-browser-path-menu-scroll".to_string())
                             .h_full()
+                            .w_full()
                             .overflow_y_scroll()
                             .track_scroll(&scroll)
-                            .p_1()
+                            .p(px(padding))
+                            .pr(px(padding + scrollbar_clearance))
                             .child(content),
                     )
                     .vertical_scrollbar(&scroll),
@@ -706,9 +739,10 @@ fn transfer_browser_breadcrumb_row(
                 })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |panel, event: &MouseDownEvent, _, cx| {
+                    cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
                         panel.with_app(cx, |this, cx| {
                             cx.stop_propagation();
+                            window.focus(this.transfer.browser_view().focus, cx);
                             this.open_transfer_browser_breadcrumb_overflow(
                                 open_segments.clone(),
                                 event,
@@ -834,9 +868,10 @@ fn transfer_browser_breadcrumb_row(
                         })
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |panel, event: &MouseDownEvent, _, cx| {
+                            cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
                                 panel.with_app(cx, |this, cx| {
                                     cx.stop_propagation();
+                                    window.focus(this.transfer.browser_view().focus, cx);
                                     this.open_transfer_browser_children_menu(
                                         children_path.clone(),
                                         children_branch.clone(),
@@ -912,6 +947,70 @@ impl TransferBrowserPathMetrics {
     }
 }
 
+fn transfer_browser_path_menu_label(label: &str) -> String {
+    // POSIX names can contain line breaks. Only normalize the presentation;
+    // selection and navigation keep the original path.
+    label.replace(['\r', '\n'], " ")
+}
+
+fn transfer_browser_path_menu_width(
+    kind: &TransferBrowserPathMenuKind,
+    font: &gpui::Font,
+    scrollbar_clearance: f32,
+    window: &Window,
+) -> f32 {
+    let padding = f32::from(window.rem_size()) / 4.;
+    let measure = |label: &str| {
+        let label = transfer_browser_path_menu_label(label);
+        let mut run = window.text_style().to_run(label.len());
+        run.font = font.clone();
+        f32::from(
+            window
+                .text_system()
+                .shape_line(label.into(), window.rem_size() * 0.75, &[run], None)
+                .width,
+        )
+    };
+    let content_width = match kind {
+        TransferBrowserPathMenuKind::Overflow { segments } => segments
+            .iter()
+            .map(|segment| measure(&segment.label))
+            .fold(0., f32::max),
+        TransferBrowserPathMenuKind::Children {
+            status,
+            branch_child_path,
+            ..
+        } => match status {
+            TransferBrowserChildrenMenuStatus::Loading => {
+                measure(&t!("fileExplorer.loadingChildDirectories"))
+            }
+            TransferBrowserChildrenMenuStatus::Ready(entries) if entries.is_empty() => {
+                measure(&t!("fileExplorer.noChildDirectories"))
+            }
+            TransferBrowserChildrenMenuStatus::Ready(entries) => entries
+                .iter()
+                .map(|entry| {
+                    measure(&entry.name)
+                        + if branch_child_path.as_deref() == Some(entry.path.as_str()) {
+                            13. + padding * 2.
+                        } else {
+                            0.
+                        }
+                })
+                .fold(0., f32::max),
+            TransferBrowserChildrenMenuStatus::Error(error) => {
+                measure(&t!("fileExplorer.childDirectoriesFailed"))
+                    .max(measure(&truncate_preview(error, 120)))
+                    .max(measure(&t!("common.retry")) + padding * 4.)
+            }
+        },
+    };
+    // Content padding, row padding, border, and optional overlay clearance.
+    (content_width.ceil() + padding * 6. + 2. + scrollbar_clearance)
+        .clamp(160., 360.)
+        .min((f32::from(window.viewport_size().width) - 16.).max(0.))
+}
+
 fn transfer_browser_path_menu_entries(
     palette: crate::theme::ThemePalette,
     segments: Vec<TransferBrowserBreadcrumbSegment>,
@@ -945,6 +1044,8 @@ fn transfer_browser_path_menu_entries(
                 .cursor_pointer()
                 .hover(|this| this.bg(rgb(palette.hover)))
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    window.focus(this.transfer.browser_view().focus, cx);
                     this.close_transfer_browser_path_menu(cx);
                     this.open_transfer_browser_directory(open_path.clone(), window, cx);
                     this.defer_transfer_panel_snapshot_flush(cx);
@@ -953,8 +1054,8 @@ fn transfer_browser_path_menu_entries(
                     div()
                         .min_w_0()
                         .flex_1()
-                        .overflow_hidden()
-                        .child(truncate_preview(&segment.label, 44)),
+                        .truncate()
+                        .child(transfer_browser_path_menu_label(&segment.label)),
                 )
                 .when(is_branch, |this| {
                     this.child(

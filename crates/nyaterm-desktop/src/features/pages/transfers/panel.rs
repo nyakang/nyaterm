@@ -250,7 +250,7 @@ mod tests {
     impl Render for AppHost {
         fn render(
             &mut self,
-            _window: &mut gpui::Window,
+            window: &mut gpui::Window,
             cx: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
             let overlay = self
@@ -262,8 +262,11 @@ mod tests {
                 .is_some()
                 .then(|| {
                     self.app.update(cx, |app, cx| {
-                        app.transfer_browser_path_menu_overlay(cx)
-                            .into_any_element()
+                        crate::features::view_widgets::full_window_overlay_layer(
+                            "transfer-path-menu-input-layer",
+                            app.transfer_browser_path_menu_overlay(window, cx),
+                        )
+                        .into_any_element()
                     })
                 });
             div()
@@ -1004,6 +1007,332 @@ mod tests {
         vcx.run_until_parked();
     }
 
+    fn show_path_menu(
+        vcx: &mut VisualTestContext,
+        app: &Entity<NyaTermApp>,
+        menu: crate::models::TransferBrowserPathMenuState,
+    ) {
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer.open_browser_path_menu(menu);
+                app.flush_transfer_panel_snapshot(cx);
+                cx.notify();
+            });
+        });
+        draw_path_fixture(vcx);
+    }
+
+    #[test]
+    fn path_menu_owns_pointer_gestures_and_outside_click_only_dismisses() {
+        use crate::models::{
+            TransferBrowserChildrenMenuStatus, TransferBrowserContextTarget,
+            TransferBrowserPathMenuKind, TransferBrowserPathMenuState,
+        };
+        let test_dir = TestConfigDir::new("nyaterm-path-pointer");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let entries = (0..8)
+            .map(super::super::tests_support::browser_entry)
+            .collect::<Vec<_>>();
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer
+                    .replace_browser_entries_for_test(entries.clone());
+                app.transfer.select_browser_entry(entries[0].identity_key());
+                window.focus(app.transfer.browser_view().focus, cx);
+                app.flush_transfer_panel_snapshot(cx);
+            });
+        });
+        draw_path_fixture(vcx);
+        let row = vcx
+            .debug_bounds("transfer-browser-entry-/remote/entry-0001")
+            .unwrap();
+        let pointer = gpui::point(row.left() + px(80.), row.center().y);
+        show_path_menu(
+            vcx,
+            &app,
+            TransferBrowserPathMenuState {
+                session_id: Some("path-test".into()),
+                x: px(20.),
+                y: row.top() - px(8.),
+                kind: TransferBrowserPathMenuKind::Children {
+                    path: "/remote".into(),
+                    branch_child_path: None,
+                    request_id: None,
+                    status: TransferBrowserChildrenMenuStatus::Loading,
+                },
+            },
+        );
+        assert!(
+            vcx.debug_bounds("transfer-browser-path-menu")
+                .unwrap()
+                .contains(&pointer)
+        );
+        for (button, click_count) in [
+            (MouseButton::Left, 1),
+            (MouseButton::Left, 2),
+            (MouseButton::Right, 1),
+            (MouseButton::Middle, 1),
+        ] {
+            vcx.simulate_mouse_move(pointer, None, Modifiers::none());
+            vcx.simulate_event(MouseDownEvent {
+                position: pointer,
+                button,
+                click_count,
+                ..Default::default()
+            });
+            vcx.simulate_mouse_move(
+                pointer + gpui::point(px(20.), px(5.)),
+                button,
+                Modifiers::none(),
+            );
+            vcx.simulate_event(MouseUpEvent {
+                position: pointer,
+                button,
+                click_count,
+                ..Default::default()
+            });
+            draw_path_fixture(vcx);
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                let browser = app.transfer.browser_view();
+                assert!(browser.path_menu.is_some());
+                assert_eq!(browser.path, "/remote");
+                assert_eq!(
+                    browser.selected_remote_path.as_deref(),
+                    Some(entries[0].path.as_str())
+                );
+                assert_eq!(browser.selected_remote_paths.len(), 1);
+                assert_eq!(
+                    browser.context_target,
+                    &TransferBrowserContextTarget::CurrentDirectory
+                );
+                assert!(browser.drag_selection.is_none());
+                assert!(!app.transfer.rename_dialog_is_open());
+                assert!(!cx.has_active_drag());
+            });
+        }
+        let outside_row = vcx
+            .debug_bounds("transfer-browser-entry-/remote/entry-0004")
+            .unwrap();
+        let outside = gpui::point(outside_row.left() + px(280.), outside_row.center().y);
+        assert!(
+            !vcx.debug_bounds("transfer-browser-path-menu")
+                .unwrap()
+                .contains(&outside)
+        );
+        vcx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::none());
+        vcx.update(|_, cx| assert!(app.read(cx).transfer.browser_view().path_menu.is_some()));
+        vcx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.transfer.browser_view().path_menu.is_none());
+            assert_eq!(
+                app.transfer.browser_view().selected_remote_path.as_deref(),
+                Some(entries[0].path.as_str())
+            );
+        });
+        vcx.simulate_click(outside, Modifiers::none());
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .selected_remote_path
+                    .as_deref(),
+                Some(entries[4].path.as_str())
+            );
+        });
+    }
+
+    #[test]
+    fn path_menu_width_tracks_content_status_and_window_edges() {
+        use crate::models::{
+            TransferBrowserBreadcrumbSegment, TransferBrowserChildrenMenuStatus,
+            TransferBrowserPathMenuKind, TransferBrowserPathMenuState,
+        };
+        let test_dir = TestConfigDir::new("nyaterm-path-width");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let menu = |kind| TransferBrowserPathMenuState {
+            session_id: Some("path-test".into()),
+            x: px(10_000.),
+            y: px(100.),
+            kind,
+        };
+        for (label, expected_width) in [("a".to_string(), 160.), ("long-name".repeat(50), 360.)] {
+            show_path_menu(
+                vcx,
+                &app,
+                menu(TransferBrowserPathMenuKind::Overflow {
+                    segments: vec![TransferBrowserBreadcrumbSegment {
+                        label,
+                        path: "/target".into(),
+                    }],
+                }),
+            );
+            let bounds = vcx.debug_bounds("transfer-browser-path-menu").unwrap();
+            assert_eq!(bounds.size.width, px(expected_width));
+            let viewport = vcx.update(|window, _| window.viewport_size());
+            assert!(bounds.right() <= viewport.width - px(8.));
+        }
+        let label = "中文目录名称".repeat(3);
+        let mut entry = super::super::tests_support::browser_entry(0);
+        entry.name = label.clone();
+        entry.file_type = nyaterm_files::sftp::SftpFileType::Directory;
+        let children = |status| TransferBrowserPathMenuKind::Children {
+            path: "/remote".into(),
+            branch_child_path: None,
+            request_id: None,
+            status,
+        };
+        for status in [
+            TransferBrowserChildrenMenuStatus::Loading,
+            TransferBrowserChildrenMenuStatus::Ready(Vec::new()),
+            TransferBrowserChildrenMenuStatus::Error("failure\n".repeat(30)),
+            TransferBrowserChildrenMenuStatus::Ready(vec![entry.clone()]),
+        ] {
+            show_path_menu(vcx, &app, menu(children(status)));
+            let bounds = vcx.debug_bounds("transfer-browser-path-menu").unwrap();
+            assert!((px(160.)..=px(360.)).contains(&bounds.size.width));
+        }
+        let measured = vcx.update(|window, cx| {
+            let mut run = window.text_style().to_run(label.len());
+            run.font = app.read(cx).gpui_ui_font().font();
+            window
+                .text_system()
+                .shape_line(label.into(), window.rem_size() * 0.75, &[run], None)
+                .width
+        });
+        let bounds = vcx.debug_bounds("transfer-browser-path-menu").unwrap();
+        assert!(bounds.size.width >= (measured + px(26.)).min(px(360.)));
+        let parent = test_dir.path().display().to_string();
+        std::fs::create_dir_all(test_dir.path().join("directory".repeat(25))).unwrap();
+        let mut loading = menu(children(TransferBrowserChildrenMenuStatus::Loading));
+        if let TransferBrowserPathMenuKind::Children { path, .. } = &mut loading.kind {
+            *path = parent.clone();
+        }
+        show_path_menu(vcx, &app, loading);
+        let loading_width = vcx
+            .debug_bounds("transfer-browser-path-menu")
+            .unwrap()
+            .size
+            .width;
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.start_transfer_browser_children_job(parent, cx)
+            });
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            let ready = vcx.update(|_, cx| {
+                matches!(
+                    app.read(cx)
+                        .transfer
+                        .browser_view()
+                        .path_menu
+                        .as_ref()
+                        .map(|menu| &menu.kind),
+                    Some(TransferBrowserPathMenuKind::Children {
+                        status: TransferBrowserChildrenMenuStatus::Ready(_),
+                        ..
+                    })
+                )
+            });
+            if ready {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child directory listing timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        draw_path_fixture(vcx);
+        assert!(loading_width < px(360.));
+        assert_eq!(
+            vcx.debug_bounds("transfer-browser-path-menu")
+                .unwrap()
+                .size
+                .width,
+            px(360.)
+        );
+        vcx.simulate_resize(gpui::size(px(150.), px(720.)));
+        draw_path_fixture(vcx);
+        let bounds = vcx.debug_bounds("transfer-browser-path-menu").unwrap();
+        assert_eq!(bounds.size.width, px(134.));
+        assert_eq!(bounds.left(), px(8.));
+        assert!(bounds.right() <= px(142.));
+    }
+
+    #[test]
+    fn path_menu_directory_click_navigates_and_escape_dismisses() {
+        use crate::models::{
+            TransferBrowserBreadcrumbSegment, TransferBrowserPathMenuKind,
+            TransferBrowserPathMenuState,
+        };
+        let test_dir = TestConfigDir::new("nyaterm-path-navigation");
+        let target = test_dir.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let target = target.display().to_string();
+        let menu = TransferBrowserPathMenuState {
+            session_id: Some("path-test".into()),
+            x: px(20.),
+            y: px(100.),
+            kind: TransferBrowserPathMenuKind::Overflow {
+                segments: vec![TransferBrowserBreadcrumbSegment {
+                    label: "target\r\ndirectory".into(),
+                    path: target.clone(),
+                }],
+            },
+        };
+        show_path_menu(vcx, &app, menu.clone());
+        let row = vcx
+            .debug_bounds(Box::leak(
+                format!("transfer-browser-path-menu-entry-{target}").into_boxed_str(),
+            ))
+            .unwrap();
+        assert_eq!(row.size.height, px(28.));
+        vcx.simulate_click(row.center(), Modifiers::none());
+        wait_for_browser(vcx, &app);
+        vcx.update(|window, cx| {
+            let app = app.read(cx);
+            assert!(app.transfer.browser_view().path_menu.is_none());
+            assert_eq!(app.transfer.browser_view().path, &target);
+            assert!(app.transfer.browser_view().focus.is_focused(window));
+        });
+        // A trigger press must acquire browser focus even when another surface
+        // previously owned it, so Escape can dismiss the popup immediately.
+        vcx.update(|window, cx| window.blur(cx));
+        let trigger = vcx
+            .debug_bounds(Box::leak(
+                format!("transfer-browser-breadcrumb-children-{target}").into_boxed_str(),
+            ))
+            .unwrap();
+        vcx.simulate_click(trigger.center(), Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.update(|window, cx| {
+            assert!(app.read(cx).transfer.browser_view().path_menu.is_some());
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .focus
+                    .is_focused(window)
+            );
+        });
+        vcx.simulate_keystrokes("escape");
+        draw_path_fixture(vcx);
+        vcx.update(|_, cx| assert!(app.read(cx).transfer.browser_view().path_menu.is_none()));
+    }
+
     #[test]
     fn path_menu_scrolls_to_the_last_directory_and_resets_when_reopened() {
         use crate::models::{
@@ -1034,6 +1363,11 @@ mod tests {
         };
         vcx.update(|window, cx| {
             app.update(cx, |app, cx| {
+                app.transfer.replace_browser_entries_for_test(
+                    (0..80)
+                        .map(super::super::tests_support::browser_entry)
+                        .collect(),
+                );
                 app.transfer.open_browser_path_menu(menu.clone());
                 app.flush_transfer_panel_snapshot(cx);
                 cx.notify();
@@ -1044,6 +1378,17 @@ mod tests {
         let viewport = vcx
             .debug_bounds("transfer-browser-path-menu-scroll")
             .expect("scroll viewport");
+        let list_scroll = vcx.update(|_, cx| {
+            app.read(cx)
+                .transfer
+                .browser_view()
+                .list_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone()
+        });
+        let list_offset = list_scroll.offset();
         assert!(viewport.size.height <= px(324.));
         assert!(viewport.size.height > px(300.));
         vcx.update(|_, cx| {
@@ -1076,6 +1421,14 @@ mod tests {
         assert!(last.bottom() <= viewport.bottom() + px(1.));
         assert!(last.top() >= viewport.top());
         assert_eq!(last.size.height, px(28.));
+        // Scrolling beyond the popup's last row must not scroll the file list.
+        vcx.simulate_event(gpui::ScrollEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
+            ..Default::default()
+        });
+        draw_path_fixture(vcx);
+        assert_eq!(list_scroll.offset(), list_offset);
         vcx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 assert!(app.transfer.browser_view().path_menu_scroll.offset().y < px(0.));
@@ -1110,6 +1463,7 @@ mod tests {
                     < px(-1_000.)
             );
         });
+        assert_eq!(list_scroll.offset(), list_offset);
         vcx.simulate_click(gpui::point(px(5.), px(5.)), Modifiers::none());
         vcx.update(|_, cx| {
             assert!(
