@@ -171,8 +171,11 @@ impl PathSource {
                     if let Some(listing) = cached(&key) {
                         break Some(listing);
                     }
-                    if !lock().in_flight.contains(&key) || started.elapsed() >= budget {
-                        break None;
+                    let running = lock().in_flight.contains(&key);
+                    if !running || started.elapsed() >= budget {
+                        // The job stores its result and leaves `in_flight` in one
+                        // step, so a finished job is visible in the cache now.
+                        break cached(&key);
                     }
                     sleep(POLL_INTERVAL).await;
                 };

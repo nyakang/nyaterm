@@ -438,6 +438,14 @@ impl NyaTermApp {
             } else {
                 "Suggestion fill confirmed"
             });
+            // Accepting a directory leaves the cursor right after its `/`, so
+            // offer its entries at once instead of waiting for another key.
+            if !execute_requested
+                && self.terminal.editing.assist_input().value.ends_with('/')
+                && self.command_suggestions_allowed_for_session(id)
+            {
+                self.refresh_command_suggestions(cx);
+            }
             cx.notify();
         }
     }
