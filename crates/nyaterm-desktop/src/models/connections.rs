@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use crate::action_links::ActionLinkTarget;
+use crate::action_links::{ActionLinkAction, ActionLinkTarget};
 
 use super::event_wake::{ANY_INTEREST, EventWake};
 
@@ -539,10 +539,7 @@ pub(crate) struct ActionLinkTooltipState {
     pub(crate) session_id: String,
     pub(crate) x: Pixels,
     pub(crate) y: Pixels,
-    pub(crate) kind_label: String,
-    pub(crate) value: String,
-    pub(crate) default_action_label: String,
-    pub(crate) default_action_preview: String,
+    pub(crate) default_action: ActionLinkAction,
     pub(crate) has_more_actions: bool,
     /// Identity key for hover stability (session|kind|value|start|end).
     pub(crate) match_key: String,
