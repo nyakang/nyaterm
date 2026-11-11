@@ -2132,7 +2132,7 @@
     "commandScript": "命令指令碼",
     "compactListMode": "緊湊清單",
     "copyCommand": "複製命令",
-    "createCategory": "建立 \"%{name}\"",
+    "createCategory": "建立分類「%{name}」",
     "delete": "刪除",
     "deleteCategory": "刪除分類",
     "deleteCategoryConfirm": "確定要刪除分類「%{name}」嗎？其中 %{count} 個快捷命令也會被刪除。",

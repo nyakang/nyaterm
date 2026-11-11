@@ -2132,7 +2132,7 @@
     "commandScript": "スクリプト",
     "compactListMode": "コンパクトリスト",
     "copyCommand": "コマンドをコピー",
-    "createCategory": "「%{name}」を作成",
+    "createCategory": "カテゴリ「%{name}」を作成",
     "delete": "削除",
     "deleteCategory": "カテゴリを削除",
     "deleteCategoryConfirm": "カテゴリ「%{name}」とその %{count} 件のコマンドを削除しますか？",

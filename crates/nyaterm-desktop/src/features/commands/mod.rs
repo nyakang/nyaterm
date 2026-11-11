@@ -5,7 +5,7 @@ pub(in crate::features) mod completion_runtime;
 mod quick_command_runtime;
 mod runtime_state;
 mod staged;
-mod state;
+pub(in crate::features) mod state;
 
 pub(in crate::features) use quick_command_runtime::{
     QUICK_COMMAND_COLOR_OPTIONS, quick_command_category_label,

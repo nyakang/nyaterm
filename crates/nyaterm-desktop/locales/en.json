@@ -2132,7 +2132,7 @@
     "commandScript": "Script",
     "compactListMode": "Compact list",
     "copyCommand": "Copy command",
-    "createCategory": "Create \"%{name}\"",
+    "createCategory": "Create category \"%{name}\"",
     "delete": "Delete",
     "deleteCategory": "Delete Category",
     "deleteCategoryConfirm": "Delete category '%{name}' and its %{count} commands?",

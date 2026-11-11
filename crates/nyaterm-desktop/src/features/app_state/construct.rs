@@ -309,6 +309,7 @@ impl NyaTermApp {
                 selected_category: settings.ui_quick_cmd_selected_category.clone(),
                 focus: QuickCommandFeatureFocus {
                     editor: cx.focus_handle(),
+                    category_trigger: cx.focus_handle(),
                     details: cx.focus_handle(),
                     variable: cx.focus_handle(),
                 },

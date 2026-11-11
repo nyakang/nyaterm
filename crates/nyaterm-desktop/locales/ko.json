@@ -2132,7 +2132,7 @@
     "commandScript": "스크립트",
     "compactListMode": "간략한 목록",
     "copyCommand": "명령 복사",
-    "createCategory": "\"%{name}\" 생성",
+    "createCategory": "카테고리 \"%{name}\" 생성",
     "delete": "삭제",
     "deleteCategory": "카테고리 삭제",
     "deleteCategoryConfirm": "카테고리 '%{name}'과(와) 명령 %{count}개를 삭제할까요?",
