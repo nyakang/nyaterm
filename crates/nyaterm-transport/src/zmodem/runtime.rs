@@ -18,6 +18,7 @@ static REAPER: Mutex<Option<Reaper<JoinHandle<()>>>> = Mutex::new(None);
 const INPUT_BATCH: usize = 128 * 1024;
 const EVENT_CAPACITY: usize = 256;
 const IDLE_WAIT: Duration = Duration::from_millis(25);
+const FINISH_WAIT: Duration = Duration::from_millis(250);
 
 pub type RuntimeWake = Arc<dyn Fn() + Send + Sync>;
 type InputObserver = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
@@ -523,14 +524,18 @@ fn run(
                     data: bytes[offset..].to_vec(),
                 });
             }
-            // The peer sends OO after our receiver's final ZFIN. Preserve every
-            // nonmatching byte, including a lone O, instead of swallowing a prompt.
-            if matches!(transfer.direction(), ZmodemDirection::Download)
-                && events
-                    .iter()
-                    .any(|a| matches!(a, ZmodemAction::EmitEvent(ZmodemEvent::Complete { .. })))
+            if events
+                .iter()
+                .any(|a| matches!(a, ZmodemAction::EmitEvent(ZmodemEvent::Complete { .. })))
             {
-                let finish = strip_finish_oo(manager, session, consumer, &mut pending);
+                let finish = strip_finish_trailer(
+                    manager,
+                    session,
+                    consumer,
+                    shared,
+                    transfer.direction(),
+                    &mut pending,
+                );
                 let skip = observer_skip.min(finish.len());
                 let observer = shared
                     .state
@@ -653,59 +658,154 @@ fn run(
     }
 }
 
-fn strip_finish_oo(
+enum FinishStep {
+    Pending,
+    Complete,
+    Mismatch,
+}
+
+struct FinishTrailer {
+    direction: ZmodemDirection,
+    bytes: Vec<u8>,
+    matched: usize,
+}
+
+impl FinishTrailer {
+    fn new(direction: ZmodemDirection) -> Self {
+        Self {
+            direction,
+            bytes: Vec::with_capacity(5),
+            matched: 0,
+        }
+    }
+
+    fn push(&mut self, byte: u8) -> FinishStep {
+        // ZHEX parsing stops before CR/LF/XON. lrzsz can set the high bit
+        // on those trailer bytes; keep the originals for recording/replay.
+        let tokens: &[&[u8]] = match self.direction {
+            ZmodemDirection::Upload => &[b"\r\n", b"\r\n\x11", b"\n", b"\n\x11"],
+            ZmodemDirection::Download => &[
+                b"OO",
+                b"\r\nOO",
+                b"\r\n\x11OO",
+                b"\nOO",
+                b"\n\x11OO",
+                b"\x11OO",
+            ],
+        };
+        self.bytes.push(byte);
+        let mut complete = false;
+        let mut partial = false;
+        for token in tokens {
+            if token.len() < self.bytes.len()
+                || !token.iter().zip(&self.bytes).all(|(expected, actual)| {
+                    let normalized = match actual {
+                        0x8d => b'\r',
+                        0x8a => b'\n',
+                        0x91 => 0x11,
+                        _ => *actual,
+                    };
+                    *expected == normalized
+                })
+            {
+                continue;
+            }
+            complete |= token.len() == self.bytes.len();
+            partial |= token.len() > self.bytes.len();
+        }
+        if complete {
+            self.matched = self.bytes.len();
+        }
+        if partial {
+            FinishStep::Pending
+        } else if complete {
+            FinishStep::Complete
+        } else {
+            // The lookahead belongs to the terminal and stays in its event.
+            self.bytes.pop();
+            FinishStep::Mismatch
+        }
+    }
+}
+
+fn strip_finish_trailer(
     manager: &SessionManager,
     session: &str,
     consumer: SessionEventConsumerId,
+    shared: &Shared,
+    direction: ZmodemDirection,
     pending: &mut VecDeque<SessionEvent>,
 ) -> Vec<u8> {
-    let deadline = Instant::now() + Duration::from_millis(250);
-    // The decoder can finish ZHEX before consuming its optional CR/LF/XON.
-    // Discard those bytes only when the complete OO token follows them.
-    let tokens: &[&[u8]] = &[
-        b"OO",
-        b"\r\nOO",
-        b"\r\n\x11OO",
-        b"\nOO",
-        b"\n\x11OO",
-        b"\x11OO",
-    ];
-    let mut prefix = Vec::new();
+    let deadline = Instant::now() + FINISH_WAIT;
+    let mut trailer = FinishTrailer::new(direction);
     loop {
-        if pending.is_empty()
-            && Instant::now() < deadline
-            && let Ok(drain) = manager.drain_events_blocking_for_consumer_with_output_budget(
+        if Instant::now() >= deadline
+            || shared.cancelled.load(Ordering::Acquire)
+            || shared
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .closed
+            || manager.event_queue.session_cancelled(session)
+            || manager.event_queue.session_ended(session)
+        {
+            break;
+        }
+        if pending.is_empty() {
+            let Ok(drain) = manager.drain_events_blocking_for_consumer_with_output_budget(
                 consumer,
                 256,
                 INPUT_BATCH,
-                deadline.saturating_duration_since(Instant::now()),
-            )
-        {
+                IDLE_WAIT.min(deadline.saturating_duration_since(Instant::now())),
+            ) else {
+                break;
+            };
             pending.extend(drain.events);
+            continue;
         }
-        let Some(SessionEvent::Output { data, .. }) = pending.front_mut() else {
+        let Some(SessionEvent::Output { session_id, data }) = pending.front() else {
             break;
         };
-        if !data.is_empty() {
-            prefix.push(data.remove(0));
+        if session_id != session {
+            break;
         }
-        if data.is_empty() {
+        let mut used = 0;
+        let mut done = false;
+        for byte in data {
+            match trailer.push(*byte) {
+                FinishStep::Pending => used += 1,
+                FinishStep::Complete => {
+                    used += 1;
+                    done = true;
+                    break;
+                }
+                FinishStep::Mismatch => {
+                    done = true;
+                    break;
+                }
+            }
+        }
+        if used == data.len() {
             pending.pop_front();
+        } else if used > 0
+            && let Some(SessionEvent::Output { data, .. }) = pending.front_mut()
+        {
+            data.drain(..used);
         }
-        if tokens.contains(&prefix.as_slice()) {
-            return prefix;
-        }
-        if !tokens.iter().any(|token| token.starts_with(&prefix)) {
+        if done {
             break;
         }
     }
-    if !prefix.is_empty() {
+    // Upload may have a complete newline while waiting for optional XON.
+    // Download commits nothing until both O bytes have arrived.
+    let replay = trailer.bytes.split_off(trailer.matched);
+    if !replay.is_empty() {
         pending.push_front(SessionEvent::Output {
             session_id: session.into(),
-            data: prefix,
+            data: replay,
         });
     }
-    Vec::new()
+    trailer.bytes
 }
 #[cfg(test)]
 mod tests;
