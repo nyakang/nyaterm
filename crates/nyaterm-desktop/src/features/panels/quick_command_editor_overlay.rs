@@ -6,8 +6,8 @@ use gpui::{
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaPopover, NyaScrollArea, NyaScrollable, NyaSwitch, NyaTabItem,
-    NyaTabs, NyaTabsVariant,
+    NyaButton, NyaButtonVariant, NyaPopover, NyaScrollable, NyaSwitch, NyaTabItem, NyaTabs,
+    NyaTabsVariant,
 };
 
 use super::{
@@ -15,8 +15,8 @@ use super::{
     quick_command_editor_script_field, quick_command_icon_mark,
 };
 use crate::features::{
-    NyaTermApp, commands::QUICK_COMMAND_COLOR_OPTIONS, icons::QUICK_COMMAND_ICON_OPTIONS,
-    text_inputs::TextInputSetup,
+    NyaTermApp, commands::QUICK_COMMAND_COLOR_OPTIONS, commands::state::QuickCommandCategoryChoice,
+    icons::QUICK_COMMAND_ICON_OPTIONS, text_inputs::TextInputSetup,
 };
 use crate::models::{QuickCommandEditorField, QuickCommandEditorState};
 
@@ -51,7 +51,6 @@ impl NyaTermApp {
         let uncategorized_label = t!("quickCommands.uncategorized");
         let category_label_text = t!("quickCommands.category");
         let category_search_label = t!("quickCommands.searchOrCreateCategory");
-        let new_category_root_hint = t!("quickCommands.newCategoryRootHint");
         let description_label = t!("quickCommands.description");
         let description_placeholder = t!("quickCommands.descriptionPlaceholder");
         let label_name = t!("quickCommands.labelName");
@@ -126,16 +125,7 @@ impl NyaTermApp {
             .commands
             .quick_editor_category_search_draft()
             .to_string();
-        let new_category_draft = self.commands.quick_editor_new_category_draft().to_string();
-        let category_draft = category_search_draft.trim().to_string();
-        let category_query = category_draft.to_lowercase();
-        let category_search_has_no_matches =
-            self.commands.quick_editor_category_search_has_no_matches();
-        let new_category_placeholder = if category_search_has_no_matches {
-            t!("quickCommands.newCategoryNoMatchesPlaceholder")
-        } else {
-            t!("quickCommands.newCategoryPlaceholder")
-        };
+        let category_app = cx.entity();
         let category_search_input = self
             .text_input_box(
                 "quick-command.editor.category",
@@ -143,23 +133,17 @@ impl NyaTermApp {
                 TextInputSetup::placeholder(category_search_label),
                 cx,
             )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                let modifiers = event.keystroke.modifiers;
-                let plain_enter = event.keystroke.key == "enter"
-                    && !modifiers.platform
-                    && !modifiers.control
-                    && !modifiers.alt
-                    && !modifiers.function;
-                if plain_enter && this.commit_quick_command_editor_category_search(cx) {
-                    cx.stop_propagation();
+            .on_plain_enter(move |window, cx| {
+                category_app.update(cx, |this, cx| {
+                    let index = this.commands.quick_editor_category_highlight();
+                    this.commit_quick_command_editor_category_choice(index, window, cx);
+                });
+            })
+            .on_vertical_navigation(cx.listener(|this, down, _, cx| {
+                if this.commands.move_quick_editor_category_highlight(*down) {
+                    cx.notify();
                 }
             }));
-        let new_category_input = self.text_input_box(
-            "quick-command.editor.new-category",
-            &new_category_draft,
-            TextInputSetup::placeholder(new_category_placeholder),
-            cx,
-        );
         let category_label = editor
             .category_id
             .as_deref()
@@ -210,87 +194,73 @@ impl NyaTermApp {
                 }),
             ));
         }
-        let mut category_choices = div().w_full().flex().flex_col();
-        if category_draft.is_empty() {
-            let uncategorized_selected =
-                editor.category_id.as_deref().unwrap_or_default().is_empty();
-            category_choices = category_choices.child(quick_command_category_choice(
-                palette,
-                "quick-command-editor-category-none".to_string(),
-                uncategorized_label.to_string(),
-                uncategorized_selected,
-                cx.listener(|this, _, _, cx| {
-                    this.set_quick_command_editor_category(None, cx);
-                }),
-            ));
-        }
-        for category in self
-            .commands
-            .quick_command_categories()
-            .to_vec()
-            .into_iter()
-            .filter(|category| {
-                category_query.is_empty() || category.name.to_lowercase().contains(&category_query)
-            })
-        {
-            let category_id = category.id.clone();
-            let selected = editor.category_draft.trim().is_empty()
-                && editor.category_id.as_deref() == Some(category_id.as_str());
-            category_choices = category_choices.child(quick_command_category_choice(
-                palette,
-                format!("quick-command-editor-category-{}", category.id),
-                truncate_preview(&category.name, 22),
-                selected,
-                cx.listener(move |this, _, _, cx| {
-                    this.set_quick_command_editor_category(Some(category_id.clone()), cx);
-                }),
-            ));
-        }
-        let new_category_name = self
-            .commands
-            .quick_editor_new_category_draft()
-            .trim()
-            .to_string();
-        let new_category_duplicate = !new_category_name.is_empty()
-            && self
-                .commands
-                .quick_command_categories()
-                .iter()
-                .any(|category| {
-                    category
-                        .name
-                        .trim()
-                        .eq_ignore_ascii_case(&new_category_name)
-                });
-        let category_list = NyaScrollArea::new("quick-command-editor-category-list")
+        let category_scroll = self.commands.quick_editor_category_scroll().clone();
+        let highlighted = self.commands.quick_editor_category_highlight();
+        let mut category_choices = div()
+            .id("quick-command-editor-category-list")
+            .debug_selector(|| "quick-command-editor-category-list".to_string())
+            .w_full()
             .max_h(px(258.))
-            .child(category_choices);
-        let new_category_add = div()
-            .id("quick-command-editor-new-category-add")
-            .size(px(28.))
-            .rounded_sm()
             .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .text_color(if new_category_name.is_empty() || new_category_duplicate {
-                rgb(palette.text_dimmed)
-            } else {
-                rgb(palette.text)
-            })
-            .hover(|style| style.bg(rgb(palette.hover)))
-            .child(svg().size(px(14.)).path("icons/plus.svg"))
-            .when(
-                !(new_category_name.is_empty() || new_category_duplicate),
-                |this| {
-                    this.on_click(cx.listener(|this, _, _, cx| {
-                        this.commit_quick_command_editor_new_category(cx);
-                    }))
-                },
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&category_scroll);
+        for (index, choice) in self
+            .commands
+            .quick_editor_category_choices()
+            .into_iter()
+            .enumerate()
+        {
+            let (id, label, selected, create) = match choice {
+                QuickCommandCategoryChoice::Uncategorized => (
+                    "quick-command-editor-category-none".to_string(),
+                    uncategorized_label.to_string(),
+                    editor.category_id.is_none() && editor.category_draft.trim().is_empty(),
+                    false,
+                ),
+                QuickCommandCategoryChoice::Existing { id, name } => (
+                    format!("quick-command-editor-category-{id}"),
+                    name,
+                    editor.category_draft.trim().is_empty()
+                        && editor.category_id.as_deref() == Some(id.as_str()),
+                    false,
+                ),
+                QuickCommandCategoryChoice::Create(name) => (
+                    "quick-command-editor-category-create".to_string(),
+                    t!("quickCommands.createCategory", name = name).to_string(),
+                    false,
+                    true,
+                ),
+            };
+            category_choices = category_choices.child(
+                quick_command_category_choice(
+                    palette,
+                    id,
+                    label,
+                    selected,
+                    index == highlighted,
+                    create,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.commit_quick_command_editor_category_choice(index, window, cx);
+                }))
+                .on_hover(cx.listener(move |this, hovered, _, cx| {
+                    if *hovered {
+                        this.highlight_quick_command_editor_category(index, cx);
+                    }
+                })),
             );
+        }
+        let category_list = div()
+            .w_full()
+            .relative()
+            .child(category_choices)
+            .vertical_scrollbar(&category_scroll);
         let category_picker_open = self.commands.quick_editor_category_picker_is_open();
         let category_picker_trigger = div()
             .id("quick-command-editor-category-trigger")
+            .debug_selector(|| "quick-command-editor-category-trigger".to_string())
+            .track_focus(self.commands.quick_editor_category_trigger_focus())
             .h(px(36.))
             .w_full()
             .px_3()
@@ -312,11 +282,14 @@ impl NyaTermApp {
                 div()
                     .min_w_0()
                     .text_sm()
-                    .text_color(if editor.category_id.is_some() {
-                        rgb(palette.text)
-                    } else {
-                        rgb(palette.text_muted)
-                    })
+                    .text_color(
+                        if editor.category_id.is_some() || !editor.category_draft.trim().is_empty()
+                        {
+                            rgb(palette.text)
+                        } else {
+                            rgb(palette.text_muted)
+                        },
+                    )
                     .child(truncate_preview(&category_display, 48)),
             )
             .child(
@@ -336,43 +309,11 @@ impl NyaTermApp {
                 self.shell_surface_color(palette.surface)
             })
             .shadow_lg()
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_quick_command_category_picker_key_down(event, window, cx);
+            }))
             .child(div().p_1().child(category_search_input))
-            .child(category_list)
-            .child(
-                div()
-                    .border_t_1()
-                    .border_color(rgb(palette.border))
-                    .p_1()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .on_key_down(cx.listener(
-                                        |this, event: &KeyDownEvent, _, cx| {
-                                            if event.keystroke.key == "enter" {
-                                                this.commit_quick_command_editor_new_category(cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
-                                    .child(new_category_input),
-                            )
-                            .child(new_category_add),
-                    )
-                    .child(
-                        div()
-                            .px_1()
-                            .pt_1()
-                            .text_size(px(10.))
-                            .text_color(rgb(palette.text_dimmed))
-                            .child(new_category_root_hint),
-                    ),
-            );
+            .child(category_list);
         let category_picker = NyaPopover::new(
             "quick-command-editor-category-popover",
             category_picker_trigger,
@@ -384,6 +325,8 @@ impl NyaTermApp {
             this.set_quick_command_editor_category_picker_open(*open, cx);
             if *open {
                 this.focus_text_input_if_present("quick-command.editor.category", window, cx);
+            } else {
+                window.focus(this.commands.quick_editor_category_trigger_focus(), cx);
             }
         }));
 
@@ -744,27 +687,43 @@ fn quick_command_category_choice(
     id: String,
     label: String,
     selected: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+    highlighted: bool,
+    create: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let selector = id.clone();
     div()
         .id(SharedString::from(id))
+        .debug_selector(move || selector.clone())
         .h(px(36.))
+        .flex_none()
         .w_full()
         .px_3()
-        .bg(quick_command_category_choice_fill(palette, selected, false))
+        .bg(quick_command_category_choice_fill(
+            palette,
+            selected,
+            highlighted,
+        ))
         .cursor_pointer()
         .flex()
         .items_center()
         .justify_between()
         .gap_2()
         .text_size(px(13.))
-        .text_color(if selected {
+        .text_color(if selected || create {
             rgb(palette.link)
         } else {
             rgb(palette.text)
         })
         .hover(move |style| style.bg(quick_command_category_choice_fill(palette, selected, true)))
         .child(div().min_w_0().text_ellipsis().child(label))
+        .when(highlighted, |this| {
+            this.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_muted))
+                    .child("Enter ↵"),
+            )
+        })
         .when(selected, |this| {
             this.child(
                 svg()
@@ -773,7 +732,6 @@ fn quick_command_category_choice(
                     .path("icons/check.svg"),
             )
         })
-        .on_click(on_click)
 }
 
 fn quick_command_color_swatch(
@@ -880,3 +838,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod category_picker_tests;

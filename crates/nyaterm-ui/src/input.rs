@@ -8,7 +8,8 @@ use gpui_base::input::InputContextMenuCapabilities;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
     Copy, Cut, Editor, EditorState, Enter, Escape, IndentInline, Input, InputContentType,
-    InputEvent, InputState, OutdentInline, Paste, SelectAll, Textarea, TextareaState,
+    InputEvent, InputState, MoveDown, MoveUp, OutdentInline, Paste, SelectAll, Textarea,
+    TextareaState,
 };
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable, Size};
 
@@ -819,6 +820,44 @@ impl NyaInput {
     }
 }
 
+// Both bare inputs and framed registry fields must guard actions before the
+// component emits Submitted; a raw key callback runs after bound actions.
+fn protect_input_composition<E: gpui::InteractiveElement>(
+    element: E,
+    state: ComponentState,
+    owner: Entity<NyaInputState>,
+) -> E {
+    let enter_state = state.clone();
+    let escape_state = state.clone();
+    let enter_owner = owner.clone();
+    element
+        .capture_action(move |_: &Enter, window, cx| {
+            if enter_state.is_composing(window, cx) {
+                enter_state.finish_composition(window, cx);
+                // Marked-text updates need not emit Change. Publish the confirmed
+                // value so a surrounding search list can refresh before another key.
+                let value = enter_state.value(cx);
+                enter_owner.update(cx, |_, cx| cx.emit(NyaInputEvent::Changed(value)));
+                cx.stop_propagation();
+            }
+        })
+        .capture_action(move |_: &Escape, window, cx| {
+            if escape_state.is_composing(window, cx) {
+                escape_state.finish_composition(window, cx);
+                let value = escape_state.value(cx);
+                owner.update(cx, |_, cx| cx.emit(NyaInputEvent::Changed(value)));
+                cx.stop_propagation();
+            }
+        })
+        .capture_key_down(move |event, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "escape" | "tab")
+                && state.is_composing(window, cx)
+            {
+                cx.stop_propagation();
+            }
+        })
+}
+
 impl RenderOnce for NyaInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (state, disabled, readonly, multi_line) =
@@ -827,8 +866,6 @@ impl RenderOnce for NyaInput {
         let masked = self.state.read(cx).masked;
         let focus_state = state.clone();
         let composition_state = state.clone();
-        let enter_composition_state = state.clone();
-        let escape_composition_state = state.clone();
         let input = match state {
             ComponentState::Input(state) => configure_secret_input(
                 Input::new(&state)
@@ -873,43 +910,28 @@ impl RenderOnce for NyaInput {
                 .when_some(self.font_size, |this, font_size| this.text_size(font_size))
                 .into_any_element(),
         };
-        div()
-            .size_full()
-            .bg(input_surface_color(cx))
-            .when(!multi_line, |this| this.flex().items_center())
-            .capture_any_mouse_down(|_, _, cx| {
-                preserve_nya_input_focus_on_pointer_down(cx);
-            })
-            .capture_action(move |_: &Enter, window, cx| {
-                if enter_composition_state.is_composing(window, cx) {
-                    enter_composition_state.finish_composition(window, cx);
-                    cx.stop_propagation();
-                }
-            })
-            .capture_action(move |_: &Escape, window, cx| {
-                if escape_composition_state.is_composing(window, cx) {
-                    escape_composition_state.finish_composition(window, cx);
-                    cx.stop_propagation();
-                }
-            })
-            .capture_key_down(move |event, window, cx| {
-                // Form shortcuts must not submit or dismiss while the IME owns Enter/Escape.
-                if matches!(event.keystroke.key.as_str(), "enter" | "escape" | "tab")
-                    && composition_state.is_composing(window, cx)
-                {
-                    cx.stop_propagation();
-                }
-            })
-            .on_any_mouse_down(move |_, window, cx| {
-                if !disabled {
-                    focus_state.focus(window, cx);
-                }
-            })
-            .child(input)
+        protect_input_composition(
+            div()
+                .size_full()
+                .bg(input_surface_color(cx))
+                .when(!multi_line, |this| this.flex().items_center())
+                .capture_any_mouse_down(|_, _, cx| {
+                    preserve_nya_input_focus_on_pointer_down(cx);
+                })
+                .on_any_mouse_down(move |_, window, cx| {
+                    if !disabled {
+                        focus_state.focus(window, cx);
+                    }
+                })
+                .child(input),
+            composition_state,
+            self.state,
+        )
     }
 }
 
 type KeyDownHandler = Box<dyn Fn(&KeyDownEvent, &mut Window, &mut App) + 'static>;
+type VerticalNavigationHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type SecondaryEnterHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
 fn prepare_input_component(
@@ -958,6 +980,8 @@ pub struct NyaInputShell {
     trailing: Vec<AnyElement>,
     footer: Option<AnyElement>,
     on_key_down: Option<KeyDownHandler>,
+    on_vertical_navigation: Option<VerticalNavigationHandler>,
+    on_plain_enter: Option<SecondaryEnterHandler>,
     on_secondary_enter: Option<SecondaryEnterHandler>,
     tab_navigation: bool,
     context_menu_labels: Option<[SharedString; 4]>,
@@ -978,6 +1002,8 @@ impl NyaInputShell {
             trailing: Vec::new(),
             footer: None,
             on_key_down: None,
+            on_vertical_navigation: None,
+            on_plain_enter: None,
             on_secondary_enter: None,
             tab_navigation: false,
             context_menu_labels: None,
@@ -1047,11 +1073,28 @@ impl NyaInputShell {
         self
     }
 
+    /// Route Up/Down actions to a choice list while retaining IME ownership.
+    /// The callback receives true for Down and false for Up.
+    pub fn on_vertical_navigation(
+        mut self,
+        handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_vertical_navigation = Some(Rc::new(handler));
+        self
+    }
+
     pub fn on_key_down(
         mut self,
         handler: impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_key_down = Some(Box::new(handler));
+        self
+    }
+
+    /// Consume Enter actions and call the handler only for an unmodified Enter.
+    /// IME confirmation is handled first, without emitting Submitted to subscribers.
+    pub fn on_plain_enter(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_plain_enter = Some(Box::new(handler));
         self
     }
 
@@ -1084,6 +1127,8 @@ impl RenderOnce for NyaInputShell {
             trailing,
             footer,
             on_key_down,
+            on_vertical_navigation,
+            on_plain_enter,
             on_secondary_enter,
             tab_navigation,
             context_menu_labels,
@@ -1096,6 +1141,7 @@ impl RenderOnce for NyaInputShell {
         let (state, disabled, readonly, state_multi_line) =
             prepare_input_component(&state, window, cx);
         state.set_context_menu_enabled(context_menu_labels.is_none(), cx);
+        let composition_state = state.clone();
         let menu_state = state.clone();
         let capture_focus_state = state.clone();
         let gpui_context_menu = context_menu_labels.is_some();
@@ -1131,7 +1177,7 @@ impl RenderOnce for NyaInputShell {
                 }
                 input = configure_secret_input(
                     input,
-                    owner,
+                    owner.clone(),
                     SecretInputPresentation {
                         kind,
                         masked,
@@ -1230,6 +1276,41 @@ impl RenderOnce for NyaInputShell {
                     }
                 })
             });
+        container = protect_input_composition(container, composition_state, owner.clone());
+        if let Some(handler) = on_plain_enter {
+            container = container.capture_action(move |action: &Enter, window, cx| {
+                cx.stop_propagation();
+                let modifiers = window.modifiers();
+                if !action.shift
+                    && !action.secondary
+                    && !modifiers.shift
+                    && !modifiers.platform
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && !modifiers.function
+                {
+                    handler(window, cx);
+                }
+            });
+        }
+        if let Some(handler) = on_vertical_navigation {
+            let up_state = owner.clone();
+            let down_state = owner.clone();
+            let up_handler = handler.clone();
+            container = container
+                .capture_action(move |_: &MoveUp, window, cx| {
+                    if !up_state.update(cx, |state, cx| state.is_composing(window, cx)) {
+                        cx.stop_propagation();
+                        up_handler(&false, window, cx);
+                    }
+                })
+                .capture_action(move |_: &MoveDown, window, cx| {
+                    if !down_state.update(cx, |state, cx| state.is_composing(window, cx)) {
+                        cx.stop_propagation();
+                        handler(&true, window, cx);
+                    }
+                });
+        }
         if let Some(handler) = on_key_down {
             container = container.on_key_down(handler);
         }
