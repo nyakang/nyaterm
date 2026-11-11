@@ -7,11 +7,12 @@
 - 仓库：`nyakang/nyaterm`；原 PR head：`bc066fdb439a8812a92df99512fe1188aa1d8f2c`。
 - 用户核实的主线整合基线：`3959330f0ef128eb5e4db6e408b4a17427e7ae43`；原 PR base：`326313bbd80c3486c93b473d3a202759349b9773`。
 - Worktree：`/data/kang/nyaterm-pr1227`；分支：`fix/pr1227-review`。
-- 主线整合提交：`811fd3f59`，保留原 PR 历史；未推送、未合并远端 PR。
+- 主线整合提交：`811fd3f59`，保留原 PR 历史；首次交付时未推送，未合并远端 PR。
 - 修复提交：`426a95301`（终端安全与会话边界）、`c610a1c08`（设置取消保留布局）、`1cb95da0e`（Windows ConPTY 回归与 CI）。测试覆盖的源码随后提交，未改变源码内容。
 - 主工作区有其他任务的未提交修改；收尾时其 main 已由其他任务推进到 `68cca59a2`。本任务只编辑独立 worktree，整合并验证上述核实基线，保留主工作区的并行修改与提交。
 - 构建使用 worktree 自己的 `target/`。从现有缓存复制第三方编译产物以减少冷启动；NyaTerm workspace crates 重新编译，不复用其他工作区的测试可执行文件。
 - Diff 交付：`/data/kang/nyaterm-pr1227-fixes.patch` 相对整合提交 `811fd3f59`；`/data/kang/nyaterm-pr1227-vs-main.patch` 是相对主线 `3959330f0` 的完整最终 diff。两份均包含本验证记录。
+- 后续按用户授权，将修复正常推送到 PR #1227 的来源分支 `fonaix/nyaterm:main`，首轮发布由 `bc066fdb439a` 快进到 `4837cab3a`；本发布记录随后随分支推送。Windows CI 实测仍待运行结果。
 
 ## 审查结论与处理
 
