@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use crate::adb::client::{DeviceBinding, open_service};
+use crate::adb::client::DeviceBinding;
 use crate::error::{AdbError, AdbResult};
 
 pub const MAX_SHELL_PACKET: usize = 1024 * 1024;
@@ -68,13 +68,21 @@ impl ShellDecoder {
 }
 
 pub fn open_shell(binding: &DeviceBinding, command: &[u8], pty: bool) -> AdbResult<TcpStream> {
+    open_shell_with_cancel(binding, command, pty, || Ok(()))
+}
+pub fn open_shell_with_cancel(
+    binding: &DeviceBinding,
+    command: &[u8],
+    pty: bool,
+    check: impl FnMut() -> AdbResult<()>,
+) -> AdbResult<TcpStream> {
     let mut request = if pty {
         b"shell,v2,pty,TERM=xterm-256color:".to_vec()
     } else {
         b"shell,v2,raw:".to_vec()
     };
     request.extend_from_slice(command);
-    open_service(binding, &request)
+    crate::adb::client::open_service_with_cancel(binding, &request, check)
 }
 
 pub fn write_packet(writer: &mut impl Write, id: u8, data: &[u8]) -> AdbResult<()> {
@@ -102,7 +110,7 @@ pub fn execute_with_cancel(
     mut check: impl FnMut() -> AdbResult<()>,
 ) -> AdbResult<Vec<u8>> {
     check()?;
-    let mut stream = open_shell(binding, command, false)?;
+    let mut stream = open_shell_with_cancel(binding, command, false, &mut check)?;
     stream.set_read_timeout(Some(std::time::Duration::from_millis(200)))?;
     let mut deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut decoder = ShellDecoder::default();

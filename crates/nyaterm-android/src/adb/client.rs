@@ -1,8 +1,9 @@
+mod controlled;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nyaterm_core::models::android::AdbDeviceSelector;
 use serde::{Deserialize, Serialize};
@@ -127,57 +128,72 @@ impl AdbClient {
     }
 
     pub fn command(&self, args: &[&str]) -> AdbResult<String> {
-        let mut child = self
-            .process(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or(AdbError::Protocol("command stdout"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or(AdbError::Protocol("command stderr"))?;
-        let read = |reader: Box<dyn Read + Send>| {
-            nyaterm_core::runtime::worker::spawn("adb-command-output".into(), move || {
-                let mut bytes = Vec::new();
-                reader
-                    .take(COMMAND_OUTPUT_LIMIT + 1)
-                    .read_to_end(&mut bytes)
-                    .map(|_| bytes)
+        self.command_with_control(args, &crate::operation::AdbOperationControl::default())
+    }
+    pub fn command_with_control(
+        &self,
+        args: &[&str],
+        control: &crate::operation::AdbOperationControl,
+    ) -> AdbResult<String> {
+        control.check()?;
+        let mut command = self.process(args);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let control = control.with_timeout(Duration::from_secs(15));
+        let worker = nyaterm_core::runtime::worker::spawn("adb-command".into(), move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async move {
+                use tokio::io::AsyncReadExt as _;
+                let mut command = tokio::process::Command::from(command);
+                let mut child = command.kill_on_drop(true).spawn()?;
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or(AdbError::Protocol("command stdout"))?;
+                let stderr = child
+                    .stderr
+                    .take()
+                    .ok_or(AdbError::Protocol("command stderr"))?;
+                async fn read(reader: impl tokio::io::AsyncRead + Unpin) -> AdbResult<Vec<u8>> {
+                    let mut bytes = Vec::new();
+                    reader
+                        .take(COMMAND_OUTPUT_LIMIT + 1)
+                        .read_to_end(&mut bytes)
+                        .await?;
+                    if bytes.len() > COMMAND_OUTPUT_LIMIT as usize {
+                        return Err(AdbError::Protocol("command output limit"));
+                    }
+                    Ok(bytes)
+                }
+                let result = {
+                    let io = async {
+                        let (output, errors, status) =
+                            tokio::try_join!(read(stdout), read(stderr), async {
+                                child.wait().await.map_err(AdbError::from)
+                            })?;
+                        drop(errors);
+                        if !status.success() {
+                            return Err(AdbError::Rejected);
+                        }
+                        String::from_utf8(output)
+                            .map_err(|_| AdbError::Protocol("command output encoding"))
+                    };
+                    tokio::select! {
+                        result = io => result,
+                        error = control.until_stopped() => Err(error),
+                    }
+                };
+                if result.is_err() {
+                    let _ = child.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+                }
+                result
             })
-        };
-        let out = read(Box::new(stdout))?;
-        let err = read(Box::new(stderr))?;
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break Ok(status);
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(AdbError::Timeout);
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let output = out
+        })?;
+        worker
             .join()
-            .map_err(|_| AdbError::Protocol("command reader panic"))??;
-        let errors = err
-            .join()
-            .map_err(|_| AdbError::Protocol("command reader panic"))??;
-        if !status?.success() {
-            return Err(AdbError::Rejected);
-        }
-        if output.len() > COMMAND_OUTPUT_LIMIT as usize
-            || errors.len() > COMMAND_OUTPUT_LIMIT as usize
-        {
-            return Err(AdbError::Protocol("command output limit"));
-        }
-        String::from_utf8(output).map_err(|_| AdbError::Protocol("command output encoding"))
+            .map_err(|_| AdbError::Protocol("command worker panic"))?
     }
 
     pub fn process(&self, args: &[&str]) -> Command {
@@ -203,20 +219,24 @@ impl AdbClient {
     }
 
     pub fn device_command(&self, binding: &DeviceBinding, args: &[&str]) -> AdbResult<String> {
-        let selector = binding
-            .transport_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| binding.serial.clone());
-        let mut all = vec![
-            if binding.transport_id.is_some() {
-                "-t"
-            } else {
-                "-s"
-            },
-            selector.as_str(),
-        ];
+        self.device_command_with_control(
+            binding,
+            args,
+            &crate::operation::AdbOperationControl::default(),
+        )
+    }
+    pub fn device_command_with_control(
+        &self,
+        binding: &DeviceBinding,
+        args: &[&str],
+        control: &crate::operation::AdbOperationControl,
+    ) -> AdbResult<String> {
+        control.check()?;
+        controlled::validate(binding, &mut || control.check())?;
+        control.check()?;
+        let mut all = vec!["-s", binding.serial.as_str()];
         all.extend_from_slice(args);
-        self.command(&all)
+        self.command_with_control(&all, control)
     }
 }
 
@@ -315,37 +335,26 @@ fn verify_bundled_adb(executable: &Path) -> AdbResult<()> {
 }
 
 pub fn device_features(binding: &DeviceBinding) -> AdbResult<Vec<String>> {
-    let mut stream = TcpStream::connect_timeout(&binding.server, Duration::from_secs(5))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let service = binding
-        .transport_id
-        .map(|id| format!("host-transport-id:{id}:features"))
-        .unwrap_or_else(|| format!("host-serial:{}:features", binding.serial));
-    request(&mut stream, service.as_bytes())?;
-    let payload = read_host_payload(&mut stream)?;
-    Ok(std::str::from_utf8(&payload)
-        .map_err(|_| AdbError::Protocol("features encoding"))?
-        .split(',')
-        .map(str::to_owned)
-        .collect())
+    device_features_with_cancel(binding, || Ok(()))
 }
-
+pub fn device_features_with_cancel(
+    binding: &DeviceBinding,
+    check: impl FnMut() -> AdbResult<()>,
+) -> AdbResult<Vec<String>> {
+    controlled::features(binding, check)
+}
 pub fn open_service(binding: &DeviceBinding, service: &[u8]) -> AdbResult<TcpStream> {
-    let mut stream = TcpStream::connect_timeout(&binding.server, Duration::from_secs(5))?;
-    stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let selection = binding
-        .transport_id
-        .map(|id| format!("host:transport-id:{id}"))
-        .unwrap_or_else(|| format!("host:transport:{}", binding.serial));
-    request(&mut stream, selection.as_bytes())?;
-    request(&mut stream, service)?;
-    Ok(stream)
+    open_service_with_cancel(binding, service, || Ok(()))
+}
+pub fn open_service_with_cancel(
+    binding: &DeviceBinding,
+    service: &[u8],
+    check: impl FnMut() -> AdbResult<()>,
+) -> AdbResult<TcpStream> {
+    controlled::open(binding, service, check)
 }
 
-pub fn request(stream: &mut TcpStream, data: &[u8]) -> AdbResult<()> {
+pub fn request(stream: &mut (impl Read + Write), data: &[u8]) -> AdbResult<()> {
     if data.len() > REQUEST_LIMIT {
         return Err(AdbError::Protocol("request length"));
     }
@@ -486,5 +495,70 @@ mod tests {
     fn custom_file_without_execute_permission_is_rejected_before_server_reuse() {
         let file = tempfile::NamedTempFile::new().unwrap();
         assert!(resolve_executable(Some(file.path())).is_err());
+    }
+    fn read_request(socket: &mut std::net::TcpStream) -> Vec<u8> {
+        let mut length = [0; 4];
+        socket.read_exact(&mut length).unwrap();
+        let length = usize::from_str_radix(std::str::from_utf8(&length).unwrap(), 16).unwrap();
+        let mut bytes = vec![0; length];
+        socket.read_exact(&mut bytes).unwrap();
+        bytes
+    }
+    #[test]
+    fn native_device_selection_verifies_transport_on_the_same_serial_channel() {
+        use crate::adb::client::{DeviceBinding, open_service};
+        for (actual, succeeds) in [(7u64, true), (8, false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let binding = DeviceBinding {
+                server: listener.local_addr().unwrap(),
+                serial: "original".into(),
+                transport_id: Some(7),
+                generation: 1,
+            };
+            let worker = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+                assert_eq!(read_request(&mut socket), b"host:tport:serial:original");
+                socket.write_all(b"OKAY").unwrap();
+                socket.write_all(&actual.to_le_bytes()).unwrap();
+                if succeeds {
+                    assert_eq!(read_request(&mut socket), b"sync:");
+                    socket.write_all(b"OKAY").unwrap();
+                } else {
+                    assert_eq!(
+                        socket.read(&mut [0; 1]).unwrap(),
+                        0,
+                        "no device request may follow a mismatched identity"
+                    );
+                }
+            });
+            assert_eq!(open_service(&binding, b"sync:").is_ok(), succeeds);
+            worker.join().unwrap();
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn inherited_output_pipes_cannot_extend_the_command_deadline() {
+        use crate::operation::AdbOperationControl;
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = std::env::temp_dir().join(format!("nyaterm-adb-pipe-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "#!/bin/sh\nsleep 2 &\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let client = AdbClient {
+            executable: path.clone(),
+            server: "127.0.0.1:5037".parse().unwrap(),
+        };
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            client.command_with_control(
+                &[],
+                &AdbOperationControl::default().with_timeout(std::time::Duration::from_millis(100))
+            ),
+            Err(AdbError::Timeout)
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -6,3 +6,5 @@ pub mod ipc;
 pub mod screen;
 
 pub mod process;
+
+pub mod operation;

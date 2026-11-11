@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::time::{Duration, Instant};
 
-use crate::adb::client::{DeviceBinding, device_features, open_service};
+use crate::adb::client::{DeviceBinding, device_features};
 use crate::error::{AdbError, AdbResult};
 
 const CHUNK: usize = 64 * 1024;
@@ -11,6 +11,7 @@ const LIST_LIMIT: usize = 100_000;
 
 #[derive(Clone, Debug)]
 pub struct FileStat {
+    pub identity: Option<(u64, u64)>,
     pub mode: u32,
     pub size: u64,
     pub modified: u64,
@@ -25,22 +26,48 @@ pub struct DirectoryEntry {
     pub stat: FileStat,
 }
 
+/// A data notification is an increment, never a running counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SyncByteDelta(pub u64);
+
+#[derive(Clone, Copy)]
+pub struct SyncSendOptions {
+    pub mode: u32,
+    pub modified: u64,
+    pub buffer_size: usize,
+}
+
 pub struct SyncStream {
     stream: TcpStream,
     stat_v2: bool,
     list_v2: bool,
+    idle_timeout: Duration,
 }
 
 impl SyncStream {
     pub fn open(binding: &DeviceBinding) -> AdbResult<Self> {
         let features = device_features(binding)?;
-        let stream = open_service(binding, b"sync:")?;
+        Self::open_with_features(binding, &features)
+    }
+    pub(crate) fn open_with_features(
+        binding: &DeviceBinding,
+        features: &[String],
+    ) -> AdbResult<Self> {
+        Self::open_with_features_controlled(binding, features, || Ok(()))
+    }
+    pub(crate) fn open_with_features_controlled(
+        binding: &DeviceBinding,
+        features: &[String],
+        check: impl FnMut() -> AdbResult<()>,
+    ) -> AdbResult<Self> {
+        let stream = crate::adb::client::open_service_with_cancel(binding, b"sync:", check)?;
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         stream.set_write_timeout(Some(Duration::from_millis(200)))?;
         Ok(Self {
             stream,
             stat_v2: features.iter().any(|f| f == "stat_v2"),
             list_v2: features.iter().any(|f| f == "ls_v2"),
+            idle_timeout: Duration::from_secs(15),
         })
     }
 
@@ -63,20 +90,25 @@ impl SyncStream {
         bytes: &mut [u8],
         progress: &mut impl FnMut(u64) -> AdbResult<()>,
     ) -> AdbResult<()> {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut stalled = Duration::ZERO;
         let mut offset = 0;
         while offset < bytes.len() {
             progress(0)?;
+            let started = Instant::now();
             match self.stream.read(&mut bytes[offset..]) {
                 Ok(0) => return Err(AdbError::Protocol("sync EOF")),
-                Ok(count) => offset += count,
+                Ok(count) => {
+                    offset += count;
+                    stalled = Duration::ZERO;
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                     ) =>
                 {
-                    if Instant::now() >= deadline {
+                    stalled += started.elapsed();
+                    if stalled >= self.idle_timeout {
                         return Err(AdbError::Timeout);
                     }
                 }
@@ -91,20 +123,25 @@ impl SyncStream {
         bytes: &[u8],
         progress: &mut impl FnMut(u64) -> AdbResult<()>,
     ) -> AdbResult<()> {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut stalled = Duration::ZERO;
         let mut offset = 0;
         while offset < bytes.len() {
             progress(0)?;
+            let started = Instant::now();
             match self.stream.write(&bytes[offset..]) {
                 Ok(0) => return Err(AdbError::Protocol("sync write EOF")),
-                Ok(count) => offset += count,
+                Ok(count) => {
+                    offset += count;
+                    stalled = Duration::ZERO;
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                     ) =>
                 {
-                    if Instant::now() >= deadline {
+                    stalled += started.elapsed();
+                    if stalled >= self.idle_timeout {
                         return Err(AdbError::Timeout);
                     }
                 }
@@ -158,6 +195,7 @@ impl SyncStream {
                 return Err(AdbError::FileMissing);
             }
             Ok(FileStat {
+                identity: None,
                 mode,
                 size: u32::from_le_bytes(data[4..8].try_into().unwrap()).into(),
                 modified: u32::from_le_bytes(data[8..12].try_into().unwrap()).into(),
@@ -199,6 +237,7 @@ impl SyncStream {
                 }
                 (
                     FileStat {
+                        identity: None,
                         mode: u32::from_le_bytes(data[0..4].try_into().unwrap()),
                         size: u32::from_le_bytes(data[4..8].try_into().unwrap()).into(),
                         modified: u32::from_le_bytes(data[8..12].try_into().unwrap()).into(),
@@ -219,6 +258,45 @@ impl SyncStream {
             }
         }
         Ok(entries)
+    }
+
+    pub fn receive_controlled(
+        &mut self,
+        path: &[u8],
+        writer: &mut impl Write,
+        mut check: impl FnMut() -> AdbResult<()>,
+        mut progress: impl FnMut(SyncByteDelta) -> AdbResult<()>,
+    ) -> AdbResult<u64> {
+        self.receive(path, writer, |bytes| {
+            check()?;
+            if bytes != 0 {
+                progress(SyncByteDelta(bytes))?;
+            }
+            Ok(())
+        })
+    }
+    pub fn send_controlled(
+        &mut self,
+        path: &[u8],
+        reader: &mut impl Read,
+        options: SyncSendOptions,
+        mut check: impl FnMut() -> AdbResult<()>,
+        mut progress: impl FnMut(SyncByteDelta) -> AdbResult<()>,
+    ) -> AdbResult<u64> {
+        self.send_with_buffer(
+            path,
+            reader,
+            options.mode,
+            options.modified,
+            options.buffer_size,
+            |bytes| {
+                check()?;
+                if bytes != 0 {
+                    progress(SyncByteDelta(bytes))?;
+                }
+                Ok(())
+            },
+        )
     }
 
     pub fn receive(
@@ -255,13 +333,25 @@ impl SyncStream {
         reader: &mut impl Read,
         mode: u32,
         modified: u64,
+        progress: impl FnMut(u64) -> AdbResult<()>,
+    ) -> AdbResult<u64> {
+        self.send_with_buffer(path, reader, mode, modified, CHUNK, progress)
+    }
+
+    pub fn send_with_buffer(
+        &mut self,
+        path: &[u8],
+        reader: &mut impl Read,
+        mode: u32,
+        modified: u64,
+        buffer_size: usize,
         mut progress: impl FnMut(u64) -> AdbResult<()>,
     ) -> AdbResult<u64> {
         let mut target = path.to_vec();
         target.extend_from_slice(format!(",{}", mode & 0o777).as_bytes());
         self.request(b"SEND", &target, &mut progress)?;
         let mut total = 0;
-        let mut buffer = vec![0; CHUNK];
+        let mut buffer = vec![0; buffer_size.clamp(8 * 1024, CHUNK)];
         loop {
             progress(0)?;
             let length = reader.read(&mut buffer)?;
@@ -305,6 +395,7 @@ fn decode_stat_v2(data: &[u8]) -> AdbResult<FileStat> {
         return Err(AdbError::Rejected);
     }
     Ok(FileStat {
+        identity: Some((get64(4), get64(12))),
         mode: get32(20),
         uid: Some(get32(28)),
         gid: Some(get32(32)),
@@ -319,6 +410,7 @@ mod tests {
     use crate::adb::sync::SyncStream;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
     fn fixture(bytes: Vec<u8>, v2: bool) -> SyncStream {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -341,6 +433,7 @@ mod tests {
             stream: client,
             stat_v2: v2,
             list_v2: v2,
+            idle_timeout: Duration::from_secs(15),
         }
     }
     #[test]
@@ -396,5 +489,46 @@ mod tests {
                 .stat_with_cancel(b"/fixture", || Err(crate::error::AdbError::Cancelled)),
             Err(crate::error::AdbError::Cancelled)
         ));
+    }
+    #[test]
+    fn paused_callbacks_do_not_consume_network_idle_budget_but_stalls_do() {
+        use std::time::{Duration, Instant};
+        for stalled in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_millis(10)))
+                .unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                rx.recv().unwrap();
+                std::thread::sleep(Duration::from_millis(if stalled { 200 } else { 40 }));
+                let _ = socket.write_all(b"okay");
+            });
+            let mut stream = super::SyncStream {
+                stream: client,
+                stat_v2: false,
+                list_v2: false,
+                idle_timeout: Duration::from_millis(100),
+            };
+            let mut paused = false;
+            let started = Instant::now();
+            let result = stream.read(&mut [0; 4], &mut |_| {
+                if !paused {
+                    paused = true;
+                    std::thread::sleep(Duration::from_millis(150));
+                    tx.send(()).unwrap();
+                }
+                Ok(())
+            });
+            if stalled {
+                assert!(matches!(result, Err(crate::error::AdbError::Timeout)));
+            } else {
+                assert!(result.is_ok());
+            }
+            assert!(started.elapsed() < Duration::from_secs(1));
+            server.join().unwrap();
+        }
     }
 }

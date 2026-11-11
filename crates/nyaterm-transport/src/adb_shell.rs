@@ -248,7 +248,8 @@ mod tests {
             socket
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            assert_eq!(request(&mut socket), b"host:transport-id:7");
+            assert_eq!(request(&mut socket), b"host:tport:serial:fixture");
+            socket.write_all(&7u64.to_le_bytes()).unwrap();
             assert_eq!(request(&mut socket), b"shell,v2,pty,TERM=xterm-256color:");
             let mut decoder = ShellDecoder::default();
             let mut packets = Vec::new();
