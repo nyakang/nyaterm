@@ -4,6 +4,7 @@ use super::SessionFeatureState;
 use crate::features::runtime_jobs::SessionStartResult;
 use crate::models::{SessionLaunchConfig, StartupCommandRequest, WorkspaceSplitDirection};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use nyaterm_core::models::android::AndroidViewKind;
 use nyaterm_core::{AiExecutionProfile, ConnectionType, SavedConnection, uuid};
 use nyaterm_transport::SessionKind;
 use std::collections::{HashMap, HashSet};
@@ -117,6 +118,7 @@ pub(in crate::features) enum SessionStartEventRequest {
 
 #[derive(Clone, Default)]
 pub(in crate::features) struct SavedConnectionStartOptions {
+    pub android_view: Option<nyaterm_core::models::android::AndroidViewKind>,
     pub(in crate::features) mcp_open_operation_id: Option<String>,
     pub ssh_runtime_mode: Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
     pub custom_name: Option<String>,
@@ -280,6 +282,15 @@ impl SessionStartFeatureState {
                 ai_execution_profile,
                 ..
             } => (SessionKind::Serial, *ai_execution_profile),
+            ConnectionType::Adb { .. } => {
+                match options.android_view.unwrap_or(AndroidViewKind::Shell) {
+                    AndroidViewKind::Shell => (SessionKind::AdbShell, AiExecutionProfile::SendOnly),
+                    AndroidViewKind::Files => (SessionKind::AdbFiles, AiExecutionProfile::Disabled),
+                    AndroidViewKind::Screen => {
+                        (SessionKind::AdbScreen, AiExecutionProfile::Disabled)
+                    }
+                }
+            }
             ConnectionType::Rdp { .. } => (SessionKind::Rdp, AiExecutionProfile::Disabled),
             ConnectionType::Vnc { .. } => (SessionKind::Vnc, AiExecutionProfile::Disabled),
         };

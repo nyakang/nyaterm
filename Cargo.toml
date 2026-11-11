@@ -2,12 +2,15 @@
 # The application resolves its helpers beside its executable. Include the Windows
 # ActiveX host in development builds; release packaging filters it by platform.
 default-members = [
+    "crates/nyaterm-android-helper",
     "crates/nyaterm-app",
     "crates/nyaterm-mcp",
     "crates/nyaterm-rdp-helper",
     "crates/nyaterm-vnc-helper",
 ]
 members = [
+    "crates/nyaterm-android-helper",
+    "crates/nyaterm-android",
     "crates/nyaterm-app",
     "crates/nyaterm-ai-client",
     "crates/nyaterm-cloud-storage",
@@ -52,6 +55,7 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nyaterm-android = { path = "crates/nyaterm-android" }
 nucleo-matcher = "0.3.1"
 automerge = "=0.12.0"
 httpdate = "1.0"

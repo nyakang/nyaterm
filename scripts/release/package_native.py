@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import plistlib
 import re
 import shutil
@@ -286,6 +288,11 @@ def build_binary(package: str, name: str, target: str) -> Path:
 
 
 def build_application(target: str) -> Path:
+    import prepare_android
+    _, prefix = prepare_android.prepare(target)
+    if prefix is None:
+        raise RuntimeError("Android decoder dependencies were not prepared")
+    os.environ["FFMPEG_DIR"] = str(prefix)
     binary = build_binary("nyaterm-app", APP_BIN, target)
     for name in helper_bins(target):
         build_binary(name, name, target)
@@ -305,13 +312,35 @@ def copy_helpers(destination: Path, target: str) -> list[Path]:
         if "windows" not in target:
             make_executable(binary)
         copied.append(binary)
+    copy_android_resources(destination, target)
     return copied
+
+
+def copy_android_resources(destination: Path, target: str) -> list[Path]:
+    """Stage the same pinned resources used by development and CI."""
+    import prepare_android
+    adb = prepare_android.STAGING / "adb" / target
+    ffmpeg = prepare_android.STAGING / "ffmpeg" / target
+    if not adb.is_dir() or not ffmpeg.is_dir():
+        raise FileNotFoundError("Run prepare_android.py before packaging")
+    prepare_android.stage_runtime(adb, ffmpeg, destination)
+    files = [path for directory in (destination / "adb", destination / "android-libs")
+             for path in directory.rglob("*") if path.is_file()]
+    if "windows" in target:
+        files.extend(destination / name for name in ("avcodec-62.dll", "avformat-62.dll", "avutil-60.dll", "swscale-9.dll"))
+    manifest = {"schema": 1, "target": target, "dependencies": prepare_android.METADATA,
+                "files": {path.relative_to(destination).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(files)}}
+    output = destination / "android-resources.json"
+    output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return [*files, output]
 
 
 def copy_release_documents(destination: Path, version: str) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     completion_licenses = ROOT_DIR / "crates/nyaterm-core/assets/completion"
-    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo"]
+    android_licenses = ROOT_DIR / "crates" / "nyaterm-android" / "assets"
+    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo",
+                 android_licenses / "NOTICE.md", android_licenses / "LICENSE.scrcpy"]
     (destination / "LICENSE").write_text("\n\n".join(path.read_text(encoding="utf-8") for path in documents), encoding="utf-8")
     (destination / "VERSION").write_text(f"{version}\n", encoding="utf-8")
 
@@ -393,7 +422,7 @@ def create_windows_packages(
     installer_root.mkdir()
     shutil.copy2(binary, installer_root / "NyaTerm.exe")
     installer_helpers = copy_helpers(installer_root, info.target)
-    installer_conpty = copy_conpty(installer_root, info.target)
+    installer_conpty = [*copy_conpty(installer_root, info.target), *copy_android_resources(installer_root, info.target)]
     copy_release_documents(installer_root, version)
     shutil.copy2(ICON_DIR / "icon.ico", installer_root / "icon.ico")
 
@@ -579,8 +608,13 @@ def create_macos_packages(
     # Sign inside out. A bundle-only signature seals extra Mach-O files in
     # Contents/MacOS as resources instead of signing them as code, which makes
     # the helper fail to launch under Gatekeeper.
-    for helper in helper_binaries:
+    android_code = [*macos_dir.glob("android-libs/*.dylib"), macos_dir / "adb" / "adb"]
+    for helper in [*android_code, *helper_binaries]:
         run([codesign, "--force", "--sign", "-", "--timestamp=none", str(helper)])
+    manifest_path = macos_dir / "android-resources.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"] = {name: hashlib.sha256((macos_dir / name).read_bytes()).hexdigest() for name in manifest["files"]}
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     run([codesign, "--force", "--deep", "--sign", "-", "--timestamp=none", str(bundle)])
 
     tar_output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}.app.tar.gz"

@@ -67,6 +67,7 @@ impl NyaTermApp {
             sync_operations,
         } = process_entities;
         let session_manager = session_hub.manager();
+        let android_devices = session_hub.android_devices();
         let ssh_connections = session_hub.ssh_connections();
         nyaterm_core::warm_terminal_input_tracker();
         let NyaTermStoreClients {
@@ -382,6 +383,10 @@ impl NyaTermApp {
             remote_panels,
             host_tool_panels,
             remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
+            android: crate::features::android::AndroidFeatureState::new(
+                android_devices,
+                cx.focus_handle(),
+            ),
             translation: TranslationFeatureState::new(translation_settings),
             update,
             cloud_sync: {
@@ -459,6 +464,9 @@ impl NyaTermApp {
             _test_config_dir: None,
         };
         app.update_custom_icons(custom_icons, cx);
+        // The cached settings panel starts on General, even before navigation
+        // opens it. Build that tab's input before publishing its first snapshot.
+        app.ensure_settings_tab_inputs(crate::models::SettingsTab::General, cx);
         app.sync_quick_command_selected_category(cx);
         app
     }

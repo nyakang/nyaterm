@@ -32,14 +32,17 @@ pub(super) fn transfer_context_action_visible_for_backend(
     action: TransferContextMenuAction,
     backend: nyaterm_files::file_browser::FileBrowserBackendKind,
 ) -> bool {
-    backend == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
-        || !matches!(
-            action,
-            TransferContextMenuAction::Upload
-                | TransferContextMenuAction::Download
-                | TransferContextMenuAction::DownloadToDirectory
-                | TransferContextMenuAction::NewSymlink
-        )
+    match action {
+        TransferContextMenuAction::NewSymlink => {
+            backend == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+        }
+        TransferContextMenuAction::Upload
+        | TransferContextMenuAction::Download
+        | TransferContextMenuAction::DownloadToDirectory => {
+            backend != nyaterm_files::file_browser::FileBrowserBackendKind::Local
+        }
+        _ => true,
+    }
 }
 
 pub(super) fn transfer_visible_context_menu_nodes(
@@ -232,6 +235,33 @@ pub(super) fn send_to_destination_path(target_dir: &str, entry_name: &str) -> St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn adb_transfer_actions_match_toolbar_capabilities_without_enabling_symlinks() {
+        use super::{TransferContextMenuAction, transfer_context_action_visible_for_backend};
+        use nyaterm_files::file_browser::FileBrowserBackendKind;
+        for action in [
+            TransferContextMenuAction::Upload,
+            TransferContextMenuAction::Download,
+            TransferContextMenuAction::DownloadToDirectory,
+        ] {
+            assert!(transfer_context_action_visible_for_backend(
+                action,
+                FileBrowserBackendKind::Adb
+            ));
+            assert!(transfer_context_action_visible_for_backend(
+                action,
+                FileBrowserBackendKind::Remote
+            ));
+            assert!(!transfer_context_action_visible_for_backend(
+                action,
+                FileBrowserBackendKind::Local
+            ));
+        }
+        assert!(!transfer_context_action_visible_for_backend(
+            TransferContextMenuAction::NewSymlink,
+            FileBrowserBackendKind::Adb
+        ));
+    }
     use super::{
         SendToCandidate, TransferContextMenuAction as Action, TransferContextMenuNode as Node,
         TransferEntryMenuCapabilities, send_to_candidate_is_eligible, send_to_destination_path,

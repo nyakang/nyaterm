@@ -314,16 +314,6 @@ impl Drop for NewTargetGuard {
     }
 }
 
-fn populate_new_target<R: Read>(source: &mut R, target: &Path) -> anyhow::Result<FileIdentity> {
-    use anyhow::Context as _;
-    let mut destination = NewTargetGuard::create(target)?;
-    io::copy(source, destination.file_mut())
-        .context("download commit failed while populating new target")?;
-    destination
-        .commit()
-        .context("failed to sync committed download")
-}
-
 impl DownloadTemporary {
     /// Copy the resume prefix during preparation, before entering the download loop.
     /// Any preparation failure leaves the original file intact.
@@ -417,6 +407,14 @@ impl DownloadTemporary {
     /// root and its ancestors must be user-controlled because path checks do not protect against
     /// concurrent directory replacement.
     pub(crate) fn commit(self, root: &Path, target: &Path) -> anyhow::Result<FileIdentity> {
+        self.commit_with_modified(root, target, None)
+    }
+    pub(crate) fn commit_with_modified(
+        self,
+        root: &Path,
+        target: &Path,
+        modified: Option<std::time::SystemTime>,
+    ) -> anyhow::Result<FileIdentity> {
         ensure_no_symlink(root, target)?;
         ensure_no_symlink(root, &self.path)?;
         if let DownloadTargetAccess::ReplaceKnownTarget(identity, _) = &self.access {
@@ -446,13 +444,16 @@ impl DownloadTemporary {
             use anyhow::Context as _;
             io::copy(&mut source, &mut destination)
                 .context("download commit failed; target may contain partial data")?;
+            if let Some(modified) = modified {
+                destination.set_modified(modified)?;
+            }
             destination
                 .sync_all()
                 .context("failed to sync committed download")?;
             Ok(identity.clone())
         } else {
             let mut source = fs::File::open(&self.path)?;
-            populate_new_target(&mut source, target)
+            populate_new_target(&mut source, target, modified)
         }
     }
 
@@ -474,6 +475,19 @@ impl Drop for DownloadTemporary {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+fn populate_new_target(
+    source: &mut impl Read,
+    target: &Path,
+    modified: Option<std::time::SystemTime>,
+) -> anyhow::Result<FileIdentity> {
+    let mut destination = NewTargetGuard::create(target)?;
+    io::copy(source, destination.file_mut())?;
+    if let Some(modified) = modified {
+        destination.file_mut().set_modified(modified)?;
+    }
+    Ok(destination.commit()?)
 }
 
 /// Stage contents in a temporary file in the destination directory, then commit while preserving
@@ -756,7 +770,7 @@ mod tests {
         let mut source = FailingReader {
             first: Some(b"partial"),
         };
-        assert!(super::populate_new_target(&mut source, &target).is_err());
+        assert!(super::populate_new_target(&mut source, &target, None).is_err());
         assert!(!target.exists());
         assert_eq!(std::fs::read_dir(&root)?.count(), 0);
         std::fs::remove_dir_all(root)?;

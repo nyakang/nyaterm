@@ -327,8 +327,22 @@ impl NyaTermApp {
             let output_target_session_id = target_session_id.clone();
             self.submit_bulk_transfer_job("file-clipboard", id.clone(), tx.clone(), move || {
                 let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
+                let android = matches!(request.source_service, FileBrowserService::Adb(_))
+                    || matches!(request.target_service, FileBrowserService::Adb(_));
+                let cancelled = request.control.clone();
                 let result = copy_verified(request, move |value| progress.send(value))
-                    .map(|result| file_operation_output(result, output_target_session_id));
+                    .map(|result| file_operation_output(result, output_target_session_id))
+                    .map_err(|error| {
+                        if cancelled.is_cancelled() {
+                            nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED.into()
+                        } else if android {
+                            crate::features::android::labels::file_error_message(
+                                &error.context(nyaterm_files::adb::AdbFileError),
+                            )
+                        } else {
+                            error.to_string()
+                        }
+                    });
                 let _ = tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),

@@ -587,9 +587,11 @@ impl NyaTermApp {
     ) {
         let entries = self.selected_transfer_entries();
         if entries.is_empty() {
-            self.shell
-                .set_status("mark remote items before downloading".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "download",
+                &nyaterm_files::file_browser::FileTransferEntryError::NoSelection.into(),
+                cx,
+            );
             return;
         }
         if self.settings.summary().transfer_ask_save_location {
@@ -608,8 +610,7 @@ impl NyaTermApp {
         let targets = match self.resolve_transfer_download_targets(remote_paths, None) {
             Ok(targets) => targets,
             Err(error) => {
-                self.shell.set_status(error.to_string());
-                cx.notify();
+                self.report_browser_transfer_error("download-target", &error, cx);
                 return;
             }
         };

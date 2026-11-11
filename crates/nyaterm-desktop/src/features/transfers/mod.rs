@@ -19,6 +19,7 @@ pub(in crate::features) use state::TransferSessionTransferBundle;
 pub(in crate::features) use state::TransferTreePresentation;
 pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey};
 mod transfer_events;
+mod transfer_feedback;
 pub(in crate::features) mod transfer_jobs;
 mod transfer_options;
 mod transfer_paths;
@@ -36,9 +37,9 @@ use nyaterm_transport::SshSessionConfig;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(in crate::features) struct SftpJobSession {
+pub(in crate::features) struct FileTransferSession {
     pub session_id: Option<String>,
-    pub service: RemoteFileService,
+    pub service: FileBrowserService,
 }
 
 struct ConnectionStoreBackendPreferences {
@@ -177,6 +178,11 @@ impl NyaTermApp {
         session_id: &str,
     ) -> anyhow::Result<FileBrowserService> {
         match self.session.file_browser_backend_for_session(session_id) {
+            Some(nyaterm_files::file_browser::FileBrowserBackendKind::Adb) => self
+                .android_config_for_session(session_id)
+                .ok_or_else(|| anyhow::Error::new(nyaterm_android::error::AdbError::Offline))
+                .and_then(|config| self.android.file_service(&config.device_key))
+                .map(FileBrowserService::Adb),
             Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local) => {
                 Ok(FileBrowserService::local())
             }

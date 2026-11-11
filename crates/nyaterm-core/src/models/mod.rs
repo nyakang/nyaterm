@@ -1,3 +1,4 @@
+pub mod android;
 pub mod connection;
 pub mod connection_batch;
 pub mod credentials;

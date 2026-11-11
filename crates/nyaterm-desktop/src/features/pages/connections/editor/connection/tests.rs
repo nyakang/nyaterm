@@ -287,6 +287,10 @@ fn ssh_algorithm_lists_keep_rows_full_height_and_scroll_inside_the_viewport() {
 
 fn protocol_selectors(kind: ConnectionKindTab) -> (&'static str, &'static str) {
     match kind {
+        ConnectionKindTab::Adb => (
+            "connection-editor-adb-section",
+            "connection-editor-adb-advanced",
+        ),
         ConnectionKindTab::Ssh => (
             "connection-editor-ssh-section",
             "connection-editor-ssh-advanced",
@@ -327,6 +331,8 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> ConnectionEditorState {
     ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         id: None,
         kind: ConnectionKindTab::Ssh,
         name: String::new(),
@@ -2010,5 +2016,194 @@ fn invalid_hidden_baud_rate_opens_its_picker_and_focuses_the_custom_input(cx: &m
         assert!(state.editor_baud_popover_is_open());
         let input = &state.editor_number_fields()[&ConnectionEditorField::BaudRate];
         assert!(input.read(cx).component_focus_handle(cx).is_focused(window));
+    });
+}
+
+#[gpui::test]
+fn android_editor_uses_responsive_numeric_port_and_preserves_screen_draft(cx: &mut TestAppContext) {
+    use crate::models::ConnectionEditorSection;
+    let test_dir = TestConfigDir::new("nyaterm-android-editor-layout");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 900., 12.);
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let mut draft = editor(None, None);
+            draft.kind = ConnectionKindTab::Adb;
+            draft.host = "example.test".into();
+            draft.port = "5555".into();
+            app.connection_state.begin_editor(draft);
+            app.connection_state.build_editor_fields(cx);
+        })
+    });
+    draw_editor(&app, vcx);
+    let host = vcx.debug_bounds("connection-editor-field-Host").unwrap();
+    let port = vcx.debug_bounds("connection-editor-field-Port").unwrap();
+    assert_eq!(host.top(), port.top());
+    assert_eq!(port.size.width, px(150.));
+    assert!(
+        vcx.debug_bounds("connection-editor-field-AndroidFps")
+            .is_none()
+    );
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            for field in [
+                ConnectionEditorField::Port,
+                ConnectionEditorField::AndroidMaxSize,
+                ConnectionEditorField::AndroidFps,
+                ConnectionEditorField::AndroidBitRate,
+            ] {
+                assert!(
+                    app.connection_state
+                        .editor_number_fields()
+                        .contains_key(&field)
+                );
+                assert!(!app.connection_state.editor_fields().contains_key(&field));
+            }
+            app.set_connection_editor_section(ConnectionEditorSection::AndroidScreen, cx);
+            app.apply_connection_editor_field_text(
+                ConnectionEditorField::AndroidFps,
+                "60".into(),
+                cx,
+            );
+        })
+    });
+    draw_editor(&app, vcx);
+    assert!(vcx.debug_bounds("connection-editor-field-Port").is_none());
+    assert!(
+        vcx.debug_bounds("connection-editor-field-AndroidFps")
+            .is_some()
+    );
+    assert!(
+        vcx.debug_bounds("connection-editor-field-Description")
+            .is_none()
+    );
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_connection_editor_section(ConnectionEditorSection::Basic, cx);
+            let draft = app.connection_state.active_editor_draft().unwrap();
+            assert_eq!(draft.android_screen.max_fps, 60);
+            app.connection_state.set_android_editor_usb(true);
+            app.connection_state.sync_editor_fields_from_draft(cx);
+        })
+    });
+    draw_editor(&app, vcx);
+    assert!(vcx.debug_bounds("connection-editor-field-Port").is_none());
+    assert!(vcx.debug_bounds("connection-editor-field-Host").is_some());
+}
+
+#[gpui::test]
+fn android_numeric_fields_accept_integer_bounds_and_apply_their_steps(cx: &mut TestAppContext) {
+    let test_dir = TestConfigDir::new("nyaterm-android-numeric-input");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 900., 12.);
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let mut draft = editor(None, None);
+            draft.kind = ConnectionKindTab::Adb;
+            draft.port = "5555".into();
+            app.connection_state.begin_editor(draft);
+            app.connection_state.build_editor_fields(cx);
+        });
+    });
+    for (field, seed, min, max, step) in [
+        (ConnectionEditorField::Port, 5555, 1, 65_535, 1),
+        (ConnectionEditorField::AndroidMaxSize, 1280, 128, 2560, 1),
+        (ConnectionEditorField::AndroidFps, 30, 1, 120, 1),
+        (
+            ConnectionEditorField::AndroidBitRate,
+            8_000_000,
+            100_000,
+            100_000_000,
+            100_000,
+        ),
+    ] {
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.set_connection_editor_section(field.section(), cx);
+            });
+        });
+        draw_editor(&app, vcx);
+        let input = vcx.update(|window, cx| {
+            let input = app.read(cx).connection_state.editor_number_fields()[&field].clone();
+            window.focus(&input.read(cx).component_focus_handle(cx), cx);
+            input
+        });
+        for (value, key, expected) in [
+            (max, "up", max),
+            (min, "down", min),
+            (seed, "up", seed + step),
+        ] {
+            vcx.simulate_keystrokes("secondary-a");
+            vcx.simulate_input(&value.to_string());
+            vcx.simulate_keystrokes(key);
+            vcx.run_until_parked();
+            assert_eq!(
+                input.read_with(vcx, |input, cx| input.value(cx)),
+                expected.to_string()
+            );
+        }
+        let expected = (seed + step).to_string();
+        for invalid in [(max + 1).to_string(), format!("{seed}.5")] {
+            vcx.update(|_, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(invalid));
+            });
+            vcx.simulate_keystrokes("secondary-a secondary-v");
+            vcx.run_until_parked();
+            assert_eq!(input.read_with(vcx, |input, cx| input.value(cx)), expected);
+        }
+    }
+}
+
+#[gpui::test]
+fn android_editor_stacks_host_and_numeric_port_in_narrow_windows(cx: &mut TestAppContext) {
+    let test_dir = TestConfigDir::new("nyaterm-android-editor-narrow");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 620., 900., 12.);
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let mut draft = editor(None, None);
+            draft.kind = ConnectionKindTab::Adb;
+            draft.port = "5555".into();
+            app.connection_state.begin_editor(draft);
+            app.connection_state.build_editor_fields(cx);
+        })
+    });
+    draw_editor(&app, vcx);
+    let host = vcx.debug_bounds("connection-editor-field-Host").unwrap();
+    let port = vcx.debug_bounds("connection-editor-field-Port").unwrap();
+    assert!(port.top() > host.top());
+    assert_eq!(host.size.width, port.size.width);
+}
+
+#[gpui::test]
+fn android_save_focuses_invalid_screen_setting_from_basic_page(cx: &mut TestAppContext) {
+    use crate::models::ConnectionEditorSection;
+    let test_dir = TestConfigDir::new("nyaterm-android-validation-focus");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 900., 12.);
+    vcx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let mut draft = editor(None, None);
+            draft.kind = ConnectionKindTab::Adb;
+            draft.host = "example.test".into();
+            draft.port = "5555".into();
+            draft.android_screen.max_fps = 0;
+            app.connection_state.begin_editor(draft);
+            app.connection_state.build_editor_fields(cx);
+            app.save_connection_editor(window, cx);
+        })
+    });
+    for _ in 0..6 {
+        draw_editor(&app, vcx);
+    }
+    vcx.update(|window, cx| {
+        let state = &app.read(cx).connection_state;
+        let draft = state.active_editor_draft().unwrap();
+        assert_eq!(draft.section, ConnectionEditorSection::AndroidScreen);
+        assert!(
+            draft
+                .field_errors
+                .contains_key(&ConnectionEditorField::AndroidFps)
+        );
+        let focus = state.editor_number_fields()[&ConnectionEditorField::AndroidFps]
+            .read(cx)
+            .component_focus_handle(cx);
+        assert!(focus.is_focused(window));
     });
 }

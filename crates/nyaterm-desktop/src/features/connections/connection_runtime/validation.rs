@@ -24,6 +24,18 @@ impl ConnectionEditorValidationError {
             algorithm_tab: None,
         };
         match self {
+            Self::AndroidSettings(error) => {
+                use nyaterm_core::models::android::AndroidScreenValidationError;
+                let field = match error {
+                    AndroidScreenValidationError::MaxSize => ConnectionEditorField::AndroidMaxSize,
+                    AndroidScreenValidationError::MaxFps => ConnectionEditorField::AndroidFps,
+                    AndroidScreenValidationError::BitRate => ConnectionEditorField::AndroidBitRate,
+                };
+                return location(
+                    ConnectionEditorSection::AndroidScreen,
+                    ConnectionEditorFocusTarget::Field(field),
+                );
+            }
             Self::RdpRelayUnsupported | Self::RdpMstscRelayUnsupported => {
                 return location(
                     ConnectionEditorSection::Network,
@@ -104,12 +116,17 @@ impl ConnectionEditorValidationError {
             _ => {}
         }
         let field = match self {
-            ConnectionEditorValidationError::HostRequired
+            ConnectionEditorValidationError::AndroidDeviceRequired
+            | ConnectionEditorValidationError::AndroidHostInvalid
+            | ConnectionEditorValidationError::HostRequired
             | ConnectionEditorValidationError::RdpMstscHostInvalid => ConnectionEditorField::Host,
             ConnectionEditorValidationError::PortInvalid => ConnectionEditorField::Port,
             ConnectionEditorValidationError::UsernameRequired
             | ConnectionEditorValidationError::MissingAccount => ConnectionEditorField::Username,
             ConnectionEditorValidationError::VncPasswordTooLong => ConnectionEditorField::Password,
+            ConnectionEditorValidationError::AndroidDirectoryInvalid => {
+                ConnectionEditorField::WorkingDir
+            }
             ConnectionEditorValidationError::ShellPathRequired => ConnectionEditorField::ShellPath,
             ConnectionEditorValidationError::SerialPortRequired => {
                 ConnectionEditorField::SerialPort
@@ -142,6 +159,7 @@ impl ConnectionEditorValidationError {
             }
             ConnectionEditorValidationError::RdpWindowsAuthenticationRequired
             | ConnectionEditorValidationError::RdpRelayUnsupported
+            | ConnectionEditorValidationError::AndroidSettings(_)
             | ConnectionEditorValidationError::RdpMstscRelayUnsupported
             | ConnectionEditorValidationError::SshAgentEndpoint(_)
             | ConnectionEditorValidationError::SshAgentForwarding { .. }
@@ -197,6 +215,30 @@ mod tests {
             "id": "navigation", "name": "Navigation", "type": "ssh", "host": "example.test", "username": "root"
         })).unwrap();
         connection_editor_from_saved(saved, false)
+    }
+
+    #[test]
+    fn android_screen_validation_routes_each_error_to_its_numeric_field() {
+        use nyaterm_core::models::android::AndroidScreenValidationError;
+        for (error, field) in [
+            (
+                AndroidScreenValidationError::MaxSize,
+                ConnectionEditorField::AndroidMaxSize,
+            ),
+            (
+                AndroidScreenValidationError::MaxFps,
+                ConnectionEditorField::AndroidFps,
+            ),
+            (
+                AndroidScreenValidationError::BitRate,
+                ConnectionEditorField::AndroidBitRate,
+            ),
+        ] {
+            let location =
+                ConnectionEditorValidationError::AndroidSettings(error).location(&editor());
+            assert_eq!(location.section, ConnectionEditorSection::AndroidScreen);
+            assert_eq!(location.target, ConnectionEditorFocusTarget::Field(field));
+        }
     }
 
     #[test]

@@ -82,6 +82,7 @@ def dependency_errors() -> list[str]:
         "nyaterm-preview",
         "nyaterm-translation-client",
         "nyaterm-core",
+        "nyaterm-android",
         "nyaterm-transport",
         "nyaterm-files",
         "nyaterm-recording",
@@ -105,6 +106,7 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
+        ("nyaterm-android", set()),
         ("nyaterm-ai-client", set()),
         ("nyaterm-cloud-storage", set()),
         ("nyaterm-updater", set()),
@@ -135,12 +137,20 @@ def dependency_errors() -> list[str]:
                 and package != "nyaterm-core"
             )
             wrong_adapter_direction = (
-                crate in {"nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
+                crate in {"nyaterm-android", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
             )
             if wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
+    for manifest in (ROOT / "crates").glob("*/Cargo.toml"):
+        crate = manifest.parent.name
+        if crate.endswith("-helper"):
+            continue
+        document = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        for package in dependency_packages(document, workspace_dependencies):
+            if package in {"ffmpeg-next", "ffmpeg-sys-next", "openh264", "openh264-sys2"}:
+                errors.append(f"decoder_isolation: {crate} must not link {package}")
     return errors
 
 

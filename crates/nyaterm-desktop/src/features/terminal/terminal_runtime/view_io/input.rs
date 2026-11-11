@@ -1055,7 +1055,7 @@ impl NyaTermApp {
             .session
             .manager()
             .write(session_id, &encoded)
-            .map_err(|error| error.to_string())
+            .map_err(|error| self.terminal_session_write_error_text(session_id, error))
         {
             self.record_terminal_session_write_failure(session_id, "input", &error);
             return Err(error);
@@ -1142,7 +1142,7 @@ impl NyaTermApp {
             .session
             .manager()
             .write_raw(session_id, bytes)
-            .map_err(|error| error.to_string())
+            .map_err(|error| self.terminal_session_write_error_text(session_id, error))
         {
             self.record_terminal_session_write_failure(session_id, "raw input", &error);
             return Err(error);
@@ -1197,7 +1197,7 @@ impl NyaTermApp {
         self.session
             .manager()
             .write(session_id, &encoded)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| self.terminal_session_write_error_text(session_id, error))?;
         if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
             self.commands.complete_completion_submission(session_id);
         }
@@ -1300,7 +1300,9 @@ impl NyaTermApp {
         } else {
             self.session.manager().write(session_id, wire_bytes)
         };
-        if let Err(error) = result.map_err(|error| error.to_string()) {
+        if let Err(error) =
+            result.map_err(|error| self.terminal_session_write_error_text(session_id, error))
+        {
             self.record_terminal_session_write_failure(session_id, "framed input", &error);
             return Err(error);
         }
@@ -1342,12 +1344,28 @@ impl NyaTermApp {
             .session
             .manager()
             .write_raw(session_id, bytes)
-            .map_err(|error| error.to_string())
+            .map_err(|error| self.terminal_session_write_error_text(session_id, error))
         {
             self.record_terminal_session_write_failure(session_id, "protocol response", &error);
             return Err(error);
         }
         Ok(())
+    }
+
+    fn terminal_session_write_error_text(
+        &self,
+        session_id: &str,
+        error: nyaterm_transport::SessionError,
+    ) -> String {
+        if self
+            .session
+            .session_info(session_id)
+            .is_some_and(|session| session.kind == nyaterm_transport::SessionKind::AdbShell)
+        {
+            rust_i18n::t!("android.errors.inputFailed").into_owned()
+        } else {
+            error.to_string()
+        }
     }
 
     fn record_terminal_session_write_failure(
@@ -1365,7 +1383,18 @@ impl NyaTermApp {
         if session_id.is_empty() {
             return;
         }
-        let log = terminal_session_write_failure_log(context, error);
+        let log = if self
+            .session
+            .session_info(session_id)
+            .is_some_and(|session| session.kind == nyaterm_transport::SessionKind::AdbShell)
+        {
+            format!(
+                "\n# {}: {error}\n",
+                rust_i18n::t!("sessionNotice.writeFailed")
+            )
+        } else {
+            terminal_session_write_failure_log(context, error)
+        };
         self.recording
             .write_local_message(session_id.to_string(), log.clone());
         self.publish_session_notice(

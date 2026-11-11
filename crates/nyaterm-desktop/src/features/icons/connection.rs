@@ -246,6 +246,7 @@ pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconD
         "Serial" => "serial",
         "RDP" => "rdp",
         "VNC" => "vnc",
+        "ADB" | "Android" | "Android (ADB)" => "android",
         _ => DEFAULT_CONNECTION_ICON,
     };
     lookup(key).expect("protocol defaults must be registered connection icons")
@@ -253,6 +254,9 @@ pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconD
 
 #[cfg(test)]
 mod tests {
+    use crate::models::ConnectionKindTab;
+    use nyaterm_core::models::sessions::SavedConnection;
+
     use super::super::IconPaint;
     use super::super::aliases::CONNECTION_ICON_ALIASES;
     use super::{
@@ -401,7 +405,7 @@ mod tests {
     #[test]
     fn unknown_and_empty_keys_fall_back_by_kind() {
         let mut paths = Vec::new();
-        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC"] {
+        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC", "ADB"] {
             let default = default_connection_icon_for_kind(kind);
             for key in [None, Some(""), Some("   "), Some("nonsense")] {
                 assert_eq!(resolve_connection_icon(key, kind), default);
@@ -417,6 +421,33 @@ mod tests {
             );
             paths.push(default.path);
         }
+    }
+
+    #[test]
+    fn saved_android_connection_keeps_the_editor_default_icon() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "name": "android-1",
+            "type": "adb",
+            "device": { "kind": "usb", "serial": "test-device" }
+        }))
+        .expect("saved Android connection must load without an explicit icon");
+        let android = lookup("android").expect("Android logo must be registered");
+        for kind in [
+            connection.kind_label(),
+            ConnectionKindTab::Adb.label(),
+            "Android",
+        ] {
+            assert_eq!(
+                resolve_connection_icon(connection.icon.as_deref(), kind),
+                android
+            );
+            assert_eq!(
+                resolve_connection_icon(Some("server"), kind),
+                lookup("server").unwrap(),
+                "an explicitly selected icon must still take precedence"
+            );
+        }
+        assert_eq!(android.paint, IconPaint::FullColor);
     }
 
     #[test]
@@ -442,7 +473,7 @@ mod tests {
 
     #[test]
     fn every_protocol_default_has_one_matching_picker_option() {
-        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC"] {
+        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC", "ADB"] {
             let default = resolve_connection_icon(None, kind);
             let matching_options = CONNECTION_ICON_OPTIONS
                 .iter()

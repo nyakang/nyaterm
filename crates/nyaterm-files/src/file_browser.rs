@@ -1,21 +1,112 @@
 use crate::local_fs::LocalFileService;
 use crate::remote_file::{
-    FileTransferEndpoint, RemoteFileService, RemoteTextDocument, RemoteTextRevision,
-    RemoteTextWriteResult,
+    FileCopyRequest, FileTransferEndpoint, RemoteFileService, RemoteTextDocument,
+    RemoteTextRevision, RemoteTextWriteResult,
 };
 use crate::sftp::{
     RemoteBinaryFile, RemoteFilePath, SftpAttributeUpdate, SftpFileEntry, SftpFileProperties,
-    SftpRemoteTextFile,
+    SftpRemoteTextFile, SftpTransferControl,
+};
+use crate::sftp_transfer_types::{
+    SftpPathTransferOptions, SftpTransferProgress, SftpTransferSummary,
 };
 use anyhow::bail;
 use nyaterm_transport::local_shell::LocalShellPathStyle;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+
+#[derive(Clone)]
+pub enum WeakFileBrowserService {
+    Remote(Weak<RemoteFileService>),
+    Adb(Weak<crate::adb::AdbFileService>),
+}
+
+impl std::fmt::Debug for WeakFileBrowserService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("WeakFileBrowserService")
+            .field(&self.kind())
+            .finish()
+    }
+}
+
+impl From<Weak<RemoteFileService>> for WeakFileBrowserService {
+    fn from(service: Weak<RemoteFileService>) -> Self {
+        Self::Remote(service)
+    }
+}
+
+impl WeakFileBrowserService {
+    pub fn kind(&self) -> FileBrowserBackendKind {
+        match self {
+            Self::Remote(_) => FileBrowserBackendKind::Remote,
+            Self::Adb(_) => FileBrowserBackendKind::Adb,
+        }
+    }
+    pub fn upgrade(&self) -> Option<FileBrowserService> {
+        match self {
+            Self::Remote(service) => service.upgrade().map(FileBrowserService::Remote),
+            Self::Adb(service) => service
+                .upgrade()
+                .filter(|s| !s.control.is_cancelled() && s.runtime.is_valid())
+                .map(FileBrowserService::Adb),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileBrowserBackendKind {
     Local,
     Remote,
+    Adb,
+}
+
+/// Entry failures have stable codes and never retain paths or picker diagnostics.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+pub enum FileTransferEntryError {
+    #[error("file transfer source is unavailable")]
+    Unavailable,
+    #[error("file transfer backend is unsupported")]
+    UnsupportedBackend,
+    #[error("file transfer destination is invalid")]
+    InvalidDestination,
+    #[error("file picker failed")]
+    PickerFailed,
+    #[error("file picker closed without a response")]
+    PickerClosed,
+    #[error("file picker is already open")]
+    PickerAlreadyOpen,
+    #[error("remote drag export is unsupported on this platform")]
+    DragPlatformUnsupported,
+    #[error("select files before starting a transfer")]
+    NoSelection,
+    #[error("links and special files cannot be transferred by this operation")]
+    UnsupportedFileType,
+    #[error("the source changed during transfer")]
+    SourceChanged,
+    #[error("file transfer exceeded its resource limit")]
+    LimitExceeded,
+    #[error("the promised destination already exists")]
+    TargetExists,
+}
+
+impl FileTransferEntryError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unavailable => "SourceUnavailable",
+            Self::UnsupportedBackend => "UnsupportedBackend",
+            Self::InvalidDestination => "InvalidDestination",
+            Self::PickerFailed => "PickerFailed",
+            Self::PickerClosed => "PickerClosed",
+            Self::PickerAlreadyOpen => "PickerAlreadyOpen",
+            Self::DragPlatformUnsupported => "DragPlatformUnsupported",
+            Self::NoSelection => "NoSelection",
+            Self::UnsupportedFileType => "UnsupportedFileType",
+            Self::SourceChanged => "SourceChanged",
+            Self::LimitExceeded => "LimitExceeded",
+            Self::TargetExists => "TargetExists",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +136,7 @@ impl FileBrowserCapabilities {
 pub enum FileBrowserService {
     Local(LocalFileService),
     Remote(Arc<RemoteFileService>),
+    Adb(Arc<crate::adb::AdbFileService>),
 }
 
 impl std::fmt::Debug for FileBrowserService {
@@ -57,13 +149,102 @@ impl std::fmt::Debug for FileBrowserService {
 }
 
 impl FileBrowserService {
+    pub fn downgrade(&self) -> Option<WeakFileBrowserService> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(service) => Some(WeakFileBrowserService::Remote(Arc::downgrade(service))),
+            Self::Adb(service) => Some(WeakFileBrowserService::Adb(Arc::downgrade(service))),
+        }
+    }
+    pub fn download_remote_path_with_progress_and_path_options(
+        &self,
+        remote: &RemoteFilePath,
+        local: PathBuf,
+        control: SftpTransferControl,
+        options: SftpPathTransferOptions,
+        progress: impl FnMut(SftpTransferProgress) + Send + 'static,
+    ) -> anyhow::Result<SftpTransferSummary> {
+        if let Self::Remote(service) = self {
+            return service.download_remote_path_with_progress_and_path_options(
+                remote, local, control, options, progress,
+            );
+        }
+        control.check_cancelled()?;
+        let local = std::path::absolute(local)?;
+        if let Some(parent) = local.parent().filter(|path| !path.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        let summary = FileCopyRequest {
+            source: self.transfer_endpoint(remote),
+            destination: FileTransferEndpoint::Local(local.clone()),
+            control,
+            options,
+        }
+        .execute_with_progress(progress)?;
+        Ok(SftpTransferSummary {
+            remote_path: remote.display_path.clone(),
+            local_path: PathBuf::from(summary.destination_path),
+            bytes: summary.bytes,
+            skipped: !summary.copied,
+        })
+    }
+
+    pub fn upload_path_with_progress_and_path_options(
+        &self,
+        local: PathBuf,
+        remote: &str,
+        control: SftpTransferControl,
+        options: SftpPathTransferOptions,
+        progress: impl FnMut(SftpTransferProgress) + Send + 'static,
+    ) -> anyhow::Result<SftpTransferSummary> {
+        self.upload_remote_path_with_progress_and_path_options(
+            local,
+            &RemoteFilePath::new(remote),
+            control,
+            options,
+            progress,
+        )
+    }
+
+    pub fn upload_remote_path_with_progress_and_path_options(
+        &self,
+        local: PathBuf,
+        remote: &RemoteFilePath,
+        control: SftpTransferControl,
+        options: SftpPathTransferOptions,
+        progress: impl FnMut(SftpTransferProgress) + Send + 'static,
+    ) -> anyhow::Result<SftpTransferSummary> {
+        if let Self::Remote(service) = self {
+            return service.upload_path_with_progress_and_path_options(
+                local,
+                &remote.display_path,
+                control,
+                options,
+                progress,
+            );
+        }
+        let summary = FileCopyRequest {
+            source: FileTransferEndpoint::Local(local.clone()),
+            destination: self.transfer_endpoint(remote),
+            control,
+            options,
+        }
+        .execute_with_progress(progress)?;
+        Ok(SftpTransferSummary {
+            remote_path: summary.destination_path,
+            local_path: local,
+            bytes: summary.bytes,
+            skipped: !summary.copied,
+        })
+    }
+
     pub fn parent_path(&self, path: &RemoteFilePath) -> anyhow::Result<RemoteFilePath> {
         match self {
             Self::Local(_) => Ok(RemoteFilePath::new(file_browser_parent(
                 self.kind(),
                 &path.display_path,
             ))),
-            Self::Remote(_) => path.parent(),
+            Self::Remote(_) | Self::Adb(_) => path.parent(),
         }
     }
 
@@ -83,6 +264,9 @@ impl FileBrowserService {
                 name,
             ))),
             Self::Remote(service) => service.child_path(directory, name),
+            Self::Adb(service) => service
+                .child_path(directory, name)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -151,6 +335,9 @@ impl FileBrowserService {
                     }
                 }
             }
+            (Self::Adb(origin), Self::Adb(target)) => origin
+                .validate_copy_destination(source, target, destination, directory)
+                .map_err(crate::adb::file_error)?,
             _ => {}
         }
         Ok(())
@@ -166,6 +353,9 @@ impl FileBrowserService {
                 service.create_dir(resolve_local_path(&path.display_path), mode)
             }
             Self::Remote(service) => service.create_dir_remote_path(path, mode),
+            Self::Adb(service) => service
+                .create_dir_remote_path(path, mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -179,6 +369,9 @@ impl FileBrowserService {
                 service.create_file(resolve_local_path(&path.display_path), mode)
             }
             Self::Remote(service) => service.create_file_remote_path(path, mode),
+            Self::Adb(service) => service
+                .create_file_remote_path(path, mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -194,6 +387,7 @@ impl FileBrowserService {
         match self {
             Self::Local(_) => FileBrowserBackendKind::Local,
             Self::Remote(_) => FileBrowserBackendKind::Remote,
+            Self::Adb(_) => FileBrowserBackendKind::Adb,
         }
     }
 
@@ -201,6 +395,12 @@ impl FileBrowserService {
         match self {
             Self::Local(_) => FileBrowserCapabilities::LOCAL,
             Self::Remote(_) => FileBrowserCapabilities::REMOTE,
+            Self::Adb(_) => FileBrowserCapabilities {
+                ordinary_transfer: true,
+                create_symlink: false,
+                edit_attributes: false,
+                direct_external_open: false,
+            },
         }
     }
 
@@ -208,6 +408,7 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.home_dir(),
             Self::Remote(service) => service.home_dir(),
+            Self::Adb(_) => Ok("/sdcard/".into()),
         }
     }
 
@@ -215,6 +416,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.list_dir(resolve_local_path(path.as_ref())),
             Self::Remote(service) => service.list_dir(path),
+            Self::Adb(service) => service
+                .list_dir_path(&RemoteFilePath::new(path.as_ref()))
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -222,6 +426,7 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.list_dir(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.list_dir_path(path),
+            Self::Adb(service) => service.list_dir_path(path).map_err(crate::adb::file_error),
         }
     }
 
@@ -229,6 +434,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.create_dir(resolve_local_path(path.as_ref()), mode),
             Self::Remote(service) => service.create_dir_path(path, mode),
+            Self::Adb(service) => service
+                .create_dir_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -236,6 +444,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.create_file(resolve_local_path(path.as_ref()), mode),
             Self::Remote(service) => service.create_file_path(path, mode),
+            Self::Adb(service) => service
+                .create_file_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -245,7 +456,9 @@ impl FileBrowserService {
         target_path: impl AsRef<str>,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Local(_) => bail!("creating symbolic links is unavailable for local browsing"),
+            Self::Adb(_) | Self::Local(_) => {
+                bail!("creating symbolic links is unavailable for this backend")
+            }
             Self::Remote(service) => service.create_symlink_path(link_path, target_path),
         }
     }
@@ -254,6 +467,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.delete(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.delete_remote_path(path),
+            Self::Adb(service) => service
+                .delete_remote_path(path)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -268,6 +484,9 @@ impl FileBrowserService {
                 resolve_local_path(&new_path.display_path),
             ),
             Self::Remote(service) => service.rename_remote_paths(old_path, new_path),
+            Self::Adb(service) => service
+                .rename_remote_paths(old_path, new_path)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -283,6 +502,9 @@ impl FileBrowserService {
                 &resolve_local_path(&destination.display_path),
             ),
             Self::Remote(service) => service.rename_remote_paths_no_replace(source, destination),
+            Self::Adb(service) => service
+                .rename_remote_paths_no_replace(source, destination)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -293,6 +515,9 @@ impl FileBrowserService {
         match self {
             Self::Local(service) => service.properties(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.remote_file_properties(path),
+            Self::Adb(service) => service
+                .remote_file_properties(path)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -302,7 +527,9 @@ impl FileBrowserService {
         update: SftpAttributeUpdate,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Local(_) => bail!("editing attributes is unavailable for local browsing"),
+            Self::Adb(_) | Self::Local(_) => {
+                bail!("editing attributes is unavailable for this backend")
+            }
             Self::Remote(service) => service.update_remote_path_attributes(path, update),
         }
     }
@@ -317,6 +544,9 @@ impl FileBrowserService {
                 service.read_text_file(resolve_local_path(&path.display_path), max_bytes)
             }
             Self::Remote(service) => service.read_text_file_path(path, max_bytes),
+            Self::Adb(service) => service
+                .read_text_file_path(path, max_bytes)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -330,6 +560,9 @@ impl FileBrowserService {
                 service.read_text_document(resolve_local_path(&path.display_path), max_bytes)
             }
             Self::Remote(service) => service.read_text_document_path(path, max_bytes),
+            Self::Adb(service) => service
+                .read_text_document_path(path, max_bytes)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -350,6 +583,9 @@ impl FileBrowserService {
             Self::Remote(service) => {
                 service.write_text_document_path(path, content, expected_revision, force)
             }
+            Self::Adb(service) => service
+                .write_text_document_path(path, content, expected_revision, force)
+                .map_err(crate::adb::file_error),
         }
     }
 
@@ -363,12 +599,19 @@ impl FileBrowserService {
                 service.read_file_bytes(resolve_local_path(&path.display_path), max_bytes)
             }
             Self::Remote(service) => service.read_file_bytes_path(path, max_bytes),
+            Self::Adb(service) => service
+                .read_file_bytes_path(path, max_bytes)
+                .map_err(crate::adb::file_error),
         }
     }
 
     pub fn transfer_endpoint(&self, path: &RemoteFilePath) -> FileTransferEndpoint {
         match self {
             Self::Local(_) => FileTransferEndpoint::Local(resolve_local_path(&path.display_path)),
+            Self::Adb(service) => FileTransferEndpoint::Adb {
+                service: service.clone(),
+                path: path.clone(),
+            },
             Self::Remote(service) => FileTransferEndpoint::Remote {
                 service: service.clone(),
                 path: path.clone(),
@@ -382,7 +625,7 @@ impl FileBrowserService {
 
     pub fn remote_service(&self) -> Option<Arc<RemoteFileService>> {
         match self {
-            Self::Local(_) => None,
+            Self::Adb(_) | Self::Local(_) => None,
             Self::Remote(service) => Some(service.clone()),
         }
     }
@@ -405,7 +648,7 @@ pub fn file_browser_name(kind: FileBrowserBackendKind, path: &str) -> String {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string()),
-        FileBrowserBackendKind::Remote => path
+        FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => path
             .trim_end_matches('/')
             .rsplit('/')
             .next()
@@ -421,7 +664,7 @@ pub fn file_browser_parent(kind: FileBrowserBackendKind, path: &str) -> String {
             .map(|parent| parent.to_string_lossy().into_owned())
             .filter(|parent| !parent.is_empty())
             .unwrap_or_else(|| path.to_string()),
-        FileBrowserBackendKind::Remote => {
+        FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
             let path = path.trim_end_matches('/');
             match path.rfind('/') {
                 Some(0) => "/".to_string(),
@@ -437,7 +680,7 @@ pub fn file_browser_join(kind: FileBrowserBackendKind, parent: &str, child: &str
         FileBrowserBackendKind::Local => {
             Path::new(parent).join(child).to_string_lossy().into_owned()
         }
-        FileBrowserBackendKind::Remote => {
+        FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
             let absolute = parent.starts_with('/');
             let parent = parent.trim_end_matches('/');
             match parent {
@@ -451,7 +694,9 @@ pub fn file_browser_join(kind: FileBrowserBackendKind, parent: &str, child: &str
 
 pub fn file_browser_root(kind: FileBrowserBackendKind, path: &str) -> String {
     match kind {
-        FileBrowserBackendKind::Remote => if path.starts_with('/') { "/" } else { "." }.to_string(),
+        FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
+            if path.starts_with('/') { "/" } else { "." }.to_string()
+        }
         FileBrowserBackendKind::Local => {
             let path = Path::new(path);
             path.ancestors()
@@ -465,11 +710,13 @@ pub fn file_browser_root(kind: FileBrowserBackendKind, path: &str) -> String {
 
 pub fn file_browser_identity(kind: FileBrowserBackendKind, path: &str) -> String {
     match kind {
-        FileBrowserBackendKind::Remote => match posix_path_parts(path) {
-            Some(parts) if parts.is_empty() => "/".to_string(),
-            Some(parts) => format!("/{}", parts.join("/")),
-            None => path.to_string(),
-        },
+        FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
+            match posix_path_parts(path) {
+                Some(parts) if parts.is_empty() => "/".to_string(),
+                Some(parts) => format!("/{}", parts.join("/")),
+                None => path.to_string(),
+            }
+        }
         FileBrowserBackendKind::Local if cfg!(windows) => {
             let path = path.replace('/', "\\");
             wsl_unc_identity(&path).unwrap_or_else(|| path.to_lowercase())
@@ -663,7 +910,7 @@ pub fn file_browser_copy_destination_invalid(
         return false;
     }
     match kind {
-        FileBrowserBackendKind::Remote => {
+        FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
             let Some(source_parts) = posix_path_parts(source) else {
                 return true;
             };

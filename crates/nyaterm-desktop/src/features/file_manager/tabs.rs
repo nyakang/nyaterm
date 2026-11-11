@@ -82,7 +82,18 @@ impl NyaTermApp {
             display_path: path,
             raw_path_token: self.transfer.browser_view().raw_path_token.clone(),
         });
-        let endpoint = if self
+        let path = if self.android_file_initial_directory(session_id).is_some() {
+            path.filter(|path| nyaterm_files::adb::raw_path(path).is_ok())
+                .or_else(|| {
+                    self.android_file_initial_directory(session_id)
+                        .map(RemoteFilePath::new)
+                })
+        } else {
+            path
+        };
+        let endpoint = if let Some(config) = self.android_config_for_session(session_id) {
+            PaneEndpoint::Adb(config.device_key)
+        } else if self
             .session
             .file_browser_backend_support_for_session(session_id)
             == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
@@ -289,7 +300,7 @@ impl NyaTermApp {
         FileManagerPaneRestore {
             source: match &pane.endpoint {
                 PaneEndpoint::Local => FileManagerSourceRestore::Local,
-                PaneEndpoint::OfflineConnection(id) => {
+                PaneEndpoint::Adb(id) | PaneEndpoint::OfflineConnection(id) => {
                     FileManagerSourceRestore::Connection { id: id.clone() }
                 }
                 PaneEndpoint::Session(session_id) => {
@@ -332,7 +343,7 @@ impl NyaTermApp {
         let mut remember = |endpoint: &PaneEndpoint, path: &RemoteFilePath| {
             let source = match endpoint {
                 PaneEndpoint::Local => FileManagerSourceRestore::Local,
-                PaneEndpoint::OfflineConnection(id) => {
+                PaneEndpoint::Adb(id) | PaneEndpoint::OfflineConnection(id) => {
                     FileManagerSourceRestore::Connection { id: id.clone() }
                 }
                 PaneEndpoint::Session(session) => {
@@ -381,7 +392,7 @@ impl NyaTermApp {
         };
         let source = match &endpoint {
             PaneEndpoint::Local => Some(FileManagerSourceRestore::Local),
-            PaneEndpoint::OfflineConnection(id) => {
+            PaneEndpoint::Adb(id) | PaneEndpoint::OfflineConnection(id) => {
                 Some(FileManagerSourceRestore::Connection { id: id.clone() })
             }
             PaneEndpoint::Session(session) => self
@@ -454,7 +465,7 @@ impl NyaTermApp {
     ) {
         match endpoint {
             PaneEndpoint::Session(session) => self.reconnect_session(session, window, cx),
-            PaneEndpoint::OfflineConnection(connection) => {
+            PaneEndpoint::Adb(connection) | PaneEndpoint::OfflineConnection(connection) => {
                 if let Some(saved) = self.connection_state.connection_by_id(&connection).cloned() {
                     self.start_saved_connection(saved, window, cx);
                 } else {
@@ -496,6 +507,7 @@ impl NyaTermApp {
     pub(in crate::features) fn endpoint_label(&self, endpoint: &PaneEndpoint) -> String {
         match endpoint {
             PaneEndpoint::Local => t!("fileManager.local").to_string(),
+            PaneEndpoint::Adb(key) => self.android.device_name(key),
             PaneEndpoint::OfflineConnection(id) => self
                 .connection_state
                 .connection_by_id(id)

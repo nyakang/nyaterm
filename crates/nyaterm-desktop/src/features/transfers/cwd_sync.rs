@@ -104,7 +104,9 @@ impl NyaTermApp {
             translate_local_browser_cwd(backend, style, wsl_distro.as_deref(), cwd.to_string())?;
         (!cwd.is_empty()
             && match backend {
-                FileBrowserBackendKind::Remote => cwd.starts_with('/'),
+                FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
+                    cwd.starts_with('/')
+                }
                 FileBrowserBackendKind::Local => std::path::Path::new(&cwd).is_absolute(),
             })
         .then_some(cwd)

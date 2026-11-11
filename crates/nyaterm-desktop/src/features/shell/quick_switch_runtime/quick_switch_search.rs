@@ -242,7 +242,13 @@ fn item_endpoint(item: &QuickSwitchItem) -> Option<(&str, u16)> {
             | ConnectionType::Telnet { host, port, .. }
             | ConnectionType::Rdp { host, port, .. }
             | ConnectionType::Vnc { host, port, .. } => Some((host, *port)),
-            ConnectionType::LocalTerminal { .. } | ConnectionType::Serial { .. } => None,
+            ConnectionType::Adb {
+                device: nyaterm_core::models::android::AdbDeviceSelector::Tcp { host, port },
+                ..
+            } => Some((host, *port)),
+            ConnectionType::Adb { .. }
+            | ConnectionType::LocalTerminal { .. }
+            | ConnectionType::Serial { .. } => None,
         },
         QuickSwitchItem::Pending { .. } => None,
     }

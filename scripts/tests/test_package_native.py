@@ -63,6 +63,11 @@ def staged_package(target: str):
 
 
 class PackageNativeTests(unittest.TestCase):
+    def setUp(self):
+        from scripts.tests.test_verify_native_package import stage_android_fixture
+        patcher = mock.patch.object(package_native, "copy_android_resources", side_effect=stage_android_fixture)
+        patcher.start(); self.addCleanup(patcher.stop)
+
     @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
     def test_real_deb_icons_are_readable_root_owned_and_repaired_on_configure(self) -> None:
         for version in ("2.0.0", "2.0.0-preview.1"):

@@ -86,13 +86,28 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.github/actions/install-linux-deps
         with:
-          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm
+          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm libclang-dev cmake ninja-build libprotobuf-dev protobuf-compiler libusb-1.0-0-dev libssl-dev zlib1g-dev libbrotli-dev liblz4-dev libpcre2-dev libzstd-dev
       - name: Install AppImage tooling
         if: runner.os == 'Linux'
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: bash scripts/ci/install-appimagetool.sh "${TARGET}"
+      - name: Install Android native build tools (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install pkg-config
+      - name: Install Android native build tools (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install llvm -y --no-progress
+      - name: Set up MSYS2 for Android native dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          path-type: inherit
+          install: make
       - name: Install NSIS
         if: runner.os == 'Windows'
         shell: pwsh
@@ -122,6 +137,12 @@ jobs:
           NYATERM_VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
         run: python scripts/release/package_native.py "${TARGET}"
+      - name: Prepare Android native dependencies (Windows MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python scripts/release/prepare_android.py --target "${TARGET}"
       - name: Package native application (Windows MSVC)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -140,6 +161,12 @@ jobs:
           Write-Host "Using MSVC linker: $linker"
           python scripts/release/package_native.py "$env:TARGET"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test Windows FFmpeg import library links and cached repair
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python scripts/ci/test_scripts.py --suite android-ffmpeg
       - name: Verify native package
         shell: bash
         env:

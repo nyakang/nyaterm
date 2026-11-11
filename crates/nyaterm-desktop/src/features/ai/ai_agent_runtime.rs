@@ -249,9 +249,11 @@ impl NyaTermApp {
                 SessionKind::LocalPty | SessionKind::Telnet | SessionKind::RawTcp => {
                     AiExecutionProfile::Posix
                 }
-                SessionKind::Serial | SessionKind::Rdp | SessionKind::Vnc => {
-                    AiExecutionProfile::SendOnly
-                }
+                SessionKind::AdbFiles | SessionKind::AdbScreen => AiExecutionProfile::Disabled,
+                SessionKind::AdbShell
+                | SessionKind::Serial
+                | SessionKind::Rdp
+                | SessionKind::Vnc => AiExecutionProfile::SendOnly,
             })
             .unwrap_or(AiExecutionProfile::SendOnly)
     }

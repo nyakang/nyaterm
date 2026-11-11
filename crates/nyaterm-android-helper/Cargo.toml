@@ -1,0 +1,17 @@
+[package]
+name = "nyaterm-android-helper"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nyaterm-android.workspace = true
+nyaterm-core.workspace = true
+# 8.1.0's codec/scaling modules import format unconditionally. Its native
+# demuxers, protocols and network are disabled in the pinned FFmpeg build.
+ffmpeg-next = { version = "=8.1.0", default-features = false, features = ["codec", "software-scaling", "format"] }
+
+[dev-dependencies]
+tempfile.workspace = true

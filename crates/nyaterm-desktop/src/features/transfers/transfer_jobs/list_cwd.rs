@@ -16,7 +16,16 @@ impl NyaTermApp {
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(error) => {
-                self.transfer.browser.error = Some(error.to_string());
+                crate::features::android::labels::log_file_error(
+                    "initial-directory",
+                    self.session
+                        .active_file_browser_backend()
+                        .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote),
+                    "service",
+                    &error,
+                );
+                self.transfer.browser.error =
+                    Some(crate::features::android::labels::file_error_message(&error));
                 cx.notify();
                 return;
             }
@@ -68,13 +77,19 @@ impl NyaTermApp {
             id.clone(),
             transfer_tx.clone(),
             move || {
-                let result = resolve_initial_directory(
-                    || service.home_dir().map_err(|error| error.to_string()),
-                    |path| service.list_dir(path).map_err(|error| error.to_string()),
-                );
+                let result =
+                    resolve_initial_directory(|| service.home_dir(), |path| service.list_dir(path));
+                if let Err(error) = &result {
+                    crate::features::android::labels::log_file_error(
+                        "list-directory",
+                        service.kind(),
+                        &id,
+                        error,
+                    );
+                }
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
-                    event: TransferJobEvent::Finished(result),
+                    event: TransferJobEvent::FileFinished(result),
                 });
             },
         );
@@ -95,7 +110,16 @@ impl NyaTermApp {
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(error) => {
-                self.transfer.browser.status = error.to_string();
+                crate::features::android::labels::log_file_error(
+                    "resolve-directory",
+                    self.session
+                        .active_file_browser_backend()
+                        .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote),
+                    "service",
+                    &error,
+                );
+                self.transfer.browser.status =
+                    crate::features::android::labels::file_error_message(&error);
                 cx.notify();
                 return;
             }
@@ -143,16 +167,24 @@ impl NyaTermApp {
             id.clone(),
             transfer_tx.clone(),
             move || {
-                let result = service
-                    .list_dir(&remote_path)
-                    .map(|entries| TransferJobOutput::ChildEntries {
-                        remote_path,
-                        entries,
-                    })
-                    .map_err(|error| error.to_string());
+                let result =
+                    service
+                        .list_dir(&remote_path)
+                        .map(|entries| TransferJobOutput::ChildEntries {
+                            remote_path,
+                            entries,
+                        });
+                if let Err(error) = &result {
+                    crate::features::android::labels::log_file_error(
+                        "list-directory",
+                        service.kind(),
+                        &id,
+                        error,
+                    );
+                }
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
-                    event: TransferJobEvent::Finished(result),
+                    event: TransferJobEvent::FileFinished(result),
                 });
             },
         );
@@ -178,8 +210,17 @@ impl NyaTermApp {
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(error) => {
+                crate::features::android::labels::log_file_error(
+                    "list-directory",
+                    self.session
+                        .active_file_browser_backend()
+                        .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote),
+                    "service",
+                    &error,
+                );
                 self.restore_transfer_browser_navigation(rollback);
-                self.shell.set_status(error.to_string());
+                self.shell
+                    .set_status(crate::features::android::labels::file_error_message(&error));
                 cx.notify();
                 return;
             }
@@ -245,19 +286,27 @@ impl NyaTermApp {
             id.clone(),
             transfer_tx.clone(),
             move || {
-                let result = service
-                    .list_dir_path(&remote_file_path)
-                    .map(|entries| match cwd_reason {
-                        Some(_) => TransferJobOutput::CwdSynced {
-                            remote_path,
-                            entries,
-                        },
-                        None => TransferJobOutput::Entries(entries),
-                    })
-                    .map_err(|error| error.to_string());
+                let result =
+                    service
+                        .list_dir_path(&remote_file_path)
+                        .map(|entries| match cwd_reason {
+                            Some(_) => TransferJobOutput::CwdSynced {
+                                remote_path,
+                                entries,
+                            },
+                            None => TransferJobOutput::Entries(entries),
+                        });
+                if let Err(error) = &result {
+                    crate::features::android::labels::log_file_error(
+                        "list-directory",
+                        service.kind(),
+                        &id,
+                        error,
+                    );
+                }
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
-                    event: TransferJobEvent::Finished(result),
+                    event: TransferJobEvent::FileFinished(result),
                 });
             },
         );
@@ -286,7 +335,16 @@ impl NyaTermApp {
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(error) => {
-                self.transfer.browser.status = error.to_string();
+                crate::features::android::labels::log_file_error(
+                    "resolve-directory",
+                    self.session
+                        .active_file_browser_backend()
+                        .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote),
+                    "service",
+                    &error,
+                );
+                self.transfer.browser.status =
+                    crate::features::android::labels::file_error_message(&error);
                 cx.notify();
                 return;
             }
@@ -316,12 +374,20 @@ impl NyaTermApp {
             transfer_tx.clone(),
             move || {
                 let result = (|| {
-                    let home_dir = service.home_dir().map_err(|error| error.to_string())?;
+                    let home_dir = service.home_dir()?;
                     Ok(TransferJobOutput::HomeDir(home_dir))
                 })();
+                if let Err(error) = &result {
+                    crate::features::android::labels::log_file_error(
+                        "resolve-home",
+                        service.kind(),
+                        &id,
+                        error,
+                    );
+                }
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
-                    event: TransferJobEvent::Finished(result),
+                    event: TransferJobEvent::FileFinished(result),
                 });
             },
         );
@@ -329,10 +395,10 @@ impl NyaTermApp {
     }
 }
 
-fn resolve_initial_directory(
-    home_dir: impl FnOnce() -> Result<String, String>,
-    mut list_dir: impl FnMut(&str) -> Result<Vec<SftpFileEntry>, String>,
-) -> Result<TransferJobOutput, String> {
+fn resolve_initial_directory<E>(
+    home_dir: impl FnOnce() -> Result<String, E>,
+    mut list_dir: impl FnMut(&str) -> Result<Vec<SftpFileEntry>, E>,
+) -> Result<TransferJobOutput, E> {
     if let Ok(home) = home_dir() {
         let home = home.trim();
         if home.starts_with('/')
@@ -358,7 +424,7 @@ mod tests {
 
     #[test]
     fn initial_directory_uses_home_when_it_can_be_listed() {
-        let result = resolve_initial_directory(
+        let result = resolve_initial_directory::<String>(
             || Ok("/home/user".to_string()),
             |path| {
                 assert_eq!(path, "/home/user");
@@ -373,7 +439,7 @@ mod tests {
 
     #[test]
     fn initial_directory_falls_back_to_root_after_home_error() {
-        let result = resolve_initial_directory(
+        let result = resolve_initial_directory::<String>(
             || Err("home unavailable".to_string()),
             |path| {
                 assert_eq!(path, "/");
@@ -387,7 +453,7 @@ mod tests {
     #[test]
     fn initial_directory_falls_back_to_root_after_home_listing_error() {
         let mut attempted = Vec::new();
-        let result = resolve_initial_directory(
+        let result = resolve_initial_directory::<String>(
             || Ok("/home/user".to_string()),
             |path| {
                 attempted.push(path.to_string());
@@ -405,7 +471,7 @@ mod tests {
 
     #[test]
     fn initial_directory_reports_root_error_when_both_locations_fail() {
-        let result = resolve_initial_directory(
+        let result = resolve_initial_directory::<String>(
             || Ok("/home/user".to_string()),
             |_| Err("root unavailable".to_string()),
         );

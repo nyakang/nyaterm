@@ -476,3 +476,171 @@ fn rendered_context_menu_keeps_multi_selection_and_activates_the_clicked_pane(
         );
     });
 }
+
+#[gpui::test]
+fn system_file_drop_on_an_offline_adb_pane_paints_a_localized_error_notification(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{ExternalPaths, FileDropEvent};
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-offline-adb-drop");
+    std::fs::create_dir_all(root.path().join("target")).unwrap();
+    let input = root.path().join("input.txt");
+    std::fs::write(&input, b"offline drop").unwrap();
+    let app = crate::features::test_support::app_with_visible_android_session(
+        cx,
+        root.path(),
+        "adb-drop-test",
+        "/device",
+    );
+    let palette = crate::theme::theme_palette("dark");
+    cx.update(|cx| {
+        cx.set_reduce_motion(true);
+        nyaterm_ui::apply_component_theme(palette, gpui::font("Segoe UI"), gpui::px(14.), cx);
+    });
+    let workspace = workspace(cx, &app, "/device");
+    let key = cx.read(|cx| {
+        app.read(cx)
+            .android_config_for_session("adb-drop-test")
+            .unwrap()
+            .device_key
+    });
+    workspace.update(cx, |state, _| {
+        state.left.endpoint = PaneEndpoint::Adb(key);
+        state.left.disconnected = true;
+        state.left.entries = std::sync::Arc::new(
+            nyaterm_files::file_browser::FileBrowserService::local()
+                .list_dir(root.path().to_string_lossy())
+                .unwrap(),
+        );
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    cx.update(|window, cx| {
+        app.update(cx, |app, _| {
+            app.shell
+                .remember_main_window(window.window_handle().downcast().unwrap());
+        });
+    });
+    draw_file_manager(cx);
+    let surface = gpui::Background::from(gpui::rgb(palette.surface));
+    let painted_surfaces = |window: &gpui::Window| {
+        window
+            .painted_quads()
+            .iter()
+            .filter(|quad| quad.background == surface)
+            .count()
+    };
+    let before = cx.update(|window, _| painted_surfaces(window));
+    let position = cx
+        .debug_bounds("file-manager-row-left-target")
+        .unwrap()
+        .center();
+    cx.simulate_event(FileDropEvent::Entered {
+        position,
+        paths: ExternalPaths(vec![input].into()),
+    });
+    draw_file_manager(cx);
+    cx.simulate_event(FileDropEvent::Submit { position });
+    draw_file_manager(cx);
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            app.shell.status(),
+            rust_i18n::t!("fileExplorer.transferSourceUnavailable").to_string(),
+        );
+        assert!(app.transfer.transfer_jobs().is_empty());
+    });
+    // The component toast adds a painted popover surface above the unchanged panes.
+    assert!(cx.update(|window, _| painted_surfaces(window)) > before);
+}
+
+#[gpui::test]
+fn system_file_drop_on_a_directory_row_uses_its_local_identity_and_actual_destination(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{ExternalPaths, FileDropEvent};
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-external-drop");
+    let directory = root.path().join("target");
+    std::fs::create_dir_all(&directory).unwrap();
+    let input = root.path().join("input.txt");
+    std::fs::write(&input, b"external drop content").unwrap();
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    workspace.update(cx, |state, _| {
+        state.left.entries = std::sync::Arc::new(
+            nyaterm_files::file_browser::FileBrowserService::local()
+                .list_dir(root.path().to_string_lossy())
+                .unwrap(),
+        );
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.shell
+                .remember_main_window(window.window_handle().downcast().unwrap());
+            app.start_transfer_event_drain(cx);
+        });
+    });
+    draw_file_manager(cx);
+    let position = cx
+        .debug_bounds("file-manager-row-left-target")
+        .unwrap()
+        .center();
+    cx.simulate_event(FileDropEvent::Entered {
+        position,
+        paths: ExternalPaths(vec![input.clone()].into()),
+    });
+    draw_file_manager(cx);
+    cx.simulate_event(FileDropEvent::Submit { position });
+    wait_for(cx, "external upload", |_| {
+        directory.join("input.txt").exists()
+    });
+    assert_eq!(
+        std::fs::read(directory.join("input.txt")).unwrap(),
+        b"external drop content"
+    );
+    cx.read(|cx| {
+        let app = app.read(cx);
+        let job = app
+            .transfer
+            .transfer_jobs()
+            .iter()
+            .find(|job| matches!(job.kind, crate::models::TransferJobKind::Upload { .. }))
+            .unwrap();
+        let crate::models::TransferJobKind::Upload { remote_path, .. } = &job.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            std::path::Path::new(remote_path),
+            directory.join("input.txt")
+        );
+    });
+    wait_for(cx, "transfer completion", |cx| {
+        app.read(cx).transfer.transfer_jobs().iter().all(|job| {
+            !matches!(
+                job.status,
+                crate::models::TransferJobStatus::Running
+                    | crate::models::TransferJobStatus::Queued
+            )
+        })
+    });
+}

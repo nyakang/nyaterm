@@ -712,7 +712,20 @@ impl SftpService {
         } else {
             run_sftp_operation(operation)
         };
-        if let Err(error) = result.as_ref() {
+        // Transfer owners report the typed final error once with a request id.
+        // Keep diagnostics here for operations without a transfer task owner.
+        if let Err(error) = result.as_ref()
+            && !matches!(
+                operation_name,
+                "upload_file"
+                    | "upload_remote_file"
+                    | "upload_path"
+                    | "download_file"
+                    | "download_path"
+                    | "download_remote_path"
+            )
+            && !is_sftp_transfer_cancelled(error)
+        {
             tracing::warn!(
                 session_id = self.session_id,
                 operation = operation_name,
@@ -720,29 +733,6 @@ impl SftpService {
                 category = sftp_error_category(error),
                 "SFTP operation failed"
             );
-        }
-        result
-    }
-
-    /// Runs an upload and records its final result; ordinary failures are logged as errors,
-    /// while user cancellations are logged as warnings.
-    fn run_upload_operation<T, F>(
-        &self,
-        operation: &'static str,
-        attempts: u32,
-        operation_future: F,
-    ) -> anyhow::Result<T>
-    where
-        T: Send + 'static,
-        F: Future<Output = anyhow::Result<T>> + Send + 'static,
-    {
-        let result = self.run_operation(operation, operation_future);
-        if let Err(error) = &result {
-            if is_sftp_transfer_cancelled(error) {
-                tracing::warn!(operation, "SFTP upload cancelled");
-            } else {
-                log_sftp_upload_failure(operation, attempts, error);
-            }
         }
         result
     }
@@ -1279,6 +1269,36 @@ impl SftpService {
             .await;
             close_sftp_session(session).await;
             result
+        })
+    }
+
+    pub(crate) fn set_modified_remote_path(
+        &self,
+        path: &RemoteFilePath,
+        modified: u32,
+    ) -> anyhow::Result<()> {
+        let path = path.clone();
+        let config = self.config.clone();
+        let multiplex = self.multiplex.clone();
+        self.run_operation("set_modified", async move {
+            let codec = SftpPathCodec::from_ssh_config(&config)?;
+            let raw = remote_file_path_bytes(&codec, &path)?;
+            let session = open_sftp_session(&config, multiplex.as_ref()).await?;
+            let current = session.sftp.symlink_metadata_bytes(raw.clone()).await?;
+            let attributes = russh_sftp::protocol::FileAttributes {
+                atime: Some(current.atime.unwrap_or(modified)),
+                mtime: Some(modified),
+                ..russh_sftp::protocol::FileAttributes::empty()
+            };
+            session
+                .sftp
+                .set_metadata_bytes(raw.clone(), attributes)
+                .await?;
+            anyhow::ensure!(
+                session.sftp.symlink_metadata_bytes(raw).await?.mtime == Some(modified),
+                "remote timestamp could not be preserved"
+            );
+            Ok(())
         })
     }
 
@@ -2243,8 +2263,7 @@ impl SftpService {
         let remote_path = remote_path.as_ref().to_string();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        let attempts = options.max_retries().saturating_add(1);
-        self.run_upload_operation("upload_file", attempts, async move {
+        self.run_operation("upload_file", async move {
             let upload_metadata = UploadMetadata::default();
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let codec = SftpPathCodec::from_ssh_config(&config)?;
@@ -2306,8 +2325,7 @@ impl SftpService {
         let remote_path = remote_path.clone();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        let attempts = options.max_retries().saturating_add(1);
-        self.run_upload_operation("upload_remote_file", attempts, async move {
+        self.run_operation("upload_remote_file", async move {
             let upload_metadata = UploadMetadata::default();
             let codec = SftpPathCodec::from_ssh_config(&config)?;
             let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
@@ -2450,11 +2468,7 @@ impl SftpService {
         let remote_path = remote_path.as_ref().to_string();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        let attempts = path_options
-            .transfer_options()
-            .max_retries()
-            .saturating_add(1);
-        self.run_upload_operation("upload_path", attempts, async move {
+        self.run_operation("upload_path", async move {
             let upload_metadata = UploadMetadata::default();
             let metadata = tokio::fs::metadata(&local_path).await?;
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
@@ -2724,17 +2738,6 @@ fn remote_join_bytes(parent: &[u8], child: &[u8]) -> Vec<u8> {
 
 fn is_sftp_transfer_cancelled(error: &anyhow::Error) -> bool {
     error.to_string().contains(SFTP_TRANSFER_CANCELLED)
-}
-
-/// Server status strings can contain user data; diagnostics record categories, never error text.
-fn log_sftp_upload_failure(operation: &'static str, attempts: u32, error: &anyhow::Error) {
-    tracing::error!(
-        operation,
-        attempts,
-        stage = "completion",
-        category = sftp_error_category(error),
-        "SFTP upload failed"
-    );
 }
 
 /// Replaces an existing file with a fully written temporary file. Plain SFTP v3 rename refuses
@@ -3076,6 +3079,7 @@ where
     {
         let bytes = source_metadata.size.unwrap_or(0);
         progress(SftpTransferProgress {
+            phase: None,
             remote_path: remote_path.to_string(),
             local_path: local_path.to_path_buf(),
             bytes_transferred: bytes,
@@ -3116,6 +3120,7 @@ where
         let result = async {
             let mut bytes = resume_offset;
             progress(SftpTransferProgress {
+                phase: None,
                 remote_path: remote_path.to_string(),
                 local_path: local_path.to_path_buf(),
                 bytes_transferred: bytes,
@@ -3156,6 +3161,7 @@ where
                     local.write_all(&data).await?;
                     bytes += data.len() as u64;
                     progress(SftpTransferProgress {
+                        phase: None,
                         remote_path: remote_path.to_string(),
                         local_path: local_path.to_path_buf(),
                         bytes_transferred: bytes,
@@ -3175,6 +3181,7 @@ where
                     local.write_all(&buffer[..read]).await?;
                     bytes += read as u64;
                     progress(SftpTransferProgress {
+                        phase: None,
                         remote_path: remote_path.to_string(),
                         local_path: local_path.to_path_buf(),
                         bytes_transferred: bytes,
@@ -3439,6 +3446,7 @@ where
                     let finished = completed.fetch_add(1, Ordering::Relaxed) + 1;
                     if let Ok(mut callback) = progress.lock() {
                         callback(SftpTransferProgress {
+                            phase: None,
                             remote_path,
                             local_path,
                             bytes_transferred: total_bytes.load(Ordering::Relaxed),
@@ -3547,6 +3555,7 @@ where
     let mut buffer = vec![0_u8; sftp_upload_buffer_size(options)];
     let mut bytes = 0_u64;
     progress(SftpTransferProgress {
+        phase: None,
         remote_path: remote_path.to_string(),
         local_path: local_path.to_path_buf(),
         bytes_transferred: bytes,
@@ -3564,6 +3573,7 @@ where
         control.wait_if_paused().await?;
         bytes += read as u64;
         progress(SftpTransferProgress {
+            phase: None,
             remote_path: remote_path.to_string(),
             local_path: local_path.to_path_buf(),
             bytes_transferred: bytes,
@@ -3675,6 +3685,7 @@ where
             .await?;
             transferred = transferred.saturating_add(bytes);
             progress(SftpTransferProgress {
+                phase: None,
                 remote_path: entry.remote_path,
                 local_path: entry.local_path,
                 bytes_transferred: transferred,
@@ -4040,6 +4051,7 @@ async fn upload_local_directory_entry(
         .min(item_count_total);
     let aggregate_bytes = bytes_transferred.load(Ordering::Relaxed);
     let _ = progress_tx.send(SftpTransferProgress {
+        phase: None,
         remote_path: progress_remote_path,
         local_path: progress_local_path,
         bytes_transferred: aggregate_bytes,
@@ -4058,6 +4070,7 @@ fn directory_upload_aggregate_progress(
     item_count_total: u64,
 ) -> SftpTransferProgress {
     SftpTransferProgress {
+        phase: None,
         remote_path: current.remote_path,
         local_path: current.local_path,
         bytes_transferred: aggregate_bytes,
@@ -4140,6 +4153,7 @@ fn directory_transfer_progress(
     item_count_total: u64,
 ) -> SftpTransferProgress {
     SftpTransferProgress {
+        phase: None,
         remote_path: current.remote_path,
         local_path: current.local_path,
         bytes_transferred: completed_bytes.saturating_add(current.bytes_transferred),
@@ -4357,6 +4371,7 @@ mod tests {
     #[test]
     fn directory_progress_accumulates_file_bytes_and_preserves_item_counts() {
         let current = SftpTransferProgress {
+            phase: None,
             remote_path: "/remote/two.txt".to_string(),
             local_path: PathBuf::from("/local/two.txt"),
             bytes_transferred: 25,
@@ -4565,6 +4580,7 @@ mod tests {
     #[test]
     fn directory_upload_progress_uses_global_bytes_and_completed_items() {
         let current = SftpTransferProgress {
+            phase: None,
             remote_path: "/remote/current.txt".to_string(),
             local_path: PathBuf::from("/local/current.txt"),
             bytes_transferred: 15,

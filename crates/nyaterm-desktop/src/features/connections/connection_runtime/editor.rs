@@ -103,6 +103,18 @@ impl NyaTermApp {
             ConnectionEditorValidationError::MissingAccount => {
                 t!("passwordManager.missingAccount").into()
             }
+            ConnectionEditorValidationError::AndroidSettings(error) => {
+                crate::features::android::labels::screen_validation_message(*error)
+            }
+            ConnectionEditorValidationError::AndroidDeviceRequired => {
+                t!("android.errors.deviceRequired").into()
+            }
+            ConnectionEditorValidationError::AndroidHostInvalid => {
+                t!("android.errors.hostInvalid").into()
+            }
+            ConnectionEditorValidationError::AndroidDirectoryInvalid => {
+                t!("android.errors.directoryInvalid").into()
+            }
             ConnectionEditorValidationError::HostRequired => t!("dialog.hostRequired").into(),
             ConnectionEditorValidationError::PortInvalid => t!("dialog.portInvalid").into(),
             ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
@@ -226,6 +238,8 @@ impl NyaTermApp {
             connection_editor_from_saved(connection, connect_after_save)
         } else {
             ConnectionEditorState {
+                android_usb: false,
+                android_screen: Default::default(),
                 id: None,
                 kind: ConnectionKindTab::Ssh,
                 name: String::new(),
@@ -346,6 +360,9 @@ impl NyaTermApp {
             }
         };
 
+        if editor.kind == ConnectionKindTab::Adb {
+            self.prepare_android_tracker(cx);
+        }
         self.connection_state.begin_editor(editor);
         self.reconcile_open_editor_password_source();
         if self.security_secrets_locked() {
@@ -858,9 +875,13 @@ impl NyaTermApp {
                 ConnectionKindTab::Serial => &t!("dialog.serial"),
                 ConnectionKindTab::Rdp => "RDP",
                 ConnectionKindTab::Vnc => "VNC",
+                ConnectionKindTab::Adb => "Android",
             };
             self.shell
                 .set_status(t!("dialog.connectionTypeChanged", "type" => kind_label));
+        }
+        if kind == ConnectionKindTab::Adb {
+            self.prepare_android_tracker(cx);
         }
         cx.notify();
     }

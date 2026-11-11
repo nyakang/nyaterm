@@ -52,6 +52,12 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap_3()
+            .child(settings_form_row(
+                palette,
+                rust_i18n::t!("android.adbExecutable"),
+                Some(SharedString::from(rust_i18n::t!("android.adbPathHint"))),
+                self.existing_text_input_box("settings.android.adb-path", false),
+            ))
             .child(settings_form_section(
                 palette,
                 None,

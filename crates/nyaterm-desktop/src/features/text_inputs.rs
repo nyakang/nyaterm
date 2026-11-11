@@ -650,6 +650,8 @@ impl NyaTermApp {
             self.apply_interaction_word_separators(text, cx);
         } else if id.as_ref() == "settings.terminal.x11-display" {
             self.apply_terminal_x11_display(text, cx);
+        } else if id.as_ref() == "settings.android.adb-path" {
+            self.apply_android_adb_path(text, cx);
         } else if id.as_ref() == "settings.terminal.timestamp-format" {
             self.apply_terminal_timestamp_format(text, cx);
         } else if id.as_ref() == "settings.security.master-password" {

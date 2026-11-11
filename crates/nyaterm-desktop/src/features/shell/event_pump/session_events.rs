@@ -328,6 +328,16 @@ impl NyaTermApp {
                             &mut pending_frame_outputs,
                             &mut drain_timings,
                         );
+                        let reason = if self.session.metadata(&session_id).is_some_and(|metadata| {
+                            matches!(
+                                metadata.launch_config,
+                                crate::models::SessionLaunchConfig::AdbShell(_)
+                            )
+                        }) {
+                            crate::features::android::labels::shell_event_message(&reason)
+                        } else {
+                            reason
+                        };
                         root_chrome_dirty |=
                             self.handle_session_exited_event(session_id, reason, cx);
                     }
@@ -359,6 +369,17 @@ impl NyaTermApp {
                             &mut pending_frame_outputs,
                             &mut drain_timings,
                         );
+                        let message =
+                            if self.session.metadata(&session_id).is_some_and(|metadata| {
+                                matches!(
+                                    metadata.launch_config,
+                                    crate::models::SessionLaunchConfig::AdbShell(_)
+                                )
+                            }) {
+                                crate::features::android::labels::shell_event_message(&message)
+                            } else {
+                                message
+                            };
                         root_chrome_dirty |=
                             self.handle_session_error_event(session_id, message, cx);
                     }
@@ -519,7 +540,20 @@ impl NyaTermApp {
             "session exited or disconnected"
         );
         let log_reason = terminal_log_plain_text(&reason);
-        let log = format!("\n# session disconnected: {log_reason}\n");
+        let android = self.session.metadata(&session_id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::AdbShell(_)
+            )
+        });
+        let log = if android {
+            format!(
+                "\n# {}: {log_reason}\n",
+                rust_i18n::t!("sessionNotice.disconnected")
+            )
+        } else {
+            format!("\n# session disconnected: {log_reason}\n")
+        };
         if known_session && !self.session.is_disconnected(&session_id) {
             self.recording.write_local_message(session_id.clone(), log);
             self.publish_session_notice(&session_id, SessionNoticeKind::Disconnected(reason));
@@ -533,8 +567,18 @@ impl NyaTermApp {
         if known_session {
             // Keep the tab so the user can reconnect (Tauri disconnected pane).
             self.mark_session_disconnected(&session_id, cx);
-            self.shell
-                .set_status(format!("session disconnected {}", short_id(&session_id)));
+            self.shell.set_status(
+                if self.session.metadata(&session_id).is_some_and(|metadata| {
+                    matches!(
+                        metadata.launch_config,
+                        crate::models::SessionLaunchConfig::AdbShell(_)
+                    )
+                }) {
+                    rust_i18n::t!("android.errors.disconnected").into_owned()
+                } else {
+                    format!("session disconnected {}", short_id(&session_id))
+                },
+            );
         } else {
             self.shell
                 .set_status(format!("session exited {}", short_id(&session_id)));
@@ -558,7 +602,20 @@ impl NyaTermApp {
             "session error"
         );
         let log_message = terminal_log_plain_text(&message);
-        let log = format!("\n# session error: {log_message}\n");
+        let android = self.session.metadata(&session_id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::AdbShell(_)
+            )
+        });
+        let log = if android {
+            format!(
+                "\n# {}: {log_message}\n",
+                rust_i18n::t!("sessionNotice.error")
+            )
+        } else {
+            format!("\n# session error: {log_message}\n")
+        };
         if !session_id.is_empty() {
             self.sync_session_event_bridge_session_policy(&session_id);
             self.recording

@@ -967,6 +967,8 @@ fn connection_editor_new_group_commit_closes_select_and_keeps_pending_parent() {
 #[test]
 fn editing_a_field_clears_a_stale_validation_error() {
     let mut draft = ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         error: Some("SSH host is required".to_string()),
         ..connection_editor_state_with_secret_draft()
     };
@@ -984,6 +986,8 @@ fn editing_a_field_clears_a_stale_validation_error() {
 #[test]
 fn set_connection_editor_icon_trims_empty_values_and_clears_error() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         error: Some("stale validation".to_string()),
         ..connection_editor_state_with_secret_draft()
     });
@@ -1008,6 +1012,8 @@ fn set_connection_editor_icon_trims_empty_values_and_clears_error() {
 #[test]
 fn switching_to_no_authentication_preserves_password_and_key_drafts() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         password_id: Some("saved-password".to_string()),
         key_id: Some("key-a".to_string()),
         error: Some("stale validation".to_string()),
@@ -1054,6 +1060,8 @@ fn set_connection_editor_agent_endpoint_updates_the_authentication_endpoint() {
 #[test]
 fn enabling_allow_all_agent_forwarding_requires_fresh_confirmation() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         agent_allow_all_confirmed: true,
         agent_forwarding_config: nyaterm_core::SshAgentForwardingConfig {
             enabled: false,
@@ -1076,6 +1084,8 @@ fn enabling_allow_all_agent_forwarding_requires_fresh_confirmation() {
 #[test]
 fn set_connection_editor_group_select_value_clears_group_draft() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         new_group_name: "scratch".to_string(),
         pending_group_name: Some("pending".to_string()),
         pending_group_parent_id: Some("parent".to_string()),
@@ -1102,6 +1112,8 @@ fn set_connection_editor_group_select_value_clears_group_draft() {
 #[test]
 fn ssh_profile_selection_preserves_explicit_terminal_type() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         terminal_type: Some(SshTerminalType::Ansi),
         ..connection_editor_state_with_secret_draft()
     });
@@ -1132,6 +1144,8 @@ fn ssh_profile_selection_preserves_explicit_terminal_type() {
 #[test]
 fn ssh_algorithm_mode_fills_only_empty_custom_lists_and_clears_presets() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         ssh_algorithm_kex: vec!["future-kex".to_string()],
         ..connection_editor_state_with_secret_draft()
     });
@@ -1167,6 +1181,8 @@ fn ssh_algorithm_custom_edits_preserve_unknown_values_and_order() {
     let first = defaults.kex[0].clone();
     let second = defaults.kex[1].clone();
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         ssh_algorithm_mode: "custom".to_string(),
         ssh_algorithm_kex: vec!["future-kex".to_string(), first.clone(), second.clone()],
         ..connection_editor_state_with_secret_draft()
@@ -1228,6 +1244,8 @@ fn recording_edits_preserve_advanced_compatibility_fields() {
     let expected_path = "logs/{session}.log".to_string();
     let expected_rotation = RecordingRotationPolicy::Size { max_bytes: 8192 };
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         recording: Some(ConnectionRecordingSettings {
             auto_start: Some(true),
             mode: Some(RecordingMode::Raw),
@@ -1290,6 +1308,8 @@ fn editor_tags_trim_deduplicate_remove_and_keep_draft_fields_independent() {
 #[test]
 fn switching_password_sources_preserves_the_direct_password_and_saved_reference() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         password_id: Some("saved-password".to_string()),
         ..connection_editor_state_with_secret_draft()
     });
@@ -1312,6 +1332,8 @@ fn switching_password_sources_preserves_the_direct_password_and_saved_reference(
 #[test]
 fn set_connection_editor_kind_updates_default_ports_and_clears_error() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         port: "22".to_string(),
         error: Some("stale validation".to_string()),
         ..connection_editor_state_with_secret_draft()
@@ -1332,6 +1354,8 @@ fn set_connection_editor_kind_updates_default_ports_and_clears_error() {
 #[test]
 fn commit_connection_editor_new_group_requires_non_empty_name() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         new_group_name: "  ".to_string(),
         error: None,
         ..connection_editor_state_with_secret_draft()
@@ -1350,6 +1374,8 @@ fn commit_connection_editor_new_group_requires_non_empty_name() {
 #[test]
 fn commit_connection_editor_new_group_captures_parent_and_clears_draft() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         group_id: Some("parent".to_string()),
         new_group_name: "  staging  ".to_string(),
         focused_field: ConnectionEditorField::NewGroupName,
@@ -1375,6 +1401,8 @@ fn commit_connection_editor_new_group_captures_parent_and_clears_draft() {
 fn toggle_connection_editor_raw_tcp_preserves_enter_mode() {
     for enter_mode in ["cr", "lf", "crlf"] {
         let mut draft = Some(ConnectionEditorState {
+            android_usb: false,
+            android_screen: Default::default(),
             raw_tcp_cli: false,
             telnet_enter_mode: enter_mode.to_string(),
             error: Some("stale validation".to_string()),
@@ -1442,6 +1470,8 @@ fn connection_editor_credential_overlay_closes_competing_popups() {
 #[test]
 fn insert_connection_editor_description_newline_only_when_description_focused() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         focused_field: ConnectionEditorField::Description,
         description: "first".to_string(),
         error: Some("stale validation".to_string()),
@@ -1476,6 +1506,8 @@ fn set_connection_editor_error_updates_active_draft() {
 #[test]
 fn apply_connection_editor_paths_update_field_and_clear_error() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         error: Some("stale validation".to_string()),
         ..connection_editor_state_with_secret_draft()
     });
@@ -1563,6 +1595,8 @@ fn connection_password_input_replaces_or_removes_the_existing_secret_without_tri
         ConnectionKindTab::Vnc,
     ] {
         let mut draft = ConnectionEditorState {
+            android_usb: false,
+            android_screen: Default::default(),
             kind,
             password_edit: ConnectionPasswordEdit::Keep,
             password: Default::default(),
@@ -1605,6 +1639,8 @@ fn stored_password_placeholder_is_fixed_and_disappears_when_deleted_or_replaced(
         ] {
             for stored in ["short", "a much longer stored ciphertext"] {
                 let draft = ConnectionEditorState {
+                    android_usb: false,
+                    android_screen: Default::default(),
                     kind,
                     password_source: ConnectionEditorPasswordSource::Direct,
                     password_edit: ConnectionPasswordEdit::Keep,
@@ -2401,6 +2437,8 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
     ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         id: Some("conn".to_string()),
         kind: ConnectionKindTab::Ssh,
         name: "prod".to_string(),
@@ -2552,6 +2590,8 @@ fn network_proxy_editor(id: &str) -> NetworkProxyEditorState {
 #[test]
 fn raw_tcp_toggle_retains_telnet_keepalive_configuration() {
     let mut draft = Some(ConnectionEditorState {
+        android_usb: false,
+        android_screen: Default::default(),
         raw_tcp_cli: false,
         telnet_keep_alive_interval_secs: "45".into(),
         ..connection_editor_state_with_secret_draft()

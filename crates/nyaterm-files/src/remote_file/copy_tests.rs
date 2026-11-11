@@ -147,6 +147,7 @@ fn staged_copy_combines_both_legs_and_does_not_finish_at_download_completion() {
     let reporter = CopyProgress::new(&source, &target, 2, move |p| record.lock().unwrap().push(p));
     reporter.scan(&source, &SftpTransferControl::new()).unwrap();
     let stage = |bytes| SftpTransferProgress {
+        phase: None,
         remote_path: String::new(),
         local_path: Default::default(),
         bytes_transferred: bytes,

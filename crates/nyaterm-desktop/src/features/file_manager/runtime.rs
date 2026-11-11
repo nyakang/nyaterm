@@ -9,17 +9,28 @@ use crate::features::transfers::file_operations::{
     FileMutation, FileMutationIntent, FileTransferOperation,
 };
 use gpui::{Context, Window, prelude::*};
-use nyaterm_files::file_browser::FileBrowserService;
+use nyaterm_files::file_browser::{FileBrowserBackendKind, FileBrowserService};
 use nyaterm_files::sftp::RemoteFilePath;
 use rust_i18n::t;
 
 impl NyaTermApp {
+    fn file_browser_backend_for_endpoint(&self, endpoint: &PaneEndpoint) -> FileBrowserBackendKind {
+        match endpoint {
+            PaneEndpoint::Session(id) => self
+                .session
+                .file_browser_backend_support_for_session(id)
+                .unwrap_or(FileBrowserBackendKind::Remote),
+            _ => endpoint.kind(),
+        }
+    }
+
     pub(in crate::features) fn file_browser_service_for_endpoint(
         &mut self,
         endpoint: &PaneEndpoint,
     ) -> anyhow::Result<FileBrowserService> {
         match endpoint {
             PaneEndpoint::Local => Ok(FileBrowserService::local()),
+            PaneEndpoint::Adb(key) => self.android.file_service(key).map(FileBrowserService::Adb),
             PaneEndpoint::Session(id) => self.file_browser_service_for_session(id),
             PaneEndpoint::OfflineConnection(_) => {
                 anyhow::bail!("reconnect the source before browsing files")
@@ -44,9 +55,17 @@ impl NyaTermApp {
             cx.notify();
             (pane.endpoint.clone(), generation, snapshot)
         });
+        let request_id = nyaterm_core::uuid();
+        let backend = self.file_browser_backend_for_endpoint(&endpoint);
         let service = match self.file_browser_service_for_endpoint(&endpoint) {
             Ok(service) => service,
             Err(error) => {
+                crate::features::android::labels::log_file_error(
+                    "list-directory",
+                    backend,
+                    &request_id,
+                    &error,
+                );
                 let show_hidden = self.settings.summary().ui_file_explorer_show_hidden_files;
                 workspace.update(cx, |workspace, cx| {
                     workspace.apply_list_result(
@@ -56,7 +75,9 @@ impl NyaTermApp {
                             endpoint,
                             path,
                             snapshot,
-                            result: Err(error.to_string()),
+                            result: Err(crate::features::android::labels::file_error_message(
+                                &error,
+                            )),
                         },
                         show_hidden,
                     );
@@ -71,20 +92,37 @@ impl NyaTermApp {
             let path = path.clone();
             move |_| {
                 service.list_dir_path(&path).map_err(|error| {
+                    crate::features::android::labels::log_file_error(
+                        "list-directory",
+                        service.kind(),
+                        &request_id,
+                        &error,
+                    );
                     let missing = error.chain().any(|cause| {
-                        cause
+                        matches!(
+                            cause.downcast_ref::<nyaterm_android::error::AdbError>(),
+                            Some(nyaterm_android::error::AdbError::FileMissing)
+                        ) || cause
                             .downcast_ref::<std::io::Error>()
                             .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-                    }) || error.to_string().contains("No such file")
-                        || error.to_string().contains("no such file");
-                    (missing, error.to_string())
+                    }) || (!matches!(service, FileBrowserService::Adb(_))
+                        && (error.to_string().contains("No such file")
+                            || error.to_string().contains("no such file")));
+                    (missing, error)
                 })
             }
         });
         cx.spawn(async move |this, cx| {
             let result = match await_blocking_job(task).await {
                 Ok(result) => result,
-                Err(error) => Err((false, error)),
+                Err(error) => Err((
+                    false,
+                    if backend == FileBrowserBackendKind::Adb {
+                        anyhow::Error::new(nyaterm_files::adb::AdbFileError)
+                    } else {
+                        anyhow::Error::msg(error)
+                    },
+                )),
             };
             let missing = result.as_ref().err().is_some_and(|(missing, _)| *missing);
             let success = result.is_ok();
@@ -98,7 +136,9 @@ impl NyaTermApp {
                             endpoint: endpoint.clone(),
                             path: path.clone(),
                             snapshot,
-                            result: result.map_err(|(_, message)| message),
+                            result: result.map_err(|(_, error)| {
+                                crate::features::android::labels::file_error_message(&error)
+                            }),
                         },
                         show_hidden,
                     );
@@ -133,14 +173,22 @@ impl NyaTermApp {
             return;
         };
         let endpoint = workspace.read(cx).pane(pane_id).endpoint.clone();
+        let request_id = nyaterm_core::uuid();
+        let backend = self.file_browser_backend_for_endpoint(&endpoint);
         let service = match self.file_browser_service_for_endpoint(&endpoint) {
             Ok(service) => service,
             Err(error) => {
+                crate::features::android::labels::log_file_error(
+                    "resolve-home",
+                    backend,
+                    &request_id,
+                    &error,
+                );
                 workspace.update(cx, |workspace, cx| {
                     let pane = workspace.pane_mut(pane_id);
                     pane.disconnected = true;
                     pane.loading = false;
-                    pane.error = Some(error.to_string());
+                    pane.error = Some(crate::features::android::labels::file_error_message(&error));
                     cx.notify();
                 });
                 return;
@@ -157,10 +205,26 @@ impl NyaTermApp {
         let task = self
             .blocking_jobs
             .submit_task("file-manager-home", move |_| {
-                service.home_dir().map_err(|error| error.to_string())
+                service.home_dir().inspect_err(|error| {
+                    crate::features::android::labels::log_file_error(
+                        "resolve-home",
+                        service.kind(),
+                        &request_id,
+                        error,
+                    )
+                })
             });
         cx.spawn(async move |this, cx| {
-            let result = await_blocking_job(task).await.and_then(|result| result);
+            let result = await_blocking_job(task)
+                .await
+                .map_err(|error| {
+                    if backend == FileBrowserBackendKind::Adb {
+                        anyhow::Error::new(nyaterm_files::adb::AdbFileError)
+                    } else {
+                        anyhow::Error::msg(error)
+                    }
+                })
+                .and_then(|result| result);
             let _ = this.update(cx, |app, cx| {
                 if workspace.read(cx).pane(pane_id).generation != generation
                     || workspace.read(cx).pane(pane_id).endpoint != endpoint
@@ -184,7 +248,8 @@ impl NyaTermApp {
                     Err(error) => workspace.update(cx, |workspace, cx| {
                         let pane = workspace.pane_mut(pane_id);
                         pane.loading = false;
-                        pane.error = Some(error);
+                        pane.error =
+                            Some(crate::features::android::labels::file_error_message(&error));
                         cx.notify();
                     }),
                 }
@@ -216,6 +281,7 @@ impl NyaTermApp {
         path: &RemoteFilePath,
         cx: &mut Context<Self>,
     ) {
+        let backend = self.file_browser_backend_for_endpoint(endpoint);
         let targets: Vec<_> = self
             .file_manager
             .all_workspaces()
@@ -230,7 +296,7 @@ impl NyaTermApp {
                                 || path.raw_path_token.is_none()
                                 || pane.path.raw_path_token == path.raw_path_token)
                             && nyaterm_files::file_browser::file_browser_path_eq(
-                                endpoint.kind(),
+                                backend,
                                 &pane.path.display_path,
                                 &path.display_path,
                             ))
@@ -251,6 +317,9 @@ impl NyaTermApp {
                         .file_browser_backend_support_for_session(session)
                         == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
                 }
+                PaneEndpoint::Adb(key) => self
+                    .android_config_for_session(session)
+                    .is_some_and(|config| config.device_key == *key),
                 PaneEndpoint::Session(id) => *session == id,
                 PaneEndpoint::OfflineConnection(_) => false,
             })
@@ -267,6 +336,10 @@ impl NyaTermApp {
                 self.session.active_file_browser_backend()
                     == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
             }
+            PaneEndpoint::Adb(key) => active
+                .as_deref()
+                .and_then(|id| self.android_config_for_session(id))
+                .is_some_and(|config| config.device_key == *key),
             PaneEndpoint::Session(id) => active.as_ref() == Some(id),
             PaneEndpoint::OfflineConnection(_) => false,
         };

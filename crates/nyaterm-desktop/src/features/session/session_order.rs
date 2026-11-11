@@ -10,6 +10,15 @@ impl NyaTermApp {
         session_id: &str,
         metadata: SessionRuntimeMetadata,
     ) {
+        if let crate::models::SessionLaunchConfig::AdbShell(config) = &metadata.launch_config {
+            self.android.views.insert(
+                session_id.to_string(),
+                crate::features::android::AndroidView {
+                    device_key: config.device_key.clone(),
+                    kind: nyaterm_core::models::android::AndroidViewKind::Shell,
+                },
+            );
+        }
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         let is_terminal = encoding.is_some();
         self.session.register_session_metadata(session_id, metadata);
@@ -43,6 +52,15 @@ impl NyaTermApp {
                     .then_some(id)
             })
         });
+        if let crate::models::SessionLaunchConfig::AdbShell(config) = &metadata.launch_config {
+            self.android.views.insert(
+                session_id.to_string(),
+                crate::features::android::AndroidView {
+                    device_key: config.device_key.clone(),
+                    kind: nyaterm_core::models::android::AndroidViewKind::Shell,
+                },
+            );
+        }
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         let is_terminal = encoding.is_some();
         self.session.prepare_session_metadata_for_start(
@@ -75,6 +93,15 @@ impl NyaTermApp {
         session_id: &str,
         metadata: SessionRuntimeMetadata,
     ) {
+        if let crate::models::SessionLaunchConfig::AdbShell(config) = &metadata.launch_config {
+            self.android.views.insert(
+                session_id.to_string(),
+                crate::features::android::AndroidView {
+                    device_key: config.device_key.clone(),
+                    kind: nyaterm_core::models::android::AndroidViewKind::Shell,
+                },
+            );
+        }
         let encoding = metadata.launch_config.encoding().map(ToOwned::to_owned);
         self.session
             .prepare_provisional_reconnect(session_id, metadata);

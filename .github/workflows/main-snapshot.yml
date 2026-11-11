@@ -69,6 +69,17 @@ jobs:
           cache-key: main-snapshot-preflight
       - name: Install Linux system dependencies
         uses: ./.github/actions/install-linux-deps
+      - name: Prepare Android native dependencies
+        shell: bash
+        run: |
+          python3 scripts/release/prepare_android.py
+          python3 - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          target = subprocess.check_output(['rustc', '-vV'], text=True).split('host: ')[1].splitlines()[0]
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'FFMPEG_DIR={(Path("target/android-deps/ffmpeg") / target).resolve()}\n')
+          PY
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
       - name: Test packaging and release helpers

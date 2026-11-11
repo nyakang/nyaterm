@@ -16,6 +16,7 @@ struct FileDelivery {
     ranges: Vec<(u64, u64)>,
     total: Option<u64>,
     eof: Option<u64>,
+    staged_bytes: u64,
 }
 impl FileDelivery {
     fn add(&mut self, offset: u64, length: u64, total: Option<u64>) {
@@ -115,6 +116,32 @@ impl DragAggregate {
             .map(|root| root.control.clone())
             .collect()
     }
+    pub(super) fn fail_inventory(
+        &self,
+        backend: nyaterm_files::file_browser::FileBrowserBackendKind,
+        error: &anyhow::Error,
+    ) {
+        self.observe(NativeFileDragEvent::Started);
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(root) = state.roots.first() {
+            crate::features::android::labels::log_file_error(
+                "drag-inventory",
+                backend,
+                &root.id,
+                error,
+            );
+        }
+        let cancelled = crate::features::android::labels::file_error_code(error) == "Cancelled";
+        let message = crate::features::android::labels::file_error_message(error);
+        for root in &mut state.roots {
+            if cancelled {
+                root.control.cancel();
+            } else {
+                root.error.get_or_insert(message.clone());
+            }
+            self.settle(root, Some(NativeFileDragOutcome::Failed));
+        }
+    }
     pub(super) fn register(&self, root_index: usize, file: &RemoteDragFile) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(root) = state.roots.get_mut(root_index)
@@ -158,13 +185,43 @@ impl DragAggregate {
                     total,
                 } => {
                     let delivery = root.files.entry(file.remote_path.clone()).or_default();
-                    let previous_bytes = delivery.bytes();
+                    let previous_bytes = delivery.bytes().max(delivery.staged_bytes);
                     let previous_complete = delivery.complete();
                     delivery.add(offset, length, total);
-                    root.bytes += delivery.bytes().saturating_sub(previous_bytes);
                     root.completed = root.completed - u64::from(previous_complete)
                         + u64::from(delivery.complete());
+                    root.bytes += delivery
+                        .bytes()
+                        .max(delivery.staged_bytes)
+                        .saturating_sub(previous_bytes);
                     aggregate.progress(root, false);
+                }
+                ExportReadEvent::Progress { bytes, total } => {
+                    let delivery = root.files.entry(file.remote_path.clone()).or_default();
+                    let previous_bytes = delivery.bytes().max(delivery.staged_bytes);
+                    delivery.staged_bytes = delivery.staged_bytes.max(bytes);
+                    delivery.total = total;
+                    root.bytes += delivery
+                        .bytes()
+                        .max(delivery.staged_bytes)
+                        .saturating_sub(previous_bytes);
+                    aggregate.progress(root, false);
+                }
+                ExportReadEvent::Failed { backend, error } => {
+                    root.active = root.active.saturating_sub(1);
+                    if crate::features::android::labels::file_error_code(&error) != "Cancelled"
+                        && root.error.is_none()
+                    {
+                        crate::features::android::labels::log_file_error(
+                            "drag-export",
+                            backend,
+                            &root.id,
+                            &error,
+                        );
+                        root.error =
+                            Some(crate::features::android::labels::file_error_message(&error));
+                    }
+                    aggregate.settle(root, outcome);
                 }
                 ExportReadEvent::Finished(result) => {
                     root.active = root.active.saturating_sub(1);
@@ -175,7 +232,7 @@ impl DragAggregate {
                     }
                     aggregate.settle(root, outcome);
                 }
-                ExportReadEvent::Opened(_) | ExportReadEvent::Progress { .. } => {}
+                ExportReadEvent::Opened(_) => {}
             }
         })
     }
@@ -198,6 +255,7 @@ impl DragAggregate {
         self.send(
             root,
             TransferJobEvent::Progress(SftpTransferProgress {
+                phase: None,
                 remote_path: root.path.clone(),
                 local_path: PathBuf::new(),
                 bytes_transferred: root.bytes,
