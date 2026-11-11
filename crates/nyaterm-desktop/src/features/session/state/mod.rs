@@ -14,7 +14,7 @@ use crate::models::{SessionEventBridge, SessionRuntimeMetadata, StartupCommandAc
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
 use nyaterm_transport::SessionManager;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 mod catalog;
@@ -46,6 +46,8 @@ pub(in crate::features) struct SessionFeatureState {
     pub(super) prompts: SessionPromptState,
     pub(super) dialogs: SessionDialogState,
     command_history: HashMap<String, Vec<String>>,
+    /// Commands recorded from keyboard input that the shell may still report.
+    unconfirmed_commands: HashMap<String, VecDeque<String>>,
     active_search_draft: String,
     /// Shared by the active-sessions list and its scrollbar so both read one
     /// scroll position across re-renders.
@@ -157,6 +159,7 @@ impl SessionFeatureState {
                 temporary_ssh_link_error: None,
             },
             command_history: HashMap::new(),
+            unconfirmed_commands: HashMap::new(),
             active_search_draft: String::new(),
             active_list_scroll: UniformListScrollHandle::new(),
             busy_actions: HashMap::new(),

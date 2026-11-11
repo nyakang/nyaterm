@@ -2817,3 +2817,43 @@ fn independent_rdp_instances_can_reference_the_same_saved_connection() {
         assert!(app.session.has_session("rdp-three"));
     });
 }
+
+#[test]
+fn command_reported_by_shell_after_keyboard_input_is_listed_once() {
+    let test_dir = TestConfigDir::new("nyaterm-unconfirmed-history");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, test_dir.path());
+    sessions.record_unconfirmed_command_history("session-a", "ls");
+    sessions.record_accepted_command_history("session-a", "ls");
+    sessions.record_unconfirmed_command_history("session-a", "ls");
+    sessions.record_accepted_command_history("session-a", "ls");
+    sessions.record_accepted_command_history("session-a", "pwd");
+    assert_eq!(
+        sessions.command_history_for("session-a"),
+        Some(["pwd".to_string(), "ls".to_string(), "ls".to_string()].as_slice())
+    );
+}
+
+#[test]
+fn unmatched_keyboard_commands_do_not_hide_later_shell_reports() {
+    let test_dir = TestConfigDir::new("nyaterm-unconfirmed-history");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, test_dir.path());
+    sessions.record_unconfirmed_command_history("session-a", "first");
+    sessions.record_unconfirmed_command_history("session-a", "second");
+    sessions.record_accepted_command_history("session-a", "second");
+    sessions.record_accepted_command_history("session-a", "first");
+    assert_eq!(
+        sessions.command_history_for("session-a"),
+        Some(
+            [
+                "first".to_string(),
+                "second".to_string(),
+                "first".to_string()
+            ]
+            .as_slice()
+        )
+    );
+}

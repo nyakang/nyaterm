@@ -290,6 +290,7 @@ impl SessionFeatureState {
             self.tab_drag = None;
         }
         self.command_history.remove(session_id);
+        self.unconfirmed_commands.remove(session_id);
         self.busy_actions.remove(session_id);
         if self.active_id() == Some(session_id) {
             self.clear_active_session();

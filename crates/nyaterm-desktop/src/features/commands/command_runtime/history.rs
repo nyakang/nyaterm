@@ -283,7 +283,17 @@ impl NyaTermApp {
                 if !nyaterm_core::completion::privacy::command_may_be_learned(command, sensitive) {
                     continue;
                 }
-                self.session.record_command_history(session_id, command);
+                // Without a marked prompt the shell may still report this command, as the
+                // directory-only integration does.
+                if context
+                    .as_ref()
+                    .is_some_and(|context| context.command_events)
+                {
+                    self.session
+                        .record_unconfirmed_command_history(session_id, command);
+                } else {
+                    self.session.record_command_history(session_id, command);
+                }
                 if let Some(context) = context.clone().filter(|_| confirmed) {
                     let include_global = !recorded.contains(command);
                     if self.commands.observe_completion_submission(

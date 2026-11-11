@@ -115,6 +115,7 @@ pub(super) fn session_info_from_metadata(
 }
 
 pub(super) const COMMAND_HISTORY_LIMIT: usize = 128;
+const UNCONFIRMED_COMMAND_LIMIT: usize = 32;
 /// Safety net for the activation stack. Entries are deduplicated and pruned when
 /// their session leaves the catalog, so the stack normally stays at or below the
 /// live session count; this only bounds ids activated before registration.
@@ -189,7 +190,10 @@ impl SessionFeatureState {
                 cwd: self.cwds.remove(session_id),
                 tab_color: self.tab_colors.remove(session_id),
                 locked: self.locked_tabs.remove(session_id),
-                command_history: self.command_history.remove(session_id),
+                command_history: {
+                    self.unconfirmed_commands.remove(session_id);
+                    self.command_history.remove(session_id)
+                },
                 busy_action: self.busy_actions.remove(session_id),
                 remote_file: self.protocols.remote_files.remove(session_id),
                 ssh_connection: self.protocols.ssh_connections.remove(session_id),
@@ -350,7 +354,42 @@ impl SessionFeatureState {
         history.insert(0, command.to_string());
         history.truncate(COMMAND_HISTORY_LIMIT);
     }
+    /// Record a command seen on keyboard input in a session whose shell can also report it.
+    pub(in crate::features) fn record_unconfirmed_command_history(
+        &mut self,
+        session_id: &str,
+        command: &str,
+    ) {
+        self.record_command_history(session_id, command);
+        let pending = self
+            .unconfirmed_commands
+            .entry(session_id.to_string())
+            .or_default();
+        pending.push_back(command.trim().to_string());
+        if pending.len() > UNCONFIRMED_COMMAND_LIMIT {
+            pending.pop_front();
+        }
+    }
+    /// Record a command reported by the shell, unless keyboard input already recorded it.
+    pub(in crate::features) fn record_accepted_command_history(
+        &mut self,
+        session_id: &str,
+        command: &str,
+    ) {
+        let command = command.trim();
+        if let Some(pending) = self.unconfirmed_commands.get_mut(session_id)
+            && let Some(index) = pending.iter().position(|entry| entry == command)
+        {
+            pending.drain(..=index);
+            return;
+        }
+        self.record_command_history(session_id, command);
+    }
     pub(in crate::features) fn migrate_command_history(&mut self, old_id: &str, new_id: &str) {
+        if let Some(pending) = self.unconfirmed_commands.remove(old_id) {
+            self.unconfirmed_commands
+                .insert(new_id.to_string(), pending);
+        }
         if let Some(history) = self.command_history.remove(old_id) {
             self.command_history.insert(new_id.to_string(), history);
         }
