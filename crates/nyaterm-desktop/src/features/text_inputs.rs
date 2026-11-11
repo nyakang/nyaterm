@@ -547,11 +547,7 @@ impl NyaTermApp {
         } else if id.starts_with("transfer.rename.") {
             self.apply_transfer_rename_input(text, cx);
         } else if let Some(field) = id.strip_prefix("quick-command.editor.") {
-            if field == "new-category" {
-                self.apply_quick_command_editor_new_category_input(text, cx);
-            } else {
-                self.apply_quick_command_editor_input(field, text, cx);
-            }
+            self.apply_quick_command_editor_input(field, text, cx);
         } else if let Some(index) = id
             .strip_prefix("quick-command.variable.")
             .and_then(|index| index.parse::<usize>().ok())

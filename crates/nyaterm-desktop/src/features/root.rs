@@ -10,7 +10,6 @@ use rust_i18n::t;
 
 use super::NyaTermApp;
 use super::ai::AiFullAccessSetting;
-use super::mcp::{McpApprovalDecision, McpApprovalRequest};
 use super::terminal::{FULL_SHELL_PAINT_COUNT, terminal_surface_paint_count};
 use super::view_widgets::{
     full_window_input_layer, full_window_overlay_layer, modal_overlay_layer, modal_scrim_is_drawn,
@@ -916,7 +915,7 @@ impl NyaTermApp {
         });
         let overlay = self.root_overlay_visibility(cx);
         let full_access_confirmation = self.pending_ai_full_access();
-        let mcp_approval = self.mcp_pending_approval_requests().into_iter().next();
+        self.schedule_mcp_approval_dialog(window, cx);
 
         content
             .when(overlay.tab_actions_open, |this| {
@@ -1065,15 +1064,6 @@ impl NyaTermApp {
                     ))
                 },
             )
-            .when_some(
-                overlay.mcp_approval_open.then_some(mcp_approval).flatten(),
-                |this, request| {
-                    this.child(full_window_overlay_layer(
-                        "mcp-approval-input-layer",
-                        self.mcp_approval_overlay(request, cx),
-                    ))
-                },
-            )
             // Below the lock screen on purpose: both layers share
             // `APP_OVERLAY_PRIORITY`, so insertion order decides, and a layer
             // painted above the lock screen would swallow the pointer input the
@@ -1177,128 +1167,6 @@ impl NyaTermApp {
             )
     }
 
-    fn mcp_approval_overlay(
-        &mut self,
-        request: McpApprovalRequest,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = self.theme_palette();
-        let deny_id = request.request_id.clone();
-        let once_id = request.request_id.clone();
-        let session_id = request.request_id.clone();
-        let backdrop_id = request.request_id.clone();
-        let escape_id = request.request_id.clone();
-        div()
-            .id("mcp-approval-overlay")
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgba(0x00000080))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.respond_to_mcp_approval(&backdrop_id, McpApprovalDecision::Deny, cx)
-            }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    this.respond_to_mcp_approval(&escape_id, McpApprovalDecision::Deny, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                div()
-                    .id("mcp-approval-card")
-                    .w(px(520.))
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(if request.destructive {
-                        palette.danger
-                    } else {
-                        palette.warning
-                    }))
-                    .bg(rgb(palette.surface))
-                    .shadow_lg()
-                    .on_click(|_, _, cx| cx.stop_propagation())
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .text_color(rgb(if request.destructive {
-                                palette.danger
-                            } else {
-                                palette.warning
-                            }))
-                            .child(t!("ai.mcp.approvalTitle")),
-                    )
-                    .child(mcp_detail_row(t!("ai.mcp.client"), request.client))
-                    .child(mcp_detail_row(t!("ai.mcp.capability"), request.capability))
-                    .when_some(request.target, |this, target| {
-                        this.child(mcp_detail_row(t!("ai.mcp.target"), target))
-                    })
-                    .child(mcp_detail_row(
-                        t!("ai.mcp.parameters"),
-                        request.parameter_summary,
-                    ))
-                    .child(mcp_detail_row(t!("ai.mcp.risk"), request.risk_level))
-                    .when(request.destructive, |this| {
-                        this.child(
-                            div()
-                                .text_color(rgb(palette.danger))
-                                .child(t!("ai.mcp.destructiveWarning")),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap_2()
-                            .child(overlay_button(
-                                "mcp-approval-deny",
-                                t!("ai.mcp.deny"),
-                                palette,
-                                true,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.respond_to_mcp_approval(
-                                        &deny_id,
-                                        McpApprovalDecision::Deny,
-                                        cx,
-                                    )
-                                }),
-                            ))
-                            .child(overlay_button(
-                                "mcp-approval-once",
-                                t!("ai.mcp.allowOnce"),
-                                palette,
-                                false,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.respond_to_mcp_approval(
-                                        &once_id,
-                                        McpApprovalDecision::AllowOnce,
-                                        cx,
-                                    )
-                                }),
-                            ))
-                            .when(request.allow_session, |this| {
-                                this.child(overlay_button(
-                                    "mcp-approval-session",
-                                    t!("ai.mcp.allowSession"),
-                                    palette,
-                                    false,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.respond_to_mcp_approval(
-                                            &session_id,
-                                            McpApprovalDecision::AllowSession,
-                                            cx,
-                                        )
-                                    }),
-                                ))
-                            }),
-                    ),
-            )
-    }
-
     fn reconcile_root_pointer_interactions(
         &mut self,
         event: &MouseMoveEvent,
@@ -1362,7 +1230,7 @@ impl NyaTermApp {
     /// The pending state counts: a child window is opened from a deferred
     /// callback, and without it the main window would be live for the frames in
     /// between.
-    fn modal_child_window_is_open_or_pending(&self) -> bool {
+    pub(in crate::features) fn modal_child_window_is_open_or_pending(&self) -> bool {
         self.connection_state.editor_window_is_open_or_pending()
             || self.commands.quick_editor_window_is_open_or_pending()
             || self.sync_input.window_is_open_or_pending()
@@ -1576,22 +1444,6 @@ fn overlay_button(
         .hover(|this| this.opacity(0.85))
         .on_click(on_click)
         .child(label.into())
-}
-
-fn mcp_detail_row(
-    label: impl Into<SharedString>,
-    value: impl Into<SharedString>,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .gap_2()
-        .child(
-            div()
-                .w(px(112.))
-                .text_color(rgba(0xffffff88))
-                .child(label.into()),
-        )
-        .child(div().flex_1().min_w_0().child(value.into()))
 }
 
 #[cfg(test)]

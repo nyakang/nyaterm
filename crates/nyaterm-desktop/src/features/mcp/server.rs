@@ -365,6 +365,7 @@ async fn handle_connection(
                     &cancellations,
                     &mut reader,
                     resumable,
+                    REQUEST_REPLY_TIMEOUT,
                 )
                 .await
             }
@@ -422,6 +423,7 @@ async fn handle_execute(
     cancellations: &CancellationMap,
     reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
     extended_results: bool,
+    reply_timeout: Duration,
 ) -> RpcResponse {
     let Ok(params) = serde_json::from_value::<CapabilityExecuteParams>(params) else {
         return rpc_error(id, "invalid_argument", "Invalid capability request.");
@@ -452,11 +454,12 @@ async fn handle_execute(
         pending.insert(key.clone(), cancellation.clone());
     }
     let (reply, result) = oneshot::channel();
+    let host_request_id = format!("mcp:{}:{connection_id}:{request_id}", credential.generation);
     let request = McpHostRequest {
         extended_results,
         resolved_session_id: None,
         connection_id: connection_id.to_string(),
-        request_id: format!("mcp:{}:{connection_id}:{request_id}", credential.generation),
+        request_id: host_request_id.clone(),
         generation: credential.generation,
         client: client.to_string(),
         permission_mode: credential.permission_mode,
@@ -479,13 +482,22 @@ async fn handle_execute(
     let result = tokio::select! {
         _ = reader.fill_buf() => {
             cancellation.cancel();
+            let _ = requests.unbounded_send(McpHostEvent::Cancelled {
+                request_id: host_request_id.clone(),
+            });
             Err(rpc_failure("bridge_disconnected", "The client disconnected or pipelined an unsupported request; the operation may already have started."))
         },
         _ = cancellation.cancelled() => Err(rpc_failure("cancelled", "The MCP request was cancelled.")),
-        result = tokio::time::timeout(REQUEST_REPLY_TIMEOUT, result) => match result {
+        result = tokio::time::timeout(reply_timeout, result) => match result {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(rpc_failure("host_unavailable", "NyaTerm closed the MCP request.")),
-            Err(_) => Err(rpc_failure("host_timeout", "NyaTerm MCP Host request timed out.")),
+            Err(_) => {
+                cancellation.cancel();
+                let _ = requests.unbounded_send(McpHostEvent::Cancelled {
+                    request_id: host_request_id,
+                });
+                Err(rpc_failure("host_timeout", "NyaTerm MCP Host request timed out."))
+            },
         }
     };
     cancellation.cancel();
@@ -607,7 +619,10 @@ fn permission_mode_name(mode: &AiPermissionMode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use futures::StreamExt;
     use nyaterm_core::{AiPermissionMode, CapabilityScope};
@@ -619,7 +634,56 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;
 
-    use super::{McpHostEndpoint, McpHostEvent, McpHostRuntime, rpc_failure};
+    use super::{
+        HostCredential, McpHostEndpoint, McpHostEvent, McpHostRuntime, handle_execute, rpc_failure,
+    };
+
+    #[tokio::test]
+    async fn mcp_approval_timeout_notifies_the_ui_and_keeps_the_host_timeout_error() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let peer = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, _write) = stream.into_split();
+        let credential = Arc::new(Mutex::new(HostCredential {
+            token: "fixture-token".into(),
+            generation: "fixture-generation".into(),
+            permission_mode: AiPermissionMode::Confirm,
+            scope: CapabilityScope::AllSessions,
+        }));
+        let cancellations = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let request_cancellations = cancellations.clone();
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let response = tokio::spawn(async move {
+            handle_execute(
+                1,
+                json!({"requestId":"fixture", "tool":"terminal_execute", "arguments":{"sessionId":"s", "command":"echo fixture"}}),
+                &AuthParams { token: "fixture-token".into(), generation: "fixture-generation".into() },
+                "owner",
+                "fixture client",
+                &credential,
+                &tx,
+                &request_cancellations,
+                &mut BufReader::new(read),
+                true,
+                Duration::from_millis(1),
+            ).await
+        });
+        let McpHostEvent::Execute(request) = rx.next().await.unwrap() else {
+            panic!("expected a queued request");
+        };
+        assert_eq!(response.await.unwrap().error.unwrap().code, "host_timeout");
+        assert!(request.cancellation.is_cancelled());
+        let McpHostEvent::Cancelled { request_id } = rx.next().await.unwrap() else {
+            panic!("timeout must withdraw the pending approval from the UI");
+        };
+        assert_eq!(request_id, request.request_id);
+        assert!(cancellations.lock().await.is_empty());
+        drop(peer);
+    }
 
     async fn rpc(
         reader: &mut tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>,

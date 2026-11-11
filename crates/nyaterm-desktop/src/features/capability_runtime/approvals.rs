@@ -1,4 +1,5 @@
 use nyaterm_mcp_protocol::tool;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     CapabilityApprovalRequest, CapabilityCaller, CapabilityRequest, CapabilityRuntimeState,
@@ -15,7 +16,47 @@ pub(in crate::features) struct NativeCapabilityApproval {
     pub command: Option<String>,
 }
 
+/// Presentation-only projection; the queue retains the executable arguments.
+#[derive(Clone)]
+pub(in crate::features) struct ExternalCapabilityApproval {
+    pub approval: CapabilityApprovalRequest,
+    pub command: Option<String>,
+    pub cancellation: CancellationToken,
+}
+
 impl CapabilityRuntimeState {
+    pub(in crate::features) fn external_approval_request(
+        &self,
+        request_id: &str,
+    ) -> Option<&CapabilityApprovalRequest> {
+        let pending = self.pending_approvals.get(request_id)?;
+        (matches!(pending.request.caller, CapabilityCaller::Mcp)
+            && !pending.request.cancellation.is_cancelled())
+        .then_some(&pending.approval)
+    }
+
+    pub(in crate::features) fn external_approval_view(
+        &self,
+        request_id: &str,
+    ) -> Option<ExternalCapabilityApproval> {
+        let approval = self.external_approval_request(request_id)?;
+        let pending = self.pending_approvals.get(request_id)?;
+        Some(ExternalCapabilityApproval {
+            approval: approval.clone(),
+            cancellation: pending.request.cancellation.clone(),
+            command: matches!(
+                pending.request.tool.as_str(),
+                tool::TERMINAL_EXECUTE | tool::TERMINAL_START
+            )
+            .then(|| {
+                pending.request.arguments["command"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .flatten(),
+        })
+    }
+
     pub(in crate::features) fn cancel_native_approvals_for_target(
         &mut self,
         session_id: &str,
@@ -137,6 +178,41 @@ mod tests {
             grant_key: mcp_grant_key(&request),
             request,
         }
+    }
+
+    #[test]
+    fn external_views_show_complete_terminal_commands_without_exposing_other_arguments() {
+        let mut state = CapabilityRuntimeState::default();
+        for tool_name in [tool::TERMINAL_EXECUTE, tool::TERMINAL_START] {
+            let mut request = pending(tool_name, CapabilityCaller::Mcp, true);
+            request.request.tool = tool_name.into();
+            let command = request.request.arguments["command"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            state.queue_approval(request);
+            let view = state.external_approval_view(tool_name).unwrap();
+            assert_eq!(view.command.as_deref(), Some(command.as_str()));
+            assert_ne!(view.approval.parameter_summary, command);
+        }
+        let mut file = pending("file", CapabilityCaller::Mcp, true);
+        file.request.tool = tool::SFTP_WRITE_TEXT.into();
+        file.request.arguments = json!({"path":"/tmp/file", "content":"private contents", "command":"not a terminal tool"});
+        state.queue_approval(file);
+        assert!(
+            state
+                .external_approval_view("file")
+                .unwrap()
+                .command
+                .is_none()
+        );
+        state.queue_approval(pending("native", native("run", "chat"), true));
+        assert!(state.external_approval_view("native").is_none());
+        state.pending_approvals[tool::TERMINAL_START]
+            .request
+            .cancellation
+            .cancel();
+        assert!(state.external_approval_view(tool::TERMINAL_START).is_none());
     }
 
     #[test]

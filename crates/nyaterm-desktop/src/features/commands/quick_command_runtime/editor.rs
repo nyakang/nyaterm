@@ -1,6 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{Context, KeyDownEvent};
+use gpui::{Context, KeyDownEvent, Window};
 use nyaterm_core::{QuickCommand, QuickCommandCategory, uuid};
 use nyaterm_store::StoreDomain;
 
@@ -10,18 +10,9 @@ use crate::models::QuickCommandEditorField;
 use super::helpers::{unix_millis_now, validated_quick_command_text};
 
 impl NyaTermApp {
-    pub(in crate::features) fn set_quick_command_editor_category(
-        &mut self,
-        category_id: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .commands
-            .set_quick_editor_category(category_id, String::new())
-        {
-            self.reset_text_input("quick-command.editor.category", "", cx);
-            self.reset_text_input("quick-command.editor.new-category", "", cx);
-            cx.notify();
+    fn clear_quick_command_category_search_input(&mut self, cx: &mut Context<Self>) {
+        if let Some(input) = self.existing_text_input("quick-command.editor.category") {
+            input.update(cx, |input, cx| input.set_content_silent("", cx));
         }
     }
 
@@ -32,21 +23,91 @@ impl NyaTermApp {
     ) {
         if self.commands.set_quick_editor_category_picker_open(open) {
             if !open {
-                self.reset_text_input("quick-command.editor.category", "", cx);
-                self.reset_text_input("quick-command.editor.new-category", "", cx);
+                self.clear_quick_command_category_search_input(cx);
             }
             cx.notify();
         }
     }
 
-    pub(in crate::features) fn commit_quick_command_editor_new_category(
+    pub(in crate::features) fn commit_quick_command_editor_category_choice(
         &mut self,
+        index: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.commands.commit_quick_editor_new_category() {
-            self.reset_text_input("quick-command.editor.category", "", cx);
-            self.reset_text_input("quick-command.editor.new-category", "", cx);
+        if self.quick_command_category_search_is_composing(window, cx) {
+            return;
+        }
+        if self.commands.commit_quick_editor_category_choice(index) {
+            self.clear_quick_command_category_search_input(cx);
+            window.focus(self.commands.quick_editor_category_trigger_focus(), cx);
             cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn highlight_quick_command_editor_category(
+        &mut self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.commands.highlight_quick_editor_category(index) {
+            cx.notify();
+        }
+    }
+
+    fn quick_command_category_search_is_composing(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.existing_text_input("quick-command.editor.category")
+            .is_some_and(|input| input.update(cx, |input, cx| input.is_composing(window, cx)))
+    }
+
+    pub(in crate::features) fn handle_quick_command_category_picker_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.commands.quick_editor_category_picker_is_open() {
+            return;
+        }
+        if self.quick_command_category_search_is_composing(window, cx) {
+            // NyaInput owns IME confirmation; do not consume or submit marked text here.
+            return;
+        }
+        let modifiers = event.keystroke.modifiers;
+        let plain = !modifiers.shift
+            && !modifiers.platform
+            && !modifiers.control
+            && !modifiers.alt
+            && !modifiers.function;
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                // Consume every Enter, even when no choice can be submitted. Closing
+                // the picker must never let the same event save the whole command.
+                cx.stop_propagation();
+                if plain {
+                    let index = self.commands.quick_editor_category_highlight();
+                    self.commit_quick_command_editor_category_choice(index, window, cx);
+                }
+            }
+            "up" | "down" if plain => {
+                cx.stop_propagation();
+                if self
+                    .commands
+                    .move_quick_editor_category_highlight(event.keystroke.key == "down")
+                {
+                    cx.notify();
+                }
+            }
+            "escape" => {
+                cx.stop_propagation();
+                self.set_quick_command_editor_category_picker_open(false, cx);
+                window.focus(self.commands.quick_editor_category_trigger_focus(), cx);
+            }
+            _ => {}
         }
     }
 
@@ -285,16 +346,6 @@ impl NyaTermApp {
             _ => return,
         };
         if self.commands.apply_quick_editor_input(field, text) {
-            cx.notify();
-        }
-    }
-
-    pub(in crate::features) fn apply_quick_command_editor_new_category_input(
-        &mut self,
-        text: String,
-        cx: &mut Context<Self>,
-    ) {
-        if self.commands.apply_quick_editor_new_category(text) {
             cx.notify();
         }
     }
