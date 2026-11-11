@@ -50,7 +50,8 @@ impl NyaTermApp {
             has_source_connection: self.tab_action_can_show_session_info(session_id),
             is_busy,
             is_disconnected,
-            reconnect_pending: self.session.start_reconnect_is_pending(session_id),
+            reconnect_pending: self.session.start_reconnect_is_pending(session_id)
+                || self.remote_desktop.start_is_pending(session_id),
             // Session registration creates a terminal frame for launch configs with an
             // encoding. Check the in-memory view so a transiently unavailable terminal keeps
             // the AI submenu visible while its actions remain disabled.

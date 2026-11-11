@@ -157,6 +157,7 @@ fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_complete
 
 fn pending(name: &str) -> PendingSessionStart {
     PendingSessionStart {
+        preparing: false,
         mcp_open_operation_id: None,
         requested_ssh_runtime_mode: None,
         attempt: Default::default(),
@@ -409,23 +410,23 @@ fn failed_retry_uses_current_saved_configuration_and_retains_deleted_sources() {
 #[test]
 fn closing_retry_preparation_prevents_stale_callbacks_and_worker_results() {
     let mut starts = SessionStartFeatureState::new();
-    starts.begin_retry_preparation("preparing".into(), pending("retry"));
+    starts.begin_preparation("preparing".into(), pending("retry"));
     let options = super::SavedConnectionStartOptions {
-        retry_request_id: Some("preparing".into()),
+        request_id: Some("preparing".into()),
         ..Default::default()
     };
-    assert!(starts.retry_is_pending(&options));
+    assert!(starts.request_can_start(&options));
     let attempt = starts.attempt("preparing");
     starts.close_pending("preparing").unwrap();
     assert!(attempt.check().is_err());
-    assert!(!starts.retry_is_pending(&options));
+    assert!(!starts.request_can_start(&options));
     assert!(
         !starts.has_cancelled_results(),
         "no worker was submitted during preparation"
     );
 
-    starts.begin_retry_preparation("worker".into(), pending("retry"));
-    starts.finish_retry_preparation("worker");
+    starts.begin_preparation("worker".into(), pending("retry"));
+    starts.register_pending("worker".into(), pending("retry"));
     starts.close_pending("worker").unwrap();
     assert!(matches!(
         starts.take_event_request("worker"),
@@ -623,7 +624,7 @@ fn selected_failed_and_retry_tabs_replace_the_previous_tab_highlight() {
             let failed = app.session.start.take_failed_for_retry("failure").unwrap();
             app.session
                 .start
-                .begin_retry_preparation("retry".into(), failed.pending);
+                .begin_preparation("retry".into(), failed.pending);
             cx.notify();
         });
         draw_and_assert(cx, "pending-session-tab-active-retry", &[formal_highlight]);
@@ -2319,49 +2320,78 @@ fn session_start_success_and_workspace_split_are_single_owner_transitions() {
 }
 
 #[test]
-fn session_start_state_reserves_saved_connections_during_preparation() {
+fn saved_connection_preparations_are_independent_and_count_each_tab_once() {
     let mut starts = SessionStartFeatureState::new();
-    let connection_1 = starts.allocate_tab_placement(0);
-    let connection_2 = starts.allocate_tab_placement(1);
-
-    assert!(starts.reserve_saved_connection_start("connection-1", connection_1));
-    assert!(starts.saved_connection_is_preparing("connection-1"));
-    assert!(!starts.reserve_saved_connection_start("connection-1", connection_1));
-    assert!(starts.reserve_saved_connection_start("connection-2", connection_2));
+    let saved = serde_json::from_value(serde_json::json!({
+        "id":"saved", "name":"SSH", "type":"ssh", "host":"127.0.0.1"
+    }))
+    .unwrap();
+    let first = starts.allocate_tab_placement(0);
+    let second = starts.allocate_tab_placement(1);
+    let a = starts.begin_saved_preparation(
+        &saved,
+        &super::SavedConnectionStartOptions {
+            tab_placement: Some(first),
+            ..Default::default()
+        },
+    );
+    let b = starts.begin_saved_preparation(
+        &saved,
+        &super::SavedConnectionStartOptions {
+            tab_placement: Some(second),
+            ..Default::default()
+        },
+    );
+    assert_ne!(a, b);
     assert_eq!(starts.visible_tab_reservation_count(), 2);
-    assert_eq!(connection_1.insert_index, 0);
-    assert_eq!(connection_2.insert_index, 1);
-    assert!(connection_1.request_sequence < connection_2.request_sequence);
-
-    starts.release_saved_connection_start("connection-1");
-    assert!(!starts.saved_connection_is_preparing("connection-1"));
-    assert!(starts.reserve_saved_connection_start("connection-1", connection_1));
+    assert!(starts.saved_connection_is_preparing("saved"));
+    assert!(starts.has_pending());
+    starts.close_pending(&a).unwrap();
+    assert_eq!(starts.visible_tab_reservation_count(), 1);
+    assert!(starts.saved_connection_is_preparing("saved"));
+    assert!(starts.attempt(&b).check().is_ok());
+    assert!(!starts.has_cancelled_results());
 }
 
 #[test]
-fn pending_registration_promotes_saved_preparation_without_changing_placement() {
+fn pending_promotion_preserves_attempt_placement_and_user_selection() {
     let mut starts = SessionStartFeatureState::new();
     let placement = starts.allocate_tab_placement(3);
-    assert!(starts.reserve_saved_connection_start("connection-1", placement));
-
     let mut request = pending("saved");
-    request.source_connection_id = Some("connection-1".to_string());
+    request.source_connection_id = Some("connection-1".into());
     request.tab_placement = Some(placement);
-    starts.register_pending("request-1".to_string(), request);
-
-    assert!(!starts.saved_connection_is_preparing("connection-1"));
-    assert_eq!(starts.visible_tab_reservation_count(), 1);
-    let pending = starts
-        .pending
-        .get("request-1")
-        .expect("saved preparation should become pending");
+    starts.begin_preparation("request-1".into(), request);
+    let attempt = starts.attempt("request-1");
+    starts.begin_preparation("request-2".into(), pending("second"));
+    starts.register_pending("request-1".into(), pending("saved"));
+    assert_eq!(starts.visible_tab_reservation_count(), 2);
+    assert_eq!(starts.active_pending.as_deref(), Some("request-2"));
     assert_eq!(
-        pending
+        starts.pending["request-1"]
             .tab_placement
-            .expect("pending start should retain its tab placement")
+            .unwrap()
             .insert_index,
         3
     );
+    attempt.cancel();
+    assert!(starts.attempt("request-1").check().is_err());
+    assert!(starts.attempt("request-2").check().is_ok());
+}
+
+#[test]
+fn operation_liveness_is_not_kept_alive_by_another_start_from_the_same_saved_connection() {
+    let mut starts = SessionStartFeatureState::new();
+    let mut operation = pending("operation");
+    operation.source_connection_id = Some("saved".into());
+    operation.mcp_open_operation_id = Some("operation-id".into());
+    starts.begin_preparation("request-id".into(), operation);
+    let mut sibling = pending("sibling");
+    sibling.source_connection_id = Some("saved".into());
+    starts.register_pending("sibling".into(), sibling);
+    assert!(starts.mcp_operation_is_pending("operation-id"));
+    starts.take_event_request("request-id");
+    assert!(starts.source_connection_is_pending("saved"));
+    assert!(!starts.mcp_operation_is_pending("operation-id"));
 }
 
 #[test]
@@ -2391,7 +2421,7 @@ fn saved_ssh_mode_survives_failure_before_config_build_and_retry_preparation() {
         );
         let failed = starts.take_failed_for_retry("first").unwrap();
         assert_eq!(failed.pending.ssh_runtime_mode(), Some(mode));
-        starts.begin_retry_preparation("retry".into(), failed.pending);
+        starts.begin_preparation("retry".into(), failed.pending);
         assert_eq!(
             starts.pending.get("retry").unwrap().ssh_runtime_mode(),
             Some(mode)
@@ -2402,15 +2432,12 @@ fn saved_ssh_mode_survives_failure_before_config_build_and_retry_preparation() {
 #[test]
 fn unrelated_start_from_same_connection_does_not_release_preparation() {
     let mut starts = SessionStartFeatureState::new();
-    let preparing = starts.allocate_tab_placement(0);
-    let duplicate = starts.allocate_tab_placement(1);
-    assert!(starts.reserve_saved_connection_start("connection-1", preparing));
-
-    let mut duplicate_request = pending("duplicate");
-    duplicate_request.source_connection_id = Some("connection-1".to_string());
-    duplicate_request.tab_placement = Some(duplicate);
-    starts.register_pending("request-duplicate".to_string(), duplicate_request);
-
+    let mut preparing = pending("preparing");
+    preparing.source_connection_id = Some("connection-1".into());
+    starts.begin_preparation("request-preparing".into(), preparing);
+    let mut duplicate = pending("duplicate");
+    duplicate.source_connection_id = Some("connection-1".into());
+    starts.register_pending("request-duplicate".into(), duplicate);
     assert!(starts.saved_connection_is_preparing("connection-1"));
     assert_eq!(starts.visible_tab_reservation_count(), 2);
 }

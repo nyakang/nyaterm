@@ -11,13 +11,12 @@ use nyaterm_remote_desktop::{
     CertificatePromptReason, ClipboardTracker, CursorPosition, CursorShape, Framebuffer, KeyMapper,
     RdpCapability, RdpCertificateRequest, RdpDisplayMetrics, RdpError, RdpErrorKind,
     RdpServerCapabilities, RdpSessionConfig, RdpSessionManager, RemoteDesktopError,
-    RemoteDesktopViewState, VncError, VncServerCapabilities, VncSessionConfig, VncSessionManager,
+    RemoteDesktopViewState, VncServerCapabilities, VncSessionManager,
 };
 
 pub(in crate::features) struct RemoteDesktopFeatureState {
+    pub(super) helper_launches: HashMap<String, String>,
     pub(in crate::features) routes:
-        HashMap<String, Arc<nyaterm_transport::network_route::NetworkRoute>>,
-    pub(in crate::features) prepared_routes:
         HashMap<String, Arc<nyaterm_transport::network_route::NetworkRoute>>,
     pub(super) manager: Arc<RdpSessionManager>,
     pub(super) vnc_manager: Arc<VncSessionManager>,
@@ -57,6 +56,8 @@ pub(super) struct RemoteModifierState {
 }
 
 pub(super) struct RemoteDesktopSessionState {
+    pub(super) start_token: String,
+    pub(super) start_attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     pub(super) state: RemoteDesktopViewState,
     pub(super) framebuffer: Option<Framebuffer>,
     pub(super) texture: Option<DynamicTexture>,
@@ -109,6 +110,8 @@ pub(super) struct RemoteDesktopSessionState {
 impl Default for RemoteDesktopSessionState {
     fn default() -> Self {
         Self {
+            start_token: nyaterm_core::uuid(),
+            start_attempt: Default::default(),
             state: RemoteDesktopViewState::Connecting,
             framebuffer: None,
             texture: None,
@@ -198,8 +201,8 @@ impl RemoteDesktopFeatureState {
     }
 
     pub(in crate::features) fn blocks_configuration_replacement(&self) -> bool {
-        self.restore_pending.is_some()
-            || !self.prepared_routes.is_empty()
+        !self.helper_launches.is_empty()
+            || self.restore_pending.is_some()
             || !self.routes.is_empty()
             || self.sessions.iter().any(|(id, session)| {
                 let pending = session.deferred_start.is_some()
@@ -259,8 +262,8 @@ impl RemoteDesktopFeatureState {
             vnc_wake.signal(ANY_INTEREST);
         }));
         Self {
+            helper_launches: HashMap::new(),
             routes: HashMap::new(),
-            prepared_routes: HashMap::new(),
             manager,
             vnc_manager,
             sessions: HashMap::new(),
@@ -331,13 +334,57 @@ impl RemoteDesktopFeatureState {
         &self.focus
     }
 
-    pub(in crate::features) fn create_vnc_session(
+    pub(in crate::features) fn start_is_pending(&self, id: &str) -> bool {
+        self.helper_launches.contains_key(id)
+            || self.sessions.get(id).is_some_and(|session| {
+                matches!(
+                    session.state,
+                    RemoteDesktopViewState::Connecting | RemoteDesktopViewState::Reconnecting
+                )
+            })
+    }
+
+    pub(in crate::features) fn start_matches(&self, id: &str, token: &str) -> bool {
+        self.sessions.get(id).is_some_and(|session| {
+            session.start_token == token && !session.start_attempt.is_cancelled()
+        })
+    }
+
+    pub(super) fn renew_start(&mut self, id: &str) {
+        if let Some(session) = self.sessions.get_mut(id) {
+            session.start_attempt.cancel();
+            session.start_attempt = Default::default();
+            session.start_token = nyaterm_core::uuid();
+        }
+    }
+
+    pub(in crate::features) fn insert_connecting_for_request(
         &mut self,
-        config: VncSessionConfig,
-    ) -> Result<String, VncError> {
-        let session_id = self.vnc_manager.create_session(config)?;
-        self.insert_connecting(session_id.clone());
-        Ok(session_id)
+        id: String,
+        request_id: String,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
+    ) {
+        self.insert_connecting(id.clone());
+        if let Some(session) = self.sessions.get_mut(&id) {
+            session.start_token = request_id;
+            session.start_attempt = attempt;
+        }
+    }
+
+    /// A prepared retry is the same request when replacing its old helper.
+    /// Move its cancellation context out before closing the old presentation.
+    pub(super) fn take_start_context(
+        &mut self,
+        id: &str,
+    ) -> Option<(
+        String,
+        nyaterm_transport::connection_attempt::ConnectionAttempt,
+    )> {
+        let session = self.sessions.get_mut(id)?;
+        Some((
+            session.start_token.clone(),
+            std::mem::take(&mut session.start_attempt),
+        ))
     }
 
     pub(in crate::features) fn insert_failed_session(
@@ -364,6 +411,7 @@ impl RemoteDesktopFeatureState {
         self.surfaces.remove(session_id);
         self.routes.remove(session_id);
         if let Some(mut session) = self.sessions.remove(session_id) {
+            session.start_attempt.cancel();
             if let Some(texture) = session.texture.take() {
                 self.pending_texture_removals.push(texture);
             }
@@ -388,7 +436,9 @@ impl RemoteDesktopFeatureState {
             session.viewport = viewport;
             session.viewport_scale_factor = viewport_scale_factor;
         }
-        self.sessions.insert(session_id, session);
+        if let Some(previous) = self.sessions.insert(session_id, session) {
+            previous.start_attempt.cancel();
+        }
     }
 
     pub(in crate::features) fn insert_disconnected(&mut self, session_id: String) {

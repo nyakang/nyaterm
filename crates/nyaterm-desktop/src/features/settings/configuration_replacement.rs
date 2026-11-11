@@ -220,16 +220,13 @@ mod tests {
                 .prepare_session_start_options(Default::default())
                 .tab_placement
                 .unwrap();
-            assert!(
-                app.session
-                    .start_reserve_saved_connection("saved", placement)
-            );
-            assert!(!app.session.start_has_pending());
+            let preparing_id = app.session.simulate_saved_preparation("saved", placement);
+            assert!(app.session.start_has_pending());
             assert!(
                 app.begin_configuration_replacement("settings.closeActiveSessionBeforeImport", cx)
                     .is_none()
             );
-            app.session.start_release_saved_connection("saved");
+            app.session.simulate_close_preparation(&preparing_id);
             assert!(
                 app.begin_configuration_replacement("settings.closeActiveSessionBeforeImport", cx)
                     .is_some()

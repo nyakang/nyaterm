@@ -4,12 +4,14 @@ use super::SessionFeatureState;
 use crate::features::runtime_jobs::SessionStartResult;
 use crate::models::{SessionLaunchConfig, StartupCommandRequest, WorkspaceSplitDirection};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use nyaterm_core::{AiExecutionProfile, SavedConnection};
+use nyaterm_core::{AiExecutionProfile, ConnectionType, SavedConnection, uuid};
 use nyaterm_transport::SessionKind;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 pub(in crate::features) struct PendingSessionStart {
+    /// Preparation has no worker result to reap when its callback is cancelled.
+    pub preparing: bool,
     pub(in crate::features) mcp_open_operation_id: Option<String>,
     /// Retains an external override before a saved connection's config is built.
     pub requested_ssh_runtime_mode: Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
@@ -97,14 +99,12 @@ pub(in crate::features::session) struct SessionStartFeatureState {
     pub(super) reconnect_failures: HashMap<String, String>,
     pub(super) reconnect_completions: HashMap<String, PendingReconnectCompletion>,
     pub(super) pending_workspace_split: Option<(WorkspaceSplitDirection, String)>,
-    pub(super) preparing_saved_connections: HashMap<String, SessionStartTabPlacement>,
     pub(super) next_request_sequence: u64,
     // Positions are resolved by sequence, including in callbacks holding an old
     // options snapshot. A drag must survive credential loading and worker completion.
     // Allocation time disambiguates completed tabs imported from another
     // workspace, whose local request sequences can overlap ours.
     pub(super) placements: HashMap<(u64, Instant), SessionStartTabPlacement>,
-    pub(super) retry_preparations: HashSet<String>,
 }
 
 pub(in crate::features) enum SessionStartEventRequest {
@@ -129,7 +129,7 @@ pub(in crate::features) struct SavedConnectionStartOptions {
     pub reconnect_session_id: Option<String>,
     pub workspace_split: Option<(WorkspaceSplitDirection, String)>,
     pub tab_placement: Option<SessionStartTabPlacement>,
-    pub retry_request_id: Option<String>,
+    pub request_id: Option<String>,
 }
 
 impl SessionStartFeatureState {
@@ -146,10 +146,8 @@ impl SessionStartFeatureState {
             reconnect_failures: HashMap::new(),
             reconnect_completions: HashMap::new(),
             pending_workspace_split: None,
-            preparing_saved_connections: HashMap::new(),
             next_request_sequence: 0,
             placements: HashMap::new(),
-            retry_preparations: HashSet::new(),
         }
     }
 
@@ -168,7 +166,7 @@ impl SessionStartFeatureState {
     }
 
     pub(in crate::features) fn is_busy(&self) -> bool {
-        !self.pending.is_empty() || !self.preparing_saved_connections.is_empty()
+        !self.pending.is_empty()
     }
 
     pub(in crate::features) fn has_failed(&self) -> bool {
@@ -186,7 +184,6 @@ impl SessionStartFeatureState {
             .filter(|pending| pending.reconnect_session_id.is_none())
             .count()
             .saturating_add(self.failed.len())
-            .saturating_add(self.preparing_saved_connections.len())
     }
 
     pub(in crate::features) fn allocate_tab_placement(
@@ -230,46 +227,93 @@ impl SessionStartFeatureState {
         );
     }
 
-    pub(in crate::features) fn retry_is_pending(
+    pub(in crate::features) fn request_can_start(
         &self,
         options: &SavedConnectionStartOptions,
     ) -> bool {
-        options
-            .retry_request_id
-            .as_ref()
-            .is_none_or(|id| self.pending.contains_key(id))
+        options.request_id.as_ref().is_none_or(|id| {
+            self.pending
+                .get(id)
+                .is_some_and(|pending| pending.preparing)
+        })
     }
 
-    pub(in crate::features) fn begin_retry_preparation(
+    pub(in crate::features) fn begin_preparation(
         &mut self,
         request_id: String,
-        pending: PendingSessionStart,
+        mut pending: PendingSessionStart,
     ) {
-        self.retry_preparations.insert(request_id.clone());
+        pending.preparing = true;
         self.register_pending(request_id, pending);
     }
 
-    pub(in crate::features) fn finish_retry_preparation(&mut self, request_id: &str) {
-        self.retry_preparations.remove(request_id);
-    }
-
-    pub(in crate::features) fn preparing_retry_request(
-        &self,
-        placement: Option<SessionStartTabPlacement>,
-    ) -> Option<&str> {
-        let placement = placement?;
-        self.retry_preparations
-            .iter()
-            .find(|id| {
-                self.pending
-                    .get(*id)
-                    .and_then(|p| p.tab_placement)
-                    .is_some_and(|p| {
-                        p.request_sequence == placement.request_sequence
-                            && p.requested_at == placement.requested_at
-                    })
-            })
-            .map(String::as_str)
+    pub(in crate::features) fn begin_saved_preparation(
+        &mut self,
+        connection: &SavedConnection,
+        options: &SavedConnectionStartOptions,
+    ) -> String {
+        if let Some(id) = &options.request_id {
+            return id.clone();
+        }
+        let (kind, ai_execution_profile) = match &connection.config {
+            ConnectionType::LocalTerminal {
+                ai_execution_profile,
+                ..
+            } => (SessionKind::LocalPty, *ai_execution_profile),
+            ConnectionType::Ssh {
+                ai_execution_profile,
+                ..
+            } => (SessionKind::Ssh, *ai_execution_profile),
+            ConnectionType::Telnet {
+                ai_execution_profile,
+                raw_tcp_cli,
+                ..
+            } => (
+                if *raw_tcp_cli {
+                    SessionKind::RawTcp
+                } else {
+                    SessionKind::Telnet
+                },
+                *ai_execution_profile,
+            ),
+            ConnectionType::Serial {
+                ai_execution_profile,
+                ..
+            } => (SessionKind::Serial, *ai_execution_profile),
+            ConnectionType::Rdp { .. } => (SessionKind::Rdp, AiExecutionProfile::Disabled),
+            ConnectionType::Vnc { .. } => (SessionKind::Vnc, AiExecutionProfile::Disabled),
+        };
+        let id = uuid();
+        self.begin_preparation(
+            id.clone(),
+            PendingSessionStart {
+                preparing: true,
+                mcp_open_operation_id: options.mcp_open_operation_id.clone(),
+                requested_ssh_runtime_mode: options.ssh_runtime_mode,
+                attempt: Default::default(),
+                connection_name: connection.name.clone(),
+                launch_config: None,
+                requested_at: options
+                    .tab_placement
+                    .map(|p| p.requested_at)
+                    .unwrap_or_else(Instant::now),
+                kind,
+                ai_execution_profile,
+                custom_name: options.custom_name.clone(),
+                tab_color: options.tab_color,
+                locked: options.locked,
+                after_session_id: options.after_session_id.clone(),
+                insert_index: options.insert_index,
+                seed_output: options.seed_output.clone(),
+                startup_command: options.startup_command.clone(),
+                multiplex_key: None,
+                source_connection_id: Some(connection.id.clone()),
+                workspace_split: options.workspace_split.clone(),
+                tab_placement: options.tab_placement,
+                reconnect_session_id: options.reconnect_session_id.clone(),
+            },
+        );
+        id
     }
 
     pub(in crate::features) fn active_failed_request_id(&self) -> Option<&str> {
@@ -333,27 +377,21 @@ impl SessionStartFeatureState {
             .any(|pending| pending.source_connection_id.as_deref() == Some(connection_id))
     }
 
-    pub(in crate::features) fn reserve_saved_connection_start(
-        &mut self,
-        connection_id: &str,
-        placement: SessionStartTabPlacement,
-    ) -> bool {
-        if self.source_connection_is_pending(connection_id)
-            || self.preparing_saved_connections.contains_key(connection_id)
-        {
-            return false;
-        }
-        self.preparing_saved_connections
-            .insert(connection_id.to_string(), placement);
-        true
-    }
-
-    pub(in crate::features) fn release_saved_connection_start(&mut self, connection_id: &str) {
-        self.preparing_saved_connections.remove(connection_id);
-    }
-
+    #[cfg(test)]
     pub(in crate::features) fn saved_connection_is_preparing(&self, connection_id: &str) -> bool {
-        self.preparing_saved_connections.contains_key(connection_id)
+        self.pending.values().any(|pending| {
+            pending.preparing && pending.source_connection_id.as_deref() == Some(connection_id)
+        })
+    }
+
+    pub(in crate::features) fn mcp_operation_is_pending(&self, operation_id: &str) -> bool {
+        self.pending
+            .values()
+            .any(|pending| pending.mcp_open_operation_id.as_deref() == Some(operation_id))
+            || self
+                .reconnect_completions
+                .values()
+                .any(|pending| pending.mcp_open_operation_id.as_deref() == Some(operation_id))
     }
 
     pub(in crate::features) fn attempt(
@@ -375,19 +413,19 @@ impl SessionStartFeatureState {
             pending.tab_placement =
                 Some(self.allocate_tab_placement(pending.insert_index.unwrap_or(usize::MAX)));
         }
-        if let (Some(connection_id), Some(placement)) = (
-            pending.source_connection_id.as_deref(),
-            pending.tab_placement,
-        ) && self
-            .preparing_saved_connections
-            .get(connection_id)
-            .is_some_and(|preparing| preparing.request_sequence == placement.request_sequence)
-        {
-            self.preparing_saved_connections.remove(connection_id);
+        let existing = self.pending.get(&request_id);
+        let promotion = existing.is_some();
+        if let Some(existing) = existing {
+            pending.attempt = existing.attempt.clone();
+            pending.requested_at = existing.requested_at;
+            pending.custom_name = existing.custom_name.clone();
+            pending.tab_color = existing.tab_color;
+            pending.locked = existing.locked;
+            pending.tab_placement = existing.tab_placement;
         }
         let reconnecting = pending.reconnect_session_id.is_some();
         self.pending.insert(request_id.clone(), pending);
-        if !reconnecting {
+        if !reconnecting && !promotion {
             self.active_pending = Some(request_id);
             self.active_failed = None;
         }
@@ -402,7 +440,6 @@ impl SessionStartFeatureState {
             return SessionStartEventRequest::Cancelled;
         }
         let was_active = self.active_pending.as_deref() == Some(request_id);
-        self.retry_preparations.remove(request_id);
         let pending = self.pending.remove(request_id);
         if was_active {
             self.active_pending = None;
@@ -414,7 +451,7 @@ impl SessionStartFeatureState {
     }
 
     pub(in crate::features) fn complete_success(
-        &mut self,
+        &self,
         was_active: bool,
         no_active_session: bool,
     ) -> bool {
@@ -591,20 +628,7 @@ impl SessionStartFeatureState {
     ) -> Option<PendingSessionStart> {
         let pending = self.pending.remove(request_id)?;
         pending.attempt.cancel();
-        if let (Some(connection_id), Some(placement)) = (
-            pending.source_connection_id.as_deref(),
-            pending.tab_placement,
-        ) && self
-            .preparing_saved_connections
-            .get(connection_id)
-            .is_some_and(|reserved| {
-                reserved.request_sequence == placement.request_sequence
-                    && reserved.requested_at == placement.requested_at
-            })
-        {
-            self.preparing_saved_connections.remove(connection_id);
-        }
-        if !self.retry_preparations.remove(request_id) {
+        if !pending.preparing {
             self.cancelled.insert(request_id.to_string());
         }
         if self.active_pending.as_deref() == Some(request_id) {
@@ -770,35 +794,33 @@ impl SessionFeatureState {
     ) -> impl Iterator<Item = (&String, &FailedSessionStart)> {
         self.start.failed_entries()
     }
-    pub(in crate::features) fn start_saved_connection_is_pending(
-        &self,
-        connection: &SavedConnection,
-    ) -> bool {
-        self.start.source_connection_is_pending(&connection.id)
-    }
-    pub(in crate::features) fn start_saved_connection_is_pending_or_preparing(
-        &self,
-        connection: &SavedConnection,
-    ) -> bool {
-        self.start_saved_connection_is_pending(connection)
-            || self.start.saved_connection_is_preparing(&connection.id)
-    }
-    pub(in crate::features) fn start_reserve_saved_connection(
-        &mut self,
-        connection_id: &str,
-        placement: SessionStartTabPlacement,
-    ) -> bool {
-        self.start
-            .reserve_saved_connection_start(connection_id, placement)
-    }
     pub(in crate::features) fn saved_connection_is_starting(&self, id: &str) -> bool {
-        self.start.source_connection_is_pending(id) || self.start.saved_connection_is_preparing(id)
+        self.start.source_connection_is_pending(id)
     }
-    pub(in crate::features) fn start_release_saved_connection(&mut self, connection_id: &str) {
-        self.start.release_saved_connection_start(connection_id);
-        if self.start.visible_tab_reservation_count() == 0 {
-            self.clear_start_tab_placements();
-        }
+    pub(in crate::features) fn start_mcp_operation_is_pending(&self, id: &str) -> bool {
+        self.start.mcp_operation_is_pending(id)
+    }
+    #[cfg(test)]
+    pub(in crate::features) fn simulate_saved_preparation(
+        &mut self,
+        id: &str,
+        placement: SessionStartTabPlacement,
+    ) -> String {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": id, "name": "preparing", "type": "ssh", "host": "127.0.0.1"
+        }))
+        .unwrap();
+        self.start.begin_saved_preparation(
+            &connection,
+            &SavedConnectionStartOptions {
+                tab_placement: Some(placement),
+                ..Default::default()
+            },
+        )
+    }
+    #[cfg(test)]
+    pub(in crate::features) fn simulate_close_preparation(&mut self, id: &str) {
+        self.start.close_pending(id);
     }
     pub(in crate::features) fn start_reconnect_is_pending(&self, session_id: &str) -> bool {
         self.start.reconnect_is_pending(session_id)

@@ -39,10 +39,6 @@ impl NyaTermApp {
                 .iter()
                 .find(|connection| &connection.id == id)
         });
-        let source_busy = pending.source_connection_id.as_ref().is_some_and(|id| {
-            self.session.start.source_connection_is_pending(id)
-                || self.session.start.saved_connection_is_preparing(id)
-        });
         let ssh_host = match pending.launch_config.as_ref() {
             Some(SessionLaunchConfig::Ssh(config)) => Some(config.host.clone()),
             _ => connection.and_then(|connection| match &connection.config {
@@ -53,12 +49,11 @@ impl NyaTermApp {
         .filter(|host| !host.trim().is_empty());
         Some(StartTabActionContext {
             connecting: ended.is_none(),
-            can_restart: !source_busy
-                && (connection.is_some()
-                    || pending
-                        .launch_config
-                        .as_ref()
-                        .is_some_and(|config| config.encoding().is_some())),
+            can_restart: (connection.is_some()
+                || pending
+                    .launch_config
+                    .as_ref()
+                    .is_some_and(|config| config.encoding().is_some())),
             ssh_host,
         })
     }
@@ -119,6 +114,7 @@ impl NyaTermApp {
                     .start
                     .cancel_pending(&request_id, message.clone());
                 self.shell.set_status(message);
+                self.wake_startup_restore_after_preparation(cx);
                 self.clear_session_tab_drag(cx);
                 cx.notify();
             }
@@ -183,6 +179,7 @@ impl NyaTermApp {
             return;
         };
         let mut pending = PendingSessionStart {
+            preparing: false,
             mcp_open_operation_id: None,
             requested_ssh_runtime_mode: source.requested_ssh_runtime_mode,
             attempt: Default::default(),
@@ -217,16 +214,14 @@ impl NyaTermApp {
             tab_color: pending.tab_color,
             insert_index: Some(index),
             tab_placement: Some(placement),
-            retry_request_id: Some(request_id.clone()),
+            request_id: Some(request_id.clone()),
             ..Default::default()
         };
         let launch_config = pending.launch_config.clone();
         let name = pending.connection_name.clone();
         let source_id = pending.source_connection_id.clone();
         let profile = pending.ai_execution_profile;
-        self.session
-            .start
-            .begin_retry_preparation(request_id, pending);
+        self.session.start.begin_preparation(request_id, pending);
         let new_key = crate::features::shell::session_tabs::SessionStripTabId::Start(
             placement.request_sequence,
         )

@@ -154,7 +154,6 @@ impl NyaTermApp {
         let stop_transfers = self.transfer.begin_bulk_shutdown();
         let ssh_connections = self.session.ssh_connection_pool();
         self.remote_desktop.routes.clear();
-        self.remote_desktop.prepared_routes.clear();
         self.shutdown_remote_desktop_workers();
         #[cfg(windows)]
         let native_hosts = self.remote_desktop.take_native_hosts_for_shutdown();

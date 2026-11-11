@@ -155,12 +155,6 @@ impl NyaTermApp {
     ) -> usize {
         let mut started = 0usize;
         for connection in connections {
-            if self
-                .session
-                .start_saved_connection_is_pending_or_preparing(&connection)
-            {
-                continue;
-            }
             self.start_saved_connection_with_options(
                 connection,
                 SavedConnectionStartOptions::default(),

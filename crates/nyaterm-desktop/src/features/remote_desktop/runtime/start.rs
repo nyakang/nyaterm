@@ -57,10 +57,13 @@ impl NyaTermApp {
     pub(in crate::features) fn schedule_rdp_runtime(
         &mut self,
         config: RdpSessionConfig,
+        request_id: String,
+        attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
         cx: &mut Context<Self>,
     ) -> String {
         let session_id = nyaterm_core::uuid();
-        self.remote_desktop.insert_connecting(session_id.clone());
+        self.remote_desktop
+            .insert_connecting_for_request(session_id.clone(), request_id, attempt);
         self.begin_rdp_runtime(&session_id, config, cx);
         session_id
     }
@@ -106,7 +109,7 @@ impl NyaTermApp {
             RdpStartPlan::Connect(display) => {
                 let panel_desktop = metrics.filter(|_| display.mode == RdpDisplayMode::FitWindow);
                 config.display = display;
-                self.launch_rdp_runtime(session_id, config);
+                self.launch_rdp_runtime(session_id, config, cx);
                 self.ensure_remote_desktop_periodic_clock(cx);
                 if let Some(session) = self.remote_desktop.sessions.get_mut(session_id)
                     && let Some(metrics) = panel_desktop
@@ -125,6 +128,7 @@ impl NyaTermApp {
         &mut self,
         session_id: &str,
         mut config: RdpSessionConfig,
+        cx: &mut Context<Self>,
     ) {
         if self
             .cloud_sync
@@ -167,28 +171,18 @@ impl NyaTermApp {
             return;
         }
 
-        match self
-            .remote_desktop
-            .manager
-            .create_session_with_id(session_id.to_string(), config)
-        {
-            Ok(_) => {
-                if let Some(metadata) = self.session.metadata_mut(session_id) {
-                    metadata.disconnected = false;
-                }
-            }
-            // Left on the tab as a failure the user can retry, which is what a
-            // connect that failed before the session was registered showed.
-            Err(error) => self.remote_desktop.insert_failed_session(
-                session_id.to_string(),
-                error.kind,
-                error.message,
-            ),
-        }
+        self.spawn_remote_desktop_helper(
+            session_id,
+            crate::models::SessionLaunchConfig::Rdp(config),
+            cx,
+        );
     }
 
     /// Connect the fit-window sessions whose panel was never measured.
-    pub(in crate::features) fn drive_deferred_rdp_starts(&mut self) -> bool {
+    pub(in crate::features) fn drive_deferred_rdp_starts(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let now = Instant::now();
         let due = self
             .remote_desktop
@@ -211,7 +205,7 @@ impl NyaTermApp {
             let Some((config, _)) = deferred else {
                 continue;
             };
-            self.launch_rdp_runtime(session_id, config);
+            self.launch_rdp_runtime(session_id, config, cx);
         }
         !due.is_empty()
     }
