@@ -4,7 +4,7 @@ use nyaterm_core::models::android::AndroidScreenSettings;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CONTROL_BYTES: usize = 128 * 1024;
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -59,6 +59,13 @@ pub enum Control {
     ClipboardAck {
         sequence: u64,
     },
+    Presentation {
+        visible: bool,
+    },
+    InputRejected {
+        operation: InputOperation,
+        code: InputRejection,
+    },
     Rotate,
     ReleaseInputs,
     FrameAck {
@@ -75,6 +82,106 @@ pub enum Control {
     Fatal {
         code: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputOperation {
+    Key,
+    Touch,
+    Scroll,
+    Text,
+    Paste,
+    Rotate,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
+pub enum InputRejection {
+    #[error("Android text exceeds input limit")]
+    TextTooLong,
+    #[error("Android text contains NUL")]
+    Nul,
+    #[error("Android input exceeds IPC limit")]
+    PacketTooLong,
+    #[error("Android input is invalid")]
+    InvalidInput,
+}
+impl InputRejection {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::TextTooLong => "TextTooLong",
+            Self::Nul => "InputNul",
+            Self::PacketTooLong => "InputPacketTooLong",
+            Self::InvalidInput => "InvalidInput",
+        }
+    }
+}
+impl Control {
+    pub fn input_operation(&self) -> Option<InputOperation> {
+        match self {
+            Self::Key { .. } => Some(InputOperation::Key),
+            Self::Touch { .. } => Some(InputOperation::Touch),
+            Self::Scroll { .. } => Some(InputOperation::Scroll),
+            Self::Text { .. } => Some(InputOperation::Text),
+            Self::Paste { .. } => Some(InputOperation::Paste),
+            Self::Rotate => Some(InputOperation::Rotate),
+            _ => None,
+        }
+    }
+    pub fn validate_input(&self) -> Result<(), InputRejection> {
+        match self {
+            Self::Text { text } | Self::Paste { text, .. } => {
+                if text.len() > MAX_TEXT_BYTES {
+                    return Err(InputRejection::TextTooLong);
+                }
+                if text.contains('\0') {
+                    return Err(InputRejection::Nul);
+                }
+            }
+            Self::Key { action, .. } if *action > 1 => return Err(InputRejection::InvalidInput),
+            Self::Touch { action, .. } if *action > 3 => return Err(InputRejection::InvalidInput),
+            Self::Scroll {
+                horizontal,
+                vertical,
+                ..
+            } if !horizontal.is_finite() || !vertical.is_finite() => {
+                return Err(InputRejection::InvalidInput);
+            }
+            _ => {}
+        }
+        if let Self::Touch {
+            x,
+            y,
+            width,
+            height,
+            ..
+        }
+        | Self::Scroll {
+            x,
+            y,
+            width,
+            height,
+            ..
+        } = self
+            && (*width == 0
+                || *height == 0
+                || *width > 4096
+                || *height > 4096
+                || x >= width
+                || y >= height)
+        {
+            return Err(InputRejection::InvalidInput);
+        }
+        if self.input_operation().is_some()
+            && serde_json::to_vec(self)
+                .map_err(|_| InputRejection::InvalidInput)?
+                .len()
+                > MAX_CONTROL_BYTES
+        {
+            return Err(InputRejection::PacketTooLong);
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for Control {
@@ -248,5 +355,51 @@ mod tests {
             sequence: 1,
         };
         assert!(!format!("{control:?}").contains("private"));
+    }
+    #[test]
+    fn input_limits_count_utf8_bytes_and_serialized_escaping() {
+        use crate::ipc::{InputRejection, MAX_TEXT_BYTES};
+        assert!(
+            Control::Text {
+                text: "a".repeat(MAX_TEXT_BYTES)
+            }
+            .validate_input()
+            .is_ok()
+        );
+        assert!(matches!(
+            Control::Text {
+                text: "中".repeat(MAX_TEXT_BYTES / 3 + 1)
+            }
+            .validate_input(),
+            Err(InputRejection::TextTooLong)
+        ));
+        assert!(matches!(
+            Control::Paste {
+                text: "private\0value".into(),
+                sequence: 1
+            }
+            .validate_input(),
+            Err(InputRejection::Nul)
+        ));
+        assert!(matches!(
+            Control::Text {
+                text: "\u{1}".repeat(MAX_TEXT_BYTES)
+            }
+            .validate_input(),
+            Err(InputRejection::PacketTooLong)
+        ));
+        assert!(
+            Control::Scroll {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+                horizontal: f32::NAN,
+                vertical: 0.,
+                generation: 1
+            }
+            .validate_input()
+            .is_err()
+        );
     }
 }

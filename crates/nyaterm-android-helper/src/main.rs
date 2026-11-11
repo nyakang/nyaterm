@@ -11,13 +11,30 @@ use std::time::{Duration, Instant};
 
 use nyaterm_android::ipc::{Control, Frame, PROTOCOL_VERSION, Packet, read_packet, write_packet};
 
-#[derive(Default)]
 struct OutputState {
     controls: VecDeque<Control>,
     latest: Option<Frame>,
     in_flight: Option<u64>,
     sequence: u64,
     closed: bool,
+    visible: bool,
+    epoch: u64,
+    pixels: Vec<Vec<u8>>,
+}
+
+impl Default for OutputState {
+    fn default() -> Self {
+        Self {
+            controls: VecDeque::new(),
+            latest: None,
+            in_flight: None,
+            sequence: 0,
+            closed: false,
+            visible: true,
+            epoch: 0,
+            pixels: Vec::new(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -37,6 +54,12 @@ impl Output {
     }
     fn frame(&self, mut frame: Frame) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if !state.visible {
+            if state.pixels.len() < 2 {
+                state.pixels.push(frame.pixels);
+            }
+            return;
+        }
         state.sequence = state.sequence.wrapping_add(1).max(1);
         frame.sequence = state.sequence;
         state.latest = Some(frame);
@@ -48,6 +71,33 @@ impl Output {
             state.in_flight = None;
             self.changed.notify_one();
         }
+    }
+    fn presentation(&self, visible: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.visible != visible {
+            state.epoch = state.epoch.wrapping_add(1);
+        }
+        state.visible = visible;
+        if !visible
+            && let Some(frame) = state.latest.take()
+            && state.pixels.len() < 2
+        {
+            state.pixels.push(frame.pixels);
+        }
+        self.changed.notify_all();
+    }
+    fn credit(&self) -> Option<u64> {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        (state.visible && !state.closed && state.in_flight.is_none() && state.latest.is_none())
+            .then_some(state.epoch)
+    }
+    fn take_pixels(&self) -> Vec<u8> {
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .pixels
+            .pop()
+            .unwrap_or_default()
     }
     fn close(&self) {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
@@ -80,6 +130,12 @@ fn output_loop(output: Arc<Output>) -> io::Result<()> {
             }
         };
         write_packet(&mut stdout, &packet)?;
+        if let Packet::Frame(frame) = packet {
+            let mut state = output.state.lock().unwrap_or_else(|p| p.into_inner());
+            if state.pixels.len() < 2 {
+                state.pixels.push(frame.pixels);
+            }
+        }
     }
 }
 
@@ -113,6 +169,57 @@ fn connect_video(endpoint: SocketAddr) -> io::Result<TcpStream> {
     }
 }
 
+struct PresentationReader<'a, F> {
+    socket: &'a mut TcpStream,
+    tick: F,
+}
+impl<F: FnMut() -> io::Result<()>> Read for PresentationReader<'_, F> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            (self.tick)()?;
+            match self.socket.read(buffer) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+fn present_cached(
+    decoder: &mut Option<decoder::Decoder>,
+    output: &Output,
+    busy: &Mutex<Option<Instant>>,
+    presented: &mut (u64, u64),
+    binding_generation: u64,
+    generation: u64,
+) -> io::Result<()> {
+    let Some(epoch) = output.credit() else {
+        return Ok(());
+    };
+    let Some(decoder) = decoder else {
+        return Ok(());
+    };
+    let signature = (decoder.serial(), epoch);
+    if decoder.serial() == 0 || signature == *presented {
+        return Ok(());
+    }
+    *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+    let frame = decoder.present(binding_generation, generation, output.take_pixels());
+    *busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    if let Some(frame) = frame.map_err(io::Error::other)? {
+        output.frame(frame);
+        *presented = signature;
+    }
+    Ok(())
+}
+
 fn video_loop(
     mut video: TcpStream,
     output: Arc<Output>,
@@ -127,13 +234,29 @@ fn video_loop(
     if &codec != b"h264" {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "expected H.264"));
     }
+    video.set_read_timeout(Some(Duration::from_millis(50)))?;
     let mut decoder = None;
+    let mut presented = (0, 0);
     let mut config = Vec::new();
     let mut generation = 0;
     loop {
-        match protocol::read_video(&mut video)? {
+        let packet = protocol::read_video(&mut PresentationReader {
+            socket: &mut video,
+            tick: || {
+                present_cached(
+                    &mut decoder,
+                    &output,
+                    &busy,
+                    &mut presented,
+                    binding_generation,
+                    generation,
+                )
+            },
+        })?;
+        match packet {
             protocol::VideoPacket::Session { width, height } => {
                 generation += 1;
+                presented = (0, 0);
                 config.clear();
                 *geometry.lock().unwrap_or_else(|p| p.into_inner()) = (width, height, generation);
                 *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
@@ -172,10 +295,7 @@ fn video_loop(
                     io::Error::new(io::ErrorKind::InvalidData, "session header missing")
                 })?;
                 *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
-                let result =
-                    decoder.packet(&packet, pts, binding_generation, generation, |frame| {
-                        output.frame(frame)
-                    });
+                let result = decoder.packet(&packet, pts);
                 *busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
                 result.map_err(io::Error::other)?;
             }
@@ -379,6 +499,7 @@ fn run() -> io::Result<()> {
             match control {
                 Control::Ping { sequence } => output.control(Control::Pong { sequence }),
                 Control::FrameAck { sequence } => output.acknowledge(sequence),
+                Control::Presentation { visible } => output.presentation(visible),
                 Control::ReleaseInputs => inputs.release()?,
                 Control::Disconnect => {
                     inputs.release()?;
@@ -389,7 +510,26 @@ fn run() -> io::Result<()> {
                 | Control::Scroll { .. }
                 | Control::Text { .. }
                 | Control::Paste { .. }
-                | Control::Rotate => inputs.send(&control)?,
+                | Control::Rotate => {
+                    if let Err(code) = control.validate_input() {
+                        output.control(Control::InputRejected {
+                            operation: control.input_operation().expect("input variant"),
+                            code,
+                        });
+                    } else if let Err(error) = inputs.send(&control) {
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput
+                        ) {
+                            output.control(Control::InputRejected {
+                                operation: control.input_operation().expect("input variant"),
+                                code: nyaterm_android::ipc::InputRejection::InvalidInput,
+                            });
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                }
                 _ => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -460,5 +600,38 @@ mod tests {
         output.acknowledge(1000);
         assert_eq!(output.state.lock().unwrap().in_flight, None);
         let _: OutputState = Default::default();
+    }
+    #[test]
+    fn hidden_screen_decodes_without_conversion_and_resumes_cached_static_frame() {
+        ffmpeg_next::init().unwrap();
+        let mut decoder = Some(crate::decoder::Decoder::new().unwrap());
+        decoder
+            .as_mut()
+            .unwrap()
+            .packet(include_bytes!("../tests/fixtures/black.h264"), 1)
+            .unwrap();
+        assert!(decoder.as_ref().unwrap().serial() > 0);
+        let output = Output::default();
+        let busy = std::sync::Mutex::new(None);
+        let mut presented = (0, 0);
+        output.presentation(false);
+        for _ in 0..100 {
+            crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
+        }
+        assert_eq!(decoder.as_ref().unwrap().conversions, 0);
+        assert!(output.state.lock().unwrap().latest.is_none());
+        output.presentation(true);
+        crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
+        assert_eq!(decoder.as_ref().unwrap().conversions, 1);
+        assert_eq!(output.state.lock().unwrap().latest.as_ref().unwrap().pts, 1);
+        for _ in 0..100 {
+            crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
+        }
+        assert_eq!(decoder.as_ref().unwrap().conversions, 1);
+        output.presentation(false);
+        output.presentation(true);
+        crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
+        assert_eq!(decoder.as_ref().unwrap().conversions, 2);
+        assert!(output.state.lock().unwrap().pixels.len() <= 2);
     }
 }

@@ -39,7 +39,10 @@ pub(super) struct ScreenState {
     dimensions: (u32, u32),
     drag: bool,
     error: Option<labels::AndroidError>,
-    last_render: Instant,
+    start_control: nyaterm_android::operation::AdbOperationControl,
+    visible: bool,
+    error_reported: bool,
+    last_input_notice: Option<Instant>,
     zoom: f32,
 }
 pub(in crate::features) struct AndroidFeatureState {
@@ -102,10 +105,19 @@ impl AndroidFeatureState {
     pub(in crate::features) fn kind(&self, id: &str) -> Option<AndroidViewKind> {
         self.views.get(id).map(|v| v.kind)
     }
+    pub(super) fn collect_unused_devices(&mut self) {
+        self.cleanup.retain(|ticket| !ticket.is_complete());
+        self.devices.retain(|key, lease| {
+            self.views.values().any(|view| &view.device_key == key)
+                || self.pending.contains_key(key)
+                || Arc::strong_count(&lease.files) > Arc::strong_count(&lease.owners)
+        });
+    }
     pub(in crate::features) fn close_view(&mut self, id: &str) {
         self.views.remove(id);
         self.surfaces.remove(id);
         if let Some(mut screen) = self.screens.remove(id) {
+            screen.start_control.cancel();
             if let Some(texture) = screen.texture.take() {
                 self.retired_textures.push(texture);
             }
@@ -117,6 +129,7 @@ impl AndroidFeatureState {
     }
     pub(in crate::features) fn stop_screen(&mut self, id: &str) {
         if let Some(screen) = self.screens.get_mut(id) {
+            screen.start_control.cancel();
             screen.attempt = screen.attempt.wrapping_add(1);
             screen.drag = false;
             screen.physical_keys.clear();
@@ -144,6 +157,7 @@ impl AndroidFeatureState {
             }
         }
         for screen in self.screens.values() {
+            screen.start_control.cancel();
             if let Some(handle) = &screen.handle {
                 handle.close();
             }
@@ -176,6 +190,10 @@ impl AndroidFeatureState {
                 keys.insert(view.device_key.clone());
                 let mut screen = self.screens.remove(id);
                 if let Some(screen) = &mut screen {
+                    if screen.handle.is_none() {
+                        screen.start_control.cancel();
+                        screen.error = Some(labels::AndroidError::Disconnected);
+                    }
                     if let Some(texture) = screen.texture.take() {
                         self.retired_textures.push(texture);
                     }

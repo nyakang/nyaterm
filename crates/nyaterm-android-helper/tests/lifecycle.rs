@@ -85,6 +85,37 @@ fn handshake_control_input_idle_video_heartbeat_and_normal_disconnect() {
         read_packet(child.stdout.as_mut().unwrap()).unwrap(),
         Some(Packet::Control(Control::Pong { sequence: 17 }))
     ));
+    // Recoverable paste errors must leave media and heartbeat alive.
+    for text in [
+        "private\0paste".into(),
+        "x".repeat(nyaterm_android::ipc::MAX_TEXT_BYTES + 1),
+    ] {
+        write_packet(
+            child.stdin.as_mut().unwrap(),
+            &Packet::Control(Control::Paste { text, sequence: 19 }),
+        )
+        .unwrap();
+        assert!(matches!(
+            read_packet(child.stdout.as_mut().unwrap()).unwrap(),
+            Some(Packet::Control(Control::InputRejected { .. }))
+        ));
+    }
+    for visible in [false, true] {
+        write_packet(
+            child.stdin.as_mut().unwrap(),
+            &Packet::Control(Control::Presentation { visible }),
+        )
+        .unwrap();
+    }
+    write_packet(
+        child.stdin.as_mut().unwrap(),
+        &Packet::Control(Control::Ping { sequence: 20 }),
+    )
+    .unwrap();
+    assert!(matches!(
+        read_packet(child.stdout.as_mut().unwrap()).unwrap(),
+        Some(Packet::Control(Control::Pong { sequence: 20 }))
+    ));
     write_packet(
         child.stdin.as_mut().unwrap(),
         &Packet::Control(Control::Key {

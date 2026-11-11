@@ -1482,6 +1482,7 @@ fn fit_wallpaper_tile_size(viewport: (f32, f32), intrinsic: (f32, f32)) -> (f32,
 
 impl Render for NyaTermApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_android_visibility(cx);
         for texture in self.android.retired_textures.drain(..) {
             window.remove_dynamic_texture(texture);
         }

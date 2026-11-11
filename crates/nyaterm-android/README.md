@@ -26,6 +26,43 @@ maximum FPS (1–120), and bit rate (100000–100000000 bits/s). Defaults are
 control channel; there is no read-only mode. Desktop localizes Android labels,
 status codes and typed backend errors in all six supported languages.
 
+## Transfer and runtime guarantees
+
+Ordinary ADB upload/download and native drag export read each source once per
+attempt. Protocol completion, actual byte counts and source type/size/mtime before
+and after transfer protect temporary commits; content hashes and complete remote
+readbacks are reserved for editor revisions. A same-size content change with an
+unchanged modification time is outside ordinary-transfer detection. Editor saves
+require a revision unless forced, upload into a private remote temporary, then
+recheck the current revision immediately before replacement. This is the same
+best-effort concurrency boundary as SSH shell saves, not a remote compare-and-swap.
+
+Transfers expose scanning, data transfer and committing phases. ADB pause/resume
+continues an open transfer; retry after a failed transfer starts from the beginning.
+Only unfinished temporary data can retry automatically. Replacement, deletion,
+editor saves and terminal commands are never automatically replayed. Overwrites
+preserve remote mode/owner/group or fail safely; timestamp preservation is verified.
+Each immutable binding caches Sync capabilities and leases at most two exclusive
+channels. Cancelled, failed or desynchronized channels are destroyed.
+
+Tracker transitions invalidate old bindings immediately, including offline/online
+transitions between UI updates. Native service selection uses the serial and
+verifies the transport ID on the same channel; older servers use serial selection
+with mapping checks. Closed views leave submitted transfers alive; weak runtime
+registration releases device resources after the last owner disappears.
+
+Screen startup is cancellable with a 30-second deadline. Helper IPC version 2 adds
+presentation visibility and recoverable input rejection. Text must fit UTF-8 and
+serialized IPC limits and contain no NUL. Input overflow releases held input and
+shows a rate-limited notice. Screen events wake GPUI and schedule presentation on
+the next frame. Hidden screens continue H.264 decoding, retain the latest decoded
+frame and skip BGRA conversion/frame IPC/GPU uploads. Restoring visibility presents
+the cached frame without waiting for new media. App and helper must be built and
+packaged together.
+
+See [VALIDATION.md](VALIDATION.md) for regression coverage, device probe results
+and outstanding platform/performance acceptance.
+
 ## Bundled dependencies
 
 Release packages include ADB, its companions, the Android helper and LGPL dynamic

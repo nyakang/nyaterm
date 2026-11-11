@@ -49,7 +49,17 @@ impl DeviceRuntime {
         Ok(())
     }
     fn features(&self, check: &mut impl FnMut() -> AdbResult<()>) -> AdbResult<Vec<String>> {
-        let mut features = self.features.lock().unwrap_or_else(|p| p.into_inner());
+        let mut features = loop {
+            self.check()?;
+            check()?;
+            match self.features.try_lock() {
+                Ok(features) => break features,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        };
         if features.is_none() {
             *features = Some(device_features_with_cancel(&self.binding, || {
                 self.check()?;
@@ -107,5 +117,42 @@ impl DeviceRuntime {
             channels.count -= 1;
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::adb::client::DeviceBinding;
+    use crate::adb::runtime::DeviceRuntime;
+    use crate::error::AdbError;
+    use crate::operation::AdbOperationControl;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn cancelling_a_waiter_does_not_wait_for_a_paused_capability_probe() {
+        let runtime = Arc::new(DeviceRuntime::new(DeviceBinding {
+            server: "127.0.0.1:1".parse().unwrap(),
+            serial: "fixture".into(),
+            transport_id: None,
+            generation: 1,
+        }));
+        let probe = runtime.features.lock().unwrap();
+        let control = AdbOperationControl::default();
+        let worker_control = control.clone();
+        let worker_runtime = runtime.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = worker_runtime.features(&mut || worker_control.check());
+            sender
+                .send(matches!(result, Err(AdbError::Cancelled)))
+                .unwrap();
+        });
+        control.cancel();
+        let result = receiver.recv_timeout(Duration::from_secs(1));
+        drop(probe);
+        worker.join().unwrap();
+        assert!(result.unwrap());
+        assert!(runtime.is_valid());
     }
 }

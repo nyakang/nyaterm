@@ -35,7 +35,7 @@ impl NyaTermApp {
             .clone()
             .into_any_element()
     }
-    pub(super) fn poll_android_screen(&mut self, id: &str) -> bool {
+    pub(super) fn poll_android_screen(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
         let expected_binding = self
             .android_config_for_session(id)
             .map(|config| config.binding.generation);
@@ -46,6 +46,7 @@ impl NyaTermApp {
             return false;
         };
         let mut changed = false;
+        let mut input_rejected = None;
         for event in handle.events() {
             match event {
                 Control::Ready {
@@ -68,6 +69,10 @@ impl NyaTermApp {
                     screen.error = Some(AndroidError::Fatal(code));
                     screen.drag = false;
                     screen.physical_keys.clear();
+                    changed = true;
+                }
+                Control::InputRejected { code, .. } => {
+                    input_rejected = Some(code);
                     changed = true;
                 }
                 Control::Disconnected => {
@@ -94,7 +99,7 @@ impl NyaTermApp {
                 handle.acknowledge(old.sequence);
             }
             // Invisible surfaces retain one latest CPU frame and return credit.
-            if screen.last_render.elapsed() > Duration::from_millis(100)
+            if !screen.visible
                 && let Some(frame) = &screen.frame
             {
                 handle.acknowledge(frame.sequence);
@@ -106,7 +111,50 @@ impl NyaTermApp {
         {
             metadata.disconnected = true;
         }
+        let failure = screen
+            .error
+            .as_ref()
+            .filter(|_| !screen.error_reported)
+            .map(|error| (screen.attempt.to_string(), error.code(), error.message()));
+        if failure.is_some() {
+            screen.error_reported = true;
+        }
+        if let Some((request, code, message)) = failure {
+            self.report_android_failure("screen", &request, code, message, cx);
+        }
+        if let Some(code) = input_rejected {
+            self.android_input_notice(id, false, Some(code), cx);
+        }
         changed
+    }
+    pub(in crate::features) fn sync_android_visibility(&mut self, cx: &mut Context<Self>) {
+        let visible: std::collections::HashSet<String> = self
+            .visible_terminal_session_ids()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let mut failures = Vec::new();
+        for (id, screen) in &mut self.android.screens {
+            let next = visible.contains(id)
+                && self.shell.selected_nav() == crate::models::NavItem::Workspace;
+            if screen.visible != next {
+                screen.visible = next;
+                if let Some(handle) = &screen.handle {
+                    if handle
+                        .send(Control::Presentation { visible: next })
+                        .is_err()
+                    {
+                        failures.push(id.clone());
+                    }
+                    if !next && let Some(frame) = screen.frame.take() {
+                        handle.acknowledge(frame.sequence);
+                    }
+                }
+            }
+        }
+        for id in failures {
+            self.android_input_notice(&id, false, None, cx);
+        }
     }
     pub(super) fn prepare_android_texture(&mut self, id: &str, window: &mut Window) {
         for texture in self.android.retired_textures.drain(..) {
@@ -115,7 +163,9 @@ impl NyaTermApp {
         let Some(screen) = self.android.screens.get_mut(id) else {
             return;
         };
-        screen.last_render = Instant::now();
+        if !screen.visible {
+            return;
+        }
         let Some(frame) = screen.frame.take() else {
             return;
         };
@@ -187,8 +237,8 @@ impl NyaTermApp {
                 label,
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
-                    app.android_key(&target, keycode, 0, 0);
-                    app.android_key(&target, keycode, 1, 0);
+                    app.android_key(&target, keycode, 0, 0, cx);
+                    app.android_key(&target, keycode, 1, 0, cx);
                 }),
             ));
         }
@@ -204,7 +254,7 @@ impl NyaTermApp {
                 t!("android.rotate"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
-                    app.android_send(&rotate, Control::Rotate);
+                    app.android_send(&rotate, Control::Rotate, cx);
                 }),
             ))
             .child(small_button(
@@ -244,6 +294,7 @@ impl NyaTermApp {
                                 text,
                                 sequence: nyaterm_core::models::android::next_paste_sequence(),
                             },
+                            cx,
                         );
                     }
                 }),
@@ -314,14 +365,14 @@ impl NyaTermApp {
                     cx.stop_propagation();
                     app.activate_workspace_pane(down.clone(), cx);
                     app.focus_android_screen(window, cx);
-                    app.android_pointer(&down, event.position, 0);
+                    app.android_pointer(&down, event.position, 0, cx);
                 }),
             )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |app, event: &gpui::MouseUpEvent, _, cx| {
                     cx.stop_propagation();
-                    app.android_pointer(&up, event.position, 1);
+                    app.android_pointer(&up, event.position, 1, cx);
                 }),
             )
             .on_mouse_up_out(
@@ -330,11 +381,13 @@ impl NyaTermApp {
                     app.android.release_inputs(&outside_up);
                 }),
             )
-            .on_mouse_move(cx.listener(move |app, event: &gpui::MouseMoveEvent, _, _| {
-                if app.android.screens.get(&movement).is_some_and(|s| s.drag) {
-                    app.android_pointer(&movement, event.position, 2);
-                }
-            }))
+            .on_mouse_move(
+                cx.listener(move |app, event: &gpui::MouseMoveEvent, _, cx| {
+                    if app.android.screens.get(&movement).is_some_and(|s| s.drag) {
+                        app.android_pointer(&movement, event.position, 2, cx);
+                    }
+                }),
+            )
             .on_scroll(cx.listener(move |app, event: &gpui::ScrollEvent, _, cx| {
                 cx.stop_propagation();
                 if let Some((x, y, width, height, generation)) =
@@ -352,6 +405,7 @@ impl NyaTermApp {
                             horizontal: f32::from(delta.x) / 40.0,
                             vertical: f32::from(delta.y) / 40.0,
                         },
+                        cx,
                     );
                 }
             }))
@@ -371,14 +425,14 @@ impl NyaTermApp {
                         .as_ref()
                         .filter(|s| s.is_ascii() && !s.chars().any(char::is_control))
                 {
-                    app.android_send(&keyboard, Control::Text { text: text.clone() });
+                    app.android_send(&keyboard, Control::Text { text: text.clone() }, cx);
                 } else if let Some(code) =
                     nyaterm_core::models::android::android_keycode(&event.keystroke.key)
                 {
                     if let Some(screen) = app.android.screens.get_mut(&keyboard) {
                         screen.physical_keys.insert(code);
                     }
-                    app.android_key(&keyboard, code, 0, metastate);
+                    app.android_key(&keyboard, code, 0, metastate, cx);
                 }
             }))
             .on_key_up(cx.listener(move |app, event: &gpui::KeyUpEvent, _, cx| {
@@ -391,7 +445,7 @@ impl NyaTermApp {
                         .get_mut(&key_up)
                         .is_some_and(|screen| screen.physical_keys.remove(&code))
                 {
-                    app.android_key(&key_up, code, 1, 0);
+                    app.android_key(&key_up, code, 1, 0, cx);
                 }
             }))
             .child(image);
@@ -406,12 +460,84 @@ impl NyaTermApp {
             .child(surface)
             .into_any_element()
     }
-    fn android_send(&self, id: &str, control: Control) {
-        if let Some(handle) = self.android.screens.get(id).and_then(|s| s.handle.as_ref()) {
-            let _ = handle.send(control);
+    fn android_send(&mut self, id: &str, control: Control, cx: &mut Context<Self>) {
+        let result = control
+            .validate_input()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
+            .and_then(|()| {
+                self.android
+                    .screens
+                    .get(id)
+                    .and_then(|s| s.handle.as_ref())
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotConnected))?
+                    .send(control)
+            });
+        if let Err(error) = result {
+            let rejection = error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<nyaterm_android::ipc::InputRejection>())
+                .copied();
+            self.android_input_notice(
+                id,
+                error.kind() == std::io::ErrorKind::WouldBlock,
+                rejection,
+                cx,
+            );
         }
     }
-    fn android_key(&self, id: &str, code: u32, action: u8, metastate: u32) {
+    fn android_input_notice(
+        &mut self,
+        id: &str,
+        queue_full: bool,
+        rejection: Option<nyaterm_android::ipc::InputRejection>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(screen) = self.android.screens.get_mut(id) {
+            if queue_full {
+                screen.drag = false;
+                screen.physical_keys.clear();
+            }
+            if screen
+                .last_input_notice
+                .is_some_and(|last| last.elapsed() < Duration::from_secs(2))
+            {
+                return;
+            }
+            screen.last_input_notice = Some(Instant::now());
+        }
+        let message = if queue_full {
+            t!("android.errors.inputQueueFull").into_owned()
+        } else {
+            rejection
+                .map(super::labels::input_rejection_message)
+                .unwrap_or_else(|| t!("android.errors.inputFailed").into_owned())
+        };
+        if queue_full {
+            self.shell.set_status(message.clone());
+            self.notify_background_operation(
+                "android-input",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                message,
+                cx,
+            );
+        } else {
+            self.report_android_failure(
+                "screen-input",
+                &nyaterm_core::uuid(),
+                rejection.map_or("InputRejected", |code| code.code()),
+                message,
+                cx,
+            );
+        }
+    }
+    fn android_key(
+        &mut self,
+        id: &str,
+        code: u32,
+        action: u8,
+        metastate: u32,
+        cx: &mut Context<Self>,
+    ) {
         self.android_send(
             id,
             Control::Key {
@@ -420,6 +546,7 @@ impl NyaTermApp {
                 repeat: 0,
                 metastate,
             },
+            cx,
         );
     }
     fn android_position(
@@ -443,7 +570,13 @@ impl NyaTermApp {
         )?;
         Some((x, y, width, height, screen.generation))
     }
-    fn android_pointer(&mut self, id: &str, position: Point<Pixels>, action: u8) {
+    fn android_pointer(
+        &mut self,
+        id: &str,
+        position: Point<Pixels>,
+        action: u8,
+        cx: &mut Context<Self>,
+    ) {
         if let Some((x, y, width, height, generation)) = self.android_position(id, position) {
             if let Some(screen) = self.android.screens.get_mut(id) {
                 screen.drag = action != 1;
@@ -458,9 +591,10 @@ impl NyaTermApp {
                     height,
                     generation,
                 },
+                cx,
             );
         } else if action == 1 {
-            self.android_send(id, Control::ReleaseInputs);
+            self.android_send(id, Control::ReleaseInputs, cx);
             if let Some(screen) = self.android.screens.get_mut(id) {
                 screen.drag = false;
             }

@@ -34,6 +34,36 @@ pub(super) enum AndroidError {
 }
 
 impl AndroidError {
+    pub(super) fn code(&self) -> &'static str {
+        match self {
+            Self::Backend(error) => match error {
+                AdbError::Cancelled => "Cancelled",
+                AdbError::Timeout => "Timeout",
+                AdbError::Offline => "Offline",
+                AdbError::Unauthorized => "Unauthorized",
+                AdbError::ExecutableMissing => "ExecutableMissing",
+                AdbError::IncompatibleServer => "IncompatibleServer",
+                AdbError::FileMissing => "FileMissing",
+                AdbError::Rejected => "Rejected",
+                AdbError::Protocol(_) => "Protocol",
+                AdbError::Io(_) => "Io",
+                AdbError::ShellExit(_) => "ShellExit",
+            },
+            Self::Fatal(code) => match code.as_str() {
+                "DeviceDisconnected" => "Offline",
+                "HelperVersionMismatch" => "HelperVersionMismatch",
+                "HelperInputFailed" => "HelperInputFailed",
+                "HelperHung" | "DecoderHung" => "HelperHung",
+                "HelperExited" => "HelperExited",
+                "ServerExited" => "ServerExited",
+                "DecoderPanic" => "DecoderPanic",
+                _ => "ScreenFailed",
+            },
+            Self::Disconnected => "Offline",
+            Self::TextureUpload => "TextureUpload",
+            Self::JobFailed => "JobFailed",
+        }
+    }
     pub(super) fn message(&self) -> String {
         match self {
             Self::Backend(error) => adb_error_message(error),
@@ -58,6 +88,17 @@ pub(in crate::features) fn adb_error_message(error: &AdbError) -> String {
         AdbError::Cancelled => t!("android.errors.cancelled"),
         AdbError::Timeout => t!("android.errors.timeout"),
         AdbError::ShellExit(code) => t!("android.errors.shellExit", code = code),
+    }
+    .into_owned()
+}
+
+pub(super) fn input_rejection_message(code: nyaterm_android::ipc::InputRejection) -> String {
+    use nyaterm_android::ipc::InputRejection;
+    match code {
+        InputRejection::TextTooLong => t!("android.errors.inputTextTooLong"),
+        InputRejection::Nul => t!("android.errors.inputNul"),
+        InputRejection::PacketTooLong => t!("android.errors.inputPacketTooLong"),
+        InputRejection::InvalidInput => t!("android.errors.inputInvalid"),
     }
     .into_owned()
 }
@@ -122,6 +163,17 @@ pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
         }
         .into_owned();
     }
+    if let Some(error) = error.downcast_ref::<nyaterm_files::adb::AdbFilePolicyError>() {
+        use nyaterm_files::adb::AdbFilePolicyError;
+        return match error {
+            AdbFilePolicyError::AttributesUnavailable => t!("android.errors.fileAttributes"),
+            AdbFilePolicyError::PermissionsUnavailable => t!("android.errors.filePermissions"),
+            AdbFilePolicyError::TimestampUnavailable => t!("android.errors.fileTimestamp"),
+            AdbFilePolicyError::EditLimitExceeded => t!("android.errors.editLimit"),
+            AdbFilePolicyError::RevisionRequired => t!("android.errors.revisionRequired"),
+        }
+        .into_owned();
+    }
     if let Some(error) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<AdbError>())
@@ -146,6 +198,11 @@ pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
 /// Classify failures without formatting the error chain, which can contain user data.
 pub(in crate::features) fn file_error_code(error: &anyhow::Error) -> &'static str {
     use nyaterm_files::adb::AdbFileValidationError;
+    // anyhow contexts support typed downcasts through Error, but the standard
+    // source chain only exposes the wrapper and its underlying cause.
+    if let Some(error) = error.downcast_ref::<nyaterm_files::adb::AdbFilePolicyError>() {
+        return error.code();
+    }
     for cause in error.chain() {
         if let Some(error) =
             cause.downcast_ref::<nyaterm_files::file_browser::FileTransferEntryError>()
@@ -330,6 +387,42 @@ mod tests {
                 assert!(!message.is_empty());
                 assert_ne!(message, key);
                 assert!(!message.contains("%{"));
+            }
+        }
+    }
+
+    #[test]
+    fn file_policy_failures_have_specific_translations_and_stable_codes() {
+        use nyaterm_files::adb::{AdbFileError, AdbFilePolicyError};
+        for (policy, key) in [
+            (
+                AdbFilePolicyError::AttributesUnavailable,
+                "android.errors.fileAttributes",
+            ),
+            (
+                AdbFilePolicyError::PermissionsUnavailable,
+                "android.errors.filePermissions",
+            ),
+            (
+                AdbFilePolicyError::TimestampUnavailable,
+                "android.errors.fileTimestamp",
+            ),
+            (
+                AdbFilePolicyError::EditLimitExceeded,
+                "android.errors.editLimit",
+            ),
+            (
+                AdbFilePolicyError::RevisionRequired,
+                "android.errors.revisionRequired",
+            ),
+        ] {
+            let error = anyhow::anyhow!("private device output")
+                .context(policy)
+                .context(AdbFileError);
+            assert_eq!(super::file_error_code(&error), policy.code());
+            assert!(!file_error_message(&error).contains("private"));
+            for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "fr"] {
+                assert_ne!(rust_i18n::t!(key, locale = locale), key);
             }
         }
     }

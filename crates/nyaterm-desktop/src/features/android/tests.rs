@@ -242,3 +242,86 @@ fn changing_saved_device_selector_requires_rebind_without_reusing_the_old_shell_
         assert_eq!(app.android_config_for_session("fixture").unwrap().binding.serial, "synthetic");
     });
 }
+
+#[test]
+fn closing_a_starting_screen_cancels_only_its_startup_and_unused_leases_are_released() {
+    use crate::features::android::ScreenState;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-start-cancel");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, _| {
+        let service = app.android.file_service("android-device").unwrap();
+        let control = service.runtime.control.child();
+        app.android.screens.insert(
+            "fixture".into(),
+            ScreenState {
+                handle: None,
+                attempt: 1,
+                physical_keys: Default::default(),
+                frame: None,
+                texture: None,
+                texture_size: None,
+                bounds: None,
+                bounds_generation: 0,
+                generation: 0,
+                dimensions: (0, 0),
+                drag: false,
+                error: None,
+                start_control: control.clone(),
+                visible: true,
+                error_reported: false,
+                last_input_notice: None,
+                zoom: 1.,
+            },
+        );
+        app.android.close_view("fixture");
+        assert!(control.is_cancelled());
+        assert!(service.runtime.is_valid());
+        app.android.collect_unused_devices();
+        assert!(
+            app.android.devices.contains_key("android-device"),
+            "submitted service keeps the lease alive"
+        );
+        let runtime = Arc::downgrade(&service.runtime);
+        drop(service);
+        app.android.collect_unused_devices();
+        assert!(!app.android.devices.contains_key("android-device"));
+        assert!(
+            runtime.upgrade().is_none(),
+            "weak registry must not permanently own the device"
+        );
+    });
+}
+
+#[test]
+fn shared_window_leases_do_not_keep_each_other_alive_after_all_views_close() {
+    use crate::features::android::AndroidFeatureState;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-shared-lease");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, _| {
+        let lease = &app.android.devices["android-device"];
+        let weak = Arc::downgrade(&lease.files);
+        let mut other =
+            AndroidFeatureState::new(app.android.tracker.clone(), app.android.focus.clone());
+        other.devices.insert(
+            "android-device".into(),
+            DeviceLease {
+                config: lease.config.clone(),
+                files: lease.files.clone(),
+                observed: lease.observed,
+                owners: lease.owners.clone(),
+            },
+        );
+        app.android.close_view("fixture");
+        app.android.collect_unused_devices();
+        assert!(app.android.devices.is_empty());
+        other.collect_unused_devices();
+        assert!(other.devices.is_empty());
+        assert!(weak.upgrade().is_none());
+    });
+}

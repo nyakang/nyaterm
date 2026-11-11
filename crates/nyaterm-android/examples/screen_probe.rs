@@ -9,22 +9,33 @@ use std::time::{Duration, Instant};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let serial = args.get(1).ok_or("provide host:port")?;
-    let (host, port) = serial.rsplit_once(':').ok_or("provide host:port")?;
+    let selector = if let Some((host, port)) = serial
+        .rsplit_once(':')
+        .filter(|(_, port)| port.parse::<u16>().is_ok())
+    {
+        AdbDeviceSelector::Tcp {
+            host: host.into(),
+            port: port.parse()?,
+        }
+    } else {
+        AdbDeviceSelector::Usb {
+            serial: serial.clone(),
+        }
+    };
     let seconds: u64 = args.get(2).map(|v| v.parse()).transpose()?.unwrap_or(10);
     let cycles: u32 = args.get(3).map(|v| v.parse()).transpose()?.unwrap_or(1);
     let fps = args.get(4).map(|v| v.parse()).transpose()?.unwrap_or(30);
+    let visibility_probe = args.get(5).is_some_and(|value| value == "visibility");
+    if visibility_probe && seconds < 3 {
+        return Err("visibility probe needs at least three seconds".into());
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-    let client = AdbClient::local(Some(
-        &root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)),
-    ))?;
+    let adb = std::env::var_os("NYATERM_PROBE_ADB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)));
+    let client = AdbClient::local(Some(&adb))?;
     for cycle in 0..cycles {
-        let binding = client.bind(
-            &AdbDeviceSelector::Tcp {
-                host: host.into(),
-                port: port.parse()?,
-            },
-            u64::from(cycle) + 1,
-        )?;
+        let binding = client.bind(&selector, u64::from(cycle) + 1)?;
         let screen = ScreenHandle::start_with_helper(
             client.clone(),
             binding,
@@ -40,7 +51,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let mut frames = 0u64;
         let mut first = None;
+        let mut hidden_at = None;
+        let mut resumed_at = None;
+        let mut resume_frame = false;
         while started.elapsed() < Duration::from_secs(seconds) {
+            if visibility_probe {
+                if hidden_at.is_none() && started.elapsed() >= Duration::from_secs(seconds / 3) {
+                    screen.send(Control::Presentation { visible: false })?;
+                    hidden_at = Some(Instant::now());
+                }
+                if resumed_at.is_none() && started.elapsed() >= Duration::from_secs(seconds * 2 / 3)
+                {
+                    screen.send(Control::Presentation { visible: true })?;
+                    resumed_at = Some(Instant::now());
+                }
+            }
             for event in screen.events() {
                 match event {
                     Control::Fatal { code } => return Err(code.into()),
@@ -49,6 +74,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             if let Some(frame) = screen.take_frame() {
+                if hidden_at.is_some_and(|at| at.elapsed() > Duration::from_millis(500))
+                    && resumed_at.is_none()
+                {
+                    return Err("hidden screen continued frame IPC after draining".into());
+                }
+                if resumed_at.is_some() {
+                    resume_frame = true;
+                }
                 first.get_or_insert_with(|| {
                     println!(
                         "first frame {}x{} after {:?}",
@@ -84,6 +117,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if first.is_none() {
             return Err("no decoded frames".into());
+        }
+        if visibility_probe && !resume_frame {
+            return Err("cached frame did not resume".into());
+        }
+        if visibility_probe {
+            println!("hidden frame IPC stopped; cached frame resumed");
         }
         println!(
             "cycle={} frames={} elapsed={:?}",

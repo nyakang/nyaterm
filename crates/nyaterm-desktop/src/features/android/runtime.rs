@@ -17,6 +17,41 @@ use rust_i18n::t;
 use std::sync::Arc;
 
 impl NyaTermApp {
+    pub(super) fn report_android_error(
+        &mut self,
+        operation: &'static str,
+        request_id: &str,
+        error: &AndroidError,
+        cx: &mut Context<Self>,
+    ) {
+        self.report_android_failure(operation, request_id, error.code(), error.message(), cx);
+    }
+    pub(super) fn report_android_failure(
+        &mut self,
+        operation: &'static str,
+        request_id: &str,
+        code: &'static str,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        if code == "Cancelled" {
+            return;
+        }
+        tracing::warn!(
+            operation,
+            backend = "Adb",
+            request_id,
+            error_code = code,
+            "Android operation failed"
+        );
+        self.shell.set_status(message.clone());
+        self.notify_background_operation(
+            "android-operation",
+            nyaterm_ui::notification::NyaNotificationKind::Error,
+            message,
+            cx,
+        );
+    }
     pub(in crate::features) fn start_android_connection(
         &mut self,
         connection: SavedConnection,
@@ -39,6 +74,7 @@ impl NyaTermApp {
             && let Some(lease) = self.android.devices.get_mut(&key)
             && lease.config.device == device
             && lease.files.control.check_cancelled().is_ok()
+            && lease.files.runtime.is_valid()
         {
             lease.config.name = connection.name.clone();
             lease.config.directory = directory;
@@ -61,18 +97,62 @@ impl NyaTermApp {
             let client =
                 AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?;
             tracker.ensure(&client)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let snapshot = loop {
+                let snapshot = tracker.snapshot();
+                if snapshot.revision > 0 {
+                    break snapshot;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(nyaterm_android::error::AdbError::Timeout);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            };
             let binding = client.bind(&device, generation)?;
-            Ok::<_, nyaterm_android::error::AdbError>(AndroidSessionConfig {
-                name,
-                device_key: task_key,
-                device,
-                directory,
-                screen,
-                binding,
-                client,
-                cols: 80,
-                rows: 24,
-            })
+            let snapshot = if snapshot.devices.iter().any(|entry| {
+                entry.serial == binding.serial
+                    && entry.status == nyaterm_android::adb::client::DeviceStatus::Online
+                    && entry.transport_id == binding.transport_id
+            }) {
+                snapshot
+            } else {
+                // Explicit TCP connect may create the online mapping. Wait for that
+                // new binding's tracker epoch rather than treating it as an old task.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let current = tracker.snapshot();
+                    if current.server_generation != snapshot.server_generation {
+                        return Err(nyaterm_android::error::AdbError::Offline);
+                    }
+                    if current.devices.iter().any(|entry| {
+                        entry.serial == binding.serial
+                            && entry.status == nyaterm_android::adb::client::DeviceStatus::Online
+                            && entry.transport_id == binding.transport_id
+                    }) {
+                        break current;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(nyaterm_android::error::AdbError::Timeout);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+            };
+            let files = Arc::new(AdbFileService::new(binding.clone()));
+            tracker.register_runtime_since(&files.runtime, &snapshot)?;
+            Ok::<_, nyaterm_android::error::AdbError>((
+                AndroidSessionConfig {
+                    name,
+                    device_key: task_key,
+                    device,
+                    directory,
+                    screen,
+                    binding,
+                    client,
+                    cols: 80,
+                    rows: 24,
+                },
+                files,
+            ))
         });
         self.shell
             .set_status(t!("android.connecting", name = connection.name).into_owned());
@@ -84,8 +164,13 @@ impl NyaTermApp {
                     return;
                 }
                 app.android.pending.remove(&key);
+                if let Err(error) = &result { app.report_android_error("bind", &generation.to_string(), error, cx); }
                 match result {
-                    Ok(config) => {
+                    Ok((config, files)) => {
+                        if !files.runtime.is_valid() {
+                            app.report_android_error("bind", &generation.to_string(), &AndroidError::Backend(nyaterm_android::error::AdbError::Offline), cx);
+                            return;
+                        }
                         if let Some(old) = app.android.devices.remove(&key) {
                             old.files.cancel();
                         }
@@ -111,7 +196,7 @@ impl NyaTermApp {
                         app.android.devices.insert(
                             key.clone(),
                             DeviceLease {
-                                files: Arc::new(AdbFileService::new(config.binding.clone())),
+                                files,
                                 owners: Arc::new(()),
                                 config: config.clone(),
                                 observed: app.android.tracker.snapshot().devices.iter().any(|device| device.serial == config.binding.serial && device.status == nyaterm_android::adb::client::DeviceStatus::Online),
@@ -124,18 +209,16 @@ impl NyaTermApp {
                             "android-deferred-cleanup",
                             move |_| {
                                 for ticket in tickets {
-                                    let cleanup =
-                                        ticket.lock().unwrap_or_else(|p| p.into_inner()).take();
+                                    let mut pending = ticket.lock().unwrap_or_else(|p| p.into_inner());
+                                    let cleanup = pending.take();
                                     if let Some(mut cleanup) = cleanup {
                                         if cleanup.binding.serial != binding.serial {
-                                            *ticket.lock().unwrap_or_else(|p| p.into_inner()) =
-                                                Some(cleanup);
+                                            *pending = Some(cleanup);
                                             continue;
                                         }
                                         cleanup.binding = binding.clone();
                                         if cleanup.retry().is_err() {
-                                            *ticket.lock().unwrap_or_else(|p| p.into_inner()) =
-                                                Some(cleanup);
+                                            *pending = Some(cleanup);
                                         }
                                     }
                                 }
@@ -268,6 +351,20 @@ impl NyaTermApp {
         );
         self.android.generation = self.android.generation.wrapping_add(1);
         let attempt = self.android.generation;
+        let runtime = self
+            .android
+            .file_service(&config.device_key)
+            .map(|files| files.runtime.clone())
+            .unwrap_or_else(|_| {
+                let runtime = Arc::new(nyaterm_android::adb::runtime::DeviceRuntime::new(
+                    config.binding.clone(),
+                ));
+                runtime.invalidate();
+                runtime
+            });
+        let start_control = runtime.control.child();
+        let ticket = Arc::new(nyaterm_android::screen::CleanupStatus::default());
+        self.android.cleanup.push(ticket.clone());
         self.android.screens.insert(
             id.clone(),
             ScreenState {
@@ -283,7 +380,10 @@ impl NyaTermApp {
                 dimensions: (0, 0),
                 drag: false,
                 error: None,
-                last_render: std::time::Instant::now(),
+                start_control: start_control.clone(),
+                visible: true,
+                error_reported: false,
+                last_input_notice: None,
                 zoom: 1.0,
             },
         );
@@ -291,7 +391,14 @@ impl NyaTermApp {
         let task = self
             .blocking_jobs
             .submit_task("android-screen-start", move |_| {
-                ScreenHandle::start(config.client, config.binding, config.screen)
+                ScreenHandle::start_controlled(
+                    config.client,
+                    config.binding,
+                    config.screen,
+                    start_control,
+                    ticket,
+                    runtime,
+                )
             });
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task)
@@ -313,10 +420,26 @@ impl NyaTermApp {
                 if !valid {
                     return;
                 }
+                if let Err(error) = &result {
+                    app.report_android_error("screen-start", &attempt.to_string(), error, cx);
+                }
                 if let Some(screen) = app.android.screens.get_mut(&id) {
                     match result {
-                        Ok(handle) => screen.handle = Some(handle),
-                        Err(error) => screen.error = Some(error),
+                        Ok(handle) => {
+                            if handle
+                                .send(nyaterm_android::ipc::Control::Presentation {
+                                    visible: screen.visible,
+                                })
+                                .is_err()
+                            {
+                                screen.error = Some(AndroidError::Disconnected);
+                            }
+                            screen.handle = Some(handle);
+                        }
+                        Err(error) => {
+                            screen.error = Some(error);
+                            screen.error_reported = true;
+                        }
                     }
                 }
                 cx.notify();
@@ -431,6 +554,7 @@ impl NyaTermApp {
                     .await;
                 if this
                     .update(cx, |app, cx| {
+                        app.android.collect_unused_devices();
                         let snapshot = app.android.tracker.snapshot();
                         if snapshot.revision == 0
                             || snapshot.revision == app.android.tracker_revision
@@ -446,9 +570,11 @@ impl NyaTermApp {
                                 .find(|d| d.serial == lease.config.binding.serial);
                             if device.is_some_and(|d| {
                                 d.status == nyaterm_android::adb::client::DeviceStatus::Online
+                                    && d.transport_id == lease.config.binding.transport_id
+                                    && lease.files.runtime.is_valid()
                             }) {
                                 lease.observed = true;
-                            } else if lease.observed {
+                            } else if lease.observed || !lease.files.runtime.is_valid() {
                                 missing.push(key.clone());
                                 lease.observed = false;
                             }
