@@ -140,6 +140,11 @@ fn command_suggestion_refresh_input_delay(
     })
 }
 
+/// True when `next` is `previous` plus characters typed at the end.
+fn command_suggestion_draft_only_appended(previous: &str, next: &str) -> bool {
+    !previous.is_empty() && next.len() > previous.len() && next.starts_with(previous)
+}
+
 fn command_suggestion_input_can_defer_refresh(state: &TerminalInputState) -> bool {
     !state.desynced && !state.multiline && state.cursor == state.value.len()
 }
@@ -260,13 +265,40 @@ impl NyaTermApp {
         };
         if !self.command_suggestions_allowed_for_session(&popup.session_id)
             || !self.command_suggestion_input_is_confirmed()
-            || self.terminal.editing.assist_input().value != popup.draft
-            || self.terminal.editing.state().unwrap().model.version != popup.input_version
             || self.sync_input.revision() != popup.sync_revision
         {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
+        let draft = self.terminal.editing.assist_input().value.clone();
+        let version = self.terminal.editing.state().unwrap().model.version;
+        if draft != popup.draft || version != popup.input_version {
+            // Typing forward only narrows the visible rows, so keep the popup
+            // instead of flickering until the debounced search lands. Any
+            // other edit (backspace, mid-line, paste) still hides it.
+            if !command_suggestion_draft_only_appended(&popup.draft, &draft) {
+                self.hide_command_suggestions_if_present(cx);
+                return;
+            }
+            let popup = self.terminal.assist.command_suggestions.as_mut().unwrap();
+            let selected = popup
+                .selected_index
+                .and_then(|index| popup.items.get(index))
+                .map(|item| item.command.clone());
+            popup.items.retain(|item| item.command.starts_with(&draft));
+            popup.draft = draft;
+            popup.input_version = version;
+            popup.selected_index = selected
+                .and_then(|command| popup.items.iter().position(|item| item.command == command));
+            if popup.items.is_empty() {
+                self.hide_command_suggestions_if_present(cx);
+                return;
+            }
+            cx.notify();
+        }
+        let Some(popup) = self.terminal.assist.command_suggestions.as_ref() else {
+            return;
+        };
         let policy = self.command_suggestion_fill_policy(&popup.session_id);
         let popup = self.terminal.assist.command_suggestions.as_mut().unwrap();
         let selected_command = popup
@@ -577,7 +609,8 @@ impl NyaTermApp {
                         return None;
                     }
                     if this.runtime_output_pressure_active() {
-                        this.hide_command_suggestions_if_present(cx);
+                        // The visible rows were already narrowed to the current
+                        // draft, so keep them; echo of typed keys is also output.
                         this.schedule_command_suggestion_refresh_after(
                             COMMAND_SUGGESTION_REFRESH_PRESSURE_RETRY,
                             cx,
@@ -2283,10 +2316,11 @@ mod tests {
 
     use super::{
         command_history_input_update, command_suggestion_clamp_selection,
-        command_suggestion_input_can_defer_refresh, command_suggestion_input_candidate_chars,
-        command_suggestion_input_obvious_pager_prefix, command_suggestion_item_for_selection,
-        command_suggestion_refresh_input_delay, command_suggestion_state_changed,
-        command_suggestion_step_selection, terminal_line_prefix_for_cell_col,
+        command_suggestion_draft_only_appended, command_suggestion_input_can_defer_refresh,
+        command_suggestion_input_candidate_chars, command_suggestion_input_obvious_pager_prefix,
+        command_suggestion_item_for_selection, command_suggestion_refresh_input_delay,
+        command_suggestion_state_changed, command_suggestion_step_selection,
+        terminal_line_prefix_for_cell_col,
     };
 
     #[test]
@@ -2963,6 +2997,15 @@ mod tests {
         assert_eq!(terminal_line_prefix_for_cell_col(text, 0), "");
         assert_eq!(terminal_line_prefix_for_cell_col(text, 1), "e\u{301}");
         assert_eq!(terminal_line_prefix_for_cell_col(text, 2), "e\u{301}x");
+    }
+
+    #[test]
+    fn only_forward_typing_keeps_the_popup_alive() {
+        assert!(command_suggestion_draft_only_appended("git c", "git ch"));
+        assert!(!command_suggestion_draft_only_appended("git ch", "git c"));
+        assert!(!command_suggestion_draft_only_appended("git c", "git c"));
+        assert!(!command_suggestion_draft_only_appended("", "g"));
+        assert!(!command_suggestion_draft_only_appended("git c", "ls"));
     }
 
     #[test]
