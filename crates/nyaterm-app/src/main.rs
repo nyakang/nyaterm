@@ -27,6 +27,23 @@ fn main() -> anyhow::Result<()> {
     if nyaterm_desktop::run_update_helper_if_requested() {
         return Ok(());
     }
+    // A successor process is spawned before the old one exits. Wait for the old
+    // instance lock here, before `AppRuntime::resolve` applies the pending data
+    // directory switch: the migration copies the database, which must be closed.
+    // The variable holds a marker inside the old instance directory; removing it
+    // makes a stale inherited value harmless.
+    if let Some(marker) = std::env::var_os(nyaterm_core::RELAUNCH_HANDOFF_ENV) {
+        let marker = std::path::PathBuf::from(marker);
+        if marker.exists() {
+            let instance_dir = marker.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let waited = single_instance::wait_for_previous_instance(
+                instance_dir,
+                single_instance::RESTART_HANDOFF_DEADLINE,
+            );
+            let _ = std::fs::remove_file(&marker);
+            waited.context("wait for the previous NyaTerm instance to exit")?;
+        }
+    }
     let runtime = AppRuntime::resolve().context("resolve nyaterm runtime")?;
     runtime
         .ensure_directories()
@@ -36,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         *uuid::Uuid::new_v4().as_bytes(),
         std::env::args_os().skip(1),
     );
-    let mut instance_owner = match acquire(runtime.config_dir(), initial_activation.clone())? {
+    let mut instance_owner = match acquire(&runtime.instance_dir(), initial_activation.clone())? {
         SingleInstanceOutcome::Owner(owner) => owner,
         SingleInstanceOutcome::Forwarded => return Ok(()),
     };

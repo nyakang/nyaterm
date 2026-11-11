@@ -151,6 +151,13 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) terminal_theme_is_dark: bool,
     /// Read-only palette projection from the settings owner, matching terminal paint.
     pub(in crate::features) terminal_ansi: [u32; 16],
+    /// Active data directory and its bootstrap state, sourced from `AppRuntime`.
+    pub(in crate::features) data_directory: SharedString,
+    pub(in crate::features) data_directory_custom: bool,
+    pub(in crate::features) data_directory_editable: bool,
+    pub(in crate::features) data_directory_restart_pending: bool,
+    pub(in crate::features) data_directory_notice: Option<SharedString>,
+    pub(in crate::features) data_directory_sync_client: Option<SharedString>,
 }
 
 impl SettingsPresentation {
@@ -185,6 +192,12 @@ impl SettingsPresentation {
             config_path_prompt_active: false,
             terminal_theme_is_dark: true,
             terminal_ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            data_directory: SharedString::default(),
+            data_directory_custom: false,
+            data_directory_editable: false,
+            data_directory_restart_pending: false,
+            data_directory_notice: None,
+            data_directory_sync_client: None,
         }
     }
 }
@@ -489,6 +502,9 @@ pub(in crate::features) struct SettingsPanel {
     pub(in crate::features::pages::settings) image_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) content_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) window_opacity_slider: Entity<NyaSliderState>,
+    /// Validated but not yet queued data-directory change shown inline.
+    pub(in crate::features::pages::settings) data_directory_choice:
+        Option<nyaterm_core::data_directory::PreparedSwitch>,
     pub(in crate::features::pages::settings) image_opacity_focus: gpui::FocusHandle,
     pub(in crate::features::pages::settings) content_opacity_focus: gpui::FocusHandle,
     pub(in crate::features::pages::settings) window_opacity_focus: gpui::FocusHandle,
@@ -560,6 +576,7 @@ impl SettingsPanel {
             image_opacity_slider,
             content_opacity_slider,
             window_opacity_slider,
+            data_directory_choice: None,
             image_opacity_focus: cx.focus_handle(),
             content_opacity_focus: cx.focus_handle(),
             window_opacity_focus: cx.focus_handle(),
@@ -692,6 +709,13 @@ impl SettingsPanel {
             app.request_settings_panel_refresh(cx);
             result
         })
+    }
+
+    pub(in crate::features::pages::settings) fn app_runtime(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<nyaterm_core::runtime::AppRuntime> {
+        self.app.upgrade().map(|app| app.read(cx).runtime.clone())
     }
 
     pub(in crate::features::pages::settings) fn mcp_host_status(

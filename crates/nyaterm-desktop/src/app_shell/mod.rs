@@ -167,6 +167,18 @@ impl AppShell {
             self._subscriptions.push(subscription);
         }
         self.start_main_window_state_persistence(window, cx);
+        // A pending data-directory switch that could not be applied falls back
+        // to the previous directory. Surface that once per window instead of
+        // retrying the switch on every launch.
+        if let Some(notice) = self.runtime.data_dir_notice().map(str::to_string)
+            && let Some(app) = self.app.clone()
+        {
+            cx.defer(move |cx| {
+                app.update(cx, |app, cx| {
+                    app.notify_data_directory_startup_notice(notice, cx);
+                });
+            });
+        }
     }
 
     fn start_main_window_state_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -649,9 +661,16 @@ impl AppShell {
         // The installer helper waits for process exit. Validate its launch before
         // destroying workspace workers so a failed launch can return to a usable app.
         if launch_update && let Some(app) = &self.app {
-            let update_result =
-                app.update(cx, |app, cx| app.launch_pending_update_after_shutdown(cx));
-            if let Err(error) = update_result {
+            // A restart and an update install are mutually exclusive relaunch
+            // paths; a queued data-directory switch takes precedence.
+            let launch_result = app.update(cx, |app, cx| {
+                if app.data_directory_restart_requested() {
+                    app.launch_pending_restart_after_shutdown(cx)
+                } else {
+                    app.launch_pending_update_after_shutdown(cx)
+                }
+            });
+            if let Err(error) = launch_result {
                 if let Some(store_runtime) = &self.store_runtime {
                     store_runtime.resume_after_failed_shutdown();
                 }
@@ -1040,6 +1059,10 @@ impl AppShell {
                     .app
                     .as_ref()
                     .is_some_and(|app| app.read(cx).native_update_install_requested(cx));
+                let restarting = self
+                    .app
+                    .as_ref()
+                    .is_some_and(|app| app.read(cx).data_directory_restart_requested());
                 div()
                     .size_full()
                     .flex()
@@ -1070,6 +1093,8 @@ impl AppShell {
                             )
                             .child(if updating {
                                 t!("appShell.preparingUpdate")
+                            } else if restarting {
+                                t!("appShell.restartingForDataDirectory")
                             } else {
                                 t!("appShell.savingBeforeClose")
                             }),

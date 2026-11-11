@@ -277,6 +277,7 @@ impl NyaTermApp {
             ),
             workspace_id,
             workspace_revision: 0,
+            restart_requested: false,
             desktop_controller: None,
             process_state,
             blocking_jobs: blocking_jobs.clone(),

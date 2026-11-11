@@ -1158,7 +1158,9 @@ pub(super) fn load_cloud_sync_options(
         device_name: Some(settings.device_name.clone()),
         config_dir: runtime.config_dir().to_path_buf(),
         portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
-        remote_dir: runtime.config_dir().join("cloud-sync-local"),
+        remote_dir: runtime
+            .local_dir()
+            .join(nyaterm_core::data_directory::CLOUD_SYNC_LOCAL_DIR_NAME),
         remote_root: settings.remote_root.clone(),
         device_id: state.device_id.clone(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
