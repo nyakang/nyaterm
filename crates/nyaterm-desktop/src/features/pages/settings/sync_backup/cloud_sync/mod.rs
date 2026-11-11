@@ -256,6 +256,7 @@ impl SettingsPanel {
         let cloud_conflict = self.cloud_sync.conflict().cloned();
         let active_cloud_provider = configured_cloud_sync_provider(self.cloud_sync.settings());
         let form_enabled = self.cloud_sync_form_enabled();
+        let cloud_sync_toggle_enabled = self.cloud_sync.settings().enabled || form_enabled;
         let auto_sync_enabled = form_enabled && self.cloud_sync.settings().enabled;
         let validation_key = cloud_sync_validation_key(&self.cloud_sync.pending_settings());
         let validation_message = (form_enabled && self.cloud_sync.settings().enabled)
@@ -435,15 +436,17 @@ impl SettingsPanel {
                         palette,
                         t!("settings.enableCloudSync"),
                         Some(SharedString::from(t!("settings.enableCloudSyncDesc"))),
-                        settings_switch_with_enabled(
-                            palette,
-                            "cloud-sync-enabled",
-                            self.cloud_sync.settings().enabled,
-                            form_enabled,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_cloud_sync_enabled(cx);
-                            }),
-                        ),
+                        div()
+                            .debug_selector(|| "cloud-sync-enabled-control".into())
+                            .child(settings_switch_with_enabled(
+                                palette,
+                                "cloud-sync-enabled",
+                                self.cloud_sync.settings().enabled,
+                                cloud_sync_toggle_enabled,
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_cloud_sync_enabled(cx);
+                                }),
+                            )),
                     ))
                     .when(!form_enabled, |this| {
                         this.child(

@@ -1246,6 +1246,167 @@ fn encrypted_portable_snapshot_requires_master_password() {
 }
 
 #[test]
+fn backup_import_disables_sync_only_when_the_target_has_no_master_password() {
+    const BACKUP_PASSWORD: &str = "fixture-backup-password";
+    for legacy in [false, true] {
+        for (source_password, enabled) in [
+            (None, false),
+            (Some(BACKUP_PASSWORD), false),
+            (Some(BACKUP_PASSWORD), true),
+        ] {
+            let source_dir = TestTempDir::new("nyaterm-import-sync-source");
+            let source = ConnectionStore::open(source_dir.path()).unwrap();
+            source.save_master_password(source_password).unwrap();
+            let mut cloud = CloudSyncSettings {
+                enabled,
+                ..Default::default()
+            };
+            cloud.webdav.endpoint = "https://dav.example.invalid".into();
+            cloud.webdav.username = "fixture-user".into();
+            cloud.webdav.password = Some("fixture-cloud-secret".into());
+            source.save_cloud_sync_settings(cloud.clone()).unwrap();
+            let mut settings = source.load_settings_value().unwrap();
+            settings["cloud_sync"]["future_cloud_field"] = serde_json::json!({"retain": true});
+            source.save_settings_value(&settings).unwrap();
+            let path = source_dir.path().join("backup.nya");
+            if legacy {
+                let mut snapshot = source
+                    .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "source", "1.2.10")
+                    .unwrap();
+                let mut settings: serde_json::Value =
+                    serde_json::from_str(&snapshot.entities["settings"]).unwrap();
+                // Released Tauri backups stored provider secrets in plaintext
+                // inside the encrypted envelope, unlike native backups.
+                settings["cloud_sync"]["webdav"]["password"] =
+                    serde_json::json!("fixture-cloud-secret");
+                let token: Option<String> =
+                    serde_json::from_str(&snapshot.entities["master_key_token"]).unwrap();
+                if let Some(token) = token {
+                    let token = source
+                        .credential_crypto()
+                        .unwrap()
+                        .rewrap_master_key_token(&token, Some(BACKUP_PASSWORD))
+                        .unwrap();
+                    snapshot.entities.insert(
+                        "master_key_token".into(),
+                        serde_json::to_string(&Some(token)).unwrap(),
+                    );
+                }
+                snapshot
+                    .entities
+                    .insert("settings".into(), settings.to_string());
+                snapshot.recalculate_hash().unwrap();
+                std::fs::write(
+                    &path,
+                    crate::encode_encrypted_raw_portable_snapshot(&snapshot, BACKUP_PASSWORD)
+                        .unwrap(),
+                )
+                .unwrap();
+            } else {
+                source
+                    .export_encrypted_portable_snapshot_from_open_store(
+                        &path,
+                        "source",
+                        "2.0.4",
+                        BACKUP_PASSWORD,
+                    )
+                    .unwrap();
+            }
+
+            for target_password in [None, Some("fixture-target-password")] {
+                let target_dir = TestTempDir::new("nyaterm-import-sync-target");
+                let target = ConnectionStore::open(target_dir.path()).unwrap();
+                target.save_master_password(target_password).unwrap();
+                target
+                    .import_encrypted_portable_snapshot_into_open_store(&path, BACKUP_PASSWORD)
+                    .unwrap();
+                drop(target);
+                let target = ConnectionStore::open(target_dir.path()).unwrap();
+                let mut expected = cloud.clone();
+                expected.enabled = enabled && target_password.is_some();
+                assert_eq!(target.load_cloud_sync_settings().unwrap(), expected);
+                assert_eq!(
+                    target.load_settings_value().unwrap()["cloud_sync"]["future_cloud_field"],
+                    serde_json::json!({"retain": true})
+                );
+                assert_eq!(
+                    target
+                        .load_app_settings_summary()
+                        .unwrap()
+                        .has_master_password,
+                    target_password.is_some()
+                );
+                if let Some(password) = target_password {
+                    assert!(target.verify_master_password(password).unwrap());
+                    assert!(!target.verify_master_password(BACKUP_PASSWORD).unwrap());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn backup_import_normalizes_legacy_sync_without_overriding_embedded_settings() {
+    for embedded_enabled in [None, Some(false), Some(true)] {
+        for legacy_enabled in [None, Some(false), Some(true)] {
+            for target_password in [None, Some("fixture-target-password")] {
+                let source_dir = TestTempDir::new("nyaterm-import-sync-doc-source");
+                let source = ConnectionStore::open(source_dir.path()).unwrap();
+                let mut settings = source.load_settings_value().unwrap();
+                settings.as_object_mut().unwrap().remove("cloud_sync");
+                if let Some(enabled) = embedded_enabled {
+                    settings["cloud_sync"] = serde_json::json!({
+                        "enabled": enabled, "future": "embedded"
+                    });
+                }
+                source.save_settings_value(&settings).unwrap();
+                let mut snapshot = source
+                    .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "source", "2.0.4")
+                    .unwrap();
+                snapshot.recalculate_hash().unwrap();
+                let target_dir = TestTempDir::new("nyaterm-import-sync-doc-target");
+                let target = ConnectionStore::open(target_dir.path()).unwrap();
+                target.save_master_password(target_password).unwrap();
+                let mut legacy = legacy_enabled
+                    .map(|enabled| serde_json::json!({"enabled": enabled, "future": "legacy"}));
+                if let Some(value) = &legacy {
+                    target
+                        .save_settings_doc_value(SETTINGS_CLOUD_SYNC, value)
+                        .unwrap();
+                }
+                target.apply_raw_portable_snapshot(&snapshot).unwrap();
+                drop(target);
+                let target = ConnectionStore::open(target_dir.path()).unwrap();
+                assert_eq!(
+                    target.load_cloud_sync_settings().unwrap().enabled,
+                    embedded_enabled.or(legacy_enabled).unwrap_or(false)
+                        && target_password.is_some()
+                );
+                let settings = target.load_settings_value().unwrap();
+                assert_eq!(
+                    settings.get("cloud_sync").is_some(),
+                    embedded_enabled.is_some()
+                );
+                if embedded_enabled.is_some() {
+                    assert_eq!(settings["cloud_sync"]["future"], "embedded");
+                }
+                if target_password.is_none()
+                    && let Some(value) = legacy.as_mut()
+                {
+                    value["enabled"] = serde_json::json!(false);
+                }
+                assert_eq!(
+                    target
+                        .read_json_table::<serde_json::Value>(SETTINGS_TABLE, SETTINGS_CLOUD_SYNC)
+                        .unwrap(),
+                    legacy
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn legacy_tauri_snapshot_reencrypts_settings_and_rewraps_master_key() {
     const SNAPSHOT_PASSWORD: &str = "legacy-snapshot-password";
     const AI_SECRET: &str = "synthetic-ai-secret";
