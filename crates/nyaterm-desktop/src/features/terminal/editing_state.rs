@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use nyaterm_core::terminal::editing::{EditCapability, EditPhase, ShellEditState};
+use nyaterm_core::terminal::editing::{
+    EditCapability, EditPhase, ShellEditState, supports_scalar_editing,
+};
 use nyaterm_core::terminal::input_tracker::TerminalInputState;
 use nyaterm_terminal::editing::InputMapping;
 use nyaterm_terminal::{ShellInputAnchor, TerminalLineId, TerminalSnapshot};
@@ -77,6 +79,19 @@ impl SnapshotEvidence {
 }
 
 impl SessionEditingState {
+    pub(super) fn confirmed_input_at_end(&self) -> bool {
+        let input = &self.model.input;
+        !self.awaiting_snapshot
+            && self.model.phase == EditPhase::Ready
+            && self.mapping.is_some()
+            && !input.desynced
+            && !input.line_rewrite_required
+            && !input.multiline
+            && !input.paste_mode
+            && input.cursor == input.value.len()
+            && supports_scalar_editing(&input.value)
+    }
+
     pub(super) fn cancel_stale_suggestion_fill(&mut self, now: Instant, sync_revision: u64) {
         if self.suggestion_fill.as_ref().is_some_and(|request| {
             request.request_id != self.confirmation_id
@@ -151,6 +166,9 @@ impl TerminalEditingState {
 
     pub(super) fn state(&self) -> Option<&SessionEditingState> {
         self.sessions.get(&self.active)
+    }
+    pub(super) fn is_active(&self, session_id: &str) -> bool {
+        self.active == session_id
     }
     pub(super) fn state_mut(&mut self) -> &mut SessionEditingState {
         self.sessions.entry(self.active.clone()).or_default()

@@ -724,6 +724,7 @@ impl NyaTermApp {
             return;
         }
         self.shell.set_status("sync group deleted".to_string());
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -759,12 +760,14 @@ impl NyaTermApp {
         }
         self.sync_input.ensure_selected_group();
         if self.sync_input.replace_selected_sessions(session_ids) {
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
         }
     }
 
     pub(in crate::features) fn clear_sync_group_sessions(&mut self, cx: &mut Context<Self>) {
         if self.sync_input.clear_selected_sessions() {
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
         }
     }
@@ -783,6 +786,7 @@ impl NyaTermApp {
         }
         self.sync_input.ensure_selected_group();
         if self.sync_input.add_selected_sessions(session_ids) {
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
         }
     }
@@ -800,6 +804,7 @@ impl NyaTermApp {
             .map(|session| session.id)
             .collect::<HashSet<_>>();
         if self.sync_input.remove_selected_sessions(&remove_ids) {
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
         }
     }
@@ -832,6 +837,7 @@ impl NyaTermApp {
             .map(|session| session.id)
             .collect::<Vec<_>>();
         if self.sync_input.replace_selected_sessions(matching_ids) {
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
         }
     }
@@ -875,6 +881,7 @@ impl NyaTermApp {
     ) {
         let Some(enabled) = self.sync_input.toggle_selected_enabled() else {
             self.shell.set_status("no sync group selected".to_string());
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
             return;
         };
@@ -883,6 +890,7 @@ impl NyaTermApp {
         } else {
             "sync group disabled".to_string()
         });
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -895,6 +903,7 @@ impl NyaTermApp {
         let Some(added) = self.sync_input.toggle_selected_session(session_id) else {
             self.shell
                 .set_status("create or select a sync group first".to_string());
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
             return;
         };
@@ -905,6 +914,7 @@ impl NyaTermApp {
             self.shell
                 .set_status("session removed from sync group".to_string());
         }
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -922,6 +932,7 @@ impl NyaTermApp {
             }
             .to_string(),
         );
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -965,6 +976,7 @@ impl NyaTermApp {
             } else {
                 "broadcast to all sessions disabled".to_string()
             });
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -995,6 +1007,7 @@ impl NyaTermApp {
         } else {
             "session sync paused".to_string()
         });
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -1014,6 +1027,7 @@ impl NyaTermApp {
             }
             .to_string(),
         );
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -1026,10 +1040,12 @@ impl NyaTermApp {
         if !self.sync_input.leave_active_group(&session_id) {
             self.shell
                 .set_status("session is not in an active sync group".to_string());
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
             return;
         }
         self.shell.set_status("left sync group".to_string());
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 
@@ -1042,10 +1058,12 @@ impl NyaTermApp {
         if !self.sync_input.close_active_group(&session_id) {
             self.shell
                 .set_status("session is not in an active sync group".to_string());
+            self.reconcile_command_suggestion_availability(cx);
             cx.notify();
             return;
         }
         self.shell.set_status("sync group closed".to_string());
+        self.reconcile_command_suggestion_availability(cx);
         cx.notify();
     }
 }

@@ -826,6 +826,7 @@ impl NyaTermApp {
         session_id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        self.reconcile_command_suggestion_availability(cx);
         let session_id = session_id
             .filter(|id| !id.is_empty())
             .map(str::to_string)

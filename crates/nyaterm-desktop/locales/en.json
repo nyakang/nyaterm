@@ -3538,6 +3538,7 @@
     "memUsage": "Memory Usage"
   },
   "suggestions": {
+    "openPasteReview": "Open paste review",
     "acceptSelected": "accept selected",
     "legacyHistory": "Legacy global history",
     "multiline": "Multiline",

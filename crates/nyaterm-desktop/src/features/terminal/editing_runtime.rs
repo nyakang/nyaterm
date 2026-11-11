@@ -107,6 +107,7 @@ impl NyaTermApp {
         state.selection_origin_version = None;
         state.mapping = None;
         self.schedule_shell_edit_confirmation_timeout(cx);
+        self.reconcile_command_suggestion_availability(cx);
     }
 
     pub(in crate::features) fn schedule_shell_edit_confirmation_timeout(
@@ -152,6 +153,39 @@ impl NyaTermApp {
         id: &str,
         cx: &mut Context<Self>,
     ) {
+        if self.session.active_id() != Some(id) {
+            return;
+        }
+        let before = self.command_suggestion_input_is_confirmed().then(|| {
+            (
+                self.command_suggestion_fill_policy(id),
+                self.terminal.editing.state().unwrap().model.version,
+            )
+        });
+        let filling = self
+            .terminal
+            .editing
+            .state()
+            .is_some_and(|state| state.suggestion_fill.is_some());
+        self.reconcile_shell_editing_snapshot(id, cx);
+        self.reconcile_command_suggestion_availability(cx);
+        let after = self.command_suggestion_input_is_confirmed().then(|| {
+            (
+                self.command_suggestion_fill_policy(id),
+                self.terminal.editing.state().unwrap().model.version,
+            )
+        });
+        if after.is_some()
+            && after != before
+            && !filling
+            && self.command_suggestions_allowed_for_session(id)
+            && !self.terminal.editing.assist_input().value.is_empty()
+        {
+            self.refresh_command_suggestions(cx);
+        }
+    }
+
+    fn reconcile_shell_editing_snapshot(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.session.active_id() != Some(id) {
             return;
         }
@@ -265,7 +299,7 @@ impl NyaTermApp {
             });
             let known_prompt = prompt.as_ref().is_some_and(|prefix| {
                 !prefix.trim().is_empty()
-                    && (strip_terminal_command_prompt(prefix).is_empty()
+                    && (strip_terminal_command_prompt(prefix).trim().is_empty()
                         || state.line_editor_prompt.as_ref() == Some(prefix))
             });
             let has_prompt = prompt

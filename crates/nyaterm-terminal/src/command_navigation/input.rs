@@ -131,6 +131,7 @@ pub fn command_submission_evidence(
 mod tests {
     use crate::TerminalCore;
     use crate::command_navigation::command_submission_evidence;
+    use crate::command_navigation::input::visible_shell_prompt;
     use nyaterm_core::terminal::input_tracker::{TerminalInputState, apply_terminal_input_data};
 
     #[test]
@@ -163,6 +164,23 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn android_and_themed_prompts_preserve_history_recall_and_command_navigation() {
+        for prompt in ["fuxi:/sdcard # ", "~/src ❯ ", "➜ ~/src ", "~ % "] {
+            let mut terminal = TerminalCore::new(80, 4);
+            terminal.advance(format!("{prompt}mv source destination").as_bytes());
+            let snapshot = terminal.snapshot();
+            assert_eq!(
+                visible_shell_prompt(&snapshot).unwrap().1,
+                prompt.trim_end()
+            );
+            let input = apply_terminal_input_data(&TerminalInputState::new(), "\x1b[A");
+            let evidence = command_submission_evidence(&snapshot, &input, b"\r").unwrap();
+            assert_eq!(evidence.command, "mv source destination");
+            assert_eq!(evidence.prompt.as_deref(), Some(prompt.trim_end()));
+        }
     }
 
     #[test]

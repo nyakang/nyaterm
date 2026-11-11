@@ -18,6 +18,20 @@ pub fn supports_full_command_fill(text: &str) -> bool {
                     .any(|ch| ch.is_control() && !matches!(ch, '\r' | '\n' | '\t'))))
 }
 
+/// Ephemeral terminal operation policy, independent of transport and presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionFillPolicy {
+    AppendOnly,
+    ReplaceAllowed,
+}
+
+impl CompletionFillPolicy {
+    pub fn allows(self, input: &str, target: &str) -> bool {
+        (target.starts_with(input) || self == Self::ReplaceAllowed || target.contains(['\r', '\n']))
+            && supports_full_command_fill(target)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellDialect {

@@ -3538,6 +3538,7 @@
     "memUsage": "메모리 사용량"
   },
   "suggestions": {
+    "openPasteReview": "붙여넣기 검토 열기",
     "acceptSelected": "선택 항목 적용",
     "legacyHistory": "이전 전역 기록",
     "multiline": "여러 줄",
