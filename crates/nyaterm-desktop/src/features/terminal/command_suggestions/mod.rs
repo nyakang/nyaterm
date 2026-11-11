@@ -10,8 +10,8 @@ use gpui::{
     px, rgb, rgba, svg,
 };
 use nyaterm_core::completion::types::{
-    CandidateKind, CandidateSource, CompletionCandidate, CompletionMode, CompletionResult,
-    CompletionScope, ShellCommandContext, ShellDialect,
+    CandidateKind, CandidateSource, CompletionCandidate, CompletionFillPolicy, CompletionMode,
+    CompletionResult, CompletionScope, ShellCommandContext, ShellDialect,
 };
 use nyaterm_core::terminal::editing::{
     EDIT_CONFIRMATION_TIMEOUT, EditIntent, ShellLineEditing, plan_edit,
@@ -107,6 +107,7 @@ struct CommandSuggestionSearchRequest {
     started_at: Instant,
     popup_visible_at_start: bool,
     timing: CommandSuggestionRefreshTiming,
+    fill_policy: CompletionFillPolicy,
 }
 
 impl CommandSuggestionRefreshTiming {
@@ -174,6 +175,106 @@ fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> O
 }
 
 impl NyaTermApp {
+    pub(in crate::features::terminal) fn command_suggestion_fill_policy(
+        &self,
+        session_id: &str,
+    ) -> CompletionFillPolicy {
+        let shell_session = self.session.metadata(session_id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Local(_)
+                    | crate::models::SessionLaunchConfig::Ssh(_)
+            )
+        });
+        if shell_session
+            && self
+                .terminal
+                .editing
+                .sessions
+                .get(session_id)
+                .is_some_and(|state| state.allows_editing())
+        {
+            CompletionFillPolicy::ReplaceAllowed
+        } else {
+            CompletionFillPolicy::AppendOnly
+        }
+    }
+
+    pub(in crate::features::terminal) fn command_suggestions_allowed_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session.active_id() == Some(session_id)
+            && !self.session.is_disconnected(session_id)
+            && !self.active_terminal_input_blocked()
+            && !self.security.screen_locked()
+            && !self.active_terminal_uses_alternate_screen()
+            && !self.is_credential_prompt_input_mode()
+            && self.terminal.assist.credential_suggestions.is_none()
+            && !self.terminal.assist.command_suggestions_suppressed
+            && !self
+                .terminal_protocol_state_for_session(session_id)
+                .mouse_reporting
+            && self.active_terminal_display_offset() == 0
+            && self
+                .settings
+                .summary()
+                .interaction_command_suggestions_enabled
+            && !self.sync_input.may_fan_out_from(session_id)
+    }
+
+    pub(in crate::features::terminal) fn command_suggestion_input_is_confirmed(&self) -> bool {
+        if self
+            .session
+            .active_id()
+            .is_none_or(|id| !self.terminal.editing.is_active(id))
+        {
+            return false;
+        }
+        self.terminal
+            .editing
+            .state()
+            .is_some_and(|state| state.confirmed_input_at_end())
+    }
+
+    /// Called from state/terminal events, never from element construction.
+    pub(in crate::features) fn reconcile_command_suggestion_availability(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(popup) = self.terminal.assist.command_suggestions.as_ref() else {
+            return;
+        };
+        if !self.command_suggestions_allowed_for_session(&popup.session_id)
+            || !self.command_suggestion_input_is_confirmed()
+            || self.terminal.editing.assist_input().value != popup.draft
+            || self.terminal.editing.state().unwrap().model.version != popup.input_version
+            || self.sync_input.revision() != popup.sync_revision
+        {
+            self.hide_command_suggestions_if_present(cx);
+            return;
+        }
+        let policy = self.command_suggestion_fill_policy(&popup.session_id);
+        let popup = self.terminal.assist.command_suggestions.as_mut().unwrap();
+        let selected_command = popup
+            .selected_index
+            .and_then(|index| popup.items.get(index))
+            .map(|item| item.command.clone());
+        let old_len = popup.items.len();
+        popup
+            .items
+            .retain(|item| item.fillable && policy.allows(&popup.draft, &item.command));
+        if popup.items.len() != old_len {
+            popup.selected_index = selected_command
+                .and_then(|command| popup.items.iter().position(|item| item.command == command));
+            if popup.items.is_empty() {
+                self.hide_command_suggestions_if_present(cx);
+            } else {
+                cx.notify();
+            }
+        }
+    }
+
     pub(in crate::features) fn completion_has_marked_shell(&self, session_id: &str) -> bool {
         self.terminal
             .editing
@@ -474,6 +575,7 @@ impl NyaTermApp {
                 let results = request
                     .completion
                     .search(CompletionQuery {
+                        fill_policy: Some(request.fill_policy),
                         context: request.context.clone(),
                         input: request.pattern.clone(),
                         mode: request.mode,
@@ -608,32 +710,11 @@ impl NyaTermApp {
             timing.hide_popup = hide_started_at.elapsed();
             finish_refresh!("no_active_session", 0, 0);
         };
-        if self.terminal.assist.credential_suggestions.is_some()
-            || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.command_suggestions_suppressed
+        if !self.command_suggestions_allowed_for_session(&session_id)
+            || !self.command_suggestion_input_is_confirmed()
         {
-            let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
-            timing.hide_popup = hide_started_at.elapsed();
-            finish_refresh!("suppressed_or_credential", 0, 0);
-        }
-        // A search scheduled on the shell line can land after a full-screen
-        // program has taken the alternate screen, so re-check here too.
-        if self.active_terminal_uses_alternate_screen() {
-            let hide_started_at = Instant::now();
-            self.hide_command_suggestions_if_present(cx);
-            timing.hide_popup = hide_started_at.elapsed();
-            finish_refresh!("alternate_screen", 0, 0);
-        }
-        if !self
-            .settings
-            .summary()
-            .interaction_command_suggestions_enabled
-        {
-            let hide_started_at = Instant::now();
-            self.hide_command_suggestions_if_present(cx);
-            timing.hide_popup = hide_started_at.elapsed();
-            finish_refresh!("disabled", 0, 0);
+            finish_refresh!("not_confirmed_or_restricted", 0, 0);
         }
         let min_chars = self
             .settings
@@ -692,6 +773,7 @@ impl NyaTermApp {
             started_at,
             popup_visible_at_start,
             timing,
+            fill_policy: self.command_suggestion_fill_policy(&session_id),
         })
     }
 
@@ -713,24 +795,31 @@ impl NyaTermApp {
                 .map(|state| state.model.version)
                 != Some(request.input_version)
             || self.sync_input.revision() != request.sync_revision
-            || self.terminal.assist.credential_suggestions.is_some()
-            || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.command_suggestions_suppressed
-            || !self
-                .settings
-                .summary()
-                .interaction_command_suggestions_enabled
             || self.terminal.editing.assist_input().value != request.pattern
         {
             return;
         }
-        // The search was started on the shell line, but a full-screen program
-        // may have taken the alternate screen while it ran.
-        if self.active_terminal_uses_alternate_screen() {
+        self.reconcile_command_suggestion_availability(cx);
+        if !self.command_suggestions_allowed_for_session(&request.session_id)
+            || !self.command_suggestion_input_is_confirmed()
+        {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
-        let results = result.candidates;
+        if self.command_suggestion_fill_policy(&request.session_id) != request.fill_policy {
+            self.refresh_command_suggestions(cx);
+            return;
+        }
+        let results: Vec<_> = result
+            .candidates
+            .into_iter()
+            .filter(|item| {
+                item.fillable
+                    && item
+                        .target_line(&request.pattern)
+                        .is_some_and(|target| request.fill_policy.allows(&request.pattern, &target))
+            })
+            .collect();
         let completion_revision = result.revision;
         let scope = Some(request.context.scope.clone());
         let mode = request.mode;
@@ -1109,9 +1198,9 @@ impl NyaTermApp {
             }
             SuggestionFill::Replace(command) => {
                 let backend = self.shell_line_editing(&popup.session_id);
-                // A console host has no anchor to confirm editing capability,
-                // but it does own the line and can erase it with backspace.
-                if backend.allows_cursor_motion() && !state.allows_editing() {
+                if self.command_suggestion_fill_policy(&popup.session_id)
+                    != CompletionFillPolicy::ReplaceAllowed
+                {
                     return self.reject_command_suggestion(
                         "This terminal has no confirmed shell editing capability",
                         cx,
@@ -1163,22 +1252,8 @@ impl NyaTermApp {
                 state.selection_origin_version = None;
                 self.clear_terminal_selection(cx);
                 self.arm_terminal_input_wake(cx);
-                if backend.allows_cursor_motion() {
-                    self.schedule_shell_edit_confirmation_timeout(cx);
-                }
+                self.schedule_shell_edit_confirmation_timeout(cx);
             }
-        }
-        if self.shell_line_editing(&popup.session_id) == ShellLineEditing::LegacyConsole {
-            // The console host owns the line and never publishes an anchor, so
-            // there is no echo acknowledgement to wait for: the write is the
-            // fill, and a stale-echo timeout would only report a false failure.
-            self.shell.set_status(if execute_requested {
-                "Suggestion filled; press Enter again to execute"
-            } else {
-                "Suggestion filled"
-            });
-            cx.notify();
-            return SuggestionSubmitResult::Submitted;
         }
         let state = self.terminal.editing.state_mut();
         state.suggestion_fill = Some(SuggestionFillRequest {
@@ -1243,7 +1318,9 @@ impl NyaTermApp {
         if self.session.active_id() != Some(state.session_id.as_str()) {
             return div().into_any_element();
         }
-        if self.active_terminal_uses_alternate_screen() {
+        if !self.command_suggestions_allowed_for_session(&state.session_id)
+            || !self.command_suggestion_input_is_confirmed()
+        {
             return div().into_any_element();
         }
         let menu_w = 380.0_f32;
@@ -1274,14 +1351,6 @@ impl NyaTermApp {
             .and_then(|index| state.items.get(index))
             .filter(|item| item.command.chars().count() > 48)
             .map(|item| item.command.clone());
-        // Shell capability can become known after an asynchronous search. Keep
-        // text eligibility in the candidate and assess replacement separately.
-        let can_replace = self
-            .terminal
-            .editing
-            .state()
-            .is_some_and(|state| state.allows_editing());
-
         let mut list = div()
             .id(SharedString::from("command-suggestions-list"))
             .flex()
@@ -1306,8 +1375,6 @@ impl NyaTermApp {
             let description = item.description.clone();
             let show_description = state.mode == CompletionMode::Token && !description.is_empty();
             let multiline = item.command.contains(['\r', '\n']);
-            let fillable = item.fillable
-                && (multiline || item.command.starts_with(&state.draft) || can_replace);
             let delete_command = item.command.clone();
             let mut row = div()
                 .id(SharedString::from(format!("command-suggestion-{index}")))
@@ -1330,7 +1397,6 @@ impl NyaTermApp {
                 }))
                 .text_size(px(11.))
                 .text_color(rgb(palette.text))
-                .opacity(if fillable { 1.0 } else { 0.5 })
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(state) = this.terminal.assist.command_suggestions.as_mut() {
@@ -1371,7 +1437,7 @@ impl NyaTermApp {
                     div()
                         .flex_none()
                         .text_color(rgb(palette.text_dimmed))
-                        .child(t!("suggestions.multiline")),
+                        .child(t!("suggestions.openPasteReview")),
                 );
             }
             if show_description {
@@ -1391,10 +1457,10 @@ impl NyaTermApp {
                         .child(description.clone()),
                 );
             }
-            if show_full_command || !description.is_empty() || !fillable {
+            if show_full_command || !description.is_empty() || multiline {
                 row = row.tooltip(move |window, cx| {
-                    let label = if !fillable {
-                        t!("suggestions.unsafeSuffix").to_string()
+                    let label = if multiline {
+                        t!("suggestions.openPasteReview").to_string()
                     } else if !description.is_empty() {
                         description.clone()
                     } else {
@@ -1871,7 +1937,7 @@ mod tests {
                 last_used_at_ms: 1,
                 score: 1,
                 indices: vec![],
-                fillable: command.starts_with(input),
+                fillable: nyaterm_core::completion::types::supports_full_command_fill(command),
                 context_priority: 1,
             }],
         }
@@ -2005,13 +2071,24 @@ mod tests {
         );
         cx.update_entity(&app, |app, cx| {
             app.note_shell_editing_input(b"echo", cx);
-            let request = app
-                .prepare_command_suggestion_search(
-                    1,
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
                     nyaterm_core::completion::types::CompletionMode::Token,
                     cx,
                 )
-                .expect("ordinary typing predictions can request suggestions");
+                .is_none()
+            );
+            app.terminal
+                .seed_session_view("s1".into(), "$ echo".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            let request = app
+                .prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx,
+                )
+                .expect("confirmed echoed input can request suggestions");
             app.terminal.editing.state_mut().model.invalidate();
             assert!(
                 app.prepare_command_suggestion_search(
@@ -2426,6 +2503,9 @@ mod tests {
         cx.update_entity(&app, |app, cx| {
             show_surface_for_session(app, "s1");
             app.note_shell_editing_input(b"docker r", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ docker r".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
             for mode in [
                 nyaterm_core::completion::types::CompletionMode::Token,
                 nyaterm_core::completion::types::CompletionMode::History,
@@ -2874,11 +2954,12 @@ mod tests {
         let request = cx.update_entity(&app, |app, cx| {
             show_surface_for_session(app, "s1");
             assert!(!app.active_terminal_uses_alternate_screen());
-            *app.terminal.editing.input_mut() =
-                apply_terminal_input_data(&TerminalInputState::new(), "vim 1");
-            app.terminal.editing.state_mut().model.confirm();
+            app.note_shell_editing_input(b"vim 1", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ vim 1".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
             app.prepare_command_suggestion_search(
-                1,
+                app.terminal.assist.command_suggestion_search_gen,
                 nyaterm_core::completion::types::CompletionMode::Token,
                 cx,
             )

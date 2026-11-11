@@ -3538,6 +3538,7 @@
     "memUsage": "Utilisation de la mémoire"
   },
   "suggestions": {
+    "openPasteReview": "Ouvrir la vérification du collage",
     "acceptSelected": "accepter la sélection",
     "legacyHistory": "Ancien historique global",
     "multiline": "Multiligne",

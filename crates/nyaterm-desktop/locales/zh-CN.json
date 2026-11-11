@@ -3538,6 +3538,7 @@
     "memUsage": "内存占用"
   },
   "suggestions": {
+    "openPasteReview": "打开粘贴审查",
     "acceptSelected": "接受所选",
     "legacyHistory": "旧全局历史",
     "multiline": "多行",

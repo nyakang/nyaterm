@@ -3538,6 +3538,7 @@
     "memUsage": "メモリ使用率"
   },
   "suggestions": {
+    "openPasteReview": "貼り付けの確認を開く",
     "acceptSelected": "選択候補を確定",
     "legacyHistory": "以前のグローバル履歴",
     "multiline": "複数行",

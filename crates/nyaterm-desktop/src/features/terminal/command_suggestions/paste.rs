@@ -42,23 +42,7 @@ impl NyaTermApp {
         }) {
             return Err("Completion context changed; select a current suggestion");
         }
-        if self.session.active_id() != Some(context.session_id.as_str())
-            || self.session.is_disconnected(&context.session_id)
-            || self.active_terminal_input_blocked()
-            || self.security.screen_locked()
-            || self.active_terminal_uses_alternate_screen()
-            || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.credential_suggestions.is_some()
-            || self.terminal.assist.command_suggestions_suppressed
-            || self
-                .terminal_protocol_state_for_session(&context.session_id)
-                .mouse_reporting
-            || self.active_terminal_display_offset() != 0
-            || !self
-                .settings
-                .summary()
-                .interaction_command_suggestions_enabled
-            || self.sync_input.may_fan_out_from(&context.session_id)
+        if !self.command_suggestions_allowed_for_session(&context.session_id)
             || self.sync_input.revision() != context.sync_revision
         {
             return Err("Cannot safely fill this suggestion in the current terminal state");

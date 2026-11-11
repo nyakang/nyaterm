@@ -7,9 +7,11 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Render,
     TestAppContext, Window,
 };
-use nyaterm_core::completion::types::{CompletionScope, ShellCommandContext, ShellDialect};
+use nyaterm_core::completion::types::{
+    CompletionFillPolicy, CompletionMode, CompletionScope, ShellCommandContext, ShellDialect,
+};
 use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
-use nyaterm_transport::{SessionManager, TelnetSessionConfig};
+use nyaterm_transport::{SerialSessionConfig, SessionManager, TelnetSessionConfig};
 
 use super::fill::SuggestionSubmitResult;
 use super::tests::show_surface_for_session;
@@ -105,6 +107,15 @@ impl Fixture {
             self.suggest(current, target);
         }
         self.update(|app, cx, id| {
+            let launch = app
+                .session
+                .metadata("fixture")
+                .unwrap()
+                .launch_config
+                .clone();
+            let mut metadata = app.session.metadata(id).unwrap().clone();
+            metadata.launch_config = launch;
+            app.session.register_session_metadata(id, metadata);
             app.terminal.seed_session_view(
                 id.into(),
                 format!("$ \x1b]133;B\x07{current}"),
@@ -157,6 +168,318 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn expanded_prompts_offer_replacement_in_shell_sessions_and_append_in_telnet_and_serial() {
+    let mut f = Fixture::new();
+    for kind in 0..4 {
+        for prompt in [
+            "fuxi:/sdcard # ",
+            "host:~$ ",
+            "~/src ❯ ",
+            "➜ ~/src ",
+            "~ % ",
+        ] {
+            f.suggest("mv", "mv source destination");
+            f.update(|app, cx, id| {
+                let launch = match kind {
+                    0 => app
+                        .session
+                        .metadata("fixture")
+                        .unwrap()
+                        .launch_config
+                        .clone(),
+                    1 => SessionLaunchConfig::Ssh(Box::default()),
+                    2 => SessionLaunchConfig::Telnet(TelnetSessionConfig::default()),
+                    _ => SessionLaunchConfig::Serial(SerialSessionConfig::default()),
+                };
+                app.session.metadata_mut(id).unwrap().launch_config = launch;
+                app.terminal
+                    .seed_session_view(id.into(), format!("{prompt}mv"), "UTF-8");
+                app.reconcile_shell_editing(id, cx);
+                let expected = if kind < 2 {
+                    CompletionFillPolicy::ReplaceAllowed
+                } else {
+                    CompletionFillPolicy::AppendOnly
+                };
+                assert_eq!(app.command_suggestion_fill_policy(id), expected, "{prompt}");
+                let request = app
+                    .prepare_command_suggestion_search(
+                        app.terminal.assist.command_suggestion_search_gen,
+                        CompletionMode::Token,
+                        cx,
+                    )
+                    .unwrap();
+                let revision = app.commands.completion_runtime().revision();
+                let mut results = super::tests::history_search_fixture("cat file", "mv", revision);
+                results.candidates.extend(
+                    super::tests::history_search_fixture("mv source destination", "mv", revision)
+                        .candidates,
+                );
+                results.candidates.extend(
+                    super::tests::history_search_fixture("echo first\necho second", "mv", revision)
+                        .candidates,
+                );
+                app.publish_command_suggestion_search(request, results, Duration::ZERO, cx);
+                let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+                assert_eq!(popup.items.len(), if kind < 2 { 3 } else { 2 });
+                assert!(popup.items.iter().all(|item| item.fillable));
+                assert_eq!(
+                    popup.items.iter().any(|item| item.command == "cat file"),
+                    kind < 2
+                );
+                assert!(popup.items.iter().any(|item| item.command.contains('\n')));
+            });
+        }
+    }
+    f.assert_quiet();
+}
+
+#[test]
+fn android_shell_prompt_replacement_writes_only_edit_keys_and_waits_for_confirmation() {
+    let mut f = Fixture::new();
+    f.suggest("mv", "mv source destination");
+    f.update(|app, cx, id| {
+        app.session.metadata_mut(id).unwrap().launch_config = app
+            .session
+            .metadata("fixture")
+            .unwrap()
+            .launch_config
+            .clone();
+        app.terminal
+            .seed_session_view(id.into(), "fuxi:/sdcard # mv".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        popup(app, id, "cat file");
+        assert_eq!(
+            app.submit_selected_command_suggestion(true, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        assert_eq!(app.terminal.editing.predicted_input().value, "cat file");
+        assert_eq!(
+            app.terminal.editing.state().unwrap().model.phase,
+            EditPhase::Pending
+        );
+        assert!(app.session.command_history_for(id).is_none());
+    });
+    f.receive(b"\x7f\x7fcat file");
+    f.assert_quiet();
+}
+
+#[test]
+fn delayed_echo_hides_candidates_then_schedules_a_refresh_when_input_is_confirmed() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("mv", "mv source destination");
+    f.update(|app, cx, id| {
+        app.note_shell_editing_input(b"x", cx);
+        app.terminal.assist.command_suggestion_refresh_task = None;
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        assert!(
+            app.prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx
+            )
+            .is_none()
+        );
+        echo(app, cx, id, "mvx");
+        assert!(app.command_suggestion_input_is_confirmed());
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn unconfirmed_or_nonterminal_line_input_never_enters_candidate_search() {
+    let mut f = Fixture::new();
+    for scenario in 0..8 {
+        f.suggest_in_shell("mv", "mv source destination");
+        f.update(|app, cx, _| {
+            let state = app.terminal.editing.state_mut();
+            match scenario {
+                0 => state.awaiting_snapshot = true,
+                1 => state.mapping = None,
+                2 => state.model.phase = EditPhase::Pending,
+                3 => state.model.input.cursor = 0,
+                4 => state.model.input.multiline = true,
+                5 => state.model.input.paste_mode = true,
+                6 => state.model.input.line_rewrite_required = true,
+                _ => state.model.input.desynced = true,
+            }
+            app.reconcile_command_suggestion_availability(cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+            app.terminal.editing.state_mut().awaiting_snapshot = false;
+        });
+    }
+    f.assert_quiet();
+}
+
+#[test]
+fn restricted_terminal_states_never_publish_or_select_candidates() {
+    let mut f = Fixture::new();
+    for scenario in 0..8 {
+        f.suggest_in_shell("mv", "mv source destination");
+        f.update(|app, cx, id| {
+            let request = app
+                .prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx,
+                )
+                .unwrap();
+            match scenario {
+                0 => {
+                    app.toggle_broadcast_to_all(cx);
+                }
+                1 => app.terminal.assist.credential_prompt_input_until_ms = u64::MAX,
+                2 => app.security.activate_screen_lock("test lock".into()),
+                3 => {
+                    app.terminal
+                        .view
+                        .views
+                        .get_mut(id)
+                        .unwrap()
+                        .protocol_state
+                        .alternate_screen = true
+                }
+                4 => {
+                    app.terminal
+                        .view
+                        .views
+                        .get_mut(id)
+                        .unwrap()
+                        .protocol_state
+                        .mouse_reporting = true
+                }
+                5 => app.session.metadata_mut(id).unwrap().disconnected = true,
+                6 => {
+                    app.session.select_active_session("fixture");
+                }
+                _ => {
+                    let view = app.terminal.view.views.get_mut(id).unwrap();
+                    view.append_bytes_unprotected("\r\n".repeat(80).as_bytes());
+                    view.scroll_offset = 1;
+                    assert_eq!(app.active_terminal_display_offset(), 1);
+                }
+            }
+            app.reconcile_command_suggestion_availability(cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            app.publish_command_suggestion_search(
+                request,
+                super::tests::history_search_fixture(
+                    "mv source destination",
+                    "mv",
+                    app.commands.completion_runtime().revision(),
+                ),
+                Duration::ZERO,
+                cx,
+            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+            if app.sync_input.broadcast_to_all() {
+                app.toggle_broadcast_to_all(cx);
+            }
+            app.terminal.assist.credential_prompt_input_until_ms = 0;
+            app.security.deactivate_screen_lock();
+            app.session.metadata_mut(id).unwrap().disconnected = false;
+            let view = app.terminal.view.views.get_mut(id).unwrap();
+            view.protocol_state.alternate_screen = false;
+            view.protocol_state.mouse_reporting = false;
+            view.scroll_offset = 0;
+            app.session.select_active_session(id);
+        });
+    }
+    f.assert_quiet();
+}
+
+#[test]
+fn policy_changes_filter_existing_candidates_and_discard_pending_results() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("mv", "cat file");
+    f.update(|app, cx, id| {
+        let request = app
+            .prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx,
+            )
+            .unwrap();
+        app.session.metadata_mut(id).unwrap().launch_config =
+            SessionLaunchConfig::Serial(SerialSessionConfig::default());
+        app.reconcile_command_suggestion_availability(cx);
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        app.publish_command_suggestion_search(
+            request,
+            super::tests::history_search_fixture(
+                "cat file",
+                "mv",
+                app.commands.completion_runtime().revision(),
+            ),
+            Duration::ZERO,
+            cx,
+        );
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn tightening_policy_preserves_selection_of_a_remaining_append_candidate() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("mv", "cat file");
+    f.update(|app, cx, id| {
+        let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+        let mut append = popup.items[0].clone();
+        append.command = "mv source destination".into();
+        append.display = append.command.clone();
+        popup.items.push(append);
+        popup.selected_index = Some(1);
+        app.session.metadata_mut(id).unwrap().launch_config =
+            SessionLaunchConfig::Telnet(TelnetSessionConfig::default());
+        app.reconcile_command_suggestion_availability(cx);
+        let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+        assert_eq!(popup.items.len(), 1);
+        assert_eq!(popup.items[0].command, "mv source destination");
+        assert_eq!(popup.selected_index, Some(0));
+    });
+    f.assert_quiet();
+}
+
+fn set_encoding(launch: &mut SessionLaunchConfig, encoding: &str) {
+    let field = match launch {
+        SessionLaunchConfig::Local(config) => &mut config.encoding,
+        SessionLaunchConfig::Ssh(config) => &mut config.encoding,
+        SessionLaunchConfig::Telnet(config) => &mut config.encoding,
+        SessionLaunchConfig::Serial(config) => &mut config.encoding,
+        _ => panic!("encoding fixture requires a terminal session"),
+    };
+    *field = encoding.into();
+}
+
 fn key(name: &str) -> KeyDownEvent {
     KeyDownEvent {
         keystroke: gpui::Keystroke {
@@ -186,6 +509,13 @@ fn echo(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>, id: &str, value: &st
 }
 
 fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
+    // These tests install exact rows; snapshot-triggered searches must not replace them.
+    app.terminal.assist.command_suggestion_refresh_task = None;
+    app.terminal.assist.command_suggestion_search_gen = app
+        .terminal
+        .assist
+        .command_suggestion_search_gen
+        .saturating_add(1);
     let state = app.terminal.editing.state().unwrap();
     app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
         mode: nyaterm_core::completion::types::CompletionMode::History,
@@ -411,9 +741,7 @@ fn replacement_uses_native_keyboard_encoding_and_the_session_charset() {
             .protocol_state
             .kitty_keyboard_report_all_keys_as_esc = true;
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(false, cx),
@@ -456,9 +784,7 @@ fn replacement_encoding_failure_never_deletes_the_original_input() {
     f.suggest_in_shell("dkr", "echo 😀");
     f.update(|app, cx, id| {
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(false, cx),
@@ -694,9 +1020,7 @@ fn encoding_and_bracketed_paste_never_add_control_sequences_to_the_suffix() {
     f.suggest("echo ", "echo 😀");
     f.update(|app, cx, id| {
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(true, cx),
@@ -879,7 +1203,7 @@ fn unselected_token_keys_reach_the_session_with_its_native_encoding() {
 }
 
 #[test]
-fn typing_and_backspace_clear_selection_before_the_debounced_refresh() {
+fn typing_and_backspace_close_stale_candidates_before_the_debounced_refresh() {
     for (input, expected) in [(b"x".as_slice(), "dockx"), (b"\x7f".as_slice(), "doc")] {
         let mut f = Fixture::new();
         f.suggest("dock", "docker");
@@ -902,15 +1226,7 @@ fn typing_and_backspace_clear_selection_before_the_debounced_refresh() {
                     .command_suggestion_refresh_task
                     .is_some()
             );
-            assert_eq!(
-                app.terminal
-                    .assist
-                    .command_suggestions
-                    .as_ref()
-                    .unwrap()
-                    .selected_index,
-                None
-            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
             assert!(!app.handle_command_suggestion_key(&key("enter"), cx));
             assert!(!app.handle_command_suggestion_key(&key("tab"), cx));
         });
@@ -1292,9 +1608,7 @@ fn multiline_paste_encoding_failure_does_not_erase_the_query() {
             SuggestionSubmitResult::PasteReviewRequested
         );
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
     });
     f.with_window(|app, window, cx, _| {
@@ -1317,9 +1631,7 @@ fn multiline_paste_uses_native_delete_keys_and_encodes_only_the_paste_body() {
         protocol.kitty_keyboard_report_event_types = true;
         protocol.kitty_keyboard_report_all_keys_as_esc = true;
         let mut metadata = app.session.metadata(id).unwrap().clone();
-        if let SessionLaunchConfig::Telnet(config) = &mut metadata.launch_config {
-            config.encoding = "GBK".into();
-        }
+        set_encoding(&mut metadata.launch_config, "GBK");
         app.session.register_session_metadata(id, metadata);
         assert_eq!(
             app.submit_selected_command_suggestion(false, cx),
