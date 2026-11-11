@@ -209,6 +209,7 @@ impl NyaTermApp {
         }
         let request_id = uuid();
         let options = SavedConnectionStartOptions {
+            android_view: pending.android_view_kind(),
             ssh_runtime_mode: pending.ssh_runtime_mode(),
             custom_name: pending.custom_name.clone(),
             tab_color: pending.tab_color,

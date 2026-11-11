@@ -196,7 +196,9 @@ fn android_screen_menu_uses_runtime_policy_and_focuses_screen_for_the_target_dev
         app.update(cx, |app, cx| {
             let target = TabActionTarget::Session("shell".into());
             assert!(app.tab_target_action_enabled(&target, "android_screen"));
-            app.android.pending.insert("android-device".into(), 2);
+            app.android
+                .pending
+                .insert("android-device".into(), "pending".into());
             assert!(
                 !app.tab_action_policy_for("shell", "shell")
                     .unwrap()
@@ -238,7 +240,7 @@ fn changing_saved_device_selector_requires_rebind_without_reusing_the_old_shell_
         })).unwrap();
         app.start_android_connection(connection, SavedConnectionStartOptions::default(), None, cx);
         assert!(app.android.pending.contains_key("android-device"));
-        assert_eq!(app.session.start_pending_entries().count(), 0);
+        assert_eq!(app.session.start_pending_entries().count(), 1);
         assert_eq!(app.android_config_for_session("fixture").unwrap().binding.serial, "synthetic");
     });
 }
@@ -529,5 +531,200 @@ fn android_split_screens_have_distinct_focus_and_release_only_the_blurred_screen
             app.android.release_all_inputs();
             assert!(app.android.screens["second"].physical_keys.is_empty());
         })
+    });
+}
+
+fn missing_adb_connection() -> nyaterm_core::SavedConnection {
+    serde_json::from_value(serde_json::json!({
+        "id": "missing-android", "name": "Android", "type": "adb",
+        "device": {"kind": "usb", "serial": "missing-device"}
+    }))
+    .unwrap()
+}
+
+fn wait_for_android_bind(
+    app: &gpui::Entity<crate::features::NyaTermApp>,
+    cx: &mut gpui::TestAppContext,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if app.update(cx, |app, _| app.android.pending.is_empty()) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ADB bind did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn android_bind_failure_stays_in_its_workspace_tab_and_retries_the_same_view() {
+    use crate::features::session::SavedConnectionStartOptions;
+    use crate::features::test_support::session_focus_test_window;
+    for kind in [
+        AndroidViewKind::Shell,
+        AndroidViewKind::Files,
+        AndroidViewKind::Screen,
+    ] {
+        let root = TestConfigDir::new("nyaterm-android-bind-workspace");
+        let mut cx = gpui::TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let (request, placement) = app.update(&mut cx, |app, cx| {
+            let mut settings = app.settings.summary().clone();
+            settings.android_adb_path = root
+                .path()
+                .join("missing-adb")
+                .to_string_lossy()
+                .into_owned();
+            app.settings.replace_summary(settings);
+            let connection = missing_adb_connection();
+            app.connection_state
+                .replace_loaded(vec![connection.clone()], Vec::new());
+            app.continue_saved_connection_start(
+                connection,
+                SavedConnectionStartOptions {
+                    android_view: Some(kind),
+                    custom_name: Some("My Android".into()),
+                    tab_color: Some(0x123456),
+                    locked: true,
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(app.session_strip_tabs(&None).len(), 2);
+            let (request, pending) = app.session.start_pending_entries().next().unwrap();
+            assert!(pending.preparing);
+            assert_eq!(pending.android_view_kind(), Some(kind));
+            (
+                request.clone(),
+                pending.tab_placement.unwrap().request_sequence,
+            )
+        });
+        wait_for_android_bind(&app, &mut cx);
+        app.update(&mut cx, |app, _| {
+            assert!(!app.session.start_has_pending());
+            assert_eq!(
+                app.session.active_failed_request_id(),
+                Some(request.as_str())
+            );
+            let failed = app.session.start_active_failed().unwrap();
+            assert_eq!(
+                failed.error,
+                super::labels::AndroidError::Backend(
+                    nyaterm_android::error::AdbError::ExecutableMissing
+                )
+                .message()
+            );
+            assert_eq!(failed.pending.custom_name.as_deref(), Some("My Android"));
+            assert_eq!(app.session_strip_tabs(&None).len(), 2);
+            assert!(app.android.views.is_empty());
+        });
+        let window = session_focus_test_window(&mut cx, &app);
+        window.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.retry_failed_session_start(request.clone(), window, cx);
+                assert!(!app.session.start_has_failed());
+                let (next_request, pending) = app.session.start_pending_entries().next().unwrap();
+                assert_ne!(next_request, &request);
+                assert_eq!(pending.android_view_kind(), Some(kind));
+                assert_eq!(pending.tab_placement.unwrap().request_sequence, placement);
+                assert_eq!(pending.custom_name.as_deref(), Some("My Android"));
+                assert_eq!(pending.tab_color, Some(0x123456));
+                assert!(pending.locked);
+                assert_eq!(app.session_strip_tabs(&None).len(), 2);
+            })
+        });
+        wait_for_android_bind(&app, &mut cx);
+    }
+}
+
+#[test]
+fn closing_android_bind_allows_a_new_attempt_and_ignores_the_old_result() {
+    use crate::features::session::SavedConnectionStartOptions;
+    let root = TestConfigDir::new("nyaterm-android-bind-cancel");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let next_request = app.update(&mut cx, |app, cx| {
+        let mut settings = app.settings.summary().clone();
+        settings.android_adb_path = root
+            .path()
+            .join("missing-adb")
+            .to_string_lossy()
+            .into_owned();
+        app.settings.replace_summary(settings);
+        app.start_android_connection(missing_adb_connection(), Default::default(), None, cx);
+        let request = app
+            .session
+            .start_pending_entries()
+            .next()
+            .unwrap()
+            .0
+            .clone();
+        let attempt = app.session.start_attempt(&request);
+        app.close_pending_session_start(request.clone(), cx);
+        assert!(attempt.is_cancelled());
+        assert_eq!(app.session_strip_tabs(&None).len(), 1);
+        app.start_android_connection(
+            missing_adb_connection(),
+            SavedConnectionStartOptions::default(),
+            None,
+            cx,
+        );
+        let next_request = app
+            .session
+            .start_pending_entries()
+            .next()
+            .unwrap()
+            .0
+            .clone();
+        assert_ne!(next_request, request);
+        next_request
+    });
+    wait_for_android_bind(&app, &mut cx);
+    app.update(&mut cx, |app, _| {
+        assert_eq!(app.session.start_failed_entries().count(), 1);
+        assert_eq!(
+            app.session.active_failed_request_id(),
+            Some(next_request.as_str())
+        );
+        assert_eq!(app.session_strip_tabs(&None).len(), 2);
+        assert!(app.android.devices.is_empty());
+    });
+}
+
+#[test]
+fn android_files_handoff_consumes_preparation_when_reusing_a_valid_device() {
+    use crate::features::session::SavedConnectionStartOptions;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-files-preparation");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        let config = app.android_config_for_session("fixture").unwrap();
+        let connection = serde_json::from_value(serde_json::json!({
+            "id":"android-device", "name":"Android", "type":"adb",
+            "device":{"kind":"usb", "serial":"synthetic"}
+        }))
+        .unwrap();
+        let mut options = app.prepare_session_start_options(SavedConnectionStartOptions {
+            android_view: Some(AndroidViewKind::Files),
+            ..Default::default()
+        });
+        options.request_id = Some(
+            app.session
+                .begin_saved_start_preparation(&connection, &options),
+        );
+        let id = app
+            .open_android_view(config, AndroidViewKind::Files, options, cx)
+            .unwrap();
+        assert!(!app.session.start_has_pending());
+        assert_eq!(app.android.kind(&id), Some(AndroidViewKind::Files));
+        assert_eq!(app.session.active_id(), Some(id.as_str()));
     });
 }

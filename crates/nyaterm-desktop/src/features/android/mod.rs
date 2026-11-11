@@ -98,7 +98,7 @@ pub(in crate::features) struct AndroidFeatureState {
     surfaces: HashMap<String, Entity<surface::AndroidSurface>>,
     cleanup: Vec<CleanupTicket>,
     pub(super) retired_textures: Vec<DynamicTexture>,
-    pub(in crate::features) pending: HashMap<String, u64>,
+    pub(in crate::features) pending: HashMap<String, String>,
     pub(super) tracker: SharedDeviceService,
     pub(super) clock: Option<gpui::Task<()>>,
     pub(super) tracker_revision: u64,

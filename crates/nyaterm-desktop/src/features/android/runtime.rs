@@ -60,6 +60,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let kind = kind.unwrap_or(AndroidViewKind::Shell);
+        if !self.session.start_request_can_start(&options) {
+            return;
+        }
         self.ensure_android_clock(cx);
         let ConnectionType::Adb {
             device,
@@ -82,21 +85,49 @@ impl NyaTermApp {
             self.open_android_view(config, kind, options, cx);
             return;
         }
-        if self.android.pending.contains_key(&key) {
+        if let Some(request_id) = self.android.pending.get(&key)
+            && self
+                .session
+                .start_pending_entries()
+                .any(|(id, _)| id == request_id)
+        {
             return;
         }
+        let mut options = self.prepare_session_start_options(options);
+        options.android_view = Some(kind);
+        options.request_id = Some(
+            self.session
+                .begin_saved_start_preparation(&connection, &options),
+        );
+        let attempt = self
+            .session
+            .start_attempt(options.request_id.as_ref().unwrap());
+        self.shell.clear_last_connect_failure();
+        self.shell.show_workspace();
+        self.ensure_pending_session_status_clock(cx);
         let generation = super::next_generation();
-        self.android.pending.insert(key.clone(), generation);
+        self.android
+            .pending
+            .insert(key.clone(), options.request_id.clone().unwrap());
         let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
         let name = connection.name.clone();
         let task_key = key.clone();
         let task = self.blocking_jobs.submit_task("android-bind", move |_| {
+            let check_cancelled = || {
+                if attempt.is_cancelled() {
+                    Err(nyaterm_android::error::AdbError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            };
+            check_cancelled()?;
             let client =
                 AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?;
             tracker.ensure(&client)?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let snapshot = loop {
+                check_cancelled()?;
                 let snapshot = tracker.snapshot();
                 if snapshot.revision > 0 {
                     break snapshot;
@@ -107,6 +138,7 @@ impl NyaTermApp {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             };
             let binding = client.bind(&device, generation)?;
+            check_cancelled()?;
             let snapshot = if snapshot.devices.iter().any(|entry| {
                 entry.serial == binding.serial
                     && entry.status == nyaterm_android::adb::client::DeviceStatus::Online
@@ -118,6 +150,7 @@ impl NyaTermApp {
                 // new binding's tracker epoch rather than treating it as an old task.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
+                    check_cancelled()?;
                     let current = tracker.snapshot();
                     if current.server_generation != snapshot.server_generation {
                         return Err(nyaterm_android::error::AdbError::Offline);
@@ -158,15 +191,19 @@ impl NyaTermApp {
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task).await.map_err(|_| AndroidError::JobFailed).and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
-                if app.android.pending.get(&key) != Some(&generation) {
+                if app.android.pending.get(&key) != options.request_id.as_ref() {
                     return;
                 }
                 app.android.pending.remove(&key);
-                if let Err(error) = &result { app.report_android_error("bind", &generation.to_string(), error, cx); }
+                if !app.session.start_request_can_start(&options) {
+                    return;
+                }
                 match result {
                     Ok((config, files)) => {
                         if !files.runtime.is_valid() {
-                            app.report_android_error("bind", &generation.to_string(), &AndroidError::Backend(nyaterm_android::error::AdbError::Offline), cx);
+                            let error = AndroidError::Backend(nyaterm_android::error::AdbError::Offline);
+                            app.fail_start_preparation(&options, error.message(), cx);
+                            app.shell.set_status(error.message());
                             return;
                         }
                         if let Some(old) = app.android.devices.remove(&key) {
@@ -224,7 +261,10 @@ impl NyaTermApp {
                         );
                         app.open_android_view(config, kind, options, cx);
                     }
-                    Err(error) => app.shell.set_status(error.message()),
+                    Err(error) => {
+                        app.fail_start_preparation(&options, error.message(), cx);
+                        app.shell.set_status(error.message());
+                    }
                 }
                 cx.notify();
             });
@@ -241,6 +281,17 @@ impl NyaTermApp {
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        let options = if options.request_id.is_some() {
+            self.prepare_session_start_options(options)
+        } else {
+            options
+        };
+        if kind != AndroidViewKind::Shell
+            && let Some(request_id) = options.request_id.as_ref()
+        {
+            // These views register directly instead of submitting a shell worker.
+            self.session.complete_start_preparation(request_id);
+        }
         if kind != AndroidViewKind::Shell
             && self.session.restore_is_complete()
             && options.reconnect_session_id.is_none()
@@ -249,6 +300,7 @@ impl NyaTermApp {
             })
         {
             self.activate_session_id(&id, cx);
+            self.settle_session_start_tab_placements_if_idle();
             return Some(id);
         }
         if kind == AndroidViewKind::Shell {
@@ -329,6 +381,7 @@ impl NyaTermApp {
         self.activate_session_id(&id, cx);
         self.shell.select_nav(NavItem::Workspace);
         self.apply_workspace_split_for_duplicate(cx, options.workspace_split, &id);
+        self.settle_session_start_tab_placements_if_idle();
         self.persist_open_tabs();
         cx.notify();
         Some(id)

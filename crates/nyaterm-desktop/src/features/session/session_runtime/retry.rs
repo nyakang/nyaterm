@@ -57,6 +57,10 @@ impl NyaTermApp {
                     | (ConnectionType::Serial { .. }, SessionKind::Serial)
                     | (ConnectionType::Rdp { .. }, SessionKind::Rdp)
                     | (ConnectionType::Vnc { .. }, SessionKind::Vnc)
+                    | (
+                        ConnectionType::Adb { .. },
+                        SessionKind::AdbShell | SessionKind::AdbFiles | SessionKind::AdbScreen
+                    )
             )
         });
         if !same_protocol {
@@ -90,7 +94,7 @@ impl NyaTermApp {
         let profile = pending.ai_execution_profile;
         let new_id = uuid();
         let options = SavedConnectionStartOptions {
-            android_view: None,
+            android_view: pending.android_view_kind(),
             mcp_open_operation_id: None,
             ssh_runtime_mode: pending.ssh_runtime_mode(),
             custom_name: pending.custom_name.clone(),
@@ -141,7 +145,7 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features::session) fn fail_start_preparation(
+    pub(in crate::features) fn fail_start_preparation(
         &mut self,
         options: &SavedConnectionStartOptions,
         error: String,

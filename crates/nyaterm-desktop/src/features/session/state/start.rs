@@ -38,6 +38,15 @@ pub(in crate::features) struct PendingSessionStart {
 }
 
 impl PendingSessionStart {
+    pub(in crate::features) fn android_view_kind(&self) -> Option<AndroidViewKind> {
+        match self.kind {
+            SessionKind::AdbShell => Some(AndroidViewKind::Shell),
+            SessionKind::AdbFiles => Some(AndroidViewKind::Files),
+            SessionKind::AdbScreen => Some(AndroidViewKind::Screen),
+            _ => None,
+        }
+    }
+
     pub(in crate::features) fn ssh_runtime_mode(
         &self,
     ) -> Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode> {
@@ -732,6 +741,32 @@ pub(in crate::features::session) fn failed_session_start_display_name(
 pub(super) const DEFAULT_DUPLICATE_STARTUP_DELAY_MS: u64 = 500;
 
 impl SessionFeatureState {
+    pub(in crate::features) fn start_request_can_start(
+        &self,
+        options: &SavedConnectionStartOptions,
+    ) -> bool {
+        self.start.request_can_start(options)
+    }
+
+    pub(in crate::features) fn begin_saved_start_preparation(
+        &mut self,
+        connection: &SavedConnection,
+        options: &SavedConnectionStartOptions,
+    ) -> String {
+        self.start.begin_saved_preparation(connection, options)
+    }
+
+    pub(in crate::features) fn start_attempt(
+        &self,
+        request_id: &str,
+    ) -> nyaterm_transport::connection_attempt::ConnectionAttempt {
+        self.start.attempt(request_id)
+    }
+
+    pub(in crate::features) fn complete_start_preparation(&mut self, request_id: &str) {
+        self.start.take_event_request(request_id);
+    }
+
     pub(in crate::features) fn clear_active_start_selection(&mut self) {
         self.start.clear_active_selection();
     }
