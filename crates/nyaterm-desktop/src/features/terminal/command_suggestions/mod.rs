@@ -192,7 +192,11 @@ impl NyaTermApp {
                 .editing
                 .sessions
                 .get(session_id)
-                .is_some_and(|state| state.allows_editing())
+                .is_some_and(|state| {
+                    state.confirmed_input_at_end()
+                        && state.allows_editing()
+                        && state.editor_evidence.is_some()
+                })
         {
             CompletionFillPolicy::ReplaceAllowed
         } else {
@@ -211,7 +215,11 @@ impl NyaTermApp {
             && !self.active_terminal_uses_alternate_screen()
             && !self.is_credential_prompt_input_mode()
             && self.terminal.assist.credential_suggestions.is_none()
-            && !self.terminal.assist.command_suggestions_suppressed
+            && !self
+                .terminal
+                .assist
+                .command_suggestion_suppression
+                .is_suppressed()
             && !self
                 .terminal_protocol_state_for_session(session_id)
                 .mouse_reporting
@@ -403,7 +411,12 @@ impl NyaTermApp {
             cx.notify();
         }
 
-        if self.terminal.assist.command_suggestions_suppressed {
+        if self
+            .terminal
+            .assist
+            .command_suggestion_suppression
+            .is_suppressed()
+        {
             let hide_started_at = Instant::now();
             self.terminal.assist.command_suggestion_search_gen = self
                 .terminal
@@ -610,7 +623,11 @@ impl NyaTermApp {
     pub(in crate::features) fn show_manual_command_suggestions(&mut self, cx: &mut Context<Self>) {
         if self.terminal.assist.credential_suggestions.is_some()
             || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.command_suggestions_suppressed
+            || self
+                .terminal
+                .assist
+                .command_suggestion_suppression
+                .is_suppressed()
             || !self
                 .settings
                 .summary()
@@ -646,34 +663,49 @@ impl NyaTermApp {
     }
 
     fn command_suggestion_context(&self, session: &str) -> ShellCommandContext {
-        self.commands
-            .command_context(session)
-            .cloned()
-            .unwrap_or(ShellCommandContext {
-                scope: CompletionScope::legacy(),
-                dialect: ShellDialect::Unknown,
-                command_events: false,
-            })
+        let mut context =
+            self.commands
+                .command_context(session)
+                .cloned()
+                .unwrap_or(ShellCommandContext {
+                    scope: CompletionScope::legacy(),
+                    dialect: ShellDialect::Unknown,
+                    command_events: false,
+                });
+        if let Some(evidence) = self
+            .terminal
+            .editing
+            .sessions
+            .get(session)
+            .and_then(|state| state.editor_evidence)
+        {
+            if let Some(dialect) = evidence.dialect {
+                context.dialect = dialect;
+            } else if evidence.platform
+                == Some(nyaterm_core::action_links::ActionLinkPlatform::Posix)
+                && matches!(
+                    context.dialect,
+                    ShellDialect::Cmd | ShellDialect::PowerShell
+                )
+            {
+                // A POSIX prompt cannot identify bash vs zsh, but it disproves
+                // a stale Windows parsing hint after leaving a nested shell.
+                context.dialect = ShellDialect::Unknown;
+            }
+        }
+        context
     }
 
     /// Line-editing backend of the active session's shell.
     ///
-    /// A known Windows console program decides on its own; every other shell is
-    /// classified from live evidence so a nested shell (for example `su`) still
-    /// uses the anchor-based path rather than a launch-time guess.
-    fn shell_line_editing(&self, session_id: &str) -> ShellLineEditing {
-        if let Some(backend) = self
-            .command_suggestion_context(session_id)
-            .dialect
-            .line_editing_backend()
-        {
-            return backend;
-        }
-        if self.completion_has_marked_shell(session_id) {
-            ShellLineEditing::Marked
-        } else {
-            ShellLineEditing::AnsiLineEditor
-        }
+    /// Only current snapshot evidence selects a destructive edit's encoding.
+    fn shell_line_editing(&self, session_id: &str) -> Option<ShellLineEditing> {
+        self.terminal
+            .editing
+            .sessions
+            .get(session_id)?
+            .editor_evidence
+            .map(|evidence| evidence.line_editing)
     }
 
     fn prepare_command_suggestion_search(
@@ -1197,7 +1229,9 @@ impl NyaTermApp {
                 }
             }
             SuggestionFill::Replace(command) => {
-                let backend = self.shell_line_editing(&popup.session_id);
+                let Some(backend) = self.shell_line_editing(&popup.session_id) else {
+                    return self.reject_command_suggestion("Shell editor is not confirmed", cx);
+                };
                 if self.command_suggestion_fill_policy(&popup.session_id)
                     != CompletionFillPolicy::ReplaceAllowed
                 {
@@ -1217,6 +1251,12 @@ impl NyaTermApp {
                     return self
                         .reject_command_suggestion("Cannot plan this shell replacement", cx);
                 };
+                if !backend.allows_cursor_motion() && plan.move_steps != 0 {
+                    return self.reject_command_suggestion(
+                        "Console replacement requires the cursor at the end",
+                        cx,
+                    );
+                }
                 let insertion_wire = match self
                     .encode_session_outgoing(&popup.session_id, plan.insert_text.as_bytes())
                 {
@@ -1916,6 +1956,7 @@ fn terminal_line_prefix_for_cell_col(line: &str, cell_col: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
     pub(super) fn history_search_fixture(
         command: &str,
         input: &str,
@@ -2139,6 +2180,18 @@ mod tests {
                     nyaterm_core::completion::types::CompletionMode::Token,
                     cx
                 )
+                .is_none()
+            );
+            app.terminal
+                .seed_session_view("s1".into(), "$ git".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    2,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
                 .is_some()
             );
         });
@@ -2204,6 +2257,10 @@ mod tests {
 
             // A separator after real command text still offers suggestions.
             app.note_shell_editing_input(b"git ", cx);
+            assert!(!app.command_suggestion_input_is_confirmed());
+            app.terminal
+                .seed_session_view("s1".into(), "$   git ".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
             assert!(
                 app.prepare_command_suggestion_search(
                     2,
@@ -2250,6 +2307,9 @@ mod tests {
             // 1. Login shell: type and submit `su - root`.
             app.note_shell_editing_input(b"su - root", cx);
             app.note_command_suggestion_input(b"su - root", cx);
+            assert!(!app.command_suggestion_input_is_confirmed());
+            screen.push_str("su - root");
+            output!(screen);
             assert!(
                 app.prepare_command_suggestion_search(1, CompletionMode::Token, cx)
                     .is_some(),
@@ -2261,7 +2321,7 @@ mod tests {
             app.apply_shell_integration_edges("s1", true, false, true);
 
             // 2. su writes a no-echo password prompt; the password is never echoed.
-            screen.push_str("su - root\r\nPassword: ");
+            screen.push_str("\r\nPassword: ");
             output!(screen);
             app.note_shell_editing_input(b"password", cx);
             app.note_command_suggestion_input(b"password", cx);
@@ -2432,7 +2492,8 @@ mod tests {
             show_surface_for_session(app, "s1");
             // `su - root` started. The outer shell sent OSC 133 C, while its D
             // can only arrive after the child exits, so the latch outlives it.
-            app.terminal.assist.command_suggestions_suppressed = true;
+            app.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::CommandRunning;
             app.note_shell_editing_input(b"git", cx);
             app.note_command_suggestion_input(b"git", cx);
             assert!(app.terminal.assist.command_suggestions.is_none());
@@ -2441,7 +2502,12 @@ mod tests {
             app.terminal
                 .seed_session_view("s1".into(), "root@host:~# git".into(), "UTF-8");
             app.reconcile_shell_editing("s1", cx);
-            assert!(!app.terminal.assist.command_suggestions_suppressed);
+            assert!(
+                !app.terminal
+                    .assist
+                    .command_suggestion_suppression
+                    .is_suppressed()
+            );
             assert!(
                 app.prepare_command_suggestion_search(
                     1,
@@ -2465,7 +2531,8 @@ mod tests {
         );
         cx.update_entity(&app, |app, cx| {
             show_surface_for_session(app, "s1");
-            app.terminal.assist.command_suggestions_suppressed = true;
+            app.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::CommandRunning;
             app.note_shell_editing_input(b"git", cx);
 
             // A pager status line and a child REPL echo the text, but neither
@@ -2475,10 +2542,49 @@ mod tests {
                     .seed_session_view("s1".into(), seeded.into(), "UTF-8");
                 app.reconcile_shell_editing("s1", cx);
                 assert!(
-                    app.terminal.assist.command_suggestions_suppressed,
+                    app.terminal
+                        .assist
+                        .command_suggestion_suppression
+                        .is_suppressed(),
                     "{seeded}"
                 );
             }
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn shell_like_pager_echo_cannot_release_explicit_interactive_suppression() {
+        let dir = TestConfigDir::new("nyaterm-explicit-pager-suppression");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.terminal.assist.pending_command_history_entry = Some("su - root".into());
+            app.note_shell_editing_input(b"less", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.apply_shell_integration_edges("s1", true, false, true);
+            app.note_shell_editing_input(b"git", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "root@host:~# git".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert_eq!(
+                app.terminal.assist.command_suggestion_suppression,
+                CommandSuggestionSuppression::InteractiveProgram
+            );
             assert!(
                 app.prepare_command_suggestion_search(
                     1,

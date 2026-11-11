@@ -73,15 +73,16 @@ impl ShellDialect {
             Self::Bash | Self::Zsh | Self::Fish | Self::Unknown => None,
         }
     }
-    /// Target platform implied by the shell running on the far side.
+    /// Platform implied by a dialect alone. PowerShell also runs on POSIX;
+    /// callers need current prompt or host evidence to classify it.
     ///
     /// `None` for shells that carry no platform information (Telnet/Serial,
     /// or a prompt the tracker has not classified yet).
     pub fn action_link_platform(self) -> Option<ActionLinkPlatform> {
         match self {
-            Self::Cmd | Self::PowerShell => Some(ActionLinkPlatform::Windows),
+            Self::Cmd => Some(ActionLinkPlatform::Windows),
             Self::Bash | Self::Zsh | Self::Fish => Some(ActionLinkPlatform::Posix),
-            Self::Unknown => None,
+            Self::PowerShell | Self::Unknown => None,
         }
     }
     pub fn native_options(self, command: &str) -> bool {
@@ -378,12 +379,10 @@ mod tests {
 
     #[test]
     fn shell_dialects_name_the_platform_their_tools_run_on() {
-        for dialect in [ShellDialect::Cmd, ShellDialect::PowerShell] {
-            assert_eq!(
-                dialect.action_link_platform(),
-                Some(ActionLinkPlatform::Windows)
-            );
-        }
+        assert_eq!(
+            ShellDialect::Cmd.action_link_platform(),
+            Some(ActionLinkPlatform::Windows)
+        );
         for dialect in [ShellDialect::Bash, ShellDialect::Zsh, ShellDialect::Fish] {
             assert_eq!(
                 dialect.action_link_platform(),
@@ -391,6 +390,7 @@ mod tests {
             );
         }
         assert_eq!(ShellDialect::Unknown.action_link_platform(), None);
+        assert_eq!(ShellDialect::PowerShell.action_link_platform(), None);
     }
 
     #[test]

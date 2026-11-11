@@ -7,6 +7,7 @@ use nyaterm_core::terminal::editing::{
     EditCapability, EditPhase, ShellEditState, supports_scalar_editing,
 };
 use nyaterm_core::terminal::input_tracker::TerminalInputState;
+use nyaterm_core::terminal::shell_prompt::ShellPrompt;
 use nyaterm_terminal::editing::InputMapping;
 use nyaterm_terminal::{ShellInputAnchor, TerminalLineId, TerminalSnapshot};
 use zeroize::Zeroize;
@@ -28,6 +29,7 @@ pub(super) struct SessionEditingState {
     pub(super) echo_line_editor: bool,
     pub(super) launched_line_editor: bool,
     pub(super) line_editor_prompt: Option<String>,
+    pub(super) editor_evidence: Option<ShellPrompt>,
     pub(super) mapping: Option<InputMapping>,
     pub(super) selection: Option<(TerminalSelection, u64)>,
     pub(super) selection_origin_version: Option<u64>,
@@ -128,6 +130,14 @@ impl SessionEditingState {
         self.capability.allows_editing(self.echo_line_editor)
     }
 
+    pub(super) fn observe_editor_evidence(&mut self, backend: Option<ShellPrompt>) {
+        if self.editor_evidence != backend {
+            self.editor_evidence = backend;
+            self.model.version = self.model.version.wrapping_add(1);
+            self.suggestion_fill = None;
+        }
+    }
+
     fn deactivate(&mut self) {
         self.model.deactivate(self.allows_editing());
         self.invalidate();
@@ -137,6 +147,7 @@ impl SessionEditingState {
         self.suggestion_fill = None;
         self.model.invalidate();
         self.capability = EditCapability::None;
+        self.editor_evidence = None;
         self.mapping = None;
         self.selection = None;
         self.selection_origin_version = None;

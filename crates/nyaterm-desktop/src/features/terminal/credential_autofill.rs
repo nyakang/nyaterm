@@ -210,12 +210,15 @@ impl NyaTermApp {
             return false;
         };
         let view = self.terminal.view.views.get(&session_id);
-        let snapshot = view.and_then(|view| view.frame_snapshot.as_deref());
-        let row = snapshot.and_then(credential_autofill_prompt_row_from_snapshot);
-        let instance = row.map(|row| (row.line_id, row.revision));
-        let prompt_text = snapshot
-            .and_then(credential_autofill_prompt_text_from_snapshot)
-            .unwrap_or_default();
+        // Missing frames are not evidence that a no-echo prompt ended.
+        let Some(row) = view
+            .and_then(|view| view.frame_snapshot.as_deref())
+            .and_then(credential_autofill_prompt_row_from_snapshot)
+        else {
+            return false;
+        };
+        let instance = Some((row.line_id, row.revision));
+        let prompt_text = credential_autofill_prompt_text_from_visible(&row.text);
         let dirty = self
             .terminal
             .assist
@@ -232,11 +235,22 @@ impl NyaTermApp {
         if self.session.active_id() != Some(session_id) {
             return false;
         }
+        let now = Self::now_unix_ms();
+        if self
+            .terminal
+            .assist
+            .credential_autofill_pending
+            .as_ref()
+            .is_some_and(|pending| pending.session_id != session_id || pending.expires_at_ms <= now)
+        {
+            self.terminal.assist.credential_autofill_pending = None;
+        }
         if prompt_text.is_empty() {
-            if !self.terminal.assist.credential_autofill_buffer.is_empty() {
-                self.terminal.assist.credential_autofill_buffer.clear();
+            self.terminal.assist.credential_autofill_buffer.clear();
+            if self.terminal.assist.credential_autofill_pending.is_none()
+                && !self.terminal.assist.credential_autofill_sending
+            {
                 self.terminal.assist.credential_prompt_input_until_ms = 0;
-                return false;
             }
             return false;
         }
@@ -1372,6 +1386,74 @@ mod tests {
     use crate::models::{ConnectionPasswordTarget, CredentialAutofillTarget, SessionLaunchConfig};
     use crate::test_support::TestConfigDir;
     use gpui::{AppContext as _, TestAppContext};
+
+    #[test]
+    fn credential_window_ends_at_a_real_empty_prompt_but_survives_missing_frames() {
+        let dir = TestConfigDir::new("nyaterm-empty-credential-prompt");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            for prompt in ["", "   ", "$ "] {
+                app.terminal
+                    .seed_session_view("s1".into(), "Password: ".into(), "UTF-8");
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert!(app.is_credential_prompt_input_mode());
+                app.note_shell_editing_input(b"synthetic-no-echo", cx);
+                assert!(app.terminal.editing.predicted_input().value.is_empty());
+                app.terminal
+                    .view
+                    .views
+                    .get_mut("s1")
+                    .unwrap()
+                    .frame_snapshot = None;
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert!(app.is_credential_prompt_input_mode());
+
+                app.terminal.seed_session_view(
+                    "s1".into(),
+                    format!("Password: \r\n{prompt}"),
+                    "UTF-8",
+                );
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert!(!app.is_credential_prompt_input_mode());
+                assert!(app.terminal.assist.credential_autofill_buffer.is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn empty_prompt_preserves_only_current_unexpired_pending_credentials() {
+        let dir = TestConfigDir::new("nyaterm-empty-pending-credential");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            for (session, expiry, protected) in [
+                ("s1", u64::MAX, true),
+                ("s1", 0, false),
+                ("other", u64::MAX, false),
+            ] {
+                app.terminal.assist.credential_prompt_input_until_ms = u64::MAX;
+                app.terminal.assist.credential_autofill_pending =
+                    Some(crate::models::PendingCredentialAutofill {
+                        session_id: session.into(),
+                        credential_id: "fixture".into(),
+                        expires_at_ms: expiry,
+                    });
+                app.sync_credential_autofill_prompt_text("s1", String::new(), cx);
+                assert_eq!(app.is_credential_prompt_input_mode(), protected);
+                assert_eq!(
+                    app.terminal.assist.credential_autofill_pending.is_some(),
+                    protected
+                );
+            }
+        });
+    }
     use nyaterm_core::{
         AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
         CredentialPromptKind, SavedConnection,
