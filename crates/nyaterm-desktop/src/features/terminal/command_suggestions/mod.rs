@@ -31,10 +31,12 @@ mod fill;
 mod fill_tests;
 mod helpers;
 pub(super) mod paste;
+mod path_source;
 
 use self::fill::{SuggestionFill, SuggestionSubmitResult, plan_suggestion_fill};
 use self::helpers::command_suggestion_highlight_parts;
 use self::paste::SuggestionPasteContext;
+use self::path_source::{PATH_CANDIDATE_LIMIT, PathSource, listing_timeout};
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
 const COMMAND_SUGGESTION_REFRESH_SLOW_THRESHOLD: Duration = Duration::from_millis(8);
@@ -113,6 +115,7 @@ struct CommandSuggestionSearchRequest {
     popup_visible_at_start: bool,
     timing: CommandSuggestionRefreshTiming,
     fill_policy: CompletionFillPolicy,
+    path_source: Option<PathSource>,
 }
 
 impl CommandSuggestionRefreshTiming {
@@ -138,6 +141,33 @@ fn command_suggestion_refresh_input_delay(
         let elapsed = now.saturating_duration_since(last);
         (elapsed < TERMINAL_INPUT_LATENCY_WINDOW).then(|| TERMINAL_INPUT_LATENCY_WINDOW - elapsed)
     })
+}
+
+/// Path rows lead once the user typed a directory part (`cd /va`); a bare
+/// name (`cd pr`) keeps history and catalog rows first.
+fn merge_path_candidates(
+    mut result: CompletionResult,
+    paths: Vec<CompletionCandidate>,
+    source: &PathSource,
+    input: &str,
+) -> CompletionResult {
+    if paths.is_empty() {
+        return result;
+    }
+    let existing = std::mem::take(&mut result.candidates);
+    let (first, second) = if source.query().dir_text.is_empty() {
+        (existing, paths)
+    } else {
+        (paths, existing)
+    };
+    let mut seen = std::collections::HashSet::new();
+    result.candidates = first
+        .into_iter()
+        .chain(second)
+        .filter(|item| seen.insert(item.target_line(input)))
+        .take(PATH_CANDIDATE_LIMIT)
+        .collect();
+    result
 }
 
 /// True when `next` is `previous` plus characters typed at the end.
@@ -635,6 +665,14 @@ impl NyaTermApp {
                         max: request.max_chars,
                     })
                     .await;
+                let results = match request.path_source.as_ref() {
+                    Some(source) => {
+                        let timer = cx.background_executor().timer(listing_timeout());
+                        let paths = source.candidates(&request.pattern, timer).await;
+                        merge_path_candidates(results, paths, source, &request.pattern)
+                    }
+                    None => results,
+                };
                 let search_duration = search_started_at.elapsed();
                 let _ = this.update(cx, |this, cx| {
                     this.publish_command_suggestion_search(request, results, search_duration, cx);
@@ -827,6 +865,10 @@ impl NyaTermApp {
             timing.hide_popup = hide_started_at.elapsed();
             finish_refresh!("pager_prefix", pattern_chars, 0);
         }
+        let context = self.command_suggestion_context(&session_id);
+        let path_source = (mode == CompletionMode::Token)
+            .then(|| self.path_source_for_session(&session_id, &pattern, context.dialect))
+            .flatten();
         Some(CommandSuggestionSearchRequest {
             request_id,
             session_id: session_id.clone(),
@@ -837,13 +879,14 @@ impl NyaTermApp {
             min_chars,
             max_chars,
             mode,
-            context: self.command_suggestion_context(&session_id),
+            context,
             completion: self.commands.completion_runtime(),
             quick_commands: self.commands.quick_commands_snapshot(),
             started_at,
             popup_visible_at_start,
             timing,
             fill_policy: self.command_suggestion_fill_policy(&session_id),
+            path_source,
         })
     }
 
