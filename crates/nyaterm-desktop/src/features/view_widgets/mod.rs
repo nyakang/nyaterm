@@ -8,7 +8,7 @@ pub(in crate::features) use chrome::{
     selectable_overlay_layer, vertical_resize_handle_visual, window_control_button,
 };
 
-mod dialogs;
+pub(in crate::features) mod dialogs;
 
 mod child_window;
 pub(in crate::features) use child_window::{
