@@ -1,4 +1,5 @@
 mod approvals;
+mod composer_height;
 mod history_and_streaming;
 mod native_decisions;
 mod pickers;
