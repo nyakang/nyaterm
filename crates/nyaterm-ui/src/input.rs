@@ -84,6 +84,11 @@ impl Default for NyaInputLabels {
 struct InputLabelsProvider(Box<dyn Fn() -> NyaInputLabels>);
 impl gpui::Global for InputLabelsProvider {}
 
+/// Vertical chrome a framed medium multi-line input adds around its editor
+/// element: `input_py` padding above and below plus the 1px border on each
+/// side (8 + 8 + 1 + 1).
+const MULTI_LINE_FRAME_HEIGHT: f32 = 18.;
+
 /// Resolve labels at render time so existing inputs follow language changes.
 pub fn set_nya_input_label_provider(provider: impl Fn() -> NyaInputLabels + 'static, cx: &mut App) {
     cx.set_global(InputLabelsProvider(Box::new(provider)));
@@ -578,6 +583,24 @@ impl NyaInputState {
             Some(ComponentState::Input(state)) => Some(state.clone()),
             _ => None,
         }
+    }
+
+    /// Height the auto-grow layout gives this textarea for its current
+    /// content, frame included. Independent of any outer height constraint,
+    /// so callers can clamp manual sizing against the "natural" box without
+    /// reading back what their own constraint produced.
+    pub fn auto_grow_height(&self, cx: &App) -> Option<gpui::Pixels> {
+        let (min_rows, max_rows) = self.auto_grow?;
+        let ComponentState::Textarea(state) = self.state.as_ref()? else {
+            return None;
+        };
+        let state = state.read(cx);
+        let line_height = state.line_height()?;
+        let rows = state
+            .display_map()
+            .wrap_row_count()
+            .clamp(min_rows, max_rows) as f32;
+        (line_height > px(0.)).then(|| px(rows * f32::from(line_height) + MULTI_LINE_FRAME_HEIGHT))
     }
 
     fn ensure_component(&mut self, window: &mut Window, cx: &mut Context<Self>) -> ComponentState {

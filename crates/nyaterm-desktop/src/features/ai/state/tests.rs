@@ -486,6 +486,45 @@ fn state(cx: &TestAppContext) -> AiFeatureState {
 }
 
 #[test]
+fn composer_resize_floors_at_auto_grow_and_caps_at_max() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let natural = gpui::px(136.);
+
+    assert_eq!(state.composer_min_height(), 0.);
+    assert_eq!(state.update_composer_resize(gpui::px(0.), natural), None);
+
+    state.start_composer_resize(gpui::px(400.), natural);
+    assert!(state.composer_is_resizing());
+
+    // Upward drag adds height anchored at the pressed box height.
+    assert_eq!(
+        state.update_composer_resize(gpui::px(350.), natural),
+        Some(186.)
+    );
+    // Past the cap the floor stops following the pointer.
+    assert_eq!(
+        state.update_composer_resize(gpui::px(0.), natural),
+        Some(480.)
+    );
+    // At or below the natural height the override drops back to auto-grow.
+    assert_eq!(
+        state.update_composer_resize(gpui::px(400.), natural),
+        Some(0.)
+    );
+    assert_eq!(
+        state.update_composer_resize(gpui::px(800.), natural),
+        Some(0.)
+    );
+
+    assert!(state.finish_composer_resize());
+    assert!(!state.composer_is_resizing());
+    assert_eq!(state.update_composer_resize(gpui::px(0.), natural), None);
+    assert!(!state.finish_composer_resize());
+}
+
+#[test]
 fn conversation_title_uses_the_first_nonempty_user_message_without_cutting_unicode() {
     let cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);

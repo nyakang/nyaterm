@@ -46,6 +46,10 @@ use components::ai_setup_step;
 use layout::AiPanelLayout;
 use transcript::{AiTranscriptRow, AiTranscriptUpdate};
 
+/// Handle id shared by the snapshot chrome flags and the shell's delayed-hover
+/// machinery, which lives on the app rather than inside this entity.
+pub(in crate::features) const AI_COMPOSER_RESIZE_HANDLE_ID: &str = "ai-composer-height-resize";
+
 #[derive(Clone, Copy)]
 pub(in crate::features) struct AiPanelChrome {
     pub palette: ThemePalette,
@@ -114,6 +118,11 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub discovery_index: usize,
     pub prompt_draft: String,
     pub prompt_input: Entity<nyaterm_ui::NyaInputState>,
+    /// Manual height floor dragged in from the composer's top edge; `0` is the
+    /// content-driven default.
+    pub composer_min_height: f32,
+    pub composer_resizing: bool,
+    pub composer_handle_active: bool,
     pub model_search_input: Option<Entity<nyaterm_ui::NyaInputState>>,
     pub history_search_input: Option<Entity<nyaterm_ui::NyaInputState>>,
     pub file_action_ready: bool,
@@ -417,6 +426,7 @@ impl AiPanel {
                             .child(self.ai_transcript_body(&snapshot, cx)),
                     ),
             )
+            .child(self.ai_composer_resize_handle(&snapshot, cx))
             .child(self.ai_composer(&snapshot, cx))
             // Absolute popovers must paint after the transcript and composer;
             // later siblings otherwise cover an open menu even though its

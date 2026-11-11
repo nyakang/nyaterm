@@ -1,7 +1,8 @@
 //! Prompt box, and the mode, agent, model and execution controls.
 
 use gpui::{
-    AnyElement, Context, IntoElement, MouseButton, deferred, div, prelude::*, px, rgb, svg,
+    AnyElement, Context, IntoElement, MouseButton, MouseDownEvent, SharedString, deferred, div,
+    prelude::*, px, rgb, svg,
 };
 use nyaterm_core::{AgentCommandExecutionMode, AiAgentKind, AiMode};
 use nyaterm_ui::{
@@ -11,8 +12,8 @@ use nyaterm_ui::{
 use rust_i18n::t;
 
 use super::components::{agent_kind_display_name, ai_send_button, execution_mode_label};
-use super::{AiPanel, AiPanelSnapshot, ai_agent_status_badge};
-use crate::features::view_widgets::APP_OVERLAY_PRIORITY;
+use super::{AI_COMPOSER_RESIZE_HANDLE_ID, AiPanel, AiPanelSnapshot, ai_agent_status_badge};
+use crate::features::view_widgets::{APP_OVERLAY_PRIORITY, horizontal_resize_handle_borderless};
 
 const CONTROL_HEIGHT: f32 = 28.;
 
@@ -26,6 +27,9 @@ impl AiPanel {
         let compact = self.layout.is_compact();
         let prompt_input = NyaInputShell::new("ai.chat.prompt", &snapshot.prompt_input)
             .multi_line()
+            .when(snapshot.composer_min_height > 0., |this| {
+                this.height(px(snapshot.composer_min_height))
+            })
             .gpui_context_menu([
                 t!("menu.cut").into(),
                 t!("menu.copy").into(),
@@ -153,6 +157,48 @@ impl AiPanel {
                 )
             })
             .into_any_element()
+    }
+
+    /// Top-edge strip that pins the prompt box taller for long drafts. It sits
+    /// between the transcript and the composer like the transfer queue's
+    /// divider, and the drag itself stays on the app through `with_app` for the
+    /// same reason.
+    pub(super) fn ai_composer_resize_handle(
+        &self,
+        snapshot: &AiPanelSnapshot,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let id = SharedString::from(AI_COMPOSER_RESIZE_HANDLE_ID);
+        let hover_id = id.clone();
+        let drag_id = id.clone();
+        deferred(
+            horizontal_resize_handle_borderless(
+                snapshot.chrome.palette,
+                snapshot.composer_resizing,
+                snapshot.composer_handle_active,
+            )
+            .id(id.clone())
+            .debug_selector(|| "ai-composer-resize-handle".to_string())
+            .cursor_row_resize()
+            .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
+                let hovered = *hovered;
+                let hover_id = hover_id.clone();
+                panel.with_app(cx, |app, cx| {
+                    app.update_resize_handle_hover(hover_id, hovered, cx);
+                });
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |panel, event: &MouseDownEvent, _, cx| {
+                    let event = event.clone();
+                    let drag_id = drag_id.clone();
+                    panel.with_app(cx, |app, cx| {
+                        app.activate_resize_handle_immediately(drag_id, cx);
+                        app.start_ai_composer_resize(&event, cx);
+                    });
+                }),
+            ),
+        )
     }
 
     fn ai_work_mode_toggle(
