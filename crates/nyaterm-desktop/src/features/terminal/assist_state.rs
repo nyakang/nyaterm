@@ -17,6 +17,7 @@ use crate::models::{
 /// matcher remains a background pipeline and never runs in a render path.
 pub(super) struct TerminalAssistState {
     pub(super) command_suggestions: Option<CommandSuggestionState>,
+    pub(super) command_suggestion_scroll: gpui::ScrollHandle,
     pub(super) command_suggestion_mode: nyaterm_core::completion::types::CompletionMode,
     pub(super) command_suggestion_suppression: CommandSuggestionSuppression,
     pub(super) pending_command_history_entry: Option<String>,
@@ -41,6 +42,7 @@ impl TerminalAssistState {
     pub(super) fn new() -> Self {
         Self {
             command_suggestions: None,
+            command_suggestion_scroll: gpui::ScrollHandle::default(),
             command_suggestion_mode: nyaterm_core::completion::types::CompletionMode::Token,
             command_suggestion_suppression: CommandSuggestionSuppression::None,
             pending_command_history_entry: None,

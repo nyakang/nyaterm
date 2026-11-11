@@ -540,6 +540,172 @@ fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
     });
 }
 
+fn set_popup_space(app: &mut NyaTermApp, id: &str, width: f32, space_below: f32) {
+    let bounds = gpui::Bounds::new(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::size(gpui::px(width), gpui::px(400.)),
+    );
+    app.terminal
+        .layout
+        .session_surface_bounds
+        .insert(id.into(), bounds);
+    let insets = app.terminal_content_insets_for_bounds(Some(id), bounds);
+    let row = app
+        .terminal
+        .assist
+        .command_suggestions
+        .as_ref()
+        .unwrap()
+        .cursor_row;
+    let cursor_bottom = insets.top + (row + 1) as f32 * app.terminal_cell_size().1;
+    app.shell
+        .set_viewport_size_for_test((width, cursor_bottom + 4. + space_below + 8.));
+}
+
+fn draw_popup(app: &Entity<NyaTermApp>, cx: &mut gpui::VisualTestContext) {
+    for _ in 0..2 {
+        cx.update(|window, cx| {
+            app.update(cx, |_, cx| cx.notify());
+            window.refresh();
+            _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+    }
+}
+
+#[test]
+fn shortened_popup_keeps_keyboard_selection_visible_after_resize() {
+    let mut f = Fixture::new();
+    f.suggest("mv", "mv source destination");
+    f.update(|app, _, id| {
+        let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+        popup.items = vec![popup.items[0].clone(); 12];
+        popup.selected_index = None;
+        popup.cursor_row = 20;
+        set_popup_space(app, id, 800., 250.);
+    });
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    draw_popup(&app, cx);
+    assert_eq!(
+        cx.debug_bounds("command-suggestions-overlay")
+            .unwrap()
+            .size
+            .height,
+        gpui::px(250.)
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            for _ in 0..12 {
+                assert!(app.handle_command_suggestion_key(&key("down"), cx));
+            }
+        })
+    });
+    draw_popup(&app, cx);
+    for space_below in [250., 106.] {
+        cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 800., space_below)));
+        draw_popup(&app, cx);
+        let scroll = app.read_with(cx, |app, _| {
+            app.terminal.assist.command_suggestion_scroll.clone()
+        });
+        let selected = scroll.bounds_for_item(11).unwrap();
+        let offset = scroll.offset();
+        assert!(offset.y < gpui::px(0.));
+        assert!(selected.top() + offset.y >= scroll.bounds().top());
+        assert!(
+            selected.bottom() + offset.y <= scroll.bounds().bottom(),
+            "space={space_below}, item={selected:?}, offset={offset:?}, viewport={:?}",
+            scroll.bounds()
+        );
+        assert_eq!(
+            cx.debug_bounds("command-suggestions-overlay")
+                .unwrap()
+                .size
+                .height,
+            gpui::px(space_below)
+        );
+    }
+    let scroll = app.read_with(cx, |app, _| {
+        app.terminal.assist.command_suggestion_scroll.clone()
+    });
+    scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+    draw_popup(&app, cx);
+    assert_eq!(
+        scroll.offset().y,
+        gpui::px(0.),
+        "redrawing preserves manual scrolling"
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            // Leave the selection, then re-enter at the first candidate.
+            assert!(app.handle_command_suggestion_key(&key("down"), cx));
+            assert!(app.handle_command_suggestion_key(&key("down"), cx));
+        })
+    });
+    draw_popup(&app, cx);
+    let scroll = app.read_with(cx, |app, _| {
+        app.terminal.assist.command_suggestion_scroll.clone()
+    });
+    assert_eq!(scroll.offset().y, gpui::px(0.));
+}
+
+#[test]
+fn long_command_preview_stays_beyond_popup_and_inside_narrow_window() {
+    let mut f = Fixture::new();
+    f.suggest("mv", &"mv source destination ".repeat(80));
+    f.update(|app, _, id| {
+        app.terminal
+            .assist
+            .command_suggestions
+            .as_mut()
+            .unwrap()
+            .cursor_row = 20;
+        set_popup_space(app, id, 300., 300.);
+    });
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    for (space_below, above) in [(300., false), (0., true)] {
+        cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 300., space_below)));
+        draw_popup(&app, cx);
+        let menu = cx.debug_bounds("command-suggestions-overlay").unwrap();
+        let preview = cx.debug_bounds("command-suggestion-preview").unwrap();
+        let (_, height) = app.read_with(cx, |app, _| app.shell.viewport_size());
+        assert_eq!(menu.size.width, gpui::px(284.));
+        assert_eq!(preview.size.width, menu.size.width);
+        assert!(preview.size.height <= gpui::px(120.));
+        assert!(preview.top() >= gpui::px(8.));
+        assert!(preview.bottom() <= gpui::px(height - 8.));
+        if above {
+            assert!(preview.bottom() <= menu.top() - gpui::px(6.));
+        } else {
+            assert!(preview.top() >= menu.bottom() + gpui::px(6.));
+        }
+    }
+    cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 300., 100.)));
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestion-preview").is_none());
+}
+
+#[test]
+fn insufficient_space_hides_popup_without_discarding_candidates() {
+    let mut f = Fixture::new();
+    f.suggest("mv", "mv source destination");
+    f.update(|app, _, id| set_popup_space(app, id, 800., 30.));
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestions-overlay").is_none());
+    assert!(app.read_with(cx, |app, _| {
+        app.terminal.assist.command_suggestions.is_some()
+    }));
+    cx.update(|_, cx| app.update(cx, |app, _| set_popup_space(app, &id, 800., 300.)));
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestions-overlay").is_some());
+}
+
 #[test]
 fn tab_and_enter_only_send_the_missing_suffix_and_confirm_once() {
     for execute in [false, true] {
