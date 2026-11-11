@@ -13,11 +13,13 @@ use nyaterm_core::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionFillPolicy, CompletionMode,
     CompletionResult, CompletionScope, ShellCommandContext, ShellDialect,
 };
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditIntent, plan_edit};
+use nyaterm_core::terminal::editing::{
+    EDIT_CONFIRMATION_TIMEOUT, EditIntent, ShellLineEditing, plan_edit,
+};
 use nyaterm_core::{QuickCommand, TerminalInputState, terminal_input_tracker_below_min_chars};
 
 use crate::features::NyaTermApp;
-use crate::features::terminal::editing_payload::shell_edit_payload;
+use crate::features::terminal::editing_payload::shell_edit_payload_with_backend;
 use crate::features::terminal::editing_state::{SnapshotEvidence, SuggestionFillRequest};
 use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
 use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
@@ -146,6 +148,19 @@ fn command_suggestion_input_candidate_chars(state: &TerminalInputState) -> usize
     state.value.trim_start().chars().count()
 }
 
+/// Whether the tracked line holds any actual command text.
+///
+/// Remote pagers on switches consume keys such as Space without echoing them,
+/// so the local tracker can hold nothing but separators while the remote screen
+/// owns the cursor. That is not a command context: the token completer reads a
+/// trailing separator as an empty first token and answers with the whole
+/// catalog, and the whole-line search treats it as the manual empty query and
+/// answers with recent history. Requiring real text keeps this structural
+/// instead of matching any vendor's pager prompt.
+fn command_suggestion_input_has_command_text(state: &TerminalInputState) -> bool {
+    !state.value.trim().is_empty()
+}
+
 #[cfg(test)]
 fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> Option<String> {
     let submitted = if text.contains('\r') || text.contains('\n') {
@@ -177,7 +192,11 @@ impl NyaTermApp {
                 .editing
                 .sessions
                 .get(session_id)
-                .is_some_and(|state| state.allows_editing())
+                .is_some_and(|state| {
+                    state.confirmed_input_at_end()
+                        && state.allows_editing()
+                        && state.editor_evidence.is_some()
+                })
         {
             CompletionFillPolicy::ReplaceAllowed
         } else {
@@ -196,7 +215,11 @@ impl NyaTermApp {
             && !self.active_terminal_uses_alternate_screen()
             && !self.is_credential_prompt_input_mode()
             && self.terminal.assist.credential_suggestions.is_none()
-            && !self.terminal.assist.command_suggestions_suppressed
+            && !self
+                .terminal
+                .assist
+                .command_suggestion_suppression
+                .is_suppressed()
             && !self
                 .terminal_protocol_state_for_session(session_id)
                 .mouse_reporting
@@ -388,7 +411,12 @@ impl NyaTermApp {
             cx.notify();
         }
 
-        if self.terminal.assist.command_suggestions_suppressed {
+        if self
+            .terminal
+            .assist
+            .command_suggestion_suppression
+            .is_suppressed()
+        {
             let hide_started_at = Instant::now();
             self.terminal.assist.command_suggestion_search_gen = self
                 .terminal
@@ -432,6 +460,25 @@ impl NyaTermApp {
             }
             timing.hide_popup = hide_started_at.elapsed();
             finish!("below_min_chars", 0);
+        }
+
+        // Automatic suggestions need real command text. A pager keypress (for
+        // example Space on a switch's `--More--` prompt) reaches the tracker as
+        // ordinary input, and only whitespace means no local command line grew.
+        if self.terminal.assist.command_suggestion_mode == CompletionMode::Token
+            && !command_suggestion_input_has_command_text(self.terminal.editing.assist_input())
+        {
+            let hide_started_at = Instant::now();
+            self.terminal.assist.command_suggestion_search_gen = self
+                .terminal
+                .assist
+                .command_suggestion_search_gen
+                .saturating_add(1);
+            if self.terminal.assist.command_suggestions.take().is_some() {
+                cx.notify();
+            }
+            timing.hide_popup = hide_started_at.elapsed();
+            finish!("blank_input", 0);
         }
 
         let pattern_started_at = Instant::now();
@@ -576,7 +623,11 @@ impl NyaTermApp {
     pub(in crate::features) fn show_manual_command_suggestions(&mut self, cx: &mut Context<Self>) {
         if self.terminal.assist.credential_suggestions.is_some()
             || self.is_credential_prompt_input_mode()
-            || self.terminal.assist.command_suggestions_suppressed
+            || self
+                .terminal
+                .assist
+                .command_suggestion_suppression
+                .is_suppressed()
             || !self
                 .settings
                 .summary()
@@ -612,14 +663,49 @@ impl NyaTermApp {
     }
 
     fn command_suggestion_context(&self, session: &str) -> ShellCommandContext {
-        self.commands
-            .command_context(session)
-            .cloned()
-            .unwrap_or(ShellCommandContext {
-                scope: CompletionScope::legacy(),
-                dialect: ShellDialect::Unknown,
-                command_events: false,
-            })
+        let mut context =
+            self.commands
+                .command_context(session)
+                .cloned()
+                .unwrap_or(ShellCommandContext {
+                    scope: CompletionScope::legacy(),
+                    dialect: ShellDialect::Unknown,
+                    command_events: false,
+                });
+        if let Some(evidence) = self
+            .terminal
+            .editing
+            .sessions
+            .get(session)
+            .and_then(|state| state.editor_evidence)
+        {
+            if let Some(dialect) = evidence.dialect {
+                context.dialect = dialect;
+            } else if evidence.platform
+                == Some(nyaterm_core::action_links::ActionLinkPlatform::Posix)
+                && matches!(
+                    context.dialect,
+                    ShellDialect::Cmd | ShellDialect::PowerShell
+                )
+            {
+                // A POSIX prompt cannot identify bash vs zsh, but it disproves
+                // a stale Windows parsing hint after leaving a nested shell.
+                context.dialect = ShellDialect::Unknown;
+            }
+        }
+        context
+    }
+
+    /// Line-editing backend of the active session's shell.
+    ///
+    /// Only current snapshot evidence selects a destructive edit's encoding.
+    fn shell_line_editing(&self, session_id: &str) -> Option<ShellLineEditing> {
+        self.terminal
+            .editing
+            .sessions
+            .get(session_id)?
+            .editor_evidence
+            .map(|evidence| evidence.line_editing)
     }
 
     fn prepare_command_suggestion_search(
@@ -677,7 +763,8 @@ impl NyaTermApp {
         let pattern_chars = pattern.chars().count();
         timing.pattern = pattern_started_at.elapsed();
         if !command_suggestion_input_can_defer_refresh(self.terminal.editing.assist_input())
-            || (mode == CompletionMode::Token && pattern.is_empty())
+            || (mode == CompletionMode::Token
+                && !command_suggestion_input_has_command_text(self.terminal.editing.assist_input()))
         {
             let hide_started_at = Instant::now();
             self.hide_command_suggestions_if_present(cx);
@@ -1142,6 +1229,9 @@ impl NyaTermApp {
                 }
             }
             SuggestionFill::Replace(command) => {
+                let Some(backend) = self.shell_line_editing(&popup.session_id) else {
+                    return self.reject_command_suggestion("Shell editor is not confirmed", cx);
+                };
                 if self.command_suggestion_fill_policy(&popup.session_id)
                     != CompletionFillPolicy::ReplaceAllowed
                 {
@@ -1161,6 +1251,12 @@ impl NyaTermApp {
                     return self
                         .reject_command_suggestion("Cannot plan this shell replacement", cx);
                 };
+                if !backend.allows_cursor_motion() && plan.move_steps != 0 {
+                    return self.reject_command_suggestion(
+                        "Console replacement requires the cursor at the end",
+                        cx,
+                    );
+                }
                 let insertion_wire = match self
                     .encode_session_outgoing(&popup.session_id, plan.insert_text.as_bytes())
                 {
@@ -1174,7 +1270,8 @@ impl NyaTermApp {
                     }
                 };
                 let mode = self.terminal_key_mode_for_session(Some(&popup.session_id));
-                let (wire, logical) = shell_edit_payload(&plan, mode, insertion_wire);
+                let (wire, logical) =
+                    shell_edit_payload_with_backend(&plan, backend, mode, insertion_wire);
                 self.dismiss_command_suggestions(cx);
                 self.terminal.view.frame_pipeline.arm_output_event_wake();
                 if let Err(error) =
@@ -1859,6 +1956,7 @@ fn terminal_line_prefix_for_cell_col(line: &str, cell_col: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
     pub(super) fn history_search_fixture(
         command: &str,
         input: &str,
@@ -2055,6 +2153,446 @@ mod tests {
             app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
             assert!(app.apply_selected_command_suggestion(true, cx));
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
+    }
+
+    #[test]
+    fn startup_layout_resize_keeps_first_line_input_eligible_for_suggestions() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-first-line-resize");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            // Selecting the new session activates editing state, then the first
+            // paint fits the pane to its real bounds before the user can type.
+            app.terminal.activate_shell_editing_session("s1");
+            app.terminal.invalidate_shell_editing_session("s1");
+            app.note_shell_editing_input(b"git", cx);
+            assert!(!app.terminal.editing.predicted_input().desynced);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+            app.terminal
+                .seed_session_view("s1".into(), "$ git".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    2,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
+        });
+    }
+
+    #[test]
+    fn layout_resize_with_tracked_text_still_desyncs_the_line() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-resize-tracked");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.note_shell_editing_input(b"git", cx);
+            app.terminal.invalidate_shell_editing_session("s1");
+            app.note_shell_editing_input(b"x", cx);
+            assert!(app.terminal.editing.predicted_input().desynced);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    2,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn pager_space_without_command_text_cannot_start_suggestions() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-pager-space");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            // A remote pager consumes Space itself and echoes nothing, so the
+            // local tracker holds only a separator while the screen repaints.
+            app.note_shell_editing_input(b" ", cx);
+            assert_eq!(app.terminal.editing.assist_input().value, " ");
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+
+            // The same signal hides a popup left over from an earlier line.
+            app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
+            app.note_command_suggestion_input(b" ", cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+
+            // A separator after real command text still offers suggestions.
+            app.note_shell_editing_input(b"git ", cx);
+            assert!(!app.command_suggestion_input_is_confirmed());
+            app.terminal
+                .seed_session_view("s1".into(), "$   git ".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                app.prepare_command_suggestion_search(
+                    2,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
+        });
+    }
+
+    /// Deterministic replay of a real `su` round trip. Every step feeds the
+    /// screen text the remote would produce and drives the same gates the live
+    /// input path drives, so a rejection is localized to the step that causes it.
+    #[test]
+    fn su_round_trip_keeps_suggestions_available_across_prompts() {
+        use nyaterm_core::completion::types::CompletionMode;
+
+        let dir = TestConfigDir::new("nyaterm-suggestions-su-round-trip");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            macro_rules! output {
+                ($screen:expr) => {{
+                    app.terminal
+                        .seed_session_view("s1".into(), $screen.to_string(), "UTF-8");
+                    if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                        let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                        view.frame_snapshot = Some(snapshot);
+                    }
+                    app.drain_pending_credential_autofill_detection(cx);
+                    app.reconcile_shell_editing("s1", cx);
+                }};
+            }
+            let mut screen = String::from("user@host:~$ ");
+            output!(screen);
+
+            // 1. Login shell: type and submit `su - root`.
+            app.note_shell_editing_input(b"su - root", cx);
+            app.note_command_suggestion_input(b"su - root", cx);
+            assert!(!app.command_suggestion_input_is_confirmed());
+            screen.push_str("su - root");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(1, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work before su"
+            );
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            // bash preexec emits OSC 133 C for the foreground `su`.
+            app.apply_shell_integration_edges("s1", true, false, true);
+
+            // 2. su writes a no-echo password prompt; the password is never echoed.
+            screen.push_str("\r\nPassword: ");
+            output!(screen);
+            app.note_shell_editing_input(b"password", cx);
+            app.note_command_suggestion_input(b"password", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+
+            // 3. Authentication succeeds; the child root shell owns the prompt.
+            screen.push_str("\r\nroot@host:~# ");
+            output!(screen);
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            screen.push_str("ls");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(2, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work inside the child shell"
+            );
+
+            // 4. `ls` runs and the child prompt returns without any OSC 133 marks.
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            screen.push_str("\r\nfile1 file2\r\nroot@host:~# ");
+            output!(screen);
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            screen.push_str("ls");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(3, CompletionMode::Token, cx)
+                    .is_some(),
+                "a second command inside the child shell must still suggest"
+            );
+
+            // 5. `exit` returns to the outer shell, which emits OSC 133 D.
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            app.note_shell_editing_input(b"exit", cx);
+            app.note_command_suggestion_input(b"exit", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            screen.push_str("\r\nlogout\r\nuser@host:~$ ");
+            app.terminal
+                .seed_session_view("s1".into(), screen.clone(), "UTF-8");
+            app.apply_shell_integration_edges("s1", false, true, false);
+            app.drain_pending_credential_autofill_detection(cx);
+            app.reconcile_shell_editing("s1", cx);
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            screen.push_str("ls");
+            output!(screen);
+            assert!(
+                app.prepare_command_suggestion_search(4, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work after exiting the child shell"
+            );
+        });
+    }
+
+    /// Reproduces the reported `su` failure without an SSH server: a saved
+    /// credential makes the credential tick arm the no-echo input window at
+    /// `su`'s password prompt. The window must end when the child prompt is
+    /// visible, otherwise every later keystroke is discarded as password input.
+    #[test]
+    fn su_password_prompt_input_window_ends_at_the_child_prompt() {
+        use nyaterm_core::completion::types::CompletionMode;
+
+        let dir = TestConfigDir::new("nyaterm-suggestions-su-credential-window");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+
+            // The credential tick ran at `su`'s no-echo password prompt and
+            // armed the no-echo input window, remembering that prompt instance.
+            app.terminal.seed_session_view(
+                "s1".into(),
+                "user@host:~$ su - root\r\nPassword: ".into(),
+                "UTF-8",
+            );
+            if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                view.frame_snapshot = Some(snapshot);
+            }
+            app.sync_credential_autofill_for_test(cx);
+            assert!(app.is_credential_prompt_input_mode());
+
+            // Authentication succeeded; the prompt line changed and is no longer
+            // a credential prompt. `observe_credential_prompt_instance` clears
+            // the buffer during this tick.
+            app.terminal.seed_session_view(
+                "s1".into(),
+                "user@host:~$ su - root\r\nPassword: \r\nroot@host:~# ".into(),
+                "UTF-8",
+            );
+            if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                view.frame_snapshot = Some(snapshot);
+            }
+            app.sync_credential_autofill_for_test(cx);
+            assert!(
+                !app.is_credential_prompt_input_mode(),
+                "the no-echo input window must end once the visible prompt is not a credential prompt"
+            );
+
+            // Typing at the child prompt must reach the suggestion gates.
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "root@host:~# ls".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                app.prepare_command_suggestion_search(1, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work in the child shell"
+            );
+
+            // `exit` returns to the outer shell. The window must stay closed:
+            // this is the reported "still no suggestions after leaving su"
+            // symptom, which a per-prompt re-arm would bring back.
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            app.note_shell_editing_input(b"exit", cx);
+            app.note_command_suggestion_input(b"exit", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.note_command_suggestion_input(b"\r", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "logout\r\nuser@host:~$ ".into(), "UTF-8");
+            if let Some(view) = app.terminal.view.views.get_mut("s1") {
+                let snapshot = std::sync::Arc::new(view.screen.viewport_snapshot(0));
+                view.frame_snapshot = Some(snapshot);
+            }
+            app.sync_credential_autofill_for_test(cx);
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                !app.is_credential_prompt_input_mode(),
+                "the window must not reopen at the outer prompt after exit"
+            );
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_command_suggestion_input(b"ls", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "logout\r\nuser@host:~$ ls".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                app.prepare_command_suggestion_search(2, CompletionMode::Token, cx)
+                    .is_some(),
+                "suggestions must work after exiting the child shell"
+            );
+        });
+    }
+
+    #[test]
+    fn confirmed_prompt_echo_in_a_child_shell_releases_suppression() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-child-shell-resync");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            // `su - root` started. The outer shell sent OSC 133 C, while its D
+            // can only arrive after the child exits, so the latch outlives it.
+            app.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::CommandRunning;
+            app.note_shell_editing_input(b"git", cx);
+            app.note_command_suggestion_input(b"git", cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+
+            // The root prompt echoes the locally predicted line back.
+            app.terminal
+                .seed_session_view("s1".into(), "root@host:~# git".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(
+                !app.terminal
+                    .assist
+                    .command_suggestion_suppression
+                    .is_suppressed()
+            );
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_some()
+            );
+        });
+    }
+
+    #[test]
+    fn echo_without_a_shell_prompt_prefix_keeps_suppression() {
+        let dir = TestConfigDir::new("nyaterm-suggestions-pager-prompt-resync");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::CommandRunning;
+            app.note_shell_editing_input(b"git", cx);
+
+            // A pager status line and a child REPL echo the text, but neither
+            // prefix is a shell prompt, so the suppression must survive.
+            for seeded in ["/git", ">>> git"] {
+                app.terminal
+                    .seed_session_view("s1".into(), seeded.into(), "UTF-8");
+                app.reconcile_shell_editing("s1", cx);
+                assert!(
+                    app.terminal
+                        .assist
+                        .command_suggestion_suppression
+                        .is_suppressed(),
+                    "{seeded}"
+                );
+            }
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn shell_like_pager_echo_cannot_release_explicit_interactive_suppression() {
+        let dir = TestConfigDir::new("nyaterm-explicit-pager-suppression");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.terminal.assist.pending_command_history_entry = Some("su - root".into());
+            app.note_shell_editing_input(b"less", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.apply_shell_integration_edges("s1", true, false, true);
+            app.note_shell_editing_input(b"git", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "root@host:~# git".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert_eq!(
+                app.terminal.assist.command_suggestion_suppression,
+                CommandSuggestionSuppression::InteractiveProgram
+            );
+            assert!(
+                app.prepare_command_suggestion_search(
+                    1,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx
+                )
+                .is_none()
+            );
         });
     }
 

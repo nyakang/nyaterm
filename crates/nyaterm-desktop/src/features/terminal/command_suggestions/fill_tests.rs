@@ -7,8 +7,10 @@ use gpui::{
     AppContext as _, Context, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Render,
     TestAppContext, Window,
 };
-use nyaterm_core::completion::types::{CompletionFillPolicy, CompletionMode};
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase};
+use nyaterm_core::completion::types::{
+    CompletionFillPolicy, CompletionMode, CompletionScope, ShellCommandContext, ShellDialect,
+};
+use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditPhase, ShellLineEditing};
 use nyaterm_transport::{SerialSessionConfig, SessionManager, TelnetSessionConfig};
 
 use super::fill::SuggestionSubmitResult;
@@ -1709,6 +1711,419 @@ fn clicking_a_multiline_candidate_opens_review_even_without_shell_editing_capabi
             "echo first\necho second"
         );
         assert_eq!(app.terminal.editing.predicted_input().value, "脚本");
+    });
+    f.assert_quiet();
+}
+
+fn make_cmd_session(
+    app: &mut NyaTermApp,
+    cx: &mut Context<NyaTermApp>,
+    id: &str,
+    typed: &str,
+    echo: &str,
+) {
+    let launch = app
+        .session
+        .metadata("fixture")
+        .unwrap()
+        .launch_config
+        .clone();
+    app.session.metadata_mut(id).unwrap().launch_config = launch;
+    app.commands.set_command_context(
+        id.to_string(),
+        ShellCommandContext {
+            scope: CompletionScope::legacy(),
+            dialect: ShellDialect::Cmd,
+            command_events: false,
+        },
+    );
+    app.terminal.editing.state_mut().awaiting_snapshot = false;
+    app.terminal.editing.clear_active();
+    app.terminal
+        .seed_session_view(id.into(), String::new(), "UTF-8");
+    app.note_shell_editing_input(typed.as_bytes(), cx);
+    app.terminal
+        .seed_session_view(id.into(), format!("C:\\Users\\DYQ>{echo}"), "UTF-8");
+    app.reconcile_shell_editing(id, cx);
+    assert_eq!(
+        app.terminal.editing.state().unwrap().model.phase,
+        EditPhase::Ready
+    );
+}
+
+#[test]
+fn cmd_completion_appends_and_waits_for_confirmed_echo() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pi", "pi");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        let state = app.terminal.editing.state().unwrap();
+        assert_eq!(state.model.input.value, "ping 172.22.222.149");
+        assert!(
+            state.suggestion_fill.is_some(),
+            "unmarked console input still needs a fresh echo acknowledgement"
+        );
+    });
+    f.receive(b"ng 172.22.222.149");
+    f.update(|app, cx, id| {
+        app.terminal.seed_session_view(
+            id.into(),
+            "C:\\Users\\DYQ>ping 172.22.222.149".into(),
+            "UTF-8",
+        );
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        assert!(app.command_suggestion_input_is_confirmed());
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn cmd_completion_rewrites_the_line_with_console_backspaces() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_some()
+        );
+        assert_eq!(
+            app.terminal.editing.state().unwrap().model.phase,
+            EditPhase::Pending
+        );
+    });
+    let mut expected = vec![0x08; "pong".len()];
+    expected.extend_from_slice(b"ping 172.22.222.149");
+    f.receive(&expected);
+    f.assert_quiet();
+}
+
+fn redraw_console_line(app: &mut NyaTermApp, id: &str, prompt: &str, value: &str) {
+    let view = app.terminal.view.views.get_mut(id).unwrap();
+    // Preserve the live stream's monotonic row revisions. Recreating a screen
+    // for equal-length text would look like the same old frame to the gate.
+    view.screen
+        .advance_decoded_text(&format!("\r\x1b[2K{prompt}{value}"));
+    view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+}
+
+#[test]
+fn nested_windows_prompt_changes_invalidate_candidates_and_select_current_delete_encoding() {
+    let mut f = Fixture::new();
+    for launch in [ShellDialect::Cmd, ShellDialect::PowerShell] {
+        f.update(|app, cx, id| {
+            make_cmd_session(app, cx, id, "pong", "pong");
+            app.commands.set_command_context(
+                id.into(),
+                ShellCommandContext {
+                    scope: CompletionScope::legacy(),
+                    dialect: launch,
+                    command_events: false,
+                },
+            );
+        });
+        for (prompt, backend, erase) in [
+            ("PS C:\\Users> ", ShellLineEditing::AnsiLineEditor, 0x7f),
+            ("C:\\Users>", ShellLineEditing::LegacyConsole, 0x08),
+            ("PS C:\\Users> ", ShellLineEditing::AnsiLineEditor, 0x7f),
+        ] {
+            f.update(|app, cx, id| {
+                popup(app, id, "ping");
+                redraw_console_line(app, id, prompt, "pong");
+                app.reconcile_shell_editing(id, cx);
+                assert!(app.terminal.assist.command_suggestions.is_none());
+                assert_eq!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .editor_evidence
+                        .map(|evidence| evidence.line_editing),
+                    Some(backend)
+                );
+                assert_eq!(
+                    app.command_suggestion_context(id).dialect,
+                    if backend == ShellLineEditing::LegacyConsole {
+                        ShellDialect::Cmd
+                    } else {
+                        ShellDialect::PowerShell
+                    }
+                );
+                let request = app
+                    .prepare_command_suggestion_search(
+                        app.terminal.assist.command_suggestion_search_gen,
+                        CompletionMode::Token,
+                        cx,
+                    )
+                    .unwrap();
+                assert_eq!(request.fill_policy, CompletionFillPolicy::ReplaceAllowed);
+                let revision = app.commands.completion_runtime().revision();
+                app.publish_command_suggestion_search(
+                    request,
+                    super::tests::history_search_fixture("ping", "pong", revision),
+                    Duration::ZERO,
+                    cx,
+                );
+                assert!(
+                    app.terminal
+                        .assist
+                        .command_suggestions
+                        .as_ref()
+                        .unwrap()
+                        .items
+                        .iter()
+                        .any(|item| item.command == "ping")
+                );
+                popup(app, id, "ping");
+                assert_eq!(
+                    app.submit_selected_command_suggestion(true, cx),
+                    SuggestionSubmitResult::Submitted
+                );
+                assert!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .suggestion_fill
+                        .is_some()
+                );
+            });
+            let mut expected = vec![erase; 4];
+            expected.extend_from_slice(b"ping");
+            f.receive(&expected);
+            f.update(|app, cx, id| {
+                redraw_console_line(app, id, prompt, "ping");
+                app.reconcile_shell_editing(id, cx);
+                assert!(
+                    app.terminal
+                        .editing
+                        .state()
+                        .unwrap()
+                        .suggestion_fill
+                        .is_none()
+                );
+                app.note_shell_editing_input(b"\r", cx);
+                app.note_shell_editing_input(b"pong", cx);
+                redraw_console_line(app, id, prompt, "pong");
+                app.reconcile_shell_editing(id, cx);
+            });
+            f.assert_quiet();
+        }
+    }
+}
+
+#[test]
+fn unclassified_windows_editor_filters_replacement_and_rejects_stale_fill() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        app.terminal.editing.state_mut().launched_line_editor = true;
+        app.terminal
+            .seed_session_view(id.into(), "custom> pong".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(app.command_suggestion_input_is_confirmed());
+        assert_eq!(
+            app.command_suggestion_fill_policy(id),
+            CompletionFillPolicy::AppendOnly
+        );
+        let request = app
+            .prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx,
+            )
+            .unwrap();
+        let revision = app.commands.completion_runtime().revision();
+        app.publish_command_suggestion_search(
+            request,
+            super::tests::history_search_fixture("ping", "pong", revision),
+            Duration::ZERO,
+            cx,
+        );
+        assert!(app.terminal.assist.command_suggestions.is_none());
+        popup(app, id, "ping");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Rejected
+        );
+        popup(app, id, "pong extra");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Submitted
+        );
+    });
+    f.receive(b" extra");
+    f.assert_quiet();
+}
+
+#[test]
+fn unclassified_remote_editor_never_infers_ansi_from_a_shell_launch() {
+    let mut f = Fixture::new();
+    for dialect in [ShellDialect::Unknown, ShellDialect::Bash] {
+        f.update(|app, cx, id| {
+            make_cmd_session(app, cx, id, "pong", "pong");
+            app.session.metadata_mut(id).unwrap().launch_config =
+                SessionLaunchConfig::Ssh(Box::default());
+            app.commands.set_command_context(
+                id.into(),
+                ShellCommandContext {
+                    scope: CompletionScope::legacy(),
+                    dialect,
+                    command_events: false,
+                },
+            );
+            app.terminal.editing.state_mut().launched_line_editor = true;
+            redraw_console_line(app, id, "custom> ", "pong");
+            app.reconcile_shell_editing(id, cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert_eq!(
+                app.command_suggestion_fill_policy(id),
+                CompletionFillPolicy::AppendOnly
+            );
+            popup(app, id, "ping");
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Rejected
+            );
+            popup(app, id, "pong extra");
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Submitted
+            );
+        });
+        f.receive(b" extra");
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn cmd_fill_is_cancelled_by_mismatched_echo_and_never_executes() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping");
+        assert_eq!(
+            app.submit_selected_command_suggestion(true, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        app.terminal
+            .seed_session_view(id.into(), "C:\\Users>pinq".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        app.terminal
+            .seed_session_view(id.into(), "C:\\Users>ping".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+    });
+    f.receive(b"\x08\x08\x08\x08ping");
+    f.assert_quiet();
+}
+
+#[test]
+fn cmd_replacement_requires_confirmed_input_and_editor_capability() {
+    let mut f = Fixture::new();
+    for condition in 0..4 {
+        f.update(|app, cx, id| {
+            make_cmd_session(app, cx, id, "pong", "pong");
+            if condition == 1 {
+                app.note_shell_editing_input(b"x", cx);
+            }
+            let state = app.terminal.editing.state_mut();
+            match condition {
+                0 => state.awaiting_snapshot = true,
+                1 => assert_eq!(state.model.phase, EditPhase::Pending),
+                2 => state.model.input.cursor = 0,
+                _ => state.model.input.desynced = true,
+            }
+            assert_eq!(
+                app.command_suggestion_fill_policy(id),
+                CompletionFillPolicy::AppendOnly
+            );
+            popup(app, id, "ping");
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::Rejected
+            );
+        });
+        f.assert_quiet();
+    }
+}
+
+#[test]
+fn cmd_replacement_confirmation_timeout_cancels_the_fill_before_late_echo() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        make_cmd_session(app, cx, id, "pong", "pong");
+        popup(app, id, "ping");
+        assert_eq!(
+            app.submit_selected_command_suggestion(true, cx),
+            SuggestionSubmitResult::Submitted
+        );
+        app.terminal.editing.state_mut().model.last_input_at =
+            Some(Instant::now() - Duration::from_secs(3));
+    });
+    f.receive(b"\x08\x08\x08\x08ping");
+    f.cx.run_until_parked();
+    f.cx.executor().advance_clock(Duration::from_secs(3));
+    f.cx.run_until_parked();
+    f.update(|app, cx, id| {
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
+        assert_eq!(
+            app.terminal.editing.state().unwrap().model.phase,
+            EditPhase::Uncertain
+        );
+        app.terminal
+            .seed_session_view(id.into(), "C:\\Users>ping".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(
+            app.terminal
+                .editing
+                .state()
+                .unwrap()
+                .suggestion_fill
+                .is_none()
+        );
     });
     f.assert_quiet();
 }

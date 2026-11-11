@@ -3,8 +3,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::action_links::ActionLinkPlatform;
 use crate::models::quick_commands::CommandHistoryEntry;
-use crate::terminal::editing::supports_scalar_editing;
+use crate::terminal::editing::{ShellLineEditing, supports_scalar_editing};
 use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
 
 /// Multiline whole commands require paste review rather than scalar insertion.
@@ -58,6 +59,30 @@ impl ShellDialect {
             "pwsh" | "powershell" => Self::PowerShell,
             "cmd" => Self::Cmd,
             _ => Self::Unknown,
+        }
+    }
+    /// Line-editing backend implied by the launched program alone.
+    ///
+    /// `None` means the program is not a known Windows console host: remote
+    /// POSIX shells and nested shells must be classified from live evidence
+    /// (OSC 133 anchor or matched echo) instead.
+    pub fn line_editing_backend(self) -> Option<ShellLineEditing> {
+        match self {
+            Self::Cmd => Some(ShellLineEditing::LegacyConsole),
+            Self::PowerShell => Some(ShellLineEditing::AnsiLineEditor),
+            Self::Bash | Self::Zsh | Self::Fish | Self::Unknown => None,
+        }
+    }
+    /// Platform implied by a dialect alone. PowerShell also runs on POSIX;
+    /// callers need current prompt or host evidence to classify it.
+    ///
+    /// `None` for shells that carry no platform information (Telnet/Serial,
+    /// or a prompt the tracker has not classified yet).
+    pub fn action_link_platform(self) -> Option<ActionLinkPlatform> {
+        match self {
+            Self::Cmd => Some(ActionLinkPlatform::Windows),
+            Self::Bash | Self::Zsh | Self::Fish => Some(ActionLinkPlatform::Posix),
+            Self::PowerShell | Self::Unknown => None,
         }
     }
     pub fn native_options(self, command: &str) -> bool {
@@ -347,8 +372,46 @@ pub struct ShellCommandContext {
 
 #[cfg(test)]
 mod tests {
-    use crate::completion::types::supports_full_command_fill;
+    use crate::action_links::ActionLinkPlatform;
+    use crate::completion::types::{ShellDialect, supports_full_command_fill};
+    use crate::terminal::editing::ShellLineEditing;
     use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
+
+    #[test]
+    fn shell_dialects_name_the_platform_their_tools_run_on() {
+        assert_eq!(
+            ShellDialect::Cmd.action_link_platform(),
+            Some(ActionLinkPlatform::Windows)
+        );
+        for dialect in [ShellDialect::Bash, ShellDialect::Zsh, ShellDialect::Fish] {
+            assert_eq!(
+                dialect.action_link_platform(),
+                Some(ActionLinkPlatform::Posix)
+            );
+        }
+        assert_eq!(ShellDialect::Unknown.action_link_platform(), None);
+        assert_eq!(ShellDialect::PowerShell.action_link_platform(), None);
+    }
+
+    #[test]
+    fn console_hosts_pick_their_own_line_editing_backend() {
+        assert_eq!(
+            ShellDialect::Cmd.line_editing_backend(),
+            Some(ShellLineEditing::LegacyConsole)
+        );
+        assert_eq!(
+            ShellDialect::PowerShell.line_editing_backend(),
+            Some(ShellLineEditing::AnsiLineEditor)
+        );
+        for dialect in [
+            ShellDialect::Bash,
+            ShellDialect::Zsh,
+            ShellDialect::Fish,
+            ShellDialect::Unknown,
+        ] {
+            assert_eq!(dialect.line_editing_backend(), None);
+        }
+    }
 
     #[test]
     fn whole_command_fill_allows_reviewable_multiline_text_and_rejects_terminal_controls() {

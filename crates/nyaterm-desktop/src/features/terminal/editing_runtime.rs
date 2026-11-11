@@ -1,16 +1,21 @@
 //! GPUI coordination for shell input evidence and predictions.
 
+use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
 use std::time::Instant;
 use zeroize::Zeroize;
 
 use gpui::Context;
 use nyaterm_core::command_starts_suggestion_suppressing_program;
 use nyaterm_core::command_suggestion_suppression::command_starts_line_editor;
-use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase};
+use nyaterm_core::completion::types::ShellDialect;
+use nyaterm_core::terminal::editing::{
+    EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase, ShellLineEditing,
+};
 use nyaterm_core::terminal::input_tracker::{
     MAX_TRACKED_INPUT_BYTES, TerminalInputState, get_tracked_submission_command,
     strip_terminal_command_prompt,
 };
+use nyaterm_core::terminal::shell_prompt::{ShellPrompt, classify_shell_prompt};
 use nyaterm_terminal::editing::{recover_marked_input, resolve_input};
 
 use super::editing_state::SnapshotEvidence;
@@ -80,20 +85,27 @@ impl NyaTermApp {
             .state_mut()
             .command_navigation
             .note_input(text);
-        let was_suppressed = self.terminal.assist.command_suggestions_suppressed;
+        let was_suppressed = self
+            .terminal
+            .assist
+            .command_suggestion_suppression
+            .is_suppressed();
         if text == "\u{3}" || (was_suppressed && text == "q") {
-            self.terminal.assist.command_suggestions_suppressed = false;
+            self.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::None;
         }
-        if !was_suppressed
-            && self.terminal.assist.pending_command_history_entry.is_none()
-            && text.contains(['\r', '\n'])
-        {
+        if !was_suppressed && text.contains(['\r', '\n']) {
             let submitted = get_tracked_submission_command(self.terminal.editing.predicted_input());
             if !submitted.is_empty() {
                 if command_starts_suggestion_suppressing_program(&submitted) {
-                    self.terminal.assist.command_suggestions_suppressed = true;
+                    self.terminal.assist.command_suggestion_suppression =
+                        CommandSuggestionSuppression::InteractiveProgram;
                 }
-                self.terminal.assist.pending_command_history_entry = Some(submitted);
+                // The outer `su` history entry may remain pending throughout
+                // the child shell. It must not disable pager suppression there.
+                if self.terminal.assist.pending_command_history_entry.is_none() {
+                    self.terminal.assist.pending_command_history_entry = Some(submitted);
+                }
             }
         }
         let snapshot = self.terminal_snapshot_for_session(Some(&id), 0);
@@ -219,6 +231,28 @@ impl NyaTermApp {
                     | crate::models::SessionLaunchConfig::Ssh(_)
             )
         });
+        let windows_console_session = self.commands.command_context(id).is_some_and(|context| {
+            matches!(
+                context.dialect,
+                ShellDialect::Cmd | ShellDialect::PowerShell
+            )
+        }) || (cfg!(windows)
+            && self.session.metadata(id).is_some_and(|metadata| {
+                matches!(
+                    metadata.launch_config,
+                    crate::models::SessionLaunchConfig::Local(_)
+                )
+            }));
+        // An unclassified remote prompt may belong to CMD even if the launch
+        // context says Unknown or POSIX. Only a native POSIX local session can
+        // safely infer ANSI from the existing child-editor evidence alone.
+        let unclassified_ansi_editor = !windows_console_session
+            && self.session.metadata(id).is_some_and(|metadata| {
+                matches!(
+                    metadata.launch_config,
+                    crate::models::SessionLaunchConfig::Local(_)
+                )
+            });
         let state = self.terminal.editing.state_mut();
         state.cancel_stale_suggestion_fill(Instant::now(), sync_revision);
         if state.awaiting_snapshot {
@@ -279,6 +313,9 @@ impl NyaTermApp {
             state.model.version = state.model.version.wrapping_add(1);
             mapping = resolve_input(&snapshot, &state.model.input.value, cursor);
         }
+        // Confirmed echo at a recognized shell prompt proves that a shell line
+        // editor owns this line again; see the recovery below.
+        let mut confirmed_shell_prompt = false;
         let queued = if let Some(mapping) = mapping {
             // A unique echo can also come from canonical TTY input (cat/tee).
             // Require a shell prompt or a positively identified child line editor.
@@ -297,16 +334,39 @@ impl NyaTermApp {
                     })
                     .collect::<String>()
             });
-            let known_prompt = prompt.as_ref().is_some_and(|prefix| {
-                !prefix.trim().is_empty()
-                    && (strip_terminal_command_prompt(prefix).trim().is_empty()
-                        || state.line_editor_prompt.as_ref() == Some(prefix))
+            let shell_prompt = prompt.as_ref().is_some_and(|prefix| {
+                !prefix.trim().is_empty() && strip_terminal_command_prompt(prefix).trim().is_empty()
             });
+            let known_prompt = shell_prompt
+                || prompt.as_ref().is_some_and(|prefix| {
+                    !prefix.trim().is_empty() && state.line_editor_prompt.as_ref() == Some(prefix)
+                });
             let has_prompt = prompt
                 .as_ref()
                 .is_some_and(|prefix| !prefix.trim().is_empty());
             state.echo_line_editor =
                 shell_session && (known_prompt || (state.launched_line_editor && has_prompt));
+            let backend = prompt
+                .as_deref()
+                .and_then(classify_shell_prompt)
+                .or_else(|| {
+                    if snapshot.shell_input_anchor.is_some() {
+                        Some(ShellPrompt {
+                            dialect: None,
+                            line_editing: ShellLineEditing::Marked,
+                            platform: None,
+                        })
+                    } else if state.echo_line_editor && unclassified_ansi_editor {
+                        Some(ShellPrompt {
+                            dialect: None,
+                            line_editing: ShellLineEditing::AnsiLineEditor,
+                            platform: None,
+                        })
+                    } else {
+                        None
+                    }
+                });
+            state.observe_editor_evidence(backend);
             if state.echo_line_editor
                 && prompt
                     .as_ref()
@@ -314,6 +374,8 @@ impl NyaTermApp {
             {
                 state.line_editor_prompt = prompt;
             }
+            confirmed_shell_prompt =
+                shell_session && shell_prompt && !state.model.input.value.trim().is_empty();
             if state.mapping.as_ref().is_some_and(|old| old != &mapping) {
                 state.selection = None;
                 state.selection_origin_version = None;
@@ -341,6 +403,25 @@ impl NyaTermApp {
             }
             None
         };
+        // A child shell hides the OSC 133 lifecycle from us: the outer shell
+        // emits C for the command that started it, but its matching D arrives
+        // only after the child exits, and the child emits no marks itself.
+        // Without a D the suppression would outlive that command for the whole
+        // child shell (`su`, `sudo -i`, `docker exec`, nested `ssh`). A locally
+        // predicted line echoed back behind a recognized prompt is structural
+        // evidence that a shell line editor is accepting input again, so
+        // release the suppression instead of waiting for a D that cannot come.
+        // Pagers and child REPLs echo without a shell prompt prefix and keep
+        // their suppression.
+        if confirmed_shell_prompt
+            && self
+                .terminal
+                .assist
+                .command_suggestion_suppression
+                .release_at_shell_prompt()
+        {
+            self.schedule_command_suggestion_refresh(cx);
+        }
         if let Some(target) = queued {
             let _ = self.move_smart_input_cursor(target, cx);
         }
@@ -364,6 +445,7 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
+    use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
     use std::io::Read;
     use std::net::TcpListener;
     use std::time::Duration;
@@ -646,7 +728,8 @@ mod tests {
             let mut settings = app.settings.summary().clone();
             settings.interaction_command_suggestions_enabled = false;
             app.settings.replace_summary(settings);
-            app.terminal.assist.command_suggestions_suppressed = true;
+            app.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::CommandRunning;
             app.note_shell_editing_input(b"echo abc", cx);
             app.terminal
                 .seed_session_view("s1".into(), "$ echo abc".into(), "UTF-8");
@@ -676,7 +759,8 @@ mod tests {
             );
             app.reconcile_shell_editing("s1", cx);
             app.note_shell_editing_input(b"\r", cx);
-            app.terminal.assist.command_suggestions_suppressed = true;
+            app.terminal.assist.command_suggestion_suppression =
+                CommandSuggestionSuppression::CommandRunning;
             // Child typing may precede delivery of the outer shell's OSC C.
             app.note_shell_editing_input(b"echo abc", cx);
             app.terminal
@@ -693,7 +777,14 @@ mod tests {
                 EditCapability::EchoMatched
             );
             assert!(app.can_use_smart_cursor_selection());
-            assert!(app.terminal.assist.command_suggestions_suppressed);
+            // The unmarked child shell never emits OSC 133; a confirmed prompt
+            // echo releases the outer command's suppression instead.
+            assert!(
+                !app.terminal
+                    .assist
+                    .command_suggestion_suppression
+                    .is_suppressed()
+            );
         });
     }
 
