@@ -296,6 +296,7 @@ struct AiPanelState {
 struct AiComposerResize {
     start_y: Pixels,
     start_height: Pixels,
+    start_floor: f32,
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -2171,8 +2172,10 @@ impl AiFeatureState {
         &mut self,
         current_y: Pixels,
         natural_height: Pixels,
+        maximum_height: Pixels,
     ) -> Option<f32> {
-        self.panel.update_composer_resize(current_y, natural_height)
+        self.panel
+            .update_composer_resize(current_y, natural_height, maximum_height)
     }
 
     pub(in crate::features) fn finish_composer_resize(&mut self) -> bool {
@@ -2266,27 +2269,36 @@ impl AiChatState {
 }
 
 impl AiPanelState {
-    /// Beyond this the composer would crowd out the transcript entirely.
-    const COMPOSER_HEIGHT_MAX: f32 = 480.;
-
     fn start_composer_resize(&mut self, start_y: Pixels, start_height: Pixels) {
         self.composer_resize = Some(AiComposerResize {
             start_y,
             start_height,
+            start_floor: self.composer_min_height,
         });
     }
 
-    fn update_composer_resize(&mut self, current_y: Pixels, natural_height: Pixels) -> Option<f32> {
+    fn update_composer_resize(
+        &mut self,
+        current_y: Pixels,
+        natural_height: Pixels,
+        maximum_height: Pixels,
+    ) -> Option<f32> {
         let state = self.composer_resize?;
         let delta = f32::from(state.start_y - current_y);
-        let floor = (f32::from(state.start_height) + delta).min(Self::COMPOSER_HEIGHT_MAX);
-        // A floor inside the auto-grow range would shrink the box below its
-        // content, so the override simply turns off there.
-        self.composer_min_height = if floor > f32::from(natural_height) {
-            floor
-        } else {
-            0.
-        };
+        let maximum = maximum_height
+            .max(gpui::px(0.))
+            .min(super::panel::layout::COMPOSER_HEIGHT_MAX);
+        let floor = (f32::from(state.start_height) + delta).min(f32::from(maximum));
+        // A click or an upward drag already at the ceiling must not overwrite
+        // a taller runtime preference hidden by the current panel size.
+        self.composer_min_height =
+            if delta == 0. || (delta > 0. && floor <= f32::from(state.start_height)) {
+                state.start_floor
+            } else if delta < 0. && floor <= f32::from(natural_height.min(maximum)) {
+                0.
+            } else {
+                floor
+            };
         Some(self.composer_min_height)
     }
 

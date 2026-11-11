@@ -290,16 +290,11 @@ impl NyaTermApp {
     pub(in crate::features) fn start_ai_composer_resize(
         &mut self,
         event: &MouseDownEvent,
+        start_height: Pixels,
         cx: &mut Context<Self>,
     ) {
-        // An active override pins the box, so the press anchors on it; at the
-        // default the visible edge is the auto-grow height instead.
-        let stored_floor = px(self.ai.composer_min_height());
-        let start_height = if stored_floor > px(0.) {
-            stored_floor
-        } else {
-            self.ai_composer_natural_height(cx)
-        };
+        // Anchor on the laid-out box, including natural growth and the current
+        // panel budget, rather than a preference hidden by either constraint.
         if start_height <= px(0.) {
             return;
         }
@@ -316,9 +311,10 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let natural_height = self.ai_composer_natural_height(cx);
-        let Some(height) = self
-            .ai
-            .update_composer_resize(event.position.y, natural_height)
+        let maximum_height = self.ai_panel.read(cx).composer_height_limit(cx);
+        let Some(height) =
+            self.ai
+                .update_composer_resize(event.position.y, natural_height, maximum_height)
         else {
             return;
         };

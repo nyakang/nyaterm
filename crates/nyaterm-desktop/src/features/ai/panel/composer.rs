@@ -7,11 +7,12 @@ use gpui::{
 use nyaterm_core::{AgentCommandExecutionMode, AiAgentKind, AiMode};
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaInputShell, NyaMenuAnchor, NyaMenuItem,
-    NyaSearchInput,
+    NyaScrollable, NyaSearchInput,
 };
 use rust_i18n::t;
 
 use super::components::{agent_kind_display_name, ai_send_button, execution_mode_label};
+use super::layout::{COMPOSER_GAP, COMPOSER_HEIGHT_MAX, COMPOSER_PADDING};
 use super::{AI_COMPOSER_RESIZE_HANDLE_ID, AiPanel, AiPanelSnapshot, ai_agent_status_badge};
 use crate::features::view_widgets::{APP_OVERLAY_PRIORITY, horizontal_resize_handle_borderless};
 
@@ -25,11 +26,20 @@ impl AiPanel {
     ) -> AnyElement {
         let palette = snapshot.chrome.palette;
         let compact = self.layout.is_compact();
+        let minimum = snapshot
+            .prompt_input
+            .read(cx)
+            .textarea_min_height(cx)
+            .unwrap_or(px(38.));
+        let limits = self.composer_layout.limits(minimum);
+        let scroll_context = limits
+            .is_some_and(|limits| self.composer_layout.context_height + minimum > limits.editable);
         let prompt_input = NyaInputShell::new("ai.chat.prompt", &snapshot.prompt_input)
             .multi_line()
-            .when(snapshot.composer_min_height > 0., |this| {
-                this.height(px(snapshot.composer_min_height))
-            })
+            .height_limits(
+                px(snapshot.composer_min_height),
+                limits.map_or(COMPOSER_HEIGHT_MAX, |limits| limits.prompt),
+            )
             .gpui_context_menu([
                 t!("menu.cut").into(),
                 t!("menu.copy").into(),
@@ -103,19 +113,51 @@ impl AiPanel {
                 .child(mode_controls)
                 .child(model_control)
                 .child(trailing)
-        };
+        }
+        .flex_none();
 
-        div()
-            .debug_selector(|| "ai-composer".to_string())
-            .relative()
-            .flex_none()
-            .border_t_1()
-            .border_color(rgb(palette.border))
-            .bg(snapshot.chrome.transparent_section_header)
-            .p_2()
+        let prompt_index = usize::from(snapshot.quoted_text.is_some())
+            + usize::from(!snapshot.target_sessions.is_empty());
+        let body_entity = cx.weak_entity();
+        let composer_entity = body_entity.clone();
+        let editable = div()
+            .w_full()
+            .min_w_0()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap(COMPOSER_GAP)
+            .on_children_prepainted(move |bounds, _, cx| {
+                let Some(panel) = body_entity.upgrade() else {
+                    return;
+                };
+                let prompt_height = bounds[prompt_index].size.height;
+                let context_height = bounds
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != prompt_index)
+                    .map(|(_, bounds)| bounds.size.height)
+                    .sum::<gpui::Pixels>()
+                    + COMPOSER_GAP * bounds.len().saturating_sub(1) as f32;
+                let layout = panel.read(cx).composer_layout;
+                if (layout.context_height - context_height).abs() <= px(0.5)
+                    && (layout.prompt_height - prompt_height).abs() <= px(0.5)
+                {
+                    return;
+                }
+                cx.defer(move |cx| {
+                    panel.update(cx, |panel, cx| {
+                        let layout = panel.composer_layout;
+                        if (layout.context_height - context_height).abs() <= px(0.5)
+                            && (layout.prompt_height - prompt_height).abs() <= px(0.5)
+                        {
+                            return;
+                        }
+                        panel.composer_layout.context_height = context_height;
+                        panel.composer_layout.prompt_height = prompt_height;
+                        cx.notify();
+                    })
+                });
+            })
             .when_some(snapshot.quoted_text.clone(), |this, quoted_text| {
                 this.child(self.ai_quote_bar(palette, quoted_text, cx))
             })
@@ -127,6 +169,7 @@ impl AiPanel {
                     .debug_selector(|| "ai-prompt".to_string())
                     .w_full()
                     .relative()
+                    .flex_none()
                     .flex()
                     .when(composer_disabled, |this| this.opacity(0.56))
                     .on_key_down(cx.listener(|panel, event: &gpui::KeyDownEvent, _, cx| {
@@ -135,11 +178,10 @@ impl AiPanel {
                         }
                     }))
                     .child(div().min_w_0().flex_1().child(prompt_input))
-                    .when(snapshot.mention_open, |this| {
+                    .when(snapshot.mention_open && !scroll_context, |this| {
                         this.child(self.ai_mention_popover(snapshot, cx))
                     }),
             )
-            .child(footer)
             .when(snapshot.file_action_ready, |this| {
                 this.child(
                     div()
@@ -147,6 +189,63 @@ impl AiPanel {
                         .text_color(rgb(palette.warning))
                         .child(t!("ai.fileActionReady")),
                 )
+            });
+        let editable_viewport = div()
+            .min_h_0()
+            .min_w_0()
+            .w_full()
+            .when_some(limits, |this, limits| this.max_h(limits.editable))
+            .child(editable);
+        let editable_viewport = if scroll_context {
+            editable_viewport.overflow_y_scrollbar().into_any_element()
+        } else {
+            editable_viewport.into_any_element()
+        };
+        // Keep the viewport's layout outside the wrapper's scroll-translated
+        // content node; the footer and menus remain siblings of this shell.
+        let editable_viewport = div()
+            .debug_selector(|| "ai-composer-editable-viewport".to_string())
+            .w_full()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .when_some(limits, |this, limits| this.max_h(limits.editable))
+            .child(editable_viewport);
+
+        div()
+            .debug_selector(|| "ai-composer".to_string())
+            .relative()
+            .flex_none()
+            .border_t_1()
+            .border_color(rgb(palette.border))
+            .bg(snapshot.chrome.transparent_section_header)
+            .p(COMPOSER_PADDING)
+            .flex()
+            .flex_col()
+            .gap(COMPOSER_GAP)
+            .when_some(limits, |this, limits| this.max_h(limits.composer))
+            .on_children_prepainted(move |bounds, _, cx| {
+                let Some(panel) = composer_entity.upgrade() else {
+                    return;
+                };
+                let footer_height = bounds[1].size.height;
+                if panel.read(cx).composer_layout.footer_height == footer_height {
+                    return;
+                }
+                cx.defer(move |cx| {
+                    panel.update(cx, |panel, cx| {
+                        if panel.composer_layout.footer_height != footer_height {
+                            panel.composer_layout.footer_height = footer_height;
+                            cx.notify();
+                        }
+                    })
+                });
+            })
+            .child(editable_viewport)
+            .child(footer)
+            .when(snapshot.mention_open && scroll_context, |this| {
+                this.child(self.ai_mention_popover(snapshot, cx))
             })
             // Resize handles paint in the default deferred layer; the menu must
             // paint above them and own the pointer where they overlap.
@@ -192,9 +291,10 @@ impl AiPanel {
                 cx.listener(move |panel, event: &MouseDownEvent, _, cx| {
                     let event = event.clone();
                     let drag_id = drag_id.clone();
+                    let start_height = panel.composer_visible_height();
                     panel.with_app(cx, |app, cx| {
                         app.activate_resize_handle_immediately(drag_id, cx);
-                        app.start_ai_composer_resize(&event, cx);
+                        app.start_ai_composer_resize(&event, start_height, cx);
                     });
                 }),
             ),
