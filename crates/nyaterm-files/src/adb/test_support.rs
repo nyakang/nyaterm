@@ -21,7 +21,14 @@ pub(crate) struct Node {
 pub(crate) struct Device {
     pub nodes: BTreeMap<Vec<u8>, Node>,
     pub receives: usize,
+    pub sends: usize,
+    pub fail_sends: usize,
+    pub fail_receives: usize,
+    pub renames: usize,
+    pub fail_rename: bool,
+    pub preserve_change_time: bool,
     pub change_on_receive: bool,
+    pub change_on_send: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 pub(crate) struct AdbFixture {
@@ -118,7 +125,7 @@ fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
     let request = host_request(&mut socket)?;
     socket.write_all(b"OKAY")?;
     if request.ends_with(b":features") {
-        return socket.write_all(b"0000");
+        return socket.write_all(b"0007stat_v2");
     }
     assert!(request.starts_with(b"host:transport:"));
     let request = host_request(&mut socket)?;
@@ -150,6 +157,10 @@ fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
                 },
             );
         } else if command.starts_with(b"mv ") {
+            state.renames += 1;
+            if state.fail_rename {
+                return socket.write_all(&[3, 1, 0, 0, 0, 1]);
+            }
             if !command.starts_with(b"mv -n") || !state.nodes.contains_key(&args[1]) {
                 if let Some(node) = state.nodes.remove(&args[0]) {
                     state.nodes.insert(args[1].clone(), node);
@@ -157,6 +168,21 @@ fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
                     exit = 1;
                 }
             }
+        } else if command.starts_with(b"chmod ") {
+            let mode = std::str::from_utf8(command)
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let mode = u32::from_str_radix(mode, 8).unwrap();
+            state.nodes.get_mut(&args[0]).unwrap().mode = 0o100000 | mode;
+        } else if command.starts_with(b"touch ") {
+            let time = std::str::from_utf8(&args[0])
+                .unwrap()
+                .trim_start_matches('@')
+                .parse::<u32>()
+                .unwrap();
+            state.nodes.get_mut(&args[1]).unwrap().modified = time;
         } else if command.starts_with(b"rm -") {
             state.nodes.remove(&args[0]);
         } else {
@@ -165,91 +191,134 @@ fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
         return socket.write_all(&[3, 1, 0, 0, 0, exit]);
     }
     assert_eq!(request, b"sync:");
-    let mut tag = [0; 4];
-    socket.read_exact(&mut tag)?;
-    let mut length = [0; 4];
-    socket.read_exact(&mut length)?;
-    let mut path = vec![0; u32::from_le_bytes(length) as usize];
-    socket.read_exact(&mut path)?;
-    match &tag {
-        b"STAT" => {
-            let node = state.lock().unwrap().nodes.get(&path).cloned();
-            socket.write_all(b"STAT")?;
-            for value in node.map_or([0, 0, 0], |node| {
-                [node.mode, node.data.len() as u32, node.modified]
-            }) {
-                socket.write_all(&value.to_le_bytes())?;
+    loop {
+        let mut tag = [0; 4];
+        match socket.read_exact(&mut tag) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let mut length = [0; 4];
+        socket.read_exact(&mut length)?;
+        let mut path = vec![0; u32::from_le_bytes(length) as usize];
+        socket.read_exact(&mut path)?;
+        match &tag {
+            b"LST2" => {
+                let node = state.lock().unwrap().nodes.get(&path).cloned();
+                let mut data = [0u8; 68];
+                if let Some(node) = node {
+                    data[20..24].copy_from_slice(&node.mode.to_le_bytes());
+                    data[28..32].copy_from_slice(&2000u32.to_le_bytes());
+                    data[32..36].copy_from_slice(&2000u32.to_le_bytes());
+                    data[36..44].copy_from_slice(&(node.data.len() as u64).to_le_bytes());
+                    data[52..60].copy_from_slice(&(node.modified as u64).to_le_bytes());
+                } else {
+                    data[0..4].copy_from_slice(&2u32.to_le_bytes());
+                }
+                socket.write_all(b"LST2")?;
+                socket.write_all(&data)?;
             }
-        }
-        b"LIST" => {
-            let mut prefix = path;
-            if !prefix.ends_with(b"/") {
-                prefix.push(b'/');
+            b"STAT" => {
+                let node = state.lock().unwrap().nodes.get(&path).cloned();
+                socket.write_all(b"STAT")?;
+                for value in node.map_or([0, 0, 0], |node| {
+                    [node.mode, node.data.len() as u32, node.modified]
+                }) {
+                    socket.write_all(&value.to_le_bytes())?;
+                }
             }
-            for (path, node) in &state.lock().unwrap().nodes {
-                if let Some(name) = path
-                    .strip_prefix(prefix.as_slice())
-                    .filter(|name| !name.is_empty() && !name.contains(&b'/'))
-                {
-                    socket.write_all(b"DENT")?;
-                    for value in [
-                        node.mode,
-                        node.data.len() as u32,
-                        node.modified,
-                        name.len() as u32,
-                    ] {
-                        socket.write_all(&value.to_le_bytes())?;
+            b"LIST" => {
+                let mut prefix = path;
+                if !prefix.ends_with(b"/") {
+                    prefix.push(b'/');
+                }
+                for (path, node) in &state.lock().unwrap().nodes {
+                    if let Some(name) = path
+                        .strip_prefix(prefix.as_slice())
+                        .filter(|name| !name.is_empty() && !name.contains(&b'/'))
+                    {
+                        socket.write_all(b"DENT")?;
+                        for value in [
+                            node.mode,
+                            node.data.len() as u32,
+                            node.modified,
+                            name.len() as u32,
+                        ] {
+                            socket.write_all(&value.to_le_bytes())?;
+                        }
+                        socket.write_all(name)?;
                     }
-                    socket.write_all(name)?;
                 }
+                socket.write_all(b"DONE")?;
+                socket.write_all(&[0; 16])?;
             }
-            socket.write_all(b"DONE")?;
-            socket.write_all(&[0; 16])?;
-        }
-        b"RECV" => {
-            let mut state = state.lock().unwrap();
-            let data = state.nodes.get(&path).unwrap().data.clone();
-            state.receives += 1;
-            if state.change_on_receive {
-                state.nodes.get_mut(&path).unwrap().modified += 1;
-                state.change_on_receive = false;
-            }
-            drop(state);
-            for chunk in data.chunks(64 * 1024) {
-                socket.write_all(b"DATA")?;
-                socket.write_all(&(chunk.len() as u32).to_le_bytes())?;
-                socket.write_all(chunk)?;
-            }
-            socket.write_all(b"DONE\0\0\0\0")?;
-        }
-        b"SEND" => {
-            let comma = path.iter().rposition(|byte| *byte == b',').unwrap();
-            path.truncate(comma);
-            let mut data = Vec::new();
-            loop {
-                socket.read_exact(&mut tag)?;
-                socket.read_exact(&mut length)?;
-                if &tag == b"DONE" {
-                    break;
+            b"RECV" => {
+                let mut state = state.lock().unwrap();
+                let data = state.nodes.get(&path).unwrap().data.clone();
+                state.receives += 1;
+                let fail = state.fail_receives > 0;
+                state.fail_receives = state.fail_receives.saturating_sub(1);
+                if state.change_on_receive {
+                    state.nodes.get_mut(&path).unwrap().modified += 1;
+                    state.change_on_receive = false;
                 }
-                assert_eq!(&tag, b"DATA");
-                let mut chunk = vec![0; u32::from_le_bytes(length) as usize];
-                socket.read_exact(&mut chunk)?;
-                data.extend(chunk);
+                drop(state);
+                for chunk in data.chunks(64 * 1024) {
+                    socket.write_all(b"DATA")?;
+                    socket.write_all(&(chunk.len() as u32).to_le_bytes())?;
+                    socket.write_all(chunk)?;
+                    if fail {
+                        return Ok(());
+                    }
+                }
+                socket.write_all(b"DONE\0\0\0\0")?;
             }
-            state.lock().unwrap().nodes.insert(
-                path,
-                Node {
-                    mode: 0o100644,
-                    data,
-                    modified: 7,
-                },
-            );
-            socket.write_all(b"OKAY\0\0\0\0")?;
+            b"SEND" => {
+                let comma = path.iter().rposition(|byte| *byte == b',').unwrap();
+                let mode = std::str::from_utf8(&path[comma + 1..])
+                    .unwrap()
+                    .parse::<u32>()
+                    .unwrap();
+                path.truncate(comma);
+                let mut data = Vec::new();
+                loop {
+                    socket.read_exact(&mut tag)?;
+                    socket.read_exact(&mut length)?;
+                    if &tag == b"DONE" {
+                        break;
+                    }
+                    assert_eq!(&tag, b"DATA");
+                    let mut chunk = vec![0; u32::from_le_bytes(length) as usize];
+                    socket.read_exact(&mut chunk)?;
+                    data.extend(chunk);
+                }
+                let mut state = state.lock().unwrap();
+                state.sends += 1;
+                state.nodes.insert(
+                    path,
+                    Node {
+                        mode: 0o100000 | mode | ((mode & 0o700) >> 3) | ((mode & 0o700) >> 6),
+                        data,
+                        modified: u32::from_le_bytes(length),
+                    },
+                );
+                let preserve_time = state.preserve_change_time;
+                if let Some((path, data)) = state.change_on_send.take() {
+                    let node = state.nodes.get_mut(&path).unwrap();
+                    node.data = data;
+                    if !preserve_time {
+                        node.modified += 1;
+                    }
+                }
+                if state.fail_sends > 0 {
+                    state.fail_sends -= 1;
+                    return Ok(());
+                }
+                socket.write_all(b"OKAY\0\0\0\0")?;
+            }
+            _ => panic!("unexpected fixture Sync request"),
         }
-        _ => panic!("unexpected fixture Sync request"),
     }
-    Ok(())
 }
 
 fn shell_paths(command: &[u8]) -> Vec<Vec<u8>> {

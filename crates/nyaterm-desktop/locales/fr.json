@@ -1,7 +1,6 @@
 {
   "android": {
     "directoryLoadFailed": "Échec du chargement du répertoire : %{error}",
-
     "screenSettings": "Paramètres de l’écran",
     "maxSize": "Côté maximal de l’écran (pixels)",
     "maxFps": "Fréquence maximale (FPS)",
@@ -26,7 +25,7 @@
     "zoom": "Zoom",
     "reconnect": "Reconnecter",
     "adbExecutable": "Exécutable ADB",
-    "adbPathHint": "Laissez vide pour utiliser ADB intégré. Le chemin indiqué doit être valide.",
+    "adbPathHint": "Laissez vide pour utiliser ADB intégré. Le chemin indiqué doit être valide. Les transferts ADB peuvent être mis en pause. Après un échec, ils reprennent depuis le début.",
     "bundledAdb": "ADB intégré",
     "files": "Fichiers Android",
     "shell": "Terminal Android",
@@ -69,7 +68,17 @@
       "fileOperationFailed": "L’opération sur les fichiers Android a échoué",
       "invalidFilePath": "Utilisez un chemin Android absolu commençant par /.",
       "invalidPathToken": "Les données du chemin Android sont invalides. Actualisez le dossier et réessayez.",
-      "invalidFilename": "Le nom de fichier Android est invalide."
+      "invalidFilename": "Le nom de fichier Android est invalide.",
+      "inputQueueFull": "La file d’entrée est pleine. Les touches et le toucher ont été relâchés. Réessayez dans un instant.",
+      "inputTextTooLong": "Le texte Android dépasse la limite de 64 Kio en UTF-8.",
+      "inputNul": "L’entrée Android ne peut pas contenir de caractère NUL.",
+      "inputPacketTooLong": "L’entrée Android encodée dépasse la taille maximale du message.",
+      "inputInvalid": "Les coordonnées ou les valeurs de l’entrée Android sont invalides.",
+      "fileAttributes": "Impossible de lire les permissions et le propriétaire de la cible Android ; le remplacement a été arrêté.",
+      "filePermissions": "Impossible d’appliquer ou de conserver les permissions et le propriétaire du fichier Android en toute sécurité.",
+      "fileTimestamp": "Impossible de conserver la date de modification du fichier ou du dossier.",
+      "editLimit": "Le contenu édité Android dépasse la limite de 16 MiB.",
+      "revisionRequired": "Une révision du fichier est nécessaire pour enregistrer en toute sécurité. Rouvrez le fichier avant de l’enregistrer."
     }
   },
   "mcp": {
@@ -1594,6 +1603,8 @@
     "goHome": "Accueil"
   },
   "fileTransfer": {
+    "scanning": "Analyse des fichiers…",
+    "committing": "Enregistrement des fichiers transférés…",
     "cancel": "Annuler",
     "cancelAll": "Tout annuler",
     "cancelled": "Annulé",

@@ -598,6 +598,31 @@ impl RemoteFileService {
         }
     }
 
+    pub(crate) fn set_modified_remote_path(
+        &self,
+        path: &RemoteFilePath,
+        modified: u32,
+    ) -> anyhow::Result<()> {
+        match self.backend()? {
+            RemoteFileBackendKind::Sftp => self.sftp()?.set_modified_remote_path(path, modified),
+            kind => {
+                self.require_display_path(path)?;
+                self.shell(kind).exec_ok(
+                    format!(
+                        "touch -m -d '@{modified}' -- {}",
+                        shell_quote(&path.display_path)
+                    ),
+                    None,
+                )?;
+                anyhow::ensure!(
+                    self.remote_file_properties(path)?.modified_at == Some(modified),
+                    "remote timestamp could not be preserved"
+                );
+                Ok(())
+            }
+        }
+    }
+
     pub fn update_path_attributes(
         &self,
         path: impl AsRef<str>,
@@ -1158,6 +1183,7 @@ impl RemoteFileService {
                     skipped: false,
                 };
                 progress(SftpTransferProgress {
+                    phase: None,
                     remote_path: summary.remote_path.clone(),
                     local_path: summary.local_path.clone(),
                     bytes_transferred: summary.bytes,
@@ -1805,6 +1831,7 @@ where
                 control.clone(),
                 move |current| {
                     report.lock().expect("shell progress lock")(SftpTransferProgress {
+                        phase: None,
                         remote_path: remote_name.clone(),
                         local_path: local_name.clone(),
                         bytes_transferred: offset.saturating_add(current),
@@ -1817,6 +1844,7 @@ where
         }
         completed = completed.saturating_add(1);
         callback.lock().expect("shell progress lock")(SftpTransferProgress {
+            phase: None,
             remote_path: remote,
             local_path: local,
             bytes_transferred: bytes,
@@ -1826,6 +1854,7 @@ where
         });
     }
     callback.lock().expect("shell progress lock")(SftpTransferProgress {
+        phase: None,
         remote_path: remote_path.to_string(),
         local_path: local_path.to_path_buf(),
         bytes_transferred: bytes,
@@ -1896,6 +1925,7 @@ where
                 transfer_options,
                 move |current| {
                     report.lock().expect("shell progress lock")(SftpTransferProgress {
+                        phase: None,
                         remote_path: remote_name.clone(),
                         local_path: local_name.clone(),
                         bytes_transferred: offset.saturating_add(current),
@@ -1908,6 +1938,7 @@ where
         }
         completed = completed.saturating_add(1);
         callback.lock().expect("shell progress lock")(SftpTransferProgress {
+            phase: None,
             remote_path: remote,
             local_path: local,
             bytes_transferred: bytes,
@@ -1917,6 +1948,7 @@ where
         });
     }
     callback.lock().expect("shell progress lock")(SftpTransferProgress {
+        phase: None,
         remote_path: remote_path.to_string(),
         local_path: local_path.to_path_buf(),
         bytes_transferred: bytes,

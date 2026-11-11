@@ -464,6 +464,9 @@ impl NyaTermApp {
             match event.event {
                 TransferJobEvent::Started { detail } => job.detail = detail,
                 TransferJobEvent::Progress(progress) => {
+                    if job.status == TransferJobStatus::Running {
+                        job.detail = format_transfer_progress(&progress);
+                    }
                     job.speed
                         .record(progress.bytes_transferred, std::time::Instant::now());
                     job.progress = Some(progress);
@@ -1459,6 +1462,7 @@ impl NyaTermApp {
                 };
                 job.entries.clear();
                 job.progress = Some(SftpTransferProgress {
+                    phase: None,
                     remote_path: summary.remote_path.clone(),
                     local_path: summary.local_path.clone(),
                     bytes_transferred: summary.bytes,
@@ -1492,6 +1496,7 @@ impl NyaTermApp {
                 job.status = TransferJobStatus::Completed;
                 job.detail = format!("{} uploaded", format_file_size(Some(summary.bytes)));
                 job.progress = Some(SftpTransferProgress {
+                    phase: None,
                     remote_path: summary.remote_path.clone(),
                     local_path: summary.local_path.clone(),
                     bytes_transferred: summary.bytes,
@@ -1887,6 +1892,7 @@ mod tests {
                 app.apply_transfer_event(TransferJobResult {
                     id: "external".into(),
                     event: TransferJobEvent::Progress(SftpTransferProgress {
+                phase: None,
                         remote_path: "/remote/example.txt".into(),
                         local_path: prepared.clone(),
                         bytes_transferred: 3,
@@ -2292,6 +2298,7 @@ mod tests {
         TransferJobResult {
             id: id.to_string(),
             event: TransferJobEvent::Progress(SftpTransferProgress {
+                phase: None,
                 remote_path: format!("/remote/{id}"),
                 local_path: PathBuf::from(format!("/local/{id}")),
                 bytes_transferred: bytes,
@@ -2856,6 +2863,7 @@ mod tests {
                 local_path: PathBuf::from("/tmp/file"),
             },
             &TransferJobEvent::Progress(SftpTransferProgress {
+                phase: None,
                 remote_path: "/tmp/file".to_string(),
                 local_path: PathBuf::from("/tmp/file"),
                 bytes_transferred: 1,
@@ -2898,6 +2906,7 @@ mod tests {
     #[test]
     fn inactive_transfer_progress_does_not_request_ui_refresh() {
         let progress = TransferJobEvent::Progress(SftpTransferProgress {
+            phase: None,
             remote_path: "/tmp/file".to_string(),
             local_path: PathBuf::from("/tmp/file"),
             bytes_transferred: 1,

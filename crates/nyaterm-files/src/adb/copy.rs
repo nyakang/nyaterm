@@ -6,6 +6,7 @@ use crate::sftp_transfer_types::{
     SftpDuplicateCacheKey, SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest,
     SftpTransferDirection, SftpTransferProgress,
 };
+use std::path::PathBuf;
 
 fn browser(endpoint: &FileTransferEndpoint) -> (FileBrowserService, RemoteFilePath) {
     match endpoint {
@@ -39,6 +40,22 @@ fn exists(endpoint: &FileTransferEndpoint) -> anyhow::Result<bool> {
     }
 }
 
+fn wait_request(request: &FileCopyRequest) -> anyhow::Result<()> {
+    loop {
+        request.control.check_cancelled()?;
+        for endpoint in [&request.source, &request.destination] {
+            if let FileTransferEndpoint::Adb { service, .. } = endpoint {
+                service.runtime.check()?;
+                service.control.check_cancelled()?;
+            }
+        }
+        if !request.control.is_paused() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 pub(crate) fn execute(
     request: FileCopyRequest,
     callback: impl FnMut(SftpTransferProgress) + Send + 'static,
@@ -51,8 +68,14 @@ pub(crate) fn execute(
         1
     };
     let progress = CopyProgress::new(&request.source, &request.destination, stages, callback);
-    progress.scan(&request.source, &request.control)?;
-    let (bytes, copied, target) = node(&request, &progress, 0)?;
+    let inventory = super::inventory::Inventory::scan_with_wait(
+        &request.source,
+        &request.control,
+        super::inventory::MAX_ENTRIES,
+        |_| wait_request(&request),
+    )?;
+    progress.set_inventory(inventory.bytes, inventory.len() as u64);
+    let (bytes, copied, target) = node(&request, &progress, &inventory, 0)?;
     if copied {
         progress.finish(bytes);
     }
@@ -68,10 +91,14 @@ pub(crate) fn execute(
 fn node(
     request: &FileCopyRequest,
     progress: &CopyProgress,
+    inventory: &super::inventory::Inventory,
     depth: usize,
 ) -> anyhow::Result<(u64, bool, String)> {
-    anyhow::ensure!(depth < 128, "Android directory nesting exceeds limit");
-    request.control.wait_if_paused_blocking()?;
+    anyhow::ensure!(
+        depth <= super::inventory::MAX_DEPTH,
+        crate::file_browser::FileTransferEntryError::LimitExceeded
+    );
+    wait_request(request)?;
     let (source, source_path) = browser(&request.source);
     if let FileTransferEndpoint::Local(path) = &request.source {
         anyhow::ensure!(
@@ -79,12 +106,7 @@ fn node(
             crate::file_browser::FileTransferEntryError::InvalidDestination
         );
     }
-    let properties = match &source {
-        FileBrowserService::Adb(service) => {
-            service.remote_file_properties_with_control(&source_path, &request.control)?
-        }
-        _ => source.remote_file_properties(&source_path)?,
-    };
+    let properties = inventory.properties(&request.source)?;
     if depth == 0
         && let Some(expected) = request.options.expected_source_type()
     {
@@ -121,7 +143,9 @@ fn node(
         },
         is_directory: directory,
     };
-    source.validate_copy_destination(&source_path, &target, &path, directory)?;
+    if depth == 0 {
+        source.validate_copy_destination(&source_path, &target, &path, directory)?;
+    }
     let mut replace = false;
     let promised_local = if request.options.is_promised_download() {
         match &destination {
@@ -220,13 +244,22 @@ fn node(
             "destination is not a directory"
         );
         let mut total = 0u64;
-        let entries = match &source {
-            FileBrowserService::Adb(service) => {
-                service.list_dir_path_with_control(&source_path, &request.control)?
-            }
-            _ => source.list_dir_path(&source_path)?,
-        };
-        for entry in entries {
+        let entries = inventory.children(&request.source)?;
+        for endpoint in entries {
+            let (_, child_source_path) = browser(&endpoint);
+            let child_properties = inventory.properties(&endpoint)?;
+            let entry = crate::sftp::SftpFileEntry {
+                name: child_properties.name,
+                path: child_source_path.display_path.clone(),
+                raw_path_token: child_source_path.raw_path_token.clone(),
+                file_type: child_properties.file_type,
+                size: child_properties.size,
+                permissions: child_properties.permissions,
+                modified_at: child_properties.modified_at,
+                owner: String::new(),
+                group: String::new(),
+                symlink_target_is_directory: false,
+            };
             request.control.check_cancelled()?;
             if matches!(entry.name.as_str(), "." | "..") {
                 continue;
@@ -255,49 +288,80 @@ fn node(
                     .with_transfer_options(request.options.transfer_options().clone()),
             };
             total = total
-                .checked_add(node(&nested, progress, depth + 1)?.0)
+                .checked_add(node(&nested, progress, inventory, depth + 1)?.0)
                 .ok_or_else(|| anyhow::anyhow!("copy size overflow"))?;
+        }
+        if request.options.transfer_options().preserve_timestamps {
+            if let Some(modified) = properties.modified_at {
+                match &target {
+                    FileBrowserService::Adb(service) => service.set_modified(&path, modified)?,
+                    FileBrowserService::Local(_) => {
+                        std::fs::File::open(PathBuf::from(&path.display_path))?.set_modified(
+                            std::time::UNIX_EPOCH
+                                + std::time::Duration::from_secs(u64::from(modified)),
+                        )?;
+                    }
+                    FileBrowserService::Remote(service) => {
+                        service.set_modified_remote_path(&path, modified)?
+                    }
+                }
+            } else {
+                anyhow::bail!(super::AdbFilePolicyError::TimestampUnavailable);
+            }
         }
         progress.finish_item();
         return Ok((total, true, path.display_path));
     }
     if owned
-        && let (Some(local), FileTransferEndpoint::Adb { service, path }) =
+        && let (Some(local), FileTransferEndpoint::Adb { path, .. }) =
             (&promised_local, &request.source)
     {
-        let mut local_hash = super::HashWriter::default();
-        std::io::copy(&mut std::fs::File::open(local)?, &mut local_hash)?;
-        let mut remote_hash = super::HashWriter::default();
-        let bytes = service.receive(
-            path,
-            &mut remote_hash,
-            &request.control,
-            progress.cumulative_bytes(),
-        )?;
+        let raw = super::raw_path(path)?;
         anyhow::ensure!(
-            local_hash.digest() == remote_hash.digest(),
+            request.options.download_runtime()?.reusable(
+                local,
+                &raw,
+                properties.size,
+                properties.modified_at
+            )?,
             crate::file_browser::FileTransferEntryError::SourceChanged
         );
+        let bytes = properties.size.unwrap_or(0);
         progress.finish_item();
         return Ok((bytes, true, local.to_string_lossy().into_owned()));
     }
+    let current = source.remote_file_properties(&source_path)?;
+    anyhow::ensure!(
+        current.file_type == properties.file_type
+            && current.size == properties.size
+            && current.modified_at == properties.modified_at,
+        crate::file_browser::FileTransferEntryError::SourceChanged
+    );
     let bytes = match (&request.source, &destination) {
         (FileTransferEndpoint::Local(local), FileTransferEndpoint::Adb { service, path }) => {
-            service.upload(
+            service.upload_with_options(
                 local,
                 path,
                 replace,
                 &request.control,
-                progress.cumulative_bytes(),
+                request.options.transfer_options(),
+                |event| match event {
+                    super::AdbTransferEvent::Data(bytes) => progress.add_bytes(bytes),
+                    super::AdbTransferEvent::Phase(phase) => progress.phase(phase),
+                },
             )?
         }
         (FileTransferEndpoint::Adb { service, path }, FileTransferEndpoint::Local(local)) => {
-            service.download(
+            service.download_with_options(
                 path,
                 local,
                 replace,
                 &request.control,
-                progress.cumulative_bytes(),
+                request.options.transfer_options(),
+                |event| match event {
+                    super::AdbTransferEvent::Data(bytes) => progress.add_bytes(bytes),
+                    super::AdbTransferEvent::Phase(phase) => progress.phase(phase),
+                },
             )?
         }
         _ => {
@@ -305,12 +369,16 @@ fn node(
             let local = temp.path().join("content");
             match &request.source {
                 FileTransferEndpoint::Adb { service, path } => {
-                    service.download(
+                    service.download_with_options(
                         path,
                         &local,
                         false,
                         &request.control,
-                        progress.cumulative_bytes(),
+                        request.options.transfer_options(),
+                        |event| match event {
+                            super::AdbTransferEvent::Data(bytes) => progress.add_bytes(bytes),
+                            super::AdbTransferEvent::Phase(phase) => progress.phase(phase),
+                        },
                     )?;
                 }
                 _ => {
@@ -320,16 +388,30 @@ fn node(
                         control: request.control.clone(),
                         options: request.options.clone(),
                     }
-                    .execute()?;
+                    .execute_with_progress({
+                        let progress = progress.clone();
+                        let mut reported = 0;
+                        move |value| {
+                            let delta = value.bytes_transferred.saturating_sub(reported);
+                            reported = value.bytes_transferred;
+                            if delta > 0 {
+                                progress.add_bytes(delta);
+                            }
+                        }
+                    })?;
                 }
             }
             match &destination {
-                FileTransferEndpoint::Adb { service, path } => service.upload(
+                FileTransferEndpoint::Adb { service, path } => service.upload_with_options(
                     &local,
                     path,
                     replace,
                     &request.control,
-                    progress.cumulative_bytes(),
+                    request.options.transfer_options(),
+                    |event| match event {
+                        super::AdbTransferEvent::Data(bytes) => progress.add_bytes(bytes),
+                        super::AdbTransferEvent::Phase(phase) => progress.phase(phase),
+                    },
                 )?,
                 _ => {
                     FileCopyRequest {
@@ -338,7 +420,17 @@ fn node(
                         control: request.control.clone(),
                         options: request.options.clone(),
                     }
-                    .execute()?
+                    .execute_with_progress({
+                        let progress = progress.clone();
+                        let mut reported = 0;
+                        move |value| {
+                            let delta = value.bytes_transferred.saturating_sub(reported);
+                            reported = value.bytes_transferred;
+                            if delta > 0 {
+                                progress.add_bytes(delta);
+                            }
+                        }
+                    })?
                     .bytes
                 }
             }

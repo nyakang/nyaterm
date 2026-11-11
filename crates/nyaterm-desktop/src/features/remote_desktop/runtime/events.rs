@@ -624,6 +624,7 @@ impl NyaTermApp {
                     RdpClipboardTransferStatus::Cancelled => TransferJobStatus::Cancelled,
                 };
                 let sample = SftpTransferProgress {
+                    phase: None,
                     remote_path: "RDP clipboard".to_string(),
                     local_path: std::path::PathBuf::new(),
                     bytes_transferred: progress.transferred_bytes,

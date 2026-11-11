@@ -8,15 +8,15 @@ use crate::sftp::{
 };
 use nyaterm_android::adb::client::DeviceBinding;
 use nyaterm_android::adb::shell::{execute, execute_with_cancel, quote};
-use nyaterm_android::adb::sync::{FileStat, SyncStream};
-use nyaterm_android::error::{AdbError, AdbResult};
-use sha2::{Digest, Sha256};
+use nyaterm_android::adb::sync::FileStat;
+use nyaterm_android::error::AdbError;
 use std::io::Write;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) mod copy;
+pub(crate) mod inventory;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod transfer;
+pub(crate) use transfer::AdbTransferEvent;
 #[cfg(test)]
 mod transfer_tests;
 
@@ -36,6 +36,45 @@ pub enum AdbFileValidationError {
     InvalidFilename,
 }
 
+/// Policy failures are stable and contain no device or filesystem data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AdbFilePolicyError {
+    #[error("Android target attributes are unavailable")]
+    AttributesUnavailable,
+    #[error("Android file permissions or ownership could not be preserved")]
+    PermissionsUnavailable,
+    #[error("File timestamp could not be preserved")]
+    TimestampUnavailable,
+    #[error("Android edit exceeds the size limit")]
+    EditLimitExceeded,
+    #[error("A revision is required for a safe edit save")]
+    RevisionRequired,
+}
+
+impl AdbFilePolicyError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::AttributesUnavailable => "AttributesUnavailable",
+            Self::PermissionsUnavailable => "PermissionsUnavailable",
+            Self::TimestampUnavailable => "TimestampUnavailable",
+            Self::EditLimitExceeded => "EditLimitExceeded",
+            Self::RevisionRequired => "RevisionRequired",
+        }
+    }
+    pub(crate) fn context(self, error: anyhow::Error) -> anyhow::Error {
+        if error.chain().any(|cause| {
+            matches!(
+                cause.downcast_ref::<AdbError>(),
+                Some(AdbError::Cancelled | AdbError::Offline | AdbError::Timeout)
+            )
+        }) {
+            error
+        } else {
+            error.context(self)
+        }
+    }
+}
+
 pub(crate) fn file_error(error: anyhow::Error) -> anyhow::Error {
     error.context(AdbFileError)
 }
@@ -44,6 +83,7 @@ pub(crate) fn file_error(error: anyhow::Error) -> anyhow::Error {
 pub struct AdbFileService {
     pub binding: DeviceBinding,
     pub control: SftpTransferControl,
+    pub runtime: std::sync::Arc<nyaterm_android::adb::runtime::DeviceRuntime>,
 }
 
 pub fn raw_path(path: &RemoteFilePath) -> anyhow::Result<Vec<u8>> {
@@ -70,12 +110,16 @@ fn kind(mode: u32) -> SftpFileType {
 impl AdbFileService {
     pub fn new(binding: DeviceBinding) -> Self {
         Self {
+            runtime: std::sync::Arc::new(nyaterm_android::adb::runtime::DeviceRuntime::new(
+                binding.clone(),
+            )),
             binding,
             control: SftpTransferControl::new(),
         }
     }
     pub fn cancel(&self) {
         self.control.cancel();
+        self.runtime.invalidate();
     }
     pub fn child_path(
         &self,
@@ -97,7 +141,8 @@ impl AdbFileService {
         ))
     }
     fn check(&self) -> anyhow::Result<()> {
-        self.control.check_cancelled()
+        self.control.check_cancelled()?;
+        Ok(self.runtime.check()?)
     }
     pub fn stat(&self, path: &RemoteFilePath) -> anyhow::Result<FileStat> {
         self.stat_with_control(path, &self.control)
@@ -108,15 +153,16 @@ impl AdbFileService {
         control: &SftpTransferControl,
     ) -> anyhow::Result<FileStat> {
         self.check()?;
-        control.wait_if_paused_blocking()?;
-        Ok(
-            SyncStream::open(&self.binding)?.stat_with_cancel(&raw_path(path)?, || {
-                self.control
-                    .check_cancelled()
-                    .and_then(|()| control.check_cancelled())
-                    .map_err(|_| AdbError::Cancelled)
-            })?,
-        )
+        self.wait_for_transfer(control)?;
+        Ok(self.runtime.with_sync(
+            || self.check_transfer(control),
+            |stream| {
+                stream.stat_with_cancel(
+                    &raw_path(path).map_err(|_| AdbError::Protocol("file path"))?,
+                    || self.check_transfer(control),
+                )
+            },
+        )?)
     }
     pub fn exists(&self, path: &RemoteFilePath) -> anyhow::Result<bool> {
         match self.stat(path) {
@@ -141,15 +187,13 @@ impl AdbFileService {
         control: &SftpTransferControl,
     ) -> anyhow::Result<Vec<SftpFileEntry>> {
         self.check()?;
-        control.wait_if_paused_blocking()?;
+        self.wait_for_transfer(control)?;
         let parent = raw_path(path)?;
-        SyncStream::open(&self.binding)?
-            .list_with_cancel(&parent, || {
-                self.control
-                    .check_cancelled()
-                    .and_then(|()| control.check_cancelled())
-                    .map_err(|_| AdbError::Cancelled)
-            })?
+        self.runtime
+            .with_sync(
+                || self.check_transfer(control),
+                |stream| stream.list_with_cancel(&parent, || self.check_transfer(control)),
+            )?
             .into_iter()
             .map(|entry| {
                 anyhow::ensure!(
@@ -346,142 +390,11 @@ impl AdbFileService {
         to: &RemoteFilePath,
     ) -> anyhow::Result<()> {
         self.command(b"mv -nT --", &[from, to], b"")?;
-        anyhow::ensure!(!self.exists(from)?, "Android destination already exists");
+        anyhow::ensure!(
+            !self.exists(from)?,
+            crate::file_browser::FileTransferEntryError::TargetExists
+        );
         Ok(())
-    }
-    fn progress(
-        &self,
-        control: &SftpTransferControl,
-        bytes: u64,
-        callback: &mut impl FnMut(u64),
-    ) -> AdbResult<()> {
-        self.control
-            .check_cancelled()
-            .map_err(|_| AdbError::Cancelled)?;
-        control
-            .wait_if_paused_blocking()
-            .map_err(|_| AdbError::Cancelled)?;
-        if bytes != 0 {
-            callback(bytes);
-        }
-        Ok(())
-    }
-    pub fn receive(
-        &self,
-        path: &RemoteFilePath,
-        writer: &mut impl Write,
-        control: &SftpTransferControl,
-        mut progress: impl FnMut(u64),
-    ) -> anyhow::Result<u64> {
-        self.check()?;
-        Ok(
-            SyncStream::open(&self.binding)?.receive(&raw_path(path)?, writer, |n| {
-                self.progress(control, n, &mut progress)
-            })?,
-        )
-    }
-    pub fn upload(
-        &self,
-        local: &Path,
-        path: &RemoteFilePath,
-        replace: bool,
-        control: &SftpTransferControl,
-        mut progress: impl FnMut(u64),
-    ) -> anyhow::Result<u64> {
-        let temp = self.child_path(
-            &path.parent()?,
-            &format!(".nyaterm-{}.part", uuid::Uuid::new_v4()),
-        )?;
-        self.create_file_remote_path(&temp, None)?;
-        let result = (|| {
-            let mut reader = std::fs::File::open(local)?;
-            let expected = reader.metadata()?.len();
-            let modified = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-            let bytes = SyncStream::open(&self.binding)?.send(
-                &raw_path(&temp)?,
-                &mut reader,
-                0o644,
-                modified,
-                |n| self.progress(control, n, &mut progress),
-            )?;
-            anyhow::ensure!(
-                bytes == expected && self.stat(&temp)?.size == expected,
-                "Android upload length changed"
-            );
-            let mut local_hash = HashWriter::default();
-            std::io::copy(&mut std::fs::File::open(local)?, &mut local_hash)?;
-            let mut remote_hash = HashWriter::default();
-            self.receive(&temp, &mut remote_hash, control, |_| {})?;
-            anyhow::ensure!(
-                local_hash.digest() == remote_hash.digest(),
-                "Android upload verification failed"
-            );
-            control.check_cancelled()?;
-            self.check()?;
-            if replace {
-                self.rename_remote_paths(&temp, path)?;
-            } else {
-                self.rename_remote_paths_no_replace(&temp, path)?;
-            }
-            Ok(bytes)
-        })();
-        if result.is_err() {
-            self.cleanup_temp(&temp);
-        }
-        result
-    }
-    fn cleanup_temp(&self, temp: &RemoteFilePath) {
-        // Cleanup must work after cancellation, and can only name our unique file.
-        if let Ok(raw) = raw_path(temp)
-            && let Ok(quoted) = quote(&raw)
-        {
-            let mut command = b"rm -f -- ".to_vec();
-            command.extend(quoted);
-            let _ = execute(&self.binding, &command, 4096);
-        }
-    }
-    pub fn download(
-        &self,
-        path: &RemoteFilePath,
-        local: &Path,
-        replace: bool,
-        control: &SftpTransferControl,
-        progress: impl FnMut(u64),
-    ) -> anyhow::Result<u64> {
-        let before = self.stat_with_control(path, control)?;
-        anyhow::ensure!(
-            kind(before.mode) == SftpFileType::File,
-            "Android download requires a regular file"
-        );
-        let parent = local
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("download parent is missing"))?;
-        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-        let bytes = self.receive(path, temp.as_file_mut(), control, progress)?;
-        temp.as_file_mut().sync_all()?;
-        let after = self.stat_with_control(path, control)?;
-        anyhow::ensure!(
-            bytes == before.size && before.size == after.size && before.modified == after.modified,
-            crate::file_browser::FileTransferEntryError::SourceChanged
-        );
-        // mtime has only second precision on older Sync implementations. Verify
-        // bytes as well so a same-size edit cannot commit a mixed download.
-        let mut local_hash = HashWriter::default();
-        std::io::copy(&mut std::fs::File::open(temp.path())?, &mut local_hash)?;
-        let mut remote_hash = HashWriter::default();
-        self.receive(path, &mut remote_hash, control, |_| {})?;
-        anyhow::ensure!(
-            local_hash.digest() == remote_hash.digest(),
-            crate::file_browser::FileTransferEntryError::SourceChanged
-        );
-        control.check_cancelled()?;
-        self.check()?;
-        if replace {
-            temp.persist(local).map_err(|e| e.error)?;
-        } else {
-            temp.persist_noclobber(local).map_err(|e| e.error)?;
-        }
-        Ok(bytes)
     }
     pub fn read_file_bytes_path(
         &self,
@@ -541,48 +454,57 @@ impl AdbFileService {
         expected: Option<&RemoteTextRevision>,
         force: bool,
     ) -> anyhow::Result<RemoteTextWriteResult> {
+        let content = content.as_ref();
+        anyhow::ensure!(
+            content.len() <= 16 * 1024 * 1024,
+            AdbFilePolicyError::EditLimitExceeded
+        );
+        anyhow::ensure!(
+            force || expected.is_some(),
+            AdbFilePolicyError::RevisionRequired
+        );
+        let original = self.replacement_metadata(path)?;
+        anyhow::ensure!(original.is_some(), AdbError::FileMissing);
+        let mut local = tempfile::NamedTempFile::new()?;
+        local.write_all(content.as_bytes())?;
+        let control = SftpTransferControl::new();
+        let staged = self.stage_upload(
+            local.path(),
+            path,
+            &control,
+            &crate::sftp_transfer_types::SftpTransferOptions::default(),
+            |_| {},
+        )?;
         if !force
-            && let Some(expected) = expected
             && self
                 .read_text_document_path(path, 16 * 1024 * 1024)?
                 .revision
-                != *expected
+                != *expected.expect("checked revision")
         {
             return Ok(RemoteTextWriteResult::Conflict);
         }
-        let mut local = tempfile::NamedTempFile::new()?;
-        local.write_all(content.as_ref().as_bytes())?;
-        self.upload(
-            local.path(),
-            path,
-            true,
-            &SftpTransferControl::new(),
-            |_| {},
-        )?;
+        let current = self.replacement_metadata(path)?;
+        if !transfer::same_target(original.as_ref(), current.as_ref()) {
+            return Ok(RemoteTextWriteResult::Conflict);
+        }
+        staged.commit(path, true, &control)?;
+        let stat = self.stat(path)?;
+        anyhow::ensure!(
+            stat.size == content.len() as u64,
+            crate::file_browser::FileTransferEntryError::SourceChanged
+        );
         Ok(RemoteTextWriteResult::Saved {
-            revision: self
-                .read_text_document_path(path, 16 * 1024 * 1024)?
-                .revision,
+            revision: RemoteTextRevision::from_bytes(
+                content.as_bytes(),
+                RemoteTextMetadata {
+                    size: stat.size,
+                    modified_at: Some(stat.modified),
+                },
+            ),
         })
     }
 }
 
-#[derive(Default)]
-struct HashWriter(Sha256);
-impl HashWriter {
-    fn digest(self) -> [u8; 32] {
-        self.0.finalize().into()
-    }
-}
-impl Write for HashWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 struct LimitedWriter {
     bytes: Vec<u8>,
     limit: u64,

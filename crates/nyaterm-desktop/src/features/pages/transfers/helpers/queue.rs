@@ -133,6 +133,7 @@ mod tests {
         item_count_total: Option<u64>,
     ) -> SftpTransferProgress {
         SftpTransferProgress {
+            phase: None,
             remote_path: "/remote".to_string(),
             local_path: std::path::PathBuf::from("/local"),
             bytes_transferred,

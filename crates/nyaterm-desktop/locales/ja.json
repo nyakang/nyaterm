@@ -1,7 +1,6 @@
 {
   "android": {
     "directoryLoadFailed": "ディレクトリの読み込みに失敗しました：%{error}",
-
     "screenSettings": "画面設定",
     "maxSize": "画面の最大辺（ピクセル）",
     "maxFps": "最大フレームレート（FPS）",
@@ -26,7 +25,7 @@
     "zoom": "ズーム",
     "reconnect": "再接続",
     "adbExecutable": "ADB 実行ファイル",
-    "adbPathHint": "空欄の場合は内蔵 ADB を使用します。指定するパスは有効である必要があります。",
+    "adbPathHint": "空欄の場合は内蔵 ADB を使用します。指定するパスは有効である必要があります。 ADB は一時停止と再開に対応します。失敗時の再試行は最初から転送します。",
     "bundledAdb": "内蔵 ADB",
     "files": "Android ファイル",
     "shell": "Android ターミナル",
@@ -69,7 +68,17 @@
       "fileOperationFailed": "Android のファイル操作に失敗しました",
       "invalidFilePath": "/ で始まる Android の絶対パスを使用してください。",
       "invalidPathToken": "Android のパス情報が無効です。ディレクトリを更新して再試行してください。",
-      "invalidFilename": "Android のファイル名が無効です。"
+      "invalidFilename": "Android のファイル名が無効です。",
+      "inputQueueFull": "入力キューが満杯です。キーとタッチを解除しました。しばらくしてから再試行してください。",
+      "inputTextTooLong": "Android テキストは UTF-8 で 64 KiB を超えています。",
+      "inputNul": "Android 入力に NUL 文字は使用できません。",
+      "inputPacketTooLong": "エンコードされた Android 入力がメッセージのサイズ制限を超えています。",
+      "inputInvalid": "Android 入力の座標または値が無効です。",
+      "fileAttributes": "Android の対象の権限と所有者を読み取れないため、置換を停止しました。",
+      "filePermissions": "Android ファイルの権限と所有者を安全に設定または保持できません。",
+      "fileTimestamp": "ファイルまたはディレクトリの更新日時を保持できません。",
+      "editLimit": "Android の編集内容が 16 MiB の上限を超えています。",
+      "revisionRequired": "安全な保存にはファイルのバージョン情報が必要です。ファイルを開き直してから保存してください。"
     }
   },
   "mcp": {
@@ -1594,6 +1603,8 @@
     "goHome": "ホーム"
   },
   "fileTransfer": {
+    "scanning": "ファイルをスキャン中…",
+    "committing": "転送したファイルを保存中…",
     "cancel": "キャンセル",
     "cancelAll": "すべてキャンセル",
     "cancelled": "キャンセルしました",

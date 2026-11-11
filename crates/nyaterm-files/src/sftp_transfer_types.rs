@@ -10,8 +10,16 @@ pub struct SftpTransferSummary {
     pub skipped: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileTransferPhase {
+    Scanning,
+    Transferring,
+    Committing,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpTransferProgress {
+    pub phase: Option<FileTransferPhase>,
     pub remote_path: String,
     pub local_path: PathBuf,
     pub bytes_transferred: u64,

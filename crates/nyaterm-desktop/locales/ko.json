@@ -1,7 +1,6 @@
 {
   "android": {
     "directoryLoadFailed": "디렉터리 로드 실패: %{error}",
-
     "screenSettings": "화면 설정",
     "maxSize": "화면 최대 변 길이(픽셀)",
     "maxFps": "최대 프레임 속도(FPS)",
@@ -26,7 +25,7 @@
     "zoom": "확대",
     "reconnect": "다시 연결",
     "adbExecutable": "ADB 실행 파일",
-    "adbPathHint": "비워 두면 내장 ADB를 사용합니다. 지정한 경로는 유효해야 합니다.",
+    "adbPathHint": "비워 두면 내장 ADB를 사용합니다. 지정한 경로는 유효해야 합니다. ADB 전송을 일시 정지하고 재개할 수 있습니다. 실패 후 재시도는 처음부터 전송합니다.",
     "bundledAdb": "내장 ADB",
     "files": "Android 파일",
     "shell": "Android 터미널",
@@ -69,7 +68,17 @@
       "fileOperationFailed": "Android 파일 작업에 실패했습니다",
       "invalidFilePath": "/로 시작하는 Android 절대 경로를 사용하세요.",
       "invalidPathToken": "Android 경로 데이터가 잘못되었습니다. 디렉터리를 새로 고친 후 다시 시도하세요.",
-      "invalidFilename": "Android 파일 이름이 잘못되었습니다."
+      "invalidFilename": "Android 파일 이름이 잘못되었습니다.",
+      "inputQueueFull": "입력 대기열이 가득 찼습니다. 키와 터치를 해제했습니다. 잠시 후 다시 시도하세요.",
+      "inputTextTooLong": "Android 텍스트가 UTF-8 64 KiB 제한을 초과합니다.",
+      "inputNul": "Android 입력에 NUL 문자를 포함할 수 없습니다.",
+      "inputPacketTooLong": "인코딩된 Android 입력이 메시지 크기 제한을 초과합니다.",
+      "inputInvalid": "Android 입력의 좌표 또는 값이 잘못되었습니다.",
+      "fileAttributes": "Android 대상의 권한과 소유자를 읽을 수 없어 교체를 중단했습니다.",
+      "filePermissions": "Android 파일의 권한과 소유자를 안전하게 설정하거나 보존할 수 없습니다.",
+      "fileTimestamp": "파일 또는 디렉터리의 수정 시간을 보존할 수 없습니다.",
+      "editLimit": "Android 편집 내용이 16 MiB 제한을 초과했습니다.",
+      "revisionRequired": "안전하게 저장하려면 파일 버전 정보가 필요합니다. 파일을 다시 연 후 저장하세요."
     }
   },
   "mcp": {
@@ -1594,6 +1603,8 @@
     "goHome": "홈"
   },
   "fileTransfer": {
+    "scanning": "파일 검색 중…",
+    "committing": "전송한 파일 저장 중…",
     "cancel": "취소",
     "cancelAll": "모두 취소",
     "cancelled": "취소됨",

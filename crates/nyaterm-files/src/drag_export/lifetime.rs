@@ -20,6 +20,7 @@ pub struct DragSourceLifetime {
     stopped: Arc<AtomicBool>,
     controls: Vec<SftpTransferControl>,
     cleanups: Arc<Mutex<Vec<ExportCleanup>>>,
+    _adb_service: Option<Arc<crate::adb::AdbFileService>>,
 }
 
 impl DragSourceLifetime {
@@ -33,6 +34,10 @@ impl DragSourceLifetime {
         let service = source
             .upgrade()
             .ok_or_else(|| io::Error::other("source session is closed"))?;
+        let adb_service = match &service {
+            FileBrowserService::Adb(adb) => Some(adb.clone()),
+            _ => None,
+        };
         let FileBrowserService::Remote(service) = service else {
             let watched = controls.clone();
             let stop = stopped.clone();
@@ -41,7 +46,9 @@ impl DragSourceLifetime {
                 .name("adb-drag-lifetime".into())
                 .spawn(move || {
                     while !stop.load(Ordering::Acquire) {
-                        if source.upgrade().is_none() {
+                        if source.upgrade().is_none_or(|service| {
+                            matches!(service, FileBrowserService::Adb(ref adb) if !adb.runtime.is_valid() || adb.control.is_cancelled())
+                        }) {
                             for control in &watched {
                                 control.cancel();
                             }
@@ -53,6 +60,7 @@ impl DragSourceLifetime {
                     }
                 })?;
             return Ok(Self {
+                _adb_service: adb_service,
                 task: None,
                 stopped,
                 controls,
@@ -81,6 +89,7 @@ impl DragSourceLifetime {
             })
             .abort_handle();
         Ok(Self {
+            _adb_service: None,
             task: Some(task),
             stopped,
             controls,

@@ -1,7 +1,6 @@
 {
   "android": {
     "directoryLoadFailed": "Directory load failed: %{error}",
-
     "screenSettings": "Screen settings",
     "maxSize": "Screen maximum edge (px)",
     "maxFps": "Maximum FPS",
@@ -26,7 +25,7 @@
     "zoom": "Zoom",
     "reconnect": "Reconnect",
     "adbExecutable": "ADB executable",
-    "adbPathHint": "Leave empty to use bundled ADB. An explicit path must be valid.",
+    "adbPathHint": "Leave empty to use bundled ADB. An explicit path must be valid. ADB transfers can pause and resume. Retrying a failed transfer restarts from the beginning; partial transfers cannot resume.",
     "bundledAdb": "Bundled ADB",
     "files": "Android files",
     "shell": "Android shell",
@@ -69,7 +68,17 @@
       "fileOperationFailed": "Android file operation failed",
       "invalidFilePath": "Use an absolute Android path starting with /.",
       "invalidPathToken": "The Android path data is invalid. Refresh the directory and try again.",
-      "invalidFilename": "The Android filename is invalid."
+      "invalidFilename": "The Android filename is invalid.",
+      "inputQueueFull": "Input queue is full. Keys and touch have been released. Try again shortly.",
+      "inputTextTooLong": "Android text exceeds the 64 KiB UTF-8 limit.",
+      "inputNul": "Android input cannot contain a NUL character.",
+      "inputPacketTooLong": "Encoded Android input exceeds the message size limit.",
+      "inputInvalid": "Android input has invalid coordinates or values.",
+      "fileAttributes": "Cannot read Android target permissions and ownership; replacement was stopped.",
+      "filePermissions": "Cannot safely apply or preserve Android file permissions and ownership.",
+      "fileTimestamp": "Cannot preserve the file or directory modification time.",
+      "editLimit": "Android edit content exceeds the 16 MiB limit.",
+      "revisionRequired": "A file revision is required for a safe save. Reopen the file before saving."
     }
   },
   "mcp": {
@@ -1594,6 +1603,8 @@
     "goHome": "Home"
   },
   "fileTransfer": {
+    "scanning": "Scanning files…",
+    "committing": "Saving transferred files…",
     "cancel": "Cancel",
     "cancelAll": "Cancel All",
     "cancelled": "Cancelled",

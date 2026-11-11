@@ -376,6 +376,7 @@ mod transfer_job_state_tests {
             let mut job = job(kind, Some("session-a"));
             job.status = TransferJobStatus::Running;
             job.update_progress(SftpTransferProgress {
+                phase: None,
                 remote_path: "/remote/file".to_string(),
                 local_path: PathBuf::from("file"),
                 bytes_transferred: 0,

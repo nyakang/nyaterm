@@ -1,6 +1,6 @@
 use super::FileTransferEndpoint;
 use crate::sftp::{SftpFileType, SftpTransferControl};
-use crate::sftp_transfer_types::SftpTransferProgress;
+use crate::sftp_transfer_types::{FileTransferPhase, SftpTransferProgress};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -62,6 +62,7 @@ impl CopyProgress {
         };
         let reporter = Self(Arc::new(Mutex::new(CopyProgressState {
             value: SftpTransferProgress {
+                phase: Some(FileTransferPhase::Scanning),
                 remote_path,
                 local_path,
                 bytes_transferred: 0,
@@ -158,18 +159,25 @@ impl CopyProgress {
         Ok(())
     }
 
-    pub(crate) fn add_bytes(&self, bytes: u64) {
+    pub(crate) fn set_inventory(&self, bytes: Option<u64>, items: u64) {
         let mut state = self.0.lock().expect("copy progress lock");
-        state.value.bytes_transferred = state.value.bytes_transferred.saturating_add(bytes);
+        state.stage_items = items.max(1);
+        state.value.total_bytes = bytes.and_then(|n| n.checked_mul(state.stages));
+        state.value.item_count_total = Some(state.stage_items.saturating_mul(state.stages));
+        state.value.item_count_completed = Some(0);
+        state.emit(false);
+    }
+    pub(crate) fn phase(&self, phase: FileTransferPhase) {
+        let mut state = self.0.lock().expect("copy progress lock");
+        state.value.phase = Some(phase);
         state.emit(false);
     }
 
-    pub(crate) fn cumulative_bytes(&self) -> impl FnMut(u64) + '_ {
-        let mut previous = 0;
-        move |bytes| {
-            self.add_bytes(bytes.saturating_sub(previous));
-            previous = bytes;
-        }
+    pub(crate) fn add_bytes(&self, bytes: u64) {
+        let mut state = self.0.lock().expect("copy progress lock");
+        state.value.phase = Some(FileTransferPhase::Transferring);
+        state.value.bytes_transferred = state.value.bytes_transferred.saturating_add(bytes);
+        state.emit(false);
     }
 
     pub(crate) fn finish_item(&self) {

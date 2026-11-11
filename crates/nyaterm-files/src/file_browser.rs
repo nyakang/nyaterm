@@ -48,7 +48,7 @@ impl WeakFileBrowserService {
             Self::Remote(service) => service.upgrade().map(FileBrowserService::Remote),
             Self::Adb(service) => service
                 .upgrade()
-                .filter(|s| !s.control.is_cancelled())
+                .filter(|s| !s.control.is_cancelled() && s.runtime.is_valid())
                 .map(FileBrowserService::Adb),
         }
     }

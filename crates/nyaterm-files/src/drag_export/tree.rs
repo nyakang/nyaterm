@@ -84,77 +84,68 @@ pub fn enumerate_file_browser_drag_with_root_controls(
         root_controls.is_empty() || root_controls.len() == roots.len(),
         "invalid drag root controls"
     );
-    let mut pending: Vec<_> = roots
-        .into_iter()
-        .enumerate()
-        .rev()
-        .map(|(index, entry)| {
-            let relative = PathBuf::from(&entry.name);
-            (entry, relative, 0_usize, index)
-        })
-        .collect();
     let mut found = Vec::new();
     let mut visited = std::collections::HashSet::new();
-    while let Some((entry, relative_path, depth, root_index)) = pending.pop() {
-        control.wait_if_paused_blocking()?;
+    for (root_index, root) in roots.into_iter().enumerate() {
+        adb.wait_for_transfer(control)?;
         let item_control = root_controls.get(root_index).unwrap_or(control);
-        if item_control.wait_if_paused_blocking().is_err() {
+        if item_control.check_cancelled().is_err() {
             continue;
         }
+        let root_path = root.remote_path();
+        let endpoint = service.transfer_endpoint(&root_path);
+        let inventory = crate::adb::inventory::Inventory::scan_with_limit(
+            &endpoint,
+            item_control,
+            crate::adb::inventory::MAX_ENTRIES - found.len(),
+        )?;
         anyhow::ensure!(
-            depth <= 128 && found.len() < 65536,
-            FileTransferEntryError::LimitExceeded
-        );
-        crate::download_path::validate_name(&entry.name)
-            .map_err(|_| FileTransferEntryError::InvalidDestination)?;
-        let path = entry.remote_path();
-        let raw = crate::adb::raw_path(&path)?;
-        let raw_name = raw.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
-        anyhow::ensure!(
-            std::str::from_utf8(raw_name).is_ok(),
-            FileTransferEntryError::InvalidDestination
-        );
-        anyhow::ensure!(visited.insert(raw), "duplicate remote drag source");
-        let props = adb.remote_file_properties_with_control(&path, item_control)?;
-        anyhow::ensure!(
-            props.file_type == entry.file_type,
+            inventory.properties(&endpoint)?.file_type == root.file_type,
             FileTransferEntryError::SourceChanged
         );
-        anyhow::ensure!(
-            matches!(
-                props.file_type,
-                SftpFileType::File | SftpFileType::Directory
-            ),
-            FileTransferEntryError::UnsupportedFileType
-        );
-        let is_directory = props.is_directory();
-        if is_directory {
-            let children = adb.list_dir_path_with_control(&path, item_control)?;
-            anyhow::ensure!(
-                children.len() + pending.len() + found.len() <= 65536,
-                FileTransferEntryError::LimitExceeded
-            );
-            for child in children.into_iter().rev() {
-                if matches!(child.name.as_str(), "." | "..") {
-                    continue;
-                }
-                let relative = relative_path.join(&child.name);
-                pending.push((child, relative, depth + 1, root_index));
+        let mut pending = vec![(endpoint, PathBuf::from(&root.name))];
+        while let Some((endpoint, relative_path)) = pending.pop() {
+            adb.wait_for_transfer(control)?;
+            if item_control.check_cancelled().is_err() {
+                break;
             }
+            let crate::remote_file::FileTransferEndpoint::Adb { path, .. } = &endpoint else {
+                unreachable!("ADB inventory");
+            };
+            let raw = crate::adb::raw_path(path)?;
+            let raw_name = raw.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+            let name = std::str::from_utf8(raw_name)
+                .map_err(|_| FileTransferEntryError::InvalidDestination)?;
+            crate::download_path::validate_name(name)
+                .map_err(|_| FileTransferEntryError::InvalidDestination)?;
+            anyhow::ensure!(visited.insert(raw), FileTransferEntryError::SourceChanged);
+            let props = inventory.properties(&endpoint)?;
+            let is_directory = props.is_directory();
+            for child in inventory.children(&endpoint)?.into_iter().rev() {
+                let crate::remote_file::FileTransferEndpoint::Adb { path, .. } = &child else {
+                    unreachable!("ADB child");
+                };
+                let raw = crate::adb::raw_path(path)?;
+                let name = std::str::from_utf8(
+                    raw.rsplit(|byte| *byte == b'/').next().unwrap_or_default(),
+                )
+                .map_err(|_| FileTransferEntryError::InvalidDestination)?;
+                pending.push((child.clone(), relative_path.join(name)));
+            }
+            found.push(RemoteDragEntry {
+                relative_path,
+                root_index,
+                is_directory,
+                file: RemoteDragFile {
+                    display_name: props.name.into(),
+                    remote_path: path.clone(),
+                    size: if is_directory { None } else { props.size },
+                    modified_at: props.modified_at.map(|time| {
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(time))
+                    }),
+                },
+            });
         }
-        found.push(RemoteDragEntry {
-            relative_path,
-            root_index,
-            is_directory,
-            file: RemoteDragFile {
-                display_name: entry.name.into(),
-                remote_path: path,
-                size: if is_directory { None } else { props.size },
-                modified_at: props.modified_at.map(|time| {
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(time))
-                }),
-            },
-        });
     }
     anyhow::ensure!(!found.is_empty(), FileTransferEntryError::NoSelection);
     Ok(found)
@@ -287,11 +278,10 @@ mod tests {
             Vec::new(),
         )
         .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains(crate::sftp::SFTP_TRANSFER_CANCELLED)
-        );
+        assert!(matches!(
+            error.downcast_ref::<nyaterm_android::error::AdbError>(),
+            Some(nyaterm_android::error::AdbError::Cancelled)
+        ));
         assert_eq!(fixture.device.lock().unwrap().receives, 0);
     }
 }

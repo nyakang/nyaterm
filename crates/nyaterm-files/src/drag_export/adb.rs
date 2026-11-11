@@ -1,4 +1,4 @@
-//! ADB Sync is sequential. Native random reads share a verified disk snapshot.
+//! ADB Sync is sequential. Native random reads share a private disk snapshot.
 use crate::adb::AdbFileService;
 use crate::drag_export::{EXPORT_READ_CHUNK, ExportObserver, ExportReadEvent, RemoteDragFile};
 use crate::file_browser::{FileBrowserBackendKind, FileTransferEntryError};
@@ -181,15 +181,13 @@ impl AdbReadStream {
     }
 
     fn read_snapshot(&self, offset: u64, buffer: &mut [u8]) -> anyhow::Result<(usize, u64)> {
-        self.control.wait_if_paused_blocking()?;
         let service = self
             .service
             .upgrade()
             .ok_or_else(|| anyhow::Error::new(nyaterm_android::error::AdbError::Offline))?;
-        service.control.check_cancelled()?;
+        service.wait_for_transfer(&self.control)?;
         let mut snapshot = loop {
-            self.control.check_cancelled()?;
-            service.control.check_cancelled()?;
+            service.wait_for_transfer(&self.control)?;
             match self.snapshot.try_lock() {
                 Ok(snapshot) => break snapshot,
                 Err(std::sync::TryLockError::WouldBlock) => {
@@ -212,14 +210,16 @@ impl AdbReadStream {
                 cleanup_sender()?;
                 let directory = tempfile::tempdir()?;
                 let target = directory.path().join("content");
+                let mut transferred = 0u64;
                 let bytes = service.download(
                     &self.file.remote_path,
                     &target,
                     false,
                     &self.control,
                     |bytes| {
+                        transferred = transferred.saturating_add(bytes);
                         (self.observer)(ExportReadEvent::Progress {
-                            bytes,
+                            bytes: transferred,
                             total: self.file.size,
                         });
                     },
@@ -251,6 +251,7 @@ impl AdbReadStream {
         let length = reader.read(buffer)?;
         self.control.check_cancelled()?;
         service.control.check_cancelled()?;
+        service.runtime.check()?;
         Ok((length, total))
     }
 
@@ -292,7 +293,39 @@ mod tests {
     }
 
     #[test]
-    fn native_adb_reads_share_one_verified_snapshot_and_support_arbitrary_offsets() {
+    fn native_adb_paused_read_exits_when_the_binding_is_invalidated() {
+        let fixture = AdbFixture::new();
+        fixture.file(b"/device/content", b"data");
+        let control = SftpTransferControl::new();
+        control.pause();
+        let source = AdbReadSource::new(
+            Arc::downgrade(&fixture.service),
+            RemoteDragFile {
+                display_name: "content".into(),
+                size: Some(4),
+                remote_path: RemoteFilePath::new("/device/content"),
+                modified_at: None,
+            },
+            Arc::new(|| Arc::new(|_| {})),
+            control.clone(),
+        );
+        let mut stream = source.open().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            sender
+                .send(stream.read_at(0, &mut [0; 4]).is_err())
+                .unwrap();
+        });
+        fixture.service.runtime.invalidate();
+        let result = receiver.recv_timeout(std::time::Duration::from_secs(2));
+        control.cancel();
+        worker.join().unwrap();
+        assert!(result.unwrap());
+        assert_eq!(fixture.device.lock().unwrap().receives, 0);
+    }
+
+    #[test]
+    fn native_adb_reads_share_one_disk_snapshot_and_support_arbitrary_offsets() {
         let fixture = AdbFixture::new();
         let data: Vec<u8> = (0..150_000).map(|n| (n * 31) as u8).collect();
         fixture.file(b"/device/content", &data);
@@ -319,7 +352,7 @@ mod tests {
                 &data[offset as usize..offset as usize + buffer.len()]
             );
         }
-        assert_eq!(fixture.device.lock().unwrap().receives, 2);
+        assert_eq!(fixture.device.lock().unwrap().receives, 1);
         let path = source
             .snapshot
             .lock()

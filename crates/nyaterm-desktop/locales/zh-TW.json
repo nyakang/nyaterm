@@ -1,7 +1,6 @@
 {
   "android": {
     "directoryLoadFailed": "目錄載入失敗：%{error}",
-
     "screenSettings": "螢幕設定",
     "maxSize": "螢幕最大邊長（像素）",
     "maxFps": "最大影格率（FPS）",
@@ -26,7 +25,7 @@
     "zoom": "縮放",
     "reconnect": "重新連線",
     "adbExecutable": "ADB 執行檔",
-    "adbPathHint": "留空使用內建 ADB；指定的路徑必須有效。",
+    "adbPathHint": "留空使用內建 ADB；指定的路徑必須有效。 ADB 檔案傳輸暫停後可以繼續；失敗重試從頭傳輸，不支援斷點續傳。",
     "bundledAdb": "內建 ADB",
     "files": "Android 檔案",
     "shell": "Android 終端機",
@@ -69,7 +68,17 @@
       "fileOperationFailed": "Android 檔案操作失敗",
       "invalidFilePath": "請使用以 / 開頭的 Android 絕對路徑。",
       "invalidPathToken": "Android 路徑資料無效，請重新整理目錄後再試。",
-      "invalidFilename": "Android 檔案名稱無效。"
+      "invalidFilename": "Android 檔案名稱無效。",
+      "inputQueueFull": "輸入佇列已滿，已釋放按鍵與觸控，請稍後重試。",
+      "inputTextTooLong": "Android 文字超過 64 KiB UTF-8 位元組限制。",
+      "inputNul": "Android 輸入不能包含 NUL 字元。",
+      "inputPacketTooLong": "編碼後的 Android 輸入超過訊息大小限制。",
+      "inputInvalid": "Android 輸入的座標或數值無效。",
+      "fileAttributes": "無法讀取 Android 目標的權限和擁有者，已停止替換。",
+      "filePermissions": "無法安全設定或保留 Android 檔案的權限和擁有者。",
+      "fileTimestamp": "無法保留檔案或目錄的修改時間。",
+      "editLimit": "Android 編輯內容超過 16 MiB 限制。",
+      "revisionRequired": "安全儲存需要檔案版本資訊，請重新開啟檔案後再儲存。"
     }
   },
   "mcp": {
@@ -1594,6 +1603,8 @@
     "goHome": "主目錄"
   },
   "fileTransfer": {
+    "scanning": "正在掃描檔案…",
+    "committing": "正在儲存傳輸檔案…",
     "cancel": "取消",
     "cancelAll": "全部取消",
     "cancelled": "已取消",

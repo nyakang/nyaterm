@@ -2,6 +2,7 @@ use crate::models::TransferJobKind;
 use nyaterm_files::sftp_transfer_types::{
     SftpDuplicateDecision, SftpDuplicatePolicy, SftpTransferProgress,
 };
+use rust_i18n::t;
 
 pub(in crate::features) fn duplicate_policy_label(policy: SftpDuplicatePolicy) -> &'static str {
     match policy {
@@ -116,6 +117,15 @@ pub(in crate::features) fn transfer_job_title(kind: &TransferJobKind) -> String 
 }
 
 pub(in crate::features) fn format_transfer_progress(progress: &SftpTransferProgress) -> String {
+    if let Some(phase) = progress.phase {
+        use nyaterm_files::sftp_transfer_types::FileTransferPhase;
+        match phase {
+            FileTransferPhase::Scanning => return t!("fileTransfer.scanning").into_owned(),
+            FileTransferPhase::Committing => return t!("fileTransfer.committing").into_owned(),
+            FileTransferPhase::Transferring => {}
+        }
+    }
+
     let transferred = format_file_size(Some(progress.bytes_transferred));
     match progress.total_bytes.filter(|total| *total > 0) {
         Some(total) => {

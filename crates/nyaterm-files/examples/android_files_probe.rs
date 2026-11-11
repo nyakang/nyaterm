@@ -8,20 +8,23 @@ fn main() -> anyhow::Result<()> {
     let serial = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow::anyhow!("host:port required"))?;
-    let (host, port) = serial
+    let selector = if let Some((host, port)) = serial
         .rsplit_once(':')
-        .ok_or_else(|| anyhow::anyhow!("host:port required"))?;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-    let client = AdbClient::local(Some(
-        &root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)),
-    ))?;
-    let files = AdbFileService::new(client.bind(
-        &AdbDeviceSelector::Tcp {
+        .filter(|(_, port)| port.parse::<u16>().is_ok())
+    {
+        AdbDeviceSelector::Tcp {
             host: host.into(),
             port: port.parse()?,
-        },
-        1,
-    )?);
+        }
+    } else {
+        AdbDeviceSelector::Usb { serial }
+    };
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
+    let adb = std::env::var_os("NYATERM_PROBE_ADB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join(format!("adb/adb{}", std::env::consts::EXE_SUFFIX)));
+    let client = AdbClient::local(Some(&adb))?;
+    let files = AdbFileService::new(client.bind(&selector, 1)?);
     files
         .list_dir_path(&RemoteFilePath::new("/sdcard/"))
         .context("list shared storage")?;

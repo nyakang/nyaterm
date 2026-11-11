@@ -255,6 +255,7 @@ impl DragAggregate {
         self.send(
             root,
             TransferJobEvent::Progress(SftpTransferProgress {
+                phase: None,
                 remote_path: root.path.clone(),
                 local_path: PathBuf::new(),
                 bytes_transferred: root.bytes,

@@ -1,7 +1,6 @@
 {
   "android": {
     "directoryLoadFailed": "目录加载失败：%{error}",
-
     "screenSettings": "屏幕设置",
     "maxSize": "屏幕最大边长（像素）",
     "maxFps": "最大帧率（FPS）",
@@ -26,7 +25,7 @@
     "zoom": "缩放",
     "reconnect": "重新连接",
     "adbExecutable": "ADB 可执行文件",
-    "adbPathHint": "留空使用内置 ADB；指定的路径必须有效。",
+    "adbPathHint": "留空使用内置 ADB；指定的路径必须有效。 ADB 文件传输暂停后可以继续；失败重试从头传输，不支持断点续传。",
     "bundledAdb": "内置 ADB",
     "files": "Android 文件",
     "shell": "Android 终端",
@@ -69,7 +68,17 @@
       "fileOperationFailed": "Android 文件操作失败",
       "invalidFilePath": "请使用以 / 开头的 Android 绝对路径。",
       "invalidPathToken": "Android 路径数据无效，请刷新目录后重试。",
-      "invalidFilename": "Android 文件名无效。"
+      "invalidFilename": "Android 文件名无效。",
+      "inputQueueFull": "输入队列已满，已释放按键和触摸，请稍后重试。",
+      "inputTextTooLong": "安卓文本超过 64 KiB UTF-8 字节限制。",
+      "inputNul": "安卓输入不能包含 NUL 字符。",
+      "inputPacketTooLong": "编码后的安卓输入超过消息大小限制。",
+      "inputInvalid": "安卓输入的坐标或数值无效。",
+      "fileAttributes": "无法读取 Android 目标的权限和所有者，已停止替换。",
+      "filePermissions": "无法安全设置或保留 Android 文件的权限和所有者。",
+      "fileTimestamp": "无法保留文件或目录的修改时间。",
+      "editLimit": "Android 编辑内容超过 16 MiB 限制。",
+      "revisionRequired": "安全保存需要文件版本信息，请重新打开文件后再保存。"
     }
   },
   "mcp": {
@@ -1594,6 +1603,8 @@
     "goHome": "主目录"
   },
   "fileTransfer": {
+    "scanning": "正在扫描文件…",
+    "committing": "正在保存传输文件…",
     "cancel": "取消",
     "cancelAll": "全部取消",
     "cancelled": "已取消",
