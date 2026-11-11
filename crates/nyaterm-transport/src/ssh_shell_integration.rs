@@ -1099,6 +1099,11 @@ __nyaterm_install_prompt(){
 }
 "#;
 
+// `__nyaterm_line_init` exists for prompt frameworks (powerlevel10k, ...) that
+// rebuild PS1 after our precmd hook and drop the B mark appended there.
+// line-init runs once the prompt is drawn, where the input starts, so it emits
+// the mark when PS1 no longer carries it. No comments inside the script: it is
+// delivered as injected shell input.
 const ZSH_PERSISTENT_SCRIPT: &str = r#"# nyaterm shell integration v2
 __nyaterm_host(){ hostname 2>/dev/null || printf localhost; }
 __nyaterm_emit_command(){
@@ -1130,6 +1135,10 @@ __nyaterm_prompt(){
   printf '\033]133;A\007'
   [[ "$PS1" == *$'\033]133;B\007'* ]] || PS1="$PS1"$'%{\033]133;B\007%}'
 }
+__nyaterm_line_init(){
+  [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
+  [[ "$PS1" == *$'\033]133;B\007'* ]] || printf '\033]133;B\007'
+}
 __nyaterm_preexec(){
   [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
   __nyaterm_cmd_active=1
@@ -1153,6 +1162,8 @@ __nyaterm_install_full(){
   add-zsh-hook -d precmd __nyaterm_prompt 2>/dev/null || true
   add-zsh-hook -d preexec __nyaterm_preexec 2>/dev/null || true
   add-zsh-hook precmd __nyaterm_prompt || return 1
+  autoload -Uz add-zle-hook-widget 2>/dev/null \
+    && add-zle-hook-widget line-init __nyaterm_line_init 2>/dev/null || true
   add-zsh-hook preexec __nyaterm_preexec || return 1
   typeset -g NYATERM_ZSH_HOOKS_READY=1
 }
@@ -1749,6 +1760,17 @@ mod tests {
             assert!(ready < pop);
             assert!(script.contains("unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P"));
         }
+    }
+
+    #[test]
+    fn zsh_script_marks_the_input_start_even_when_a_prompt_framework_rewrites_ps1() {
+        let script = super::ZSH_PERSISTENT_SCRIPT;
+        assert!(script.contains("__nyaterm_line_init(){"));
+        assert!(script.contains("add-zle-hook-widget line-init __nyaterm_line_init"));
+        // Only emitted when PS1 lost the mark, so ordinary prompts see one B.
+        assert!(
+            script.contains(r#"[[ "$PS1" == *$'\033]133;B\007'* ]] || printf '\033]133;B\007'"#)
+        );
     }
 
     #[test]

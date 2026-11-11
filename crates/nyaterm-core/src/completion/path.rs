@@ -424,6 +424,20 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_name_part_lists_every_visible_entry() {
+        let q = query("cd /var/").unwrap();
+        assert_eq!((q.dir_text.as_str(), q.base.as_str()), ("/var/", ""));
+        let entries = [
+            entry("log", true),
+            entry("lib", true),
+            entry(".cache", true),
+        ];
+        let got = path_candidates(&q, &entries, "cd /var/", &mut TextMatcher::default(), 8);
+        let shown: Vec<_> = got.iter().map(|c| c.insert_text.as_str()).collect();
+        assert_eq!(shown, ["/var/lib/", "/var/log/"]);
+    }
+
+    #[test]
     fn rejects_names_that_could_inject_input() {
         let q = query("cat /tmp/a").unwrap();
         let entries = [

@@ -153,6 +153,8 @@ impl PathSource {
             self.cwd.clone(),
             self.query.dir_text.clone(),
         );
+        let began = Instant::now();
+        let from_cache = cached(&key).is_some();
         let listing = match cached(&key) {
             Some(listing) => listing,
             None => {
@@ -186,13 +188,22 @@ impl PathSource {
                 }
             }
         };
-        path_candidates(
+        let candidates = path_candidates(
             &self.query,
             &listing,
             input,
             &mut TextMatcher::default(),
             PATH_CANDIDATE_LIMIT,
-        )
+        );
+        tracing::info!(
+            diagnostic = "path_completion",
+            entries = listing.len(),
+            candidates = candidates.len(),
+            from_cache = from_cache,
+            total_ms = began.elapsed().as_millis() as u64,
+            "path completion answered"
+        );
+        candidates
     }
 }
 
