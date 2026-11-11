@@ -5,7 +5,7 @@ use nyaterm_core::command_search::{RankedCommandSourceQuery, search_ranked_comma
 use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::types::{
-    CompletionCandidate, CompletionFillPolicy, CompletionMode, CompletionResult,
+    CandidateKind, CompletionCandidate, CompletionFillPolicy, CompletionMode, CompletionResult,
     ShellCommandContext,
 };
 use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
@@ -252,6 +252,7 @@ fn search_candidates(
         quick: &TokenHistoryIndex::default(),
         limit: 12,
     });
+    let history_rows = candidates.len();
     for token in tokens {
         let Some(target) = token.target_line(&query.input) else {
             continue;
@@ -266,8 +267,50 @@ fn search_candidates(
             candidates.push(token);
         }
     }
+    reserve_argument_rows(&mut candidates, history_rows, &query.input);
     candidates.truncate(12);
     candidates
+}
+
+/// Rows reserved for flags and subcommands so a long history cannot push the
+/// contextual rows out of the popup.
+const RESERVED_ARGUMENT_ROWS: usize = 6;
+const FLAG_LEAD_ROWS: usize = 8;
+
+/// `candidates[history_rows..]` are token rows appended after whole commands.
+/// Typing a flag (`ls -`) puts the flags first; otherwise whole commands keep
+/// their lead but leave room for the token rows. Plain command words
+/// (`dock`) are untouched so whole commands keep their documented priority.
+fn reserve_argument_rows(
+    candidates: &mut Vec<CompletionCandidate>,
+    history_rows: usize,
+    input: &str,
+) {
+    let argument_rows = candidates[history_rows..]
+        .iter()
+        .filter(|row| row.kind != CandidateKind::Command)
+        .count();
+    if argument_rows == 0 {
+        return;
+    }
+    let mut tokens = candidates.split_off(history_rows);
+    let typing_flag = input
+        .rsplit(char::is_whitespace)
+        .next()
+        .is_some_and(|word| word.starts_with('-'));
+    // Whole commands still get a share when flags lead, and vice versa.
+    tokens.truncate(if typing_flag {
+        FLAG_LEAD_ROWS
+    } else {
+        RESERVED_ARGUMENT_ROWS
+    });
+    let mut history = std::mem::take(candidates);
+    history.truncate(12usize.saturating_sub(tokens.len()));
+    *candidates = if typing_flag {
+        tokens.into_iter().chain(history).collect()
+    } else {
+        history.into_iter().chain(tokens).collect()
+    };
 }
 
 fn full_history(
@@ -531,6 +574,55 @@ mod tests {
         );
         query.mode = CompletionMode::History;
         assert!(search_candidates(&mut engine, &index, &query, &mut matcher).is_empty());
+    }
+
+    #[test]
+    fn flags_are_not_crowded_out_by_a_long_history() {
+        use crate::features::commands::completion_runtime::tests::HistoryFixture;
+        use nyaterm_core::completion::CompletionEngine;
+        use nyaterm_core::completion::matching::TextMatcher;
+        use std::collections::BTreeMap;
+
+        let scope = CompletionScope::new(&["flag-crowding-fixture"]);
+        let mut index = HistoryFixture::default();
+        for n in 0..20 {
+            index.upsert(ScopedHistoryRecord {
+                version: 1,
+                scope: scope.clone(),
+                dialect: ShellDialect::Bash,
+                command: format!("ls -l /srv/fixture-{n}"),
+                use_count: 1,
+                last_used_at_ms: n,
+                extensions: BTreeMap::new(),
+            });
+        }
+        let mut query = CompletionQuery {
+            fill_policy: None,
+            context: ShellCommandContext {
+                scope,
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "ls -".into(),
+            mode: CompletionMode::Token,
+            quick: Arc::from([]),
+            min: 2,
+            max: 64,
+        };
+        let mut engine = CompletionEngine::embedded();
+        let mut matcher = TextMatcher::default();
+        let typing_flag = search_candidates(&mut engine, &index, &query, &mut matcher);
+        assert_eq!(typing_flag.len(), 12);
+        assert!(typing_flag[0].insert_text.starts_with('-'), "flags lead");
+        assert!(
+            typing_flag
+                .iter()
+                .any(|c| c.insert_text.starts_with("ls -l /srv"))
+        );
+        // A subcommand position keeps history first but still shows the subcommand.
+        query.input = "git ch".into();
+        let subcommands = search_candidates(&mut engine, &index, &query, &mut matcher);
+        assert!(subcommands.iter().any(|c| c.insert_text == "checkout"));
     }
 
     #[test]

@@ -36,7 +36,7 @@ mod path_source;
 use self::fill::{SuggestionFill, SuggestionSubmitResult, plan_suggestion_fill};
 use self::helpers::command_suggestion_highlight_parts;
 use self::paste::SuggestionPasteContext;
-use self::path_source::{PATH_CANDIDATE_LIMIT, PathSource, listing_timeout};
+use self::path_source::{PATH_CANDIDATE_LIMIT, PathSource};
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
 const COMMAND_SUGGESTION_REFRESH_SLOW_THRESHOLD: Duration = Duration::from_millis(8);
@@ -667,8 +667,10 @@ impl NyaTermApp {
                     .await;
                 let results = match request.path_source.as_ref() {
                     Some(source) => {
-                        let timer = cx.background_executor().timer(listing_timeout());
-                        let paths = source.candidates(&request.pattern, timer).await;
+                        let executor = cx.background_executor().clone();
+                        let paths = source
+                            .candidates(&request.pattern, |delay| executor.timer(delay))
+                            .await;
                         merge_path_candidates(results, paths, source, &request.pattern)
                     }
                     None => results,
@@ -821,6 +823,7 @@ impl NyaTermApp {
         if !self.command_suggestions_allowed_for_session(&session_id)
             || !self.command_suggestion_input_is_confirmed()
         {
+            self.log_command_suggestions_unavailable(&session_id);
             self.hide_command_suggestions_if_present(cx);
             finish_refresh!("not_confirmed_or_restricted", 0, 0);
         }
@@ -1063,6 +1066,28 @@ impl NyaTermApp {
             hide_popup_us = timing.hide_popup.as_micros(),
             schedule_us = timing.schedule.as_micros(),
             "slow terminal suggestion input"
+        );
+    }
+
+    /// Explains why no popup was offered. Flags only, never input text.
+    fn log_command_suggestions_unavailable(&mut self, session_id: &str) {
+        if !self.should_log_slow_diagnostic("terminal_suggestion_unavailable", Instant::now()) {
+            return;
+        }
+        let allowed = self.command_suggestions_allowed_for_session(session_id);
+        let state = self.terminal.editing.state();
+        tracing::info!(
+            diagnostic = "terminal_suggestion_unavailable",
+            allowed,
+            editing_active = self.terminal.editing.is_active(session_id),
+            suppression = ?self.terminal.assist.command_suggestion_suppression,
+            phase = ?state.map(|s| s.model.phase),
+            has_mapping = state.is_some_and(|s| s.mapping.is_some()),
+            awaiting_snapshot = state.is_some_and(|s| s.awaiting_snapshot),
+            desynced = state.is_some_and(|s| s.model.input.desynced),
+            multiline = state.is_some_and(|s| s.model.input.multiline),
+            line_rewrite = state.is_some_and(|s| s.model.input.line_rewrite_required),
+            "command suggestions unavailable"
         );
     }
 
