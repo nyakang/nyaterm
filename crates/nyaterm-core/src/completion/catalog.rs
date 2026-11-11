@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io::Read;
 
 const MAX_CATALOG_BYTES: usize = 32 * 1024 * 1024;
+const EMBEDDED_SUPPLEMENT: &[u8] = include_bytes!("../../assets/completion/supplement.json");
 const EMBEDDED_CATALOG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/catalog.json.zlib"));
 
 fn decompress_catalog(data: &[u8]) -> Result<Vec<u8>, &'static str> {
@@ -32,7 +33,8 @@ pub struct Catalog {
     #[serde(skip)]
     index: HashMap<String, usize>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 pub struct CommandNode {
     pub token: String,
     pub aliases: Vec<String>,
@@ -42,7 +44,8 @@ pub struct CommandNode {
     pub persistent: Vec<CommandFlag>,
     pub children: Vec<CommandNode>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
+#[serde(default)]
 pub struct CommandFlag {
     pub long: String,
     pub short: String,
@@ -69,7 +72,68 @@ impl CommandFlag {
 
 impl Catalog {
     pub fn embedded() -> Result<Self, &'static str> {
-        Self::decode(&decompress_catalog(EMBEDDED_CATALOG)?)
+        let mut catalog = Self::decode(&decompress_catalog(EMBEDDED_CATALOG)?)?;
+        catalog.merge_supplement(EMBEDDED_SUPPLEMENT)?;
+        Ok(catalog)
+    }
+
+    /// Fills gaps in the generated catalog without touching its pinned bytes.
+    /// A supplement root is added when absent, otherwise only the flags and
+    /// subcommands the generated root lacks are appended.
+    pub fn merge_supplement(&mut self, data: &[u8]) -> Result<(), &'static str> {
+        let supplement = Self::decode_unindexed(data)?;
+        for root in supplement.roots {
+            match self.index.get(&root.token).copied() {
+                Some(existing) => {
+                    let target = &mut self.roots[existing];
+                    for flag in root.flags {
+                        let token = flag.token();
+                        if !target
+                            .flags
+                            .iter()
+                            .chain(&target.persistent)
+                            .any(|f| f.token() == token)
+                        {
+                            target.flags.push(flag);
+                        }
+                    }
+                    for child in root.children {
+                        if !target.children.iter().any(|c| c.token == child.token) {
+                            target.children.push(child);
+                        }
+                    }
+                }
+                None => {
+                    self.index.insert(root.token.clone(), self.roots.len());
+                    self.roots.push(root);
+                }
+            }
+        }
+        for (i, root) in self.roots.iter().enumerate() {
+            for alias in &root.aliases {
+                self.index.entry(alias.clone()).or_insert(i);
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_unindexed(data: &[u8]) -> Result<Self, &'static str> {
+        let catalog: Self =
+            serde_json::from_slice(data).map_err(|_| "Invalid completion supplement")?;
+        if catalog.version != 1 || !catalog.roots.iter().all(|r| Self::valid_node(r, 0)) {
+            return Err("Invalid completion supplement");
+        }
+        Ok(catalog)
+    }
+
+    fn valid_node(node: &CommandNode, depth: usize) -> bool {
+        depth <= 32
+            && bare_word(&node.token)
+            && node.aliases.iter().all(|a| bare_word(a))
+            && node.flags.iter().chain(&node.persistent).all(|f| {
+                (!f.long.is_empty() || !f.short.is_empty()) && f.values.iter().all(|v| bare_word(v))
+            })
+            && node.children.iter().all(|n| Self::valid_node(n, depth + 1))
     }
     pub fn decode(data: &[u8]) -> Result<Self, &'static str> {
         if data.len() > MAX_CATALOG_BYTES {
@@ -288,6 +352,55 @@ mod tests {
 
     const ORIGINAL_CATALOG: &[u8] = include_bytes!("../../assets/completion/catalog.json");
 
+    fn embedded_options(input: &str) -> Vec<String> {
+        let mut context = parse_context(
+            input,
+            input.len(),
+            ShellDialect::Bash,
+            CompletionScope::legacy(),
+        )
+        .unwrap();
+        Catalog::embedded()
+            .unwrap()
+            .candidates(&mut context)
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect()
+    }
+
+    #[test]
+    fn supplement_fills_commands_the_generated_catalog_lacks() {
+        let ls = embedded_options("ls -");
+        assert!(ls.iter().any(|t| t == "--all") && ls.iter().any(|t| t == "-l"));
+        assert!(embedded_options("ip a").iter().any(|t| t == "addr"));
+        assert!(embedded_options("yum ins").iter().any(|t| t == "install"));
+        assert!(
+            embedded_options("systemctl --")
+                .iter()
+                .any(|t| t == "--user")
+        );
+        assert!(embedded_options("ss -").iter().any(|t| t == "--listening"));
+    }
+
+    #[test]
+    fn supplement_leaves_fully_generated_commands_unchanged() {
+        let input = "git --";
+        let mut context = parse_context(
+            input,
+            input.len(),
+            ShellDialect::Bash,
+            CompletionScope::legacy(),
+        )
+        .unwrap();
+        let generated = Catalog::decode(ORIGINAL_CATALOG).unwrap();
+        assert_eq!(
+            Catalog::embedded()
+                .unwrap()
+                .candidates(&mut context.clone()),
+            generated.candidates(&mut context)
+        );
+    }
+
     fn compress(data: &[u8]) -> Vec<u8> {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
         encoder.write_all(data).unwrap();
@@ -305,7 +418,7 @@ mod tests {
 
     #[test]
     fn compressed_catalog_preserves_command_subcommand_alias_and_option_candidates() {
-        let embedded = Catalog::embedded().unwrap();
+        let embedded = Catalog::decode(&decompress_catalog(EMBEDDED_CATALOG).unwrap()).unwrap();
         let original = Catalog::decode(ORIGINAL_CATALOG).unwrap();
         for input in [
             "",
