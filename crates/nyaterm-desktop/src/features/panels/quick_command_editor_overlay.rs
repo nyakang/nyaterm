@@ -51,7 +51,6 @@ impl NyaTermApp {
         let uncategorized_label = t!("quickCommands.uncategorized");
         let category_label_text = t!("quickCommands.category");
         let category_search_label = t!("quickCommands.searchOrCreateCategory");
-        let new_category_placeholder = t!("quickCommands.newCategoryPlaceholder");
         let new_category_root_hint = t!("quickCommands.newCategoryRootHint");
         let description_label = t!("quickCommands.description");
         let description_placeholder = t!("quickCommands.descriptionPlaceholder");
@@ -128,12 +127,33 @@ impl NyaTermApp {
             .quick_editor_category_search_draft()
             .to_string();
         let new_category_draft = self.commands.quick_editor_new_category_draft().to_string();
-        let category_search_input = self.text_input_box(
-            "quick-command.editor.category",
-            &category_search_draft,
-            TextInputSetup::placeholder(category_search_label),
-            cx,
-        );
+        let category_draft = category_search_draft.trim().to_string();
+        let category_query = category_draft.to_lowercase();
+        let category_search_has_no_matches =
+            self.commands.quick_editor_category_search_has_no_matches();
+        let new_category_placeholder = if category_search_has_no_matches {
+            t!("quickCommands.newCategoryNoMatchesPlaceholder")
+        } else {
+            t!("quickCommands.newCategoryPlaceholder")
+        };
+        let category_search_input = self
+            .text_input_box(
+                "quick-command.editor.category",
+                &category_search_draft,
+                TextInputSetup::placeholder(category_search_label),
+                cx,
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let modifiers = event.keystroke.modifiers;
+                let plain_enter = event.keystroke.key == "enter"
+                    && !modifiers.platform
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && !modifiers.function;
+                if plain_enter && this.commit_quick_command_editor_category_search(cx) {
+                    cx.stop_propagation();
+                }
+            }));
         let new_category_input = self.text_input_box(
             "quick-command.editor.new-category",
             &new_category_draft,
@@ -151,12 +171,6 @@ impl NyaTermApp {
             })
             .map(|category| category.name.clone())
             .unwrap_or_else(|| uncategorized_label.to_string());
-        let category_draft = self
-            .commands
-            .quick_editor_category_search_draft()
-            .trim()
-            .to_string();
-        let category_query = category_draft.to_lowercase();
         let category_display = if editor.category_draft.trim().is_empty() {
             category_label.clone()
         } else {

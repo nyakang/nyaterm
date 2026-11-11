@@ -634,6 +634,21 @@ impl CommandFeatureState {
         &self.quick.editor.category_search_draft
     }
 
+    pub(in crate::features) fn quick_editor_category_search_has_no_matches(&self) -> bool {
+        let query = self
+            .quick
+            .editor
+            .category_search_draft
+            .trim()
+            .to_lowercase();
+        !query.is_empty()
+            && !self
+                .catalog
+                .categories
+                .iter()
+                .any(|category| category.name.to_lowercase().contains(&query))
+    }
+
     pub(in crate::features) fn apply_quick_editor_category_search(&mut self, text: String) -> bool {
         if self.quick.editor.category_search_draft == text {
             return false;
@@ -651,6 +666,24 @@ impl CommandFeatureState {
             return false;
         }
         self.quick.editor.new_category_draft = text;
+        true
+    }
+
+    pub(in crate::features) fn commit_quick_editor_category_search(&mut self) -> bool {
+        let draft = self.quick.editor.category_search_draft.trim().to_string();
+        if draft.is_empty() || !self.quick_editor_category_search_has_no_matches() {
+            return false;
+        }
+        let Some(editor) = self.quick.editor.draft.as_mut() else {
+            return false;
+        };
+        editor.category_id = None;
+        editor.category_draft = draft;
+        editor.error = None;
+        editor.error_field = None;
+        self.quick.editor.category_search_draft.clear();
+        self.quick.editor.new_category_draft.clear();
+        self.quick.editor.category_picker_open = false;
         true
     }
 
@@ -1601,6 +1634,27 @@ mod tests {
         assert_eq!(state.quick_editor().unwrap().category_draft, "Operations");
         assert_eq!(state.quick_editor_category_search_draft(), "");
         assert_eq!(state.quick_editor_new_category_draft(), "");
+    }
+
+    #[test]
+    fn quick_editor_category_search_enter_creates_only_when_no_category_matches() {
+        let test_dir = TestConfigDir::new("nyaterm-command-state-test");
+        let mut state =
+            command_state_with_category(test_dir.path(), "all", vec![category("linux", None, 0)]);
+        state.open_quick_editor(QuickCommandEditorState::blank());
+
+        assert!(state.apply_quick_editor_category_search("linux".to_string()));
+        assert!(!state.quick_editor_category_search_has_no_matches());
+        assert!(!state.commit_quick_editor_category_search());
+        assert_eq!(state.quick_editor().unwrap().category_draft, "");
+        assert_eq!(state.quick_editor_category_search_draft(), "linux");
+
+        assert!(state.apply_quick_editor_category_search("Operations".to_string()));
+        assert!(state.quick_editor_category_search_has_no_matches());
+        assert!(state.commit_quick_editor_category_search());
+        assert_eq!(state.quick_editor().unwrap().category_draft, "Operations");
+        assert_eq!(state.quick_editor_category_search_draft(), "");
+        assert!(!state.quick_editor_category_picker_is_open());
     }
 
     #[test]

@@ -2075,6 +2075,7 @@
     "labelPlaceholder": "e.g. List files",
     "listMode": "List mode",
     "newCategoryPlaceholder": "New Category...",
+    "newCategoryNoMatchesPlaceholder": "No existing categories found. Press Enter to create one.",
     "newCategoryParentHint": "Create as a subcategory under \"%{category}\"",
     "newCategoryRootHint": "Create at the top level",
     "moveToParentLevel": "Move to parent level",

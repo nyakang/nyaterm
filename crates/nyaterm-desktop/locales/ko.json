@@ -2075,6 +2075,7 @@
     "labelPlaceholder": "예: 파일 목록",
     "listMode": "목록 모드",
     "newCategoryPlaceholder": "새 카테고리...",
+    "newCategoryNoMatchesPlaceholder": "기존 카테고리를 찾을 수 없습니다. Enter 키를 눌러 새 카테고리를 만들 수 있습니다.",
     "newCategoryParentHint": "\"%{category}\" 아래에 하위 카테고리를 생성합니다",
     "newCategoryRootHint": "최상위에 카테고리를 생성합니다",
     "moveToParentLevel": "상위 단계로 이동",

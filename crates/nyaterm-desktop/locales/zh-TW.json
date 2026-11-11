@@ -2075,6 +2075,7 @@
     "labelPlaceholder": "例如：列出檔案",
     "listMode": "清單模式",
     "newCategoryPlaceholder": "新增分類...",
+    "newCategoryNoMatchesPlaceholder": "未搜尋到已有分類，按 Enter 可建立新分類。",
     "newCategoryParentHint": "將在「%{category}」下建立子分類",
     "newCategoryRootHint": "將在頂層建立分類",
     "moveToParentLevel": "移動到上一層",

@@ -21,7 +21,19 @@ impl NyaTermApp {
         {
             self.reset_text_input("quick-command.editor.category", "", cx);
             self.reset_text_input("quick-command.editor.new-category", "", cx);
+            self.sync_quick_command_editor_new_category_placeholder(cx);
             cx.notify();
+        }
+    }
+
+    fn sync_quick_command_editor_new_category_placeholder(&mut self, cx: &mut Context<Self>) {
+        let placeholder = if self.commands.quick_editor_category_search_has_no_matches() {
+            t!("quickCommands.newCategoryNoMatchesPlaceholder")
+        } else {
+            t!("quickCommands.newCategoryPlaceholder")
+        };
+        if let Some(input) = self.existing_text_input("quick-command.editor.new-category") {
+            input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         }
     }
 
@@ -35,8 +47,23 @@ impl NyaTermApp {
                 self.reset_text_input("quick-command.editor.category", "", cx);
                 self.reset_text_input("quick-command.editor.new-category", "", cx);
             }
+            self.sync_quick_command_editor_new_category_placeholder(cx);
             cx.notify();
         }
+    }
+
+    pub(in crate::features) fn commit_quick_command_editor_category_search(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.commands.commit_quick_editor_category_search() {
+            return false;
+        }
+        self.reset_text_input("quick-command.editor.category", "", cx);
+        self.reset_text_input("quick-command.editor.new-category", "", cx);
+        self.sync_quick_command_editor_new_category_placeholder(cx);
+        cx.notify();
+        true
     }
 
     pub(in crate::features) fn commit_quick_command_editor_new_category(
@@ -46,6 +73,7 @@ impl NyaTermApp {
         if self.commands.commit_quick_editor_new_category() {
             self.reset_text_input("quick-command.editor.category", "", cx);
             self.reset_text_input("quick-command.editor.new-category", "", cx);
+            self.sync_quick_command_editor_new_category_placeholder(cx);
             cx.notify();
         }
     }
@@ -284,7 +312,11 @@ impl NyaTermApp {
             "description" => QuickCommandEditorField::Description,
             _ => return,
         };
+        let category_search = field == QuickCommandEditorField::Category;
         if self.commands.apply_quick_editor_input(field, text) {
+            if category_search {
+                self.sync_quick_command_editor_new_category_placeholder(cx);
+            }
             cx.notify();
         }
     }

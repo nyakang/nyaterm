@@ -2075,6 +2075,7 @@
     "labelPlaceholder": "例: ファイル一覧",
     "listMode": "リストモード",
     "newCategoryPlaceholder": "新しいカテゴリ...",
+    "newCategoryNoMatchesPlaceholder": "既存のカテゴリが見つかりません。Enterキーで新しいカテゴリを作成できます。",
     "newCategoryParentHint": "「%{category}」のサブカテゴリとして作成",
     "newCategoryRootHint": "最上位に作成",
     "moveToParentLevel": "一つ上の階層へ移動",
