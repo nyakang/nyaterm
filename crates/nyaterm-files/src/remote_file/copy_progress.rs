@@ -108,16 +108,16 @@ impl CopyProgress {
                     }
                 }
                 FileTransferEndpoint::Adb { service, path } => {
-                    let properties = service.remote_file_properties(&path)?;
+                    let properties = service.remote_file_properties_with_control(&path, control)?;
                     anyhow::ensure!(
                         matches!(
                             properties.file_type,
                             SftpFileType::File | SftpFileType::Directory
                         ),
-                        "Android copy source is a link or special file"
+                        crate::file_browser::FileTransferEntryError::UnsupportedFileType
                     );
                     if properties.file_type == SftpFileType::Directory {
-                        for entry in service.list_dir_path(&path)? {
+                        for entry in service.list_dir_path_with_control(&path, control)? {
                             pending.push(FileTransferEndpoint::Adb {
                                 service: service.clone(),
                                 path: entry.remote_path(),
@@ -162,6 +162,14 @@ impl CopyProgress {
         let mut state = self.0.lock().expect("copy progress lock");
         state.value.bytes_transferred = state.value.bytes_transferred.saturating_add(bytes);
         state.emit(false);
+    }
+
+    pub(crate) fn cumulative_bytes(&self) -> impl FnMut(u64) + '_ {
+        let mut previous = 0;
+        move |bytes| {
+            self.add_bytes(bytes.saturating_sub(previous));
+            previous = bytes;
+        }
     }
 
     pub(crate) fn finish_item(&self) {

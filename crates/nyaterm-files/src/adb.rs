@@ -15,6 +15,10 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) mod copy;
+#[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(test)]
+mod transfer_tests;
 
 /// Marks failures from an Android file operation without exposing device data.
 #[derive(Debug, thiserror::Error)]
@@ -96,11 +100,20 @@ impl AdbFileService {
         self.control.check_cancelled()
     }
     pub fn stat(&self, path: &RemoteFilePath) -> anyhow::Result<FileStat> {
+        self.stat_with_control(path, &self.control)
+    }
+    pub(crate) fn stat_with_control(
+        &self,
+        path: &RemoteFilePath,
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<FileStat> {
         self.check()?;
+        control.wait_if_paused_blocking()?;
         Ok(
             SyncStream::open(&self.binding)?.stat_with_cancel(&raw_path(path)?, || {
                 self.control
                     .check_cancelled()
+                    .and_then(|()| control.check_cancelled())
                     .map_err(|_| AdbError::Cancelled)
             })?,
         )
@@ -120,12 +133,21 @@ impl AdbFileService {
         }
     }
     pub fn list_dir_path(&self, path: &RemoteFilePath) -> anyhow::Result<Vec<SftpFileEntry>> {
+        self.list_dir_path_with_control(path, &self.control)
+    }
+    pub(crate) fn list_dir_path_with_control(
+        &self,
+        path: &RemoteFilePath,
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<Vec<SftpFileEntry>> {
         self.check()?;
+        control.wait_if_paused_blocking()?;
         let parent = raw_path(path)?;
         SyncStream::open(&self.binding)?
             .list_with_cancel(&parent, || {
                 self.control
                     .check_cancelled()
+                    .and_then(|()| control.check_cancelled())
                     .map_err(|_| AdbError::Cancelled)
             })?
             .into_iter()
@@ -161,7 +183,14 @@ impl AdbFileService {
         &self,
         path: &RemoteFilePath,
     ) -> anyhow::Result<SftpFileProperties> {
-        let stat = self.stat(path)?;
+        self.remote_file_properties_with_control(path, &self.control)
+    }
+    pub(crate) fn remote_file_properties_with_control(
+        &self,
+        path: &RemoteFilePath,
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<SftpFileProperties> {
+        let stat = self.stat_with_control(path, control)?;
         Ok(SftpFileProperties {
             name: path
                 .display_path
@@ -419,7 +448,7 @@ impl AdbFileService {
         control: &SftpTransferControl,
         progress: impl FnMut(u64),
     ) -> anyhow::Result<u64> {
-        let before = self.stat(path)?;
+        let before = self.stat_with_control(path, control)?;
         anyhow::ensure!(
             kind(before.mode) == SftpFileType::File,
             "Android download requires a regular file"
@@ -430,10 +459,10 @@ impl AdbFileService {
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         let bytes = self.receive(path, temp.as_file_mut(), control, progress)?;
         temp.as_file_mut().sync_all()?;
-        let after = self.stat(path)?;
+        let after = self.stat_with_control(path, control)?;
         anyhow::ensure!(
             bytes == before.size && before.size == after.size && before.modified == after.modified,
-            "Android source changed during download"
+            crate::file_browser::FileTransferEntryError::SourceChanged
         );
         // mtime has only second precision on older Sync implementations. Verify
         // bytes as well so a same-size edit cannot commit a mixed download.
@@ -443,7 +472,7 @@ impl AdbFileService {
         self.receive(path, &mut remote_hash, control, |_| {})?;
         anyhow::ensure!(
             local_hash.digest() == remote_hash.digest(),
-            "Android download verification failed"
+            crate::file_browser::FileTransferEntryError::SourceChanged
         );
         control.check_cancelled()?;
         self.check()?;

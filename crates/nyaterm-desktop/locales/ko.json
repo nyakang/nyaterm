@@ -1357,6 +1357,18 @@
     "zoomOut": "축소"
   },
   "fileExplorer": {
+    "transferSourceUnavailable": "원본 연결을 사용할 수 없습니다. 다시 연결한 후 시도하세요.",
+    "transferBackendUnsupported": "이 연결은 파일 전송을 지원하지 않습니다.",
+    "transferInvalidDestination": "전송 대상이 잘못되었거나 파일 이름을 표현할 수 없습니다.",
+    "transferPickerFailed": "파일 선택기에서 오류가 발생했습니다. 다시 시도하세요.",
+    "transferPickerClosed": "파일 선택기가 결과 없이 닫혔습니다. 다시 시도하세요.",
+    "transferPickerAlreadyOpen": "파일 선택기가 이미 열려 있습니다.",
+    "transferNoSelection": "전송할 파일을 먼저 선택하세요.",
+    "transferRefreshFailed": "업로드는 완료되었지만 디렉터리를 새로 고칠 수 없습니다: %{error}",
+    "transferUnsupportedFileType": "이 작업은 심볼릭 링크나 특수 파일 전송을 지원하지 않습니다.",
+    "transferSourceChanged": "전송 중 원본 파일이 변경되었습니다. 다시 시도하세요.",
+    "transferLimitExceeded": "파일 수, 디렉터리 깊이 또는 읽기 스트림 수가 지원 한도를 초과했습니다.",
+    "transferTargetExists": "대상이 이미 존재하므로 덮어쓰지 않습니다.",
     "dragLocal": "선택한 파일을 파일 관리자로 드래그",
     "dragRemote": "선택한 파일을 드래그하여 다운로드",
     "dragDirectoryUnsupported": "링크와 특수 파일은 드래그할 수 없습니다. 다운로드를 사용하세요",

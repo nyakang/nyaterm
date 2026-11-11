@@ -411,10 +411,20 @@ mod tests {
             );
             draw_path_fixture(vcx);
             if remote && cfg!(target_os = "linux") {
-                // Linux deliberately has no remote file drag export; the local
-                // case must still exercise the first-press drag gesture.
-                vcx.update(|_, cx| assert!(!cx.has_active_drag()));
-                assert!(vcx.debug_bounds("transfer-file-drag-preview").is_none());
+                // The gesture is recognized so unsupported native export is visible.
+                // No native selection or content provider is created on Linux.
+                vcx.update(|_, cx| {
+                    app.update(cx, |app, _| {
+                        assert_eq!(
+                            app.shell.status(),
+                            rust_i18n::t!("fileExplorer.dragPlatformUnsupported").as_ref()
+                        );
+                        assert!(!app.transfer.transfer_jobs().iter().any(|job| matches!(
+                            job.kind,
+                            crate::models::TransferJobKind::DragExport { .. }
+                        )));
+                    })
+                });
                 vcx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
                 continue;
             }

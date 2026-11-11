@@ -108,6 +108,25 @@ impl TransferFeatureState {
 }
 
 impl NyaTermApp {
+    /// Picker results belong to their captured session even after a tab switch.
+    pub(super) fn with_transfer_browser_session(
+        &mut self,
+        session_id: Option<&str>,
+        apply: impl FnOnce(&mut Self),
+    ) {
+        let inactive = session_id.filter(|id| self.session.active_id() != Some(*id));
+        let snapshot = inactive.map(|id| {
+            let snapshot = self.transfer.browser_event_snapshot();
+            self.load_transfer_browser_event_session(id);
+            snapshot
+        });
+        apply(self);
+        if let (Some(id), Some(snapshot)) = (inactive, snapshot) {
+            self.cache_transfer_browser_session(id);
+            self.transfer.restore_browser_event_snapshot(snapshot);
+        }
+    }
+
     fn load_transfer_browser_event_session(&mut self, session_id: &str) {
         self.validate_android_browser_cache(session_id);
         let Some(cache) = self.transfer.browser.session_cache.get(session_id).cloned() else {
@@ -277,6 +296,50 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let TransferJobEvent::FileRefreshFailed(error) = &event.event {
+            if crate::features::android::labels::file_error_code(error) != "Cancelled" {
+                let message = t!(
+                    "fileExplorer.transferRefreshFailed",
+                    error = crate::features::android::labels::file_error_message(error)
+                )
+                .to_string();
+                self.shell.set_status(message.clone());
+                self.notify_background_operation(
+                    "file-transfer-refresh-error",
+                    nyaterm_ui::notification::NyaNotificationKind::Warning,
+                    message,
+                    cx,
+                );
+            }
+            return true;
+        }
+        if let TransferJobEvent::Finished(Err(error)) = &event.event
+            && error != SFTP_TRANSFER_CANCELLED
+            && self.transfer.transfer_job(&event.id).is_some_and(|job| {
+                matches!(
+                    job.kind,
+                    TransferJobKind::Upload { .. } | TransferJobKind::Download { .. }
+                )
+            })
+        {
+            let backend = self
+                .transfer
+                .promised_download_source(&event.id)
+                .map(|source| source.kind())
+                .unwrap_or_else(|| {
+                    if self.transfer.transfer_job_is_local(&event.id) {
+                        nyaterm_files::file_browser::FileBrowserBackendKind::Local
+                    } else {
+                        nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+                    }
+                });
+            crate::features::android::labels::log_file_error(
+                "transfer-worker",
+                backend,
+                &event.id,
+                &anyhow::anyhow!("transfer worker failed"),
+            );
+        }
         let event = TransferJobResult {
             id: event.id,
             event: match event.event {
@@ -293,6 +356,51 @@ impl NyaTermApp {
                 event => event,
             },
         };
+        let upload_parent = match &event.event {
+            TransferJobEvent::Finished(Ok(TransferJobOutput::Uploaded { parent_path, .. })) => {
+                Some(parent_path.clone())
+            }
+            TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(summary)))
+                if !summary.skipped
+                    && self
+                        .transfer
+                        .transfer_job(&event.id)
+                        .is_some_and(|job| matches!(job.kind, TransferJobKind::Upload { .. })) =>
+            {
+                let backend = self
+                    .transfer
+                    .promised_download_source(&event.id)
+                    .map(|source| source.kind())
+                    .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Local);
+                Some(nyaterm_files::file_browser::file_browser_parent(
+                    backend,
+                    &summary.remote_path,
+                ))
+            }
+            _ => None,
+        };
+        let uploaded_directory = if let Some(parent_path) = upload_parent {
+            let endpoint = match self.transfer.promised_download_source(&event.id) {
+                Some(nyaterm_files::file_browser::WeakFileBrowserService::Adb(service)) => self
+                    .android
+                    .key_for_file_service(&service)
+                    .map(crate::features::file_manager::PaneEndpoint::Adb),
+                Some(nyaterm_files::file_browser::WeakFileBrowserService::Remote(_)) => self
+                    .transfer
+                    .transfer_job(&event.id)
+                    .and_then(|job| job.session_id.clone())
+                    .map(crate::features::file_manager::PaneEndpoint::Session),
+                None => Some(crate::features::file_manager::PaneEndpoint::Local),
+            };
+            endpoint.map(|endpoint| {
+                (
+                    endpoint,
+                    nyaterm_files::sftp::RemoteFilePath::new(parent_path),
+                )
+            })
+        } else {
+            None
+        };
         if let TransferJobEvent::DragExportOpened {
             session_id,
             remote_path,
@@ -300,10 +408,8 @@ impl NyaTermApp {
             destination,
         } = event.event
         {
-            if self.session.metadata(&session_id).is_none() {
-                control.cancel();
-                return false;
-            }
+            // Native consumers can submit after the originating view closed.
+            // The captured service/device lease owns cancellation, not the view.
             let kind = match destination {
                 Some(destination) => {
                     self.transfer.bind_promised_download(
@@ -564,6 +670,22 @@ impl NyaTermApp {
         let event_failed = matches!(&event.event, TransferJobEvent::Finished(Err(_)));
         let event_succeeded = matches!(&event.event, TransferJobEvent::Finished(Ok(_)));
         let event_finished = event_failed || event_succeeded;
+        if let TransferJobEvent::Finished(Err(error)) = &event.event
+            && matches!(
+                job.kind,
+                TransferJobKind::Upload { .. }
+                    | TransferJobKind::Download { .. }
+                    | TransferJobKind::DragExport { .. }
+            )
+            && error != SFTP_TRANSFER_CANCELLED
+        {
+            self.notify_background_operation(
+                "file-transfer-error",
+                nyaterm_ui::notification::NyaNotificationKind::Error,
+                error.clone(),
+                cx,
+            );
+        }
         if let (TransferJobKind::SendTo { .. }, TransferJobEvent::Finished(result)) =
             (&job.kind, &event.event)
         {
@@ -1390,6 +1512,7 @@ impl NyaTermApp {
                 job.control = None;
 
                 if transfer_event_paths_match(&self.transfer.browser.path, &parent_path) {
+                    browser_listing_completed = true;
                     self.transfer.browser.path = parent_path.clone();
                     self.transfer.browser.entries = Arc::new(entries.clone());
                     self.transfer.browser.status = format!("{} item(s)", entries.len());
@@ -1436,7 +1559,7 @@ impl NyaTermApp {
                     zmodem_upload_after_probe = Some((session_id, files, overwrite));
                 }
             }
-            TransferJobEvent::FileFinished(_) => {
+            TransferJobEvent::FileFinished(_) | TransferJobEvent::FileRefreshFailed(_) => {
                 unreachable!("file errors are localized at event entry")
             }
             TransferJobEvent::Finished(Err(error)) => {
@@ -1609,6 +1732,9 @@ impl NyaTermApp {
         }
         if let Some(snapshot) = inactive_browser_snapshot {
             self.transfer.restore_browser_event_snapshot(snapshot);
+        }
+        if let Some((endpoint, path)) = uploaded_directory {
+            self.refresh_file_manager_directory(&endpoint, &path, cx);
         }
         if event_succeeded && self.session.active_id() == job_session_id.as_deref() {
             if reveal_tree_after_navigation {
@@ -2069,6 +2195,78 @@ mod tests {
             control: None,
             speed: Default::default(),
         }
+    }
+
+    #[test]
+    fn adb_upload_completion_updates_the_original_sessions_cache_after_a_tab_switch() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-adb-upload-refresh");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "original",
+            "/device",
+        );
+        let vcx = crate::features::test_support::session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let service = app.browser_transfer_session().unwrap().service;
+                app.transfer.browser.path = "/device".into();
+                app.cache_transfer_browser_session("original");
+                let mut job = running_job("adb-upload");
+                job.session_id = Some("original".into());
+                job.kind = TransferJobKind::Upload {
+                    local_path: root.path().join("input"),
+                    remote_path: "/device/new-file".into(),
+                };
+                app.transfer.enqueue_transfer_job(job);
+                let options = app.sftp_download_path_options();
+                app.transfer
+                    .bind_transfer_job_path_options("adb-upload", options);
+                app.transfer
+                    .bind_transfer_job_source("adb-upload", &service);
+                let metadata = app.session.metadata("original").unwrap().clone();
+                app.session.register_session_metadata("other", metadata);
+                app.session.select_active_session("other");
+                app.transfer.browser.path = "/other".into();
+                app.transfer.browser.status = "other status".into();
+                let mut entry = browser_entry("new-file");
+                entry.name = "new-file".into();
+                entry.path = "/device/new-file".into();
+                entry.raw_path_token = None;
+                app.apply_transfer_event(
+                    TransferJobResult {
+                        id: "adb-upload".into(),
+                        event: TransferJobEvent::FileFinished(Ok(TransferJobOutput::Uploaded {
+                            summary: nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+                                remote_path: "/device/new-file".into(),
+                                local_path: root.path().join("input"),
+                                bytes: 3,
+                                skipped: false,
+                            },
+                            parent_path: "/device".into(),
+                            entries: vec![entry],
+                        })),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(app.transfer.browser.path, "/other");
+                assert_eq!(app.transfer.browser.status, "other status");
+                let cache = app.transfer.browser.session_cache.get("original").unwrap();
+                assert!(
+                    cache
+                        .entries
+                        .iter()
+                        .any(|entry| entry.path == "/device/new-file")
+                );
+                assert_eq!(
+                    app.transfer.transfer_job("adb-upload").unwrap().status,
+                    TransferJobStatus::Completed
+                );
+            })
+        });
     }
 
     fn sync_cwd_job(id: &str) -> TransferJobState {

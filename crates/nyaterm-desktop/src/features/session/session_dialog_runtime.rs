@@ -366,7 +366,12 @@ impl NyaTermApp {
             self.tmux.drop_pane_session(session_id);
         }
         self.clear_terminal_composition_for_session(session_id, cx);
-        self.transfer.cancel_bulk_jobs_for_session(session_id);
+        let adb = self
+            .session
+            .file_browser_backend_support_for_session(session_id)
+            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Adb);
+        self.transfer
+            .cancel_bulk_jobs_for_closed_view(session_id, adb);
         self.reconcile_bulk_transfer_jobs();
         self.commands.cancel_staged_quick_command(session_id);
         self.close_terminal_executions_for_session(session_id, cx);

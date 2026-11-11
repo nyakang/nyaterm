@@ -80,6 +80,36 @@ pub(in crate::features) fn fatal_message(code: &str) -> Cow<'static, str> {
 
 /// Preserve unrelated backends' diagnostics; Android errors never expose raw device output.
 pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
+    if let Some(error) = error.chain().find_map(|cause| {
+        cause.downcast_ref::<nyaterm_files::file_browser::FileTransferEntryError>()
+    }) {
+        use nyaterm_files::file_browser::FileTransferEntryError;
+        return match error {
+            FileTransferEntryError::Unavailable => t!("fileExplorer.transferSourceUnavailable"),
+            FileTransferEntryError::UnsupportedBackend => {
+                t!("fileExplorer.transferBackendUnsupported")
+            }
+            FileTransferEntryError::InvalidDestination => {
+                t!("fileExplorer.transferInvalidDestination")
+            }
+            FileTransferEntryError::PickerFailed => t!("fileExplorer.transferPickerFailed"),
+            FileTransferEntryError::PickerClosed => t!("fileExplorer.transferPickerClosed"),
+            FileTransferEntryError::PickerAlreadyOpen => {
+                t!("fileExplorer.transferPickerAlreadyOpen")
+            }
+            FileTransferEntryError::DragPlatformUnsupported => {
+                t!("fileExplorer.dragPlatformUnsupported")
+            }
+            FileTransferEntryError::NoSelection => t!("fileExplorer.transferNoSelection"),
+            FileTransferEntryError::UnsupportedFileType => {
+                t!("fileExplorer.transferUnsupportedFileType")
+            }
+            FileTransferEntryError::SourceChanged => t!("fileExplorer.transferSourceChanged"),
+            FileTransferEntryError::LimitExceeded => t!("fileExplorer.transferLimitExceeded"),
+            FileTransferEntryError::TargetExists => t!("fileExplorer.transferTargetExists"),
+        }
+        .into_owned();
+    }
     if let Some(error) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<nyaterm_files::adb::AdbFileValidationError>())
@@ -117,6 +147,11 @@ pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
 pub(in crate::features) fn file_error_code(error: &anyhow::Error) -> &'static str {
     use nyaterm_files::adb::AdbFileValidationError;
     for cause in error.chain() {
+        if let Some(error) =
+            cause.downcast_ref::<nyaterm_files::file_browser::FileTransferEntryError>()
+        {
+            return error.code();
+        }
         if let Some(error) = cause.downcast_ref::<AdbFileValidationError>() {
             return match error {
                 AdbFileValidationError::InvalidPath => "InvalidPath",

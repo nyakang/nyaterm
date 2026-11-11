@@ -19,6 +19,7 @@ pub(in crate::features) use state::TransferSessionTransferBundle;
 pub(in crate::features) use state::TransferTreePresentation;
 pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey};
 mod transfer_events;
+mod transfer_feedback;
 pub(in crate::features) mod transfer_jobs;
 mod transfer_options;
 mod transfer_paths;
@@ -36,9 +37,9 @@ use nyaterm_transport::SshSessionConfig;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(in crate::features) struct SftpJobSession {
+pub(in crate::features) struct FileTransferSession {
     pub session_id: Option<String>,
-    pub service: RemoteFileService,
+    pub service: FileBrowserService,
 }
 
 struct ConnectionStoreBackendPreferences {

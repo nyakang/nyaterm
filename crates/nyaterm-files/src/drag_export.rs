@@ -1,7 +1,9 @@
 //! Deferred drag sources and the bounded synchronous-consumer/SFTP bridge.
 //! Source metadata never contains a local destination or saved credentials.
 
+mod adb;
 mod lifetime;
+pub use adb::{AdbReadSource, AdbReadStream};
 pub mod tree;
 pub use lifetime::DragSourceLifetime;
 
@@ -51,6 +53,10 @@ pub enum ExportReadEvent {
     },
     /// Content delivery finished; this does not assert that the OS committed a destination.
     Finished(Result<u64, String>),
+    Failed {
+        backend: crate::file_browser::FileBrowserBackendKind,
+        error: anyhow::Error,
+    },
 }
 
 pub type ExportObserver = Arc<dyn Fn(ExportReadEvent) + Send + Sync>;

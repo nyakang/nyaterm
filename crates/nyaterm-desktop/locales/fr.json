@@ -1357,6 +1357,18 @@
     "zoomOut": "Zoom arrière"
   },
   "fileExplorer": {
+    "transferSourceUnavailable": "La connexion source est indisponible. Reconnectez-vous et réessayez.",
+    "transferBackendUnsupported": "Cette connexion ne prend pas en charge le transfert de fichiers.",
+    "transferInvalidDestination": "La destination est invalide ou ne peut pas représenter le nom du fichier.",
+    "transferPickerFailed": "Le sélecteur de fichiers a échoué. Réessayez.",
+    "transferPickerClosed": "Le sélecteur de fichiers a fermé sans résultat. Réessayez.",
+    "transferPickerAlreadyOpen": "Un sélecteur de fichiers est déjà ouvert.",
+    "transferNoSelection": "Sélectionnez des fichiers avant de lancer le transfert.",
+    "transferRefreshFailed": "Le transfert est terminé, mais le dossier n’a pas pu être actualisé : %{error}",
+    "transferUnsupportedFileType": "Cette opération ne prend pas en charge les liens symboliques ni les fichiers spéciaux.",
+    "transferSourceChanged": "La source a changé pendant le transfert. Veuillez réessayer.",
+    "transferLimitExceeded": "Le transfert dépasse la limite de fichiers, de profondeur ou de flux de lecture.",
+    "transferTargetExists": "La destination existe déjà et ne sera pas écrasée.",
     "dragLocal": "Glisser les fichiers sélectionnés vers un gestionnaire de fichiers",
     "dragRemote": "Glisser les fichiers sélectionnés pour les télécharger",
     "dragDirectoryUnsupported": "Les liens et fichiers spéciaux ne peuvent pas être glissés ; utilisez Télécharger",

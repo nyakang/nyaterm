@@ -1357,6 +1357,18 @@
     "zoomOut": "Zoom Out"
   },
   "fileExplorer": {
+    "transferSourceUnavailable": "The source connection is unavailable. Reconnect and try again.",
+    "transferBackendUnsupported": "This connection does not support file transfer.",
+    "transferInvalidDestination": "The transfer destination is invalid or cannot represent the filename.",
+    "transferPickerFailed": "The file picker failed. Please try again.",
+    "transferPickerClosed": "The file picker closed without a response. Please try again.",
+    "transferPickerAlreadyOpen": "A file picker is already open.",
+    "transferNoSelection": "Select files before starting a transfer.",
+    "transferRefreshFailed": "Upload completed, but the directory could not be refreshed: %{error}",
+    "transferUnsupportedFileType": "Links and special files cannot be transferred by this operation.",
+    "transferSourceChanged": "The source changed during transfer. Please try again.",
+    "transferLimitExceeded": "The transfer exceeds the supported file count, depth or stream limit.",
+    "transferTargetExists": "The destination already exists and will not be overwritten.",
     "dragLocal": "Drag selected files to a file manager",
     "dragRemote": "Drag selected files to download",
     "dragDirectoryUnsupported": "Links and special files cannot be dragged out; use Download",

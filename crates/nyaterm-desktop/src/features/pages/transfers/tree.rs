@@ -133,7 +133,7 @@ pub(super) fn transfer_tree_view(
                                         });
                                     let drag_app = panel.app_handle();
                                     let drag_name = row.label.clone();
-                                    let drag_entry = row.entry.clone().filter(|_| !is_renaming && crate::features::transfers::drag_export::transfer_drag_supported(snapshot.browser.local_backend, window.supports_virtual_file_drag(), window.supports_file_promise_drag())).filter(|entry| matches!(entry.file_type, SftpFileType::File | SftpFileType::Directory));
+                                    let drag_entry = row.entry.clone().filter(|_| !is_renaming && (cfg!(target_os = "linux") || crate::features::transfers::drag_export::transfer_drag_supported(snapshot.browser.local_backend, window.supports_virtual_file_drag(), window.supports_file_promise_drag()))).filter(|entry| matches!(entry.file_type, SftpFileType::File | SftpFileType::Directory));
                                     let row_group = SharedString::from(format!("transfer-tree-row:{}", row.key));
                                     let content = div()
                                         .id(row_group.clone())

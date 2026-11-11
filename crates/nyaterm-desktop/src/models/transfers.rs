@@ -503,7 +503,7 @@ pub(crate) struct TransferJobResult {
 pub(crate) struct PromisedDownloadDestination {
     pub raw_path_token: Option<String>,
     pub local_path: PathBuf,
-    pub source: std::sync::Weak<nyaterm_files::remote_file::RemoteFileService>,
+    pub source: nyaterm_files::file_browser::WeakFileBrowserService,
     pub options: nyaterm_files::sftp_transfer_types::SftpPathTransferOptions,
 }
 
@@ -529,6 +529,8 @@ pub(crate) enum TransferJobEvent {
     Progress(SftpTransferProgress),
     /// File adapters retain typed errors until the desktop event boundary.
     FileFinished(Result<TransferJobOutput, anyhow::Error>),
+    /// The upload committed successfully, but fetching its new listing failed.
+    FileRefreshFailed(anyhow::Error),
     Finished(Result<TransferJobOutput, String>),
 }
 

@@ -90,6 +90,15 @@ impl AndroidFeatureState {
             .map(|d| d.config.name.clone())
             .unwrap_or_else(|| rust_i18n::t!("android.disconnectedTitle").into_owned())
     }
+
+    pub(in crate::features) fn key_for_file_service(
+        &self,
+        service: &std::sync::Weak<AdbFileService>,
+    ) -> Option<String> {
+        self.devices.iter().find_map(|(key, device)| {
+            std::sync::Weak::ptr_eq(service, &Arc::downgrade(&device.files)).then(|| key.clone())
+        })
+    }
     pub(in crate::features) fn kind(&self, id: &str) -> Option<AndroidViewKind> {
         self.views.get(id).map(|v| v.kind)
     }

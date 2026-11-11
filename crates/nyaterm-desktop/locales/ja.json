@@ -1357,6 +1357,18 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "transferSourceUnavailable": "接続元を利用できません。再接続して再試行してください。",
+    "transferBackendUnsupported": "この接続はファイル転送に対応していません。",
+    "transferInvalidDestination": "転送先が無効か、ファイル名を表現できません。",
+    "transferPickerFailed": "ファイル選択でエラーが発生しました。再試行してください。",
+    "transferPickerClosed": "ファイル選択が結果を返さずに閉じられました。再試行してください。",
+    "transferPickerAlreadyOpen": "ファイル選択が既に開いています。",
+    "transferNoSelection": "転送するファイルを選択してください。",
+    "transferRefreshFailed": "アップロードは完了しましたが、ディレクトリを更新できませんでした：%{error}",
+    "transferUnsupportedFileType": "この操作ではシンボリックリンクや特殊ファイルを転送できません。",
+    "transferSourceChanged": "転送中に元のファイルが変更されました。再試行してください。",
+    "transferLimitExceeded": "ファイル数、ディレクトリの深さ、または読み取りストリーム数が上限を超えています。",
+    "transferTargetExists": "転送先が既に存在するため、上書きしません。",
     "dragLocal": "選択したファイルをファイルマネージャーにドラッグ",
     "dragRemote": "選択したファイルをドラッグしてダウンロード",
     "dragDirectoryUnsupported": "リンクと特殊ファイルはドラッグできません。ダウンロードを使用してください",

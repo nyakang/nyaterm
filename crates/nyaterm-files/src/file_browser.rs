@@ -1,22 +1,112 @@
 use crate::local_fs::LocalFileService;
 use crate::remote_file::{
-    FileTransferEndpoint, RemoteFileService, RemoteTextDocument, RemoteTextRevision,
-    RemoteTextWriteResult,
+    FileCopyRequest, FileTransferEndpoint, RemoteFileService, RemoteTextDocument,
+    RemoteTextRevision, RemoteTextWriteResult,
 };
 use crate::sftp::{
     RemoteBinaryFile, RemoteFilePath, SftpAttributeUpdate, SftpFileEntry, SftpFileProperties,
-    SftpRemoteTextFile,
+    SftpRemoteTextFile, SftpTransferControl,
+};
+use crate::sftp_transfer_types::{
+    SftpPathTransferOptions, SftpTransferProgress, SftpTransferSummary,
 };
 use anyhow::bail;
 use nyaterm_transport::local_shell::LocalShellPathStyle;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+
+#[derive(Clone)]
+pub enum WeakFileBrowserService {
+    Remote(Weak<RemoteFileService>),
+    Adb(Weak<crate::adb::AdbFileService>),
+}
+
+impl std::fmt::Debug for WeakFileBrowserService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("WeakFileBrowserService")
+            .field(&self.kind())
+            .finish()
+    }
+}
+
+impl From<Weak<RemoteFileService>> for WeakFileBrowserService {
+    fn from(service: Weak<RemoteFileService>) -> Self {
+        Self::Remote(service)
+    }
+}
+
+impl WeakFileBrowserService {
+    pub fn kind(&self) -> FileBrowserBackendKind {
+        match self {
+            Self::Remote(_) => FileBrowserBackendKind::Remote,
+            Self::Adb(_) => FileBrowserBackendKind::Adb,
+        }
+    }
+    pub fn upgrade(&self) -> Option<FileBrowserService> {
+        match self {
+            Self::Remote(service) => service.upgrade().map(FileBrowserService::Remote),
+            Self::Adb(service) => service
+                .upgrade()
+                .filter(|s| !s.control.is_cancelled())
+                .map(FileBrowserService::Adb),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileBrowserBackendKind {
     Local,
     Remote,
     Adb,
+}
+
+/// Entry failures have stable codes and never retain paths or picker diagnostics.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+pub enum FileTransferEntryError {
+    #[error("file transfer source is unavailable")]
+    Unavailable,
+    #[error("file transfer backend is unsupported")]
+    UnsupportedBackend,
+    #[error("file transfer destination is invalid")]
+    InvalidDestination,
+    #[error("file picker failed")]
+    PickerFailed,
+    #[error("file picker closed without a response")]
+    PickerClosed,
+    #[error("file picker is already open")]
+    PickerAlreadyOpen,
+    #[error("remote drag export is unsupported on this platform")]
+    DragPlatformUnsupported,
+    #[error("select files before starting a transfer")]
+    NoSelection,
+    #[error("links and special files cannot be transferred by this operation")]
+    UnsupportedFileType,
+    #[error("the source changed during transfer")]
+    SourceChanged,
+    #[error("file transfer exceeded its resource limit")]
+    LimitExceeded,
+    #[error("the promised destination already exists")]
+    TargetExists,
+}
+
+impl FileTransferEntryError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unavailable => "SourceUnavailable",
+            Self::UnsupportedBackend => "UnsupportedBackend",
+            Self::InvalidDestination => "InvalidDestination",
+            Self::PickerFailed => "PickerFailed",
+            Self::PickerClosed => "PickerClosed",
+            Self::PickerAlreadyOpen => "PickerAlreadyOpen",
+            Self::DragPlatformUnsupported => "DragPlatformUnsupported",
+            Self::NoSelection => "NoSelection",
+            Self::UnsupportedFileType => "UnsupportedFileType",
+            Self::SourceChanged => "SourceChanged",
+            Self::LimitExceeded => "LimitExceeded",
+            Self::TargetExists => "TargetExists",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +149,95 @@ impl std::fmt::Debug for FileBrowserService {
 }
 
 impl FileBrowserService {
+    pub fn downgrade(&self) -> Option<WeakFileBrowserService> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(service) => Some(WeakFileBrowserService::Remote(Arc::downgrade(service))),
+            Self::Adb(service) => Some(WeakFileBrowserService::Adb(Arc::downgrade(service))),
+        }
+    }
+    pub fn download_remote_path_with_progress_and_path_options(
+        &self,
+        remote: &RemoteFilePath,
+        local: PathBuf,
+        control: SftpTransferControl,
+        options: SftpPathTransferOptions,
+        progress: impl FnMut(SftpTransferProgress) + Send + 'static,
+    ) -> anyhow::Result<SftpTransferSummary> {
+        if let Self::Remote(service) = self {
+            return service.download_remote_path_with_progress_and_path_options(
+                remote, local, control, options, progress,
+            );
+        }
+        control.check_cancelled()?;
+        let local = std::path::absolute(local)?;
+        if let Some(parent) = local.parent().filter(|path| !path.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        let summary = FileCopyRequest {
+            source: self.transfer_endpoint(remote),
+            destination: FileTransferEndpoint::Local(local.clone()),
+            control,
+            options,
+        }
+        .execute_with_progress(progress)?;
+        Ok(SftpTransferSummary {
+            remote_path: remote.display_path.clone(),
+            local_path: PathBuf::from(summary.destination_path),
+            bytes: summary.bytes,
+            skipped: !summary.copied,
+        })
+    }
+
+    pub fn upload_path_with_progress_and_path_options(
+        &self,
+        local: PathBuf,
+        remote: &str,
+        control: SftpTransferControl,
+        options: SftpPathTransferOptions,
+        progress: impl FnMut(SftpTransferProgress) + Send + 'static,
+    ) -> anyhow::Result<SftpTransferSummary> {
+        self.upload_remote_path_with_progress_and_path_options(
+            local,
+            &RemoteFilePath::new(remote),
+            control,
+            options,
+            progress,
+        )
+    }
+
+    pub fn upload_remote_path_with_progress_and_path_options(
+        &self,
+        local: PathBuf,
+        remote: &RemoteFilePath,
+        control: SftpTransferControl,
+        options: SftpPathTransferOptions,
+        progress: impl FnMut(SftpTransferProgress) + Send + 'static,
+    ) -> anyhow::Result<SftpTransferSummary> {
+        if let Self::Remote(service) = self {
+            return service.upload_path_with_progress_and_path_options(
+                local,
+                &remote.display_path,
+                control,
+                options,
+                progress,
+            );
+        }
+        let summary = FileCopyRequest {
+            source: FileTransferEndpoint::Local(local.clone()),
+            destination: self.transfer_endpoint(remote),
+            control,
+            options,
+        }
+        .execute_with_progress(progress)?;
+        Ok(SftpTransferSummary {
+            remote_path: summary.destination_path,
+            local_path: local,
+            bytes: summary.bytes,
+            skipped: !summary.copied,
+        })
+    }
+
     pub fn parent_path(&self, path: &RemoteFilePath) -> anyhow::Result<RemoteFilePath> {
         match self {
             Self::Local(_) => Ok(RemoteFilePath::new(file_browser_parent(

@@ -253,7 +253,7 @@ pub(super) fn transfer_browser_entry_row(
         .when(
             !is_renaming
                 && (local_backend
-                    || (virtual_drag_supported
+                    || ((virtual_drag_supported || cfg!(target_os = "linux"))
                         && matches!(
                             entry.file_type,
                             SftpFileType::File | SftpFileType::Directory

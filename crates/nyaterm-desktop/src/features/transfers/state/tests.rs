@@ -2097,6 +2097,9 @@ fn promised_retry_keeps_original_source_and_execution_contract_until_released() 
     assert_eq!(retry.duplicate_policy(), SftpDuplicatePolicy::Skip);
     assert_eq!(retry.transfer_options().max_retries(), 2);
     let saved = transfer.promised_download_source("promise").unwrap();
+    let nyaterm_files::file_browser::WeakFileBrowserService::Remote(saved) = saved else {
+        panic!("wrong source backend")
+    };
     assert!(std::sync::Weak::ptr_eq(
         &saved,
         &std::sync::Arc::downgrade(&source)

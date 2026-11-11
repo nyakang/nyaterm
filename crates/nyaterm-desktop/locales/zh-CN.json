@@ -1357,6 +1357,18 @@
     "zoomOut": "缩小"
   },
   "fileExplorer": {
+    "transferSourceUnavailable": "来源连接不可用，请重新连接后重试。",
+    "transferBackendUnsupported": "此连接不支持文件传输。",
+    "transferInvalidDestination": "传输目标无效或无法表示文件名。",
+    "transferPickerFailed": "文件选择器出错，请重试。",
+    "transferPickerClosed": "文件选择器未返回结果便已关闭，请重试。",
+    "transferPickerAlreadyOpen": "已有文件选择器打开。",
+    "transferNoSelection": "请先选择要传输的文件。",
+    "transferRefreshFailed": "上传已完成，但无法刷新目录：%{error}",
+    "transferUnsupportedFileType": "此操作不支持传输符号链接或特殊文件。",
+    "transferSourceChanged": "传输过程中源文件已发生变化，请重试。",
+    "transferLimitExceeded": "传输超出支持的文件数量、目录深度或读取流限制。",
+    "transferTargetExists": "目标已存在，不会覆盖现有文件。",
     "dragLocal": "将选中文件拖到文件管理器",
     "dragRemote": "拖出选中文件以下载",
     "dragDirectoryUnsupported": "链接和特殊文件暂不支持拖出，请使用下载",

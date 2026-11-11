@@ -1357,6 +1357,18 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "transferSourceUnavailable": "來源連線無法使用，請重新連線後重試。",
+    "transferBackendUnsupported": "此連線不支援檔案傳輸。",
+    "transferInvalidDestination": "傳輸目的地無效或無法表示檔案名稱。",
+    "transferPickerFailed": "檔案選擇器發生錯誤，請重試。",
+    "transferPickerClosed": "檔案選擇器未傳回結果便已關閉，請重試。",
+    "transferPickerAlreadyOpen": "已有檔案選擇器開啟。",
+    "transferNoSelection": "請先選擇要傳輸的檔案。",
+    "transferRefreshFailed": "上傳已完成，但無法重新整理目錄：%{error}",
+    "transferUnsupportedFileType": "此操作不支援傳輸符號連結或特殊檔案。",
+    "transferSourceChanged": "傳輸過程中來源檔案已變更，請重試。",
+    "transferLimitExceeded": "傳輸超出支援的檔案數量、目錄深度或讀取串流限制。",
+    "transferTargetExists": "目標已存在，不會覆寫現有檔案。",
     "dragLocal": "將選取檔案拖到檔案管理員",
     "dragRemote": "拖出選取檔案以下載",
     "dragDirectoryUnsupported": "連結和特殊檔案不支援拖出，請使用下載",

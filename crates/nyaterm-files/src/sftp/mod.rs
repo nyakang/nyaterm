@@ -712,7 +712,20 @@ impl SftpService {
         } else {
             run_sftp_operation(operation)
         };
-        if let Err(error) = result.as_ref() {
+        // Transfer owners report the typed final error once with a request id.
+        // Keep diagnostics here for operations without a transfer task owner.
+        if let Err(error) = result.as_ref()
+            && !matches!(
+                operation_name,
+                "upload_file"
+                    | "upload_remote_file"
+                    | "upload_path"
+                    | "download_file"
+                    | "download_path"
+                    | "download_remote_path"
+            )
+            && !is_sftp_transfer_cancelled(error)
+        {
             tracing::warn!(
                 session_id = self.session_id,
                 operation = operation_name,
@@ -720,29 +733,6 @@ impl SftpService {
                 category = sftp_error_category(error),
                 "SFTP operation failed"
             );
-        }
-        result
-    }
-
-    /// Runs an upload and records its final result; ordinary failures are logged as errors,
-    /// while user cancellations are logged as warnings.
-    fn run_upload_operation<T, F>(
-        &self,
-        operation: &'static str,
-        attempts: u32,
-        operation_future: F,
-    ) -> anyhow::Result<T>
-    where
-        T: Send + 'static,
-        F: Future<Output = anyhow::Result<T>> + Send + 'static,
-    {
-        let result = self.run_operation(operation, operation_future);
-        if let Err(error) = &result {
-            if is_sftp_transfer_cancelled(error) {
-                tracing::warn!(operation, "SFTP upload cancelled");
-            } else {
-                log_sftp_upload_failure(operation, attempts, error);
-            }
         }
         result
     }
@@ -2243,8 +2233,7 @@ impl SftpService {
         let remote_path = remote_path.as_ref().to_string();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        let attempts = options.max_retries().saturating_add(1);
-        self.run_upload_operation("upload_file", attempts, async move {
+        self.run_operation("upload_file", async move {
             let upload_metadata = UploadMetadata::default();
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let codec = SftpPathCodec::from_ssh_config(&config)?;
@@ -2306,8 +2295,7 @@ impl SftpService {
         let remote_path = remote_path.clone();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        let attempts = options.max_retries().saturating_add(1);
-        self.run_upload_operation("upload_remote_file", attempts, async move {
+        self.run_operation("upload_remote_file", async move {
             let upload_metadata = UploadMetadata::default();
             let codec = SftpPathCodec::from_ssh_config(&config)?;
             let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
@@ -2450,11 +2438,7 @@ impl SftpService {
         let remote_path = remote_path.as_ref().to_string();
         let config = self.config.clone();
         let multiplex = self.multiplex.clone();
-        let attempts = path_options
-            .transfer_options()
-            .max_retries()
-            .saturating_add(1);
-        self.run_upload_operation("upload_path", attempts, async move {
+        self.run_operation("upload_path", async move {
             let upload_metadata = UploadMetadata::default();
             let metadata = tokio::fs::metadata(&local_path).await?;
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
@@ -2724,17 +2708,6 @@ fn remote_join_bytes(parent: &[u8], child: &[u8]) -> Vec<u8> {
 
 fn is_sftp_transfer_cancelled(error: &anyhow::Error) -> bool {
     error.to_string().contains(SFTP_TRANSFER_CANCELLED)
-}
-
-/// Server status strings can contain user data; diagnostics record categories, never error text.
-fn log_sftp_upload_failure(operation: &'static str, attempts: u32, error: &anyhow::Error) {
-    tracing::error!(
-        operation,
-        attempts,
-        stage = "completion",
-        category = sftp_error_category(error),
-        "SFTP upload failed"
-    );
 }
 
 /// Replaces an existing file with a fully written temporary file. Plain SFTP v3 rename refuses
