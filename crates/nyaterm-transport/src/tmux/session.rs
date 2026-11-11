@@ -2031,6 +2031,7 @@ pub(crate) async fn run_control_session(
     drop(pending_send);
     session.teardown().await;
     tmux_cmd_rx.discard_pending();
+    host_rx.discard_writes();
     exit
 }
 

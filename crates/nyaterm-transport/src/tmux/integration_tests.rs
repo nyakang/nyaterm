@@ -76,6 +76,78 @@ async fn nonce_verification_accepts_fragmented_replies_and_preserves_following_b
 }
 
 #[tokio::test]
+async fn stderr_cannot_confirm_or_corrupt_nonce_verification() {
+    let mut connection = connect().await;
+    let mut incoming = connection.peer_rx.take().unwrap();
+    let outgoing = connection.peer_tx.clone();
+    let peer = tokio::spawn(async move {
+        let Some(ChannelMsg::Data { data }) = incoming.wait().await else {
+            panic!("missing probe")
+        };
+        let command = std::str::from_utf8(&data).unwrap();
+        let nonce = command
+            .trim()
+            .strip_prefix("display-message -p '")
+            .unwrap()
+            .strip_suffix('\'')
+            .unwrap();
+        // An exact nonce on stderr is not a reply on the control stream.
+        outgoing
+            .extended_data_bytes(
+                1,
+                format!("%begin 1 2 1\n{nonce}\n%end 1 2 1\n").into_bytes(),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        outgoing
+            .data_bytes(b"%begin 1 3 1\nwrong\n%end 1 3 1\n".to_vec())
+            .await
+            .unwrap();
+    });
+    assert!(matches!(
+        verify(&connection.tx, &mut connection.rx, b"", b"").await,
+        Verification::Failed(Failure::Rejected)
+    ));
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn protocol_exit_discards_host_input_before_shell_handback() {
+    use crate::session_event_queue::SessionEventQueue;
+    use crate::ssh_mailbox;
+    use crate::tmux::session::{ControlExit, run_control_session};
+    let mut connection = connect().await;
+    let queue = SessionEventQueue::new();
+    let sessions = Arc::new(Mutex::new(HashMap::new()));
+    let (tx, mut rx) = super::mailbox::channel();
+    let (host, mut host_rx) = ssh_mailbox::channel();
+    host.write(vec![b'x'; crate::writer_mailbox::BYTE_LIMIT])
+        .unwrap();
+    let exit = run_control_session(
+        &queue,
+        &sessions,
+        "host",
+        &connection.tx,
+        &mut connection.rx,
+        &mut host_rx,
+        &mut rx,
+        tx,
+        b"%exit detached\nprompt> ",
+    )
+    .await;
+    assert!(matches!(exit, ControlExit::ReturnToShell { leftover } if leftover == b"prompt> "));
+    assert!(host_rx.try_recv().is_err());
+    // The old reservation was released and new shell input remains usable.
+    host.write(vec![b'y'; crate::writer_mailbox::BYTE_LIMIT])
+        .unwrap();
+    assert!(matches!(
+        host_rx.try_recv().unwrap(),
+        crate::SshCommand::Write(_)
+    ));
+}
+
+#[tokio::test]
 async fn exit_during_verification_returns_only_shell_tail() {
     let mut connection = connect().await;
     assert!(
@@ -314,7 +386,7 @@ mod real {
         binary(&std::env::var("NYATERM_TEST_TMUX").unwrap_or_else(|_| "tmux".into()))
     }
 
-    fn control_command(socket: &str, attach: bool) -> tokio::process::Command {
+    fn control_command(socket: &str, attach: bool, flag: &str) -> tokio::process::Command {
         let tmux = std::env::var("NYATERM_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
         let mut command = binary("script");
         // -CC needs a real remote tty. script supplies one on both Unix hosts
@@ -329,7 +401,7 @@ mod real {
                 socket,
                 "-f",
                 "/dev/null",
-                "-CC",
+                flag,
             ]);
             if attach {
                 command.args(["attach-session", "-t", "test"]);
@@ -349,7 +421,7 @@ mod real {
                 "-e",
                 "-c",
                 &format!(
-                    "'{}' -L {socket} -f /dev/null -CC {action}",
+                    "'{}' -L {socket} -f /dev/null {flag} {action}",
                     tmux.replace('\'', "'\"'\"'")
                 ),
                 "/dev/null",
@@ -406,6 +478,10 @@ mod real {
         }
 
         async fn start_with(socket: Option<Arc<Socket>>) -> Self {
+            Self::start_mode(socket, "-CC", false).await
+        }
+
+        async fn start_mode(socket: Option<Arc<Socket>>, flag: &str, recalled: bool) -> Self {
             let mut connection = connect().await;
             let attach = socket.is_some();
             let socket = socket.unwrap_or_else(|| {
@@ -414,7 +490,7 @@ mod real {
                     uuid::Uuid::new_v4().simple()
                 )))
             });
-            let mut process = control_command(&socket.0, attach);
+            let mut process = control_command(&socket.0, attach, flag);
             process
                 .env("TERM", "xterm-256color")
                 .stdin(std::process::Stdio::piped())
@@ -454,13 +530,19 @@ mod real {
                 output,
             };
             let mut detector = TmuxControlDetector::new();
-            detector.feed_input(b"tmux -CC\r");
+            if recalled {
+                detector.feed_input(b"\x1b[A\r");
+            } else {
+                detector.feed_input(format!("tmux {flag}\r").as_bytes());
+            }
             let initial = tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
                     let Some(ChannelMsg::Data { data }) = connection.rx.wait().await else {
                         panic!("tmux startup ended")
                     };
-                    if let TmuxFeed::Detected { startup, rest, .. } = detector.feed(&data) {
+                    if let TmuxFeed::Detected { startup, rest, .. } =
+                        detector.feed_output(&data).output
+                    {
                         let Verification::Confirmed(initial) =
                             verify(&connection.tx, &mut connection.rx, &startup, &rest).await
                         else {
@@ -581,6 +663,46 @@ mod real {
                 .join("\n")
                 .trim_end()
                 .into()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires real tmux; run explicitly in compatibility CI"]
+    async fn real_tmux_single_and_double_control_flags_support_recalled_reattach() {
+        for flag in ["-C", "-CC"] {
+            let mut run = Running::start_mode(None, flag, false).await;
+            run.wait(|run| run.terminals.contains_key("host::pane0"))
+                .await;
+            let socket = run.tmux.socket.clone();
+            run.tx.send(SshCommand::TmuxDetach).unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(10), &mut run.driver)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                ControlExit::ReturnToShell { .. }
+            ));
+            assert!(run.sessions.lock().unwrap().is_empty());
+            drop(run);
+            let mut recalled = Running::start_mode(Some(socket), flag, true).await;
+            recalled
+                .wait(|run| run.terminals.contains_key("host::pane0"))
+                .await;
+            recalled
+                .tx
+                .write("%0", b"printf 'REATTACHED\\n'\r")
+                .unwrap();
+            recalled
+                .wait(|run| run.screen("%0").contains("REATTACHED\n"))
+                .await;
+            recalled.tx.send(SshCommand::TmuxDetach).unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(10), &mut recalled.driver)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                ControlExit::ReturnToShell { .. }
+            ));
         }
     }
 

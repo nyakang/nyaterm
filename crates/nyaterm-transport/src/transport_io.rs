@@ -69,9 +69,9 @@ pub struct SshChannelTransport {
     /// Ordered tmux control-channel commands; buffered until the channel
     /// enters control mode so early UI calls cannot reach the user's shell.
     pub(crate) tmux_tx: TmuxCommandSender,
-    /// Set only while the worker runs the tmux control session; gates
-    /// `tmux_send_command`/`tmux_detach` so commands cannot be written into
-    /// a plain shell.
+    /// Blocks binary transfers during verification and the control session.
+    /// This gate is not protocol confirmation; the worker alone owns that
+    /// transition and never routes tmux mailbox commands into a plain shell.
     pub(crate) tmux_active: Arc<AtomicBool>,
     pub(crate) backspace_as_bs: bool,
     pub(crate) worker_thread: Option<JoinHandle<()>>,

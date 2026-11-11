@@ -163,17 +163,15 @@ pub(crate) async fn verify(
         }
         loop {
             match channel_rx.wait().await {
-                Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
-                    match probe.feed(&data) {
-                        Progress::Pending => {}
-                        Progress::Confirmed(rest) => return Verification::Confirmed(rest),
-                        Progress::Exited(rest) => return Verification::Exited(rest),
-                        Progress::Rejected => return Verification::Failed(Failure::Rejected),
-                        Progress::LimitExceeded => {
-                            return Verification::Failed(Failure::LimitExceeded);
-                        }
+                Some(ChannelMsg::Data { data }) => match probe.feed(&data) {
+                    Progress::Pending => {}
+                    Progress::Confirmed(rest) => return Verification::Confirmed(rest),
+                    Progress::Exited(rest) => return Verification::Exited(rest),
+                    Progress::Rejected => return Verification::Failed(Failure::Rejected),
+                    Progress::LimitExceeded => {
+                        return Verification::Failed(Failure::LimitExceeded);
                     }
-                }
+                },
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     return Verification::Failed(Failure::ExitStatus(exit_status));
                 }
