@@ -2320,6 +2320,49 @@ fn session_start_success_and_workspace_split_are_single_owner_transitions() {
 }
 
 #[test]
+fn saved_android_preparation_matches_requested_view_and_runtime_ai_profile() {
+    use super::start::SavedConnectionStartOptions;
+    use nyaterm_core::models::android::AndroidViewKind;
+
+    let saved = serde_json::from_value(serde_json::json!({
+        "id": "android", "name": "Android", "type": "adb",
+        "device": {"kind": "usb", "serial": "test-device"}
+    }))
+    .unwrap();
+    for (view, expected_kind, expected_profile) in [
+        (None, SessionKind::AdbShell, AiExecutionProfile::SendOnly),
+        (
+            Some(AndroidViewKind::Shell),
+            SessionKind::AdbShell,
+            AiExecutionProfile::SendOnly,
+        ),
+        (
+            Some(AndroidViewKind::Files),
+            SessionKind::AdbFiles,
+            AiExecutionProfile::Disabled,
+        ),
+        (
+            Some(AndroidViewKind::Screen),
+            SessionKind::AdbScreen,
+            AiExecutionProfile::Disabled,
+        ),
+    ] {
+        let mut starts = SessionStartFeatureState::new();
+        let request_id = starts.begin_saved_preparation(
+            &saved,
+            &SavedConnectionStartOptions {
+                android_view: view,
+                ..Default::default()
+            },
+        );
+        let pending = &starts.pending[&request_id];
+        assert_eq!(pending.kind, expected_kind);
+        assert_eq!(pending.ai_execution_profile, expected_profile);
+        assert!(pending.preparing);
+    }
+}
+
+#[test]
 fn saved_connection_preparations_are_independent_and_count_each_tab_once() {
     let mut starts = SessionStartFeatureState::new();
     let saved = serde_json::from_value(serde_json::json!({
