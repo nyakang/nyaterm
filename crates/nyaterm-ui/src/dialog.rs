@@ -97,6 +97,12 @@ impl NyaDialog {
         self
     }
 
+    /// Custom actions remain outside the dialog's scrolling body.
+    pub fn footer(mut self, footer: impl IntoElement) -> Self {
+        self.inner = self.inner.footer(footer);
+        self
+    }
+
     pub fn confirm(mut self, footer: NyaDialogFooter) -> Self {
         self.inner = self
             .inner

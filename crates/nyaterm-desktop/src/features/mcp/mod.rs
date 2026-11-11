@@ -1,3 +1,4 @@
+mod approval_dialog;
 mod discovery;
 pub(in crate::features) mod server;
 
@@ -30,6 +31,7 @@ pub(in crate::features) struct McpHostFeatureState {
     ephemeral_generations:
         std::sync::Arc<std::sync::Mutex<HashMap<String, TerminalExecutionPolicy>>>,
     pub(in crate::features) capabilities: CapabilityRuntimeState,
+    approval_dialog: approval_dialog::McpApprovalPresentation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +119,7 @@ impl McpHostFeatureState {
                     generation,
                     ephemeral_generations: Default::default(),
                     capabilities: CapabilityRuntimeState::default(),
+                    approval_dialog: Default::default(),
                 }
             }
             Err(error) => {
@@ -141,6 +144,7 @@ impl McpHostFeatureState {
             generation: None,
             ephemeral_generations: Default::default(),
             capabilities: CapabilityRuntimeState::default(),
+            approval_dialog: Default::default(),
         }
     }
 
