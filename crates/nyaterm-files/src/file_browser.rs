@@ -884,7 +884,11 @@ pub fn valid_file_browser_child_name(kind: FileBrowserBackendKind, name: &str) -
         && name != "."
         && name != ".."
         && !name.contains('/')
-        && (kind == FileBrowserBackendKind::Remote || !cfg!(windows) || !name.contains('\\'))
+        && !name.contains('\0')
+        && (kind != FileBrowserBackendKind::Local
+            || !cfg!(windows)
+            || (!name.chars().any(|c| c < ' ' || "<>:\"/\\|?*".contains(c))
+                && !name.ends_with([' ', '.'])))
 }
 
 /// True when copying `source` onto `destination` would overwrite the source, nest a

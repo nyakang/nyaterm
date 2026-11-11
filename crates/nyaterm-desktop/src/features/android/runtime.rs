@@ -70,8 +70,7 @@ impl NyaTermApp {
             return;
         };
         let key = connection.id.clone();
-        if options.reconnect_session_id.is_none()
-            && let Some(lease) = self.android.devices.get_mut(&key)
+        if let Some(lease) = self.android.devices.get_mut(&key)
             && lease.config.device == device
             && lease.files.control.check_cancelled().is_ok()
             && lease.files.runtime.is_valid()
@@ -86,8 +85,7 @@ impl NyaTermApp {
         if self.android.pending.contains_key(&key) {
             return;
         }
-        self.android.generation = self.android.generation.wrapping_add(1);
-        let generation = self.android.generation;
+        let generation = super::next_generation();
         self.android.pending.insert(key.clone(), generation);
         let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
@@ -349,8 +347,7 @@ impl NyaTermApp {
                 kind: AndroidViewKind::Screen,
             },
         );
-        self.android.generation = self.android.generation.wrapping_add(1);
-        let attempt = self.android.generation;
+        let attempt = super::next_generation();
         let runtime = self
             .android
             .file_service(&config.device_key)
@@ -367,25 +364,7 @@ impl NyaTermApp {
         self.android.cleanup.push(ticket.clone());
         self.android.screens.insert(
             id.clone(),
-            ScreenState {
-                attempt,
-                physical_keys: Default::default(),
-                handle: None,
-                frame: None,
-                texture: None,
-                texture_size: None,
-                bounds: None,
-                bounds_generation: 0,
-                generation: 0,
-                dimensions: (0, 0),
-                drag: false,
-                error: None,
-                start_control: start_control.clone(),
-                visible: true,
-                error_reported: false,
-                last_input_notice: None,
-                zoom: 1.0,
-            },
+            ScreenState::new(cx.focus_handle(), attempt, start_control.clone()),
         );
         let generation = config.binding.generation;
         let task = self
@@ -406,17 +385,16 @@ impl NyaTermApp {
                 .map_err(|_| AndroidError::JobFailed)
                 .and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
-                let valid = app
+                let valid = app.android.screens.get(&id).is_some_and(|screen| {
+                    screen.attempt == attempt && !screen.start_control.is_cancelled()
+                }) && app
                     .android
-                    .screens
+                    .views
                     .get(&id)
-                    .is_some_and(|screen| screen.attempt == attempt)
-                    && app
-                        .android
-                        .views
-                        .get(&id)
-                        .and_then(|v| app.android.devices.get(&v.device_key))
-                        .is_some_and(|d| d.config.binding.generation == generation);
+                    .and_then(|v| app.android.devices.get(&v.device_key))
+                    .is_some_and(|d| {
+                        d.config.binding.generation == generation && d.files.runtime.is_valid()
+                    });
                 if !valid {
                     return;
                 }
@@ -502,21 +480,20 @@ impl NyaTermApp {
     }
     pub(in crate::features) fn focus_android_screen(
         &mut self,
+        id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.android.focus_out.is_none() {
-            self.android.focus_out =
-                Some(
-                    cx.on_focus_out(&self.android.focus, window, |app, _, _, _| {
-                        let ids: Vec<String> = app.android.screens.keys().cloned().collect();
-                        for id in ids {
-                            app.android.release_inputs(&id);
-                        }
-                    }),
-                );
+        let Some(screen) = self.android.screens.get_mut(id) else {
+            return;
+        };
+        if screen.focus_out.is_none() {
+            let target = id.to_owned();
+            screen.focus_out = Some(cx.on_focus_out(&screen.focus, window, move |app, _, _, _| {
+                app.android.release_inputs(&target);
+            }));
         }
-        window.focus(&self.android.focus, cx);
+        window.focus(&screen.focus, cx);
     }
     pub(in crate::features) fn prepare_android_tracker(&mut self, cx: &mut Context<Self>) {
         self.ensure_android_clock(cx);
@@ -543,7 +520,18 @@ impl NyaTermApp {
         })
         .detach();
     }
-    fn ensure_android_clock(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn collect_android_devices(&mut self) {
+        let pending = self
+            .session
+            .start_pending_entries()
+            .filter_map(|(_, p)| match &p.launch_config {
+                Some(SessionLaunchConfig::AdbShell(config)) => Some(config.device_key.clone()),
+                _ => None,
+            })
+            .collect();
+        self.android.collect_unused_devices(&pending);
+    }
+    pub(in crate::features) fn ensure_android_clock(&mut self, cx: &mut Context<Self>) {
         if self.android.clock.is_some() {
             return;
         }
@@ -554,13 +542,19 @@ impl NyaTermApp {
                     .await;
                 if this
                     .update(cx, |app, cx| {
-                        app.android.collect_unused_devices();
+                        app.collect_android_devices();
                         let snapshot = app.android.tracker.snapshot();
-                        if snapshot.revision == 0
-                            || snapshot.revision == app.android.tracker_revision
+                        if (snapshot.revision == 0
+                            || snapshot.revision == app.android.tracker_revision)
+                            && app
+                                .android
+                                .devices
+                                .values()
+                                .all(|lease| lease.files.runtime.is_valid())
                         {
                             return;
                         }
+                        let mut changed = snapshot.revision != app.android.tracker_revision;
                         app.android.tracker_revision = snapshot.revision;
                         let mut missing = Vec::new();
                         for (key, lease) in &mut app.android.devices {
@@ -587,16 +581,25 @@ impl NyaTermApp {
                                 .android
                                 .views
                                 .iter()
-                                .filter(|(_, v)| v.device_key == key)
+                                .filter(|(id, v)| {
+                                    v.device_key == key
+                                        && app
+                                            .session
+                                            .metadata(id)
+                                            .is_none_or(|metadata| !metadata.disconnected)
+                                })
                                 .map(|(id, _)| id.clone())
                                 .collect();
                             for id in views {
+                                changed = true;
                                 app.android.stop_screen(&id);
                                 let _ = app.session.manager().close_detached(&id);
                                 app.mark_session_disconnected(&id, cx);
                             }
                         }
-                        cx.notify();
+                        if changed {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {

@@ -128,6 +128,15 @@ impl SessionManager {
         &self,
         config: crate::adb_shell::AdbShellConfig,
     ) -> Result<SessionInfo, SessionError> {
+        self.create_adb_session_with_cancel(config, || Ok(()))
+    }
+
+    pub fn create_adb_session_with_cancel(
+        &self,
+        config: crate::adb_shell::AdbShellConfig,
+        mut check: impl FnMut() -> nyaterm_android::error::AdbResult<()>,
+    ) -> Result<SessionInfo, SessionError> {
+        check().map_err(|error| SessionError::Adb(error.into()))?;
         self.ensure_reaper()?;
         let info = SessionInfo {
             id: uuid::Uuid::new_v4().to_string(),
@@ -141,6 +150,7 @@ impl SessionManager {
             info.clone(),
             &config.binding,
             self.event_queue.clone(),
+            &mut check,
         )
         .map_err(SessionError::Adb)?;
         self.sessions

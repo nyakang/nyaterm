@@ -1,5 +1,8 @@
 {
   "android": {
+    "zoomOut": "缩小",
+    "paste": "粘贴（Ctrl+V／Cmd+V）",
+    "inputHint": "中键拖动平移；Ctrl／Cmd+滚轮围绕指针缩放。中文可通过电脑剪贴板或设备输入法输入。",
     "directoryLoadFailed": "目录加载失败：%{error}",
     "screenSettings": "屏幕设置",
     "maxSize": "屏幕最大边长（像素）",
@@ -39,6 +42,7 @@
       "unavailable": "不可用"
     },
     "errors": {
+      "leaseConflict": "目标窗口使用了不同的 Android 设备绑定，请先关闭其 Android 标签再迁移。",
       "deviceRequired": "请选择已授权的 Android 设备",
       "hostInvalid": "请输入有效的 Android 主机地址",
       "directoryInvalid": "请输入不含空字符的 Android 绝对目录",

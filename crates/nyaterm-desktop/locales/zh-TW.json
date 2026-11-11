@@ -1,5 +1,8 @@
 {
   "android": {
+    "zoomOut": "縮小",
+    "paste": "貼上（Ctrl+V／Cmd+V）",
+    "inputHint": "中鍵拖曳平移；Ctrl／Cmd+滾輪以游標為中心縮放。中文可透過電腦剪貼簿或裝置輸入法輸入。",
     "directoryLoadFailed": "目錄載入失敗：%{error}",
     "screenSettings": "螢幕設定",
     "maxSize": "螢幕最大邊長（像素）",
@@ -39,6 +42,7 @@
       "unavailable": "無法使用"
     },
     "errors": {
+      "leaseConflict": "目標視窗使用了不同的 Android 裝置綁定，請先關閉其 Android 分頁再移動。",
       "deviceRequired": "請選擇已授權的 Android 裝置",
       "hostInvalid": "請輸入有效的 Android 主機位址",
       "directoryInvalid": "請輸入不含空字元的 Android 絕對目錄",

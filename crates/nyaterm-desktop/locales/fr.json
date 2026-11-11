@@ -1,5 +1,8 @@
 {
   "android": {
+    "zoomOut": "Réduire",
+    "paste": "Coller (Ctrl+V / Cmd+V)",
+    "inputHint": "Glisser avec le bouton central : déplacer · Ctrl/Cmd + molette : zoomer autour du pointeur. Utilisez le presse-papiers ou le clavier de l’appareil pour le chinois.",
     "directoryLoadFailed": "Échec du chargement du répertoire : %{error}",
     "screenSettings": "Paramètres de l’écran",
     "maxSize": "Côté maximal de l’écran (pixels)",
@@ -39,6 +42,7 @@
       "unavailable": "Indisponible"
     },
     "errors": {
+      "leaseConflict": "La fenêtre cible utilise une autre connexion Android. Fermez ses onglets Android avant de déplacer cet onglet.",
       "deviceRequired": "Sélectionnez un appareil Android autorisé",
       "hostInvalid": "Saisissez un hôte Android valide",
       "directoryInvalid": "Saisissez un répertoire Android absolu sans caractère NUL",

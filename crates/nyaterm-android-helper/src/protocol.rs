@@ -22,19 +22,21 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+#[cfg(test)]
 pub fn read_video(reader: &mut impl Read) -> io::Result<VideoPacket> {
+    read_video_reusing(reader, &mut Vec::new())
+}
+
+pub fn read_video_reusing(
+    reader: &mut impl Read,
+    scratch: &mut Vec<u8>,
+) -> io::Result<VideoPacket> {
     let mut header = [0; 12];
     reader.read_exact(&mut header)?;
     if header[0] & 0x80 != 0 {
         let width = u32::from_be_bytes(header[4..8].try_into().unwrap());
         let height = u32::from_be_bytes(header[8..12].try_into().unwrap());
-        if width == 0
-            || height == 0
-            || width > 4096
-            || height > 4096
-            || u64::from(width) * u64::from(height) * 4
-                > nyaterm_android::ipc::MAX_FRAME_BYTES as u64
-        {
+        if !nyaterm_android::ipc::valid_capture(width, height) {
             return Err(invalid("screen dimensions exceed limit"));
         }
         return Ok(VideoPacket::Session { width, height });
@@ -44,7 +46,8 @@ pub fn read_video(reader: &mut impl Read) -> io::Result<VideoPacket> {
     if length == 0 || length > MAX_MEDIA_BYTES {
         return Err(invalid("media packet length"));
     }
-    let mut bytes = vec![0; length];
+    let mut bytes = std::mem::take(scratch);
+    bytes.resize(length, 0);
     reader.read_exact(&mut bytes)?;
     Ok(VideoPacket::Media {
         config: flags & CONFIG_FLAG != 0,

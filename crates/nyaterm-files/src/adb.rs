@@ -13,6 +13,7 @@ use nyaterm_android::error::AdbError;
 use std::io::Write;
 pub(crate) mod copy;
 pub(crate) mod inventory;
+mod permissions;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod transfer;
@@ -84,6 +85,7 @@ pub struct AdbFileService {
     pub binding: DeviceBinding,
     pub control: SftpTransferControl,
     pub runtime: std::sync::Arc<nyaterm_android::adb::runtime::DeviceRuntime>,
+    permissions: std::sync::Arc<permissions::PermissionCache>,
 }
 
 pub fn raw_path(path: &RemoteFilePath) -> anyhow::Result<Vec<u8>> {
@@ -114,6 +116,7 @@ impl AdbFileService {
                 binding.clone(),
             )),
             binding,
+            permissions: Default::default(),
             control: SftpTransferControl::new(),
         }
     }
@@ -265,7 +268,16 @@ impl AdbFileService {
         paths: &[&RemoteFilePath],
         suffix: &[u8],
     ) -> anyhow::Result<()> {
-        self.check()?;
+        self.command_with_control(prefix, paths, suffix, &self.control)
+    }
+    fn command_with_control(
+        &self,
+        prefix: &[u8],
+        paths: &[&RemoteFilePath],
+        suffix: &[u8],
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<()> {
+        self.check_transfer(control)?;
         let mut command = prefix.to_vec();
         for path in paths {
             command.push(b' ');
@@ -278,11 +290,9 @@ impl AdbFileService {
         }
         command.extend_from_slice(suffix);
         execute_with_cancel(&self.binding, &command, 4096, || {
-            self.control
-                .check_cancelled()
-                .map_err(|_| AdbError::Cancelled)
+            self.check_transfer(control)
         })?;
-        self.check()?;
+        self.check_transfer(control)?;
         Ok(())
     }
     pub(crate) fn validate_copy_destination(

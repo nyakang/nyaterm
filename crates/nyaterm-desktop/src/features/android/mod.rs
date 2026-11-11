@@ -7,6 +7,7 @@ use nyaterm_core::models::android::AndroidViewKind;
 use nyaterm_files::adb::AdbFileService;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 pub(in crate::features) mod labels;
@@ -15,6 +16,12 @@ mod surface;
 #[cfg(test)]
 mod tests;
 mod view;
+
+// Attempts survive window transfers; a window-local counter can accept stale results.
+fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 pub(in crate::features) struct DeviceLease {
     pub config: AndroidSessionConfig,
@@ -27,6 +34,8 @@ pub(in crate::features) struct AndroidView {
     pub kind: AndroidViewKind,
 }
 pub(super) struct ScreenState {
+    focus: FocusHandle,
+    focus_out: Option<gpui::Subscription>,
     handle: Option<ScreenHandle>,
     attempt: u64,
     physical_keys: HashSet<u32>,
@@ -43,7 +52,44 @@ pub(super) struct ScreenState {
     visible: bool,
     error_reported: bool,
     last_input_notice: Option<Instant>,
-    zoom: f32,
+    viewport: nyaterm_core::models::android::ScreenViewport,
+    viewport_bounds: Option<Bounds<Pixels>>,
+    layout_epoch: u64,
+    pan_drag: Option<gpui::Point<Pixels>>,
+    paste_shortcut: bool,
+}
+impl ScreenState {
+    fn new(
+        focus: FocusHandle,
+        attempt: u64,
+        start_control: nyaterm_android::operation::AdbOperationControl,
+    ) -> Self {
+        Self {
+            focus,
+            focus_out: None,
+            handle: None,
+            attempt,
+            physical_keys: HashSet::new(),
+            frame: None,
+            texture: None,
+            texture_size: None,
+            bounds: None,
+            bounds_generation: 0,
+            generation: 0,
+            dimensions: (0, 0),
+            drag: false,
+            error: None,
+            start_control,
+            visible: true,
+            error_reported: false,
+            last_input_notice: None,
+            viewport: Default::default(),
+            viewport_bounds: None,
+            layout_epoch: 0,
+            pan_drag: None,
+            paste_shortcut: false,
+        }
+    }
 }
 pub(in crate::features) struct AndroidFeatureState {
     pub(super) devices: HashMap<String, DeviceLease>,
@@ -52,16 +98,13 @@ pub(in crate::features) struct AndroidFeatureState {
     surfaces: HashMap<String, Entity<surface::AndroidSurface>>,
     cleanup: Vec<CleanupTicket>,
     pub(super) retired_textures: Vec<DynamicTexture>,
-    pub(super) focus_out: Option<gpui::Subscription>,
     pub(in crate::features) pending: HashMap<String, u64>,
-    generation: u64,
     pub(super) tracker: SharedDeviceService,
     pub(super) clock: Option<gpui::Task<()>>,
     pub(super) tracker_revision: u64,
-    pub(super) focus: FocusHandle,
 }
 impl AndroidFeatureState {
-    pub(in crate::features) fn new(tracker: SharedDeviceService, focus: FocusHandle) -> Self {
+    pub(in crate::features) fn new(tracker: SharedDeviceService) -> Self {
         Self {
             devices: HashMap::new(),
             views: HashMap::new(),
@@ -69,13 +112,10 @@ impl AndroidFeatureState {
             surfaces: HashMap::new(),
             cleanup: Vec::new(),
             retired_textures: Vec::new(),
-            focus_out: None,
             pending: HashMap::new(),
-            generation: 0,
             tracker,
             clock: None,
             tracker_revision: 0,
-            focus,
         }
     }
     pub(in crate::features) fn file_service(
@@ -105,11 +145,12 @@ impl AndroidFeatureState {
     pub(in crate::features) fn kind(&self, id: &str) -> Option<AndroidViewKind> {
         self.views.get(id).map(|v| v.kind)
     }
-    pub(super) fn collect_unused_devices(&mut self) {
+    pub(super) fn collect_unused_devices(&mut self, pending_shells: &HashSet<String>) {
         self.cleanup.retain(|ticket| !ticket.is_complete());
         self.devices.retain(|key, lease| {
             self.views.values().any(|view| &view.device_key == key)
                 || self.pending.contains_key(key)
+                || pending_shells.contains(key)
                 || Arc::strong_count(&lease.files) > Arc::strong_count(&lease.owners)
         });
     }
@@ -130,8 +171,10 @@ impl AndroidFeatureState {
     pub(in crate::features) fn stop_screen(&mut self, id: &str) {
         if let Some(screen) = self.screens.get_mut(id) {
             screen.start_control.cancel();
-            screen.attempt = screen.attempt.wrapping_add(1);
+            screen.attempt = next_generation();
             screen.drag = false;
+            screen.pan_drag = None;
+            screen.paste_shortcut = false;
             screen.physical_keys.clear();
             if let Some(handle) = screen.handle.take() {
                 handle.close();
@@ -142,10 +185,18 @@ impl AndroidFeatureState {
     pub(in crate::features) fn release_inputs(&mut self, id: &str) {
         if let Some(screen) = self.screens.get_mut(id) {
             screen.drag = false;
+            screen.pan_drag = None;
+            screen.paste_shortcut = false;
             screen.physical_keys.clear();
             if let Some(handle) = &screen.handle {
                 let _ = handle.send(nyaterm_android::ipc::Control::ReleaseInputs);
             }
+        }
+    }
+    pub(in crate::features) fn release_all_inputs(&mut self) {
+        let ids: Vec<_> = self.screens.keys().cloned().collect();
+        for id in ids {
+            self.release_inputs(&id);
         }
     }
     pub(in crate::features) fn shutdown(&mut self) {
@@ -199,6 +250,8 @@ impl AndroidFeatureState {
                     }
                     screen.texture_size = None;
                     screen.bounds = None;
+                    screen.viewport_bounds = None;
+                    screen.focus_out = None;
                 }
                 views.push(AndroidTransferredView {
                     id: id.clone(),
@@ -238,7 +291,21 @@ impl AndroidFeatureState {
         app: Entity<crate::features::NyaTermApp>,
         cx: &mut gpui::App,
     ) {
-        self.devices.extend(bundle.devices);
+        self.tracker_revision = 0;
+        for (key, lease) in bundle.devices {
+            match self.devices.entry(key) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(lease);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    // A dead binding cannot protect live channels. Prefer the valid
+                    // incoming lease without reviving views tied to the old one.
+                    if !entry.get().files.runtime.is_valid() && lease.files.runtime.is_valid() {
+                        entry.insert(lease);
+                    }
+                }
+            }
+        }
         for AndroidTransferredView {
             id,
             view,
@@ -247,7 +314,12 @@ impl AndroidFeatureState {
         } in bundle.views
         {
             self.views.insert(id.clone(), view);
-            if let Some(screen) = screen {
+            if let Some(mut screen) = screen {
+                screen.focus = cx.focus_handle();
+                screen.focus_out = None;
+                if let Some(handle) = &screen.handle {
+                    let _ = handle.send(nyaterm_android::ipc::Control::RefreshPresentation);
+                }
                 self.screens.insert(id.clone(), screen);
             }
             if let Some(workspace) = workspace {
@@ -255,5 +327,15 @@ impl AndroidFeatureState {
                 files.insert_android(id, workspace);
             }
         }
+    }
+
+    pub(crate) fn can_attach_tab(&self, bundle: &AndroidTabTransfer) -> bool {
+        bundle.devices.iter().all(|(key, lease)| {
+            self.devices.get(key).is_none_or(|existing| {
+                Arc::ptr_eq(&existing.files, &lease.files)
+                    || !existing.files.runtime.is_valid()
+                    || !lease.files.runtime.is_valid()
+            })
+        })
     }
 }

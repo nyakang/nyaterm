@@ -17,9 +17,12 @@ struct OutputState {
     in_flight: Option<u64>,
     sequence: u64,
     closed: bool,
+    stop_presenting: bool,
     visible: bool,
     epoch: u64,
     pixels: Vec<Vec<u8>>,
+    decoded: Option<Arc<decoder::Decoded>>,
+    generation: u64,
 }
 
 impl Default for OutputState {
@@ -30,9 +33,12 @@ impl Default for OutputState {
             in_flight: None,
             sequence: 0,
             closed: false,
+            stop_presenting: false,
             visible: true,
             epoch: 0,
             pixels: Vec::new(),
+            decoded: None,
+            generation: 0,
         }
     }
 }
@@ -41,6 +47,7 @@ impl Default for OutputState {
 struct Output {
     state: Mutex<OutputState>,
     changed: Condvar,
+    presentation_changed: Condvar,
 }
 
 impl Output {
@@ -50,8 +57,9 @@ impl Output {
             state.controls.pop_front();
         }
         state.controls.push_back(control);
-        self.changed.notify_one();
+        self.changed.notify_all();
     }
+    #[cfg(test)]
     fn frame(&self, mut frame: Frame) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if !state.visible {
@@ -63,13 +71,16 @@ impl Output {
         state.sequence = state.sequence.wrapping_add(1).max(1);
         frame.sequence = state.sequence;
         state.latest = Some(frame);
-        self.changed.notify_one();
+        self.changed.notify_all();
     }
     fn acknowledge(&self, sequence: u64) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.in_flight == Some(sequence) {
             state.in_flight = None;
-            self.changed.notify_one();
+            self.presentation_changed.notify_one();
+            if state.latest.is_some() {
+                self.changed.notify_one();
+            }
         }
     }
     fn presentation(&self, visible: bool) {
@@ -78,30 +89,25 @@ impl Output {
             state.epoch = state.epoch.wrapping_add(1);
         }
         state.visible = visible;
-        if !visible
-            && let Some(frame) = state.latest.take()
-            && state.pixels.len() < 2
+        let mut discarded = if visible { None } else { state.latest.take() };
+        if state.pixels.len() < 2
+            && let Some(frame) = discarded.take()
         {
             state.pixels.push(frame.pixels);
         }
-        self.changed.notify_all();
+        self.presentation_changed.notify_one();
+        drop(state);
+        drop(discarded);
     }
-    fn credit(&self) -> Option<u64> {
-        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        (state.visible && !state.closed && state.in_flight.is_none() && state.latest.is_none())
-            .then_some(state.epoch)
-    }
-    fn take_pixels(&self) -> Vec<u8> {
-        self.state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .pixels
-            .pop()
-            .unwrap_or_default()
+    fn refresh(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.epoch = state.epoch.wrapping_add(1);
+        self.presentation_changed.notify_one();
     }
     fn close(&self) {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
         self.changed.notify_all();
+        self.presentation_changed.notify_all();
     }
 }
 
@@ -169,55 +175,59 @@ fn connect_video(endpoint: SocketAddr) -> io::Result<TcpStream> {
     }
 }
 
-struct PresentationReader<'a, F> {
-    socket: &'a mut TcpStream,
-    tick: F,
-}
-impl<F: FnMut() -> io::Result<()>> Read for PresentationReader<'_, F> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        loop {
-            (self.tick)()?;
-            match self.socket.read(buffer) {
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    continue;
+fn presentation_loop(
+    output: Arc<Output>,
+    busy: Arc<Mutex<Option<Instant>>>,
+    binding: u64,
+) -> io::Result<()> {
+    let mut presenter = decoder::Presenter::new();
+    let mut presented = (0, 0, 0);
+    loop {
+        let (decoded, epoch, pixels) = {
+            let mut state = output.state.lock().unwrap_or_else(|p| p.into_inner());
+            loop {
+                if state.closed || state.stop_presenting {
+                    return Ok(());
                 }
-                result => return result,
+                if state.visible
+                    && state.in_flight.is_none()
+                    && state.latest.is_none()
+                    && let Some(decoded) = &state.decoded
+                    && (decoded.generation, decoded.serial, state.epoch) != presented
+                {
+                    let decoded = Arc::clone(decoded);
+                    break (decoded, state.epoch, state.pixels.pop().unwrap_or_default());
+                }
+                state = output
+                    .presentation_changed
+                    .wait(state)
+                    .unwrap_or_else(|p| p.into_inner());
             }
+        };
+        *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+        let frame = presenter
+            .present(&decoded, binding, pixels)
+            .map_err(io::Error::other)?;
+        *busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        presented = (decoded.generation, decoded.serial, epoch);
+        // Visibility, refresh or rotation may have changed during conversion.
+        let mut state = output.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.visible
+            && !state.closed
+            && state.generation == decoded.generation
+            && state.epoch == epoch
+        {
+            state.sequence = state.sequence.wrapping_add(1).max(1);
+            let mut frame = frame;
+            frame.sequence = state.sequence;
+            let old = state.latest.replace(frame);
+            output.changed.notify_all();
+            drop(state);
+            drop(old);
+        } else if state.pixels.len() < 2 {
+            state.pixels.push(frame.pixels);
         }
     }
-}
-
-fn present_cached(
-    decoder: &mut Option<decoder::Decoder>,
-    output: &Output,
-    busy: &Mutex<Option<Instant>>,
-    presented: &mut (u64, u64),
-    binding_generation: u64,
-    generation: u64,
-) -> io::Result<()> {
-    let Some(epoch) = output.credit() else {
-        return Ok(());
-    };
-    let Some(decoder) = decoder else {
-        return Ok(());
-    };
-    let signature = (decoder.serial(), epoch);
-    if decoder.serial() == 0 || signature == *presented {
-        return Ok(());
-    }
-    *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
-    let frame = decoder.present(binding_generation, generation, output.take_pixels());
-    *busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    if let Some(frame) = frame.map_err(io::Error::other)? {
-        output.frame(frame);
-        *presented = signature;
-    }
-    Ok(())
 }
 
 fn video_loop(
@@ -225,7 +235,6 @@ fn video_loop(
     output: Arc<Output>,
     geometry: Geometry,
     busy: Arc<Mutex<Option<Instant>>>,
-    binding_generation: u64,
 ) -> io::Result<()> {
     let mut name = [0; 64];
     video.read_exact(&mut name)?;
@@ -234,29 +243,26 @@ fn video_loop(
     if &codec != b"h264" {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "expected H.264"));
     }
-    video.set_read_timeout(Some(Duration::from_millis(50)))?;
+    video.set_read_timeout(None)?;
     let mut decoder = None;
-    let mut presented = (0, 0);
     let mut config = Vec::new();
     let mut generation = 0;
+    let mut capture_dimensions = (0, 0);
+    let mut media = Vec::new();
+    let mut packet_buffer = Vec::new();
     loop {
-        let packet = protocol::read_video(&mut PresentationReader {
-            socket: &mut video,
-            tick: || {
-                present_cached(
-                    &mut decoder,
-                    &output,
-                    &busy,
-                    &mut presented,
-                    binding_generation,
-                    generation,
-                )
-            },
-        })?;
+        let packet = protocol::read_video_reusing(&mut video, &mut media)?;
         match packet {
             protocol::VideoPacket::Session { width, height } => {
                 generation += 1;
-                presented = (0, 0);
+                capture_dimensions = (width, height);
+                let (old_decoded, old_frame) = {
+                    let mut state = output.state.lock().unwrap_or_else(|p| p.into_inner());
+                    state.generation = generation;
+                    (state.decoded.take(), state.latest.take())
+                };
+                drop(old_decoded);
+                drop(old_frame);
                 config.clear();
                 *geometry.lock().unwrap_or_else(|p| p.into_inner()) = (width, height, generation);
                 *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
@@ -281,9 +287,13 @@ fn video_loop(
                         ));
                     }
                     config.extend_from_slice(&bytes);
+                    media = bytes;
                     continue;
                 }
-                let mut packet = std::mem::take(&mut config);
+                let mut packet = std::mem::take(&mut packet_buffer);
+                packet.clear();
+                packet.extend_from_slice(&config);
+                config.clear();
                 packet.extend_from_slice(&bytes);
                 if packet.len() > protocol::MAX_MEDIA_BYTES {
                     return Err(io::Error::new(
@@ -295,9 +305,26 @@ fn video_loop(
                     io::Error::new(io::ErrorKind::InvalidData, "session header missing")
                 })?;
                 *busy.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
-                let result = decoder.packet(&packet, pts);
+                let result = decoder.packet(&packet, pts, generation);
                 *busy.lock().unwrap_or_else(|p| p.into_inner()) = None;
-                result.map_err(io::Error::other)?;
+                if let Some(decoded) = result.map_err(io::Error::other)? {
+                    if (decoded.video.width(), decoded.video.height()) != capture_dimensions {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "capture dimensions mismatch",
+                        ));
+                    }
+                    let (old, visible) = {
+                        let mut state = output.state.lock().unwrap_or_else(|p| p.into_inner());
+                        (state.decoded.replace(Arc::new(decoded)), state.visible)
+                    };
+                    if visible {
+                        output.presentation_changed.notify_one();
+                    }
+                    drop(old);
+                }
+                packet_buffer = packet;
+                media = bytes;
             }
         }
     }
@@ -422,6 +449,30 @@ fn run() -> io::Result<()> {
     let geometry = Arc::new(Mutex::new((0, 0, 0)));
     let busy = Arc::new(Mutex::new(None));
     let stopped = Arc::new(AtomicBool::new(false));
+    let presentation_busy = Arc::new(Mutex::new(None));
+    let presenter_output = Arc::clone(&output);
+    let presenter_busy = Arc::clone(&presentation_busy);
+    let presenter_stop = Arc::clone(&stopped);
+    let presenter =
+        nyaterm_core::runtime::worker::spawn("android-helper-presentation".into(), move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                presentation_loop(
+                    Arc::clone(&presenter_output),
+                    presenter_busy,
+                    binding.generation,
+                )
+            }));
+            if !matches!(result, Ok(Ok(()))) && !presenter_stop.load(Ordering::Acquire) {
+                presenter_output.control(Control::Fatal {
+                    code: if result.is_err() {
+                        "PresentationPanic"
+                    } else {
+                        "PresentationFailed"
+                    }
+                    .into(),
+                });
+            }
+        })?;
     let worker_output = Arc::clone(&output);
     let writer = nyaterm_core::runtime::worker::spawn("android-helper-output".into(), move || {
         output_loop(worker_output)
@@ -439,7 +490,6 @@ fn run() -> io::Result<()> {
                     Arc::clone(&worker_output),
                     worker_geometry,
                     worker_busy,
-                    binding.generation,
                 )
             }));
             let code = match result {
@@ -472,9 +522,18 @@ fn run() -> io::Result<()> {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .is_some_and(|started| started.elapsed() > Duration::from_secs(5));
-                if hung {
+                let presentation_hung = presentation_busy
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_some_and(|started| started.elapsed() > Duration::from_secs(5));
+                if hung || presentation_hung {
                     worker_output.control(Control::Fatal {
-                        code: "DecoderHung".into(),
+                        code: if hung {
+                            "DecoderHung"
+                        } else {
+                            "PresentationHung"
+                        }
+                        .into(),
                     });
                     std::thread::sleep(Duration::from_millis(100));
                     std::process::exit(1);
@@ -500,6 +559,7 @@ fn run() -> io::Result<()> {
                 Control::Ping { sequence } => output.control(Control::Pong { sequence }),
                 Control::FrameAck { sequence } => output.acknowledge(sequence),
                 Control::Presentation { visible } => output.presentation(visible),
+                Control::RefreshPresentation => output.refresh(),
                 Control::ReleaseInputs => inputs.release()?,
                 Control::Disconnect => {
                     inputs.release()?;
@@ -544,6 +604,14 @@ fn run() -> io::Result<()> {
     stopped.store(true, Ordering::Release);
     let _ = video_shutdown.shutdown(Shutdown::Both);
     let _ = clipboard_shutdown.shutdown(Shutdown::Both);
+    output
+        .state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .stop_presenting = true;
+    output.changed.notify_all();
+    output.presentation_changed.notify_all();
+    let _ = presenter.join();
     let _ = video_worker.join();
     let _ = clipboard_worker.join();
     let _ = watchdog.join();
@@ -584,6 +652,8 @@ mod tests {
                 binding_generation: 1,
                 generation: 1,
                 pts: n,
+                capture_width: 1,
+                capture_height: 1,
                 width: 1,
                 height: 1,
                 stride: 4,
@@ -602,36 +672,52 @@ mod tests {
         let _: OutputState = Default::default();
     }
     #[test]
-    fn hidden_screen_decodes_without_conversion_and_resumes_cached_static_frame() {
+    fn hidden_screen_keeps_decode_but_no_conversion_and_refresh_wakes_static_frame() {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
         ffmpeg_next::init().unwrap();
-        let mut decoder = Some(crate::decoder::Decoder::new().unwrap());
-        decoder
-            .as_mut()
+        let mut decoder = crate::decoder::Decoder::new().unwrap();
+        let decoded = decoder
+            .packet(include_bytes!("../tests/fixtures/black.h264"), 1, 1)
             .unwrap()
-            .packet(include_bytes!("../tests/fixtures/black.h264"), 1)
             .unwrap();
-        assert!(decoder.as_ref().unwrap().serial() > 0);
-        let output = Output::default();
-        let busy = std::sync::Mutex::new(None);
-        let mut presented = (0, 0);
+        let output = Arc::new(Output::default());
         output.presentation(false);
-        for _ in 0..100 {
-            crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
+        {
+            let mut state = output.state.lock().unwrap();
+            state.generation = 1;
+            state.decoded = Some(Arc::new(decoded));
         }
-        assert_eq!(decoder.as_ref().unwrap().conversions, 0);
+        let worker_output = Arc::clone(&output);
+        let worker = std::thread::spawn(move || {
+            crate::presentation_loop(worker_output, Arc::new(Mutex::new(None)), 1).unwrap()
+        });
         assert!(output.state.lock().unwrap().latest.is_none());
         output.presentation(true);
-        crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
-        assert_eq!(decoder.as_ref().unwrap().conversions, 1);
-        assert_eq!(output.state.lock().unwrap().latest.as_ref().unwrap().pts, 1);
-        for _ in 0..100 {
-            crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
+        let wait = || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut state = output.state.lock().unwrap();
+            while state.latest.is_none() && Instant::now() < deadline {
+                state = output
+                    .changed
+                    .wait_timeout(state, Duration::from_millis(20))
+                    .unwrap()
+                    .0;
+            }
+            assert!(state.latest.is_some());
+            state.latest.take().unwrap()
+        };
+        let first = wait();
+        {
+            output.state.lock().unwrap().in_flight = Some(first.sequence);
         }
-        assert_eq!(decoder.as_ref().unwrap().conversions, 1);
-        output.presentation(false);
-        output.presentation(true);
-        crate::present_cached(&mut decoder, &output, &busy, &mut presented, 1, 1).unwrap();
-        assert_eq!(decoder.as_ref().unwrap().conversions, 2);
-        assert!(output.state.lock().unwrap().pixels.len() <= 2);
+        output.refresh();
+        assert!(output.state.lock().unwrap().latest.is_none());
+        output.acknowledge(first.sequence);
+        let second = wait();
+        assert!(second.sequence > first.sequence);
+        assert_eq!(second.pts, first.pts);
+        output.close();
+        worker.join().unwrap();
     }
 }

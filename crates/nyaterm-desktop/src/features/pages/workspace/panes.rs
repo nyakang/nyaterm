@@ -209,7 +209,7 @@ impl NyaTermApp {
                         if this.android.kind(&focus_id)
                             == Some(nyaterm_core::models::android::AndroidViewKind::Screen)
                         {
-                            this.focus_android_screen(window, cx);
+                            this.focus_android_screen(&focus_id, window, cx);
                         } else if this.remote_desktop.is_session(&focus_id) {
                             window.focus(this.remote_desktop.focus(), cx);
                         } else if !this.session_is_sftp_only(&focus_id) {

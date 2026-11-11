@@ -48,16 +48,25 @@ impl StagedUpload<'_> {
         control: &SftpTransferControl,
     ) -> anyhow::Result<u64> {
         self.service.wait_for_transfer(control)?;
-        let current = self.service.replacement_metadata(target)?;
+        let current = self
+            .service
+            .replacement_metadata_with_control(target, control)?;
         anyhow::ensure!(
             same_target(self.target.as_ref(), current.as_ref()),
             FileTransferEntryError::SourceChanged
         );
-        if replace {
-            self.service.rename_remote_paths(&self.temporary, target)?;
-        } else {
-            self.service
-                .rename_remote_paths_no_replace(&self.temporary, target)?;
+        self.service.wait_for_transfer(control)?;
+        self.service.command_with_control(
+            if replace { b"mv -T --" } else { b"mv -nT --" },
+            &[&self.temporary, target],
+            b"",
+            control,
+        )?;
+        if !replace {
+            anyhow::ensure!(
+                matches!(self.service.stat_with_control(&self.temporary, control), Err(error) if error.downcast_ref::<AdbError>().is_some_and(|e| matches!(e, AdbError::FileMissing))),
+                FileTransferEntryError::TargetExists
+            );
         }
         self.committed = true;
         Ok(self.bytes)
@@ -166,7 +175,14 @@ impl AdbFileService {
         &self,
         path: &RemoteFilePath,
     ) -> anyhow::Result<Option<FileStat>> {
-        let mut stat = match self.stat(path) {
+        self.replacement_metadata_with_control(path, &self.control)
+    }
+    fn replacement_metadata_with_control(
+        &self,
+        path: &RemoteFilePath,
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<Option<FileStat>> {
+        let mut stat = match self.stat_with_control(path, control) {
             Ok(stat) => stat,
             Err(error)
                 if error
@@ -185,9 +201,7 @@ impl AdbFileService {
             let mut command = b"stat -c '%u %g %a %d %i' -- ".to_vec();
             command.extend(quote(&raw_path(path)?)?);
             let output = execute_with_cancel(&self.binding, &command, 128, || {
-                self.control
-                    .check_cancelled()
-                    .map_err(|_| AdbError::Cancelled)
+                self.check_transfer(control)
             })
             .map_err(|error| AdbFilePolicyError::AttributesUnavailable.context(error.into()))?;
             let text =
@@ -234,12 +248,12 @@ impl AdbFileService {
             FileTransferEntryError::UnsupportedFileType
         );
         let identity = FileIdentity::from_file(&reader)?;
-        let original = self.replacement_metadata(target)?;
+        let original = self.replacement_metadata_with_control(target, control)?;
         let temporary = self.child_path(
             &target.parent()?,
             &format!(".nyaterm-{}.part", uuid::Uuid::new_v4()),
         )?;
-        self.create_file_remote_path(&temporary, None)?;
+        self.command_with_control(b"set -C; : >", &[&temporary], b"", control)?;
         let mut staged = StagedUpload {
             service: self,
             temporary,
@@ -305,10 +319,11 @@ impl AdbFileService {
                     .uid
                     .zip(original.gid)
                     .ok_or(AdbFilePolicyError::AttributesUnavailable)?;
-                self.command(
+                self.command_with_control(
                     format!("chown {uid}:{gid} --").as_bytes(),
                     &[&staged.temporary],
                     b"",
+                    control,
                 )
                 .map_err(|error| AdbFilePolicyError::PermissionsUnavailable.context(error))?;
             }
@@ -316,10 +331,11 @@ impl AdbFileService {
                 || temporary_stat.uid != original.uid
                 || temporary_stat.gid != original.gid
             {
-                self.command(
+                self.command_with_control(
                     format!("chmod {mode:o} --").as_bytes(),
                     &[&staged.temporary],
                     b"",
+                    control,
                 )
                 .map_err(|error| AdbFilePolicyError::PermissionsUnavailable.context(error))?;
             }
@@ -331,19 +347,26 @@ impl AdbFileService {
                 AdbFilePolicyError::PermissionsUnavailable
             );
         }
+        let mount_assigned = staged.target.is_none()
+            && options.default_file_mode.is_none()
+            && self.permission_capability(&target.parent()?, control)?
+                == crate::adb::permissions::PermissionCapability::MountAssigned;
         // adbd may broaden SEND permissions (e.g. 0644 -> 0666). Apply the
         // requested mode on the staged inode, then verify it before replacement.
-        if temporary_stat.mode & 0o7777 != mode {
-            self.command(
+        if !mount_assigned && temporary_stat.mode & 0o7777 != mode {
+            self.command_with_control(
                 format!("chmod {mode:o} --").as_bytes(),
                 &[&staged.temporary],
                 b"",
+                control,
             )
             .map_err(|error| AdbFilePolicyError::PermissionsUnavailable.context(error))?;
             temporary_stat = self.stat_with_control(&staged.temporary, control)?;
         }
         anyhow::ensure!(
-            temporary_stat.mode & 0o7777 == mode,
+            kind(temporary_stat.mode) == SftpFileType::File
+                && (temporary_stat.mode & 0o7777 == mode
+                    || (mount_assigned && temporary_stat.mode & 0o7000 == 0)),
             AdbFilePolicyError::PermissionsUnavailable
         );
         if options.preserve_timestamps {

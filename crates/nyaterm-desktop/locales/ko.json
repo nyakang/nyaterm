@@ -1,5 +1,8 @@
 {
   "android": {
+    "zoomOut": "축소",
+    "paste": "붙여넣기 (Ctrl+V / Cmd+V)",
+    "inputHint": "가운데 버튼 드래그: 이동 · Ctrl/Cmd+휠: 포인터 중심 확대/축소. 중국어는 컴퓨터 클립보드나 기기 입력기를 사용하세요.",
     "directoryLoadFailed": "디렉터리 로드 실패: %{error}",
     "screenSettings": "화면 설정",
     "maxSize": "화면 최대 변 길이(픽셀)",
@@ -39,6 +42,7 @@
       "unavailable": "사용 불가"
     },
     "errors": {
+      "leaseConflict": "대상 창에 다른 Android 기기 연결이 있습니다. 해당 Android 탭을 닫은 후 이동하세요.",
       "deviceRequired": "승인된 Android 기기를 선택하세요",
       "hostInvalid": "유효한 Android 호스트를 입력하세요",
       "directoryInvalid": "NUL 문자가 없는 Android 절대 디렉터리를 입력하세요",

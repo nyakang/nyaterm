@@ -10,6 +10,10 @@ pub enum AdbError {
     ExecutableMissing,
     #[error("ADB server is incompatible; stop or update it manually")]
     IncompatibleServer,
+    #[error(
+        "Android helper version does not match the application; rebuild or reinstall both together"
+    )]
+    HelperVersionMismatch,
     #[error("Authorize this computer on the Android device")]
     Unauthorized,
     #[error("Android device is offline or missing")]

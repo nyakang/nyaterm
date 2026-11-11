@@ -251,42 +251,24 @@ fn closing_a_starting_screen_cancels_only_its_startup_and_unused_leases_are_rele
     let mut cx = gpui::TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
-    app.update(&mut cx, |app, _| {
+    app.update(&mut cx, |app, cx| {
         let service = app.android.file_service("android-device").unwrap();
         let control = service.runtime.control.child();
         app.android.screens.insert(
             "fixture".into(),
-            ScreenState {
-                handle: None,
-                attempt: 1,
-                physical_keys: Default::default(),
-                frame: None,
-                texture: None,
-                texture_size: None,
-                bounds: None,
-                bounds_generation: 0,
-                generation: 0,
-                dimensions: (0, 0),
-                drag: false,
-                error: None,
-                start_control: control.clone(),
-                visible: true,
-                error_reported: false,
-                last_input_notice: None,
-                zoom: 1.,
-            },
+            ScreenState::new(cx.focus_handle(), 1, control.clone()),
         );
         app.android.close_view("fixture");
         assert!(control.is_cancelled());
         assert!(service.runtime.is_valid());
-        app.android.collect_unused_devices();
+        app.android.collect_unused_devices(&Default::default());
         assert!(
             app.android.devices.contains_key("android-device"),
             "submitted service keeps the lease alive"
         );
         let runtime = Arc::downgrade(&service.runtime);
         drop(service);
-        app.android.collect_unused_devices();
+        app.android.collect_unused_devices(&Default::default());
         assert!(!app.android.devices.contains_key("android-device"));
         assert!(
             runtime.upgrade().is_none(),
@@ -306,8 +288,7 @@ fn shared_window_leases_do_not_keep_each_other_alive_after_all_views_close() {
     app.update(&mut cx, |app, _| {
         let lease = &app.android.devices["android-device"];
         let weak = Arc::downgrade(&lease.files);
-        let mut other =
-            AndroidFeatureState::new(app.android.tracker.clone(), app.android.focus.clone());
+        let mut other = AndroidFeatureState::new(app.android.tracker.clone());
         other.devices.insert(
             "android-device".into(),
             DeviceLease {
@@ -318,10 +299,235 @@ fn shared_window_leases_do_not_keep_each_other_alive_after_all_views_close() {
             },
         );
         app.android.close_view("fixture");
-        app.android.collect_unused_devices();
+        app.android.collect_unused_devices(&Default::default());
         assert!(app.android.devices.is_empty());
-        other.collect_unused_devices();
+        other.collect_unused_devices(&Default::default());
         assert!(other.devices.is_empty());
         assert!(weak.upgrade().is_none());
+    });
+}
+
+#[test]
+fn pending_first_shell_keeps_the_only_device_until_cancelled() {
+    use crate::features::session::SavedConnectionStartOptions;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-pending-shell");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        let config = app.android_config_for_session("fixture").unwrap();
+        app.android.close_view("fixture");
+        app.open_android_view(
+            config,
+            AndroidViewKind::Shell,
+            SavedConnectionStartOptions::default(),
+            cx,
+        );
+        assert!(app.android.views.is_empty());
+        for _ in 0..10 {
+            app.collect_android_devices();
+        }
+        assert!(app.android.devices.contains_key("android-device"));
+        let request = app
+            .session
+            .start_pending_entries()
+            .next()
+            .unwrap()
+            .0
+            .clone();
+        app.close_pending_session_start(request, cx);
+        app.collect_android_devices();
+        assert!(app.android.devices.is_empty());
+    });
+}
+
+#[test]
+fn unchanged_tracker_revision_does_not_hide_a_binding_invalidated_by_another_window() {
+    use crate::features::test_support::app_with_visible_android_session;
+    use std::time::Duration;
+    let root = TestConfigDir::new("nyaterm-android-shared-invalidation");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        app.ensure_android_clock(cx);
+        app.android.file_service("android-device").unwrap().cancel();
+        assert!(!app.session.metadata("fixture").unwrap().disconnected);
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(250));
+    cx.run_until_parked();
+    app.update(&mut cx, |app, _| {
+        assert!(app.session.metadata("fixture").unwrap().disconnected);
+    });
+}
+
+#[test]
+fn reconnecting_one_shell_reuses_valid_binding_without_stopping_sibling_views() {
+    use crate::features::session::SavedConnectionStartOptions;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-channel-reconnect");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app,cx| {
+        let service = app.android.file_service("android-device").unwrap();
+        for (id,kind) in [("sibling",AndroidViewKind::Shell),("screen",AndroidViewKind::Screen),("files",AndroidViewKind::Files)] {
+            app.android.views.insert(id.into(),AndroidView {device_key:"android-device".into(),kind});
+        }
+        let connection = serde_json::from_value(serde_json::json!({"id":"android-device","name":"Android","type":"adb","device":{"kind":"usb","serial":"synthetic"}})).unwrap();
+        app.start_android_connection(connection, SavedConnectionStartOptions { reconnect_session_id:Some("fixture".into()), ..Default::default() }, None, cx);
+        assert!(app.android.pending.is_empty());
+        assert_eq!(app.session.start_pending_entries().count(),1);
+        assert!(Arc::ptr_eq(&service, &app.android.file_service("android-device").unwrap()));
+        assert!(service.runtime.is_valid());
+        assert_eq!(app.android.views.len(),4);
+        assert!(!app.session.metadata("fixture").unwrap().disconnected);
+    });
+}
+
+#[test]
+fn android_transfer_conflict_preserves_both_leases_and_allows_source_rollback() {
+    use crate::features::android::AndroidFeatureState;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-android-transfer-conflict");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        let lease = &app.android.devices["android-device"];
+        let source = Arc::clone(&lease.files);
+        let config = lease.config.clone();
+        let mut target = AndroidFeatureState::new(app.android.tracker.clone());
+        let files = Arc::new(AdbFileService::new(config.binding.clone()));
+        target.devices.insert(
+            "android-device".into(),
+            DeviceLease {
+                config,
+                files: files.clone(),
+                observed: true,
+                owners: Arc::new(()),
+            },
+        );
+        let bundle = app
+            .android
+            .detach_tab(&["fixture".into()], &mut app.file_manager);
+        assert!(!target.can_attach_tab(&bundle));
+        assert!(source.runtime.is_valid() && files.runtime.is_valid());
+        assert!(app.android.can_attach_tab(&bundle));
+        app.android
+            .attach_tab(bundle, &mut app.file_manager, cx.entity(), cx);
+        assert!(Arc::ptr_eq(
+            &source,
+            &app.android.devices["android-device"].files
+        ));
+        assert!(Arc::ptr_eq(&files, &target.devices["android-device"].files));
+        assert!(app.android.views.contains_key("fixture"));
+        let bundle = app
+            .android
+            .detach_tab(&["fixture".into()], &mut app.file_manager);
+        files.cancel();
+        assert!(target.can_attach_tab(&bundle));
+        target.attach_tab(bundle, &mut app.file_manager, cx.entity(), cx);
+        assert!(target.views.contains_key("fixture"));
+        assert!(Arc::ptr_eq(
+            &source,
+            &target.devices["android-device"].files
+        ));
+    });
+}
+
+#[test]
+fn android_split_screens_have_distinct_focus_and_release_only_the_blurred_screen() {
+    use crate::features::android::ScreenState;
+    use crate::features::test_support::app_with_visible_android_session;
+    use gpui::{IntoElement as _, ParentElement as _, Styled as _};
+    struct Host(gpui::Entity<crate::features::NyaTermApp>);
+    impl gpui::Render for Host {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+                .size_full()
+                .flex()
+                .child(
+                    self.0
+                        .update(cx, |app, cx| app.android_screen_content("first".into(), cx))
+                        .into_any_element(),
+                )
+                .child(
+                    self.0
+                        .update(cx, |app, cx| {
+                            app.android_screen_content("second".into(), cx)
+                        })
+                        .into_any_element(),
+                )
+        }
+    }
+    let root = TestConfigDir::new("nyaterm-android-screen-focus");
+    let mut cx = gpui::TestAppContext::single();
+    cx.update(nyaterm_ui::init_components);
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        for id in ["first", "second"] {
+            let mut screen = ScreenState::new(
+                cx.focus_handle(),
+                super::next_generation(),
+                Default::default(),
+            );
+            screen.physical_keys.insert(29);
+            app.android.screens.insert(id.into(), screen);
+        }
+        assert!(app.android.screens["first"].focus != app.android.screens["second"].focus);
+    });
+    let host_app = app.clone();
+    let (_, window) = cx.add_window_view(move |_, _| Host(host_app));
+    window.update(|window, cx| {
+        window.activate_window();
+        let _ = window.draw(cx);
+    });
+    window.update(|window, cx| {
+        app.update(cx, |app, cx| app.focus_android_screen("first", window, cx));
+        let _ = window.draw(cx);
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.focus_android_screen("second", window, cx);
+            assert!(app.android.screens["second"].focus.is_focused(window));
+        });
+        let _ = window.draw(cx);
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("synthetic paste".into()));
+        app.update(cx, |app, _| {
+            app.android
+                .screens
+                .get_mut("second")
+                .unwrap()
+                .physical_keys
+                .extend([113, 117]);
+        });
+    });
+    window.simulate_keystrokes("ctrl-v");
+    window.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("v").unwrap(),
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        app.update(cx, |app, _| {
+            assert!(app.android.screens["first"].physical_keys.is_empty());
+            assert!(app.android.screens["second"].physical_keys.contains(&29));
+            assert!(!app.android.screens["second"].physical_keys.contains(&113));
+            assert!(!app.android.screens["second"].physical_keys.contains(&117));
+            assert!(!app.android.screens["second"].paste_shortcut);
+            app.android.release_all_inputs();
+            assert!(app.android.screens["second"].physical_keys.is_empty());
+        })
     });
 }

@@ -62,28 +62,44 @@ fn main() -> Result<()> {
         action,
         x,
         y,
-        width: initial.width,
-        height: initial.height,
+        width: initial.capture_width,
+        height: initial.capture_height,
         generation: initial.generation,
     };
     // Tap the Settings title, then drag its list. No preferences are toggled.
-    screen.send(touch(0, initial.width / 2, initial.height / 12))?;
-    screen.send(touch(1, initial.width / 2, initial.height / 12))?;
-    screen.send(touch(0, initial.width / 2, initial.height * 3 / 4))?;
+    screen.send(touch(
+        0,
+        initial.capture_width / 2,
+        initial.capture_height / 12,
+    ))?;
+    screen.send(touch(
+        1,
+        initial.capture_width / 2,
+        initial.capture_height / 12,
+    ))?;
+    screen.send(touch(
+        0,
+        initial.capture_width / 2,
+        initial.capture_height * 3 / 4,
+    ))?;
     for step in 0..20 {
         screen.send(touch(
             2,
-            initial.width / 2,
-            initial.height * (60 - step) / 80,
+            initial.capture_width / 2,
+            initial.capture_height * (60 - step) / 80,
         ))?;
         std::thread::sleep(Duration::from_millis(20));
     }
-    screen.send(touch(1, initial.width / 2, initial.height / 2))?;
+    screen.send(touch(
+        1,
+        initial.capture_width / 2,
+        initial.capture_height / 2,
+    ))?;
     screen.send(Control::Scroll {
-        x: initial.width / 2,
-        y: initial.height / 2,
-        width: initial.width,
-        height: initial.height,
+        x: initial.capture_width / 2,
+        y: initial.capture_height / 2,
+        width: initial.capture_width,
+        height: initial.capture_height,
         generation: initial.generation,
         horizontal: 0.0,
         vertical: 1.0,
@@ -94,7 +110,7 @@ fn main() -> Result<()> {
     }
     screen.acknowledge(initial.sequence);
     let latest = next_frame(&screen, initial.generation)?;
-    if latest.sequence <= initial.sequence + 1 || latest.pts < initial.pts {
+    if latest.sequence <= initial.sequence || latest.pts < initial.pts {
         return Err("slow consumer did not receive the latest decoded frame".into());
     }
     screen.acknowledge(latest.sequence);

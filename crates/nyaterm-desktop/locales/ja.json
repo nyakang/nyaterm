@@ -1,5 +1,8 @@
 {
   "android": {
+    "zoomOut": "縮小",
+    "paste": "貼り付け（Ctrl+V / Cmd+V）",
+    "inputHint": "中ボタンでドラッグして移動、Ctrl/Cmd+ホイールでポインターを中心に拡大縮小。中国語はパソコンのクリップボードか端末の入力方法を使用してください。",
     "directoryLoadFailed": "ディレクトリの読み込みに失敗しました：%{error}",
     "screenSettings": "画面設定",
     "maxSize": "画面の最大辺（ピクセル）",
@@ -39,6 +42,7 @@
       "unavailable": "利用不可"
     },
     "errors": {
+      "leaseConflict": "移動先のウィンドウには別の Android 接続があります。先にその Android タブを閉じてください。",
       "deviceRequired": "承認済みの Android デバイスを選択してください",
       "hostInvalid": "有効な Android ホストを入力してください",
       "directoryInvalid": "NUL 文字を含まない Android の絶対ディレクトリを入力してください",

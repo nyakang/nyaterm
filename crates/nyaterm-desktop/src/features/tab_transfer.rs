@@ -315,6 +315,12 @@ impl NyaTermApp {
         if let Err(error) = self.can_accept_tab_tree(&bundle.session_ids, placement) {
             return Err(Box::new((error, bundle)));
         }
+        if !self.android.can_attach_tab(&bundle.android) {
+            return Err(Box::new((
+                rust_i18n::t!("android.errors.leaseConflict").into_owned(),
+                bundle,
+            )));
+        }
         let insert_index = match placement {
             MoveTabPlacement::BeforeTab(tab_id) => self.session.session_index(tab_id),
             MoveTabPlacement::AfterTab(tab_id) => {
@@ -362,6 +368,7 @@ impl NyaTermApp {
         }
         self.android
             .attach_tab(android, &mut self.file_manager, cx.entity(), cx);
+        self.ensure_android_clock(cx);
         self.commands.accept_completion_sessions(completion);
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(transfer);
@@ -420,6 +427,7 @@ impl NyaTermApp {
         }
         self.android
             .attach_tab(bundle.android, &mut self.file_manager, cx.entity(), cx);
+        self.ensure_android_clock(cx);
         self.commands.accept_completion_sessions(bundle.completion);
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(bundle.transfer);

@@ -18,7 +18,14 @@ use crate::adb::shell::{
     EXIT, STDOUT, ShellDecoder, execute_with_cancel, open_shell_with_cancel, quote,
 };
 use crate::error::{AdbError, AdbResult};
-use crate::ipc::{Control, Frame, PROTOCOL_VERSION, Packet, read_packet, write_packet};
+use crate::ipc::{Control, Frame, PROTOCOL_VERSION, Packet, read_packet_reusing, write_packet};
+
+fn validate_helper_hello(protocol: u32, version: &str) -> AdbResult<()> {
+    if protocol != PROTOCOL_VERSION || version != env!("CARGO_PKG_VERSION") {
+        return Err(AdbError::HelperVersionMismatch);
+    }
+    Ok(())
+}
 
 pub const SCRCPY_VERSION: &str = "5.0.1";
 pub const SCRCPY_SHA256: &str = "764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536";
@@ -147,10 +154,19 @@ struct State {
     input: VecDeque<Control>,
     events: VecDeque<Control>,
     latest: Option<Frame>,
+    pixels: Vec<Vec<u8>>,
     closed: bool,
     finished: bool,
     hello: bool,
     pong: Instant,
+}
+impl State {
+    fn acknowledge(&mut self, sequence: u64) {
+        // Keep the reader bounded even if a faulty helper violates frame credit.
+        self.input
+            .retain(|control| !matches!(control, Control::FrameAck { .. }));
+        self.input.push_back(Control::FrameAck { sequence });
+    }
 }
 
 struct Mailbox {
@@ -166,6 +182,7 @@ impl Mailbox {
                 input: VecDeque::new(),
                 events: VecDeque::new(),
                 latest: None,
+                pixels: Vec::new(),
                 closed: false,
                 finished: false,
                 hello: false,
@@ -403,8 +420,18 @@ impl ScreenHandle {
         let binding_generation = binding.generation;
         let reader =
             nyaterm_core::runtime::worker::spawn("android-screen-reader".into(), move || {
+                let mut pixels = Vec::new();
                 loop {
-                    let packet = match read_packet(&mut stdout) {
+                    if pixels.capacity() == 0 {
+                        pixels = reader_mailbox
+                            .state
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .pixels
+                            .pop()
+                            .unwrap_or_default();
+                    }
+                    let packet = match read_packet_reusing(&mut stdout, &mut pixels) {
                         Ok(Some(packet)) => packet,
                         _ => {
                             reader_mailbox.fatal("HelperExited");
@@ -417,19 +444,30 @@ impl ScreenHandle {
                         .unwrap_or_else(|p| p.into_inner());
                     match packet {
                         Packet::Frame(frame) if frame.binding_generation == binding_generation => {
-                            state.latest = Some(frame)
+                            if let Some(old) = state.latest.replace(frame) {
+                                state.acknowledge(old.sequence);
+                                if state.pixels.len() < 2 {
+                                    state.pixels.push(old.pixels);
+                                }
+                            }
                         }
-                        Packet::Frame(frame) => state.input.push_back(Control::FrameAck {
-                            sequence: frame.sequence,
-                        }),
+                        Packet::Frame(frame) => state.acknowledge(frame.sequence),
                         Packet::Control(Control::Hello { protocol, version }) => {
-                            if protocol != PROTOCOL_VERSION || version != env!("CARGO_PKG_VERSION")
-                            {
+                            if validate_helper_hello(protocol, &version).is_err() {
                                 drop(state);
                                 reader_mailbox.fatal("HelperVersionMismatch");
                                 return;
                             }
                             state.hello = true;
+                        }
+                        Packet::Control(Control::Ready {
+                            width,
+                            height,
+                            generation,
+                        }) if !crate::ipc::valid_capture(width, height) || generation == 0 => {
+                            drop(state);
+                            reader_mailbox.fatal("HelperProtocolFailed");
+                            return;
                         }
                         Packet::Control(Control::Pong { .. }) => state.pong = Instant::now(),
                         Packet::Control(control) => {
@@ -462,11 +500,18 @@ impl ScreenHandle {
                     .0;
             }
             if !state.hello || state.closed {
+                let version_mismatch = state.events.iter().any(|event| {
+                    matches!(event, Control::Fatal { code } if code == "HelperVersionMismatch")
+                });
                 drop(state);
                 drop(resources);
                 let _ = reader.join();
                 control.check()?;
-                return Err(AdbError::Protocol("helper handshake"));
+                return Err(if version_mismatch {
+                    AdbError::HelperVersionMismatch
+                } else {
+                    AdbError::Protocol("helper handshake")
+                });
             }
             state.input.push_back(Control::Connect {
                 binding,
@@ -632,15 +677,31 @@ impl ScreenHandle {
         }
         // Visibility is state, so only its newest value needs to reach the
         // helper. Keep it deliverable even when device input has filled the queue.
-        if matches!(control, Control::Presentation { .. }) {
-            state
-                .input
-                .retain(|queued| !matches!(queued, Control::Presentation { .. }));
+        if matches!(
+            control,
+            Control::Presentation { .. }
+                | Control::RefreshPresentation
+                | Control::FrameAck { .. }
+                | Control::ReleaseInputs
+        ) {
+            state.input.retain(|queued| {
+                !matches!(
+                    (&control, queued),
+                    (Control::Presentation { .. }, Control::Presentation { .. })
+                        | (Control::RefreshPresentation, Control::RefreshPresentation)
+                        | (Control::ReleaseInputs, Control::ReleaseInputs)
+                        | (Control::FrameAck { .. }, Control::FrameAck { .. })
+                )
+            });
             if state.input.len() >= INPUT_LIMIT {
                 state.input.retain(|queued| {
                     matches!(
                         queued,
-                        Control::Connect { .. } | Control::FrameAck { .. } | Control::Ping { .. }
+                        Control::Connect { .. }
+                            | Control::FrameAck { .. }
+                            | Control::Ping { .. }
+                            | Control::Presentation { .. }
+                            | Control::RefreshPresentation
                     )
                 });
                 state.input.push_back(Control::ReleaseInputs);
@@ -664,6 +725,7 @@ impl ScreenHandle {
                     Control::Connect { .. }
                         | Control::FrameAck { .. }
                         | Control::Ping { .. }
+                        | Control::RefreshPresentation
                         | Control::Presentation { .. }
                 )
             });
@@ -683,6 +745,17 @@ impl ScreenHandle {
             .unwrap_or_else(|p| p.into_inner())
             .latest
             .take()
+    }
+    /// Return presentation credit and a bounded reusable pixel allocation together.
+    pub fn release_frame(&self, frame: Frame) {
+        let sequence = frame.sequence;
+        {
+            let mut state = self.mailbox.state.lock().unwrap_or_else(|p| p.into_inner());
+            if state.pixels.len() < 2 {
+                state.pixels.push(frame.pixels);
+            }
+        }
+        self.acknowledge(sequence);
     }
     pub fn acknowledge(&self, sequence: u64) {
         let _ = self.send(Control::FrameAck { sequence });
@@ -756,6 +829,34 @@ pub fn resolve_helper() -> AdbResult<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reader_credit_stays_bounded_when_helper_violates_backpressure() {
+        use crate::ipc::Control;
+        use crate::screen::Mailbox;
+        let mailbox = Mailbox::new();
+        let mut state = mailbox.state.lock().unwrap();
+        for sequence in 1..1000 {
+            state.acknowledge(sequence);
+        }
+        assert_eq!(state.input.len(), 1);
+        assert!(matches!(
+            state.input.front(),
+            Some(Control::FrameAck { sequence: 999 })
+        ));
+    }
+    #[test]
+    fn mismatched_helper_protocol_or_package_version_is_explicitly_rejected() {
+        use crate::error::AdbError;
+        use crate::ipc::PROTOCOL_VERSION;
+        use crate::screen::validate_helper_hello;
+        assert!(validate_helper_hello(PROTOCOL_VERSION, env!("CARGO_PKG_VERSION")).is_ok());
+        for (protocol, version) in [(2, env!("CARGO_PKG_VERSION")), (PROTOCOL_VERSION, "0.0.0")] {
+            assert!(matches!(
+                validate_helper_hello(protocol, version),
+                Err(AdbError::HelperVersionMismatch)
+            ));
+        }
+    }
     use crate::ipc::Control;
     use crate::screen::{INPUT_LIMIT, Mailbox, ScreenHandle};
     use std::sync::Arc;
@@ -813,6 +914,42 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn refresh_and_credit_survive_overflow_and_pixel_pool_remains_bounded() {
+        use crate::ipc::Frame;
+        let handle = handle();
+        handle.send(Control::RefreshPresentation).unwrap();
+        for n in 0..1000 {
+            handle.release_frame(Frame {
+                sequence: n,
+                binding_generation: 1,
+                generation: 1,
+                pts: 0,
+                capture_width: 1,
+                capture_height: 1,
+                width: 1,
+                height: 1,
+                stride: 4,
+                pixels: vec![0; 4],
+            });
+            let _ = handle.send(Control::Rotate);
+        }
+        let state = handle.mailbox.state.lock().unwrap();
+        assert!(state.pixels.len() <= 2);
+        assert!(state.input.len() <= INPUT_LIMIT);
+        assert!(
+            state
+                .input
+                .iter()
+                .any(|v| matches!(v, Control::RefreshPresentation))
+        );
+        assert!(
+            state
+                .input
+                .iter()
+                .any(|v| matches!(v, Control::FrameAck { sequence: 999 }))
+        );
+    }
     #[test]
     fn drag_moves_merge_only_between_reliable_events() {
         let handle = handle();

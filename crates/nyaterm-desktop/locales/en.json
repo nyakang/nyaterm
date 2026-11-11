@@ -1,5 +1,8 @@
 {
   "android": {
+    "zoomOut": "Zoom out",
+    "paste": "Paste (Ctrl+V / Cmd+V)",
+    "inputHint": "Middle drag: pan · Ctrl/Cmd + wheel: zoom at pointer. Use the computer clipboard or device keyboard for Chinese text.",
     "directoryLoadFailed": "Directory load failed: %{error}",
     "screenSettings": "Screen settings",
     "maxSize": "Screen maximum edge (px)",
@@ -39,6 +42,7 @@
       "unavailable": "Unavailable"
     },
     "errors": {
+      "leaseConflict": "The destination window has a different Android device binding. Close its Android views before moving this tab.",
       "deviceRequired": "Select an authorized Android device",
       "hostInvalid": "Enter a valid Android host",
       "directoryInvalid": "Enter an absolute Android directory without NUL characters",

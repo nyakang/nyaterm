@@ -26,6 +26,8 @@ pub(crate) struct Device {
     pub fail_receives: usize,
     pub renames: usize,
     pub fail_rename: bool,
+    pub permission_probe: Option<Vec<u8>>,
+    pub ignore_chmod: bool,
     pub preserve_change_time: bool,
     pub change_on_receive: bool,
     pub change_on_send: Option<(Vec<u8>, Vec<u8>)>,
@@ -120,6 +122,7 @@ fn host_request(socket: &mut TcpStream) -> io::Result<Vec<u8>> {
 }
 
 fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
+    socket.set_nonblocking(false)?;
     socket.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
     socket.set_write_timeout(Some(std::time::Duration::from_secs(2)))?;
     let request = host_request(&mut socket)?;
@@ -134,7 +137,14 @@ fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
         let args = shell_paths(command);
         let mut state = state.lock().unwrap();
         let mut exit = 0;
-        if command.starts_with(b"set -C;") {
+        if command.starts_with(b"realpath --") {
+            let probe = state.permission_probe.clone().unwrap_or_else(|| {
+                b"/device\n\0ext4\n\x001 0 0:1 / / rw - ext4 /dev/block rw\n".to_vec()
+            });
+            socket.write_all(&[1])?;
+            socket.write_all(&(probe.len() as u32).to_le_bytes())?;
+            socket.write_all(&probe)?;
+        } else if command.starts_with(b"set -C;") {
             if state.nodes.contains_key(&args[0]) {
                 exit = 1;
             } else {
@@ -175,7 +185,9 @@ fn handle(mut socket: TcpStream, state: Arc<Mutex<Device>>) -> io::Result<()> {
                 .nth(1)
                 .unwrap();
             let mode = u32::from_str_radix(mode, 8).unwrap();
-            state.nodes.get_mut(&args[0]).unwrap().mode = 0o100000 | mode;
+            if !state.ignore_chmod {
+                state.nodes.get_mut(&args[0]).unwrap().mode = 0o100000 | mode;
+            }
         } else if command.starts_with(b"touch ") {
             let time = std::str::from_utf8(&args[0])
                 .unwrap()

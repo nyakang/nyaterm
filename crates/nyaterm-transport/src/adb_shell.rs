@@ -11,7 +11,7 @@ use crate::session_types::{SessionEvent, SessionInfo, TerminalTransport};
 use nyaterm_android::adb::client::DeviceBinding;
 use nyaterm_android::adb::shell::{
     CLOSE_STDIN, EXIT, MAX_SHELL_PACKET, STDERR, STDIN, STDOUT, ShellDecoder, WINDOW_SIZE,
-    open_shell, window_size, write_packet,
+    open_shell_with_cancel, window_size, write_packet,
 };
 
 const INPUT_BYTES: usize = 8 * 1024 * 1024;
@@ -43,8 +43,10 @@ impl AdbTerminalTransport {
         info: SessionInfo,
         binding: &DeviceBinding,
         events: SessionEventQueue,
+        mut check: impl FnMut() -> nyaterm_android::error::AdbResult<()>,
     ) -> anyhow::Result<Self> {
-        let mut stream = open_shell(binding, b"", true)?;
+        let mut stream = open_shell_with_cancel(binding, b"", true, &mut check)?;
+        check()?;
         write_packet(
             &mut stream,
             WINDOW_SIZE,
@@ -240,6 +242,55 @@ mod tests {
         bytes
     }
     #[test]
+    fn cancelled_adb_handshake_does_not_register_or_leak_a_session() {
+        use crate::SessionManager;
+        use crate::adb_shell::AdbShellConfig;
+        use nyaterm_android::error::AdbError;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = listener.local_addr().unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::clone(&cancelled);
+        let worker = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut prefix = [0; 4];
+            peer.read_exact(&mut prefix).unwrap();
+            cancel.store(true, Ordering::Release);
+            let mut bytes = [0; 128];
+            while peer.read(&mut bytes).unwrap() != 0 {}
+        });
+        let manager = SessionManager::new();
+        let started = Instant::now();
+        let result = manager.create_adb_session_with_cancel(
+            AdbShellConfig {
+                name: "fixture".into(),
+                binding: DeviceBinding {
+                    server,
+                    serial: "fixture".into(),
+                    transport_id: None,
+                    generation: 1,
+                },
+                cols: 80,
+                rows: 24,
+            },
+            || {
+                if cancelled.load(Ordering::Acquire) {
+                    Err(AdbError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(manager.list_sessions().unwrap().is_empty());
+        worker.join().unwrap();
+    }
+    #[test]
     fn native_pty_routes_input_resize_utf8_stderr_and_exit_without_local_scripts() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let server = listener.local_addr().unwrap();
@@ -287,7 +338,8 @@ mod tests {
             transport_id: Some(7),
             generation: 1,
         };
-        let mut transport = AdbTerminalTransport::open(info, &binding, events.clone()).unwrap();
+        let mut transport =
+            AdbTerminalTransport::open(info, &binding, events.clone(), || Ok(())).unwrap();
         transport.write(b"test\x03").unwrap();
         transport.resize(120, 40, 600, 400).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);

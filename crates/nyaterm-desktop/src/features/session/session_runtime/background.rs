@@ -419,6 +419,14 @@ impl NyaTermApp {
         if let SessionLaunchConfig::Ssh(config) = &mut launch_config {
             config.bind_attempt(attempt.clone());
         }
+        let android_runtime = if let SessionLaunchConfig::AdbShell(config) = &launch_config {
+            self.android
+                .file_service(&config.device_key)
+                .ok()
+                .map(|files| files.runtime.clone())
+        } else {
+            None
+        };
         let session_manager = self.session.manager_handle();
         let ssh_connections = self.session.ssh_connection_pool();
         let session_start_tx = self.session.start.sender();
@@ -444,13 +452,36 @@ impl NyaTermApp {
                     session_manager
                         .create_telnet_session_with_attempt(config.clone(), attempt.clone())
                         .map(|session_info| {
-                            SessionStartSuccess::telnet(
+                            SessionStartSuccess::channel(
                                 Arc::clone(&session_manager),
                                 session_info,
                                 None,
                             )
                         })
                         .map_err(|error| error.to_string())
+                } else if let SessionLaunchConfig::AdbShell(config) = &launch_config {
+                    let runtime =
+                        android_runtime.ok_or_else(|| "AndroidDeviceDisconnected".to_string())?;
+                    session_manager
+                        .create_adb_session_with_cancel(
+                            nyaterm_transport::adb_shell::AdbShellConfig {
+                                name: rust_i18n::t!("android.shellTitle", name = config.name)
+                                    .into_owned(),
+                                binding: config.binding.clone(),
+                                cols: config.cols,
+                                rows: config.rows,
+                            },
+                            || {
+                                attempt
+                                    .check()
+                                    .map_err(|_| nyaterm_android::error::AdbError::Cancelled)?;
+                                runtime.check()
+                            },
+                        )
+                        .map(|info| {
+                            SessionStartSuccess::channel(Arc::clone(&session_manager), info, None)
+                        })
+                        .map_err(crate::features::android::labels::session_start_error_message)
                 } else {
                     create_session_from_launch_config(
                         &session_manager,
@@ -805,7 +836,7 @@ impl NyaTermApp {
 
     pub(in crate::features::session) fn apply_session_start_event(
         &mut self,
-        event: SessionStartResult,
+        mut event: SessionStartResult,
         cx: &mut Context<Self>,
     ) {
         let request_id = event.request_id.clone();
@@ -837,6 +868,20 @@ impl NyaTermApp {
         if pending.is_none() {
             // Closed preparations and already-delivered requests cannot resurrect a tab.
             return;
+        }
+        if let Some(SessionLaunchConfig::AdbShell(config)) =
+            pending.as_ref().and_then(|p| p.launch_config.as_ref())
+            && !self
+                .android
+                .devices
+                .get(&config.device_key)
+                .is_some_and(|lease| {
+                    lease.config.binding.generation == config.binding.generation
+                        && lease.files.runtime.is_valid()
+                })
+        {
+            // Dropping the replaced result closes a successful stale channel.
+            event.result = Err(rust_i18n::t!("android.errors.disconnected").into_owned());
         }
         let connection_name = event.connection_name.clone();
         let kind = pending
@@ -1271,11 +1316,12 @@ fn create_session_from_launch_config(
                 cols: config.cols,
                 rows: config.rows,
             })
-            .map(|session_info| SessionStartSuccess {
-                session_info,
-                multiplex_handle: None,
-                cleanup: None,
-                launch_config: Some(SessionLaunchConfig::AdbShell(config)),
+            .map(|session_info| {
+                SessionStartSuccess::channel(
+                    Arc::clone(session_manager),
+                    session_info,
+                    Some(SessionLaunchConfig::AdbShell(config)),
+                )
             })
             .map_err(crate::features::android::labels::session_start_error_message),
         SessionLaunchConfig::AdbFiles(_) | SessionLaunchConfig::AdbScreen(_) => {
@@ -1309,7 +1355,7 @@ fn create_session_from_launch_config(
         SessionLaunchConfig::Telnet(config) => session_manager
             .create_telnet_session(config)
             .map(|session_info| {
-                SessionStartSuccess::telnet(Arc::clone(session_manager), session_info, None)
+                SessionStartSuccess::channel(Arc::clone(session_manager), session_info, None)
             })
             .map_err(|error| error.to_string()),
         SessionLaunchConfig::Serial(config) => session_manager

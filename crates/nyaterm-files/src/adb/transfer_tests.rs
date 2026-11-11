@@ -112,6 +112,13 @@ fn browser_adb_upload_and_download_round_trip_special_names_and_empty_files() {
             )
             .unwrap();
         assert_eq!(summary.bytes, data.len() as u64);
+        // All names must round-trip on the Android wire, independent of host naming rules.
+        let mut received = Vec::new();
+        fixture
+            .service
+            .receive(&remote, &mut received, &SftpTransferControl::new(), |_| {})
+            .unwrap();
+        assert_eq!(received, data);
         let output = root.path().join(format!("outputs/{index}"));
         browser
             .download_remote_path_with_progress_and_path_options(
@@ -680,4 +687,126 @@ fn adb_safe_edit_detects_same_size_same_timestamp_content_change_and_force_keeps
             .is_err()
     );
     assert_eq!(fixture.device.lock().unwrap().sends, sends);
+}
+
+#[test]
+fn android_protocol_names_are_independent_of_windows_host_names() {
+    use crate::file_browser::{FileBrowserBackendKind, valid_file_browser_child_name};
+    for name in ["quote\"", "line\nbreak", "a\\b", "a:b"] {
+        assert!(valid_file_browser_child_name(
+            FileBrowserBackendKind::Adb,
+            name
+        ));
+        if cfg!(windows) {
+            assert!(!valid_file_browser_child_name(
+                FileBrowserBackendKind::Local,
+                name
+            ));
+        }
+    }
+}
+
+#[test]
+fn default_new_upload_accepts_only_confirmed_mount_assigned_permissions() {
+    use crate::adb::AdbFilePolicyError;
+    for (mount_assigned, explicit, existing) in [
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+        (false, false, false),
+    ] {
+        let fixture = AdbFixture::new();
+        {
+            let mut device = fixture.device.lock().unwrap();
+            device.ignore_chmod = true;
+            device.permission_probe = Some(if mount_assigned {
+                b"/storage/emulated/0\n\0fuse\n\x001 0 0:1 / /storage/emulated rw - fuse /dev/fuse rw\n".to_vec()
+            } else {
+                b"/device\n\0fuse\n\x001 0 0:1 / / rw - fuse /dev/fuse rw\n".to_vec()
+            });
+        }
+        if existing {
+            fixture.file(b"/device/file", b"original");
+        }
+        let root = tempfile::tempdir().unwrap();
+        let local = root.path().join("input");
+        std::fs::write(&local, b"replacement").unwrap();
+        let mut options = SftpTransferOptions::default();
+        if explicit {
+            options.default_file_mode = Some(0o600);
+        }
+        let result = fixture.service.upload_with_options(
+            &local,
+            &RemoteFilePath::new("/device/file"),
+            true,
+            &SftpTransferControl::new(),
+            &options,
+            |_| {},
+        );
+        if mount_assigned && !explicit && !existing {
+            assert_eq!(result.unwrap(), 11);
+            assert_eq!(
+                fixture.device.lock().unwrap().nodes[b"/device/file".as_slice()].mode & 0o777,
+                0o666
+            );
+        } else {
+            assert_eq!(
+                result.unwrap_err().downcast_ref::<AdbFilePolicyError>(),
+                Some(&AdbFilePolicyError::PermissionsUnavailable)
+            );
+            if existing {
+                assert_eq!(
+                    fixture.device.lock().unwrap().nodes[b"/device/file".as_slice()].data,
+                    b"original"
+                );
+            }
+            assert_eq!(fixture.device.lock().unwrap().renames, 0);
+        }
+        assert!(
+            fixture
+                .device
+                .lock()
+                .unwrap()
+                .nodes
+                .keys()
+                .all(|key| !key.windows(9).any(|s| s == b".nyaterm-"))
+        );
+    }
+}
+
+#[test]
+fn cancellation_at_commit_never_renames_the_staged_upload() {
+    use crate::adb::AdbTransferEvent;
+    use crate::sftp_transfer_types::FileTransferPhase;
+    let fixture = AdbFixture::new();
+    fixture.file(b"/device/file", b"original");
+    let root = tempfile::tempdir().unwrap();
+    let local = root.path().join("input");
+    std::fs::write(&local, b"replacement").unwrap();
+    let control = SftpTransferControl::new();
+    let result = fixture.service.upload_with_options(
+        &local,
+        &RemoteFilePath::new("/device/file"),
+        true,
+        &control,
+        &SftpTransferOptions::default(),
+        |event| {
+            if matches!(
+                event,
+                AdbTransferEvent::Phase(FileTransferPhase::Committing)
+            ) {
+                control.cancel();
+            }
+        },
+    );
+    assert!(result.is_err());
+    let state = fixture.device.lock().unwrap();
+    assert_eq!(state.renames, 0);
+    assert_eq!(state.nodes[b"/device/file".as_slice()].data, b"original");
+    assert!(
+        state
+            .nodes
+            .keys()
+            .all(|key| !key.windows(9).any(|s| s == b".nyaterm-"))
+    );
 }

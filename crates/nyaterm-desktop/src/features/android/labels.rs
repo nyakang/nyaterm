@@ -43,6 +43,7 @@ impl AndroidError {
                 AdbError::Unauthorized => "Unauthorized",
                 AdbError::ExecutableMissing => "ExecutableMissing",
                 AdbError::IncompatibleServer => "IncompatibleServer",
+                AdbError::HelperVersionMismatch => "HelperVersionMismatch",
                 AdbError::FileMissing => "FileMissing",
                 AdbError::Rejected => "Rejected",
                 AdbError::Protocol(_) => "Protocol",
@@ -53,10 +54,10 @@ impl AndroidError {
                 "DeviceDisconnected" => "Offline",
                 "HelperVersionMismatch" => "HelperVersionMismatch",
                 "HelperInputFailed" => "HelperInputFailed",
-                "HelperHung" | "DecoderHung" => "HelperHung",
+                "HelperHung" | "DecoderHung" | "PresentationHung" => "HelperHung",
                 "HelperExited" => "HelperExited",
                 "ServerExited" => "ServerExited",
-                "DecoderPanic" => "DecoderPanic",
+                "DecoderPanic" | "PresentationPanic" => "DecoderPanic",
                 _ => "ScreenFailed",
             },
             Self::Disconnected => "Offline",
@@ -81,6 +82,7 @@ pub(in crate::features) fn adb_error_message(error: &AdbError) -> String {
         AdbError::Io(_) => t!("android.errors.io"),
         AdbError::ExecutableMissing => t!("android.errors.executableMissing"),
         AdbError::IncompatibleServer => t!("android.errors.incompatibleServer"),
+        AdbError::HelperVersionMismatch => t!("android.errors.helperVersion"),
         AdbError::Unauthorized => t!("android.errors.unauthorized"),
         AdbError::Offline => t!("android.errors.offline"),
         AdbError::Rejected => t!("android.errors.rejected"),
@@ -108,11 +110,12 @@ pub(in crate::features) fn fatal_message(code: &str) -> Cow<'static, str> {
         "DeviceDisconnected" => t!("android.errors.disconnected"),
         "HelperVersionMismatch" => t!("android.errors.helperVersion"),
         "HelperInputFailed" => t!("android.errors.inputFailed"),
-        "HelperHung" | "DecoderHung" => t!("android.errors.helperHung"),
+        "HelperHung" | "DecoderHung" | "PresentationHung" => t!("android.errors.helperHung"),
         "HelperExited" => t!("android.errors.helperExited"),
         "ServerExited" | "VideoEnded" => t!("android.errors.videoEnded"),
-        "ServerProtocolFailed" => t!("android.errors.protocol"),
-        "DecoderPanic" | "VideoFailed" | "HelperPanic" | "HelperFailed" => {
+        "ServerProtocolFailed" | "HelperProtocolFailed" => t!("android.errors.protocol"),
+        "DecoderPanic" | "VideoFailed" | "PresentationPanic" | "PresentationFailed"
+        | "HelperPanic" | "HelperFailed" => {
             t!("android.errors.decoderFailed")
         }
         _ => t!("android.errors.operationFailed"),
@@ -222,6 +225,7 @@ pub(in crate::features) fn file_error_code(error: &anyhow::Error) -> &'static st
                 AdbError::Io(error) => io_error_code(error),
                 AdbError::ExecutableMissing => "ExecutableMissing",
                 AdbError::IncompatibleServer => "IncompatibleServer",
+                AdbError::HelperVersionMismatch => "HelperVersionMismatch",
                 AdbError::Unauthorized => "Unauthorized",
                 AdbError::Offline => "Offline",
                 AdbError::Rejected => "Rejected",

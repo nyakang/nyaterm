@@ -6,8 +6,11 @@ Android Screen opens from an Android session tab's context menu in a separate ta
 or focuses that device's existing screen. The action is disabled while the session
 is disconnected or connecting. Views have independent channels, and closing a view
 retains submitted transfers. Disconnect retains directories, terminal history and
-layout. Reconnect is manual and never replays commands. Previously saved Android
-Files views and layouts still restore, with both file-manager panes initialized.
+layout. Reconnect is manual and never replays commands. Reconnecting a channel
+reuses a valid unchanged binding and leaves sibling Shell, screen and file channels running.
+Pending Shell requests retain their device until accepted, failed or cancelled;
+undeliverable successful results close their channel on the background reaper.
+Previously saved Android Files views and layouts still restore, with both file-manager panes initialized.
 
 The sidebar starts at the connection's device directory (default `/sdcard/`),
 never the host computer's home directory. File-browser failures emit structured
@@ -42,6 +45,13 @@ continues an open transfer; retry after a failed transfer starts from the beginn
 Only unfinished temporary data can retry automatically. Replacement, deletion,
 editor saves and terminal commands are never automatically replayed. Overwrites
 preserve remote mode/owner/group or fail safely; timestamp preservation is verified.
+New uploads with no explicit mode allow mount-assigned ordinary-file permissions
+only on confirmed Android emulated FUSE, sdcardfs, FAT or exFAT mounts. Filesystem
+type, canonical parent and longest matching mount identity are probed in the
+background. Other FUSE mounts and unrecognized probes keep strict mode checks.
+Existing targets always preserve exact mode/uid/gid; explicit new-file modes must
+also match exactly. Cancellation and binding validity are checked through metadata
+and mutation handshakes and once more before the non-retried commit.
 Each immutable binding caches Sync capabilities and leases at most two exclusive
 channels. Cancelled, failed or desynchronized channels are destroyed.
 
@@ -51,14 +61,20 @@ verifies the transport ID on the same channel; older servers use serial selectio
 with mapping checks. Closed views leave submitted transfers alive; weak runtime
 registration releases device resources after the last owner disappears.
 
-Screen startup is cancellable with a 30-second deadline. Helper IPC version 2 adds
-presentation visibility and recoverable input rejection. Text must fit UTF-8 and
-serialized IPC limits and contain no NUL. Input overflow releases held input and
+Screen startup is cancellable with a 30-second deadline. Helper IPC version 3 adds
+capture geometry and explicit cached-frame refresh, retaining visibility and
+recoverable input rejection. Older helpers are rejected during the handshake with
+a specific version mismatch error. Text must fit UTF-8 and serialized IPC limits and contain no NUL. Input overflow releases held input and
 shows a rate-limited notice. Screen events wake GPUI and schedule presentation on
 the next frame. Hidden screens continue H.264 decoding, retain the latest decoded
-frame and skip BGRA conversion/frame IPC/GPU uploads. Restoring visibility presents
-the cached frame without waiting for new media. App and helper must be built and
-packaged together.
+frame and skip BGRA conversion/frame IPC/GPU uploads. A separate presentation
+worker wakes directly on frames, credit, visibility or refresh; restoring a static
+screen or moving it to another window does not require new media. Decoded frames
+are shared immutably without deep copies. Both sides retain at most two idle pixel
+buffers and return frame credit with recycled storage after upload or discard.
+App and helper must be built and packaged together. A transferred tab recreates focus, event wakes and GPU textures
+in its destination window. Different valid leases for the same saved connection reject
+the move before attachment so the source can roll back atomically.
 
 See [VALIDATION.md](VALIDATION.md) for regression coverage, device probe results
 and outstanding platform/performance acceptance.
@@ -100,10 +116,22 @@ See [scrcpy notices](assets/NOTICE.md) and [license](assets/LICENSE.scrcpy).
 ## Input and compatibility
 
 Defaults are H.264, maximum edge 1280, 30 FPS and 8 Mbps. BGRA frames are capped
-at 16 MiB, media packets at 8 MiB, and native decoding limits pixel allocation
-before parsing SPS dimensions. The helper retains one in-flight frame and one
-latest pending frame. Rotation invalidates old coordinates. Android screen sessions
+at 16 MiB and media packets at 8 MiB. Native decoding limits allocation to
+2560² pixels with each edge capped at 2560 before decoded-surface allocation,
+including when SPS dimensions disagree with the scrcpy header. Large
+captures (including 2560×1920 and 2560×2560) scale proportionally into the 16 MiB
+presentation limit. IPC carries capture and presentation dimensions separately;
+touch and scroll always use the full capture geometry. The helper retains one
+in-flight frame and one latest pending frame. Rotation invalidates old coordinates. Android screen sessions
 always enable control. Blur, close and input overflow release held input.
+
+A focused screen uses Ctrl+V / Cmd+V to paste the computer clipboard, sharing the
+toolbar paste path; an empty clipboard sends nothing. Forwarded Ctrl/Meta keys are
+released before paste. Zoom spans 1×–4× with zoom-in, zoom-out and fit controls.
+Fit clears pan; middle-button drag pans and Ctrl/Cmd + wheel zooms around the
+pointer. Ordinary wheel and left-button gestures control the device. Image and
+input coordinates use the same clipped transform; pan is constrained to the image.
+Each split screen owns its focus and releases held input independently.
 
 Unicode uses explicit paste or the device input method. Host IME does not
 automatically replace the device clipboard. A clipboard acknowledgement proves

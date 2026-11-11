@@ -173,6 +173,83 @@ pub fn screen_point(
         .then_some((px as u32, py as u32))
 }
 
+/// Window-local image transform. Coordinates are relative to the clipped viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenViewport {
+    pub zoom: f32,
+    pub pan: (f32, f32),
+}
+impl Default for ScreenViewport {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan: (0.0, 0.0),
+        }
+    }
+}
+impl ScreenViewport {
+    pub fn layout(self, viewport: (f32, f32), capture: (u32, u32)) -> Option<(f32, f32, f32, f32)> {
+        if capture.0 == 0
+            || capture.1 == 0
+            || viewport.0 <= 0.0
+            || viewport.1 <= 0.0
+            || ![viewport.0, viewport.1, self.zoom, self.pan.0, self.pan.1]
+                .iter()
+                .all(|v| v.is_finite())
+        {
+            return None;
+        }
+        let scale = (viewport.0 / capture.0 as f32).min(viewport.1 / capture.1 as f32)
+            * self.zoom.clamp(1.0, 4.0);
+        let (w, h) = (capture.0 as f32 * scale, capture.1 as f32 * scale);
+        let limit = (
+            (w - viewport.0).max(0.0) / 2.0,
+            (h - viewport.1).max(0.0) / 2.0,
+        );
+        Some((
+            (viewport.0 - w) / 2.0 + self.pan.0.clamp(-limit.0, limit.0),
+            (viewport.1 - h) / 2.0 + self.pan.1.clamp(-limit.1, limit.1),
+            w,
+            h,
+        ))
+    }
+    pub fn pan_by(&mut self, delta: (f32, f32), viewport: (f32, f32), capture: (u32, u32)) {
+        if !delta.0.is_finite() || !delta.1.is_finite() {
+            return;
+        }
+        if let Some((x, y, w, h)) = self.layout(viewport, capture) {
+            self.pan = (x - (viewport.0 - w) / 2.0, y - (viewport.1 - h) / 2.0);
+        }
+        self.pan.0 += delta.0;
+        self.pan.1 += delta.1;
+        if let Some((x, y, w, h)) = self.layout(viewport, capture) {
+            self.pan = (x - (viewport.0 - w) / 2.0, y - (viewport.1 - h) / 2.0);
+        }
+    }
+    pub fn zoom_at(
+        &mut self,
+        factor: f32,
+        anchor: (f32, f32),
+        viewport: (f32, f32),
+        capture: (u32, u32),
+    ) {
+        if !factor.is_finite() || factor <= 0.0 || !anchor.0.is_finite() || !anchor.1.is_finite() {
+            return;
+        }
+        let Some((x, y, w, h)) = self.layout(viewport, capture) else {
+            return;
+        };
+        let previous = self.zoom;
+        self.zoom = (self.zoom * factor).clamp(1.0, 4.0);
+        let ratio = self.zoom / previous;
+        self.pan = (
+            anchor.0 - (anchor.0 - x) * ratio - (viewport.0 - w * ratio) / 2.0,
+            anchor.1 - (anchor.1 - y) * ratio - (viewport.1 - h * ratio) / 2.0,
+        );
+        self.pan_by((0.0, 0.0), viewport, capture);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::models::android::{
@@ -337,5 +414,40 @@ mod screen_settings_tests {
             let loaded: SavedConnection = serde_json::from_value(serialized).unwrap();
             assert_eq!(loaded, connection);
         }
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use crate::models::android::{ScreenViewport, screen_point};
+    #[test]
+    fn pointer_anchored_zoom_and_clamped_pan_reach_all_edges() {
+        let mut transform = ScreenViewport::default();
+        transform.zoom_at(2.0, (25.0, 25.0), (100.0, 100.0), (2560, 2560));
+        let (x, y, w, h) = transform.layout((100., 100.), (2560, 2560)).unwrap();
+        assert_eq!(
+            screen_point(25. - x, 25. - y, w, h, 2560, 2560),
+            Some((640, 640))
+        );
+        transform.pan_by((10000., 10000.), (100., 100.), (2560, 2560));
+        assert_eq!(
+            transform.layout((100., 100.), (2560, 2560)),
+            Some((0., 0., 200., 200.))
+        );
+        transform.pan_by((-10000., -10000.), (100., 100.), (2560, 2560));
+        assert_eq!(
+            transform.layout((100., 100.), (2560, 2560)),
+            Some((-100., -100., 200., 200.))
+        );
+        transform.zoom_at(0.001, (50., 50.), (100., 100.), (2560, 2560));
+        assert_eq!(transform, ScreenViewport::default());
+    }
+    #[test]
+    fn letterbox_pan_is_clamped_and_invalid_geometry_is_rejected() {
+        let mut transform = ScreenViewport::default();
+        transform.pan_by((500., 500.), (100., 100.), (100, 200));
+        assert_eq!(transform.pan, (0., 0.));
+        assert!(transform.layout((f32::NAN, 100.), (100, 100)).is_none());
+        assert!(transform.layout((100., 100.), (0, 100)).is_none());
     }
 }

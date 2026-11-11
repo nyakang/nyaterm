@@ -60,8 +60,15 @@ impl NyaTermApp {
                     screen.bounds = None;
                     screen.generation = generation;
                     screen.dimensions = (width, height);
+                    screen.layout_epoch += 1;
+                    screen.pan_drag = None;
+                    screen.viewport.pan = (0.0, 0.0);
+                    if let Some(texture) = screen.texture.take() {
+                        self.android.retired_textures.push(texture);
+                    }
+                    screen.texture_size = None;
                     if let Some(frame) = screen.frame.take() {
-                        handle.acknowledge(frame.sequence);
+                        handle.release_frame(frame);
                     }
                     changed = true;
                 }
@@ -86,23 +93,30 @@ impl NyaTermApp {
             if Some(frame.binding_generation) != expected_binding
                 || frame.generation < screen.generation
             {
-                handle.acknowledge(frame.sequence);
+                handle.release_frame(frame);
                 return changed;
             }
             if frame.generation != screen.generation {
                 let _ = handle.send(Control::ReleaseInputs);
                 screen.drag = false;
+                screen.physical_keys.clear();
+                screen.bounds = None;
+                screen.layout_epoch += 1;
+                screen.pan_drag = None;
+                if let Some(texture) = screen.texture.take() {
+                    self.android.retired_textures.push(texture);
+                }
+                screen.texture_size = None;
             }
             screen.generation = frame.generation;
-            screen.dimensions = (frame.width, frame.height);
+            screen.dimensions = (frame.capture_width, frame.capture_height);
             if let Some(old) = screen.frame.replace(frame) {
-                handle.acknowledge(old.sequence);
+                handle.release_frame(old);
             }
-            // Invisible surfaces retain one latest CPU frame and return credit.
             if !screen.visible
-                && let Some(frame) = &screen.frame
+                && let Some(frame) = screen.frame.take()
             {
-                handle.acknowledge(frame.sequence);
+                handle.release_frame(frame);
             }
             changed = true;
         }
@@ -147,7 +161,7 @@ impl NyaTermApp {
                         failures.push(id.clone());
                     }
                     if !next && let Some(frame) = screen.frame.take() {
-                        handle.acknowledge(frame.sequence);
+                        handle.release_frame(frame);
                     }
                 }
             }
@@ -201,7 +215,7 @@ impl NyaTermApp {
             }
         }
         if let Some(handle) = &screen.handle {
-            handle.acknowledge(frame.sequence);
+            handle.release_frame(frame);
         }
     }
     pub(super) fn android_screen_content(
@@ -216,15 +230,20 @@ impl NyaTermApp {
         let texture = screen.texture;
         let dimensions = screen.dimensions;
         let geometry_generation = screen.generation;
-        let zoom = screen.zoom;
+        let viewport = screen.viewport;
+        let layout_epoch = screen.layout_epoch;
         let error = screen.error.as_ref().map(AndroidError::message);
         let mut toolbar = div()
+            .id(format!("android-toolbar-{id}"))
             .flex()
             .items_center()
             .gap_1()
             .h(px(36.))
             .px_2()
-            .bg(rgb(palette.surface));
+            .bg(rgb(palette.surface))
+            .tooltip(|window, cx| {
+                nyaterm_ui::NyaTooltip::new(t!("android.inputHint").into_owned()).build(window, cx)
+            });
         for (action, label, keycode) in [
             ("back", t!("android.back"), 4),
             ("home", t!("android.home"), 3),
@@ -247,6 +266,7 @@ impl NyaTermApp {
         let reconnect = id.clone();
         let fit = id.clone();
         let zoom_in = id.clone();
+        let zoom_out = id.clone();
         toolbar = toolbar
             .child(small_button(
                 palette,
@@ -264,7 +284,9 @@ impl NyaTermApp {
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
                     if let Some(screen) = app.android.screens.get_mut(&fit) {
-                        screen.zoom = 1.0;
+                        screen.viewport = Default::default();
+                        screen.bounds = None;
+                        screen.layout_epoch += 1;
                     }
                     cx.notify();
                 }),
@@ -275,28 +297,26 @@ impl NyaTermApp {
                 t!("android.zoom"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
-                    if let Some(screen) = app.android.screens.get_mut(&zoom_in) {
-                        screen.zoom = (screen.zoom * 1.25).min(4.0);
-                    }
+                    app.android_zoom(&zoom_in, 1.25, None, cx);
                     cx.notify();
                 }),
             ))
             .child(small_button(
                 palette,
-                format!("android-paste-{id}"),
-                t!("menu.paste"),
+                format!("android-zoom-out-{id}"),
+                t!("android.zoomOut"),
                 cx.listener(move |app, _, _, cx| {
                     cx.stop_propagation();
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        app.android_send(
-                            &paste,
-                            Control::Paste {
-                                text,
-                                sequence: nyaterm_core::models::android::next_paste_sequence(),
-                            },
-                            cx,
-                        );
-                    }
+                    app.android_zoom(&zoom_out, 0.8, None, cx);
+                }),
+            ))
+            .child(small_button(
+                palette,
+                format!("android-paste-{id}"),
+                t!("android.paste"),
+                cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.android_paste(&paste, cx);
                 }),
             ))
             .child(small_button(
@@ -312,23 +332,25 @@ impl NyaTermApp {
         let bounds_id = id.clone();
         let image = canvas(
             move |bounds, window, cx| {
-                let scale = (f32::from(bounds.size.width) / dimensions.0.max(1) as f32)
-                    .min(f32::from(bounds.size.height) / dimensions.1.max(1) as f32)
-                    * zoom;
-                let width = px(dimensions.0 as f32 * scale);
-                let height = px(dimensions.1 as f32 * scale);
+                let (x, y, width, height) = viewport
+                    .layout(
+                        (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                        dimensions,
+                    )
+                    .unwrap_or_default();
                 let image = Bounds::new(
-                    Point::new(
-                        bounds.origin.x + (bounds.size.width - width) / 2.0,
-                        bounds.origin.y + (bounds.size.height - height) / 2.0,
-                    ),
-                    Size::new(width, height),
+                    Point::new(bounds.origin.x + px(x), bounds.origin.y + px(y)),
+                    Size::new(px(width), px(height)),
                 );
                 let app = app.clone();
                 let bounds_id = bounds_id.clone();
                 window.defer(cx, move |_, cx| {
                     let _ = app.update(cx, |app, _| {
-                        if let Some(screen) = app.android.screens.get_mut(&bounds_id) {
+                        if let Some(screen) = app.android.screens.get_mut(&bounds_id)
+                            && screen.generation == geometry_generation
+                            && screen.layout_epoch == layout_epoch
+                        {
+                            screen.viewport_bounds = Some(bounds);
                             screen.bounds = Some(image);
                             screen.bounds_generation = geometry_generation;
                         }
@@ -350,7 +372,10 @@ impl NyaTermApp {
         let keyboard = id.clone();
         let key_up = id.clone();
         let outside_up = id.clone();
-        let focus = self.android.focus.clone();
+        let pan_down = id.clone();
+        let pan_up = id.clone();
+        let pan_out = id.clone();
+        let focus = screen.focus.clone();
         let surface = div()
             .id(format!("android-input-{id}"))
             .flex_1()
@@ -360,11 +385,40 @@ impl NyaTermApp {
             .bg(rgb(0))
             .track_focus(&focus)
             .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |app, event: &gpui::MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    app.activate_workspace_pane(pan_down.clone(), cx);
+                    app.focus_android_screen(&pan_down, window, cx);
+                    app.android.release_inputs(&pan_down);
+                    if let Some(screen) = app.android.screens.get_mut(&pan_down) {
+                        screen.pan_drag = Some(event.position);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |app, _: &gpui::MouseUpEvent, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(screen) = app.android.screens.get_mut(&pan_up) {
+                        screen.pan_drag = None;
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Middle,
+                cx.listener(move |app, _: &gpui::MouseUpEvent, _, _| {
+                    if let Some(screen) = app.android.screens.get_mut(&pan_out) {
+                        screen.pan_drag = None;
+                    }
+                }),
+            )
+            .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |app, event: &gpui::MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     app.activate_workspace_pane(down.clone(), cx);
-                    app.focus_android_screen(window, cx);
+                    app.focus_android_screen(&down, window, cx);
                     app.android_pointer(&down, event.position, 0, cx);
                 }),
             )
@@ -383,6 +437,25 @@ impl NyaTermApp {
             )
             .on_mouse_move(
                 cx.listener(move |app, event: &gpui::MouseMoveEvent, _, cx| {
+                    if let Some(screen) = app.android.screens.get_mut(&movement)
+                        && let Some(previous) = screen.pan_drag
+                        && let Some(bounds) = screen.viewport_bounds
+                    {
+                        screen.viewport.pan_by(
+                            (
+                                f32::from(event.position.x - previous.x),
+                                f32::from(event.position.y - previous.y),
+                            ),
+                            (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                            screen.dimensions,
+                        );
+                        screen.pan_drag = Some(event.position);
+                        screen.bounds = None;
+                        screen.layout_epoch += 1;
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
                     if app.android.screens.get(&movement).is_some_and(|s| s.drag) {
                         app.android_pointer(&movement, event.position, 2, cx);
                     }
@@ -390,6 +463,16 @@ impl NyaTermApp {
             )
             .on_scroll(cx.listener(move |app, event: &gpui::ScrollEvent, _, cx| {
                 cx.stop_propagation();
+                if event.modifiers.control || event.modifiers.platform {
+                    let delta = event.delta.pixel_delta(px(20.));
+                    app.android_zoom(
+                        &scroll,
+                        (f32::from(delta.y) / 240.0).exp(),
+                        Some(event.position),
+                        cx,
+                    );
+                    return;
+                }
                 if let Some((x, y, width, height, generation)) =
                     app.android_position(&scroll, event.position)
                 {
@@ -412,6 +495,27 @@ impl NyaTermApp {
             .on_key_down(cx.listener(move |app, event: &KeyDownEvent, _, cx| {
                 cx.stop_propagation();
                 let mods = event.keystroke.modifiers;
+                if event.keystroke.key.eq_ignore_ascii_case("v")
+                    && app
+                        .android
+                        .screens
+                        .get(&keyboard)
+                        .is_some_and(|screen| screen.paste_shortcut)
+                {
+                    return;
+                }
+                if event.keystroke.key.eq_ignore_ascii_case("v")
+                    && (mods.control || mods.platform)
+                    && !mods.alt
+                {
+                    if let Some(screen) = app.android.screens.get_mut(&keyboard) {
+                        screen.paste_shortcut = true;
+                    }
+                    if !event.is_held {
+                        app.android_paste(&keyboard, cx);
+                    }
+                    return;
+                }
                 let metastate = u32::from(mods.shift)
                     | (u32::from(mods.alt) << 1)
                     | (u32::from(mods.control) << 12)
@@ -437,6 +541,12 @@ impl NyaTermApp {
             }))
             .on_key_up(cx.listener(move |app, event: &gpui::KeyUpEvent, _, cx| {
                 cx.stop_propagation();
+                if event.keystroke.key.eq_ignore_ascii_case("v")
+                    && let Some(screen) = app.android.screens.get_mut(&key_up)
+                    && std::mem::take(&mut screen.paste_shortcut)
+                {
+                    return;
+                }
                 if let Some(code) =
                     nyaterm_core::models::android::android_keycode(&event.keystroke.key)
                     && app
@@ -459,6 +569,65 @@ impl NyaTermApp {
             })
             .child(surface)
             .into_any_element()
+    }
+    fn android_paste(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(text) = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .filter(|text| !text.is_empty())
+        else {
+            return;
+        };
+        let keys: Vec<_> = self
+            .android
+            .screens
+            .get_mut(id)
+            .map(|screen| {
+                [113, 114, 117, 118]
+                    .into_iter()
+                    .filter(|key| screen.physical_keys.remove(key))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for key in keys {
+            self.android_key(id, key, 1, 0, cx);
+        }
+        self.android_send(
+            id,
+            Control::Paste {
+                text,
+                sequence: nyaterm_core::models::android::next_paste_sequence(),
+            },
+            cx,
+        );
+    }
+    fn android_zoom(
+        &mut self,
+        id: &str,
+        factor: f32,
+        anchor: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.android.release_inputs(id);
+        if let Some(screen) = self.android.screens.get_mut(id)
+            && let Some(bounds) = screen.viewport_bounds
+        {
+            let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let point = anchor
+                .map(|p| {
+                    (
+                        f32::from(p.x - bounds.origin.x),
+                        f32::from(p.y - bounds.origin.y),
+                    )
+                })
+                .unwrap_or((size.0 / 2.0, size.1 / 2.0));
+            screen
+                .viewport
+                .zoom_at(factor, point, size, screen.dimensions);
+            screen.bounds = None;
+            screen.layout_epoch += 1;
+        }
+        cx.notify();
     }
     fn android_send(&mut self, id: &str, control: Control, cx: &mut Context<Self>) {
         let result = control
@@ -555,10 +724,16 @@ impl NyaTermApp {
         position: Point<Pixels>,
     ) -> Option<(u32, u32, u32, u32, u64)> {
         let screen = self.android.screens.get(id)?;
+        if screen.pan_drag.is_some() {
+            return None;
+        }
         if screen.bounds_generation != screen.generation {
             return None;
         }
         let bounds = screen.bounds?;
+        if !screen.viewport_bounds?.contains(&position) {
+            return None;
+        }
         let (width, height) = screen.dimensions;
         let (x, y) = screen_point(
             f32::from(position.x - bounds.origin.x),

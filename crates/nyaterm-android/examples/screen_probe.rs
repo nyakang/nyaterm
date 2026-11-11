@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     started.elapsed()
                 });
                 frames += 1;
-                screen.acknowledge(frame.sequence);
+                screen.release_frame(frame);
             }
             if screen.is_closed() {
                 return Err("screen closed unexpectedly".into());
