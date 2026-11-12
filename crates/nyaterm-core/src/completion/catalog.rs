@@ -342,12 +342,14 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use crate::completion::catalog::{
-        Catalog, EMBEDDED_CATALOG, MAX_CATALOG_BYTES, decompress_catalog,
+        Catalog, CommandNode, EMBEDDED_CATALOG, EMBEDDED_SUPPLEMENT, MAX_CATALOG_BYTES,
+        decompress_catalog,
     };
     use crate::completion::parser::parse_context;
     use crate::completion::types::{CompletionScope, ShellDialect};
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
+    use std::collections::HashSet;
     use std::io::Write;
 
     const ORIGINAL_CATALOG: &[u8] = include_bytes!("../../assets/completion/catalog.json");
@@ -380,6 +382,125 @@ mod tests {
                 .any(|t| t == "--user")
         );
         assert!(embedded_options("ss -").iter().any(|t| t == "--listening"));
+    }
+
+    #[test]
+    fn supplement_covers_representative_server_commands() {
+        for (input, expected) in [
+            ("iptables -", "--dport"),
+            ("iptables -t ", "nat"),
+            ("iptables -j ", "DROP"),
+            ("nft ", "list"),
+            ("firewall-cmd --", "--add-service"),
+            ("crontab -", "-l"),
+            ("nmap -", "-sV"),
+            ("nmap -", "--top-ports"),
+            ("tcpdump -", "-nn"),
+            ("tcpdump -Q ", "inout"),
+            ("lsof -", "-i"),
+            ("sar -n ", "DEV"),
+            ("iostat -", "-x"),
+            ("yq ", "eval"),
+            ("yq -o ", "json"),
+            ("7z ", "x"),
+            ("ansible -", "--inventory"),
+            ("ansible-playbook -", "--syntax-check"),
+            ("ansible-vault ", "encrypt"),
+            ("ansible-galaxy ", "collection"),
+            ("pacman -", "--sync"),
+            ("strace -", "--follow-forks"),
+            ("nc -", "-z"),
+            ("dpkg -", "--configure"),
+            ("python3 -", "-m"),
+            ("reboot -", "--force"),
+            ("uv ", "sync"),
+            ("egrep --", "--after-context"),
+            ("podman ", "run"),
+            ("ethtool -", "-S"),
+            ("timedatectl ", "set-timezone"),
+            ("rpm -", "--queryformat"),
+            ("zypper ", "install"),
+            ("npm -", "--global"),
+            ("brew --", "--prefix"),
+            ("terraform -", "-chdir"),
+            ("ufw --", "--dry-run"),
+            ("blkid -o ", "export"),
+            ("parted -a ", "optimal"),
+            ("ip ", "route"),
+            ("ss -", "--listening"),
+        ] {
+            assert!(
+                embedded_options(input).iter().any(|text| text == expected),
+                "{input:?} should offer {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn supplement_has_no_duplicate_flags_or_children() {
+        fn check(node: &CommandNode) {
+            let mut flags = HashSet::new();
+            for flag in node.flags.iter().chain(&node.persistent) {
+                assert!(
+                    flags.insert(flag.token()),
+                    "{} repeats flag {}",
+                    node.token,
+                    flag.token()
+                );
+                if !flag.short.is_empty() && !flag.long.is_empty() {
+                    assert!(
+                        flags.insert(format!("-{}", flag.short)),
+                        "{} repeats short flag -{}",
+                        node.token,
+                        flag.short
+                    );
+                }
+            }
+            let mut children = HashSet::new();
+            for child in &node.children {
+                assert!(
+                    children.insert(child.token.as_str()),
+                    "{} repeats subcommand {}",
+                    node.token,
+                    child.token
+                );
+                check(child);
+            }
+        }
+        let supplement = Catalog::decode_unindexed(EMBEDDED_SUPPLEMENT).unwrap();
+        let mut roots = HashSet::new();
+        for root in &supplement.roots {
+            assert!(
+                roots.insert(root.token.as_str()),
+                "repeated root {}",
+                root.token
+            );
+            check(root);
+        }
+        assert!(supplement.roots.len() >= 70);
+    }
+
+    #[test]
+    fn supplement_never_changes_a_flag_the_generated_catalog_already_has() {
+        let generated = Catalog::decode(ORIGINAL_CATALOG).unwrap();
+        let merged = Catalog::embedded().unwrap();
+        for root in &generated.roots {
+            let merged_root = merged
+                .roots
+                .iter()
+                .find(|candidate| candidate.token == root.token)
+                .unwrap();
+            for flag in root.flags.iter().chain(&root.persistent) {
+                let kept = merged_root
+                    .flags
+                    .iter()
+                    .chain(&merged_root.persistent)
+                    .find(|candidate| candidate.token() == flag.token())
+                    .unwrap();
+                assert_eq!(kept.description, flag.description, "{}", root.token);
+                assert_eq!(kept.takes_value, flag.takes_value, "{}", root.token);
+            }
+        }
     }
 
     #[test]
