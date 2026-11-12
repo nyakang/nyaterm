@@ -297,9 +297,22 @@ impl NyaTermApp {
                 .and_then(|row| row.line_id);
             if let Some(target_line) = target_line
                 && let Some(view) = self.terminal.view.views.get_mut(session_id)
-                && view.target_line != Some(target_line)
             {
                 view.target_line = Some(target_line);
+                let absolute = geometry
+                    .snapshot
+                    .total_rows
+                    .saturating_sub(geometry.snapshot.display_offset)
+                    .saturating_sub(geometry.snapshot.row_count())
+                    + snapshot_row;
+                if let Some(block) = geometry
+                    .snapshot
+                    .command_blocks
+                    .iter()
+                    .find(|block| block.rows.contains(&absolute))
+                {
+                    view.command_blocks.selected = Some(block.id);
+                }
                 self.notify_terminal_surface_only(Some(session_id), cx);
             }
         }

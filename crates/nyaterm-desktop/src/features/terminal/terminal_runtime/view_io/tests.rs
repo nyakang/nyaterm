@@ -26,6 +26,67 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[test]
+fn command_block_layout_changes_replace_retained_frames_without_scrolling_or_resizing() {
+    for unwrapped in [false, true] {
+        let mut view = TerminalViewState::new();
+        view.screen = TerminalScreen::new(40, 4);
+        view.screen.set_logical_line_snapshots(unwrapped);
+        for _ in 0..2 {
+            view.screen
+                .advance(b"$ \x1b]133;B\x07run\r\n\x1b]133;C\x07");
+            for _ in 0..12 {
+                view.screen.advance(b"output\r\n");
+            }
+            view.screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07");
+        }
+        view.screen.advance(b"$ \x1b]133;B\x07");
+        let blocks = view.screen.snapshot().command_blocks;
+        let first = blocks[0].id;
+        let second = blocks[1].id;
+        let offset = 2;
+        // Expanding one of several folds, expanding the last fold, and collapsing
+        // all leave the source rows and terminal geometry unchanged.
+        for (before, after) in [
+            (vec![first, second], vec![second]),
+            (vec![second], vec![]),
+            (vec![], vec![first]),
+        ] {
+            view.screen
+                .set_collapsed_commands(before.into_iter().collect());
+            let retained = Arc::new(view.screen.viewport_snapshot_with_window(offset, 100, 100));
+            view.screen
+                .set_collapsed_commands(after.into_iter().collect());
+            let replacement = Arc::new(view.screen.viewport_snapshot_with_window(offset, 100, 100));
+            view.frame_snapshot = Some(Arc::new(view.screen.snapshot()));
+            view.scrollback_snapshots
+                .insert(offset, replacement.clone());
+
+            assert_eq!(retained.history, replacement.history);
+            assert_eq!(retained.rows(), replacement.rows());
+            assert!(terminal_snapshot_covers_display_offset(
+                &retained,
+                offset,
+                4,
+                view.screen.scrollback_len(),
+            ));
+            assert!(!terminal_retained_snapshot_matches_view(
+                &retained, &view, offset, 4
+            ));
+            let painted =
+                terminal_paint_window_snapshot_for_view(Some(&view), offset, 4, Some(retained))
+                    .unwrap();
+            assert!(Arc::ptr_eq(&painted, &replacement));
+            assert!(terminal_retained_snapshot_matches_view(
+                &replacement,
+                &view,
+                offset,
+                4
+            ));
+        }
+    }
+}
+
+#[test]
 fn terminal_mouse_report_buttons_map_to_their_gpui_capture_button() {
     assert_eq!(terminal_mouse_report_button(0), Some(MouseButton::Left));
     assert_eq!(terminal_mouse_report_button(1), Some(MouseButton::Middle));

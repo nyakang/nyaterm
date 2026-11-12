@@ -539,7 +539,8 @@ fn switching_to_no_wrap_does_not_replay_cursor_reveals_from_character_mode() {
 fn painted_hit_test_grid_bounds_match_the_rendered_grid_layout() {
     let grid_bounds = rendered_terminal_grid_bounds(false);
 
-    assert_eq!(grid_bounds.origin, point(px(0.0), px(0.0)));
+    let rail = nyaterm_terminal_gpui::command_blocks::COMMAND_RAIL_WIDTH;
+    assert_eq!(grid_bounds.origin, point(px(rail), px(0.0)));
     assert_eq!(grid_bounds.size.height, px(240.0));
 }
 

@@ -1,4 +1,5 @@
 {
+  "terminalCommandOutputCollapsed": "출력 %{count}줄 접힘",
   "fileSudo": {
     "title": "SFTP sudo 인증",
     "enable": "sudo 활성화",

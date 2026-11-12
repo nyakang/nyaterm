@@ -110,6 +110,12 @@ fn terminal_retained_snapshot_matches_view(
     let scrollback_len = view.scrollback_len_for_ui();
     view.history_state()
         .preserves_coordinates_from(snapshot.history)
+        // Folding changes presentation without changing VT history or row text.
+        // Once the worker publishes the new layout, a retained surface frame
+        // must not take precedence over its replacement scroll snapshot.
+        && view.frame_snapshot.as_ref().is_none_or(|live| {
+            snapshot.display_rows == live.display_rows
+        })
         && terminal_snapshot_matches_grid_geometry(snapshot, view.screen.cols(), view.screen.rows())
         && snapshot.scrollback_len == scrollback_len
         && terminal_snapshot_covers_display_offset(
@@ -269,6 +275,8 @@ fn terminal_snapshot_with_newer_edge_row(
     rows.push(newer.rows().last().unwrap().clone());
     std::sync::Arc::new(TerminalSnapshot::from_rows(
         nyaterm_terminal::TerminalSnapshotMeta {
+            command_blocks: base.command_blocks.clone(),
+            display_rows: base.display_rows.clone(),
             history: base.history,
             shell_input_anchor: base.shell_input_anchor,
             command_navigation_target: None,
@@ -334,6 +342,8 @@ fn terminal_snapshot_with_retained_scroll_window(
         .collect();
     std::sync::Arc::new(TerminalSnapshot::from_rows(
         nyaterm_terminal::TerminalSnapshotMeta {
+            command_blocks: base.command_blocks.clone(),
+            display_rows: base.display_rows.clone(),
             history: base.history,
             shell_input_anchor: base.shell_input_anchor,
             command_navigation_target: None,
@@ -910,6 +920,7 @@ impl NyaTermApp {
                 is_active,
             });
             changed |= surface.set_protocol_state(protocol_state);
+
             let had_pending_local_scroll_sync = surface.has_pending_local_scroll_sync();
             let frame_applied = surface.apply_frame_snapshot(
                 TerminalSurfaceFrameSnapshot::new(
@@ -1077,6 +1088,7 @@ impl NyaTermApp {
         let skipped = view.map(|v| v.skipped_output_chars).unwrap_or(0);
         let protocol_state = view.map(|v| v.protocol_state).unwrap_or_default();
         let target_line = view.and_then(|v| v.target_line);
+        let command_blocks = view.map(|v| v.command_blocks.clone()).unwrap_or_default();
         let zebra_stripes_enabled = self.settings.summary().terminal_zebra_stripes_enabled;
         let zebra_stripes_by_row = self.settings.summary().terminal_zebra_stripes_by_row;
         let layout_cache = view
@@ -1295,6 +1307,7 @@ impl NyaTermApp {
                     is_active,
                 });
                 changed |= surface.set_protocol_state(protocol_state);
+                changed |= surface.set_command_blocks(command_blocks);
                 changed |= surface.set_zebra_stripes(
                     zebra_stripes_enabled,
                     zebra_stripes_by_row,
@@ -1585,6 +1598,7 @@ impl NyaTermApp {
                 is_active,
             });
             changed |= surface.set_protocol_state(protocol_state);
+            changed |= surface.set_command_blocks(command_blocks);
             changed |=
                 surface.set_zebra_stripes(zebra_stripes_enabled, zebra_stripes_by_row, target_line);
             let had_pending_local_scroll_sync = surface.has_pending_local_scroll_sync();

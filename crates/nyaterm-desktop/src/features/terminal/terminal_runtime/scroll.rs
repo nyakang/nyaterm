@@ -1463,6 +1463,15 @@ impl NyaTermApp {
         session_id: Option<&str>,
     ) -> (usize, usize) {
         let offset = self.terminal_scroll_offset_for_session(session_id);
+        if let Some(index) = session_id
+            .and_then(|id| self.terminal.view.views.get(id))
+            .and_then(|view| view.frame_snapshot.as_ref())
+            .and_then(|snapshot| snapshot.display_rows.as_ref())
+        {
+            let (offset, max) =
+                index.scroll_metrics(offset, self.terminal_viewport_rows_for_session(session_id));
+            return (max, offset);
+        }
         if let Some(index) = self.terminal_scrollbar_logical_index(session_id) {
             let (offset, max) =
                 index.scroll_metrics(offset, self.terminal_viewport_rows_for_session(session_id));
@@ -1477,6 +1486,14 @@ impl NyaTermApp {
         session_id: Option<&str>,
         offset: usize,
     ) -> usize {
+        if let Some(index) = session_id
+            .and_then(|id| self.terminal.view.views.get(id))
+            .and_then(|view| view.frame_snapshot.as_ref())
+            .and_then(|snapshot| snapshot.display_rows.as_ref())
+        {
+            return index
+                .physical_offset(offset, self.terminal_viewport_rows_for_session(session_id));
+        }
         self.terminal_scrollbar_logical_index(session_id)
             .map_or(offset, |index| {
                 index.physical_offset_for_logical_offset(

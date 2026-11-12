@@ -1,4 +1,5 @@
 {
+  "terminalCommandOutputCollapsed": "已收起 %{count} 行輸出",
   "fileSudo": {
     "title": "SFTP sudo 授權",
     "enable": "開啟 sudo",

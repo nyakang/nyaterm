@@ -1,4 +1,5 @@
 {
+  "terminalCommandOutputCollapsed": "%{count} output lines collapsed",
   "fileSudo": {
     "title": "SFTP sudo authorization",
     "enable": "Enable sudo",

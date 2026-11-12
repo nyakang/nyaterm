@@ -1,4 +1,5 @@
 {
+  "terminalCommandOutputCollapsed": "出力 %{count} 行を折りたたみ",
   "fileSudo": {
     "title": "SFTP sudo 認証",
     "enable": "sudo を有効化",

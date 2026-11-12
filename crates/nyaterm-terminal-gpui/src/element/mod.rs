@@ -1741,6 +1741,9 @@ impl Element for NyaTerminalElement {
             && let Some(layout) = self.unwrapped.as_ref()
         {
             for display_row in 0..layout.viewport_rows {
+                if layout.summary(display_row).is_some() {
+                    continue;
+                }
                 let row = layout.first_source_row(display_row);
                 if row >= self.snapshot.row_count() {
                     break;
@@ -1754,7 +1757,7 @@ impl Element for NyaTerminalElement {
                     self.snapshot.as_ref(),
                     row..row + 1,
                     target,
-                    TerminalStripeMode::new(self.zebra_stripes_by_row, true),
+                    TerminalStripeMode::new(self.zebra_stripes_by_row, layout.unwrapped),
                     self.palette,
                     TerminalPaintGeometry {
                         visual_y_offset: (display_row as f32 - row as f32) * cell_h,
@@ -1767,6 +1770,9 @@ impl Element for NyaTerminalElement {
         // Navigation feedback is independent of zebra stripes and glyph layout.
         if let Some(layout) = self.unwrapped.as_ref() {
             for display_row in 0..layout.viewport_rows {
+                if layout.summary(display_row).is_some() {
+                    continue;
+                }
                 let row = layout.first_source_row(display_row);
                 let target = layout.target_line_for_display_row(
                     &self.snapshot,
@@ -2311,11 +2317,23 @@ impl Element for NyaTerminalElement {
             if image_row_end <= visible_row_start || image.row >= visible_row_end {
                 continue;
             }
-            let x = px(f32::from(bounds.left())
-                + (image.col as f32 - image.source_col_cells as f32) * cell_w);
+            let mapped = self
+                .unwrapped
+                .as_ref()
+                .map(|layout| layout.display_position(image.row, image.col));
+            if mapped == Some(None) {
+                continue;
+            }
+            let (image_row, image_col) = mapped.flatten().unwrap_or((image.row, image.col as f32));
+            let x =
+                px(f32::from(bounds.left()) + (image_col - image.source_col_cells as f32) * cell_w);
             let y = px(f32::from(bounds.top())
-                + visual_y_offset
-                + (image.row as f32 - image.source_row_cells as f32) * cell_h);
+                + if self.unwrapped.is_some() {
+                    0.0
+                } else {
+                    visual_y_offset
+                }
+                + (image_row as f32 - image.source_row_cells as f32) * cell_h);
             let w = px(image.image_width_cells as f32 * cell_w);
             let h = px(image.image_height_cells as f32 * cell_h);
             let rect = Bounds::new(point(x, y), size(w, h));
