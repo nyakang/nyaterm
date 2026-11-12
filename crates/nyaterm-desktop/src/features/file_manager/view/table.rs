@@ -385,6 +385,10 @@ impl FileManagerWorkspace {
         let payload = FileManagerDragPayload {
             manager_id: self.id.clone(),
             pane_id: pane,
+            access_generation: state
+                .endpoint
+                .session_id()
+                .and_then(|session| self.read_app(cx, |app| app.file_access_generation(session))),
             endpoint: state.endpoint.clone(),
             entries: state.drag_entries(&entry),
             feedback: Rc::new(Cell::new(FileTransferOperation::Copy)),
@@ -520,9 +524,11 @@ impl FileManagerWorkspace {
         let writable = entry.is_directory()
             && !entry.is_symlink()
             && !state.disconnected
-            && !entry
+            && (state.endpoint.session_id().is_some_and(|session| {
+                self.read_app(cx, |app| app.file_sudo_status(session).is_sudo())
+            }) || !entry
                 .permissions
-                .is_some_and(|permissions| permissions & 0o222 == 0);
+                .is_some_and(|permissions| permissions & 0o222 == 0));
         row = row
             .can_drop(move |drag, _, _| {
                 drag.is::<gpui::ExternalPaths>()

@@ -32,6 +32,22 @@ impl NyaTermApp {
         raw_path_token: Option<String>,
         local_path: PathBuf,
     ) {
+        if session_id
+            .as_deref()
+            .is_some_and(|id| self.file_sudo_status(id).is_busy())
+        {
+            self.transfer.insert_external_sync_prompt(
+                job_id.clone(),
+                TransferExternalSyncPromptState {
+                    session_id,
+                    job_id,
+                    remote_path,
+                    raw_path_token,
+                    local_path,
+                },
+            );
+            return;
+        }
         let config = session_id
             .as_deref()
             .and_then(|session_id| self.session.metadata(session_id))
@@ -59,11 +75,15 @@ impl NyaTermApp {
         if let Some(job) = self.transfer.transfer_job_mut(&job_id) {
             job.control = Some(control.clone());
         }
+        let task_guard = self
+            .transfer
+            .begin_external_file_task(session_id.as_deref().unwrap_or_default());
         self.submit_bulk_transfer_job(
             "sftp-external-editor-upload",
             job_id.clone(),
             transfer_tx.clone(),
             move || {
+                let _task_guard = task_guard;
                 upload_external_editor_file(
                     service,
                     &job_id,
@@ -93,6 +113,17 @@ impl NyaTermApp {
         always: bool,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .transfer
+            .external_sync_prompt(prompt_id)
+            .and_then(|p| p.session_id.as_deref())
+            .is_some_and(|id| self.file_sudo_status(id).is_busy())
+        {
+            self.shell
+                .set_status(rust_i18n::t!("fileSudo.changing").to_string());
+            cx.notify();
+            return;
+        }
         let always_watch_key = if always {
             self.transfer
                 .external_sync_prompt(prompt_id)

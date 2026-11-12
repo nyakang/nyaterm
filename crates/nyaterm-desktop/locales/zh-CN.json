@@ -1,4 +1,26 @@
 {
+  "fileSudo": {
+    "title": "SFTP sudo 授权",
+    "enable": "开启 sudo",
+    "active": "sudo · root",
+    "changing": "正在切换权限…",
+    "expired": "sudo 授权已失效",
+    "description": "授权覆盖此 SSH 会话及关联文件窗口的人工文件操作。AI/MCP 保持登录身份。密码仅在当前连接内存中保留，不会保存。",
+    "password": "sudo 密码（留空尝试免密 sudo）",
+    "busy": "请先完成或取消此会话的传输、删除和保存任务，再切换权限。",
+    "reload": "文件权限已切换，请重新加载以使用当前身份读取。",
+    "passwordRequired": "sudo 需要密码。",
+    "rejected": "sudo 拒绝了此密码。",
+    "execUnavailable": "此会话无法使用 SSH exec。",
+    "terminalRequired": "sudo 策略要求终端，此模式不使用 PTY。",
+    "policyDenied": "sudo 策略禁止执行此命令。",
+    "timeout": "sudo 或 SFTP 初始化超时。",
+    "cancelled": "sudo 授权已取消或撤销。",
+    "outputLimit": "sudo 启动输出超过限制。",
+    "invalidPassword": "密码不能包含换行或 NUL 字符。",
+    "startupFailed": "无法启动特权 SFTP，请检查 sudo 策略和 OpenSSH sftp-server。",
+    "validationFailed": "无法验证远程目录访问权限。"
+  },
   "android": {
     "zoomOut": "缩小",
     "paste": "粘贴（Ctrl+V／Cmd+V）",

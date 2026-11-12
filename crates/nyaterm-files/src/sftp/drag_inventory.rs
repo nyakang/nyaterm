@@ -1,6 +1,6 @@
 use super::{
     SftpPathCodec, SftpService, attrs_to_sftp_file_type, await_sftp_request, close_sftp_session,
-    open_sftp_session, remote_file_path_bytes, remote_join,
+    remote_file_path_bytes, remote_join,
 };
 use crate::drag_export::{RemoteDragFile, tree::RemoteDragEntry};
 use crate::sftp::{RemoteFilePath, SftpFileEntry, SftpFileType, SftpTransferControl};
@@ -31,7 +31,7 @@ impl SftpService {
             "invalid drag root controls"
         );
         let config = self.config.clone();
-        let multiplex = self.multiplex.clone();
+        let factory = self.session_factory();
         let control = control.clone();
         // All roots being cancelled must also wake an inventory waiting for its
         // source's permit/gate. Individual cancellation skips only that root.
@@ -52,9 +52,7 @@ impl SftpService {
         };
         let result = self.run_controlled_operation(control.clone(), true, async move {
             let codec = SftpPathCodec::from_ssh_config(&config)?;
-            let session =
-                await_sftp_request(&control, open_sftp_session(&config, multiplex.as_ref()))
-                    .await?;
+            let session = await_sftp_request(&control, factory.open()).await?;
             let result = async {
                 let mut pending: Vec<_> = roots
                     .into_iter()

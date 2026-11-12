@@ -1,7 +1,6 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
-use nyaterm_core::connection_search::ConnectionSearch;
-use nyaterm_core::{Group, SavedConnection, natural_compare};
+use nyaterm_core::{Group, SavedConnection};
 
 use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDropPosition,
@@ -54,67 +53,6 @@ pub(super) fn saved_connections_in_group_tree_for_list_state(
         .collect()
 }
 
-pub(super) fn visible_connection_ids_for_list_state(
-    connections: &[SavedConnection],
-    groups: &[Group],
-    query: &str,
-    sort_mode: ConnectionSortMode,
-    expanded_group_ids: &HashSet<String>,
-) -> Vec<String> {
-    // Must order exactly like the rendered tree, or Shift-range selection and
-    // keyboard navigation walk a different list than the one on screen.
-    let search = ConnectionSearch::new(query, groups);
-    let mut by_group: HashMap<Option<String>, Vec<&SavedConnection>> = HashMap::new();
-    for connection in connections {
-        if !search.matches_connection(connection) {
-            continue;
-        }
-        by_group
-            .entry(connection.group_id.clone())
-            .or_default()
-            .push(connection);
-    }
-    for connections in by_group.values_mut() {
-        sort_connection_refs(connections, sort_mode);
-    }
-
-    let group_ids = groups
-        .iter()
-        .map(|group| group.id.clone())
-        .collect::<HashSet<_>>();
-    let mut children_by_parent: HashMap<Option<String>, Vec<Group>> = HashMap::new();
-    for group in groups {
-        let parent_id = group
-            .parent_id
-            .clone()
-            .filter(|parent_id| group_ids.contains(parent_id));
-        let mut group = group.clone();
-        group.parent_id = parent_id.clone();
-        children_by_parent.entry(parent_id).or_default().push(group);
-    }
-    for groups in children_by_parent.values_mut() {
-        sort_groups(groups, sort_mode);
-    }
-
-    let mut ids = Vec::new();
-    let mut visited = HashSet::new();
-    // Groups first, ungrouped last (matches connection_sections / Tauri).
-    for group in children_by_parent.get(&None).cloned().unwrap_or_default() {
-        append_visible_connection_ids(
-            group,
-            &children_by_parent,
-            &mut by_group,
-            &mut ids,
-            &mut visited,
-            expanded_group_ids,
-        );
-    }
-    if let Some(root) = by_group.remove(&None) {
-        ids.extend(root.into_iter().map(|connection| connection.id.clone()));
-    }
-    ids
-}
-
 fn group_tree_ids(groups: &[Group], group_id: &str) -> HashSet<String> {
     let mut group_ids = HashSet::from([group_id.to_string()]);
     let mut changed = true;
@@ -130,68 +68,6 @@ fn group_tree_ids(groups: &[Group], group_id: &str) -> HashSet<String> {
         }
     }
     group_ids
-}
-
-fn sort_connection_refs(connections: &mut [&SavedConnection], mode: ConnectionSortMode) {
-    connections.sort_by(|left, right| match mode {
-        ConnectionSortMode::Default => left
-            .sort_order
-            .cmp(&right.sort_order)
-            .then_with(|| natural_compare(&left.name, &right.name)),
-        ConnectionSortMode::NameAsc => natural_compare(&left.name, &right.name),
-        ConnectionSortMode::NameDesc => natural_compare(&right.name, &left.name),
-    });
-}
-
-fn sort_groups(groups: &mut [Group], mode: ConnectionSortMode) {
-    groups.sort_by(|left, right| match mode {
-        ConnectionSortMode::Default => left
-            .sort_order
-            .cmp(&right.sort_order)
-            .then_with(|| natural_compare(&left.name, &right.name)),
-        ConnectionSortMode::NameAsc => natural_compare(&left.name, &right.name),
-        ConnectionSortMode::NameDesc => natural_compare(&right.name, &left.name),
-    });
-}
-
-fn append_visible_connection_ids(
-    group: Group,
-    children_by_parent: &HashMap<Option<String>, Vec<Group>>,
-    by_group: &mut HashMap<Option<String>, Vec<&SavedConnection>>,
-    ids: &mut Vec<String>,
-    visited: &mut HashSet<String>,
-    expanded_group_ids: &HashSet<String>,
-) {
-    if !visited.insert(group.id.clone()) {
-        return;
-    }
-    // A collapsed folder's rows are not on screen, so they are not reachable by
-    // Shift-range or by the arrow keys either.
-    if !expanded_group_ids.contains(&group.id) {
-        by_group.remove(&Some(group.id));
-        return;
-    }
-    for child in children_by_parent
-        .get(&Some(group.id.clone()))
-        .cloned()
-        .unwrap_or_default()
-    {
-        append_visible_connection_ids(
-            child,
-            children_by_parent,
-            by_group,
-            ids,
-            visited,
-            expanded_group_ids,
-        );
-    }
-    if let Some(connections) = by_group.remove(&Some(group.id)) {
-        ids.extend(
-            connections
-                .into_iter()
-                .map(|connection| connection.id.clone()),
-        );
-    }
 }
 
 pub(super) fn remove_connection_list_references(

@@ -215,3 +215,13 @@ The **Properties** view shows:
 - Octal permission values
 
 If your workflow requires checking permissions before replacing a file, this is often clearer than relying only on `ls -l`.
+
+## Temporary sudo root access
+
+Choose **Enable sudo** in a remote file path bar and enter the sudo password, or leave it empty for passwordless sudo. After authentication, SFTP initialization and a directory check succeed, **sudo · root** remains visible. Click it again to disable. The SSH session's tmux panes, sidebar and file-manager windows share the grant; separate SSH sessions authorize separately.
+
+Manual browsing, previews, transfers, file operations and editor saves use this identity. AI/MCP and terminals retain the login identity. The password stays only in connection memory; disconnecting or closing the session revokes access. Nothing is saved in configuration, backups or cloud sync. Locking cancels pending authorization without interrupting already authorized transfers.
+
+Finish or cancel running, queued and paused transfers, deletions and saves before switching. Switching refreshes listings and invalidates old drag gestures. Editors preserve unsaved changes and revisions; saving still checks conflicts and preserves UID/GID and permissions. External edits made during a switch remain pending for upload.
+
+The server must allow SSH exec, sudo root and OpenSSH `sftp-server`. `su`, `doas`, policies requiring a PTY, SFTP-only sessions and disabled file services are unsupported. Startup failures never fall back to ordinary access or a new SSH connection. Expired grants require disabling and authorizing again. The current directory stays unchanged; return home if it becomes inaccessible after disabling sudo.

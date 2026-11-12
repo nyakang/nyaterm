@@ -1,7 +1,4 @@
-use super::{
-    close_sftp_session, compatibility_runtime, open_sftp_session_with_client_config,
-    remote_metadata::remote_file_path_bytes,
-};
+use super::{close_sftp_session, compatibility_runtime, remote_metadata::remote_file_path_bytes};
 use crate::drag_export::{ExportObserver, ExportReadEvent, ReadRequest, RemoteDragFile};
 use crate::remote_file::{RemoteFileBackendKind, RemoteFileService};
 use crate::sftp::SftpTransferControl;
@@ -47,6 +44,7 @@ pub(crate) fn spawn_export_reader(
     drop(service);
     Ok(runtime.spawn(async move {
         let cache = sftp.compatibility.as_ref().map(|state| state.cache.clone());
+        let sudo = sftp.sudo.clone();
         let operation = super::SFTP_COMPATIBILITY_CACHE.scope(
             cache,
             serve(
@@ -58,12 +56,13 @@ pub(crate) fn spawn_export_reader(
                 observer.clone(),
             ),
         );
+        let operation = super::sudo::guard_operation(sudo, operation);
         tokio::pin!(operation);
         let result = tokio::select! {
             result = &mut operation => result,
             _ = async {
                 loop {
-                    if source.upgrade().is_none() { control.cancel(); }
+                    if source.upgrade().is_none_or(|service| !service.authorization_is_valid()) { control.cancel(); }
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }
             } => unreachable!(),
@@ -103,11 +102,9 @@ async fn serve(
         let session = control
             .until_cancelled(tokio::time::timeout(
                 Duration::from_secs(60),
-                open_sftp_session_with_client_config(
-                    &service.config,
-                    service.multiplex.as_ref(),
-                    parameters.client_config(),
-                ),
+                service
+                    .session_factory()
+                    .open_with_config(parameters.client_config()),
             ))
             .await???;
         let result = async {
@@ -198,6 +195,9 @@ async fn serve(
                 let mut final_progress_sent = false;
                 let mut last_progress = Instant::now() - Duration::from_secs(1);
                 loop {
+                    if let Some(lease) = service.sudo_lease() {
+                        lease.check()?;
+                    }
                     let Some(next) = request.take() else {
                         break;
                     };

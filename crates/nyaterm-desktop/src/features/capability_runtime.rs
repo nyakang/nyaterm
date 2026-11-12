@@ -1114,7 +1114,11 @@ impl NyaTermApp {
             )));
             return;
         };
-        let service = match self.remote_file_service_for_session(&session_id, config) {
+        let service = match self.remote_file_service_for_session(
+            &session_id,
+            config,
+            crate::features::session::remote_files::FileAccessPurpose::Automation,
+        ) {
             Ok(service) => service,
             Err(error) => {
                 let _ = request
@@ -1256,7 +1260,11 @@ impl NyaTermApp {
             )));
             return;
         };
-        let service = match self.remote_file_service_for_session(&session_id, config) {
+        let service = match self.remote_file_service_for_session(
+            &session_id,
+            config,
+            crate::features::session::remote_files::FileAccessPurpose::Automation,
+        ) {
             Ok(service) => service,
             Err(error) => {
                 let _ = request

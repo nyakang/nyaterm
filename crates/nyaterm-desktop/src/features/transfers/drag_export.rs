@@ -25,6 +25,7 @@ use std::{
 /// drag starts cannot redirect its source connection or remote path.
 #[derive(Clone)]
 pub(in crate::features) struct TransferSelection {
+    access_generation: Option<u64>,
     session_id: String,
     backend: FileBrowserBackendKind,
     entries: Vec<SftpFileEntry>,
@@ -414,9 +415,10 @@ impl NyaTermApp {
             }
         };
         let _ = drag.selection.set(TransferSelection {
+            access_generation: self.file_access_generation(&session_id),
             source_service: if backend == FileBrowserBackendKind::Remote {
                 self.session
-                    .weak_remote_file_service(&session_id)
+                    .weak_remote_file_service(&self.ssh_scoped_session_id(&session_id))
                     .map(Into::into)
             } else {
                 self.active_file_browser_service()
@@ -442,6 +444,11 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> Option<ExternalDragPayload> {
         let selection = drag.selection.get()?;
+        if selection.backend == FileBrowserBackendKind::Remote
+            && self.file_access_generation(&selection.session_id) != selection.access_generation
+        {
+            return None;
+        }
         if self.session.metadata(&selection.session_id).is_none()
             || self.session.is_disconnected(&selection.session_id)
         {
@@ -551,6 +558,7 @@ mod tests {
     #[test]
     fn linux_resolver_rejects_remote_sources_even_when_native_flags_are_supplied() {
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "session".into(),
             source_service: None,
             transfer_options: Default::default(),
@@ -565,6 +573,7 @@ mod tests {
     #[test]
     fn remote_metadata_preserves_raw_path_and_has_no_destination() {
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "session".into(),
             source_service: None,
             transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
@@ -591,6 +600,7 @@ mod tests {
     fn remote_link_or_special_file_rejects_whole_selection() {
         for kind in [SftpFileType::Symlink, SftpFileType::Other] {
             let selection = TransferSelection {
+                access_generation: None,
                 session_id: "session".into(),
                 source_service: None,
                 transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(
@@ -605,6 +615,7 @@ mod tests {
     #[test]
     fn directory_selection_uses_worker_tree_or_native_promise_without_touching_content() {
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "session".into(),
             source_service: None,
             transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
@@ -672,6 +683,7 @@ mod tests {
     #[test]
     fn local_selection_maps_to_real_paths_including_directories() {
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "session".into(),
             source_service: None,
             transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
@@ -694,6 +706,7 @@ mod tests {
     #[test]
     fn remote_selection_is_deferred_and_keeps_native_content_order() {
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "session".into(),
             source_service: None,
             transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
@@ -732,6 +745,7 @@ mod tests {
     fn unsafe_remote_names_and_unsupported_platform_reject_before_content() {
         for name in ["../escape", "NUL.txt", "name:stream"] {
             let selection = TransferSelection {
+                access_generation: None,
                 session_id: "session".into(),
                 source_service: None,
                 transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(
@@ -754,6 +768,7 @@ mod tests {
             );
         }
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "session".into(),
             source_service: None,
             transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),
@@ -773,6 +788,7 @@ mod tests {
             nyaterm_transport::SshSessionConfig::default(),
         ));
         let selection = TransferSelection {
+            access_generation: None,
             session_id: "original".into(),
             source_service: Some(std::sync::Arc::downgrade(&service).into()),
             transfer_options: nyaterm_files::sftp_transfer_types::SftpTransferOptions::default(),

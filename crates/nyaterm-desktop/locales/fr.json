@@ -1,4 +1,26 @@
 {
+  "fileSudo": {
+    "title": "Autorisation sudo SFTP",
+    "enable": "Activer sudo",
+    "active": "sudo · root",
+    "changing": "Changement des droits…",
+    "expired": "Autorisation sudo expirée",
+    "description": "S’applique aux opérations manuelles de cette session SSH et des fenêtres de fichiers associées. AI/MCP conservent l’identité de connexion. Le mot de passe reste uniquement en mémoire pour cette connexion et n’est jamais enregistré.",
+    "password": "Mot de passe sudo (vide pour essayer sans mot de passe)",
+    "busy": "Terminez ou annulez les transferts, suppressions et enregistrements de cette session avant de changer les droits.",
+    "reload": "Les droits ont changé. Rechargez pour lire avec l’identité actuelle.",
+    "passwordRequired": "sudo nécessite un mot de passe.",
+    "rejected": "sudo a refusé le mot de passe.",
+    "execUnavailable": "SSH exec est indisponible pour cette session.",
+    "terminalRequired": "La politique sudo exige un terminal ; ce mode n’utilise pas de PTY.",
+    "policyDenied": "La politique sudo a refusé la commande.",
+    "timeout": "Délai d’initialisation sudo ou SFTP dépassé.",
+    "cancelled": "L’autorisation sudo a été annulée ou révoquée.",
+    "outputLimit": "La sortie de démarrage sudo dépasse la limite.",
+    "invalidPassword": "Le mot de passe ne peut contenir de saut de ligne ni de caractère NUL.",
+    "startupFailed": "Impossible de démarrer SFTP avec sudo. Vérifiez la politique sudo et OpenSSH sftp-server.",
+    "validationFailed": "Impossible de vérifier l’accès au répertoire distant."
+  },
   "android": {
     "zoomOut": "Réduire",
     "paste": "Coller (Ctrl+V / Cmd+V)",

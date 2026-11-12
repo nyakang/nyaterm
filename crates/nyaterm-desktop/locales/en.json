@@ -1,4 +1,26 @@
 {
+  "fileSudo": {
+    "title": "SFTP sudo authorization",
+    "enable": "Enable sudo",
+    "active": "sudo · root",
+    "changing": "Changing privileges…",
+    "expired": "sudo authorization expired",
+    "description": "Applies to manual file operations in this SSH session, including linked file windows. AI/MCP retain the login identity. The password is kept only for this connection and is never saved.",
+    "password": "sudo password (leave empty to try passwordless sudo)",
+    "busy": "Finish or cancel this session’s transfers, deletions and saves before changing privileges.",
+    "reload": "File privileges changed. Reload to read with the current identity.",
+    "passwordRequired": "sudo requires a password.",
+    "rejected": "sudo rejected the password.",
+    "execUnavailable": "SSH exec is unavailable for this session.",
+    "terminalRequired": "The sudo policy requires a terminal; this mode does not use a PTY.",
+    "policyDenied": "The sudo policy denied the command.",
+    "timeout": "sudo or SFTP initialization timed out.",
+    "cancelled": "sudo authorization was cancelled or revoked.",
+    "outputLimit": "sudo startup output exceeded its limit.",
+    "invalidPassword": "The password cannot contain a line break or NUL.",
+    "startupFailed": "Could not start privileged SFTP. Verify sudo policy and OpenSSH sftp-server.",
+    "validationFailed": "Could not verify access to the remote directory."
+  },
   "android": {
     "zoomOut": "Zoom out",
     "paste": "Paste (Ctrl+V / Cmd+V)",

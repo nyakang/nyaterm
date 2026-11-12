@@ -1,5 +1,6 @@
 //! SSH command execution, cancellation, and runtime adapters.
 pub mod streaming;
+pub mod sudo;
 use crate::{
     SshClientHandler, SshMultiplexHandle, SshSessionConfig, open_authenticated_ssh_handle,
 };

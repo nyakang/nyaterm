@@ -1,4 +1,26 @@
 {
+  "fileSudo": {
+    "title": "SFTP sudo 認証",
+    "enable": "sudo を有効化",
+    "active": "sudo · root",
+    "changing": "権限を切り替え中…",
+    "expired": "sudo の認証が無効です",
+    "description": "この SSH セッションと関連ファイルウィンドウでの手動ファイル操作に適用します。AI/MCP はログイン時の権限を維持します。パスワードは接続中のみメモリに保持し、保存しません。",
+    "password": "sudo パスワード（空欄でパスワードなしを試行）",
+    "busy": "権限を切り替える前に、このセッションの転送、削除、保存を完了またはキャンセルしてください。",
+    "reload": "ファイル権限が変更されました。現在の権限で読み取るには再読み込みしてください。",
+    "passwordRequired": "sudo のパスワードが必要です。",
+    "rejected": "sudo がパスワードを拒否しました。",
+    "execUnavailable": "このセッションでは SSH exec を使用できません。",
+    "terminalRequired": "sudo ポリシーには端末が必要です。このモードは PTY を使用しません。",
+    "policyDenied": "sudo ポリシーがコマンドを拒否しました。",
+    "timeout": "sudo または SFTP の初期化がタイムアウトしました。",
+    "cancelled": "sudo 認証がキャンセルまたは取り消されました。",
+    "outputLimit": "sudo の起動出力が上限を超えました。",
+    "invalidPassword": "パスワードに改行または NUL は使用できません。",
+    "startupFailed": "特権 SFTP を起動できません。sudo ポリシーと OpenSSH sftp-server を確認してください。",
+    "validationFailed": "リモートディレクトリへのアクセスを確認できませんでした。"
+  },
   "android": {
     "zoomOut": "縮小",
     "paste": "貼り付け（Ctrl+V / Cmd+V）",

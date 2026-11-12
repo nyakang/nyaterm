@@ -2,6 +2,9 @@
 
 use super::{SessionDisconnectUpdate, SessionFeatureState};
 use crate::app_shell::session_hub::ssh_connections::SshConnectionLease;
+use crate::features::session::remote_files::{
+    FileAccessPurpose, FilePrivilegeStatus, RemoteFilesSession,
+};
 use crate::features::session::trzsz_runtime::TrzszSessionState;
 use crate::features::session::zmodem_runtime::ZmodemSessionState;
 use nyaterm_files::remote_file::{RemoteFileBackendPreferenceStore, RemoteFileService};
@@ -63,6 +66,7 @@ impl SessionFeatureState {
         session_id: &str,
         config: SshSessionConfig,
         preference_store: std::sync::Arc<dyn RemoteFileBackendPreferenceStore>,
+        purpose: FileAccessPurpose,
     ) -> anyhow::Result<RemoteFileService> {
         let has_multiplex_key = self
             .metadata(session_id)
@@ -74,13 +78,14 @@ impl SessionFeatureState {
             anyhow::bail!("reconnect the SSH session before browsing remote files");
         }
         if let Some(service) = self.protocols.remote_files.get(session_id) {
-            return Ok(service.as_ref().clone());
+            return service.service(purpose);
         }
         let service =
             RemoteFileService::with_preference_store(config, multiplex, preference_store)?;
-        self.protocols
-            .remote_files
-            .insert(session_id.to_string(), std::sync::Arc::new(service.clone()));
+        self.protocols.remote_files.insert(
+            session_id.to_string(),
+            RemoteFilesSession::new(service.clone()),
+        );
         Ok(service)
     }
     pub(in crate::features) fn weak_remote_file_service(
@@ -90,7 +95,67 @@ impl SessionFeatureState {
         self.protocols
             .remote_files
             .get(session_id)
-            .map(std::sync::Arc::downgrade)
+            .map(RemoteFilesSession::weak)
+    }
+    pub(in crate::features) fn file_privilege_status(&self, id: &str) -> FilePrivilegeStatus {
+        self.protocols
+            .remote_files
+            .get(id)
+            .map_or(FilePrivilegeStatus::Normal, RemoteFilesSession::status)
+    }
+    pub(in crate::features) fn file_access_generation(&self, id: &str) -> Option<u64> {
+        self.protocols
+            .remote_files
+            .get(id)
+            .map(RemoteFilesSession::generation)
+    }
+    pub(in crate::features) fn begin_file_sudo(
+        &mut self,
+        id: &str,
+        connection: SshMultiplexHandle,
+        password: Option<nyaterm_core::SecretString>,
+    ) -> anyhow::Result<(u64, nyaterm_files::sftp::sudo::SftpSudoLease)> {
+        self.protocols
+            .remote_files
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("file session is closed"))?
+            .begin(connection, password)
+    }
+    pub(in crate::features) fn finish_file_sudo(
+        &mut self,
+        id: &str,
+        generation: u64,
+        service: Option<RemoteFileService>,
+    ) -> bool {
+        self.protocols
+            .remote_files
+            .get_mut(id)
+            .is_some_and(|files| files.finish(generation, service))
+    }
+    pub(in crate::features) fn cancel_file_sudo(&mut self, id: &str, generation: u64) {
+        if let Some(files) = self.protocols.remote_files.get_mut(id) {
+            files.cancel(generation);
+        }
+    }
+    pub(in crate::features) fn begin_disable_file_sudo(
+        &mut self,
+        id: &str,
+    ) -> anyhow::Result<(u64, nyaterm_files::sftp::sudo::SftpSudoGrant)> {
+        self.protocols
+            .remote_files
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("file session is closed"))?
+            .disable()
+    }
+    pub(in crate::features) fn finish_disable_file_sudo(
+        &mut self,
+        id: &str,
+        generation: u64,
+    ) -> bool {
+        self.protocols
+            .remote_files
+            .get_mut(id)
+            .is_some_and(|files| files.finish_disable(generation))
     }
     pub(in crate::features) fn remove_remote_file_service(&mut self, session_id: &str) -> bool {
         self.protocols.remote_files.remove(session_id).is_some()
@@ -243,6 +308,14 @@ impl SessionFeatureState {
         session_id: String,
         connection: SshConnectionLease,
     ) {
+        if self
+            .protocols
+            .ssh_connections
+            .get(&session_id)
+            .is_none_or(|old| !old.same_connection(&connection))
+        {
+            self.protocols.remote_files.remove(&session_id);
+        }
         self.protocols
             .ssh_connections
             .insert(session_id, connection);
@@ -254,6 +327,7 @@ impl SessionFeatureState {
         let metadata = self.metadata.get_mut(session_id)?;
         let already_disconnected = metadata.disconnected;
         metadata.disconnected = true;
+        self.protocols.remote_files.remove(session_id);
         self.protocols.ssh_connections.remove(session_id);
         Some(SessionDisconnectUpdate {
             already_disconnected,

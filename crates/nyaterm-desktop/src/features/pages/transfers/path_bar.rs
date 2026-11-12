@@ -103,6 +103,18 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                 .flex()
                 .items_center()
                 .gap_1()
+                .children(browser.sudo.clone().map(|(session, status)| {
+                    nyaterm_ui::NyaButton::new(
+                        "transfer-sudo",
+                        crate::features::transfers::privilege_runtime::sudo_label(status),
+                    )
+                    .disabled(status.is_busy())
+                    .on_click(cx.listener(move |panel, _, window, cx| {
+                        panel.with_app(cx, |app, cx| {
+                            app.toggle_file_sudo(session.clone(), window, cx)
+                        });
+                    }))
+                }))
                 .when(browser.path_editing, |this| {
                     this.child(
                         div()
