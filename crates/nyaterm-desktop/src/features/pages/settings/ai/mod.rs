@@ -1,5 +1,6 @@
 mod agents;
 mod general;
+mod mcp_tasks;
 mod models;
 mod rules;
 mod section;

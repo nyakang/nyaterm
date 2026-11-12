@@ -1,6 +1,7 @@
 //! Shared capability authorization, execution, bounded output and audit adapters.
 
 pub(in crate::features) mod approvals;
+mod background_targets;
 mod idempotency;
 mod session_open;
 pub(in crate::features) mod terminal_execution;
@@ -59,6 +60,7 @@ pub(in crate::features) enum CapabilityCaller {
 pub(in crate::features) struct CapabilityRequest {
     pub extended_results: bool,
     pub resolved_session_id: Option<String>,
+    /// Server-issued MCP client owner identity; never a saved host ID.
     pub connection_id: String,
     pub request_id: String,
     pub generation: String,
@@ -111,6 +113,12 @@ pub(in crate::features) struct CapabilityRuntimeState {
 }
 
 impl CapabilityRuntimeState {
+    pub(in crate::features) fn has_active_requests(&self) -> bool {
+        self.active_requests
+            .values()
+            .any(|(_, cancellation)| !cancellation.is_cancelled())
+    }
+
     pub(in crate::features) fn expire_mcp_owner(&mut self, owner: &str) {
         self.ledger.forget_expired_owner(owner);
     }
@@ -424,7 +432,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let audit = AppendAiAuditRequest {
-            connection_id: mcp_request_target(request),
+            connection_id: self.mcp_audit_connection_target(request),
             action: "mcp.capability".to_string(),
             user_input: None,
             generated_command: None,
@@ -544,8 +552,22 @@ impl NyaTermApp {
             self.reject_capability(request, "cancelled", "Native run is no longer active.", cx);
             return;
         }
+        nyaterm_mcp_protocol::normalize_session_target(&mut request.arguments);
+        let saved_target = request
+            .arguments
+            .get("target")
+            .and_then(|value| {
+                serde_json::from_value::<nyaterm_mcp_protocol::ExecutionTarget>(value.clone()).ok()
+            })
+            .and_then(|target| target.connection_id().map(str::to_owned));
+        if let Some(id) = &saved_target
+            && let Err(error) = self.authorize_saved_target(&request, id)
+        {
+            self.reject_capability(request, &error.code, &error.message, cx);
+            return;
+        }
         let scope = request.scope.resolve(&self.mcp_live_sessions());
-        if definition.requires_session {
+        if definition.requires_session && saved_target.is_none() {
             let requested = request.arguments.get("sessionId").and_then(Value::as_str);
             let session_id = match scope.resolve_session(requested) {
                 Ok(id) => id,
@@ -586,7 +608,15 @@ impl NyaTermApp {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             match self.authorize_terminal_job(&request.connection_id, &request.scope, job_id) {
-                Ok(id) => request.resolved_session_id = Some(id),
+                Ok(target) => {
+                    if let Some(id) = target.connection_id()
+                        && let Err(error) = self.authorize_saved_target(&request, id)
+                    {
+                        self.reject_capability(request, &error.code, &error.message, cx);
+                        return;
+                    }
+                    request.resolved_session_id = target.session_id().map(str::to_owned);
+                }
                 Err(error) => {
                     self.reject_capability(request, &error.code, &error.message, cx);
                     return;
@@ -747,14 +777,16 @@ impl NyaTermApp {
                 CapabilityCaller::Native { .. } => "native",
             }
             .into(),
-            connection_id: mcp_request_target(&request),
+            connection_id: self.mcp_audit_connection_target(&request),
             client: sanitize_ai_diagnostic(&request.client, 128),
             capability: request.tool.clone(),
-            session_id: request
-                .arguments
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            session_id: request.resolved_session_id.clone().or_else(|| {
+                request
+                    .arguments
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            }),
             permission_mode: request.permission_mode.clone(),
             risk_level: assessment.as_ref().map(|risk| risk.level.clone()),
             approval_decision: approval_decision.map(ToOwned::to_owned),
@@ -1088,42 +1120,13 @@ impl NyaTermApp {
     fn dispatch_mcp_sftp_read(
         &mut self,
         request: CapabilityRequest,
-        scope: &CapabilityScopeSnapshot,
+        _scope: &CapabilityScopeSnapshot,
         cx: &mut Context<Self>,
     ) {
-        let session_id = request
-            .arguments
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if let Err(error) = scope.require(&session_id) {
-            let _ = request
-                .reply
-                .send(Err(rpc_failure("scope_denied", &error.to_string())));
-            return;
-        }
-        let config = self
-            .session
-            .metadata(&session_id)
-            .and_then(|metadata| metadata.ssh_config.clone());
-        let Some(config) = config else {
-            let _ = request.reply.send(Err(rpc_failure(
-                "permission_denied",
-                "SFTP is unavailable for this session.",
-            )));
-            return;
-        };
-        let service = match self.remote_file_service_for_session(
-            &session_id,
-            config,
-            crate::features::session::remote_files::FileAccessPurpose::Automation,
-        ) {
+        let prepared = match self.prepare_mcp_file_service(&request) {
             Ok(service) => service,
             Err(error) => {
-                let _ = request
-                    .reply
-                    .send(Err(rpc_failure("execution_failed", &error.to_string())));
+                let _ = request.reply.send(Err(error));
                 return;
             }
         };
@@ -1131,6 +1134,10 @@ impl NyaTermApp {
         let arguments = request.arguments;
         let cancellation = request.cancellation;
         let task = self.blocking_jobs.submit_task("mcp-sftp-read", move |_| {
+            if cancellation.is_cancelled() {
+                return Err("The MCP request was cancelled.".to_string());
+            }
+            let (service, _connection_lease) = prepared.open(&cancellation)?;
             if cancellation.is_cancelled() {
                 return Err("The MCP request was cancelled.".to_string());
             }
@@ -1234,42 +1241,13 @@ impl NyaTermApp {
     fn dispatch_mcp_sftp_mutation(
         &mut self,
         request: CapabilityRequest,
-        scope: &CapabilityScopeSnapshot,
+        _scope: &CapabilityScopeSnapshot,
         cx: &mut Context<Self>,
     ) {
-        let session_id = request
-            .arguments
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if let Err(error) = scope.require(&session_id) {
-            let _ = request
-                .reply
-                .send(Err(rpc_failure("scope_denied", &error.to_string())));
-            return;
-        }
-        let config = self
-            .session
-            .metadata(&session_id)
-            .and_then(|metadata| metadata.ssh_config.clone());
-        let Some(config) = config else {
-            let _ = request.reply.send(Err(rpc_failure(
-                "permission_denied",
-                "SFTP is unavailable for this session.",
-            )));
-            return;
-        };
-        let service = match self.remote_file_service_for_session(
-            &session_id,
-            config,
-            crate::features::session::remote_files::FileAccessPurpose::Automation,
-        ) {
+        let prepared = match self.prepare_mcp_file_service(&request) {
             Ok(service) => service,
             Err(error) => {
-                let _ = request
-                    .reply
-                    .send(Err(rpc_failure("execution_failed", &error.to_string())));
+                let _ = request.reply.send(Err(error));
                 return;
             }
         };
@@ -1282,6 +1260,8 @@ impl NyaTermApp {
                 if cancellation.is_cancelled() {
                     return Err("The MCP request was cancelled.".to_string());
                 }
+                let (service, _connection_lease) = prepared.open(&cancellation)?;
+                if cancellation.is_cancelled() { return Err("The MCP request was cancelled.".to_string()); }
                 let value: Result<Value, String> = match tool_name.as_str() {
                     tool::SFTP_WRITE_TEXT => {
                         let args = serde_json::from_value::<SftpWriteTextArgs>(arguments)
@@ -1579,6 +1559,14 @@ fn permissions(mode: Option<u32>) -> String {
 }
 
 pub(in crate::features) fn mcp_request_target(request: &CapabilityRequest) -> Option<String> {
+    if let Some(id) = request
+        .arguments
+        .get("target")
+        .and_then(|target| target.get("connectionId"))
+        .and_then(Value::as_str)
+    {
+        return Some(id.to_string());
+    }
     request
         .resolved_session_id
         .as_deref()
@@ -1596,6 +1584,14 @@ pub(in crate::features) fn mcp_grant_key(
     request: &CapabilityRequest,
 ) -> Option<(String, String, String)> {
     mcp_request_target(request).map(|target| {
+        let target = format!(
+            "{}:{target}",
+            if request.arguments.get("target").is_some() {
+                "connection"
+            } else {
+                "session"
+            }
+        );
         let tool_scope = if matches!(request.caller, CapabilityCaller::Native { .. }) {
             format!(
                 "{}:{}",

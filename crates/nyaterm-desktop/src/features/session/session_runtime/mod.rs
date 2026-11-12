@@ -50,3 +50,5 @@ mod background;
 mod mstsc;
 mod retry;
 mod start;
+
+pub(in crate::features) use start::SshSessionConfigBuildContext;

@@ -1,6 +1,7 @@
 mod approval_dialog;
 mod discovery;
 pub(in crate::features) mod server;
+pub(in crate::features) mod tasks;
 
 use self::server::{McpHostEvent, McpHostRuntime, rpc_failure};
 use super::NyaTermApp;
@@ -32,6 +33,7 @@ pub(in crate::features) struct McpHostFeatureState {
         std::sync::Arc<std::sync::Mutex<HashMap<String, TerminalExecutionPolicy>>>,
     pub(in crate::features) capabilities: CapabilityRuntimeState,
     approval_dialog: approval_dialog::McpApprovalPresentation,
+    pub(in crate::features) background_tasks: tasks::BackgroundTaskPresentation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +122,7 @@ impl McpHostFeatureState {
                     ephemeral_generations: Default::default(),
                     capabilities: CapabilityRuntimeState::default(),
                     approval_dialog: Default::default(),
+                    background_tasks: Default::default(),
                 }
             }
             Err(error) => {
@@ -145,6 +148,7 @@ impl McpHostFeatureState {
             ephemeral_generations: Default::default(),
             capabilities: CapabilityRuntimeState::default(),
             approval_dialog: Default::default(),
+            background_tasks: Default::default(),
         }
     }
 
@@ -193,6 +197,10 @@ impl McpHostFeatureState {
         self.requests.take()
     }
 
+    pub(in crate::features) fn is_external_generation(&self, generation: &str) -> bool {
+        self.runtime.is_some() && self.generation.as_deref() == Some(generation)
+    }
+
     pub(in crate::features) fn generation_matches(&self, generation: &str) -> bool {
         (self.generation.as_deref() == Some(generation) && self.runtime.is_some())
             || self
@@ -223,6 +231,9 @@ impl McpHostFeatureState {
     }
 
     fn reconfigure(&mut self, settings: &ExternalMcpSettings) -> Result<(), String> {
+        self.capabilities
+            .terminal_executions
+            .request_background_shutdown();
         self.helper_status = mcp_helper_status();
         self.runtime.take();
         if let Some(generation) = self.generation.take() {
@@ -415,6 +426,7 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn reconfigure_mcp_host(&mut self) -> Result<(), String> {
+        self.session.ssh_connection_pool().invalidate_background();
         self.mcp
             .reconfigure(&self.ai.settings_config().external_mcp)
     }

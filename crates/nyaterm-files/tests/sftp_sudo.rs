@@ -15,6 +15,7 @@ use std::time::Duration;
 
 #[derive(Default)]
 struct Counts {
+    authentications: AtomicUsize,
     ordinary: AtomicUsize,
     elevated: AtomicUsize,
     renames: AtomicUsize,
@@ -97,6 +98,7 @@ struct Peer {
 impl server::Handler for Peer {
     type Error = russh::Error;
     async fn auth_none(&mut self, _: &str) -> Result<server::Auth, Self::Error> {
+        self.counts.authentications.fetch_add(1, Ordering::SeqCst);
         Ok(server::Auth::Accept)
     }
     async fn channel_open_session(
@@ -136,6 +138,19 @@ impl server::Handler for Peer {
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
         let command = String::from_utf8(command.to_vec()).unwrap();
+        if command == "mcp-wait" {
+            session.channel_success(id)?;
+            session.data(id, b"exec-output".to_vec())?;
+            return Ok(());
+        }
+        if command.contains("$HOME") {
+            session.channel_success(id)?;
+            session.data(id, b"/home/test".to_vec())?;
+            session.exit_status_request(id, 0)?;
+            session.eof(id)?;
+            session.close(id)?;
+            return Ok(());
+        }
         if !command.starts_with("LC_ALL=C sudo ") {
             session.channel_failure(id)?;
             session.close(id)?;
@@ -160,6 +175,19 @@ impl server::Handler for Peer {
                 counts: self.counts.clone(),
             },
         ));
+        Ok(())
+    }
+
+    async fn signal(
+        &mut self,
+        id: ChannelId,
+        signal: russh::Sig,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        assert!(matches!(signal, russh::Sig::INT));
+        session.exit_status_request(id, 130)?;
+        session.eof(id)?;
+        session.close(id)?;
         Ok(())
     }
 }
@@ -210,6 +238,71 @@ async fn peer() -> (SshSessionConfig, Arc<Counts>, tokio::task::JoinHandle<()>) 
         counts,
         worker,
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_exec_cancellation_preserves_concurrent_sftp_on_the_same_transport() {
+    use nyaterm_transport::ssh_execution::streaming::{SshExecEvent, stream_ssh_command};
+    use tokio_util::sync::CancellationToken;
+
+    let (config, counts, peer) = peer().await;
+    let dial = config.clone();
+    let connection = tokio::task::spawn_blocking(move || open_ssh_multiplex_handle(dial))
+        .await
+        .unwrap()
+        .unwrap();
+    let cancellation = CancellationToken::new();
+    let (sender, mut events) = tokio::sync::mpsc::channel(64);
+    let exec = tokio::spawn(stream_ssh_command(
+        config.clone(),
+        Some(connection.clone()),
+        b"mcp-wait".to_vec(),
+        Duration::from_secs(5),
+        cancellation.clone(),
+        sender,
+    ));
+    loop {
+        match tokio::time::timeout(Duration::from_secs(6), events.recv())
+            .await
+            .unwrap()
+        {
+            Some(SshExecEvent::Started) => break,
+            Some(_) => {}
+            None => panic!("the Exec channel did not start"),
+        }
+    }
+    let file_connection = connection.clone();
+    let files = tokio::task::spawn_blocking(move || {
+        let service = RemoteFileService::with_multiplex(config, file_connection).unwrap();
+        assert_eq!(service.home_dir().unwrap(), "/home/test");
+        for _ in 0..20 {
+            assert_eq!(service.list_dir(".").unwrap()[0].name, "user-file");
+        }
+    });
+    cancellation.cancel();
+    let mut output = Vec::new();
+    let mut exited = false;
+    while let Some(event) = events.recv().await {
+        match event {
+            SshExecEvent::Output { data, .. } => output.extend(data),
+            SshExecEvent::ExitStatus(130) => exited = true,
+            _ => {}
+        }
+    }
+    exec.await.unwrap();
+    files.await.unwrap();
+    assert!(exited);
+    assert_eq!(output, b"exec-output");
+    assert!(counts.ordinary.load(Ordering::SeqCst) >= 20);
+    assert_eq!(counts.authentications.load(Ordering::SeqCst), 1);
+    assert!(!connection.is_closed());
+    tokio::task::spawn_blocking(move || connection.disconnect().unwrap())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), peer)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

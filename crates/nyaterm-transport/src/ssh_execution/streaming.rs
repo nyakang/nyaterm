@@ -19,6 +19,7 @@ pub enum SshExecEvent {
     TimedOut,
     CancelledBeforeStart,
     Failed,
+    FailedBeforeStart,
 }
 
 pub async fn stream_ssh_command(
@@ -39,7 +40,7 @@ pub async fn stream_ssh_command(
             SshChannelConnection::connect(&config,multiplex.as_ref()).await
         })=>match result {
             Ok(Ok(connection))=>connection,
-            Ok(Err(_))=>{let _=send_event(&events, SshExecEvent::Failed).await;return;}
+            Ok(Err(_))=>{let _=send_event(&events, SshExecEvent::FailedBeforeStart).await;return;}
             Err(_)=>{let _=send_event(&events, SshExecEvent::TimedOut).await;return;}
         }
     };
@@ -57,7 +58,7 @@ pub async fn stream_ssh_command(
             } else if tokio::time::Instant::now() >= deadline {
                 SshExecEvent::TimedOut
             } else {
-                SshExecEvent::Failed
+                SshExecEvent::FailedBeforeStart
             };
             let _ = send_event(&events, event).await;
             let _ =

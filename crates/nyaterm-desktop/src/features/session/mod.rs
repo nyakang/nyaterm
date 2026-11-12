@@ -17,7 +17,9 @@ mod session_dialog_runtime;
 mod session_lifecycle;
 mod session_order;
 mod session_runtime;
-pub(in crate::features) use session_runtime::SessionStartFocusTarget;
+pub(in crate::features) use session_runtime::{
+    SessionStartFocusTarget, SshSessionConfigBuildContext,
+};
 mod session_state;
 mod start_tab_actions;
 mod startup_restore_runtime;

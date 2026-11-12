@@ -189,6 +189,11 @@ impl SshMultiplexHandle {
 
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::Relaxed)
+            || self
+                .inner
+                .target
+                .try_lock()
+                .is_ok_and(|handle| handle.is_closed())
     }
 
     pub fn matches_config(&self, config: &SshSessionConfig) -> bool {

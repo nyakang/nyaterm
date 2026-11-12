@@ -1,3 +1,6 @@
+mod background;
+pub(crate) use background::{BackgroundConnectionLease, BackgroundConnections};
+
 use nyaterm_transport::SshMultiplexHandle;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -13,6 +16,7 @@ pub(crate) struct SshConnectionPool {
 struct ConnectionPoolInner {
     connections: Mutex<HashMap<String, Weak<ManagedConnection>>>,
     disconnects: Arc<DisconnectWorker>,
+    background: Arc<BackgroundConnections>,
 }
 
 #[derive(Clone)]
@@ -42,10 +46,20 @@ struct DisconnectWorker {
 impl Default for SshConnectionPool {
     fn default() -> Self {
         let (sender, receiver) = mpsc::channel();
+        let background = Arc::new(BackgroundConnections::default());
+        let background_weak = Arc::downgrade(&background);
         let worker = thread::Builder::new()
             .name("nyaterm-ssh-disconnect".into())
             .spawn(move || {
-                while let Ok(job) = receiver.recv() {
+                loop {
+                    if let Some(background) = background_weak.upgrade() {
+                        background.reap(std::time::Instant::now());
+                    }
+                    let job = match receiver.recv_timeout(std::time::Duration::from_secs(1)) {
+                        Ok(job) => job,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
                     match job {
                         DisconnectJob::Disconnect(disconnect) => {
                             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(disconnect))
@@ -64,6 +78,7 @@ impl Default for SshConnectionPool {
         Self {
             inner: Arc::new(ConnectionPoolInner {
                 connections: Mutex::new(HashMap::new()),
+                background,
                 disconnects: Arc::new(DisconnectWorker {
                     sender: Some(sender),
                     worker: Some(worker),

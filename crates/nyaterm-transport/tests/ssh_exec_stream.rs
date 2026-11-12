@@ -15,6 +15,7 @@ struct Peer {
     channels: Vec<russh::Channel<server::Msg>>,
     signals: Arc<AtomicUsize>,
     ignore_int: bool,
+    allow_shell: bool,
 }
 impl server::Handler for Peer {
     type Error = russh::Error;
@@ -70,6 +71,10 @@ impl server::Handler for Peer {
         id: ChannelId,
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        assert!(
+            self.allow_shell,
+            "background transport must never request a shell"
+        );
         session.channel_success(id)?;
         Ok(())
     }
@@ -84,6 +89,10 @@ impl server::Handler for Peer {
         _: &[(russh::Pty, u32)],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
+        assert!(
+            self.allow_shell,
+            "background transport must never request a PTY"
+        );
         session.channel_success(id)?;
         Ok(())
     }
@@ -240,6 +249,16 @@ async fn peer() -> (
     Arc<AtomicUsize>,
     tokio::task::JoinHandle<()>,
 ) {
+    peer_with_shell(true).await
+}
+
+async fn peer_with_shell(
+    allow_shell: bool,
+) -> (
+    SshSessionConfig,
+    Arc<AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let signals = Arc::new(AtomicUsize::new(0));
@@ -263,6 +282,7 @@ async fn peer() -> (
                 channels: Vec::new(),
                 signals: count,
                 ignore_int: false,
+                allow_shell,
             },
         )
         .await
@@ -281,6 +301,101 @@ async fn peer() -> (
         signals,
         worker,
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_multiplex_reuses_one_transport_and_cancels_only_its_channel() {
+    use nyaterm_transport::open_ssh_multiplex_handle;
+
+    let (config, signals, peer) = peer_with_shell(false).await;
+    let dial_config = config.clone();
+    let multiplex = tokio::task::spawn_blocking(move || open_ssh_multiplex_handle(dial_config))
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..20 {
+        let (tx, mut rx) = mpsc::channel(64);
+        stream_ssh_command(
+            config.clone(),
+            Some(multiplex.clone()),
+            b"exit_first".to_vec(),
+            Duration::from_secs(3),
+            CancellationToken::new(),
+            tx,
+        )
+        .await;
+        let mut output = Vec::new();
+        let mut confirmed = false;
+        while let Some(event) = rx.recv().await {
+            match event {
+                SshExecEvent::Output { data, .. } => output.extend(data),
+                SshExecEvent::Finished {
+                    confirmed: value, ..
+                } => confirmed = value,
+                _ => {}
+            }
+        }
+        assert!(confirmed);
+        assert_eq!(output, b"tail after exit");
+    }
+    let (tx, mut rx) = mpsc::channel(64);
+    let interrupt = CancellationToken::new();
+    let running = tokio::spawn(stream_ssh_command(
+        config.clone(),
+        Some(multiplex.clone()),
+        b"wait_int".to_vec(),
+        Duration::from_secs(5),
+        interrupt.clone(),
+        tx,
+    ));
+    loop {
+        match tokio::time::timeout(Duration::from_secs(6), rx.recv())
+            .await
+            .unwrap()
+        {
+            Some(SshExecEvent::Started) => break,
+            Some(_) => {}
+            None => panic!("background command did not start"),
+        }
+    }
+    let (tx, mut independent) = mpsc::channel(64);
+    let concurrent = tokio::spawn(stream_ssh_command(
+        config,
+        Some(multiplex.clone()),
+        b"exit_first".to_vec(),
+        Duration::from_secs(5),
+        CancellationToken::new(),
+        tx,
+    ));
+    interrupt.cancel();
+    let mut stopped = false;
+    while let Some(event) = rx.recv().await {
+        if matches!(event, SshExecEvent::ExitStatus(130)) {
+            stopped = true;
+        }
+    }
+    let mut output = Vec::new();
+    let mut independent_exit = false;
+    while let Some(event) = independent.recv().await {
+        match event {
+            SshExecEvent::Output { data, .. } => output.extend(data),
+            SshExecEvent::ExitStatus(0) => independent_exit = true,
+            _ => {}
+        }
+    }
+    running.await.unwrap();
+    concurrent.await.unwrap();
+    assert!(stopped && independent_exit);
+    assert_eq!(output, b"tail after exit");
+    assert_eq!(signals.load(Ordering::SeqCst), 1);
+    assert!(!multiplex.is_closed());
+    tokio::task::spawn_blocking(move || multiplex.disconnect().unwrap())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), peer)
+        .await
+        .unwrap()
+        .unwrap();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancellation_before_submission_never_opens_an_ssh_connection() {

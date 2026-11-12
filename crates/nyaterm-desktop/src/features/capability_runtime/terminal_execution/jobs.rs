@@ -11,9 +11,9 @@ use nyaterm_core::capabilities::CapabilityScope;
 use nyaterm_core::capabilities::stream_output::StreamOutput;
 use nyaterm_core::models::connection::AiExecutionProfile;
 use nyaterm_mcp_protocol::{
-    TerminalAvailability, TerminalBackend, TerminalExecuteResult, TerminalJobStatus,
-    TerminalPollArgs, TerminalPollResult, TerminalProcessState, TerminalStartArgs,
-    TerminalStartResult, TerminalStopArgs, TerminalStopResult,
+    ExecutionTarget, TerminalAvailability, TerminalBackend, TerminalExecuteResult,
+    TerminalJobStatus, TerminalPollArgs, TerminalPollResult, TerminalProcessState,
+    TerminalStartArgs, TerminalStartResult, TerminalStopArgs, TerminalStopResult,
 };
 use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
 use nyaterm_transport::ssh_execution::streaming::{SshExecEvent, stream_ssh_command};
@@ -25,7 +25,10 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct TerminalJob {
     pub mcp_owned: bool,
     pub owner: String,
-    pub session_id: String,
+    pub target: ExecutionTarget,
+    pub command: String,
+    pub client: String,
+    pub target_name: String,
     pub window_label: String,
     pub backend: TerminalBackend,
     pub status: TerminalJobStatus,
@@ -39,6 +42,7 @@ pub(super) struct TerminalJob {
     remote_failed: bool,
     pub stop_state: String,
     pub stop_started: Option<Instant>,
+    pub(super) shutdown_requested: bool,
     pub interrupt: CancellationToken,
     pub receiver: Option<mpsc::Receiver<SshExecEvent>>,
     pub controller: Option<crate::ai_runtime::AiTask>,
@@ -58,16 +62,43 @@ fn now_ms() -> u64 {
 }
 impl TerminalJob {
     pub fn from_request(request: &TerminalExecutionRequest) -> Self {
-        Self {
-            mcp_owned: request.mcp_owned,
-            owner: request.owner.clone(),
-            session_id: request.session_id.clone(),
-            window_label: String::new(),
-            backend: if request.policy.background {
+        Self::new(
+            request.mcp_owned,
+            request.owner.clone(),
+            ExecutionTarget::Session {
+                session_id: request.session_id.clone(),
+            },
+            if request.policy.background {
                 TerminalBackend::SshExec
             } else {
                 TerminalBackend::InlinePty
             },
+            request.operation_id.clone(),
+            request.command.clone(),
+            request.source.clone(),
+            request.session_id.clone(),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        mcp_owned: bool,
+        owner: String,
+        target: ExecutionTarget,
+        backend: TerminalBackend,
+        operation_id: Option<String>,
+        command: String,
+        client: String,
+        target_name: String,
+    ) -> Self {
+        Self {
+            mcp_owned,
+            owner,
+            target,
+            command,
+            client,
+            target_name,
+            window_label: String::new(),
+            backend,
             status: TerminalJobStatus::Starting,
             process_state: TerminalProcessState::NotStarted,
             output: StreamOutput::new(4 * 1024 * 1024),
@@ -79,11 +110,12 @@ impl TerminalJob {
             remote_failed: false,
             stop_state: "not_requested".into(),
             stop_started: None,
+            shutdown_requested: false,
             interrupt: CancellationToken::new(),
             receiver: None,
             controller: None,
             manual_takeover: false,
-            operation_id: request.operation_id.clone(),
+            operation_id,
             sanitizer: RecordingSanitizer::default(),
             stdout_tail: Vec::new(),
             stderr_tail: Vec::new(),
@@ -266,12 +298,30 @@ impl TerminalExecutionState {
     }
 }
 impl NyaTermApp {
+    pub(in crate::features::capability_runtime) fn mcp_audit_connection_target(
+        &self,
+        request: &CapabilityRequest,
+    ) -> Option<String> {
+        if matches!(
+            request.tool.as_str(),
+            nyaterm_mcp_protocol::tool::TERMINAL_POLL | nyaterm_mcp_protocol::tool::TERMINAL_STOP
+        ) {
+            let id = request.arguments.get("jobId")?.as_str()?;
+            let job = self.mcp.capabilities.terminal_executions.jobs.get(id)?;
+            return (job.owner == request.connection_id)
+                .then(|| job.target.connection_id().map(str::to_owned))
+                .flatten()
+                .or_else(|| request.resolved_session_id.clone());
+        }
+        crate::features::capability_runtime::mcp_request_target(request)
+    }
+
     pub(in crate::features) fn authorize_terminal_job(
         &self,
         owner: &str,
         scope: &CapabilityScope,
         id: &str,
-    ) -> Result<String, nyaterm_mcp_protocol::RpcError> {
+    ) -> Result<ExecutionTarget, nyaterm_mcp_protocol::RpcError> {
         let job = self
             .mcp
             .capabilities
@@ -285,21 +335,31 @@ impl NyaTermApp {
                     "Job is unavailable or is owned by another client.",
                 )
             })?;
-        let permitted = if self.session.has_session(&job.session_id)
-            && !self.session.is_disconnected(&job.session_id)
-        {
-            scope
-                .resolve(&self.mcp_live_sessions())
-                .session_ids
-                .contains(&job.session_id)
-        } else {
-            match scope {
-                CapabilityScope::AllSessions => true,
-                CapabilityScope::Explicit { session_ids, .. } => {
-                    session_ids.contains(&job.session_id)
-                }
+        let permitted = match &job.target {
+            ExecutionTarget::Connection { .. } => match scope {
+                CapabilityScope::Explicit { .. } => false,
                 CapabilityScope::CurrentWindow { owner_window_label } => {
                     owner_window_label == &job.window_label
+                }
+                CapabilityScope::AllSessions => true,
+            },
+            ExecutionTarget::Session { session_id } => {
+                if self.session.has_session(session_id) && !self.session.is_disconnected(session_id)
+                {
+                    scope
+                        .resolve(&self.mcp_live_sessions())
+                        .session_ids
+                        .contains(session_id)
+                } else {
+                    match scope {
+                        CapabilityScope::AllSessions => true,
+                        CapabilityScope::Explicit { session_ids, .. } => {
+                            session_ids.contains(session_id)
+                        }
+                        CapabilityScope::CurrentWindow { owner_window_label } => {
+                            owner_window_label == &job.window_label
+                        }
+                    }
                 }
             }
         };
@@ -309,7 +369,7 @@ impl NyaTermApp {
                 "The job target is outside the current scope.",
             ));
         }
-        Ok(job.session_id.clone())
+        Ok(job.target.clone())
     }
     pub(in crate::features) fn dispatch_terminal_start(
         &mut self,
@@ -318,6 +378,14 @@ impl NyaTermApp {
     ) {
         let mut args: TerminalStartArgs =
             serde_json::from_value(request.arguments.clone()).expect("validated terminal start");
+        if args
+            .target
+            .as_ref()
+            .is_some_and(|target| target.connection_id().is_some())
+        {
+            self.dispatch_connection_start(request, args, cx);
+            return;
+        }
         let scope = request.scope.resolve(&self.mcp_live_sessions());
         let session_id = match scope.resolve_session(args.session_id.as_deref()) {
             Ok(id) => id,
@@ -340,6 +408,7 @@ impl NyaTermApp {
         }
         args.session_id = Some(session_id.clone());
         args.timeout_ms = Some(args.timeout_ms.unwrap_or(300_000));
+        args.backend = Some(args.backend());
         let canonical = serde_json::to_value(&args).expect("start arguments");
         let operation_id = match self.mcp.capabilities.ledger.begin(
             &request.connection_id,
@@ -392,6 +461,7 @@ impl NyaTermApp {
         operation_id: String,
         cx: &mut Context<Self>,
     ) -> Result<Value, nyaterm_mcp_protocol::RpcError> {
+        let backend = args.backend();
         if self.security.screen_locked() {
             return Err(rpc_failure("permission_denied", "Screen is locked."));
         }
@@ -437,7 +507,7 @@ impl NyaTermApp {
             track_insertion: true,
             reply,
         };
-        let id = if args.backend == TerminalBackend::InlinePty {
+        let id = if backend == TerminalBackend::InlinePty {
             self.start_terminal_execution(execution, cx);
             if let Ok(result) = receiver.try_recv() {
                 result?;
@@ -523,7 +593,7 @@ impl NyaTermApp {
         let result = to_value(TerminalStartResult {
             job_id: id,
             session_id,
-            backend: args.backend,
+            backend,
             status,
         });
         self.ensure_terminal_execution_clock(cx);
@@ -540,8 +610,12 @@ impl NyaTermApp {
         request: &CapabilityRequest,
         args: TerminalPollArgs,
     ) -> Result<Value, nyaterm_mcp_protocol::RpcError> {
-        let session_id =
+        let target =
             self.authorize_terminal_job(&request.connection_id, &request.scope, &args.job_id)?;
+        if target.connection_id().is_some() {
+            return self.connection_poll_result(args);
+        }
+        let session_id = target.session_id().expect("session target").to_string();
         let state = &self.mcp.capabilities.terminal_executions;
         let job = &state.jobs[&args.job_id];
         let exists = self.session.has_session(&session_id);
@@ -605,7 +679,11 @@ impl NyaTermApp {
         id: &str,
         cx: &mut Context<Self>,
     ) -> Result<Value, nyaterm_mcp_protocol::RpcError> {
-        let session_id = self.authorize_terminal_job(&request.connection_id, &request.scope, id)?;
+        let target = self.authorize_terminal_job(&request.connection_id, &request.scope, id)?;
+        if target.connection_id().is_some() {
+            return self.stop_connection_job(id, cx);
+        }
+        let session_id = target.session_id().expect("session target").to_string();
         if self.security.screen_locked() {
             return Err(rpc_failure("permission_denied", "Screen is locked."));
         }
@@ -715,7 +793,7 @@ impl NyaTermApp {
                 (
                     id.clone(),
                     (
-                        job.session_id.clone(),
+                        job.target.clone(),
                         job.stop_state.clone(),
                         job.process_state,
                     ),
@@ -808,6 +886,10 @@ impl NyaTermApp {
                     }
                     SshExecEvent::TimedOut => job.unknown(TerminalJobStatus::TimedOut),
                     SshExecEvent::Failed => job.unknown(TerminalJobStatus::Failed),
+                    SshExecEvent::FailedBeforeStart => {
+                        job.unknown(TerminalJobStatus::Failed);
+                        job.process_state = TerminalProcessState::NotStarted;
+                    }
                     SshExecEvent::CancelledBeforeStart => {
                         job.unknown(TerminalJobStatus::Cancelled);
                         job.process_state = TerminalProcessState::NotStarted;
@@ -842,6 +924,22 @@ impl NyaTermApp {
                 }
             }
         }
+        for job in state.jobs.values_mut().filter(|job| job.shutdown_requested) {
+            if job
+                .stop_started
+                .is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(2))
+                && job.receiver.is_some()
+            {
+                job.receiver = None;
+                job.controller = None;
+                if job.process_state != TerminalProcessState::ExitConfirmed {
+                    job.unknown(TerminalJobStatus::Unknown);
+                    job.stop_state = "unconfirmed".into();
+                }
+                job.output.note_source_loss();
+                job.output_complete = true;
+            }
+        }
         for job in state.jobs.values() {
             if let Some(operation) = &job.operation_id {
                 self.mcp
@@ -862,6 +960,9 @@ impl NyaTermApp {
             !job.finished
                 .is_some_and(|at| now.duration_since(at) >= Duration::from_secs(600))
         });
+        if self.mcp.background_tasks.open {
+            self.request_settings_panel_refresh(cx);
+        }
         self.mcp.capabilities.ledger.cleanup();
         let mut actions = Vec::new();
         for (id, (session, stop, process)) in previous {
@@ -884,7 +985,7 @@ impl NyaTermApp {
             }
         }
         for (session, action) in actions {
-            self.audit_terminal_job_lifecycle(&session, action, cx);
+            self.audit_execution_target(&session, action, cx);
         }
     }
     pub(super) fn audit_terminal_job_lifecycle(
@@ -893,11 +994,26 @@ impl NyaTermApp {
         action: &str,
         cx: &mut Context<Self>,
     ) {
+        self.audit_execution_target(
+            &ExecutionTarget::Session {
+                session_id: session.into(),
+            },
+            action,
+            cx,
+        );
+    }
+    pub(super) fn audit_execution_target(
+        &mut self,
+        target: &ExecutionTarget,
+        action: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.persist_mcp_audit(
             nyaterm_core::ai::AppendAiAuditRequest {
                 action: action.into(),
                 source: Some("mcp".into()),
-                session_id: Some(session.into()),
+                session_id: target.session_id().map(str::to_owned),
+                connection_id: target.connection_id().map(str::to_owned),
                 capability: Some("terminal_job".into()),
                 ..Default::default()
             },
@@ -1042,7 +1158,9 @@ mod tests {
         cx.update_entity(&app, |app, cx| {
             let mut job = job("owner");
             job.backend = TerminalBackend::SshExec;
-            job.session_id = "fixture".into();
+            job.target = nyaterm_mcp_protocol::ExecutionTarget::Session {
+                session_id: "fixture".into(),
+            };
             job.stop_started = Some(std::time::Instant::now());
             job.stop_state = "accepted".into();
             let (sender, receiver) = tokio::sync::mpsc::channel(1);

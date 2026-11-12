@@ -36,7 +36,7 @@ impl ServerHandler for NyaTermMcp {
                 "nyaterm-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions("Discover saved terminal connections, open sessions in NyaTerm, and operate scoped sessions. NyaTerm enforces session scope and approvals.")
+            .with_instructions("Use connection_list to discover saved hosts. When target parameters are advertised, prefer terminal_start with a connection target for noninteractive SSH commands and SFTP tools with the same target for file operations. Open a session only for an interactive terminal. NyaTerm enforces permissions and approvals.")
     }
 
     async fn call_tool(
@@ -55,6 +55,9 @@ impl ServerHandler for NyaTermMcp {
             return Ok(CallToolResult::structured_error(json!({"code":"unsupported_capability","message":"The connected NyaTerm Host does not support terminal jobs."})).into());
         }
         let arguments = Value::Object(request.arguments.unwrap_or_default());
+        if arguments.get("target").is_some() && !self.bridge.supports_connection_targets() {
+            return Ok(CallToolResult::structured_error(json!({"code":"unsupported_capability","message":"The connected NyaTerm Host does not support execution targets."})).into());
+        }
         validate_tool_arguments(&request.name, &arguments)
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let result = match self
@@ -96,6 +99,20 @@ impl ServerHandler for NyaTermMcp {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         let mut item = self.tools.iter().find(|item| item.name == name)?.clone();
+        let targets = self.bridge.supports_connection_targets();
+        item.input_schema = Arc::new(
+            nyaterm_mcp_protocol::tool_input_schema_for_features(name, targets)
+                .ok()?
+                .as_object()?
+                .clone(),
+        );
+        item.output_schema =
+            nyaterm_mcp_protocol::terminal_job_result_schema_for_features(name, targets)
+                .and_then(|schema| schema.as_object().cloned())
+                .map(Arc::new);
+        if !targets && name == tool::TERMINAL_START {
+            item.description = Some("Start a job in an existing scoped terminal session. Defaults to inline_pty; ssh_exec uses an independent channel. Use an idempotencyKey for retries.".into());
+        }
         if !self.bridge.supports_lifecycle() {
             if matches!(
                 name,
@@ -208,6 +225,16 @@ mod tests {
         let props = execute.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("command"));
         assert!(!props.contains_key("returnJob") && !props.contains_key("idempotencyKey"));
+        for name in [tool::SFTP_HOME, tool::SFTP_LIST, tool::SFTP_WRITE_TEXT] {
+            let item = server.get_tool(name).unwrap();
+            assert!(item.input_schema["properties"].get("target").is_none());
+            assert!(
+                item.input_schema["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("sessionId"))
+            );
+        }
     }
     #[test]
     fn sftp_list_structured_content_is_an_object() {
@@ -285,13 +312,11 @@ mod tests {
             let tool = tools.iter().find(|item| item.name == name).unwrap();
             let value = serde_json::to_value(tool).unwrap();
             assert_eq!(value["outputSchema"]["type"], "object");
-            assert!(value["outputSchema"]["properties"].get("jobId").is_some());
-            if name != tool::TERMINAL_START {
-                assert!(
-                    value["outputSchema"]["properties"]
-                        .get("processState")
-                        .is_some()
-                );
+            for variant in value["outputSchema"]["anyOf"].as_array().unwrap() {
+                assert!(variant["properties"].get("jobId").is_some());
+                if name != tool::TERMINAL_START {
+                    assert!(variant["properties"].get("processState").is_some());
+                }
             }
         }
     }

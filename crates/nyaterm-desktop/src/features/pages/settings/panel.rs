@@ -300,6 +300,7 @@ pub(in crate::features) struct AiSettingsPresentation {
     pub(in crate::features) header_errors:
         Arc<HashMap<(String, String), nyaterm_core::ai::provider_settings::CustomHeaderError>>,
     pub(in crate::features) agent_management: AgentManagementView,
+    pub(in crate::features) background_tasks: crate::features::mcp::tasks::BackgroundTasksView,
 }
 
 impl AiSettingsPresentation {
@@ -311,6 +312,7 @@ impl AiSettingsPresentation {
             credential_draft_key_ids: Arc::new(HashSet::new()),
             header_errors: Arc::new(HashMap::new()),
             agent_management: AgentManagementView::default(),
+            background_tasks: Default::default(),
         }
     }
 }

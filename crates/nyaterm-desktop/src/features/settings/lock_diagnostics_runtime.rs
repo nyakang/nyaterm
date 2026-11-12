@@ -38,6 +38,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.stop_mcp_background_operations(cx);
         self.cancel_file_sudo_prompt(cx);
         self.hide_secret_inputs(cx);
         self.security.remember_screen_lock_focus(window.focused(cx));

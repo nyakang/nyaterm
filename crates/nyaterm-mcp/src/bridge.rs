@@ -50,6 +50,7 @@ impl BridgeEndpoint {
 struct Connection {
     client_resume: bool,
     lifecycle: bool,
+    connection_targets: bool,
     reader: BufReader<tokio::net::tcp::OwnedReadHalf>,
     writer: tokio::net::tcp::OwnedWriteHalf,
     next_id: u64,
@@ -63,6 +64,7 @@ pub struct BridgeClient {
     identity: Arc<Mutex<Option<ClientIdentifyParams>>>,
     resume_token: Arc<Mutex<Option<nyaterm_core::SecretString>>>,
     lifecycle: Arc<AtomicBool>,
+    connection_targets: Arc<AtomicBool>,
 }
 
 impl BridgeClient {
@@ -73,7 +75,12 @@ impl BridgeClient {
             identity: Arc::new(Mutex::new(None)),
             resume_token: Arc::new(Mutex::new(None)),
             lifecycle: Arc::new(AtomicBool::new(false)),
+            connection_targets: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn supports_connection_targets(&self) -> bool {
+        self.connection_targets.load(Ordering::Acquire)
     }
 
     pub fn supports_lifecycle(&self) -> bool {
@@ -148,6 +155,8 @@ impl BridgeClient {
         let mut connection = connect(&self.endpoint).await.map_err(io_error)?;
         self.lifecycle
             .store(connection.lifecycle, Ordering::Release);
+        self.connection_targets
+            .store(connection.connection_targets, Ordering::Release);
         if connection.client_resume {
             let resume = self.resume_token.lock().await.clone();
             let token = attach_owner(&mut connection, resume.as_ref()).await?;
@@ -247,6 +256,7 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
     let mut connection = Connection {
         client_resume: false,
         lifecycle: false,
+        connection_targets: false,
         reader: BufReader::new(read),
         writer: write,
         next_id: 1,
@@ -270,6 +280,13 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
     connection.lifecycle = authenticated["features"]
         .as_array()
         .is_some_and(|f| f.iter().any(|v| v == "mcp_lifecycle"));
+    connection.connection_targets = authenticated["features"]
+        .as_array()
+        .is_some_and(|features| {
+            features
+                .iter()
+                .any(|feature| feature == "connection_targets")
+        });
     Ok(connection)
 }
 
