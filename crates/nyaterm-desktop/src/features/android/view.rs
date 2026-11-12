@@ -1,5 +1,6 @@
 use super::labels::AndroidError;
 use crate::features::NyaTermApp;
+use crate::features::view_widgets::color_icon;
 use crate::widgets::small_button;
 use gpui::{
     Bounds, Context, DevicePixels, IntoElement, KeyDownEvent, MouseButton, Pixels, Point, Size,
@@ -27,11 +28,13 @@ impl NyaTermApp {
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
-                nyaterm_ui::NyaIconButton::new(
+                nyaterm_ui::NyaButton::new(
                     format!("android-screen-button-{id}"),
-                    "icons/conn/rdp.svg",
+                    t!("android.screen"),
                 )
-                .size(px(28.))
+                .content(color_icon("color/session/scrcpy.svg", 22.))
+                .small()
+                .height(px(30.))
                 .tooltip(t!("android.screen"))
                 .disabled(!available)
                 .on_click(cx.listener(move |app, _, _, cx| {
@@ -270,10 +273,7 @@ impl NyaTermApp {
             .gap_1()
             .h(px(36.))
             .px_2()
-            .bg(rgb(palette.surface))
-            .tooltip(|window, cx| {
-                nyaterm_ui::NyaTooltip::new(t!("android.inputHint").into_owned()).build(window, cx)
-            });
+            .bg(rgb(palette.surface));
         for (action, label, keycode) in [
             ("back", t!("android.back"), 4),
             ("home", t!("android.home"), 3),
@@ -358,6 +358,15 @@ impl NyaTermApp {
                     app.reconnect_session(reconnect.clone(), window, cx);
                 }),
             ));
+        toolbar = toolbar.child(div().flex_1()).child(
+            nyaterm_ui::NyaIconButton::new(
+                format!("android-input-help-{id}"),
+                "icons/menu/info.svg",
+            )
+            .size(px(28.))
+            .icon_size(px(18.))
+            .tooltip(t!("android.inputHint")),
+        );
         let app = cx.weak_entity();
         let bounds_id = id.clone();
         let image = canvas(
