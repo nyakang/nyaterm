@@ -36,6 +36,10 @@ pub(in crate::features) struct TransferChrome {
 /// it. The costly field -- the listing -- is shared rather than copied; the rest are
 /// short paths and small sets.
 pub(in crate::features) struct TransferBrowserPresentation {
+    pub sudo: Option<(
+        String,
+        crate::features::session::remote_files::FilePrivilegeStatus,
+    )>,
     pub view_mode: TransferBrowserViewMode,
     pub tree: crate::features::transfers::TransferTreePresentation,
     pub tree_focus: FocusHandle,

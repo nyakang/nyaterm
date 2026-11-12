@@ -561,6 +561,10 @@ impl NyaTermApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reload_transfer_browser(cx);
+    }
+
+    pub(in crate::features) fn reload_transfer_browser(&mut self, cx: &mut Context<Self>) {
         let path = if self.transfer.browser_view().path.trim().is_empty() {
             self.transfer.normalized_remote_path()
         } else {

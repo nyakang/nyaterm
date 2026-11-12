@@ -14,6 +14,7 @@ use std::rc::Rc;
 pub(super) struct FileManagerDragPayload {
     pub manager_id: String,
     pub pane_id: PaneId,
+    pub access_generation: Option<u64>,
     pub endpoint: PaneEndpoint,
     pub entries: Vec<SftpFileEntry>,
     pub feedback: Rc<Cell<FileTransferOperation>>,
@@ -300,7 +301,15 @@ impl FileManagerWorkspace {
             operation,
         };
         let id = self.id.clone();
+        let generation = payload.access_generation;
         self.dispatch_app(window, cx, move |app, _, cx| {
+            if intent
+                .source
+                .session_id()
+                .is_some_and(|id| app.file_access_generation(id) != generation)
+            {
+                return;
+            }
             app.submit_file_transfer(id, intent, cx)
         });
     }

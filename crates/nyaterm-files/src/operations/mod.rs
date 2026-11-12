@@ -146,11 +146,16 @@ pub fn execute_file_operation(
             if !properties.is_directory() {
                 return Err(anyhow::anyhow!("destination is not a directory"));
             }
-            if properties.permissions.is_some_and(|mode| mode & 0o222 == 0) {
+            if !target_service.is_sudo()
+                && properties.permissions.is_some_and(|mode| mode & 0o222 == 0)
+            {
                 return Err(anyhow::anyhow!("destination is read-only"));
             }
             let moving = intent.operation == FileTransferOperation::Move;
-            if moving && intent.same_endpoint {
+            if moving
+                && intent.same_endpoint
+                && source_service.same_execution_identity(&target_service)
+            {
                 if target_service
                     .list_dir_path(&intent.target_directory)?
                     .iter()
