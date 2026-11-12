@@ -70,18 +70,24 @@ impl RemoteFilePreviewWindow {
     fn text_surface_for(
         &mut self,
         tab_id: &str,
+        path: &str,
         text: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<RemoteTextEditor> {
         if let Some(surface) = self.text_surface.clone() {
-            surface.update(cx, |surface, cx| surface.sync_read_only(tab_id, text, cx));
+            surface.update(cx, |surface, cx| {
+                surface.sync_read_only(tab_id, path, text, cx)
+            });
             return surface;
         }
         let app = self.app.clone();
         let id = tab_id.to_string();
         let content = text.to_string();
-        let surface = cx.new(|cx| RemoteTextEditor::new_read_only(app, id, content, window, cx));
+        // The tab ID can contain an opaque raw-path token. Only the display path
+        // carries the filename needed for syntax recognition.
+        let surface =
+            cx.new(|cx| RemoteTextEditor::new_read_only(app, id, path, content, window, cx));
         self.text_surface = Some(surface.clone());
         surface
     }
@@ -613,11 +619,23 @@ impl RemoteFilePreviewWindow {
             }
             PreviewContent::Error(message) => error_message(palette, message),
             PreviewContent::Text(text) => {
-                let surface = self.text_surface_for(&active_tab.id, text, window, cx);
+                let surface = self.text_surface_for(
+                    &active_tab.id,
+                    &active_tab.remote_path,
+                    text,
+                    window,
+                    cx,
+                );
                 text_surface_body(surface)
             }
             PreviewContent::Json { text, parse_error } => {
-                let surface = self.text_surface_for(&active_tab.id, text, window, cx);
+                let surface = self.text_surface_for(
+                    &active_tab.id,
+                    &active_tab.remote_path,
+                    text,
+                    window,
+                    cx,
+                );
                 json_body(palette, surface, parse_error.as_deref())
             }
             PreviewContent::Markdown(text) => markdown_body(palette, text, active_tab.id.as_str()),
