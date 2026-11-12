@@ -145,4 +145,4 @@ Xshell、MobaXterm、WindTerm、SecureCRT、FinalShell、Termius 和 NyaTerm / E
 
 安装模式下主要用户数据默认保存在 `~/.nyaterm/nyaterm.redb`；portable 模式使用程序旁 `data/config/` 下的配置数据。数据包括设置、连接、密钥、密码、OTP、隧道、代理、历史、AI 历史等本地内容。
 
-旧 Dragonfly 数据只按当前兼容读取路径处理：应用保留旧加密前缀和旧存储文档的 fallback，不会承诺首次启动自动复制整个 `~/.dragonfly/` 目录或创建回滚副本。
+旧 Dragonfly 数据只按当前兼容读取路径处理：应用保留旧加密前缀和旧存储文档的 fallback。

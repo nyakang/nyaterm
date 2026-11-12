@@ -21,7 +21,7 @@ VNC 的协议解码运行在独立的 helper 进程中。从源码运行时需�
 | 无 | 不做认证 |
 | VNC 密码 | classic VNC Authentication |
 
-classic VNC Authentication 只使用密码的**前 8 字节**。NyaTerm 会拒绝超过 8 字节的密码而不是静默截断，避免你以为设置了长密码。
+classic VNC Authentication 只使用密码的**前 8 字节**。超过 8 字节的密码会被拒绝。
 
 ### 显示
 

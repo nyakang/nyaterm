@@ -1,6 +1,6 @@
 # Session Types
 
-NyaTerm is not just an SSH client. It is a desktop app that puts multiple terminal and remote-desktop workflows into one workspace. It currently supports six session types:
+NyaTerm supports six terminal and remote-desktop session types in one workspace:
 
 - **SSH**
 - **Local Terminal**
@@ -8,8 +8,6 @@ NyaTerm is not just an SSH client. It is a desktop app that puts multiple termin
 - **Serial**
 - **RDP**
 - **VNC**
-
-Understanding the differences helps explain why some panels or enhancements only appear for certain tabs.
 
 ## At a glance
 
@@ -33,13 +31,6 @@ SSH is the most capable session type in NyaTerm. It is the best fit when you nee
 - Configure port tunnels
 - Fine-tune negotiated SSH algorithms
 
-If you need any of these, use **SSH** first:
-
-- File explorer
-- Auto-upload / round-trip editing
-- Remote resource monitoring
-- SSH tunnels in the Network panel
-
 ## Local Terminal
 
 Local Terminal puts your local shell workflow inside the same NyaTerm workspace, for example:
@@ -48,7 +39,7 @@ Local Terminal puts your local shell workflow inside the same NyaTerm workspace,
 - Running scripts, reading logs, or using Git
 - Comparing local and remote output side by side
 
-Its value is not remote access. Its value is that it shares the same workspace model as SSH sessions:
+Local Terminal supports these workspace features:
 
 - Tabs
 - Split panes
@@ -68,15 +59,6 @@ Telnet sessions are for:
 - Maintaining older equipment
 - Lab environments
 - Compatibility scenarios where SSH is not available
-
-You still get NyaTerm's terminal workspace model, but not SSH-specific security or file features. In practice, that usually means no:
-
-- SFTP file explorer
-- OTP binding
-- SSH jump host
-- SSH resource monitoring
-
-If your goal is simply to open a traditional remote terminal quickly, Telnet can be the more direct choice.
 
 For devices that expect specific erase behavior, Telnet also exposes `Backspace Mode` so you can choose `Ctrl+H (BS)` or `DEL (0x7F)`.
 
@@ -101,7 +83,7 @@ Serial sessions still live inside NyaTerm's tabbed and split workspace, so you c
 
 ## RDP
 
-An RDP session connects to a Windows host or another remote desktop serving RDP. It shares tabs, split panes, and the saved-connection system with terminal sessions, but it carries a graphical framebuffer rather than a text terminal — so there is no command history, SFTP file explorer, SSH proxy / jump host, or remote host monitoring.
+An RDP session connects to a Windows host or another remote desktop serving RDP. Remote desktops support tabs, split panes, and saved connections.
 
 Configuration, certificate policies, and error kinds are documented in [RDP Remote Desktop](./rdp).
 

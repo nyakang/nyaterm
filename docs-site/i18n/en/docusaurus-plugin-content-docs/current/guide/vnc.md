@@ -21,7 +21,7 @@ VNC protocol decoding runs in a separate helper process. When running from sourc
 | None | No authentication |
 | VNC password | Classic VNC Authentication |
 
-Classic VNC Authentication only uses the **first 8 bytes** of the password. NyaTerm rejects passwords longer than 8 bytes rather than silently truncating them, so you never believe a longer password took effect.
+Classic VNC Authentication only uses the **first 8 bytes** of the password. NyaTerm rejects passwords longer than 8 bytes.
 
 ### Display
 

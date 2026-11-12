@@ -12,7 +12,7 @@ Apply and publication retain the existing workflow: business changes commit atom
 
 The sections below describe snapshot mode and provider setup.
 
-NyaTerm's **Cloud Sync** capability is not remote file transfer. It syncs portable application configuration through one encrypted current snapshot in remote storage.
+NyaTerm's **Cloud Sync** synchronizes encrypted application configuration across devices.
 
 Remote storage uses immutable snapshots and independent device commits:
 
@@ -38,11 +38,6 @@ NyaTerm currently supports these remote storage provider types:
 ## Prerequisite: set a master password first
 
 Before using **Settings → Cloud Sync**, you must first set a **Master Password** in **Settings → Security**.
-
-Without a master password:
-
-- Cloud Sync cannot be enabled
-- Manual actions such as test, push, and pull cannot be run
 
 New encrypted snapshots use Argon2id with a random salt and AES-256-GCM. The version header, KDF parameters, salt, and nonce are authenticated along with the payload.
 
@@ -261,11 +256,7 @@ Use this when:
 - the current device has the correct latest version
 - you want other devices to follow this state later
 
-The important boundary is:
-
-- this is not a field-level merge
-- this is not collaborative conflict resolution
-- it is effectively a choice between the local snapshot and the remote snapshot
+In snapshot mode, conflicts are resolved by choosing the local or remote snapshot.
 
 Device commits and causal records preserve concurrent branches. Explicitly choosing local or cloud publishes a new commit resolving the observed branches; cloud uses the immutable revision explicitly selected in the preview. Later concurrent edits can produce another conflict. Do not manually clear `sync/snapshots/`: it is the current data path.
 

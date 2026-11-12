@@ -1,6 +1,6 @@
 # SFTP File Transfer
 
-NyaTerm's remote file workflow is built on top of SSH sessions. That means the **file explorer, SFTP transfers, and local-edit-then-upload-back workflow** are only available in SSH sessions. Local Terminal, Telnet, and Serial do not expose this set of features.
+SSH sessions support **remote file browsing, SFTP transfers, and local editing with upload back to the server**.
 
 ## File explorer
 
@@ -30,7 +30,7 @@ From the file list or the context menu, you can perform:
 | Properties | View size, timestamps, UID/GID, permissions, and more |
 | New File / Folder / Symlink | Create entries directly in the current directory; symlinks use OpenSSH-compatible handling |
 
-The **Open** action is not just a preview. It prepares the round-trip editing flow.
+Use **Open** to edit a file locally and upload changes back to the server.
 
 ## Selection and bulk operations
 

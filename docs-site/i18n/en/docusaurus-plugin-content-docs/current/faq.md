@@ -139,4 +139,4 @@ After import, review the username, port, authentication method, and whether prox
 
 In installed mode, the main data file is normally `~/.nyaterm/nyaterm.redb`; portable mode uses configuration data under the adjacent `data/config/` directory. This data includes settings, connections, keys, OTP data, tunnels, proxies, history, and other local state.
 
-Legacy Dragonfly data is handled through compatibility fallbacks for old encryption prefixes and storage documents. NyaTerm does not promise to copy the entire `~/.dragonfly/` directory or create a rollback copy on first launch.
+Legacy Dragonfly data is handled through compatibility fallbacks for old encryption prefixes and storage documents.
