@@ -26,14 +26,14 @@ fn decompress_catalog(data: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(decoded)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Catalog {
     version: u32,
     pub roots: Vec<CommandNode>,
     #[serde(skip)]
     index: HashMap<String, usize>,
 }
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct CommandNode {
     pub token: String,
@@ -44,7 +44,7 @@ pub struct CommandNode {
     pub persistent: Vec<CommandFlag>,
     pub children: Vec<CommandNode>,
 }
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct CommandFlag {
     pub long: String,
@@ -103,6 +103,38 @@ impl Catalog {
                         }
                     }
                 }
+                None => {
+                    self.index.insert(root.token.clone(), self.roots.len());
+                    self.roots.push(root);
+                }
+            }
+        }
+        for (i, root) in self.roots.iter().enumerate() {
+            for alias in &root.aliases {
+                self.index.entry(alias.clone()).or_insert(i);
+            }
+        }
+        Ok(())
+    }
+
+    /// Merges a user-written spec file, where entries override the built-in
+    /// ones: a flag with the same token replaces the built-in flag, a subcommand
+    /// with the same token is merged recursively and a new one is added. The
+    /// file is fully validated before the catalog is touched, so a rejected
+    /// file leaves it unchanged. Descriptions are sanitized because they are
+    /// shown in the popup.
+    pub fn merge_user_spec(&mut self, data: &[u8]) -> Result<(), &'static str> {
+        let mut spec = Self::decode_unindexed(data)?;
+        let mut nodes = 0usize;
+        for root in &mut spec.roots {
+            sanitize_user_node(root, &mut nodes);
+        }
+        if nodes > MAX_USER_SPEC_NODES {
+            return Err("Completion spec has too many commands");
+        }
+        for root in spec.roots {
+            match self.index.get(&root.token).copied() {
+                Some(existing) => merge_node(&mut self.roots[existing], root),
                 None => {
                     self.index.insert(root.token.clone(), self.roots.len());
                     self.roots.push(root);
@@ -339,6 +371,62 @@ impl Catalog {
     }
 }
 
+/// Upper bound on commands and subcommands in one user spec file.
+pub const MAX_USER_SPEC_NODES: usize = 20_000;
+const MAX_DESCRIPTION_CHARS: usize = 256;
+
+fn sanitize_text(text: &str) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_DESCRIPTION_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn sanitize_user_node(node: &mut CommandNode, nodes: &mut usize) {
+    *nodes += 1;
+    node.description = sanitize_text(&node.description);
+    for flag in node.flags.iter_mut().chain(&mut node.persistent) {
+        flag.description = sanitize_text(&flag.description);
+    }
+    for child in &mut node.children {
+        sanitize_user_node(child, nodes);
+    }
+}
+
+/// A flag with the same token replaces the existing one in place.
+fn merge_flags(target: &mut Vec<CommandFlag>, source: Vec<CommandFlag>) {
+    for flag in source {
+        let token = flag.token();
+        match target.iter_mut().find(|f| f.token() == token) {
+            Some(existing) => *existing = flag,
+            None => target.push(flag),
+        }
+    }
+}
+
+/// `source` wins on conflicts; nothing already present is removed.
+fn merge_node(target: &mut CommandNode, source: CommandNode) {
+    if !source.description.is_empty() {
+        target.description = source.description;
+    }
+    target.hidden |= source.hidden;
+    for alias in source.aliases {
+        if alias != target.token && !target.aliases.contains(&alias) {
+            target.aliases.push(alias);
+        }
+    }
+    merge_flags(&mut target.flags, source.flags);
+    merge_flags(&mut target.persistent, source.persistent);
+    for child in source.children {
+        match target.children.iter_mut().find(|c| c.token == child.token) {
+            Some(existing) => merge_node(existing, child),
+            None => target.children.push(child),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::completion::catalog::{
@@ -380,6 +468,176 @@ mod tests {
                 .any(|t| t == "--user")
         );
         assert!(embedded_options("ss -").iter().any(|t| t == "--listening"));
+    }
+
+    fn candidates_of(catalog: &Catalog, input: &str) -> Vec<(String, String)> {
+        let mut context = parse_context(
+            input,
+            input.len(),
+            ShellDialect::Bash,
+            CompletionScope::legacy(),
+        )
+        .unwrap();
+        catalog
+            .candidates(&mut context)
+            .into_iter()
+            .map(|(text, description, _)| (text, description))
+            .collect()
+    }
+
+    fn description_of(catalog: &Catalog, input: &str, token: &str) -> Option<String> {
+        candidates_of(catalog, input)
+            .into_iter()
+            .find(|(text, _)| text == token)
+            .map(|(_, description)| description)
+    }
+
+    #[test]
+    fn user_spec_overrides_a_built_in_flag_and_adds_new_entries_without_duplicates() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let before = candidates_of(&catalog, "ls -")
+            .iter()
+            .filter(|(text, _)| text == "--all")
+            .count();
+        assert_eq!(before, 1);
+        let spec = br#"{"version":1,"roots":[
+            {"token":"ls","description":"mine","flags":[
+                {"long":"all","short":"a","description":"show everything"},
+                {"long":"fancy","description":"my own flag"}]},
+            {"token":"deploy","description":"ship it","children":[
+                {"token":"staging","description":"to staging","flags":[{"long":"force"}]}]}
+        ]}"#;
+        catalog.merge_user_spec(spec).unwrap();
+        let flags = candidates_of(&catalog, "ls -");
+        assert_eq!(flags.iter().filter(|(text, _)| text == "--all").count(), 1);
+        assert_eq!(
+            description_of(&catalog, "ls -", "--all").as_deref(),
+            Some("show everything")
+        );
+        assert!(flags.iter().any(|(text, _)| text == "--fancy"));
+        assert!(flags.iter().any(|(text, _)| text == "-l"), "built-ins stay");
+        assert_eq!(
+            description_of(&catalog, "", "deploy").as_deref(),
+            Some("ship it")
+        );
+        assert!(
+            candidates_of(&catalog, "deploy ")
+                .iter()
+                .any(|(text, _)| text == "staging")
+        );
+        assert!(
+            candidates_of(&catalog, "deploy staging --")
+                .iter()
+                .any(|(text, _)| text == "--force")
+        );
+    }
+
+    #[test]
+    fn the_documented_example_spec_is_valid_and_complete() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let example = br#"{
+  "version": 1,
+  "roots": [
+    {
+      "token": "deploy",
+      "description": "Ship a release",
+      "children": [
+        {
+          "token": "staging",
+          "description": "Deploy to staging",
+          "flags": [
+            { "long": "force", "short": "f", "description": "Skip checks" },
+            { "long": "env", "takes_value": true, "values": ["blue", "green"] }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "ls",
+      "flags": [{ "long": "all", "short": "a", "description": "Show hidden entries" }]
+    }
+  ]
+}"#;
+        catalog.merge_user_spec(example).unwrap();
+        assert_eq!(
+            description_of(&catalog, "deploy staging --", "--force").as_deref(),
+            Some("Skip checks")
+        );
+        let values = candidates_of(&catalog, "deploy staging --env ");
+        assert!(values.iter().any(|(text, _)| text == "blue"));
+        assert_eq!(
+            description_of(&catalog, "ls --al", "--all").as_deref(),
+            Some("Show hidden entries")
+        );
+    }
+
+    #[test]
+    fn user_spec_merges_subcommands_of_built_in_commands_recursively() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let spec = br#"{"version":1,"roots":[{"token":"git","children":[
+            {"token":"yolo","description":"push without asking"}]}]}"#;
+        catalog.merge_user_spec(spec).unwrap();
+        let subcommands = candidates_of(&catalog, "git ");
+        assert!(subcommands.iter().any(|(text, _)| text == "yolo"));
+        assert!(subcommands.iter().any(|(text, _)| text == "checkout"));
+    }
+
+    #[test]
+    fn rejected_user_specs_leave_the_catalog_unchanged() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let before = candidates_of(&catalog, "");
+        for spec in [
+            &b"not json"[..],
+            br#"{"version":2,"roots":[]}"#,
+            br#"{"version":1,"roots":[{"token":"bad token"}]}"#,
+            br#"{"version":1,"roots":[{"token":"ok","flags":[{"description":"no name"}]}]}"#,
+            br#"{"version":1,"roots":[{"token":"ok","flags":[{"long":"x","values":["a b"]}]}]}"#,
+            &[0xff, 0xfe][..],
+            &b""[..],
+        ] {
+            assert!(catalog.merge_user_spec(spec).is_err());
+        }
+        assert_eq!(candidates_of(&catalog, ""), before);
+    }
+
+    #[test]
+    fn user_spec_descriptions_cannot_carry_terminal_controls_or_unbounded_text() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let long = "x".repeat(5000);
+        let spec = format!(
+            r#"{{"version":1,"roots":[{{"token":"tool","description":"a\u001b[31mb\u0007","flags":[{{"long":"v","description":"{long}"}}]}}]}}"#
+        );
+        catalog.merge_user_spec(spec.as_bytes()).unwrap();
+        assert_eq!(
+            description_of(&catalog, "", "tool").as_deref(),
+            Some("a[31mb")
+        );
+        let described = description_of(&catalog, "tool --", "--v").unwrap();
+        assert_eq!(described.chars().count(), 256);
+    }
+
+    #[test]
+    fn user_spec_with_too_many_commands_is_rejected() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let roots: Vec<String> = (0..=super::MAX_USER_SPEC_NODES)
+            .map(|n| format!(r#"{{"token":"c{n}"}}"#))
+            .collect();
+        let spec = format!(r#"{{"version":1,"roots":[{}]}}"#, roots.join(","));
+        assert!(catalog.merge_user_spec(spec.as_bytes()).is_err());
+        assert!(description_of(&catalog, "", "c0").is_none());
+    }
+
+    #[test]
+    fn user_alias_never_steals_a_built_in_command_token() {
+        let mut catalog = Catalog::embedded().unwrap();
+        let spec = br#"{"version":1,"roots":[{"token":"mytool","aliases":["git"],
+            "flags":[{"long":"mine"}]}]}"#;
+        catalog.merge_user_spec(spec).unwrap();
+        assert!(
+            candidates_of(&catalog, "git ")
+                .iter()
+                .any(|(text, _)| text == "checkout")
+        );
     }
 
     #[test]
