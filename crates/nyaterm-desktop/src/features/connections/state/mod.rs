@@ -13,14 +13,14 @@ use nyaterm_core::connection_search::normalize_connection_search_query;
 use nyaterm_core::{AppSettingsSummary, ConnectionType, Group, SavedConnection};
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
 
+use self::list_model::{
+    ConnectionListRow, ConnectionSection, connection_sections, flatten_connection_rows,
+    widest_connection_row,
+};
 use super::catalog::ConnectionCatalogState;
 use super::connection_runtime::ConnectionEditorToggle;
 use super::interaction::{ConnectionDropPosition, ConnectionDropTarget};
 use crate::features::NyaTermApp;
-use crate::features::pages::connections::list::{
-    ConnectionListRow, ConnectionSection, connection_sections, flatten_connection_rows,
-    widest_connection_row,
-};
 use crate::models::{
     ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorForwardingTab,
     ConnectionEditorPasswordSource, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
@@ -36,6 +36,7 @@ use nyaterm_ui::{
 mod editor_logic;
 pub(in crate::features) mod import;
 mod list_logic;
+pub(in crate::features) mod list_model;
 mod network_logic;
 mod password;
 
@@ -66,7 +67,6 @@ use self::list_logic::{
     saved_connections_in_group_tree_for_list_state, select_connection_ids,
     selected_connections_for_list_state, set_connection_drop_target_if_changed,
     set_connection_group_hover, sync_connection_search_expansion,
-    visible_connection_ids_for_list_state,
 };
 use self::network_logic::{
     clear_network_proxy_editor, clear_network_tunnel_editor, remove_network_group_references,
@@ -138,6 +138,8 @@ struct ConnectionListModelCache {
     rows_key: Option<ConnectionListRowsKey>,
     snapshot: Option<ConnectionListModelSnapshot>,
     pending_sections_ms: f64,
+    #[cfg(test)]
+    section_rebuilds: usize,
 }
 
 pub(in crate::features) struct ConnectionFeatureFocus {
@@ -427,6 +429,11 @@ impl ConnectionFeatureState {
 
     pub(in crate::features) fn connection_list_model(&mut self) -> ConnectionListModelSnapshot {
         let query = self.list.search_query();
+        let query_changed = self
+            .list_model
+            .section_key
+            .as_ref()
+            .is_none_or(|key| key.query != query);
         let section_key = ConnectionListSectionKey {
             connections_revision: self.catalog.connections_revision(),
             groups_revision: self.catalog.groups_revision(),
@@ -443,6 +450,10 @@ impl ConnectionFeatureState {
                 &query,
                 self.list.sort_mode(),
             );
+            #[cfg(test)]
+            {
+                self.list_model.section_rebuilds += 1;
+            }
             self.list_model.section_key = Some(section_key.clone());
             self.list_model.snapshot = None;
             self.list_model.rows_key = None;
@@ -482,6 +493,17 @@ impl ConnectionFeatureState {
             self.list.expanded_group_ids(),
             self.group_editor.draft.as_ref(),
         );
+        if query.is_empty() {
+            self.list.keyboard_active_connection_id = None;
+        } else if query_changed || !rows.iter().any(|row| matches!(row,
+            ConnectionListRow::Connection { connection_id, .. }
+                if Some(connection_id.as_str()) == self.list.keyboard_active_connection_id.as_deref()
+        )) {
+            self.list.keyboard_active_connection_id = rows.iter().find_map(|row| match row {
+                ConnectionListRow::Connection { connection_id, .. } => Some(connection_id.clone()),
+                _ => None,
+            });
+        }
         let flatten_ms = duration_ms(flatten_started_at.elapsed());
         let widest_started_at = Instant::now();
         let widest_row = widest_connection_row(&rows, self.catalog.connections());
@@ -583,14 +605,15 @@ impl ConnectionFeatureState {
         )
     }
 
-    pub fn visible_connection_ids(&self) -> Vec<String> {
-        visible_connection_ids_for_list_state(
-            self.catalog.connections(),
-            self.catalog.groups(),
-            &self.list.search_query(),
-            self.list.sort_mode,
-            &self.list.expanded_group_ids,
-        )
+    pub fn visible_connection_ids(&mut self) -> Vec<String> {
+        self.connection_list_model()
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                ConnectionListRow::Connection { connection_id, .. } => Some(connection_id.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn list_expanded_group_ids(&self) -> &HashSet<String> {

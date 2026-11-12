@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use super::list_model::{ConnectionListRow, connection_sections, flatten_connection_rows};
 use super::{
     ConnectionEditorFeatureState, apply_connection_editor_shell_path,
     apply_connection_editor_working_dir, clear_connection_editor_runtime_state,
@@ -21,13 +22,10 @@ use super::{
     set_network_proxy_protocol, set_network_tunnel_bind_localhost, set_network_tunnel_connection,
     set_network_tunnel_editor_error, set_network_tunnel_editor_field, set_network_tunnel_group,
     set_network_tunnel_type, sync_connection_search_expansion, toggle_connection_editor_flag,
-    toggle_network_tunnel_auto_open, visible_connection_ids_for_list_state,
+    toggle_network_tunnel_auto_open,
 };
 use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
 use crate::features::NyaTermApp;
-use crate::features::pages::connections::list::{
-    ConnectionListRow, connection_sections, flatten_connection_rows,
-};
 use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDropPosition,
     connections::ConnectionDropTarget, connections::ConnectionEditorToggle,
@@ -443,6 +441,9 @@ fn group_search_navigation_and_range_selection_follow_rendered_connection_order(
         group("child", "Services", Some("parent"), 0),
         group("unrelated", "Staging", None, 1),
     ];
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
     for mode in [
         ConnectionSortMode::Default,
         ConnectionSortMode::NameAsc,
@@ -453,21 +454,30 @@ fn group_search_navigation_and_range_selection_follow_rendered_connection_order(
             HashSet::from(["parent".to_owned()]),
             HashSet::new(),
         ] {
-            let sections = connection_sections(&connections, &groups, "prod", mode);
-            let rendered = flatten_connection_rows(&sections, &expanded, None)
-                .into_iter()
-                .filter_map(|row| match row {
-                    ConnectionListRow::Connection { connection_id, .. } => Some(connection_id),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            let visible = visible_connection_ids_for_list_state(
-                &connections,
-                &groups,
-                "prod",
-                mode,
-                &expanded,
-            );
+            let (rendered, visible) = cx.update_entity(&app, |app, _| {
+                app.connection_state
+                    .replace_loaded(connections.clone(), groups.clone());
+                app.connection_state.list.sort_mode = mode;
+                app.connection_state.set_list_search_text("prod".into());
+                app.connection_state.connection_list_model();
+                app.connection_state.set_all_catalog_groups_expanded(false);
+                for id in &expanded {
+                    app.connection_state.expand_list_group(id.clone());
+                }
+                let rendered = app
+                    .connection_state
+                    .connection_list_model()
+                    .rows
+                    .iter()
+                    .filter_map(|row| match row {
+                        ConnectionListRow::Connection { connection_id, .. } => {
+                            Some(connection_id.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                (rendered, app.connection_state.visible_connection_ids())
+            });
             assert_eq!(visible, rendered);
             assert!(!visible.contains(&"excluded".to_owned()));
             let mut selected = HashSet::new();
@@ -706,8 +716,9 @@ fn all_folder_expansion_updates_nested_rows_and_only_invalidates_on_change() {
         let _ = app.connection_state.connection_list_model();
         app.connection_state.set_all_catalog_groups_expanded(false);
         assert!(app.connection_state.list_expanded_group_ids().is_empty());
-        assert_eq!(app.connection_state.visible_connection_ids(), vec!["root"]);
         assert!(!app.connection_state.connection_list_model().stats.cache_hit);
+        assert_eq!(app.connection_state.visible_connection_ids(), vec!["root"]);
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
 
         app.connection_state.set_all_catalog_groups_expanded(false);
         assert!(app.connection_state.connection_list_model().stats.cache_hit);
@@ -717,11 +728,12 @@ fn all_folder_expansion_updates_nested_rows_and_only_invalidates_on_change() {
             app.connection_state.list_expanded_group_ids(),
             &HashSet::from(["parent-group".to_string(), "child-group".to_string()])
         );
+        assert!(!app.connection_state.connection_list_model().stats.cache_hit);
         assert_eq!(
             app.connection_state.visible_connection_ids(),
             vec!["child", "parent", "root"]
         );
-        assert!(!app.connection_state.connection_list_model().stats.cache_hit);
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
 
         app.connection_state.set_all_catalog_groups_expanded(true);
         assert!(app.connection_state.connection_list_model().stats.cache_hit);
@@ -2966,4 +2978,162 @@ fn ssh_compatibility_toggle_preserves_profile_terminal_and_sftp_settings() {
             editor.sftp_compatibility_mode
         );
     }
+}
+
+fn visible_connection_ids_for_list_state(
+    connections: &[SavedConnection],
+    groups: &[Group],
+    query: &str,
+    sort_mode: ConnectionSortMode,
+    expanded: &HashSet<String>,
+) -> Vec<String> {
+    flatten_connection_rows(
+        &connection_sections(connections, groups, query, sort_mode),
+        expanded,
+        None,
+    )
+    .into_iter()
+    .filter_map(|row| match row {
+        ConnectionListRow::Connection { connection_id, .. } => Some(connection_id),
+        _ => None,
+    })
+    .collect()
+}
+
+#[test]
+fn ranked_search_navigation_selection_and_cache_share_the_same_rows() {
+    use std::sync::Arc;
+
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let groups = vec![group("group", "Servers", None, 0)];
+        let mut connections = vec![
+            saved_connection("prefix", "production", Some("group"), 0),
+            saved_connection("exact", "prod", Some("group"), 1),
+            saved_connection("substring", "my-prod", Some("group"), 2),
+        ];
+        app.connection_state
+            .replace_loaded(connections.clone(), groups.clone());
+        app.connection_state.set_all_catalog_groups_expanded(false);
+        app.connection_state.connection_list_model();
+        let initial_builds = app.connection_state.list_model.section_rebuilds;
+        app.connection_state.set_list_search_text("prod".into());
+        app.sync_connection_keyboard_active(cx);
+        assert_eq!(
+            app.connection_state.visible_connection_ids(),
+            ["exact", "prefix", "substring"]
+        );
+        assert_eq!(
+            app.connection_state.list_keyboard_active_connection_id(),
+            Some("exact")
+        );
+        assert_eq!(
+            app.connection_state.list_model.section_rebuilds,
+            initial_builds + 1
+        );
+        let snapshot = app.connection_state.connection_list_model();
+        assert!(snapshot.stats.cache_hit);
+
+        app.connection_state
+            .set_list_keyboard_active_connection_id(Some("prefix".into()));
+        app.select_connection("exact".into(), false, false, cx);
+        app.select_connection("prefix".into(), false, true, cx);
+        assert_eq!(
+            app.connection_state.list_selection().as_ref(),
+            &HashSet::from(["exact".into(), "prefix".into()])
+        );
+        app.connection_state
+            .set_list_group_hover("group".into(), true);
+        let unchanged = app.connection_state.connection_list_model();
+        assert!(Arc::ptr_eq(&snapshot.rows, &unchanged.rows));
+        assert_eq!(
+            app.connection_state.list_model.section_rebuilds,
+            initial_builds + 1
+        );
+
+        // A catalog refresh can reorder matches without stealing an existing activity.
+        connections[2].name = "prod".into();
+        app.connection_state.replace_loaded(connections, groups);
+        app.connection_state.connection_list_model();
+        assert_eq!(
+            app.connection_state.list_keyboard_active_connection_id(),
+            Some("prefix")
+        );
+        assert_eq!(
+            app.connection_state.list_model.section_rebuilds,
+            initial_builds + 2
+        );
+        app.connection_state
+            .toggle_list_group_expanded("group".into());
+        assert!(app.connection_state.visible_connection_ids().is_empty());
+        assert_eq!(
+            app.connection_state.list_model.section_rebuilds,
+            initial_builds + 2
+        );
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
+
+        app.connection_state
+            .set_list_search_text("production".into());
+        assert_eq!(app.connection_state.visible_connection_ids(), ["prefix"]);
+        assert_eq!(
+            app.connection_state.list_keyboard_active_connection_id(),
+            Some("prefix")
+        );
+        app.connection_state.set_list_search_text(String::new());
+        assert!(app.connection_state.visible_connection_ids().is_empty());
+        assert!(app.connection_state.list_expanded_group_ids().is_empty());
+        assert!(
+            app.connection_state
+                .list_keyboard_active_connection_id()
+                .is_none()
+        );
+        app.connection_state.expand_list_group("group".into());
+        assert_eq!(
+            app.connection_state.visible_connection_ids(),
+            ["prefix", "exact", "substring"]
+        );
+    });
+}
+
+#[test]
+fn large_ranked_catalog_reuses_scoring_across_navigation_and_fold_changes() {
+    use std::time::Instant;
+
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, _| {
+        let groups: Vec<_> = (0..100)
+            .map(|n| group(&format!("g{n}"), &format!("Group {n}"), None, n))
+            .collect();
+        let connections = (0..4000)
+            .map(|n| {
+                saved_connection(
+                    &format!("c{n}"),
+                    &format!("fixture-host-{n}"),
+                    Some(&format!("g{}", n % 100)),
+                    n,
+                )
+            })
+            .collect();
+        app.connection_state.replace_loaded(connections, groups);
+        app.connection_state.set_list_search_text("host".into());
+        let started = Instant::now();
+        let snapshot = app.connection_state.connection_list_model();
+        let first = started.elapsed();
+        let builds = app.connection_state.list_model.section_rebuilds;
+        let started = Instant::now();
+        assert!(app.connection_state.connection_list_model().stats.cache_hit);
+        let cached = started.elapsed();
+        assert_eq!(app.connection_state.visible_connection_ids().len(), 4000);
+        app.connection_state.toggle_list_group_expanded("g0".into());
+        assert_eq!(app.connection_state.visible_connection_ids().len(), 3960);
+        assert_eq!(app.connection_state.list_model.section_rebuilds, builds);
+        eprintln!(
+            "ranked fixture: {} rows, first {first:?}, cached {cached:?}",
+            snapshot.rows.len()
+        );
+    });
 }

@@ -343,23 +343,14 @@ impl NyaTermApp {
         true
     }
 
-    /// Drop the keyboard-active row once the filter no longer shows it.
+    /// Settle search expansion and keyboard activity against the rendered model.
     pub(in crate::features) fn sync_connection_keyboard_active(&mut self, cx: &mut Context<Self>) {
-        let Some(active) = self
+        let previous = self
             .connection_state
             .list_keyboard_active_connection_id()
-            .map(ToOwned::to_owned)
-        else {
-            return;
-        };
-        if !self
-            .connection_state
-            .visible_connection_ids()
-            .iter()
-            .any(|candidate| candidate == &active)
-        {
-            self.connection_state
-                .set_list_keyboard_active_connection_id(None);
+            .map(ToOwned::to_owned);
+        self.connection_state.connection_list_model();
+        if self.connection_state.list_keyboard_active_connection_id() != previous.as_deref() {
             cx.notify();
         }
     }
