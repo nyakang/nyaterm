@@ -132,6 +132,7 @@ impl NyaTermApp {
         state.selection_origin_version = None;
         state.mapping = None;
         self.schedule_shell_edit_confirmation_timeout(cx);
+        self.retain_command_suggestions_during_edit(text, cx);
         self.reconcile_command_suggestion_availability(cx);
     }
 
