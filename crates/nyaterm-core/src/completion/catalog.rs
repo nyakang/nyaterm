@@ -504,6 +504,12 @@ mod tests {
     }
 
     #[test]
+    fn an_optional_value_flag_does_not_swallow_the_next_word() {
+        let after_color = embedded_options("ls --color -");
+        assert!(after_color.iter().any(|t| t == "--all"));
+    }
+
+    #[test]
     fn supplement_leaves_fully_generated_commands_unchanged() {
         let input = "git --";
         let mut context = parse_context(
