@@ -949,7 +949,7 @@ impl NyaTermApp {
                 ))
             })
             .when(overlay.favorites_menu_open, |this| {
-                this.child(regional_overlay_layer(
+                this.child(full_window_overlay_layer(
                     "transfer-favorites-menu-input-layer",
                     self.transfer_browser_favorites_menu_overlay(cx),
                 ))
