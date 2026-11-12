@@ -235,6 +235,196 @@ fn command_segment_starts_interactive_program(segment: &str) -> bool {
     false
 }
 
+/// True when an unquoted `|` joins commands; the right side then reads a pipe,
+/// not a terminal, so it cannot open an interactive shell.
+fn has_unquoted_pipe(input: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, &ch) in chars.iter().enumerate() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if quote.is_some() {
+            if quote == Some(ch) {
+                quote = None;
+            }
+        } else if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        } else if ch == '|'
+            && chars.get(index + 1) != Some(&'|')
+            && (index == 0 || chars[index - 1] != '|')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Positional arguments, skipping options and the values of `with_value`
+/// options, plus whether a `--` ended option parsing.
+fn positionals<'a>(tokens: &'a [String], with_value: &[&str]) -> (Vec<&'a str>, bool) {
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        if token == "--" {
+            return (result, true);
+        }
+        if with_value.contains(&token) {
+            index += 2;
+            continue;
+        }
+        if token.starts_with('-') && token != "-" {
+            index += 1;
+            continue;
+        }
+        result.push(token);
+        index += 1;
+    }
+    (result, false)
+}
+
+fn short_cluster_has(token: &str, letters: &str) -> bool {
+    token.starts_with('-')
+        && !token.starts_with("--")
+        && token.len() > 1
+        && token[1..].chars().all(|c| c.is_ascii_alphabetic())
+        && token[1..].chars().any(|c| letters.contains(c))
+}
+
+fn container_exec_is_interactive(args: &[String], short: &str, long: &[&str]) -> bool {
+    args.iter().any(|token| {
+        long.contains(&token.as_str())
+            || (short_cluster_has(token, short) && !short_cluster_has(token, "d"))
+    })
+}
+
+fn segment_enters_foreign_shell(segment: &str) -> bool {
+    let tokens = unwrap_command(&tokenize_shell_like(segment));
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    let name = command_name(first);
+    let args = &tokens[1..];
+    let subcommands: Vec<&str> = args
+        .iter()
+        .filter(|token| !token.starts_with('-'))
+        .map(String::as_str)
+        .collect();
+    let sub = subcommands.first().copied();
+    match name.trim_end_matches(".exe") {
+        // A remote command (`ssh host uptime`) or a forward-only flag returns to
+        // the local prompt by itself, so only a bare `ssh host` opens a shell.
+        "ssh" => {
+            const VALUE: &[&str] = &[
+                "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o",
+                "-p", "-Q", "-R", "-S", "-W", "-w", "-B",
+            ];
+            let batch = args
+                .iter()
+                .any(|t| ["-N", "-f", "-W", "-O", "-G", "-Q", "-V", "-s"].contains(&t.as_str()));
+            let (positional, _) = positionals(args, VALUE);
+            !batch && positional.len() == 1
+        }
+        "mosh" => {
+            const VALUE: &[&str] = &["--ssh", "--port", "-p", "--predict", "--family", "--server"];
+            let (positional, dashdash) = positionals(args, VALUE);
+            !dashdash && positional.len() == 1
+        }
+        "telnet" => !positionals(args, &["-l", "-e", "-b", "-s"]).0.is_empty(),
+        "docker" | "podman" | "nerdctl" => {
+            let verb = if sub == Some("container") {
+                subcommands.get(1).copied()
+            } else {
+                sub
+            };
+            matches!(verb, Some("exec" | "run" | "attach"))
+                && container_exec_is_interactive(args, "it", &["--interactive", "--tty"])
+        }
+        "kubectl" | "oc" => match sub {
+            Some("rsh") => true,
+            Some("exec" | "debug" | "run") => {
+                container_exec_is_interactive(args, "it", &["--stdin", "--tty"])
+            }
+            _ => false,
+        },
+        "lxc" | "incus" => matches!(sub, Some("exec" | "shell")),
+        "machinectl" => matches!(sub, Some("shell" | "login")),
+        "multipass" | "limactl" | "distrobox" | "toolbox" => {
+            matches!(sub, Some("shell" | "enter"))
+        }
+        "vagrant" => sub == Some("ssh") && !has_option(args, "--command", Some('c')),
+        "nsenter" => true,
+        "chroot" => positionals(args, &[]).0.len() == 1,
+        "wsl" => {
+            const MANAGEMENT: &[&str] = &[
+                "-l",
+                "--list",
+                "--shutdown",
+                "-t",
+                "--terminate",
+                "--install",
+                "--update",
+                "--status",
+                "--version",
+                "-v",
+                "--set-default",
+                "-s",
+                "--set-version",
+                "--unregister",
+                "--export",
+                "--import",
+                "--mount",
+                "--unmount",
+                "-e",
+                "--exec",
+                "--help",
+                "--manage",
+                "--import-in-place",
+                "--set-default-version",
+            ];
+            let (positional, dashdash) =
+                positionals(args, &["-d", "--distribution", "-u", "--user", "--cd"]);
+            !dashdash
+                && !args.iter().any(|t| MANAGEMENT.contains(&t.as_str()))
+                && positional.iter().all(|p| p.starts_with('~'))
+        }
+        "adb" => positionals(args, &["-s", "-t", "-H", "-P", "-L"]).0 == ["shell"],
+        _ => false,
+    }
+}
+
+/// How many interactive shells on another host, container or distro this
+/// submitted command line opens. Same-host switches (`su`, `sudo -i`, `bash`)
+/// do not count: the file system the suggestions list stays the same.
+pub fn command_enters_foreign_shell(command: &str) -> usize {
+    let normalized = sanitize_terminal_command(command);
+    if normalized.is_empty()
+        || has_unquoted_pipe(&normalized)
+        || (normalized.ends_with('&') && !normalized.ends_with("&&"))
+    {
+        return 0;
+    }
+    split_command_segments(&normalized)
+        .iter()
+        .filter(|segment| segment_enters_foreign_shell(segment))
+        .count()
+}
+
+/// True when the submitted line ends the current shell (`exit`, `logout`).
+pub fn command_leaves_shell(command: &str) -> bool {
+    split_command_segments(&sanitize_terminal_command(command))
+        .iter()
+        .any(|segment| {
+            let tokens = unwrap_command(&tokenize_shell_like(segment));
+            tokens
+                .first()
+                .is_some_and(|first| matches!(command_name(first).as_str(), "exit" | "logout"))
+        })
+}
+
 pub fn command_starts_suggestion_suppressing_program(command: &str) -> bool {
     let normalized = sanitize_terminal_command(command);
     if normalized.is_empty() {
@@ -341,6 +531,101 @@ pub fn is_pager_single_key_input(data: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::command_suggestion_suppression::CommandSuggestionSuppression;
+
+    #[test]
+    fn foreign_shells_are_those_on_another_host_container_or_distro() {
+        use crate::command_suggestion_suppression::command_enters_foreign_shell as enters;
+        for command in [
+            "ssh host",
+            "ssh -p 2222 -i ~/.ssh/key user@host",
+            "/usr/bin/ssh -o StrictHostKeyChecking=no host",
+            "sudo ssh host",
+            "FOO=1 ssh host",
+            "exec ssh host",
+            "mosh host",
+            "telnet 10.0.0.1 23",
+            "docker exec -it web bash",
+            "docker exec -ti web sh",
+            "docker run --rm -it ubuntu",
+            "podman exec --interactive --tty c bash",
+            "docker container exec -it web bash",
+            "kubectl exec -it pod -- sh",
+            "oc rsh pod",
+            "lxc exec box -- bash",
+            "machinectl shell root@box",
+            "vagrant ssh",
+            "nsenter -t 1 -a",
+            "chroot /mnt/root",
+            "wsl",
+            "wsl -d Ubuntu",
+            "wsl ~",
+            "adb shell",
+            "adb -s emulator-5554 shell",
+            "cd /tmp && ssh host",
+        ] {
+            assert_eq!(enters(command), 1, "{command}");
+        }
+        assert_eq!(enters("ssh a; ssh b"), 2);
+    }
+
+    #[test]
+    fn commands_that_return_by_themselves_are_not_foreign_shells() {
+        use crate::command_suggestion_suppression::command_enters_foreign_shell as enters;
+        for command in [
+            "",
+            "ls -la",
+            "su",
+            "sudo -i",
+            "bash",
+            "tmux",
+            "ssh host uptime",
+            "ssh -N -L 8080:localhost:80 host",
+            "ssh -f host",
+            "ssh -W host:22 jump",
+            "ssh host &",
+            "cat key | ssh host 'cat > key'",
+            "mosh host -- top",
+            "telnet",
+            "docker exec web ls",
+            "docker run --rm ubuntu echo hi",
+            "docker run -d nginx",
+            "docker run -dit nginx",
+            "docker ps",
+            "kubectl get pods",
+            "kubectl exec pod -- ls",
+            "lxc list",
+            "vagrant up",
+            "chroot /mnt/root /bin/ls",
+            "wsl -l -v",
+            "wsl --shutdown",
+            "wsl -d Ubuntu -e ls",
+            "wsl ls",
+            "adb devices",
+            "adb shell ls /sdcard",
+            "echo ssh host",
+            "grep ssh file",
+        ] {
+            assert_eq!(enters(command), 0, "{command}");
+        }
+    }
+
+    #[test]
+    fn exit_and_logout_leave_the_shell() {
+        use crate::command_suggestion_suppression::command_leaves_shell as leaves;
+        for command in [
+            "exit",
+            "logout",
+            "exit 1",
+            "  exit  ",
+            "cd /; exit",
+            "exec exit",
+        ] {
+            assert!(leaves(command), "{command}");
+        }
+        for command in ["", "echo exit", "exitcode", "ls exit", "ssh exit"] {
+            assert!(!leaves(command), "{command}");
+        }
+    }
 
     #[test]
     fn confirmed_child_prompt_releases_only_outer_command_suppression() {

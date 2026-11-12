@@ -6,7 +6,9 @@ use zeroize::Zeroize;
 
 use gpui::Context;
 use nyaterm_core::command_starts_suggestion_suppressing_program;
-use nyaterm_core::command_suggestion_suppression::command_starts_line_editor;
+use nyaterm_core::command_suggestion_suppression::{
+    command_enters_foreign_shell, command_leaves_shell, command_starts_line_editor,
+};
 use nyaterm_core::completion::types::ShellDialect;
 use nyaterm_core::terminal::editing::{
     EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase, ShellLineEditing,
@@ -94,9 +96,25 @@ impl NyaTermApp {
             self.terminal.assist.command_suggestion_suppression =
                 CommandSuggestionSuppression::None;
         }
+        // Ctrl+D on an empty line at a shell prompt ends that shell. While a
+        // program runs it only closes that program's stdin, so it is ignored.
+        if !was_suppressed
+            && text == "\u{4}"
+            && self.terminal.editing.predicted_input().value.is_empty()
+        {
+            self.terminal.editing.state_mut().foreign_shells.leave();
+        }
         if !was_suppressed && text.contains(['\r', '\n']) {
             let submitted = get_tracked_submission_command(self.terminal.editing.predicted_input());
             if !submitted.is_empty() {
+                let entered = command_enters_foreign_shell(&submitted);
+                let state = self.terminal.editing.state_mut();
+                if entered > 0 {
+                    let outer_prompt = state.line_editor_prompt.clone();
+                    state.foreign_shells.enter(entered, outer_prompt.as_deref());
+                } else if command_leaves_shell(&submitted) {
+                    state.foreign_shells.leave();
+                }
                 if command_starts_suggestion_suppressing_program(&submitted) {
                     self.terminal.assist.command_suggestion_suppression =
                         CommandSuggestionSuppression::InteractiveProgram;
@@ -202,6 +220,10 @@ impl NyaTermApp {
             return;
         }
         self.terminal.editing.activate(id);
+        if self.session.is_disconnected(id) {
+            // A reconnect starts a fresh shell on the session's own host.
+            self.terminal.editing.state_mut().foreign_shells.reset();
+        }
         if self.session.is_disconnected(id)
             || self.active_terminal_uses_alternate_screen()
             || self.is_credential_prompt_input_mode()
@@ -367,6 +389,9 @@ impl NyaTermApp {
                     }
                 });
             state.observe_editor_evidence(backend);
+            if let Some(prefix) = prompt.as_deref().filter(|prefix| !prefix.trim().is_empty()) {
+                state.foreign_shells.note_prompt(prefix);
+            }
             if state.echo_line_editor
                 && prompt
                     .as_ref()

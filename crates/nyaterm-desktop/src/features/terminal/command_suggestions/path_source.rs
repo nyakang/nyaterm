@@ -221,6 +221,17 @@ impl NyaTermApp {
         dialect: ShellDialect,
     ) -> Option<PathSource> {
         let backend = self.session.file_browser_backend_for_session(session_id)?;
+        // Inside `ssh`, `docker exec -it` and the like the session's own file
+        // system is not the one the user is looking at.
+        if self
+            .terminal
+            .editing
+            .sessions
+            .get(session_id)
+            .is_some_and(|state| state.foreign_shells.is_active())
+        {
+            return None;
+        }
         // Windows consoles use drive letters and backslashes, and WSL guest
         // paths need translation, so only POSIX-style hosts are completed.
         if backend == FileBrowserBackendKind::Adb
@@ -244,6 +255,7 @@ impl NyaTermApp {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use gpui::AppContext as _;
     use nyaterm_core::completion::path::path_query_for_input;
 
     fn source(input: &str, dir: &std::path::Path) -> PathSource {
@@ -274,6 +286,77 @@ mod tests {
         let again =
             futures::executor::block_on(source.candidates(input, |_| std::future::ready(())));
         assert_eq!(again.len(), 1);
+    }
+
+    fn submit(app: &mut NyaTermApp, cx: &mut gpui::Context<NyaTermApp>, line: &str) {
+        submit_at(app, cx, "$ ", line);
+    }
+
+    fn submit_at(
+        app: &mut NyaTermApp,
+        cx: &mut gpui::Context<NyaTermApp>,
+        prompt: &str,
+        line: &str,
+    ) {
+        app.note_shell_editing_input(line.as_bytes(), cx);
+        app.terminal
+            .seed_session_view("s1".into(), format!("{prompt}{line}"), "UTF-8");
+        app.reconcile_shell_editing("s1", cx);
+        app.note_shell_editing_input(b"\r", cx);
+    }
+
+    fn has_path_source(app: &mut NyaTermApp) -> bool {
+        app.path_source_for_session("s1", "cd /", ShellDialect::Bash)
+            .is_some()
+    }
+
+    #[test]
+    fn path_suggestions_stop_inside_a_nested_shell_and_resume_after_exit() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+        let dir = TestConfigDir::new("nyaterm-path-nested-shell");
+        let mut cx = gpui::TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            assert!(has_path_source(app), "the local shell is the baseline");
+
+            // Same-host switches and commands that return on their own keep it.
+            submit(app, cx, "sudo -i");
+            submit(app, cx, "ssh host uptime");
+            assert!(has_path_source(app));
+
+            submit(app, cx, "ssh host");
+            assert!(!has_path_source(app));
+            submit_at(app, cx, "root@box:~# ", "docker exec -it web bash");
+            assert!(!has_path_source(app));
+
+            submit_at(app, cx, "root@web:/# ", "exit");
+            assert!(!has_path_source(app), "one shell is still nested");
+            submit_at(app, cx, "root@box:~# ", "exit");
+            assert!(has_path_source(app));
+        });
+    }
+
+    #[test]
+    fn seeing_the_outer_prompt_again_ends_the_guard_after_a_failed_ssh() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+        let dir = TestConfigDir::new("nyaterm-path-failed-ssh");
+        let mut cx = gpui::TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            // The prompt is learned from the first confirmed echo.
+            submit_at(app, cx, "$ ", "ls");
+            submit_at(app, cx, "$ ", "ssh unreachable");
+            assert!(!has_path_source(app));
+            // `ssh` failed and the same prompt came back for the next command.
+            submit_at(app, cx, "$ ", "ls");
+            assert!(has_path_source(app));
+        });
     }
 
     #[test]
