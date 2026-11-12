@@ -737,30 +737,54 @@ fn strip_finish_trailer(
     pending: &mut VecDeque<SessionEvent>,
 ) -> Vec<u8> {
     let deadline = Instant::now() + FINISH_WAIT;
+    strip_finish_trailer_with(
+        session,
+        direction,
+        pending,
+        || {
+            Instant::now() < deadline
+                && !shared.cancelled.load(Ordering::Acquire)
+                && !shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .closed
+                && !manager.event_queue.session_cancelled(session)
+                && !manager.event_queue.session_ended(session)
+        },
+        || {
+            manager
+                .drain_events_blocking_for_consumer_with_output_budget(
+                    consumer,
+                    256,
+                    INPUT_BATCH,
+                    IDLE_WAIT.min(deadline.saturating_duration_since(Instant::now())),
+                )
+                .ok()
+                .map(|drain| drain.events.into())
+        },
+    )
+}
+
+// Inject waiting and event delivery so fragmented arrivals can be tested without
+// assuming the OS schedules a producer within the protocol's finish deadline.
+fn strip_finish_trailer_with(
+    session: &str,
+    direction: ZmodemDirection,
+    pending: &mut VecDeque<SessionEvent>,
+    mut keep_waiting: impl FnMut() -> bool,
+    mut drain: impl FnMut() -> Option<VecDeque<SessionEvent>>,
+) -> Vec<u8> {
     let mut trailer = FinishTrailer::new(direction);
     loop {
-        if Instant::now() >= deadline
-            || shared.cancelled.load(Ordering::Acquire)
-            || shared
-                .state
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .closed
-            || manager.event_queue.session_cancelled(session)
-            || manager.event_queue.session_ended(session)
-        {
+        if !keep_waiting() {
             break;
         }
         if pending.is_empty() {
-            let Ok(drain) = manager.drain_events_blocking_for_consumer_with_output_budget(
-                consumer,
-                256,
-                INPUT_BATCH,
-                IDLE_WAIT.min(deadline.saturating_duration_since(Instant::now())),
-            ) else {
+            let Some(events) = drain() else {
                 break;
             };
-            pending.extend(drain.events);
+            pending.extend(events);
             continue;
         }
         let Some(SessionEvent::Output { session_id, data }) = pending.front() else {

@@ -15,6 +15,7 @@
     {"path": "crates/nyaterm-desktop/src/features/pages/workspace/group_tests.rs", "max_count": 1, "reason": "The workspace stack-regression test uses a named one-MiB-stack thread and joins it before returning."},
     {"path": "crates/nyaterm-desktop/src/features/session/auth_runtime.rs", "max_count": 1, "reason": "The prompt broker test joins its named request thread."},
     {"path": "crates/nyaterm-desktop/src/app_shell/session_hub/ssh_connections.rs", "max_count": 1, "reason": "SshConnectionPool owns its process-wide disconnect worker and DisconnectWorker joins it during shutdown."},
+    {"path": "crates/nyaterm-desktop/src/app_shell/session_hub/ssh_connections/background.rs", "max_count": 1, "reason": "Background SSH acquisition coalesces callers onto one connector per cached entry, tracks completion in EntryState, and cancels the dial when the last waiter cancels; a dedicated connector lets each waiting scheduler job respect its own cancellation and deadline."},
     {"path": "crates/nyaterm-desktop/src/features/session/xymodem_runtime.rs", "max_count": 1, "reason": "Per-session X/YMODEM state owns, stops, and joins its upload worker."}
   ],
   "raw_scroll_container": [
@@ -30,6 +31,7 @@
     {"path": "crates/nyaterm-desktop/src/features/pages/settings/ai/models/tests.rs", "max_count": 1, "reason": "The model-row layout fixture tracks a caller-owned ScrollHandle to verify scrolling and attaches vertical_scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/browser/view.rs", "max_count": 1, "reason": "Browser uses a caller-owned horizontal scrollbar."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/path_bar.rs", "max_count": 1, "reason": "Transfer path menu uses a caller-owned ScrollHandle and attaches an explicit vertical scrollbar to the scrolling child."},
+    {"path": "crates/nyaterm-desktop/src/features/pages/transfers/overlays_favorites.rs", "max_count": 1, "reason": "The favorites menu tracks its caller-owned ScrollHandle for keyboard reveal and attaches vertical_scrollbar to the non-scrolling parent inside the positioned popup shell."},
     {"path": "crates/nyaterm-ui/src/settings.rs", "max_count": 1, "reason": "Settings content tracks an explicit scroll handle and attaches a visible vertical scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-ui/src/widgets.rs", "max_count": 2, "reason": "Reusable widgets own caller-positioned scrollbar overlays."}
   ]

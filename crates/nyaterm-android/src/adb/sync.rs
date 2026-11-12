@@ -491,44 +491,71 @@ mod tests {
         ));
     }
     #[test]
-    fn paused_callbacks_do_not_consume_network_idle_budget_but_stalls_do() {
-        use std::time::{Duration, Instant};
-        for stalled in [false, true] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-            client
-                .set_read_timeout(Some(Duration::from_millis(10)))
-                .unwrap();
-            let (tx, rx) = std::sync::mpsc::channel();
-            let server = std::thread::spawn(move || {
-                let (mut socket, _) = listener.accept().unwrap();
-                rx.recv().unwrap();
-                std::thread::sleep(Duration::from_millis(if stalled { 200 } else { 40 }));
-                let _ = socket.write_all(b"okay");
-            });
-            let mut stream = super::SyncStream {
-                stream: client,
-                stat_v2: false,
-                list_v2: false,
-                idle_timeout: Duration::from_millis(100),
-            };
-            let mut paused = false;
-            let started = Instant::now();
-            let result = stream.read(&mut [0; 4], &mut |_| {
-                if !paused {
-                    paused = true;
-                    std::thread::sleep(Duration::from_millis(150));
-                    tx.send(()).unwrap();
-                }
-                Ok(())
-            });
-            if stalled {
-                assert!(matches!(result, Err(crate::error::AdbError::Timeout)));
-            } else {
-                assert!(result.is_ok());
+    fn paused_callbacks_do_not_consume_network_idle_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            resume_rx.recv().unwrap();
+            socket.write_all(b"okay").unwrap();
+            ready_tx.send(()).unwrap();
+        });
+        let mut stream = SyncStream {
+            stream: client,
+            stat_v2: false,
+            list_v2: false,
+            idle_timeout: Duration::from_millis(100),
+        };
+        let mut paused = false;
+        let mut bytes = [0; 4];
+        let result = stream.read(&mut bytes, &mut |_| {
+            if !paused {
+                paused = true;
+                std::thread::sleep(Duration::from_millis(150));
+                resume_tx.send(()).unwrap();
+                // Server scheduling is part of the pause, not network idle time.
+                ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
             }
-            assert!(started.elapsed() < Duration::from_secs(1));
-            server.join().unwrap();
-        }
+            Ok(())
+        });
+        server.join().unwrap();
+        result.unwrap();
+        assert_eq!(&bytes, b"okay");
+    }
+
+    #[test]
+    fn network_stalls_exhaust_the_idle_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (_socket, _) = listener.accept().unwrap();
+            // Keep the connection open and silent until the client times out.
+            let _ = done_rx.recv();
+        });
+        let mut stream = SyncStream {
+            stream: client,
+            stat_v2: false,
+            list_v2: false,
+            idle_timeout: Duration::from_millis(100),
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let result = stream.read(&mut [0; 4], &mut |_| {
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::error::AdbError::Cancelled);
+            }
+            Ok(())
+        });
+        done_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert!(matches!(result, Err(crate::error::AdbError::Timeout)));
     }
 }
