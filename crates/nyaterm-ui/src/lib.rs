@@ -14,7 +14,7 @@ pub mod hex_editor;
 mod hover_card;
 mod input;
 mod input_focus;
-mod markdown;
+pub mod markdown;
 mod menu;
 mod native_overlay;
 pub mod notification;

@@ -1,9 +1,10 @@
-use gpui::{App, ClickEvent, IntoElement, SharedString, Window, div, prelude::*, px, rgb, svg};
+use gpui::{App, ClickEvent, IntoElement, Window};
 
 use crate::theme::ThemePalette;
 
 pub(in crate::features) use nyaterm_ui::presentation::{
-    action_button as tab_action_button, shortcut_action as empty_workspace_action,
+    action_button as tab_action_button, menu_item as tab_menu_item_enabled_with_icon,
+    menu_separator as tab_menu_separator, shortcut_action as empty_workspace_action,
 };
 
 pub(in crate::features) fn tab_menu_item(
@@ -61,52 +62,4 @@ pub(in crate::features) fn tab_menu_item_with_icon(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     tab_menu_item_enabled_with_icon(palette, id, label, Some(icon_path), true, on_click)
-}
-
-fn tab_menu_item_enabled_with_icon(
-    palette: ThemePalette,
-    id: impl Into<String>,
-    label: impl Into<String>,
-    icon_path: Option<&'static str>,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let id = id.into();
-    let label = label.into();
-    let text_color = rgb(palette.text);
-    let icon_color = rgb(palette.text_muted);
-    div()
-        .id(SharedString::from(id.clone()))
-        .debug_selector(move || id.clone())
-        .h(px(28.))
-        .flex_none()
-        .px_2()
-        .flex()
-        .items_center()
-        .gap_2()
-        .rounded_sm()
-        .text_size(px(12.))
-        .text_color(text_color)
-        .opacity(if enabled { 1. } else { 0.5 })
-        .when(enabled, |this| {
-            this.cursor_pointer()
-                .hover(|this| this.bg(rgb(palette.hover)))
-                .on_click(on_click)
-        })
-        .when_some(icon_path, |this, icon_path| {
-            this.child(
-                div()
-                    .w(px(24.))
-                    .h_full()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .child(svg().size(px(16.)).path(icon_path).text_color(icon_color)),
-            )
-        })
-        .child(div().min_w_0().flex_1().child(label))
-}
-
-pub(in crate::features) fn tab_menu_separator(palette: ThemePalette) -> impl IntoElement {
-    div().h(px(1.)).flex_none().my_1().bg(rgb(palette.border))
 }

@@ -1,6 +1,6 @@
 //! Stateless presentation helpers. Applications supply labels and actions.
 use gpui::{
-    App, ClickEvent, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px, rgb,
+    App, ClickEvent, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px, rgb, svg,
 };
 
 use crate::theme::ThemePalette;
@@ -154,4 +154,91 @@ pub fn progress_bar(palette: ThemePalette, ratio: f64) -> impl IntoElement {
                     rgb(palette.primary)
                 }),
         )
+}
+
+pub fn menu_item(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<String>,
+    icon_path: Option<&'static str>,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let id = id.into();
+    let label = label.into();
+    let text_color = rgb(palette.text);
+    let icon_color = rgb(palette.text_muted);
+    div()
+        .id(SharedString::from(id.clone()))
+        .debug_selector(move || id.clone())
+        .h(px(28.))
+        .flex_none()
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_sm()
+        .text_size(px(12.))
+        .text_color(text_color)
+        .opacity(if enabled { 1. } else { 0.5 })
+        .when(enabled, |this| {
+            this.cursor_pointer()
+                .hover(|this| this.bg(rgb(palette.hover)))
+                .on_click(on_click)
+        })
+        .when_some(icon_path, |this, icon_path| {
+            this.child(
+                div()
+                    .w(px(24.))
+                    .h_full()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .child(svg().size(px(16.)).path(icon_path).text_color(icon_color)),
+            )
+        })
+        .child(div().min_w_0().flex_1().child(label))
+}
+
+pub fn menu_separator(palette: ThemePalette) -> impl IntoElement {
+    div().h(px(1.)).flex_none().my_1().bg(rgb(palette.border))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{menu_item, menu_separator};
+    use crate::theme::theme_palette;
+    use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px};
+    use std::{cell::Cell, rc::Rc};
+
+    struct MenuFixture(Rc<Cell<usize>>);
+    impl Render for MenuFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let palette = theme_palette("github-dark");
+            let mut menu = div().w(px(200.)).flex().flex_col();
+            for (id, enabled, icon) in [
+                ("enabled", true, Some("icons/copy.svg")),
+                ("disabled", false, None),
+            ] {
+                let clicks = self.0.clone();
+                menu = menu.child(menu_item(palette, id, id, icon, enabled, move |_, _, _| {
+                    clicks.set(clicks.get() + 1)
+                }));
+            }
+            menu.child(menu_separator(palette))
+        }
+    }
+
+    #[gpui::test]
+    fn menu_ids_height_and_disabled_clicks_remain_stable(cx: &mut TestAppContext) {
+        let clicks = Rc::new(Cell::new(0));
+        let (_, vcx) = cx.add_window_view(|_, _| MenuFixture(clicks.clone()));
+        vcx.run_until_parked();
+        for id in ["enabled", "disabled"] {
+            let bounds = vcx.debug_bounds(id).unwrap();
+            assert_eq!(bounds.size.height, px(28.));
+            vcx.simulate_click(bounds.center(), Default::default());
+        }
+        assert_eq!(clicks.get(), 1);
+    }
 }

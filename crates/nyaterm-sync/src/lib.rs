@@ -3,3 +3,5 @@ pub mod application;
 pub mod engine;
 pub mod protocol;
 pub mod trust;
+
+pub mod auto_sync;

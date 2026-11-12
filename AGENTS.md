@@ -21,12 +21,23 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
   coordination, service adapters, and GPUI Entity stores.
+* `crates/nyaterm-mcp-host`: UI-independent loopback MCP service, authentication,
+  client identities, cancellation routing, and atomic discovery-file I/O. It may
+  depend on core and mcp-protocol only among workspace crates. Desktop injects
+  discovery permissions and owns approval, capability execution, configuration
+  paths, generation registration, and ephemeral credential lifetime.
+* `crates/nyaterm-agent-client`: UI-independent Codex and Claude Code CLI clients,
+  executable discovery, account/version/authentication probes, and owned child
+  process trees and pipe readers. Only core is allowed as a workspace dependency,
+  including tests. Desktop injects MCP helper paths/environment and callbacks,
+  retaining task scheduling, UI state, persistence, and credential guards.
 * `crates/nyaterm-ai-client`: UI-independent native AI provider HTTP clients,
   request and streaming-response adapters, model discovery, and proxy handling.
   Runtime/task ownership and AI feature orchestration remain in desktop.
 * `crates/nyaterm-preview`: UI-independent image/PDF decoding, text preview
   parsing, pixel transformations and decoded-content contracts. Desktop owns
-  fetching, job lifecycle, GPUI image conversion and preview caches.
+  fetching, job lifecycle, GPUI image conversion and preview caches. Its `icons`,
+  `wallpaper` and `qr` modules own decoding; OTP URI interpretation stays in desktop.
 * `crates/nyaterm-translation-client`: UI-independent native translation HTTP
   clients and provider request/response adapters. Desktop owns translation
   tasks, settings persistence, credential state and presentation.
@@ -44,7 +55,9 @@ must include explicit conversion logic and tests.
   control-sequence handling, encoding, and graphics protocols. It must remain
   independent of UI frameworks.
 * `crates/nyaterm-terminal-gpui`: GPUI-specific terminal layout, input,
-  highlighting, images, and painting.
+  highlighting, images, and painting. Its `scrollbar`, `decorations` and `ime`
+  modules own reusable presentation; desktop retains drag/session routing,
+  action-link cache selection and composition editing state.
 * `crates/nyaterm-transport`: local PTY, SSH authentication and channels, Telnet,
   Serial, tunnels, session lifecycle, tmux, and transfer-protocol runtime. It
   exposes file-session probe injection and must not depend on the file,
@@ -63,7 +76,11 @@ must include explicit conversion logic and tests.
   the three business crates must not depend on each other.
 * `crates/nyaterm-ui`: shared GPUI theme tokens, the `gpui-kit`
   integration boundary, and reusable NyaTerm presentation and interaction
-  widgets.
+  widgets. `markdown::lightweight` retains the lightweight Markdown renderer
+  separately from `NyaMarkdown`; `presentation` owns stateless menu rows.
+* `crates/nyaterm-sync`: UI-independent sync protocol and policies. Its
+  `auto_sync` schedule receives time from callers; desktop owns operations,
+  task cancellation, safe-window checks, result mapping and history persistence.
 * `crates/nyaterm-store`: persistence implementation, transactions, redb
   schema, encryption adapters, and database compatibility readers. Keep pure
   data models and serialization policies in `nyaterm-core`.

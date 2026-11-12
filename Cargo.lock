@@ -6844,6 +6844,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-agent-client"
+version = "2.0.4"
+dependencies = [
+ "nyaterm-core",
+ "serde_json",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nyaterm-ai-client"
 version = "2.0.4"
 dependencies = [
@@ -6998,11 +7008,13 @@ dependencies = [
  "hex",
  "image",
  "keyring",
+ "nyaterm-agent-client",
  "nyaterm-ai-client",
  "nyaterm-android",
  "nyaterm-cloud-storage",
  "nyaterm-core",
  "nyaterm-files",
+ "nyaterm-mcp-host",
  "nyaterm-mcp-protocol",
  "nyaterm-otp",
  "nyaterm-plugin-host",
@@ -7023,7 +7035,6 @@ dependencies = [
  "raw-window-handle",
  "redb",
  "regex",
- "rqrr",
  "rust-i18n",
  "serde",
  "serde_json",
@@ -7090,6 +7101,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-mcp-host"
+version = "2.0.4"
+dependencies = [
+ "anyhow",
+ "futures",
+ "hex",
+ "nyaterm-core",
+ "nyaterm-mcp-protocol",
+ "rand 0.10.3",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nyaterm-mcp-protocol"
 version = "2.0.4"
 dependencies = [
@@ -7132,6 +7163,8 @@ dependencies = [
  "hayro",
  "image",
  "nyaterm-core",
+ "qrcode",
+ "rqrr",
  "serde_json",
 ]
 
@@ -9074,6 +9107,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

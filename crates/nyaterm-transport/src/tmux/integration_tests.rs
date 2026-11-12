@@ -8,6 +8,108 @@ use super::handshake::{Failure, Verification, verify};
 use super::test_peer::connect;
 
 #[tokio::test]
+async fn fragmented_startup_discovery_and_nonce_verification_share_one_ssh_stream() {
+    use super::detect::{TmuxControlDetector, TmuxFeed};
+    for single_c in [false, true] {
+        let mut connection = connect().await;
+        let mut incoming = connection.peer_rx.take().unwrap();
+        let outgoing = connection.peer_tx.clone();
+        let peer = tokio::spawn(async move {
+            let prefix = if single_c { "" } else { "\x1bP1000p" };
+            let startup = format!(
+                "shell preface\r\n{prefix}%begin 1 2 0\n%end 1 2 0\n%session-changed $0 0\n"
+            );
+            for chunk in startup.as_bytes().chunks(3) {
+                outgoing.data_bytes(chunk.to_vec()).await.unwrap();
+            }
+            let Some(ChannelMsg::Data { data }) = incoming.wait().await else {
+                panic!("missing probe")
+            };
+            let command = std::str::from_utf8(&data).unwrap();
+            let nonce = command
+                .trim()
+                .strip_prefix("display-message -p '")
+                .unwrap()
+                .strip_suffix('\'')
+                .unwrap();
+            let echo = if single_c { command } else { "" };
+            outgoing
+                .data_bytes(
+                    format!("{echo}%begin 1 3 1\n{nonce}\n%end 1 3 1\n%window-add @2\n")
+                        .into_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let mut detector = TmuxControlDetector::new();
+        if single_c {
+            detector.feed_input(b"tmux -C\r");
+        }
+        let mut visible = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let Some(ChannelMsg::Data { data }) = connection.rx.wait().await else {
+                    panic!("missing startup")
+                };
+                match detector.feed_output(&data).output {
+                    TmuxFeed::Passthrough(bytes) => visible.extend(bytes),
+                    TmuxFeed::Detected {
+                        passthrough,
+                        startup,
+                        rest,
+                    } => {
+                        visible.extend(passthrough);
+                        let Verification::Confirmed(rest) =
+                            verify(&connection.tx, &mut connection.rx, &startup, &rest).await
+                        else {
+                            panic!("startup did not verify")
+                        };
+                        assert_eq!(rest, b"%window-add @2\n");
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(visible, b"shell preface\r\n");
+        peer.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn unrequested_bare_startup_is_forwarded_without_writing_to_ssh() {
+    use super::detect::{TmuxControlDetector, TmuxFeed};
+    for input in [b"".as_slice(), b"\x1b[A\r", b"tmux -CC\r"] {
+        let mut connection = connect().await;
+        let startup = b"%begin 1 2 0\n%end 1 2 0\n%session-changed $0 0\n";
+        connection
+            .peer_tx
+            .data_bytes(startup.to_vec())
+            .await
+            .unwrap();
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(input);
+        let Some(ChannelMsg::Data { data }) = connection.rx.wait().await else {
+            panic!("missing startup")
+        };
+        let TmuxFeed::Passthrough(bytes) = detector.feed_output(&data).output else {
+            panic!("bare startup unexpectedly taken over")
+        };
+        assert_eq!(bytes, startup);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                connection.peer_rx.as_mut().unwrap().wait()
+            )
+            .await
+            .is_err(),
+            "passive detection must not write a probe"
+        );
+    }
+}
+
+#[tokio::test]
 async fn rejected_nonce_and_closed_channel_are_distinct_and_never_send_detach() {
     for closed in [false, true] {
         let mut connection = connect().await;
@@ -359,6 +461,7 @@ mod real {
     use crate::tmux::detect::{TmuxControlDetector, TmuxFeed};
     use crate::tmux::mailbox;
     use crate::tmux::session::{ControlExit, TmuxStatePayload, run_control_session};
+    use crate::tmux::test_peer::Connection;
     use crate::{ManagedSession, SessionEvent, SshCommand, ssh_mailbox};
     use nyaterm_terminal::TerminalCore;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -455,33 +558,8 @@ mod real {
         }
     }
 
-    struct Running {
-        tmux: Tmux,
-        driver: tokio::task::JoinHandle<ControlExit>,
-        queue: SessionEventQueue,
-        tx: mailbox::Sender,
-        _host: ssh_mailbox::Sender,
-        sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
-        terminals: HashMap<String, TerminalCore>,
-        state: Option<TmuxStatePayload>,
-    }
-
-    impl Drop for Running {
-        fn drop(&mut self) {
-            self.driver.abort();
-        }
-    }
-
-    impl Running {
-        async fn start() -> Self {
-            Self::start_with(None).await
-        }
-
-        async fn start_with(socket: Option<Arc<Socket>>) -> Self {
-            Self::start_mode(socket, "-CC", false).await
-        }
-
-        async fn start_mode(socket: Option<Arc<Socket>>, flag: &str, recalled: bool) -> Self {
+    impl Tmux {
+        async fn start(socket: Option<Arc<Socket>>, flag: &str) -> (Self, Connection) {
             let mut connection = connect().await;
             let attach = socket.is_some();
             let socket = socket.unwrap_or_else(|| {
@@ -523,18 +601,67 @@ mod real {
                 }
                 let _ = outgoing.eof().await;
             });
-            let tmux = Tmux {
+            let tmux = Self {
                 socket,
                 child,
                 input,
                 output,
             };
-            let mut detector = TmuxControlDetector::new();
-            if recalled {
-                detector.feed_input(b"\x1b[A\r");
-            } else {
-                detector.feed_input(format!("tmux {flag}\r").as_bytes());
+            (tmux, connection)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum InputEvidence {
+        None,
+        Explicit,
+        Recalled,
+    }
+
+    impl InputEvidence {
+        fn apply(self, detector: &mut TmuxControlDetector, flag: &str) {
+            match self {
+                Self::None => {}
+                Self::Explicit => detector.feed_input(format!("tmux {flag}\r").as_bytes()),
+                Self::Recalled => detector.feed_input(b"\x1b[A\r"),
             }
+        }
+    }
+
+    struct Running {
+        tmux: Tmux,
+        driver: tokio::task::JoinHandle<ControlExit>,
+        queue: SessionEventQueue,
+        tx: mailbox::Sender,
+        _host: ssh_mailbox::Sender,
+        sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
+        terminals: HashMap<String, TerminalCore>,
+        state: Option<TmuxStatePayload>,
+    }
+
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.driver.abort();
+        }
+    }
+
+    impl Running {
+        async fn start() -> Self {
+            Self::start_with(None).await
+        }
+
+        async fn start_with(socket: Option<Arc<Socket>>) -> Self {
+            Self::start_mode(socket, "-CC", InputEvidence::None).await
+        }
+
+        async fn start_mode(
+            socket: Option<Arc<Socket>>,
+            flag: &str,
+            evidence: InputEvidence,
+        ) -> Self {
+            let (tmux, mut connection) = Tmux::start(socket, flag).await;
+            let mut detector = TmuxControlDetector::new();
+            evidence.apply(&mut detector, flag);
             let initial = tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
                     let Some(ChannelMsg::Data { data }) = connection.rx.wait().await else {
@@ -668,9 +795,14 @@ mod real {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires real tmux; run explicitly in compatibility CI"]
-    async fn real_tmux_single_and_double_control_flags_support_recalled_reattach() {
-        for flag in ["-C", "-CC"] {
-            let mut run = Running::start_mode(None, flag, false).await;
+    async fn real_tmux_explicit_single_c_and_automatic_double_c_support_reattach() {
+        for (flag, evidence) in [
+            ("-C", InputEvidence::Explicit),
+            ("-CC", InputEvidence::None),
+            ("-CC", InputEvidence::Explicit),
+            ("-CC", InputEvidence::Recalled),
+        ] {
+            let mut run = Running::start_mode(None, flag, evidence).await;
             run.wait(|run| run.terminals.contains_key("host::pane0"))
                 .await;
             let socket = run.tmux.socket.clone();
@@ -684,7 +816,7 @@ mod real {
             ));
             assert!(run.sessions.lock().unwrap().is_empty());
             drop(run);
-            let mut recalled = Running::start_mode(Some(socket), flag, true).await;
+            let mut recalled = Running::start_mode(Some(socket), flag, evidence).await;
             recalled
                 .wait(|run| run.terminals.contains_key("host::pane0"))
                 .await;
@@ -703,6 +835,43 @@ mod real {
                     .unwrap(),
                 ControlExit::ReturnToShell { .. }
             ));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires real tmux; run explicitly in compatibility CI"]
+    async fn real_tmux_single_c_without_explicit_input_remains_passthrough() {
+        for evidence in [InputEvidence::None, InputEvidence::Recalled] {
+            let (_tmux, mut connection) = Tmux::start(None, "-C").await;
+            let mut detector = TmuxControlDetector::new();
+            evidence.apply(&mut detector, "-C");
+            tokio::time::timeout(Duration::from_secs(15), async {
+                let mut raw = Vec::new();
+                let mut visible = Vec::new();
+                loop {
+                    let Some(ChannelMsg::Data { data }) = connection.rx.wait().await else {
+                        panic!("tmux startup ended")
+                    };
+                    raw.extend_from_slice(&data);
+                    let TmuxFeed::Passthrough(bytes) = detector.feed_output(&data).output else {
+                        panic!("unrequested single-C takeover")
+                    };
+                    visible.extend(bytes);
+                    if raw
+                        .split(|byte| *byte == b'\n')
+                        .any(|line| line.starts_with(b"%session-changed "))
+                        && raw.ends_with(b"\n")
+                    {
+                        assert_eq!(visible, raw);
+                        assert!(detector.deadline().is_none());
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("real single-C startup was not observed");
+            // No probe or detach is written. The isolated fixture is cleaned up
+            // out of band through its unique server socket on drop.
         }
     }
 

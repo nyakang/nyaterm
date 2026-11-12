@@ -16,9 +16,11 @@ class PluginDependencyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             crates = (
+                "nyaterm-terminal-gpui",
                 "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
                 "nyaterm-core", "nyaterm-android", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
                 "nyaterm-remote-desktop", "nyaterm-desktop", "nyaterm-plugin-api", "nyaterm-plugin-host",
+                "nyaterm-mcp-host", "nyaterm-agent-client",
                 "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
             )
             for crate in crates:
@@ -103,6 +105,46 @@ class PluginDependencyTests(unittest.TestCase):
                         f'[target.\'cfg(windows)\'.dev-dependencies]\nhidden = {{ package = "{package}", version = "1" }}\n'})
                     normalized = package.replace("_", "-")
                     self.assertEqual(errors, [f"crate_boundary: {crate} must not depend on {normalized}"])
+
+    def test_agent_and_mcp_adapters_enforce_dependencies_in_all_categories(self):
+        sections = ["dependencies", "dev-dependencies", "build-dependencies",
+                    "target.'cfg(windows)'.dependencies", "target.'cfg(windows)'.dev-dependencies",
+                    "target.'cfg(windows)'.build-dependencies"]
+        for source in ["nyaterm-agent-client", "nyaterm-mcp-host"]:
+            allowed = {"nyaterm-core"}
+            if source == "nyaterm-mcp-host":
+                allowed.add("nyaterm-mcp-protocol")
+            for target in ["nyaterm-core", "nyaterm-mcp-protocol", "nyaterm-agent-client",
+                           "nyaterm-mcp-host", "nyaterm-ai-client", "nyaterm-desktop",
+                           "nyaterm-store", "nyaterm-transport", "nyaterm-files",
+                           "gpui", "gpui_platform", "gpui-kit"]:
+                if source == target:
+                    continue
+                for section in sections:
+                    with self.subTest(source=source, target=target, section=section):
+                        errors = self.check_dependencies("", "", {source:
+                            f'[{section}]\nhidden = {{ package = "{target}", version = "1" }}\n'})
+                        expected = [] if target in allowed else [f"crate_boundary: {source} must not depend on {target.replace('_', '-')}" ]
+                        self.assertEqual(errors, expected)
+            self.assertEqual(self.check_dependencies("", "", {source:
+                '[dev-dependencies]\nhidden-transport.workspace = true\n'}),
+                [f"crate_boundary: {source} must not depend on nyaterm-transport"])
+
+
+    def test_terminal_presentation_accepts_ui_but_rejects_reverse_dependencies(self):
+        for section in ["dependencies", "dev-dependencies", "build-dependencies",
+                        "target.'cfg(windows)'.dependencies", "target.'cfg(windows)'.dev-dependencies",
+                        "target.'cfg(windows)'.build-dependencies"]:
+            for package in ["nyaterm-desktop", "nyaterm-store", "nyaterm-files",
+                            "nyaterm-core", "nyaterm-terminal", "nyaterm-ui", "gpui"]:
+                with self.subTest(section=section, package=package):
+                    errors = self.check_dependencies("", "", {"nyaterm-terminal-gpui":
+                        f'[{section}]\nhidden = {{ package = "{package}", version = "1" }}\n'})
+                    expected = [f"crate_boundary: nyaterm-terminal-gpui must not depend on {package}"] if package in {"nyaterm-desktop", "nyaterm-store", "nyaterm-files"} else []
+                    self.assertEqual(errors, expected)
+        self.assertEqual(self.check_dependencies("", "", {"nyaterm-terminal-gpui":
+            '[dev-dependencies]\nhidden-transport.workspace = true\n'}),
+            ["crate_boundary: nyaterm-terminal-gpui must not depend on nyaterm-transport"])
 
 
 if __name__ == "__main__":

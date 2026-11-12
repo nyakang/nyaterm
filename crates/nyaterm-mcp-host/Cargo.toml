@@ -1,0 +1,27 @@
+[package]
+name = "nyaterm-mcp-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+hex.workspace = true
+nyaterm-core.workspace = true
+nyaterm-mcp-protocol.workspace = true
+rand.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

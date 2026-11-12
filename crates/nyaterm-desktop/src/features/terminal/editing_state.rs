@@ -23,6 +23,8 @@ pub(super) struct TerminalEditingState {
 
 #[derive(Default)]
 pub(super) struct SessionEditingState {
+    // Survives snapshot reconciliation: recovering a history line is not typing.
+    pub(super) browsing_history: bool,
     pub(super) command_navigation: super::navigation_input::CommandNavigationInputState,
     pub(super) model: ShellEditState,
     pub(super) capability: EditCapability,
@@ -81,6 +83,35 @@ impl SnapshotEvidence {
 }
 
 impl SessionEditingState {
+    pub(super) fn note_suggestion_input(&mut self, text: &str) {
+        if matches!(
+            text,
+            "\u{1b}[A" | "\u{1b}OA" | "\u{1b}[B" | "\u{1b}OB" | "\u{10}" | "\u{e}"
+        ) {
+            self.browsing_history = true;
+        } else if (!text.is_empty()
+            && text
+                .chars()
+                .all(|ch| !ch.is_control() || matches!(ch, '\r' | '\n' | '\t')))
+            || text.contains("\u{1b}[200~")
+            || matches!(
+                text,
+                "\r" | "\n"
+                    | "\u{3}"
+                    | "\u{4}"
+                    | "\t"
+                    | "\u{7f}"
+                    | "\u{8}"
+                    | "\u{15}"
+                    | "\u{17}"
+                    | "\u{b}"
+                    | "\u{1b}[3~"
+            )
+        {
+            self.browsing_history = false;
+        }
+    }
+
     pub(super) fn confirmed_input_at_end(&self) -> bool {
         let input = &self.model.input;
         !self.awaiting_snapshot
@@ -258,6 +289,36 @@ mod tests {
     use super::{SuggestionFillRequest, TerminalEditingState};
     use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase};
     use std::time::Instant;
+
+    #[test]
+    fn history_navigation_suppression_survives_cursor_moves_and_session_switches() {
+        let mut state = TerminalEditingState::default();
+        state.activate("one");
+        state.state_mut().note_suggestion_input("\u{1b}[A");
+        for input in ["\u{1b}[D", "\u{1b}[C", "\u{1b}[H", "\u{1b}[F", "\u{1b}"] {
+            state.state_mut().note_suggestion_input(input);
+            assert!(state.state().unwrap().browsing_history);
+        }
+        state.activate("two");
+        assert!(!state.state().unwrap().browsing_history);
+        state.activate("one");
+        assert!(state.state().unwrap().browsing_history);
+        for input in [
+            "x",
+            "中文",
+            "\u{7f}",
+            "\u{1b}[3~",
+            "\t",
+            "\r",
+            "\u{3}",
+            "one\ntwo",
+            "\u{1b}[200~paste\u{1b}[201~",
+        ] {
+            state.state_mut().note_suggestion_input("\u{1b}[A");
+            state.state_mut().note_suggestion_input(input);
+            assert!(!state.state().unwrap().browsing_history);
+        }
+    }
 
     #[test]
     fn switching_sessions_retains_only_confirmed_editable_input() {

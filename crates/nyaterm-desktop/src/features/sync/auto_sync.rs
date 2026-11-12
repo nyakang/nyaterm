@@ -17,30 +17,7 @@ use super::cloud_sync_provider::{
     push_checked_provider_snapshot,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutoSyncTrigger {
-    Startup,
-    Periodic,
-    Focus,
-    Settings,
-    Change,
-    DeferredPull,
-    Retry,
-}
-
-impl AutoSyncTrigger {
-    pub(crate) fn history_name(self) -> &'static str {
-        match self {
-            Self::Startup => "auto_startup",
-            Self::Periodic => "auto_periodic",
-            Self::Focus => "auto_focus",
-            Self::Settings => "auto_settings",
-            Self::Change => "auto_change",
-            Self::DeferredPull => "auto_deferred_pull",
-            Self::Retry => "auto_retry",
-        }
-    }
-}
+pub(crate) use nyaterm_sync::auto_sync::AutoSyncTrigger;
 
 pub(crate) enum AutoSyncResult {
     V4(super::cloud_sync_v4::SyncReport),

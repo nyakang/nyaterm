@@ -32,6 +32,386 @@ struct Fixture {
 
 struct PopupView(Entity<NyaTermApp>);
 
+#[test]
+fn typing_keeps_popup_painted_while_each_result_moves_it_with_the_cursor() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("git", "git status");
+    f.update(|app, _, _| {
+        let (row, col) = app.active_terminal_cursor_cell();
+        let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+        popup.cursor_row = row;
+        popup.cursor_col = col;
+        popup.selected_index = None;
+    });
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    draw_popup(&app, cx);
+    let mut previous = cx.debug_bounds("command-suggestions-overlay").unwrap();
+    for (input, line) in [(" ", "git "), ("l", "git l"), ("o", "git lo")] {
+        app.update(cx, |app, cx| {
+            let stale = app
+                .prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx,
+                )
+                .unwrap();
+            app.note_shell_editing_input(input.as_bytes(), cx);
+            app.note_command_suggestion_input(input.as_bytes(), cx);
+            // This visual test publishes exact results instead of running catalog searches.
+            app.terminal.assist.command_suggestion_refresh_task = None;
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx,
+                )
+                .is_none()
+            );
+            app.publish_command_suggestion_search(
+                stale,
+                super::tests::history_search_fixture(
+                    "git status",
+                    "git",
+                    app.commands.completion_runtime().revision(),
+                ),
+                Duration::ZERO,
+                cx,
+            );
+            let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+            assert!(popup.refreshing);
+            assert!(popup.selected_index.is_none());
+            assert_eq!(
+                app.submit_selected_command_suggestion(false, cx),
+                SuggestionSubmitResult::NotHandled
+            );
+        });
+        draw_popup(&app, cx);
+        assert_eq!(
+            cx.debug_bounds("command-suggestions-overlay"),
+            Some(previous)
+        );
+        cx.simulate_click(
+            gpui::point(
+                previous.origin.x + gpui::px(80.),
+                previous.origin.y + gpui::px(super::SUGGESTION_OVERLAY_HEADER_HEIGHT + 14.),
+            ),
+            gpui::Modifiers::default(),
+        );
+        app.update(cx, |app, cx| {
+            assert!(
+                app.terminal
+                    .assist
+                    .command_suggestions
+                    .as_ref()
+                    .unwrap()
+                    .selected_index
+                    .is_none()
+            );
+            echo(app, cx, &id, line);
+            app.terminal.assist.command_suggestion_refresh_task = None;
+            assert!(
+                app.terminal
+                    .assist
+                    .command_suggestions
+                    .as_ref()
+                    .unwrap()
+                    .refreshing
+            );
+        });
+        draw_popup(&app, cx);
+        assert!(cx.debug_bounds("command-suggestions-overlay").is_some());
+        app.update(cx, |app, cx| {
+            let request = app
+                .prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx,
+                )
+                .unwrap();
+            app.publish_command_suggestion_search(
+                request,
+                super::tests::history_search_fixture(
+                    "git log",
+                    line,
+                    app.commands.completion_runtime().revision(),
+                ),
+                Duration::ZERO,
+                cx,
+            );
+            let popup = app.terminal.assist.command_suggestions.as_ref().unwrap();
+            assert!(!popup.refreshing);
+            assert_eq!(popup.draft, line);
+            assert_eq!(
+                (popup.cursor_row, popup.cursor_col),
+                app.active_terminal_cursor_cell()
+            );
+        });
+        draw_popup(&app, cx);
+        let current = cx.debug_bounds("command-suggestions-overlay").unwrap();
+        assert!(
+            current.origin.x > previous.origin.x,
+            "new results must follow the cursor, not pin the popup"
+        );
+        assert_eq!(current.origin.y, previous.origin.y);
+        previous = current;
+    }
+    app.update(cx, |app, cx| {
+        app.note_shell_editing_input(b"z", cx);
+        echo(app, cx, &id, "git loz");
+        app.terminal.assist.command_suggestion_refresh_task = None;
+        let request = app
+            .prepare_command_suggestion_search(
+                app.terminal.assist.command_suggestion_search_gen,
+                CompletionMode::Token,
+                cx,
+            )
+            .unwrap();
+        let mut result = super::tests::history_search_fixture(
+            "git log",
+            "git loz",
+            app.commands.completion_runtime().revision(),
+        );
+        result.candidates.clear();
+        app.publish_command_suggestion_search(request, result, Duration::ZERO, cx);
+        assert!(app.terminal.assist.command_suggestions.is_none());
+    });
+    draw_popup(&app, cx);
+    assert!(cx.debug_bounds("command-suggestions-overlay").is_none());
+    f.assert_quiet();
+}
+
+#[test]
+fn refreshing_candidates_do_not_capture_shell_keys_or_survive_lost_confirmation() {
+    for name in ["up", "down", "tab", "enter", "escape"] {
+        let mut f = Fixture::new();
+        f.suggest_in_shell("git", "git status");
+        f.update(|app, cx, _| {
+            app.note_shell_editing_input(b"x", cx);
+            assert!(
+                app.terminal
+                    .assist
+                    .command_suggestions
+                    .as_ref()
+                    .unwrap()
+                    .refreshing
+            );
+            assert_eq!(
+                app.handle_command_suggestion_key(&key(name), cx),
+                name == "escape"
+            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
+        });
+        f.assert_quiet();
+    }
+    for input in [
+        b"\x1b[A".as_slice(),
+        b"\t",
+        b"\r",
+        b"\x03",
+        b"\x15",
+        b"\x1b[D",
+    ] {
+        let mut f = Fixture::new();
+        f.suggest_in_shell("git", "git status");
+        f.update(|app, cx, _| {
+            app.note_shell_editing_input(b"x", cx);
+            app.note_shell_editing_input(input, cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+        });
+    }
+    let mut f = Fixture::new();
+    f.suggest_in_shell("git", "git status");
+    f.update(|app, cx, _| {
+        app.note_shell_editing_input(b"x", cx);
+        app.terminal
+            .editing
+            .state_mut()
+            .model
+            .expire(Instant::now() + EDIT_CONFIRMATION_TIMEOUT);
+        app.reconcile_command_suggestion_availability(cx);
+        assert!(app.terminal.assist.command_suggestions.is_none());
+    });
+}
+
+#[test]
+fn selected_tab_navigation_matches_arrows_without_writing_or_leaking_repeats() {
+    for mode in [CompletionMode::Token, CompletionMode::History] {
+        for shift in [false, true] {
+            for count in [1, 3] {
+                let mut f = Fixture::new();
+                f.suggest("dock", "docker");
+                f.update(|app, cx, id| {
+                    let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
+                    popup.mode = mode;
+                    popup.items = vec![popup.items[0].clone(); count];
+                    popup.selected_index = Some(if shift { count - 1 } else { 0 });
+                    let version = app.terminal.editing.state().unwrap().model.version;
+                    let mut press = app.terminal_tab_key_event(shift);
+                    assert!(!press.is_held);
+                    // A previous remote press must not own this popup's keys.
+                    app.terminal
+                        .view
+                        .views
+                        .get_mut(id)
+                        .unwrap()
+                        .pressed_keys
+                        .insert("tab".into());
+                    for step in 1..=count {
+                        assert!(app.handle_command_suggestion_key(&press, cx));
+                        let expected = if step == count {
+                            None
+                        } else if shift {
+                            Some(count - 1 - step)
+                        } else {
+                            Some(step)
+                        };
+                        assert_eq!(
+                            app.terminal
+                                .assist
+                                .command_suggestions
+                                .as_ref()
+                                .unwrap()
+                                .selected_index,
+                            expected
+                        );
+                        press = app.terminal_tab_key_event(shift);
+                        assert!(press.is_held);
+                    }
+                    assert_eq!(app.terminal.editing.state().unwrap().model.version, version);
+                    assert_eq!(app.terminal.editing.predicted_input().value, "dock");
+                    assert!(!app.terminal.view.views[id].pressed_keys.contains("tab"));
+                    assert!(!app.handle_command_suggestion_key(&press, cx));
+                    assert!(app.terminal.assist.command_suggestions.is_none());
+                    assert!(!app.send_terminal_key_event(&press, true, cx));
+                    let release = KeyUpEvent {
+                        keystroke: press.keystroke.clone(),
+                    };
+                    assert!(!app.send_terminal_key_release_event(&release, cx));
+                });
+                f.assert_quiet();
+                let wire = f.update(|app, cx, id| {
+                    let press = app.terminal_tab_key_event(shift);
+                    assert!(!press.is_held);
+                    assert!(!app.handle_command_suggestion_key(&press, cx));
+                    let wire = app
+                        .terminal_key_bytes_for_event_for_session(Some(id), &press)
+                        .unwrap();
+                    assert!(app.send_terminal_key_event(&press, true, cx));
+                    app.terminal.clear_session_pressed_keys(id);
+                    assert!(!app.terminal_tab_key_event(shift).is_held);
+                    app.report_terminal_focus(false, cx);
+                    assert!(!app.terminal_tab_key_event(shift).is_held);
+                    wire
+                });
+                f.receive(&wire);
+                f.assert_quiet();
+            }
+        }
+    }
+}
+
+#[test]
+fn modified_enter_and_tab_do_not_change_suggestion_selection() {
+    let mut f = Fixture::new();
+    f.suggest("dock", "docker");
+    f.update(|app, cx, _| {
+        for name in ["enter", "tab"] {
+            for modifier in ["control", "alt", "platform", "shift"] {
+                if name == "tab" && modifier == "shift" {
+                    continue;
+                }
+                let mut press = key(name);
+                match modifier {
+                    "control" => press.keystroke.modifiers.control = true,
+                    "alt" => press.keystroke.modifiers.alt = true,
+                    "platform" => press.keystroke.modifiers.platform = true,
+                    "shift" => press.keystroke.modifiers.shift = true,
+                    _ => unreachable!(),
+                }
+                assert!(!app.handle_command_suggestion_key(&press, cx));
+                assert_eq!(
+                    app.terminal
+                        .assist
+                        .command_suggestions
+                        .as_ref()
+                        .unwrap()
+                        .selected_index,
+                    Some(0)
+                );
+                assert_eq!(app.terminal.editing.predicted_input().value, "dock");
+            }
+        }
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn history_navigation_echo_does_not_reopen_suggestions() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("", "git status");
+    f.update(|app, cx, id| {
+        app.dismiss_command_suggestions(cx);
+        for key in [
+            b"\x1b[A".as_slice(),
+            b"\x1b[B",
+            b"\x1bOA",
+            b"\x1bOB",
+            b"\x10",
+            b"\x0e",
+        ] {
+            app.note_shell_editing_input(key, cx);
+            app.note_command_suggestion_input(key, cx);
+            app.terminal
+                .seed_session_view(id.into(), "$ \x1b]133;B\x07git status".into(), "UTF-8");
+            app.reconcile_shell_editing(id, cx);
+            assert!(app.command_suggestion_input_is_confirmed());
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.terminal
+                    .assist
+                    .command_suggestion_refresh_task
+                    .is_none()
+            );
+            assert!(
+                app.prepare_command_suggestion_search(
+                    app.terminal.assist.command_suggestion_search_gen,
+                    CompletionMode::Token,
+                    cx,
+                )
+                .is_none()
+            );
+            let event = self::key("up");
+            assert!(!app.handle_command_suggestion_key(&event, cx));
+        }
+        app.note_shell_editing_input(b"x", cx);
+        app.terminal
+            .seed_session_view(id.into(), "$ \x1b]133;B\x07git statusx".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(app.command_suggestions_allowed_for_session(id));
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+        app.note_shell_editing_input(b"\x1b[A", cx);
+        app.terminal
+            .seed_session_view(id.into(), "$ \x1b]133;B\x07git status".into(), "UTF-8");
+        app.reconcile_shell_editing(id, cx);
+        assert!(!app.command_suggestions_allowed_for_session(id));
+        app.show_manual_command_suggestions(cx);
+        assert!(app.command_suggestions_allowed_for_session(id));
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestion_refresh_task
+                .is_some()
+        );
+    });
+}
+
 impl Render for PopupView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.0.update(cx, |app, cx| {
@@ -265,13 +645,20 @@ fn android_shell_prompt_replacement_writes_only_edit_keys_and_waits_for_confirma
 }
 
 #[test]
-fn delayed_echo_hides_candidates_then_schedules_a_refresh_when_input_is_confirmed() {
+fn delayed_echo_retains_disabled_candidates_then_schedules_a_refresh_when_input_is_confirmed() {
     let mut f = Fixture::new();
     f.suggest_in_shell("mv", "mv source destination");
     f.update(|app, cx, id| {
         app.note_shell_editing_input(b"x", cx);
         app.terminal.assist.command_suggestion_refresh_task = None;
-        assert!(app.terminal.assist.command_suggestions.is_none());
+        assert!(
+            app.terminal
+                .assist
+                .command_suggestions
+                .as_ref()
+                .unwrap()
+                .refreshing
+        );
         assert!(
             app.prepare_command_suggestion_search(
                 app.terminal.assist.command_suggestion_search_gen,
@@ -518,6 +905,7 @@ fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
         .saturating_add(1);
     let state = app.terminal.editing.state().unwrap();
     app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
+        refreshing: false,
         mode: nyaterm_core::completion::types::CompletionMode::History,
         completion_revision: 0,
         scope: None,
@@ -707,20 +1095,24 @@ fn insufficient_space_hides_popup_without_discarding_candidates() {
 }
 
 #[test]
-fn tab_and_enter_only_send_the_missing_suffix_and_confirm_once() {
-    for execute in [false, true] {
+fn enter_only_sends_the_missing_suffix_and_confirms_once() {
+    for mode in [CompletionMode::Token, CompletionMode::History] {
         let mut f = Fixture::new();
         f.suggest("display ver", "display version");
         f.update(|app, cx, id| {
+            app.terminal
+                .assist
+                .command_suggestions
+                .as_mut()
+                .unwrap()
+                .mode = mode;
             let version = app.terminal.editing.state().unwrap().model.version;
-            assert!(
-                app.handle_command_suggestion_key(&key(if execute { "enter" } else { "tab" }), cx)
-            );
+            assert!(app.handle_command_suggestion_key(&key("enter"), cx));
             let state = app.terminal.editing.state().unwrap();
             assert_eq!(state.model.input.value, "display version");
             assert_eq!(state.model.version, version + 1);
             assert_eq!(state.model.phase, EditPhase::Pending);
-            assert!(state.suggestion_fill.is_some());
+            assert!(!state.suggestion_fill.as_ref().unwrap().execute_requested);
             assert!(app.session.command_history_for(id).is_none());
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
             echo(app, cx, id, "display versi");
@@ -813,9 +1205,7 @@ fn identical_input_writes_nothing_and_a_network_prompt_cannot_authorize_replacem
         });
         f.suggest("show ver", "display version");
         f.update(|app, cx, _| {
-            assert!(
-                app.handle_command_suggestion_key(&key(if execute { "enter" } else { "tab" }), cx)
-            );
+            assert!(app.handle_command_suggestion_key(&key("enter"), cx));
             assert_eq!(app.terminal.editing.predicted_input().value, "show ver");
         });
     }
@@ -1318,7 +1708,7 @@ fn no_selection_preserves_normal_enter_and_tab_handling() {
 #[test]
 fn unselected_token_keys_reach_the_session_with_its_native_encoding() {
     for kitty in [false, true] {
-        for name in ["enter", "tab"] {
+        for (name, shift) in [("enter", false), ("tab", false), ("tab", true)] {
             let mut f = Fixture::new();
             f.suggest("dock", "docker");
             let expected = f.update(|app, cx, id| {
@@ -1332,8 +1722,18 @@ fn unselected_token_keys_reach_the_session_with_its_native_encoding() {
                     .unwrap()
                     .protocol_state
                     .kitty_keyboard_report_all_keys_as_esc = kitty;
-                let press = key(name);
+                let mut press = key(name);
+                press.keystroke.modifiers.shift = shift;
+                let generation = app.terminal.assist.command_suggestion_search_gen;
                 assert!(!app.handle_command_suggestion_key(&press, cx));
+                assert!(app.terminal.assist.command_suggestions.is_none());
+                assert!(
+                    app.terminal
+                        .assist
+                        .command_suggestion_refresh_task
+                        .is_none()
+                );
+                assert!(app.terminal.assist.command_suggestion_search_gen > generation);
                 let expected = app
                     .terminal_key_bytes_for_event_for_session(Some(id), &press)
                     .unwrap();
@@ -1369,7 +1769,7 @@ fn unselected_token_keys_reach_the_session_with_its_native_encoding() {
 }
 
 #[test]
-fn typing_and_backspace_close_stale_candidates_before_the_debounced_refresh() {
+fn typing_and_backspace_disable_stale_candidates_before_the_debounced_refresh() {
     for (input, expected) in [(b"x".as_slice(), "dockx"), (b"\x7f".as_slice(), "doc")] {
         let mut f = Fixture::new();
         f.suggest("dock", "docker");
@@ -1392,7 +1792,14 @@ fn typing_and_backspace_close_stale_candidates_before_the_debounced_refresh() {
                     .command_suggestion_refresh_task
                     .is_some()
             );
-            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert!(
+                app.terminal
+                    .assist
+                    .command_suggestions
+                    .as_ref()
+                    .unwrap()
+                    .refreshing
+            );
             assert!(!app.handle_command_suggestion_key(&key("enter"), cx));
             assert!(!app.handle_command_suggestion_key(&key("tab"), cx));
         });
@@ -1553,7 +1960,7 @@ fn disabled_fuzzy_candidate_never_writes_editing_keys() {
             .unwrap()
             .items[0]
             .fillable = false;
-        assert!(app.handle_command_suggestion_key(&key("tab"), cx));
+        assert!(app.handle_command_suggestion_key(&key("enter"), cx));
         assert!(
             app.terminal
                 .editing

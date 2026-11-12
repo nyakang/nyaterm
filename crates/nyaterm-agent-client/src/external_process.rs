@@ -5,8 +5,6 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 
-use crate::thread_owner::spawn_joinable;
-
 pub(crate) mod child_process;
 
 use child_process::AgentChild;
@@ -48,9 +46,8 @@ impl ExternalAgentChild {
         log_stderr: impl Fn(String) + Send + 'static,
     ) -> std::io::Result<Receiver<Result<String, String>>> {
         let (line_tx, line_rx) = mpsc::channel();
-        self.readers.push(spawn_joinable(
-            format!("{worker_name}-stdout"),
-            move || {
+        self.readers
+            .push(spawn_reader(format!("{worker_name}-stdout"), move || {
                 for line in BufReader::new(stdout).lines() {
                     if line_tx
                         .send(line.map_err(|error| error.to_string()))
@@ -59,16 +56,13 @@ impl ExternalAgentChild {
                         break;
                     }
                 }
-            },
-        )?);
-        self.readers.push(spawn_joinable(
-            format!("{worker_name}-stderr"),
-            move || {
+            })?);
+        self.readers
+            .push(spawn_reader(format!("{worker_name}-stderr"), move || {
                 for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                     log_stderr(line);
                 }
-            },
-        )?);
+            })?);
         Ok(line_rx)
     }
 }
@@ -82,6 +76,14 @@ impl Drop for ExternalAgentChild {
             let _ = reader.join();
         }
     }
+}
+
+/// Named reader threads stay owned by the process guard that joins them.
+pub(crate) fn spawn_reader<T: Send + 'static>(
+    name: impl Into<String>,
+    task: impl FnOnce() -> T + Send + 'static,
+) -> std::io::Result<JoinHandle<T>> {
+    std::thread::Builder::new().name(name.into()).spawn(task)
 }
 
 #[cfg(all(test, windows))]
@@ -118,7 +120,7 @@ mod tests {
         std::fs::write(
             &wrapper,
             format!(
-                "@echo off\r\n{prefix}\"{}\" --exact features::ai::agent_management::tests::mock_codex_app_server --nocapture\r\n",
+                "@echo off\r\n{prefix}\"{}\" --exact account::tests::mock_codex_app_server --nocapture\r\n",
                 executable.display(),
             ),
         )

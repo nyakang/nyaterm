@@ -2,7 +2,6 @@
 
 mod action_links;
 mod ai_runtime;
-mod external_process;
 mod i18n;
 mod image_presentation;
 mod send_command;

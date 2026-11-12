@@ -12,3 +12,7 @@ bytemuck = "=1.25.2"
 hayro.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 serde_json.workspace = true
+rqrr = "0.9"
+
+[dev-dependencies]
+qrcode = { version = "0.14", default-features = false }
