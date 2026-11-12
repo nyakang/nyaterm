@@ -34,7 +34,7 @@ type ExternalEditorWatchStart = (
     String,
     Option<String>,
     PathBuf,
-    crate::models::external_editor::ExternalEditorFileVersion,
+    nyaterm_files::local_revision::LocalFileVersion,
 );
 
 use super::state::{TransferEditorSaveOutcome, TransferFeatureState};
@@ -1908,7 +1908,7 @@ mod tests {
                         remote_path: "/remote/example.txt".into(),
                         raw_path_token: None,
                         local_path: opened.clone(),
-                        baseline: crate::models::external_editor::ExternalEditorFileVersion {
+                        baseline: nyaterm_files::local_revision::LocalFileVersion {
                             len: 3, modified: None, digest: [0; 32],
                         },
                     })),
@@ -1954,11 +1954,7 @@ mod tests {
         let path = test_dir.path().join("LocalAppData 文件.txt");
         std::fs::write(&path, "original").unwrap();
         let baseline =
-            crate::features::transfers::external_sync_runtime::read_external_editor_version(
-                &path,
-                || false,
-            )
-            .unwrap();
+            nyaterm_files::local_revision::read_local_file_version(&path, || false).unwrap();
         // An edit before watcher startup must be compared with the downloaded baseline.
         std::fs::write(&path, "edited").unwrap();
         let mut receiver = vcx.update(|window, cx| {

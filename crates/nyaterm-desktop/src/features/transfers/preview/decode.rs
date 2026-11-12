@@ -2,6 +2,7 @@
 //!
 //! These adapters are called by background loaders. Window state and PDF page
 //! caches stay in desktop; parsing and rasterization live in nyaterm-preview.
+use crate::image_presentation::render_image_from_bgra;
 use crate::models::{
     PreviewContent, PreviewDelimited, PreviewImage, PreviewPdfDocument, PreviewPdfPage,
 };
@@ -51,16 +52,6 @@ fn presentation_content(content: DecodedContent) -> PreviewContent {
         }
         DecodedContent::Error(error) => PreviewContent::Error(error),
     }
-}
-
-fn render_image_from_bgra(
-    width: u32,
-    height: u32,
-    bgra: &[u8],
-) -> Result<Arc<RenderImage>, String> {
-    let buffer = image::RgbaImage::from_raw(width, height, bgra.to_vec())
-        .ok_or_else(|| "inconsistent pixel buffer".to_string())?;
-    Ok(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
 pub(in crate::features) fn rasterize_pdf_page(

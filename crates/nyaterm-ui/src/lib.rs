@@ -21,6 +21,7 @@ pub mod notification;
 mod number_input;
 pub mod plot;
 mod popover;
+pub mod presentation;
 pub mod resize_handle;
 mod root;
 mod selectable_text;

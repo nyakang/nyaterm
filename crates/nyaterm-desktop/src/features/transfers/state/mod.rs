@@ -1310,7 +1310,7 @@ impl TransferFeatureState {
         remote_path: String,
         raw_path_token: Option<String>,
         local_path: std::path::PathBuf,
-        baseline: crate::models::external_editor::ExternalEditorFileVersion,
+        baseline: nyaterm_files::local_revision::LocalFileVersion,
     ) -> Result<(), String> {
         let watcher = ExternalEditorWatcher::spawn(
             job_id.clone(),
