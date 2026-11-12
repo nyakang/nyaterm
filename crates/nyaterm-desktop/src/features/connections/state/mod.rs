@@ -26,8 +26,8 @@ use crate::models::{
     ConnectionEditorPasswordSource, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
     ConnectionEditorState, ConnectionGroupEditorMode, ConnectionGroupEditorState,
     ConnectionImportSource, ConnectionKindTab, ConnectionListContextTarget, ConnectionSortMode,
-    NetworkGroupEditorState, NetworkMovePickerState, NetworkProxyEditorField,
-    NetworkProxyEditorState, NetworkTab, NetworkTunnelEditorField, NetworkTunnelEditorState,
+    NetworkGroupEditorState, NetworkProxyEditorField, NetworkProxyEditorState, NetworkTab,
+    NetworkTunnelEditorField, NetworkTunnelEditorState,
 };
 use nyaterm_ui::{
     NyaInputEvent, NyaInputState, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState,
@@ -74,7 +74,7 @@ use self::network_logic::{
     set_network_proxy_editor_error, set_network_proxy_editor_field, set_network_proxy_group,
     set_network_proxy_protocol, set_network_tunnel_bind_localhost, set_network_tunnel_connection,
     set_network_tunnel_editor_error, set_network_tunnel_editor_field, set_network_tunnel_group,
-    set_network_tunnel_type, toggle_network_move_picker_state, toggle_network_tunnel_auto_open,
+    set_network_tunnel_type, toggle_network_tunnel_auto_open,
 };
 
 pub(in crate::features) struct ConnectionFeatureState {
@@ -229,7 +229,6 @@ struct ConnectionGroupEditorFeatureState {
 struct NetworkFeatureState {
     tab: NetworkTab,
     group_editor: Option<NetworkGroupEditorState>,
-    move_picker: Option<NetworkMovePickerState>,
     expanded_sections: HashSet<String>,
     tunnel_editor: Option<NetworkTunnelEditorState>,
     proxy_editor: Option<NetworkProxyEditorState>,
@@ -323,7 +322,6 @@ impl ConnectionFeatureState {
             network: NetworkFeatureState {
                 tab: NetworkTab::Tunnels,
                 group_editor: None,
-                move_picker: None,
                 expanded_sections: HashSet::new(),
                 tunnel_editor: None,
                 proxy_editor: None,
@@ -1602,10 +1600,6 @@ impl ConnectionFeatureState {
         self.network.section_is_expanded(section_key)
     }
 
-    pub fn network_move_picker_is_open(&self, tab: NetworkTab, id: &str) -> bool {
-        self.network.move_picker_is_open(tab, id)
-    }
-
     pub fn active_network_group_editor(&self) -> Option<NetworkGroupEditorState> {
         self.network.active_group_editor()
     }
@@ -1624,14 +1618,6 @@ impl ConnectionFeatureState {
 
     pub fn toggle_network_section(&mut self, section_key: String) -> bool {
         self.network.toggle_section(section_key)
-    }
-
-    pub fn toggle_network_move_picker(&mut self, tab: NetworkTab, id: String) -> bool {
-        self.network.toggle_move_picker(tab, id)
-    }
-
-    pub fn close_network_move_picker(&mut self) {
-        self.network.close_move_picker();
     }
 
     pub fn begin_network_group_edit(&mut self, draft: NetworkGroupEditorState) {
@@ -2539,12 +2525,6 @@ impl NetworkFeatureState {
         self.expanded_sections.contains(section_key)
     }
 
-    pub fn move_picker_is_open(&self, tab: NetworkTab, id: &str) -> bool {
-        self.move_picker
-            .as_ref()
-            .is_some_and(|picker| picker.tab == tab && picker.id == id)
-    }
-
     pub fn active_group_editor(&self) -> Option<NetworkGroupEditorState> {
         self.group_editor.clone()
     }
@@ -2559,24 +2539,14 @@ impl NetworkFeatureState {
 
     pub fn set_tab(&mut self, tab: NetworkTab) {
         self.tab = tab;
-        self.move_picker = None;
     }
 
     pub fn toggle_section(&mut self, section_key: String) -> bool {
         if self.expanded_sections.remove(&section_key) {
-            self.move_picker = None;
             return false;
         }
         self.expanded_sections.insert(section_key);
         true
-    }
-
-    pub fn toggle_move_picker(&mut self, tab: NetworkTab, id: String) -> bool {
-        toggle_network_move_picker_state(&mut self.move_picker, tab, id)
-    }
-
-    pub fn close_move_picker(&mut self) {
-        self.move_picker = None;
     }
 
     pub fn begin_group_edit(&mut self, draft: NetworkGroupEditorState) {
@@ -2665,13 +2635,7 @@ impl NetworkFeatureState {
     }
 
     pub fn remove_item_references(&mut self, tab: NetworkTab, id: &str) {
-        remove_network_item_references(
-            &mut self.move_picker,
-            &mut self.tunnel_editor,
-            &mut self.proxy_editor,
-            tab,
-            id,
-        );
+        remove_network_item_references(&mut self.tunnel_editor, &mut self.proxy_editor, tab, id);
     }
 
     pub fn remove_group_references(

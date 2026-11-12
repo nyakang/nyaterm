@@ -5,12 +5,11 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::*;
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, px, rgb, rgba, svg};
 
-use super::super::common::NetworkItemMenuConfig;
+use super::super::common::{NetworkItemMenuConfig, network_move_menu_items};
 use super::row::{TunnelNetworkRow, tunnel_network_row};
 use crate::features::tunnels::TunnelBatchAction;
 use crate::features::{NyaTermApp, formatting::tunnel_name};
 use crate::models::NetworkTab;
-use crate::widgets::{small_button, status_pill};
 use nyaterm_core::{TunnelConfig, TunnelGroup, truncate_preview};
 use nyaterm_transport::SshTunnelInfo;
 use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem};
@@ -119,13 +118,8 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
             let tunnel_for_open = tunnel.clone();
             let tunnel_id_for_close = tunnel.id.clone();
             let tunnel_id_for_edit = tunnel.id.clone();
-            let tunnel_id_for_move = tunnel.id.clone();
             let tunnel_id_for_delete = tunnel.id.clone();
             let tunnel_label_for_delete = tunnel_name(&tunnel);
-            let move_picker_open = app
-                .connection_state
-                .network_move_picker_is_open(NetworkTab::Tunnels, &tunnel.id);
-            let current_group_id = tunnel.group_id.clone();
             rows = rows.child(
                 div()
                     .flex()
@@ -149,7 +143,16 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
                                 edit_label: t!("common.edit"),
                                 move_label: t!("network.moveToGroup"),
                                 delete_label: t!("common.delete"),
-                                can_move: !app.tunnel_state.tunnel_groups().is_empty(),
+                                move_items: network_move_menu_items(
+                                    NetworkTab::Tunnels,
+                                    &tunnel.id,
+                                    tunnel.group_id.as_deref(),
+                                    app.tunnel_state
+                                        .tunnel_groups()
+                                        .iter()
+                                        .map(|group| (group.id.clone(), group.name.clone())),
+                                    cx,
+                                ),
                             },
                         },
                         cx.listener(move |this, _, window, cx| {
@@ -165,13 +168,6 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
                                 cx,
                             );
                         }),
-                        cx.listener(move |this, _, _, cx| {
-                            this.open_network_move_picker(
-                                NetworkTab::Tunnels,
-                                tunnel_id_for_move.clone(),
-                                cx,
-                            );
-                        }),
                         cx.listener(move |this, _, window, cx| {
                             this.open_network_delete_confirm(
                                 NetworkTab::Tunnels,
@@ -181,16 +177,7 @@ pub(in crate::features::pages::tunnels) fn tunnel_section(
                                 cx,
                             );
                         }),
-                    ))
-                    .when(move_picker_open, |this| {
-                        this.child(tunnel_move_picker(
-                            palette,
-                            tunnel.id.clone(),
-                            current_group_id,
-                            app.tunnel_state.tunnel_groups(),
-                            cx,
-                        ))
-                    }),
+                    )),
             );
         }
     }
@@ -361,92 +348,4 @@ fn tunnel_group_overflow_menu(
                 items
             })
         })
-}
-
-fn tunnel_move_picker(
-    palette: crate::theme::ThemePalette,
-    tunnel_id: String,
-    current_group_id: Option<String>,
-    groups: &[TunnelGroup],
-    cx: &mut Context<NyaTermApp>,
-) -> gpui::Div {
-    let mut targets = div().flex().flex_wrap().items_center().gap_2();
-    if current_group_id.is_none() {
-        targets = targets.child(
-            div()
-                .rounded_md()
-                .px_2()
-                .py_1()
-                .text_size(px(11.))
-                .text_color(rgb(palette.link))
-                .bg(rgb(palette.hover))
-                .child(format!(
-                    "{} · {}",
-                    t!("network.ungrouped"),
-                    t!("network.current")
-                )),
-        );
-    } else {
-        let target_id = tunnel_id.clone();
-        targets = targets.child(small_button(
-            palette,
-            format!("network-tunnel-move-{tunnel_id}-ungrouped"),
-            t!("network.ungrouped"),
-            cx.listener(move |this, _, _, cx| {
-                this.move_tunnel_to_group(target_id.clone(), None, cx);
-            }),
-        ));
-    }
-
-    for group in groups {
-        if current_group_id.as_deref() == Some(group.id.as_str()) {
-            targets = targets.child(status_pill(
-                t!("network.current"),
-                rgb(palette.success),
-                rgb(palette.hover),
-            ));
-            targets = targets.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.text))
-                    .child(truncate_preview(&group.name, 36)),
-            );
-        } else {
-            let target_id = tunnel_id.clone();
-            let group_id = group.id.clone();
-            targets = targets.child(small_button(
-                palette,
-                format!("network-tunnel-move-{tunnel_id}-{}", group.id),
-                t!("network.moveHere"),
-                cx.listener(move |this, _, _, cx| {
-                    this.move_tunnel_to_group(target_id.clone(), Some(group_id.clone()), cx);
-                }),
-            ));
-            targets = targets.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(truncate_preview(&group.name, 36)),
-            );
-        }
-    }
-
-    div()
-        .border_t_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.input))
-        .px_3()
-        .py_2()
-        .flex()
-        .items_center()
-        .gap_3()
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .font_weight(FontWeight(700.))
-                .text_color(rgb(palette.text))
-                .child(t!("network.moveToGroup")),
-        )
-        .child(targets)
 }

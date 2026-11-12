@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::models::{
-    NetworkGroupEditorState, NetworkMovePickerState, NetworkProxyEditorField,
-    NetworkProxyEditorState, NetworkTab, NetworkTunnelEditorField, NetworkTunnelEditorState,
+    NetworkGroupEditorState, NetworkProxyEditorField, NetworkProxyEditorState, NetworkTab,
+    NetworkTunnelEditorField, NetworkTunnelEditorState,
 };
 
 /// Write the group draft's name.
@@ -29,36 +29,12 @@ pub(super) fn set_network_group_editor_error(
     true
 }
 
-pub(super) fn toggle_network_move_picker_state(
-    move_picker: &mut Option<NetworkMovePickerState>,
-    tab: NetworkTab,
-    id: String,
-) -> bool {
-    if move_picker
-        .as_ref()
-        .is_some_and(|picker| picker.tab == tab && picker.id == id)
-    {
-        *move_picker = None;
-        return false;
-    }
-
-    *move_picker = Some(NetworkMovePickerState { tab, id });
-    true
-}
-
 pub(super) fn remove_network_item_references(
-    move_picker: &mut Option<NetworkMovePickerState>,
     tunnel_editor: &mut Option<NetworkTunnelEditorState>,
     proxy_editor: &mut Option<NetworkProxyEditorState>,
     tab: NetworkTab,
     id: &str,
 ) {
-    if move_picker
-        .as_ref()
-        .is_some_and(|picker| picker.tab == tab && picker.id == id)
-    {
-        *move_picker = None;
-    }
     match tab {
         NetworkTab::Tunnels => {
             if tunnel_editor
