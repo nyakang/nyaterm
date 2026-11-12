@@ -442,6 +442,11 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return false;
         };
+        if event.keystroke.key == "tab"
+            && let Some(view) = self.terminal.view.views.get_mut(&session_id)
+        {
+            view.tab_action_pressed = false;
+        }
         let peers = self.sync_peer_session_ids(&session_id);
         // Consume ownership even if the connection is no longer writable. A
         // reconnect key press and keys held by the previous TUI have no owner
@@ -1500,6 +1505,13 @@ impl NyaTermApp {
         self.terminal.input.focus_active = focused;
         if !focused {
             self.clear_terminal_composition(cx);
+            if let Some(view) = self
+                .session
+                .active_id()
+                .and_then(|id| self.terminal.view.views.get_mut(id))
+            {
+                view.tab_action_pressed = false;
+            }
         }
         let Some(session_id) = self.session.active_id_owned() else {
             return;

@@ -47,7 +47,15 @@ fn terminal_shell_placeholder_snapshot() -> std::sync::Arc<TerminalSnapshot> {
 }
 
 impl NyaTermApp {
-    fn terminal_tab_key_event(shift: bool) -> KeyDownEvent {
+    pub(in crate::features::terminal) fn terminal_tab_key_event(
+        &mut self,
+        shift: bool,
+    ) -> KeyDownEvent {
+        let is_held = self
+            .session
+            .active_id()
+            .and_then(|id| self.terminal.view.views.get_mut(id))
+            .is_some_and(|view| std::mem::replace(&mut view.tab_action_pressed, true));
         KeyDownEvent {
             keystroke: gpui::Keystroke {
                 modifiers: gpui::Modifiers {
@@ -57,7 +65,7 @@ impl NyaTermApp {
                 key: "tab".to_string(),
                 key_char: None,
             },
-            is_held: false,
+            is_held,
             prefer_character_input: false,
         }
     }
@@ -712,11 +720,11 @@ impl NyaTermApp {
                     .key_context(TERMINAL_KEY_CONTEXT)
                     .track_focus(&self.terminal.input.focus)
                     .on_action(cx.listener(|this, _: &TerminalTab, window, cx| {
-                        let event = NyaTermApp::terminal_tab_key_event(false);
+                        let event = this.terminal_tab_key_event(false);
                         this.handle_terminal_surface_key_down(&event, window, cx);
                     }))
                     .on_action(cx.listener(|this, _: &TerminalShiftTab, window, cx| {
-                        let event = NyaTermApp::terminal_tab_key_event(true);
+                        let event = this.terminal_tab_key_event(true);
                         this.handle_terminal_surface_key_down(&event, window, cx);
                     }))
                     .on_action(cx.listener(|this, _: &TerminalControlC, window, cx| {

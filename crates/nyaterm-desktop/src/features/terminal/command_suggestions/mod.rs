@@ -214,6 +214,12 @@ impl NyaTermApp {
         session_id: &str,
     ) -> bool {
         self.session.active_id() == Some(session_id)
+            && !self
+                .terminal
+                .editing
+                .sessions
+                .get(session_id)
+                .is_some_and(|state| state.browsing_history)
             && !self.session.is_disconnected(session_id)
             && !self.active_terminal_input_blocked()
             && !self.security.screen_locked()
@@ -409,7 +415,7 @@ impl NyaTermApp {
         }
 
         // Typing invalidates an explicit choice before the debounced search can
-        // publish its replacement. Enter/Tab must not accept the old selection.
+        // publish its replacement. Enter must not accept the old selection.
         if let Some(popup) = self.terminal.assist.command_suggestions.as_mut()
             && popup.selected_index.take().is_some()
         {
@@ -659,6 +665,7 @@ impl NyaTermApp {
             return;
         }
 
+        self.terminal.editing.state_mut().browsing_history = false;
         self.terminal.assist.command_suggestion_mode = CompletionMode::History;
         self.schedule_command_suggestion_search_mode(
             COMMAND_SUGGESTION_REFRESH_DEBOUNCE,
@@ -1072,10 +1079,10 @@ impl NyaTermApp {
             return false;
         }
         let session_id = state.session_id.clone();
-        let accepting = command_suggestion_item_for_selection(&state.items, state.selected_index)
-            .is_some()
-            && matches!(event.keystroke.key.as_str(), "tab" | "enter")
-            && !event.keystroke.modifiers.modified();
+        let selected =
+            command_suggestion_item_for_selection(&state.items, state.selected_index).is_some();
+        let accepting =
+            selected && event.keystroke.key == "enter" && !event.keystroke.modifiers.modified();
         if self.session.active_id() != Some(session_id.as_str())
             || self
                 .terminal_surface_bounds_for_session(Some(&session_id))
@@ -1112,13 +1119,20 @@ impl NyaTermApp {
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
             return false;
         }
-        if accepting {
+        if keystroke.key == "enter" && keystroke.modifiers.modified() {
+            return false;
+        }
+        if !selected && matches!(keystroke.key.as_str(), "tab" | "enter") {
+            self.dismiss_command_suggestions(cx);
+            return false;
+        }
+        if accepting || (selected && keystroke.key == "tab") {
             // A consumed suggestion key has no remote press owner. Its repeats
             // and Kitty release must not turn into a later command submission.
             if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
                 view.pressed_keys.remove(&keystroke.key);
             }
-            if event.is_held {
+            if accepting && event.is_held {
                 return true;
             }
         }
@@ -1127,12 +1141,19 @@ impl NyaTermApp {
                 self.dismiss_command_suggestions(cx);
                 true
             }
-            "up" => {
+            "up" | "down" | "tab" => {
+                let direction = if keystroke.key == "up"
+                    || (keystroke.key == "tab" && keystroke.modifiers.shift)
+                {
+                    -1
+                } else {
+                    1
+                };
                 if let Some(state) = self.terminal.assist.command_suggestions.as_mut() {
                     state.selected_index = command_suggestion_step_selection(
                         state.selected_index,
                         state.items.len(),
-                        -1,
+                        direction,
                     );
                     if let Some(index) = state.selected_index {
                         self.terminal
@@ -1144,25 +1165,7 @@ impl NyaTermApp {
                 }
                 true
             }
-            "down" => {
-                if let Some(state) = self.terminal.assist.command_suggestions.as_mut() {
-                    state.selected_index = command_suggestion_step_selection(
-                        state.selected_index,
-                        state.items.len(),
-                        1,
-                    );
-                    if let Some(index) = state.selected_index {
-                        self.terminal
-                            .assist
-                            .command_suggestion_scroll
-                            .scroll_to_item(index);
-                    }
-                    cx.notify();
-                }
-                true
-            }
-            "tab" => self.apply_selected_command_suggestion(false, cx),
-            "enter" => self.apply_selected_command_suggestion(true, cx),
+            "enter" => self.apply_selected_command_suggestion(false, cx),
             _ => false,
         }
     }
@@ -1393,7 +1396,12 @@ impl NyaTermApp {
             "suggestions.matches"
         });
         let footer = format!(
-            "↑↓ {} · Tab / Enter {} · Esc {}",
+            "{} {} · Enter {} · Esc {}",
+            if state.selected_index.is_some() {
+                "↑↓ / Tab / Shift+Tab"
+            } else {
+                "↑↓"
+            },
             t!("suggestions.select"),
             t!("suggestions.acceptSelected"),
             t!("suggestions.dismiss")
