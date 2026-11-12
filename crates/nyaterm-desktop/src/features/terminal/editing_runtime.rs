@@ -333,7 +333,14 @@ impl NyaTermApp {
         } else {
             None
         };
+        // A line that was just submitted stays on screen, still marked, until the
+        // shell reports the command started. Recovering from it would resurrect
+        // the executed command as the new input (`clear` wipes the screen right
+        // after, leaving every later keystroke appended to the dead text).
+        let marked_line_was_submitted = state.submitted_anchor.is_some()
+            && state.submitted_anchor == snapshot.shell_input_anchor;
         if mapping.is_none()
+            && !marked_line_was_submitted
             && state.model.phase != EditPhase::Pending
             && (state.model.input.desynced
                 || state.model.input.line_rewrite_required
@@ -640,6 +647,54 @@ mod tests {
                     .value
                     .is_empty()
             );
+        });
+    }
+
+    #[test]
+    fn input_is_confirmed_again_after_clear_wipes_the_screen() {
+        let dir = TestConfigDir::new("nyaterm-shell-edit-clear");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            // The view is rebuilt from the whole byte stream each time, which
+            // is exactly what one persistent screen would have received.
+            let mut stream = String::new();
+            let mut feed = |app: &mut crate::features::NyaTermApp, text: &str| {
+                stream.push_str(text);
+                app.terminal
+                    .seed_session_view("s1".into(), stream.clone(), "UTF-8");
+            };
+            feed(app, "\x1b]133;A\x07$ \x1b]133;B\x07");
+            app.note_shell_editing_input(b"clear", cx);
+            feed(app, "clear");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed(), "before clear");
+            app.note_shell_editing_input(b"\r", cx);
+            // The shell has not reported the command start yet, so the marked
+            // line is still on screen. It must not come back as new input.
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.terminal.editing.predicted_input().value.is_empty());
+            feed(app, "\r\n\x1b]133;C\x07");
+            app.reconcile_shell_editing("s1", cx);
+            feed(
+                app,
+                "\x1b[H\x1b[2J\x1b[3J\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07",
+            );
+            app.reconcile_shell_editing("s1", cx);
+            app.note_shell_editing_input(b"cd /", cx);
+            feed(app, "cd /");
+            app.reconcile_shell_editing("s1", cx);
+            let state = app.terminal.editing.state().unwrap();
+            assert!(
+                app.command_suggestion_input_is_confirmed(),
+                "after clear: phase={:?} mapping={} desynced={} value={:?}",
+                state.model.phase,
+                state.mapping.is_some(),
+                state.model.input.desynced,
+                state.model.input.value,
+            );
+            assert_eq!(app.terminal.editing.predicted_input().value, "cd /");
         });
     }
 

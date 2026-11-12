@@ -227,7 +227,7 @@ impl PathSource {
             &mut TextMatcher::default(),
             PATH_CANDIDATE_LIMIT,
         );
-        tracing::info!(
+        tracing::debug!(
             diagnostic = "path_completion",
             entries = listing.len(),
             candidates = candidates.len(),

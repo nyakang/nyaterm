@@ -367,6 +367,25 @@ mod tests {
         screen
     }
 
+    /// What zsh does for `clear`: the command's output erases the screen, then
+    /// the next prompt is drawn with a fresh input mark.
+    #[test]
+    fn input_is_resolved_again_after_the_screen_is_cleared() {
+        for erase in [
+            &b"\x1b[H\x1b[2J"[..],
+            &b"\x1b[H\x1b[2J\x1b[3J"[..],
+            &b"\x1b[3J\x1b[H\x1b[2J"[..],
+        ] {
+            let mut screen = TerminalScreen::new(80, 24);
+            screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07clear\r\n\x1b]133;C\x07");
+            screen.advance(erase);
+            screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07cd /");
+            let snapshot = screen.snapshot();
+            assert!(snapshot.shell_input_anchor.is_some(), "{erase:?}");
+            assert!(resolve_input(&snapshot, "cd /", 4).is_some(), "{erase:?}");
+        }
+    }
+
     #[test]
     fn a_right_prompt_on_the_input_row_does_not_block_confirmation() {
         let screen = screen_with_right_prompt("cd /");
