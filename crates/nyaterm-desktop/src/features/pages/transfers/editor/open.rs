@@ -499,8 +499,10 @@ impl NyaTermApp {
                 let progress_id = id.clone();
                 let result = run_external_open(
                     &control,
-                    || prepare_external_edit_workspace(&file_name, || control.is_cancelled())
-                        .map_err(|error| format!("{error:#}")),
+                    || {
+                        prepare_external_edit_workspace(&file_name, || control.is_cancelled())
+                            .map_err(|error| format!("{error:#}"))
+                    },
                     |local_path| {
                         let _ = progress_tx.unbounded_send(TransferJobResult {
                             id: id.clone(),
@@ -525,7 +527,7 @@ impl NyaTermApp {
                             .map_err(|error| error.to_string())
                     },
                     |local_path| {
-                        let baseline = crate::features::transfers::external_sync_runtime::read_external_editor_version(
+                        let baseline = nyaterm_files::local_revision::read_local_file_version(
                             local_path,
                             || control.is_cancelled(),
                         )
@@ -539,14 +541,14 @@ impl NyaTermApp {
                         if control.is_cancelled() {
                             return Err(SFTP_TRANSFER_CANCELLED.to_string());
                         }
-                        open_local_path_with_editor(local_path, &default_editor).map(
-                            |_| TransferJobOutput::ExternalOpened {
+                        open_local_path_with_editor(local_path, &default_editor).map(|_| {
+                            TransferJobOutput::ExternalOpened {
                                 baseline,
                                 remote_path: remote_path.clone(),
                                 raw_path_token: remote_file_path.raw_path_token.clone(),
                                 local_path: local_path.to_path_buf(),
-                            },
-                        )
+                            }
+                        })
                     },
                 );
                 let _ = finished_tx.unbounded_send(TransferJobResult {

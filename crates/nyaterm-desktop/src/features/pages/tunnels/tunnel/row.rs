@@ -28,7 +28,6 @@ pub(in crate::features::pages::tunnels) fn tunnel_network_row(
     on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_edit: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    on_move: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_delete: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let TunnelNetworkRow {
@@ -161,9 +160,7 @@ pub(in crate::features::pages::tunnels) fn tunnel_network_row(
                 .items_center()
                 .gap_1()
                 .child(toggle)
-                .child(network_item_overflow_menu(
-                    menu, on_edit, on_move, on_delete,
-                )),
+                .child(network_item_overflow_menu(menu, on_edit, on_delete)),
         )
 }
 

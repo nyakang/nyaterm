@@ -534,8 +534,8 @@ pub(crate) async fn run_open_ssh_shell_session(
 
     let mut pending_upload: Option<PendingSshIntegrationUpload> = None;
 
-    // Passive tmux control-mode detector: input-side arming happens on
-    // `SshCommand::Write`, output-side startup framing on channel data.
+    // Double-C discovery continuously follows stdout framing. Input only
+    // enables launch advisories and explicit single-C compatibility.
     let mut tmux_detector = tmux::TmuxControlDetector::new();
 
     post_login = post_login.filter(|command| command.enabled && !command.command.trim().is_empty());
@@ -581,8 +581,8 @@ pub(crate) async fn run_open_ssh_shell_session(
                 if let Some(command) = post_login.take() {
                     let mut text = command.command.replace("\r\n", "\r").replace('\n', "\r");
                     if !text.ends_with('\r') { text.push('\r'); }
-                    // A configured post-login `tmux -CC` arm detection exactly
-                    // like a user-typed command line.
+                    // Post-login commands provide the same explicit launch
+                    // evidence as user input, including single-C compatibility.
                     tmux_detector.feed_input(text.as_bytes());
                     let channel = channel.clone();
                     pending_send = Some(Box::pin(async move { channel.data_bytes(text.into_bytes()).await }));

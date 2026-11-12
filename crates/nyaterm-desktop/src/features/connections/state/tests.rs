@@ -21,8 +21,7 @@ use super::{
     set_network_proxy_protocol, set_network_tunnel_bind_localhost, set_network_tunnel_connection,
     set_network_tunnel_editor_error, set_network_tunnel_editor_field, set_network_tunnel_group,
     set_network_tunnel_type, sync_connection_search_expansion, toggle_connection_editor_flag,
-    toggle_network_move_picker_state, toggle_network_tunnel_auto_open,
-    visible_connection_ids_for_list_state,
+    toggle_network_tunnel_auto_open, visible_connection_ids_for_list_state,
 };
 use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
 use crate::features::NyaTermApp;
@@ -37,9 +36,8 @@ use crate::models::{
     ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorForwardingTab,
     ConnectionEditorPasswordSource, ConnectionEditorSelect, ConnectionEditorSshAlgorithmTab,
     ConnectionEditorState, ConnectionGroupEditorMode, ConnectionGroupEditorState,
-    ConnectionKindTab, ConnectionSortMode, NetworkGroupEditorState, NetworkMovePickerState,
-    NetworkProxyEditorField, NetworkProxyEditorState, NetworkTab, NetworkTunnelEditorField,
-    NetworkTunnelEditorState,
+    ConnectionKindTab, ConnectionSortMode, NetworkGroupEditorState, NetworkProxyEditorField,
+    NetworkProxyEditorState, NetworkTab, NetworkTunnelEditorField, NetworkTunnelEditorState,
 };
 use gpui::{AppContext as _, TestAppContext};
 use nyaterm_core::{
@@ -2110,50 +2108,17 @@ fn network_proxy_protocol_selection_resets_hidden_focus() {
 }
 
 #[test]
-fn toggle_network_move_picker_toggles_same_item() {
-    let mut move_picker = None;
-
-    assert!(toggle_network_move_picker_state(
-        &mut move_picker,
-        NetworkTab::Proxies,
-        "proxy".to_string(),
-    ));
-
-    assert_eq!(
-        move_picker,
-        Some(NetworkMovePickerState {
-            tab: NetworkTab::Proxies,
-            id: "proxy".to_string(),
-        })
-    );
-
-    assert!(!toggle_network_move_picker_state(
-        &mut move_picker,
-        NetworkTab::Proxies,
-        "proxy".to_string(),
-    ));
-
-    assert_eq!(move_picker, None);
-}
-
-#[test]
 fn remove_network_item_references_clears_only_matching_tab_and_id() {
-    let mut move_picker = Some(NetworkMovePickerState {
-        tab: NetworkTab::Tunnels,
-        id: "one".to_string(),
-    });
     let mut tunnel_editor = Some(network_tunnel_editor("one"));
     let mut proxy_editor = Some(network_proxy_editor("one"));
 
     remove_network_item_references(
-        &mut move_picker,
         &mut tunnel_editor,
         &mut proxy_editor,
         NetworkTab::Tunnels,
         "one",
     );
 
-    assert_eq!(move_picker, None);
     assert_eq!(tunnel_editor, None);
     assert_eq!(proxy_editor, Some(network_proxy_editor("one")));
 }
@@ -2195,10 +2160,6 @@ fn remove_network_group_and_item_references_clears_deleted_child_state() {
         error: None,
     });
     let mut expanded_sections = HashSet::from(["proxy:group-a".to_string()]);
-    let mut move_picker = Some(NetworkMovePickerState {
-        tab: NetworkTab::Proxies,
-        id: "proxy-a".to_string(),
-    });
     let mut tunnel_editor = Some(network_tunnel_editor("proxy-a"));
     let mut proxy_editor = Some(network_proxy_editor("proxy-a"));
 
@@ -2209,7 +2170,6 @@ fn remove_network_group_and_item_references_clears_deleted_child_state() {
         "group-a",
     );
     remove_network_item_references(
-        &mut move_picker,
         &mut tunnel_editor,
         &mut proxy_editor,
         NetworkTab::Proxies,
@@ -2218,7 +2178,6 @@ fn remove_network_group_and_item_references_clears_deleted_child_state() {
 
     assert_eq!(group_editor, None);
     assert!(expanded_sections.is_empty());
-    assert_eq!(move_picker, None);
     assert_eq!(proxy_editor, None);
     assert_eq!(tunnel_editor, Some(network_tunnel_editor("proxy-a")));
 }

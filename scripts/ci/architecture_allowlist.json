@@ -1,7 +1,6 @@
 {
   "wildcard_super_import": [],
   "desktop_feature_thread_spawn": [
-    {"path": "crates/nyaterm-desktop/src/features/ai/agent_management.rs", "max_count": 1, "reason": "The cancellation unit test uses a temporary waiter thread and joins it before returning."},
     {"path": "crates/nyaterm-desktop/src/features/app_state/store_runtime.rs", "max_count": 1, "reason": "The GPUI shutdown responsiveness test uses a watchdog thread and joins it before returning."}
   ],
   "desktop_thread_builder": [

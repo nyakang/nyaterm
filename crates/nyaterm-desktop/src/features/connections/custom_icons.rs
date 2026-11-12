@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::Arc;
 
+use crate::image_presentation::render_image_from_bgra;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui::{AppContext as _, Context, PathPromptOptions, RenderImage, Window};
 use nyaterm_core::models::sessions::ConnectionCustomIcon;
+use nyaterm_preview::icons::{self, IconDecodeError};
 use nyaterm_store::StoreDomain;
 
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
@@ -29,23 +30,13 @@ fn decode_icon(record: &ConnectionCustomIcon) -> Result<Arc<RenderImage>, String
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|_| "Invalid image encoding")?;
-    let mut reader = image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| "Invalid image format")?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let image = reader
-        .decode()
-        .map_err(|_| "Invalid or oversized icon")?
-        .thumbnail(128, 128);
-    let mut pixels = image.to_rgba8();
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Ok(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
+    let raster = icons::decode_icon(&bytes).map_err(|error| match error {
+        IconDecodeError::InvalidFormat => "Invalid image format",
+        IconDecodeError::UnsupportedFormat | IconDecodeError::InvalidOrOversizedImage => {
+            "Invalid or oversized icon"
+        }
+    })?;
+    render_image_from_bgra(raster.width, raster.height, &raster.pixels)
 }
 
 impl NyaTermApp {
@@ -119,17 +110,9 @@ impl NyaTermApp {
                     if bytes.len() > MAX_ICON_BYTES {
                         return Err("Icon exceeds 2 MiB".to_string());
                     }
-                    let format =
-                        image::guess_format(&bytes).map_err(|_| "Unsupported icon format")?;
-                    let mime = match format {
-                        image::ImageFormat::Png => "png",
-                        image::ImageFormat::Jpeg => "jpeg",
-                        image::ImageFormat::Gif => "gif",
-                        image::ImageFormat::Bmp => "bmp",
-                        image::ImageFormat::WebP => "webp",
-                        _ => return Err("Unsupported icon format".into()),
-                    };
-                    let data_url = format!("data:image/{mime};base64,{}", STANDARD.encode(bytes));
+                    let mime =
+                        icons::detect_icon_mime(&bytes).map_err(|_| "Unsupported icon format")?;
+                    let data_url = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
                     let name = path
                         .file_stem()
                         .and_then(|name| name.to_str())
@@ -225,7 +208,10 @@ mod tests {
         let url = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
         let mut record =
             ConnectionCustomIcon::from_legacy_data_url(&url, "fixture".into(), 1).unwrap();
+        let saved_record = record.clone();
         assert!(decode_icon(&record).is_ok());
+        assert_eq!(record, saved_record);
+        assert_eq!(record.data_url, url);
         record.data_url = "data:image/png;base64,AA==".into();
         assert!(decode_icon(&record).is_err());
     }

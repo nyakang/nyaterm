@@ -207,6 +207,8 @@ pub(crate) struct TerminalViewState {
     pub(crate) protocol_state: TerminalProtocolState,
     /// Physical keys routed to this connection; never carried across reconnect.
     pub(crate) pressed_keys: HashSet<String>,
+    /// Tab actions omit the platform repeat flag, including locally consumed presses.
+    pub(crate) tab_action_pressed: bool,
     pub(crate) output_decoder: TerminalOutputDecoder,
     pub(crate) recording_decoder: TerminalOutputDecoder,
     pub(crate) screen_revision: u64,
@@ -273,6 +275,7 @@ impl TerminalViewState {
             pending_selected_occurrence_visible_key: None,
             protocol_state: TerminalProtocolState::default(),
             pressed_keys: HashSet::new(),
+            tab_action_pressed: false,
             output_decoder: TerminalOutputDecoder::default(),
             recording_decoder: TerminalOutputDecoder::default(),
             screen_revision: 0,
@@ -326,6 +329,7 @@ impl TerminalViewState {
             pending_selected_occurrence_visible_key: None,
             protocol_state,
             pressed_keys: HashSet::new(),
+            tab_action_pressed: false,
             output_decoder: TerminalOutputDecoder::default(),
             recording_decoder: TerminalOutputDecoder::default(),
             screen_revision: 0,
@@ -448,6 +452,7 @@ impl TerminalViewState {
             ..TerminalProtocolState::default()
         };
         self.pressed_keys.clear();
+        self.tab_action_pressed = false;
         self.output_decoder.reset_decoder();
         self.recording_decoder.reset_decoder();
         self.set_encoding(encoding);

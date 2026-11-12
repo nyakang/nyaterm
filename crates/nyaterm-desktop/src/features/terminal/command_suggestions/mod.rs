@@ -249,6 +249,12 @@ impl NyaTermApp {
         session_id: &str,
     ) -> bool {
         self.session.active_id() == Some(session_id)
+            && !self
+                .terminal
+                .editing
+                .sessions
+                .get(session_id)
+                .is_some_and(|state| state.browsing_history)
             && !self.session.is_disconnected(session_id)
             && !self.active_terminal_input_blocked()
             && !self.security.screen_locked()
@@ -285,15 +291,55 @@ impl NyaTermApp {
             .is_some_and(|state| state.confirmed_input_at_end())
     }
 
+    pub(in crate::features::terminal) fn retain_command_suggestions_during_edit(
+        &mut self,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(popup) = self.terminal.assist.command_suggestions.as_mut()
+            && popup.begin_input_refresh(text)
+        {
+            cx.notify();
+        }
+    }
+
+    fn command_suggestion_refresh_can_remain_visible(&self) -> bool {
+        let Some(popup) = self.terminal.assist.command_suggestions.as_ref() else {
+            return false;
+        };
+        let input = self.terminal.editing.assist_input();
+        popup.refreshing
+            && self.command_suggestions_allowed_for_session(&popup.session_id)
+            && self.sync_input.revision() == popup.sync_revision
+            && command_suggestion_input_can_defer_refresh(input)
+            && !input.line_rewrite_required
+            && !input.paste_mode
+            && command_suggestion_input_has_command_text(input)
+            && !command_suggestion_input_obvious_pager_prefix(input)
+            && (popup.mode == CompletionMode::History
+                || !terminal_input_tracker_below_min_chars(
+                    input,
+                    self.settings
+                        .summary()
+                        .interaction_command_suggestion_min_chars
+                        .max(1) as usize,
+                )
+                || input.value.contains(char::is_whitespace))
+    }
+
     /// Called from state/terminal events, never from element construction.
     pub(in crate::features) fn reconcile_command_suggestion_availability(
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        if self.command_suggestion_refresh_can_remain_visible() {
+            return;
+        }
         let Some(popup) = self.terminal.assist.command_suggestions.as_ref() else {
             return;
         };
-        if !self.command_suggestions_allowed_for_session(&popup.session_id)
+        if popup.refreshing
+            || !self.command_suggestions_allowed_for_session(&popup.session_id)
             || !self.command_suggestion_input_is_confirmed()
             || self.sync_input.revision() != popup.sync_revision
         {
@@ -471,7 +517,7 @@ impl NyaTermApp {
         }
 
         // Typing invalidates an explicit choice before the debounced search can
-        // publish its replacement. Enter/Tab must not accept the old selection.
+        // publish its replacement. Enter must not accept the old selection.
         if let Some(popup) = self.terminal.assist.command_suggestions.as_mut()
             && popup.selected_index.take().is_some()
         {
@@ -732,6 +778,7 @@ impl NyaTermApp {
             return;
         }
 
+        self.terminal.editing.state_mut().browsing_history = false;
         self.terminal.assist.command_suggestion_mode = CompletionMode::History;
         self.schedule_command_suggestion_search_mode(
             COMMAND_SUGGESTION_REFRESH_DEBOUNCE,
@@ -824,7 +871,9 @@ impl NyaTermApp {
             || !self.command_suggestion_input_is_confirmed()
         {
             self.log_command_suggestions_unavailable(&session_id);
-            self.hide_command_suggestions_if_present(cx);
+            if !self.command_suggestion_refresh_can_remain_visible() {
+                self.hide_command_suggestions_if_present(cx);
+            }
             finish_refresh!("not_confirmed_or_restricted", 0, 0);
         }
         let min_chars = self
@@ -971,6 +1020,7 @@ impl NyaTermApp {
         timing.cursor = cursor_started_at.elapsed();
         let update_started_at = Instant::now();
         let next_state = CommandSuggestionState {
+            refreshing: false,
             mode,
             completion_revision,
             scope,
@@ -1172,11 +1222,25 @@ impl NyaTermApp {
         if state.items.is_empty() {
             return false;
         }
+        if state.refreshing {
+            if !event.keystroke.modifiers.platform
+                && !event.keystroke.modifiers.alt
+                && !event.keystroke.modifiers.control
+                && matches!(
+                    event.keystroke.key.as_str(),
+                    "escape" | "up" | "down" | "tab" | "enter"
+                )
+            {
+                self.dismiss_command_suggestions(cx);
+                return event.keystroke.key == "escape";
+            }
+            return false;
+        }
         let session_id = state.session_id.clone();
-        let accepting = command_suggestion_item_for_selection(&state.items, state.selected_index)
-            .is_some()
-            && matches!(event.keystroke.key.as_str(), "tab" | "enter")
-            && !event.keystroke.modifiers.modified();
+        let selected =
+            command_suggestion_item_for_selection(&state.items, state.selected_index).is_some();
+        let accepting =
+            selected && event.keystroke.key == "enter" && !event.keystroke.modifiers.modified();
         if self.session.active_id() != Some(session_id.as_str())
             || self
                 .terminal_surface_bounds_for_session(Some(&session_id))
@@ -1213,13 +1277,20 @@ impl NyaTermApp {
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
             return false;
         }
-        if accepting {
+        if keystroke.key == "enter" && keystroke.modifiers.modified() {
+            return false;
+        }
+        if !selected && matches!(keystroke.key.as_str(), "tab" | "enter") {
+            self.dismiss_command_suggestions(cx);
+            return false;
+        }
+        if accepting || (selected && keystroke.key == "tab") {
             // A consumed suggestion key has no remote press owner. Its repeats
             // and Kitty release must not turn into a later command submission.
             if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
                 view.pressed_keys.remove(&keystroke.key);
             }
-            if event.is_held {
+            if accepting && event.is_held {
                 return true;
             }
         }
@@ -1228,12 +1299,19 @@ impl NyaTermApp {
                 self.dismiss_command_suggestions(cx);
                 true
             }
-            "up" => {
+            "up" | "down" | "tab" => {
+                let direction = if keystroke.key == "up"
+                    || (keystroke.key == "tab" && keystroke.modifiers.shift)
+                {
+                    -1
+                } else {
+                    1
+                };
                 if let Some(state) = self.terminal.assist.command_suggestions.as_mut() {
                     state.selected_index = command_suggestion_step_selection(
                         state.selected_index,
                         state.items.len(),
-                        -1,
+                        direction,
                     );
                     if let Some(index) = state.selected_index {
                         self.terminal
@@ -1245,25 +1323,7 @@ impl NyaTermApp {
                 }
                 true
             }
-            "down" => {
-                if let Some(state) = self.terminal.assist.command_suggestions.as_mut() {
-                    state.selected_index = command_suggestion_step_selection(
-                        state.selected_index,
-                        state.items.len(),
-                        1,
-                    );
-                    if let Some(index) = state.selected_index {
-                        self.terminal
-                            .assist
-                            .command_suggestion_scroll
-                            .scroll_to_item(index);
-                    }
-                    cx.notify();
-                }
-                true
-            }
-            "tab" => self.apply_selected_command_suggestion(false, cx),
-            "enter" => self.apply_selected_command_suggestion(true, cx),
+            "enter" => self.apply_selected_command_suggestion(false, cx),
             _ => false,
         }
     }
@@ -1296,6 +1356,9 @@ impl NyaTermApp {
         let Some(popup) = self.terminal.assist.command_suggestions.clone() else {
             return SuggestionSubmitResult::NotHandled;
         };
+        if popup.refreshing {
+            return SuggestionSubmitResult::NotHandled;
+        }
         let execute_requested = execute_requested && popup.mode == CompletionMode::History;
         let Some(item) = command_suggestion_item_for_selection(&popup.items, popup.selected_index)
         else {
@@ -1481,7 +1544,11 @@ impl NyaTermApp {
             return div().into_any_element();
         }
         if !self.command_suggestions_allowed_for_session(&state.session_id)
-            || !self.command_suggestion_input_is_confirmed()
+            || (if state.refreshing {
+                !self.command_suggestion_refresh_can_remain_visible()
+            } else {
+                !self.command_suggestion_input_is_confirmed()
+            })
         {
             return div().into_any_element();
         }
@@ -1494,7 +1561,12 @@ impl NyaTermApp {
             "suggestions.matches"
         });
         let footer = format!(
-            "↑↓ {} · Tab / Enter {} · Esc {}",
+            "{} {} · Enter {} · Esc {}",
+            if state.selected_index.is_some() {
+                "↑↓ / Tab / Shift+Tab"
+            } else {
+                "↑↓"
+            },
             t!("suggestions.select"),
             t!("suggestions.acceptSelected"),
             t!("suggestions.dismiss")
@@ -1545,6 +1617,7 @@ impl NyaTermApp {
             .track_scroll(scroll)
             .overflow_y_scroll();
         for (index, item) in state.items.iter().enumerate() {
+            let input_version = state.input_version;
             let selected = state.selected_index == Some(index);
             let source_icon = match item.source.as_str() {
                 "history" | "legacyHistory" | "tokenHistory" => "icons/history.svg",
@@ -1585,6 +1658,17 @@ impl NyaTermApp {
                 .text_color(rgb(palette.text))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    if this
+                        .terminal
+                        .assist
+                        .command_suggestions
+                        .as_ref()
+                        .is_none_or(|popup| {
+                            popup.refreshing || popup.input_version != input_version
+                        })
+                    {
+                        return;
+                    }
                     if let Some(state) = this.terminal.assist.command_suggestions.as_mut() {
                         state.selected_index = Some(index);
                     }
@@ -1677,6 +1761,17 @@ impl NyaTermApp {
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
+                            if this
+                                .terminal
+                                .assist
+                                .command_suggestions
+                                .as_ref()
+                                .is_none_or(|popup| {
+                                    popup.refreshing || popup.input_version != input_version
+                                })
+                            {
+                                return;
+                            }
                             this.delete_command_suggestion_history(delete_command.clone(), cx);
                         }))
                         .child(
@@ -3130,6 +3225,7 @@ mod tests {
     #[test]
     fn command_suggestion_state_change_skips_identical_overlay() {
         let state = CommandSuggestionState {
+            refreshing: false,
             mode: nyaterm_core::completion::types::CompletionMode::History,
             completion_revision: 0,
             scope: None,
@@ -3239,6 +3335,7 @@ mod tests {
 
     fn open_suggestions_popup(session_id: &str) -> CommandSuggestionState {
         CommandSuggestionState {
+            refreshing: false,
             mode: nyaterm_core::completion::types::CompletionMode::History,
             completion_revision: 0,
             scope: None,

@@ -157,6 +157,44 @@ impl std::fmt::Debug for RemoteFileService {
 }
 
 impl RemoteFileService {
+    pub fn with_sudo(
+        config: SshSessionConfig,
+        multiplex: SshMultiplexHandle,
+        lease: crate::sftp::sudo::SftpSudoLease,
+    ) -> anyhow::Result<Self> {
+        let sftp_service = SftpService::with_sudo(config.clone(), multiplex.clone(), lease)?;
+        let mut service = Self::from_parts(config, Some(multiplex), None);
+        service.sftp_service = sftp_service;
+        *service.selected.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(RemoteFileBackendKind::Sftp);
+        Ok(service)
+    }
+
+    pub fn access_mode(&self) -> crate::sftp::sudo::FileAccessMode {
+        if self.sftp_service.sudo_lease().is_some() {
+            crate::sftp::sudo::FileAccessMode::SudoRoot
+        } else {
+            crate::sftp::sudo::FileAccessMode::LoginUser
+        }
+    }
+
+    pub fn authorization_is_valid(&self) -> bool {
+        self.sftp_service
+            .sudo_lease()
+            .is_none_or(|lease| !lease.is_revoked())
+    }
+
+    pub fn same_execution_identity(&self, other: &Self) -> bool {
+        match (
+            self.sftp_service.sudo_lease(),
+            other.sftp_service.sudo_lease(),
+        ) {
+            (Some(left), Some(right)) => left.same_authorization(right),
+            (None, None) => self.endpoint_key() == other.endpoint_key(),
+            _ => false,
+        }
+    }
+
     /// Join using the destination's filename encoding, retaining an opaque parent.
     pub fn child_path(
         &self,
@@ -325,6 +363,10 @@ impl RemoteFileService {
     }
 
     fn backend(&self) -> anyhow::Result<RemoteFileBackendKind> {
+        if let Some(lease) = self.sftp_service.sudo_lease() {
+            lease.check()?;
+            return Ok(RemoteFileBackendKind::Sftp);
+        }
         let mut selected = self
             .selected
             .lock()

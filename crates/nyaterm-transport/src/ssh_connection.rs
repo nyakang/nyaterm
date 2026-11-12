@@ -167,6 +167,9 @@ impl std::fmt::Debug for SshMultiplexHandle {
 }
 
 impl SshMultiplexHandle {
+    pub fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
     /// Runtime for auxiliary tasks; the connection remains the authoritative owner.
     pub fn runtime_handle(&self) -> tokio::runtime::Handle {
         self.inner.runtime.handle().clone()

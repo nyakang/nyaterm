@@ -1,16 +1,14 @@
 use rust_i18n::t;
 
 use gpui::{
-    App, ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, MouseDownEvent,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px, rgb, svg,
+    Context, InteractiveElement as _, IntoElement, MouseDownEvent, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    rgb,
 };
-use nyaterm_core::truncate_preview;
-use nyaterm_ui::NyaScrollable;
+use nyaterm_ui::{NyaCompactMenuRow, NyaScrollable};
 
-use crate::features::{NyaTermApp, shell::gpui_code_font_family};
+use crate::features::NyaTermApp;
 use crate::models::TransferBrowserFavoritesMenuState;
-use crate::theme::ThemePalette;
 
 use super::{normalized_transfer_browser_path, transfer_menu_position};
 
@@ -18,12 +16,17 @@ impl NyaTermApp {
     pub(in crate::features::pages::transfers) fn open_transfer_browser_favorites_menu(
         &mut self,
         event: &MouseDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         self.transfer.open_browser_favorites_menu(
             TransferBrowserFavoritesMenuState {
                 x: event.position.x,
                 y: event.position.y + px(18.),
+                focus,
+                scroll: gpui::ScrollHandle::new(),
             },
             t!("fileExplorer.favorites").to_string(),
         );
@@ -43,212 +46,186 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
-        let state = self.transfer.browser_view().favorites_menu.unwrap_or(
-            TransferBrowserFavoritesMenuState {
-                x: px(24.),
-                y: px(24.),
-            },
-        );
+        let Some(state) = self.transfer.browser_view().favorites_menu.clone() else {
+            return div().into_any_element();
+        };
         let current_path = normalized_transfer_browser_path(self.transfer.browser_view().path);
-        let favorite_paths = self
-            .transfer
-            .browser_view()
-            .favorites
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let favorite_paths = self.transfer.browser_view().favorites.clone();
         let (viewport_w, viewport_h) = self.shell.viewport_size();
+        let menu_width = 220_f32.min((viewport_w - 16.).max(1.));
         let (menu_x, menu_y, menu_max_height) = transfer_menu_position(
             f32::from(state.x),
             f32::from(state.y),
-            300.,
-            96. + favorite_paths.len() as f32 * 38.,
+            menu_width,
+            42. + favorite_paths.len().max(1) as f32 * 32.,
             viewport_w,
             viewport_h,
         );
-
-        let mut list = div().flex().flex_col().gap_1();
-        for path in favorite_paths {
+        let mut list = div().flex_none().flex().flex_col();
+        for (index, path) in favorite_paths.into_iter().enumerate() {
             let is_current = path == current_path;
             let open_path = path.clone();
             let remove_path = path.clone();
+            let menu_focus = state.focus.clone();
             list = list.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "transfer-browser-favorite-menu-item-{path}"
-                    )))
-                    .min_h(px(30.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(if is_current {
-                        rgb(0x256d3f)
-                    } else {
-                        rgb(palette.border)
-                    })
-                    .bg(if is_current {
-                        rgb(palette.hover)
-                    } else {
-                        rgb(palette.surface)
-                    })
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .hover(|this| this.bg(rgb(palette.hover)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                NyaCompactMenuRow::new(
+                    format!("transfer-browser-favorite-menu-item-{path}"),
+                    path,
+                    "icons/session/folder-open.svg",
+                    0xf5c542,
+                    palette,
+                    cx.listener(move |this, _, window, cx| {
                         this.close_transfer_browser_favorites_menu(cx);
+                        this.restore_transfer_browser_focus(window, cx);
                         this.open_transfer_browser_directory(open_path.clone(), window, cx);
                         this.defer_transfer_panel_snapshot_flush(cx);
-                    }))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .font_family(gpui_code_font_family())
-                            .text_size(px(10.))
-                            .text_color(if is_current {
-                                rgb(0x93c5fd)
-                            } else {
-                                rgb(palette.text)
-                            })
-                            .child(truncate_preview(&path, 46)),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!(
-                                "transfer-browser-favorite-menu-remove-{remove_path}"
-                            )))
-                            .size(px(20.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_sm()
-                            .text_color(rgb(0x86efac))
-                            .hover(|this| this.bg(rgb(palette.border)).text_color(rgb(0xfca5a5)))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                                cx.stop_propagation();
-                                this.remove_transfer_browser_favorite_path(remove_path.clone(), cx);
-                                this.defer_transfer_panel_snapshot_flush(cx);
-                            }))
-                            .child(
-                                svg()
-                                    .size(px(14.))
-                                    .path("icons/fe/bookmark-remove.svg")
-                                    .text_color(rgb(0x86efac)),
-                            ),
-                    ),
+                    }),
+                )
+                .current(is_current)
+                .scroll_on_focus(state.scroll.clone(), index)
+                .trailing_action(
+                    format!("transfer-browser-favorite-menu-remove-{remove_path}"),
+                    "icons/fe/bookmark-remove.svg",
+                    t!("fileExplorer.removeFavorite"),
+                    cx.listener(move |this, _, window, cx| {
+                        // The focused action is about to disappear; keep keys in this menu.
+                        window.focus(&menu_focus, cx);
+                        this.remove_transfer_browser_favorite_path(remove_path.clone(), cx);
+                        this.defer_transfer_panel_snapshot_flush(cx);
+                    }),
+                ),
             );
         }
 
         div()
-            .id(SharedString::from(
-                "transfer-browser-favorites-menu-overlay",
-            ))
+            .id("transfer-browser-favorites-menu-overlay")
             .absolute()
-            .top_0()
-            .bottom_0()
-            .left_0()
-            .right_0()
-            .on_click(cx.listener(|this, _, _, cx| {
+            .inset_0()
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
                 this.close_transfer_browser_favorites_menu(cx);
+                this.restore_transfer_browser_focus(window, cx);
             }))
+            .on_aux_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.close_transfer_browser_favorites_menu(cx);
+                this.restore_transfer_browser_focus(window, cx);
+            }))
+            .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
-                    .id(SharedString::from("transfer-browser-favorites-menu"))
+                    .id("transfer-browser-favorites-menu")
+                    .debug_selector(|| "transfer-browser-favorites-menu".to_string())
                     .absolute()
                     .top(px(menu_y))
                     .left(px(menu_x))
-                    .w(px(300.))
+                    .w(px(menu_width))
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
                     .bg(self.shell_surface_color(palette.bg))
                     .shadow_lg()
-                    .on_click(|_, _, cx| {
+                    .p(px(4.))
+                    .flex()
+                    .flex_col()
+                    .tab_group()
+                    .track_focus(&state.focus)
+                    .tab_index(0)
+                    .tab_stop(false)
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        match event.keystroke.key.as_str() {
+                            "escape" => {
+                                this.close_transfer_browser_favorites_menu(cx);
+                                this.restore_transfer_browser_focus(window, cx);
+                            }
+                            "tab" | "down" | "up" => {
+                                if let Some(menu) =
+                                    this.transfer.browser_view().favorites_menu.as_ref()
+                                {
+                                    move_menu_focus(
+                                        &menu.focus,
+                                        event.keystroke.key == "up"
+                                            || (event.keystroke.key == "tab"
+                                                && event.keystroke.modifiers.shift),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
                         cx.stop_propagation();
-                    })
+                    }))
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .on_aux_click(|_, _, cx| cx.stop_propagation())
+                    .child(NyaCompactMenuRow::new(
+                        "transfer-browser-favorite-menu-add-current",
+                        t!("fileExplorer.addCurrentDirToFavorites"),
+                        "icons/session/folder-open.svg",
+                        palette.link,
+                        palette,
+                        cx.listener(|this, _, _, cx| {
+                            this.add_current_transfer_browser_favorite(cx);
+                        }),
+                    ))
                     .child(
                         div()
-                            .max_h(px(menu_max_height))
-                            .overflow_y_scrollbar()
-                            .p_3()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
+                            .relative()
+                            .min_h_0()
                             .child(
-                                div().flex().items_center().justify_between().gap_2().child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight(800.))
-                                        .text_color(rgb(palette.text))
-                                        .child(t!("fileExplorer.favorites")),
-                                ),
-                            )
-                            .child(favorite_menu_button(
-                                palette,
-                                "transfer-browser-favorite-menu-add-current",
-                                t!("fileExplorer.addCurrentDirToFavorites"),
-                                cx.listener(|this, _, _, cx| {
-                                    this.add_current_transfer_browser_favorite(cx);
-                                }),
-                            ))
-                            .child(
-                                div()
-                                    .border_t_1()
-                                    .border_color(rgb(palette.border))
-                                    .pt_2()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
+                                list.id("transfer-browser-favorites-scroll")
+                                    .debug_selector(|| {
+                                        "transfer-browser-favorites-scroll".to_string()
+                                    })
+                                    .max_h(px((menu_max_height - 42.).max(0.)))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&state.scroll)
                                     .when(
                                         self.transfer.browser_view().favorites.is_empty(),
-                                        |this| {
-                                            this.child(
+                                        |list| {
+                                            list.child(
                                                 div()
-                                                    .rounded_sm()
-                                                    .border_1()
-                                                    .border_color(rgb(palette.border))
-                                                    .bg(rgb(palette.input))
-                                                    .px_2()
-                                                    .py_2()
-                                                    .text_xs()
+                                                    .h(px(32.))
+                                                    .px(px(8.))
+                                                    .flex()
+                                                    .items_center()
+                                                    .text_size(px(12.))
                                                     .text_color(rgb(palette.text_muted))
                                                     .child(t!("fileExplorer.noFavorites")),
                                             )
                                         },
-                                    )
-                                    .when(
-                                        !self.transfer.browser_view().favorites.is_empty(),
-                                        |this| this.child(list),
                                     ),
-                            ),
+                            )
+                            .vertical_scrollbar(&state.scroll),
                     ),
             )
+            .into_any_element()
     }
 }
 
-fn favorite_menu_button(
-    palette: ThemePalette,
-    id: impl Into<String>,
-    label: impl Into<SharedString>,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(SharedString::from(id.into()))
-        .h(px(30.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.surface))
-        .text_color(rgb(palette.text))
-        .text_xs()
-        .cursor_pointer()
-        .hover(|this| this.bg(rgb(palette.hover)))
-        .child(label.into())
-        .on_click(on_click)
+// Tab groups order controls but do not trap focus. Cycle past other groups so
+// neither Tab nor arrow navigation can hand an open menu's keys to the terminal.
+fn move_menu_focus(
+    focus: &gpui::FocusHandle,
+    reverse: bool,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    let mut first = None;
+    loop {
+        if reverse {
+            window.focus_prev(cx);
+        } else {
+            window.focus_next(cx);
+        }
+        if focus.contains_focused(window, cx) {
+            break;
+        }
+        let candidate = window.focused(cx);
+        if candidate.is_none() || first.as_ref() == Some(&candidate) {
+            window.focus(focus, cx);
+            break;
+        }
+        first.get_or_insert(candidate);
+    }
 }

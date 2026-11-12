@@ -136,6 +136,7 @@ impl NyaTermApp {
     ) {
         self.hide_secret_inputs(cx);
         self.security.lock_secrets();
+        self.cancel_file_sudo_prompt(cx);
         self.forget_text_inputs("security.editor.");
         self.connection_state.clear_editor_secrets(cx);
         self.forget_text_inputs("security.unlock.password");

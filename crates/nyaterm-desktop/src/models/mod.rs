@@ -4,7 +4,6 @@
 mod chrome;
 mod connections;
 pub(crate) mod event_wake;
-pub(crate) mod external_editor;
 mod layout_state;
 mod navigation;
 mod network;

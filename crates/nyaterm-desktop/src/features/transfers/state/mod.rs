@@ -9,6 +9,7 @@ mod admission;
 mod browser;
 mod clipboard;
 mod delete;
+mod privilege;
 pub(in crate::features) use browser::TransferSessionTransferBundle;
 pub(in crate::features) use clipboard::TransferFileClipboard;
 pub(super) use delete::TransferDeleteOutcome;
@@ -56,6 +57,8 @@ struct TransferRetryContext {
 }
 
 pub(in crate::features) struct TransferFeatureState {
+    pub(super) sudo_prompt: Option<super::privilege_runtime::FileSudoPrompt>,
+    external_file_tasks: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     file_operations: HashMap<String, super::file_operations::FileOperationContext>,
     clipboard: Option<TransferFileClipboard>,
     clipboard_generation: u64,
@@ -369,6 +372,8 @@ impl TransferFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
+            sudo_prompt: None,
+            external_file_tasks: HashMap::new(),
             file_operations: HashMap::new(),
             clipboard: None,
             clipboard_generation: 0,
@@ -1310,7 +1315,7 @@ impl TransferFeatureState {
         remote_path: String,
         raw_path_token: Option<String>,
         local_path: std::path::PathBuf,
-        baseline: crate::models::external_editor::ExternalEditorFileVersion,
+        baseline: nyaterm_files::local_revision::LocalFileVersion,
     ) -> Result<(), String> {
         let watcher = ExternalEditorWatcher::spawn(
             job_id.clone(),

@@ -73,6 +73,19 @@ impl NyaTermApp {
         if text.is_empty() {
             return;
         }
+        self.terminal
+            .editing
+            .state_mut()
+            .note_suggestion_input(text);
+        if self
+            .terminal
+            .editing
+            .state()
+            .is_some_and(|state| state.browsing_history)
+        {
+            // Cancel queued searches as well as the visible popup before echo arrives.
+            self.dismiss_command_suggestions(cx);
+        }
         let submitted_for_navigation =
             get_tracked_submission_command(self.terminal.editing.predicted_input());
         if text.contains(['\r', '\n']) {
@@ -137,6 +150,7 @@ impl NyaTermApp {
         state.selection_origin_version = None;
         state.mapping = None;
         self.schedule_shell_edit_confirmation_timeout(cx);
+        self.retain_command_suggestions_during_edit(text, cx);
         self.reconcile_command_suggestion_availability(cx);
     }
 

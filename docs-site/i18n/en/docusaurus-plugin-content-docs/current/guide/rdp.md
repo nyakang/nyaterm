@@ -1,6 +1,6 @@
 # RDP Remote Desktop
 
-An RDP session connects to a Windows host or any other remote desktop serving RDP. It shares tabs, split panes, and the saved-connection system with terminal sessions, but it carries a graphical framebuffer rather than a text terminal.
+An RDP session connects to a Windows host or any other remote desktop serving RDP. Remote desktops support tabs, split panes, and saved connections.
 
 RDP protocol decoding runs in a separate helper process. When running from source you must build the helper first, or connections fail with `HelperMissing` — see [Development Setup](../development/setup#rdp--vnc-need-their-helpers-built-first).
 
@@ -42,22 +42,11 @@ The default resolution is 1920×1080 at 32-bit color depth.
 
 Clipboard sharing is always enabled and has no setting. Builtin supports bidirectional text and file/directory copies; image and rich-text channels are not implemented. Windows Native uses Microsoft's full clipboard redirection, with formats and file transfers subject to the installed control and server policy.
 
-Older connections, backups, and restored sessions still accept saved disabled/text-only values, but those values no longer restrict clipboard sharing at runtime. Clipboard sharing does not enable drive, printer, or device redirection.
+Older connections, backups, and restored sessions still accept saved disabled/text-only values, but those values no longer restrict clipboard sharing at runtime.
 
 ### Reconnect
 
 **Auto reconnect** is on by default and retries a limited number of times on transient network failures. **Retry attempts** accepts **0 to 20**, defaulting to 5.
-
-## Capability boundaries
-
-RDP sessions do not offer these SSH-only capabilities:
-
-- Terminal command history and command suggestions
-- The SFTP file explorer
-- SSH proxy, jump hosts, and tunnels
-- Remote host monitoring panels
-
-Use SSH, Local Terminal, Telnet, or Serial sessions when you need command-line capabilities.
 
 ## Error kinds
 

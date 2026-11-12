@@ -1,3 +1,4 @@
+pub(super) use nyaterm_terminal_gpui::ime::utf16_byte_range;
 use std::ops::Range;
 
 /// The terminal retains only uncommitted IME text, never a copy of remote input.
@@ -71,22 +72,6 @@ impl TerminalImeState {
             ..self.text[..bytes.end].encode_utf16().count();
         (self.text[bytes].to_owned(), adjusted)
     }
-}
-
-/// Clamp UTF-16 offsets to scalar boundaries before indexing Rust strings.
-pub(super) fn utf16_byte_range(text: &str, range: Range<usize>) -> Range<usize> {
-    let offset = |wanted: usize| {
-        let mut units = 0;
-        for (byte, ch) in text.char_indices() {
-            if units + ch.len_utf16() > wanted {
-                return byte;
-            }
-            units += ch.len_utf16();
-        }
-        text.len()
-    };
-    let start = offset(range.start);
-    start..offset(range.end).max(start)
 }
 
 #[cfg(test)]

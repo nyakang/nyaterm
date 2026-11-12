@@ -1874,6 +1874,7 @@ fn remote_file_service_requires_live_multiplex_for_session_scoped_ssh() {
             "session-a",
             config,
             Arc::new(EmptyRemoteFilePreferenceStore),
+            crate::features::session::remote_files::FileAccessPurpose::Interactive,
         )
         .expect_err("missing session-scoped handle should not fall back to dedicated SSH");
     assert!(error.to_string().contains("reconnect the SSH session"));

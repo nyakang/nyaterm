@@ -29,13 +29,13 @@ use crate::models::{
 use crate::terminal::{NyaTerminalElement, TerminalGridSelection, TerminalLineDecorations};
 use crate::widgets::small_button;
 
-use super::decorations::{
-    TerminalDecorationSources, build_terminal_line_decorations,
-    terminal_action_links_for_paint_snapshot, terminal_action_links_have_ranges_for_snapshot,
-    terminal_line_decorations_cache_key, terminal_line_decorations_needed,
-    terminal_snapshot_absolute_range,
-};
+use super::decorations::terminal_action_links_for_paint_snapshot;
 use super::helpers::terminal_plain_text_input_event;
+use nyaterm_terminal_gpui::decorations::{
+    TerminalDecorationSources, build_terminal_line_decorations,
+    terminal_action_links_have_ranges_for_snapshot, terminal_line_decorations_cache_key,
+    terminal_line_decorations_needed, terminal_snapshot_absolute_range,
+};
 
 fn terminal_shell_placeholder_snapshot() -> std::sync::Arc<TerminalSnapshot> {
     static SNAPSHOT: std::sync::OnceLock<std::sync::Arc<TerminalSnapshot>> =
@@ -47,7 +47,15 @@ fn terminal_shell_placeholder_snapshot() -> std::sync::Arc<TerminalSnapshot> {
 }
 
 impl NyaTermApp {
-    fn terminal_tab_key_event(shift: bool) -> KeyDownEvent {
+    pub(in crate::features::terminal) fn terminal_tab_key_event(
+        &mut self,
+        shift: bool,
+    ) -> KeyDownEvent {
+        let is_held = self
+            .session
+            .active_id()
+            .and_then(|id| self.terminal.view.views.get_mut(id))
+            .is_some_and(|view| std::mem::replace(&mut view.tab_action_pressed, true));
         KeyDownEvent {
             keystroke: gpui::Keystroke {
                 modifiers: gpui::Modifiers {
@@ -57,7 +65,7 @@ impl NyaTermApp {
                 key: "tab".to_string(),
                 key_char: None,
             },
-            is_held: false,
+            is_held,
             prefer_character_input: false,
         }
     }
@@ -712,11 +720,11 @@ impl NyaTermApp {
                     .key_context(TERMINAL_KEY_CONTEXT)
                     .track_focus(&self.terminal.input.focus)
                     .on_action(cx.listener(|this, _: &TerminalTab, window, cx| {
-                        let event = NyaTermApp::terminal_tab_key_event(false);
+                        let event = this.terminal_tab_key_event(false);
                         this.handle_terminal_surface_key_down(&event, window, cx);
                     }))
                     .on_action(cx.listener(|this, _: &TerminalShiftTab, window, cx| {
-                        let event = NyaTermApp::terminal_tab_key_event(true);
+                        let event = this.terminal_tab_key_event(true);
                         this.handle_terminal_surface_key_down(&event, window, cx);
                     }))
                     .on_action(cx.listener(|this, _: &TerminalControlC, window, cx| {
@@ -1357,31 +1365,9 @@ const TERMINAL_RENDER_SLOW_TOTAL: Duration = Duration::from_millis(25);
 mod tests {
     use std::collections::HashMap;
 
-    use nyaterm_terminal::TerminalScreen;
-
-    use crate::models::TerminalFrameActionLinks;
     use crate::models::TerminalPerformanceMode;
 
-    use super::super::decorations::{
-        TerminalDecorationSources, terminal_line_decorations_cache_key,
-        terminal_line_decorations_needed, terminal_snapshot_absolute_range,
-    };
     use super::{TerminalRenderProfile, terminal_render_pressure_active, terminal_render_profile};
-
-    #[test]
-    fn terminal_line_decorations_skip_plain_viewport() {
-        assert!(!terminal_line_decorations_needed(
-            false, false, false, false
-        ));
-    }
-
-    #[test]
-    fn terminal_line_decorations_keep_interactive_marks() {
-        assert!(terminal_line_decorations_needed(true, false, false, false));
-        assert!(terminal_line_decorations_needed(false, true, false, false));
-        assert!(terminal_line_decorations_needed(false, false, true, false));
-        assert!(terminal_line_decorations_needed(false, false, false, true));
-    }
 
     #[test]
     fn terminal_render_pressure_tracks_runtime_bursts_and_overload() {
@@ -1417,58 +1403,6 @@ mod tests {
         assert!(terminal_render_profile(false).enhanced_decorations_enabled());
         assert!(!terminal_render_profile(true).enhanced_decorations_enabled());
         assert_eq!(terminal_render_profile(true).label(), "plain_viewport");
-    }
-
-    #[test]
-    fn terminal_line_decorations_cache_key_tracks_action_links() {
-        let snapshot = TerminalScreen::default().viewport_snapshot(0);
-        let search = HashMap::new();
-        let active = HashMap::new();
-        let (absolute_start_row, absolute_end_row) = terminal_snapshot_absolute_range(&snapshot);
-        let mut links = TerminalFrameActionLinks {
-            matcher_key: 42,
-            absolute_start_row,
-            absolute_end_row,
-            row_signatures: snapshot.rows().iter().map(|row| row.signature).collect(),
-            matches_by_line: Vec::new(),
-            cell_ranges_by_line: vec![vec![(1, 4)]],
-        };
-        let first = terminal_line_decorations_cache_key(
-            &snapshot,
-            &TerminalDecorationSources {
-                selected_occurrence_ranges_by_line: &HashMap::new(),
-                search_ranges_by_line: &search,
-                active_search_ranges_by_line: &active,
-                frame_action_links: std::slice::from_ref(&links),
-                include_action_links: true,
-                include_hyperlinks: false,
-            },
-        );
-        links.cell_ranges_by_line[0] = vec![(2, 5)];
-        let second = terminal_line_decorations_cache_key(
-            &snapshot,
-            &TerminalDecorationSources {
-                selected_occurrence_ranges_by_line: &HashMap::new(),
-                search_ranges_by_line: &search,
-                active_search_ranges_by_line: &active,
-                frame_action_links: std::slice::from_ref(&links),
-                include_action_links: true,
-                include_hyperlinks: false,
-            },
-        );
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn command_mark_only_snapshot_does_not_need_line_decorations() {
-        let mut screen = TerminalScreen::default();
-        screen.advance(b"prompt\x1b]133;A\x07");
-        let snapshot = screen.viewport_snapshot(0);
-        assert!(snapshot.rows().iter().any(|row| row.command_mark.is_some()));
-        assert!(!terminal_line_decorations_needed(
-            false, false, false, false
-        ));
     }
 
     /// Ctrl+Insert must be consumed by the terminal copy action. The canvas

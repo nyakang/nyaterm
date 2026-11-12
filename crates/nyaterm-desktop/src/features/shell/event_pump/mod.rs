@@ -472,6 +472,7 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.cancel_file_sudo_prompt(cx);
         self.hide_secret_inputs(cx);
         self.security.remember_screen_lock_focus(window.focused(cx));
         self.security.activate_idle_screen_lock();

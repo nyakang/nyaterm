@@ -16,8 +16,6 @@ NyaTerm stores connection-related configuration locally, but sensitive values ar
 - The persisted representation of the master password
 - Proxy or other authentication materials that need protection
 
-So in day-to-day use, you work with reusable password, key, and OTP entries rather than scattering plaintext secrets through config files.
-
 ## The Security/Auth panel
 
 The **Security/Auth** panel in the left activity bar centralizes authentication-related records into three groups:
@@ -56,7 +54,7 @@ Credential management is separate from SSH password authentication and can respo
 2. When terminal output matches the prompt expression, NyaTerm shows an autofill prompt.
 3. You can approve the fill or ignore it.
 
-Values remain encrypted locally, viewing saved passwords requires unlocking sensitive data, and autofill only triggers after a prompt match rather than sending values unconditionally.
+Values remain encrypted locally. Viewing saved passwords requires unlocking sensitive data.
 
 ### OTP management
 
@@ -72,8 +70,6 @@ For details, see [OTP & Authentication](./otp-and-auth).
 
 ## Master password
 
-The master password is NyaTerm's most important local desktop protection feature.
-
 You can configure it in **Settings → Security**. After it is set:
 
 - The app uses it for unlock verification
@@ -85,21 +81,14 @@ If you have not set a master password, the lock screen is only a visual lock lay
 
 ## Cloud Sync security model
 
-If you plan to use **Settings → Cloud Sync**, the master password is not just recommended. It is a prerequisite.
+Set a master password before enabling **Settings → Cloud Sync**.
 
-In the current implementation:
-
-- Cloud Sync actions cannot be enabled without a master password
+Data protection for sync and backups:
 - Cloud-provider credentials are treated as protected local secrets
-- NyaTerm uploads **encrypted portable snapshots**, not plain-text config files
-- Pulling from cloud overwrites the portable local data included in the snapshot, but it does not blindly roam every piece of device-local UI state to another machine
+- NyaTerm uploads **encrypted portable snapshots**
+- In snapshot mode, pulling overwrites local data within the sync scope; credentials and device appearance preferences stay local
 
-That makes this feature best understood as:
-
-- **Cross-device sync for portable configuration**
-- **Local `.nya` export for backup and migration**
-
-not as a collaborative merge tool.
+Cloud Sync synchronizes portable configuration across devices. Devices with field merging enabled can resolve conflicts by field. Use local `.nya` exports for full backups and migration.
 
 For the complete setup and workflow details, see [Cloud Sync](./sync-and-backup).
 
@@ -121,7 +110,7 @@ In **Settings → Security**, once screen lock is enabled, you can also configur
 - **With a master password** — entering the correct master password is required
 - **Without a master password** — unlocking can happen directly
 
-The app lock state is shared across the main workspace, modal child windows, and idle detection. When locked, terminal content and sensitive panels are covered; treat it as protection for the local NyaTerm workspace and local sensitive-operation entry points, not as remote-system access control.
+The app lock state is shared across the main workspace, modal child windows, and idle detection. When locked, terminal content and sensitive panels are covered; the lock protects the local NyaTerm workspace and local sensitive-operation entry points.
 
 If you plan to use NyaTerm on a shared machine or during demos, enabling **master password**, **screen lock**, and **idle auto-lock** together is the safer setup.
 
@@ -135,13 +124,13 @@ When SSH first connects to an unknown host, NyaTerm supports three policies:
 | Accept | Automatically accept new host keys |
 | Strict | Reject all unknown host keys |
 
-Known host records are stored in the local redb `known_hosts` document. Legacy `known_hosts` content from the old redb text-document path can be imported through the compatibility reader; NyaTerm does not promise to scan arbitrary filesystem locations for an old `known_hosts` file.
+Known host records are stored in the local redb `known_hosts` document. Legacy `known_hosts` content from the old redb text-document path can be imported through the compatibility reader.
 
 If host identity validation matters in your environment, prefer **Prompt** or **Strict** over unconditional acceptance.
 
 ## Local persistence model
 
-In installed mode, the main local data file is normally `~/.nyaterm/nyaterm.redb`. Portable mode stores configuration under the adjacent `data/config/` directory. Legacy Dragonfly data is handled through compatibility fallbacks for old encryption prefixes and storage documents; NyaTerm does not promise to copy the entire `~/.dragonfly/` directory or create an automatic rollback copy.
+In installed mode, the main local data file is normally `~/.nyaterm/nyaterm.redb`. Portable mode stores configuration under the adjacent `data/config/` directory. Legacy Dragonfly data is handled through compatibility fallbacks for old encryption prefixes and storage documents.
 
 The **Export Configuration** action creates an encrypted `.nya` backup for migration or offline storage. The **Export Diagnostics** action is intended for troubleshooting and packages recent logs and runtime summaries; review diagnostic contents before sharing them.
 
