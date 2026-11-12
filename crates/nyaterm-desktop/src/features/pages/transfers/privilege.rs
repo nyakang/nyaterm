@@ -1,7 +1,7 @@
 use crate::features::NyaTermApp;
 use crate::features::transfers::privilege_runtime::PASSWORD_INPUT;
 use gpui::{AnyElement, Context, IntoElement as _, ParentElement as _, Styled as _, div, px};
-use nyaterm_ui::NyaInput;
+use nyaterm_ui::NyaInputShell;
 use rust_i18n::t;
 
 impl NyaTermApp {
@@ -16,12 +16,13 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .gap_3()
-            .child(t!("fileSudo.description").to_string())
             .child(t!("fileSudo.password").to_string())
-            .children(
-                self.existing_text_input(PASSWORD_INPUT)
-                    .map(|field| div().w_full().h(px(32.)).child(NyaInput::new(&field))),
-            )
+            .children(self.existing_text_input(PASSWORD_INPUT).map(|field| {
+                div()
+                    .w_full()
+                    .h(px(32.))
+                    .child(NyaInputShell::new("file-sudo-password", &field).height(px(32.)))
+            }))
             .children(
                 self.file_sudo_prompt_error()
                     .map(|error| div().child(error.to_owned())),
