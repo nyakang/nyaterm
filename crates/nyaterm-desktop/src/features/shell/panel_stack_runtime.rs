@@ -23,7 +23,9 @@ use crate::models::{
     SettingsTab,
 };
 use crate::theme::ThemePalette;
-use nyaterm_ui::{NyaDialogWindowExt as _, NyaTooltip, nya_popup_is_active};
+use nyaterm_ui::{
+    NyaButton, NyaButtonVariant, NyaDialogWindowExt as _, NyaTooltip, nya_popup_is_active,
+};
 
 use super::state::{FloatingPressSource, PANEL_STACK_MIN_HEIGHT};
 
@@ -1129,17 +1131,48 @@ impl NyaTermApp {
                         && !self.session.is_disconnected(session_id)
                 });
                 can_browse.then(|| {
-                    header_svg_icon_button(
-                        self.theme_palette(),
-                        "transfer-browser-open-file-manager",
-                        "icons/file-manager.svg",
-                        t!("fileManager.openWorkspace"),
-                        true,
-                        cx.listener(|this, _, _, cx| {
-                            this.open_file_manager_tab(None, cx);
-                        }),
-                    )
-                    .into_any_element()
+                    let palette = self.theme_palette();
+                    let sudo = self.session.active_id().and_then(|session| {
+                        let status = self.file_sudo_status(session);
+                        (self.file_sudo_available(session) || status.is_sudo()).then(|| {
+                            let session = session.to_owned();
+                            NyaButton::new("transfer-sudo", "")
+                                .icon("icons/shield.svg")
+                                .variant(NyaButtonVariant::Ghost)
+                                .small()
+                                .compact()
+                                .height(px(24.))
+                                .text_color(rgb(if status.is_sudo() {
+                                    palette.warning
+                                } else {
+                                    palette.text_muted
+                                }))
+                                .tooltip(crate::features::transfers::privilege_runtime::sudo_label(
+                                    status,
+                                ))
+                                .disabled(status.is_busy())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.toggle_file_sudo(session.clone(), window, cx);
+                                }))
+                        })
+                    });
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .children(sudo)
+                        .child(header_svg_icon_button(
+                            palette,
+                            "transfer-browser-open-file-manager",
+                            "icons/file-manager.svg",
+                            t!("fileManager.openWorkspace"),
+                            true,
+                            cx.listener(|this, _, _, cx| {
+                                this.open_file_manager_tab(None, cx);
+                            }),
+                        ))
+                        .into_any_element()
                 })
             }
             NavItem::AiAssistant => {

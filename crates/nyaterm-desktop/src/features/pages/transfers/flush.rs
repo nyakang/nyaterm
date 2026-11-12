@@ -113,10 +113,6 @@ impl NyaTermApp {
         let tree_focus = self.transfer.tree_focus().clone();
         let browser = self.transfer.browser_view();
         let browser = TransferBrowserPresentation {
-            sudo: active_session_id
-                .as_ref()
-                .filter(|id| self.file_sudo_available(id) || self.file_sudo_status(id).is_sudo())
-                .map(|id| (id.clone(), self.file_sudo_status(id))),
             view_mode,
             tree,
             tree_focus,
