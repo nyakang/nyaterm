@@ -361,6 +361,9 @@ impl NyaTermApp {
         drag: &DraggedSelection,
         cx: &mut Context<Self>,
     ) {
+        self.transfer.cancel_browser_selection_click();
+        self.transfer.clear_browser_drag_selection();
+        self.transfer.cancel_browser_pending_rename();
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };

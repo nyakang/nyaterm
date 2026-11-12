@@ -524,6 +524,7 @@ impl TransferFeatureState {
     }
 
     pub(in crate::features) fn begin_browser_directory_load_path(&mut self, path: RemoteFilePath) {
+        self.cancel_browser_selection_click();
         self.browser.list_scroll = gpui::UniformListScrollHandle::new();
         self.browser.horizontal_scroll = ScrollHandle::new();
         self.browser.path = path.display_path;
@@ -542,6 +543,7 @@ impl TransferFeatureState {
     }
 
     pub(in crate::features) fn begin_browser_parent_load(&mut self, path: String) {
+        self.cancel_browser_selection_click();
         self.browser.list_scroll = gpui::UniformListScrollHandle::new();
         self.browser.horizontal_scroll = ScrollHandle::new();
         self.browser.path = path;
@@ -647,6 +649,7 @@ impl TransferFeatureState {
     }
 
     pub(in crate::features) fn select_browser_entry(&mut self, path: String) {
+        self.cancel_browser_selection_click();
         self.browser.selected_remote_path = Some(path.clone());
         self.browser.selected_remote_paths.clear();
         self.browser.selected_remote_paths.insert(path);
@@ -657,12 +660,14 @@ impl TransferFeatureState {
         paths: HashSet<String>,
         active_path: Option<String>,
     ) -> usize {
+        self.cancel_browser_selection_click();
         self.browser.selected_remote_paths = paths;
         self.browser.selected_remote_path = active_path;
         self.browser.selected_remote_paths.len()
     }
 
     pub(in crate::features) fn clear_browser_selection(&mut self) {
+        self.cancel_browser_selection_click();
         self.browser.selected_remote_path = None;
         self.browser.selected_remote_paths.clear();
     }
@@ -671,6 +676,7 @@ impl TransferFeatureState {
         &mut self,
         target: TransferBrowserContextTarget,
     ) {
+        self.cancel_browser_selection_click();
         self.browser.context_target = target;
         self.browser.cancel_pending_rename();
     }
@@ -714,15 +720,44 @@ impl TransferFeatureState {
     pub(in crate::features) fn toggle_browser_path_mark(&mut self, path: String) -> usize {
         if !self.browser.selected_remote_paths.remove(&path) {
             self.browser.selected_remote_paths.insert(path.clone());
+            self.browser.selected_remote_path = Some(path);
+        } else if !self
+            .browser
+            .selected_remote_path
+            .as_ref()
+            .is_some_and(|active| self.browser.selected_remote_paths.contains(active))
+        {
+            self.browser.selected_remote_path = self
+                .browser
+                .entries
+                .iter()
+                .map(SftpFileEntry::identity_key)
+                .find(|identity| self.browser.selected_remote_paths.contains(identity));
         }
-        self.browser.selected_remote_path = Some(path);
         self.browser.selected_remote_paths.len()
+    }
+
+    pub(in crate::features) fn defer_browser_selection_click(&mut self, path: String) {
+        self.browser.pending_selection_click = Some(path);
+    }
+
+    pub(in crate::features) fn consume_browser_selection_click(&mut self, path: &str) -> bool {
+        if self.browser.pending_selection_click.as_deref() != Some(path) {
+            return false;
+        }
+        self.browser.pending_selection_click = None;
+        true
+    }
+
+    pub(in crate::features) fn cancel_browser_selection_click(&mut self) {
+        self.browser.pending_selection_click = None;
     }
 
     pub(in crate::features) fn set_browser_drag_selection(
         &mut self,
         selection: TransferBrowserDragSelectionState,
     ) {
+        self.cancel_browser_selection_click();
         self.browser.drag_selection = Some(selection);
     }
 
@@ -799,6 +834,7 @@ impl TransferFeatureState {
 /// other app state; the page-level handlers are forwarders that own the redraw.
 impl TransferBrowserState {
     fn clear_interaction(&mut self) {
+        self.pending_selection_click = None;
         self.selected_remote_path = None;
         self.selected_remote_paths.clear();
         self.drag_selection = None;
@@ -846,6 +882,7 @@ impl TransferBrowserState {
     }
 
     fn restore_navigation(&mut self, snapshot: TransferBrowserNavigationSnapshot) {
+        self.pending_selection_click = None;
         self.path = snapshot.browser_path;
         self.raw_path_token = snapshot.browser_raw_path_token;
         self.entries = snapshot.entries;
