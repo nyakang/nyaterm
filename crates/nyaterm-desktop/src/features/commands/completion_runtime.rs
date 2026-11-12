@@ -1,4 +1,5 @@
 //! A single background owner for the catalog, token index and scoped mutations.
+use super::completion_user_specs::UserSpecs;
 use crate::features::runtime_jobs::CommandPersistenceResult;
 use futures::channel::{mpsc::UnboundedSender, oneshot};
 use nyaterm_core::command_search::{RankedCommandSourceQuery, search_ranked_command_sources_using};
@@ -13,6 +14,7 @@ use nyaterm_core::completion::{CompletionEngine, TokenCompletionRequest};
 use nyaterm_core::models::quick_commands::{CommandHistoryEntry, QuickCommand};
 use nyaterm_store::{StoreBlockingClient, StoreDomain};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -48,9 +50,19 @@ enum Request {
 }
 
 impl CompletionRuntime {
+    #[cfg(test)]
     pub(super) fn new(
         store: StoreBlockingClient,
         events: UnboundedSender<CommandPersistenceResult>,
+    ) -> Self {
+        Self::new_with_user_specs(store, events, None)
+    }
+
+    /// `user_specs_dir` is read by the worker only; a missing directory is fine.
+    pub(super) fn new_with_user_specs(
+        store: StoreBlockingClient,
+        events: UnboundedSender<CommandPersistenceResult>,
+        user_specs_dir: Option<PathBuf>,
     ) -> Self {
         let (tx, rx) = sync_channel(64);
         let epoch = Arc::new(AtomicU64::new(0));
@@ -71,6 +83,8 @@ impl CompletionRuntime {
                         .map_or(0, |value| value.load(Ordering::Acquire))
                 };
                 let mut engine = CompletionEngine::embedded();
+                let mut user_specs = UserSpecs::new(user_specs_dir);
+                user_specs.refresh(&mut engine);
                 let mut whole_matcher = TextMatcher::default();
                 let mut history = TokenHistoryIndex::default();
                 let mut whole_history = WholeCommandHistoryIndex::default();
@@ -95,6 +109,7 @@ impl CompletionRuntime {
                                 events.unbounded_send(CommandPersistenceResult::History(outcome));
                         }
                         Request::Search(query, revision, response) => {
+                            user_specs.refresh_if_due(&mut engine);
                             if worker_dirty.swap(false, Ordering::AcqRel)
                                 || loaded_generation != Some(generation())
                             {
@@ -128,6 +143,7 @@ impl CompletionRuntime {
                             let _ = response.send(outcome);
                         }
                         Request::Reload => {
+                            user_specs.refresh(&mut engine);
                             loaded_generation =
                                 reload_history(&store, &mut history, &mut whole_history).ok();
                             if loaded_generation.is_none() {

@@ -2,6 +2,7 @@
 
 mod command_runtime;
 pub(in crate::features) mod completion_runtime;
+mod completion_user_specs;
 mod quick_command_runtime;
 mod runtime_state;
 mod staged;

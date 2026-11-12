@@ -76,6 +76,45 @@ NyaTerm 会为会话工作流提供两类辅助：
 - 它们不会影响右侧命令历史面板中的已有记录
 - 它们也不会影响**快捷命令**本身的可用性
 
+### 自定义补全规范
+
+内置的命令、子命令和参数补全可以由你自己的规范扩充或覆盖，适合公司内部工具或自己的脚本。
+
+把 `*.json` 文件放进配置目录下的 `completions/` 子目录（与设置文件同级）：
+
+```json
+{
+  "version": 1,
+  "roots": [
+    {
+      "token": "deploy",
+      "description": "Ship a release",
+      "children": [
+        {
+          "token": "staging",
+          "description": "Deploy to staging",
+          "flags": [
+            { "long": "force", "short": "f", "description": "Skip checks" },
+            { "long": "env", "takes_value": true, "values": ["blue", "green"] }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "ls",
+      "flags": [{ "long": "all", "short": "a", "description": "Show hidden entries" }]
+    }
+  ]
+}
+```
+
+- 同名的命令、子命令会合并；同名参数会**覆盖**内置定义，其余内置内容保持不变
+- 多个文件按文件名顺序应用，后面的文件优先
+- 修改文件后几秒内自动生效，无需重启；删除文件即恢复内置补全
+- 单个文件不超过 1 MiB，最多读取 64 个文件，且只读取普通 `.json` 文件（不跟随符号链接）
+- 无效的文件会被跳过，日志中只记录文件名和原因，不记录内容，也不会影响其他文件或应用启动
+- 命令名、参数名和取值只能包含字母、数字及 `- _ . : / + @ , % = \`，描述中的控制字符会被移除，并截断到 256 个字符
+
 ## 从终端唤起 AI
 
 终端右键菜单提供这些 AI 入口，都会自动带上当前会话的上下文：

@@ -22,18 +22,46 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 pub struct CompletionEngine {
+    /// The shared built-in catalog, never modified.
+    base: Option<Arc<Catalog>>,
+    /// `base`, or a private copy with user spec files merged over it.
     catalog: Option<Arc<Catalog>>,
     matcher: TextMatcher,
 }
 impl CompletionEngine {
     pub fn embedded() -> Self {
         static CATALOG: OnceLock<Option<Arc<Catalog>>> = OnceLock::new();
+        let base = CATALOG
+            .get_or_init(|| Catalog::embedded().ok().map(Arc::new))
+            .clone();
         Self {
-            catalog: CATALOG
-                .get_or_init(|| Catalog::embedded().ok().map(Arc::new))
-                .clone(),
+            catalog: base.clone(),
+            base,
             matcher: TextMatcher::default(),
         }
+    }
+
+    /// Replaces the active user specs; an empty slice restores the built-in
+    /// catalog. Each file is applied in order, later files winning. Returns the
+    /// indices of rejected files, which leave the catalog unchanged. The shared
+    /// built-in catalog is only copied when there is something to merge.
+    pub fn set_user_specs(&mut self, specs: &[Vec<u8>]) -> Vec<usize> {
+        let Some(base) = self.base.as_ref() else {
+            return (0..specs.len()).collect();
+        };
+        if specs.is_empty() {
+            self.catalog = self.base.clone();
+            return Vec::new();
+        }
+        let mut merged = Catalog::clone(base);
+        let mut rejected = Vec::new();
+        for (index, spec) in specs.iter().enumerate() {
+            if merged.merge_user_spec(spec).is_err() {
+                rejected.push(index);
+            }
+        }
+        self.catalog = Some(Arc::new(merged));
+        rejected
     }
     pub fn complete(&mut self, request: TokenCompletionRequest<'_>) -> Vec<CompletionCandidate> {
         let TokenCompletionRequest {
@@ -268,6 +296,7 @@ mod tests {
         history.upsert(fuzzy);
         history.upsert(record(scope.clone(), "fixture zz-tail"));
         let mut engine = CompletionEngine {
+            base: None,
             catalog: None,
             matcher: TextMatcher::default(),
         };
@@ -312,6 +341,7 @@ mod tests {
         // A long assignment leaves room for a short replacement but not longer prefix matches.
         let input = format!("A={} fixture zz", "x".repeat(4078));
         let mut engine = CompletionEngine {
+            base: None,
             catalog: None,
             matcher: TextMatcher::default(),
         };
