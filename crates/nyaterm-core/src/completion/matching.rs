@@ -1,4 +1,5 @@
 //! Matcher scratch space and the adapter to the UI's scalar highlight indices.
+use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -8,8 +9,7 @@ pub(crate) fn matching_chars(text: &str) -> impl Iterator<Item = char> + '_ {
 
 pub struct TextMatcher {
     matcher: Matcher,
-    needle: Vec<char>,
-    ascii_needle: Option<Vec<u8>>,
+    query: Atom,
     haystack: Vec<char>,
     matched: Vec<u32>,
 }
@@ -20,8 +20,7 @@ impl Default for TextMatcher {
         config.prefer_prefix = true;
         Self {
             matcher: Matcher::new(config),
-            needle: Vec::new(),
-            ascii_needle: None,
+            query: query_atom(""),
             haystack: Vec::new(),
             matched: Vec::new(),
         }
@@ -30,16 +29,7 @@ impl Default for TextMatcher {
 
 impl TextMatcher {
     pub fn set_query(&mut self, query: &str) {
-        if query.is_ascii() {
-            let bytes = self.ascii_needle.get_or_insert_with(Vec::new);
-            bytes.clear();
-            bytes.extend_from_slice(query.as_bytes());
-        } else {
-            self.ascii_needle = None;
-        }
-        self.needle.clear();
-        self.needle
-            .extend(query.graphemes(true).filter_map(|g| g.chars().next()));
+        self.query = query_atom(query);
     }
 
     fn prepare(&mut self, text: &str) {
@@ -50,39 +40,30 @@ impl TextMatcher {
     /// Prepared catalog words share the exact grapheme representation used by
     /// `score`; highlighting still converts only selected words to scalar indices.
     pub(crate) fn score_prepared(&mut self, text: &[char]) -> Option<u32> {
-        self.matcher
-            .fuzzy_match(Utf32Str::Unicode(text), Utf32Str::Unicode(&self.needle))
+        self.query
+            .score(Utf32Str::Unicode(text), &mut self.matcher)
             .map(u32::from)
     }
 
     pub fn score(&mut self, text: &str) -> Option<u32> {
         if text.is_ascii() {
-            let needle = self
-                .ascii_needle
-                .as_ref()
-                .map_or(Utf32Str::Unicode(&self.needle), |bytes| {
-                    Utf32Str::Ascii(bytes)
-                });
             return self
-                .matcher
-                .fuzzy_match(Utf32Str::Ascii(text.as_bytes()), needle)
+                .query
+                .score(Utf32Str::Ascii(text.as_bytes()), &mut self.matcher)
                 .map(u32::from);
         }
         self.prepare(text);
-        self.matcher
-            .fuzzy_match(
-                Utf32Str::Unicode(&self.haystack),
-                Utf32Str::Unicode(&self.needle),
-            )
+        self.query
+            .score(Utf32Str::Unicode(&self.haystack), &mut self.matcher)
             .map(u32::from)
     }
 
     pub fn indices(&mut self, text: &str) -> Vec<u32> {
         self.prepare(text);
         self.matched.clear();
-        self.matcher.fuzzy_indices(
+        self.query.indices(
             Utf32Str::Unicode(&self.haystack),
-            Utf32Str::Unicode(&self.needle),
+            &mut self.matcher,
             &mut self.matched,
         );
         let mut result = Vec::new();
@@ -96,6 +77,19 @@ impl TextMatcher {
         }
         result
     }
+}
+
+fn query_atom(query: &str) -> Atom {
+    // The low-level matcher requires a normalized needle. Atom keeps scoring
+    // and highlighting on the same case/normalization policy without interpreting
+    // literal command characters as query operators.
+    Atom::new(
+        query,
+        CaseMatching::Ignore,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -128,5 +122,53 @@ mod tests {
         assert_eq!(matcher.indices("e\u{301}x"), vec![2]);
         matcher.set_query("e");
         assert_eq!(matcher.indices("e\u{301}x"), vec![0, 1]);
+    }
+
+    #[test]
+    fn case_and_accent_queries_share_scoring_and_highlight_normalization() {
+        let mut matcher = TextMatcher::default();
+        for (query, text, expected) in [
+            ("git", "git status", vec![0, 1, 2]),
+            ("GIT", "git status", vec![0, 1, 2]),
+            ("Git", "Git status", vec![0, 1, 2]),
+            ("CAFÉ", "café", vec![0, 1, 2, 3]),
+            ("cafe", "café", vec![0, 1, 2, 3]),
+            ("café", "café", vec![0, 1, 2, 3]),
+            ("E", "e\u{301}", vec![0, 1]),
+            ("工具", "echo 工具", vec![5, 6]),
+        ] {
+            matcher.set_query(query);
+            let score = matcher.score(text);
+            assert!(score.is_some(), "query {query:?}");
+            assert_eq!(matcher.indices(text), expected, "query {query:?}");
+            let prepared: Vec<_> = matching_chars(text).collect();
+            assert_eq!(matcher.score_prepared(&prepared), score);
+        }
+        matcher.set_query("café");
+        assert_eq!(matcher.score("cafe"), None);
+        assert!(matcher.indices("cafe").is_empty());
+        matcher.set_query("git");
+        assert!(matcher.score("GIT").is_some());
+        assert_eq!(matcher.indices("GIT"), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn query_operators_and_escaped_spaces_remain_literal() {
+        let mut matcher = TextMatcher::default();
+        for query in ["!", "^", "$", "'", "foo bar", "foo\\ bar", "a|b"] {
+            matcher.set_query(query);
+            assert!(matcher.score(query).is_some(), "query {query:?}");
+            assert_eq!(
+                matcher.indices(query),
+                (0..query.chars().count() as u32).collect::<Vec<_>>()
+            );
+            assert_eq!(matcher.score("unrelated"), None);
+            assert!(matcher.indices("unrelated").is_empty());
+        }
+        matcher.set_query("foo\\ bar");
+        assert_eq!(matcher.score("foo bar"), None);
+        matcher.set_query("");
+        assert!(matcher.score("anything").is_some());
+        assert!(matcher.indices("anything").is_empty());
     }
 }
