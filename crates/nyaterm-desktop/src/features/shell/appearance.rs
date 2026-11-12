@@ -869,21 +869,17 @@ impl NyaTermApp {
 }
 
 fn load_wallpaper_image(path: &str) -> Result<(Arc<RenderImage>, u32, u32), ()> {
-    let reader = image::ImageReader::open(path)
-        .map_err(|_| ())?
-        .with_guessed_format()
+    let reader = image::ImageReader::open(path).map_err(|_| ())?;
+    let format = reader.format();
+    let raster = nyaterm_preview::wallpaper::decode_wallpaper(reader.into_inner(), format)
         .map_err(|_| ())?;
-    let mut rgba = reader.decode().map_err(|_| ())?.into_rgba8();
-    let (width, height) = rgba.dimensions();
-    if width == 0 || height == 0 {
-        return Err(());
-    }
-    // GPUI's render atlas expects BGRA pixels.
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
-    let image = Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]));
-    Ok((image, width, height))
+    let image = crate::image_presentation::render_image_from_bgra(
+        raster.width,
+        raster.height,
+        &raster.pixels,
+    )
+    .map_err(|_| ())?;
+    Ok((image, raster.width, raster.height))
 }
 
 pub(in crate::features) fn appearance_font_stack(raw: &str, fallback: &str) -> Vec<String> {

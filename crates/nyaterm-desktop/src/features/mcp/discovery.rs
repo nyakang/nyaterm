@@ -1,92 +1,20 @@
+use nyaterm_mcp_host::discovery::{DiscoveryPermissions, DiscoveryStore};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use nyaterm_mcp_protocol::DiscoveryDocument;
-
-pub struct DiscoveryStore {
-    directory: PathBuf,
-    file: PathBuf,
-}
-
-impl DiscoveryStore {
-    pub fn new(config_dir: &Path) -> Self {
-        let directory = config_dir.join("mcp");
-        let file = directory.join("discovery.json");
-        Self { directory, file }
-    }
-
-    pub fn remove(&self) -> anyhow::Result<()> {
-        match std::fs::remove_file(&self.file) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+struct NativePermissions;
+impl DiscoveryPermissions for NativePermissions {
+    fn set_private(&self, path: &Path, directory: bool) -> anyhow::Result<()> {
+        if directory {
+            set_private_directory_permissions(path)
+        } else {
+            set_private_file_permissions(path)
         }
-        if let Ok(entries) = std::fs::read_dir(&self.directory) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name.starts_with(".discovery-") && name.ends_with(".tmp") {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn write(&self, document: &DiscoveryDocument) -> anyhow::Result<()> {
-        std::fs::create_dir_all(&self.directory)?;
-        set_private_directory_permissions(&self.directory)?;
-        let temporary = self
-            .directory
-            .join(format!(".discovery-{}.tmp", uuid::Uuid::new_v4()));
-        let bytes = serde_json::to_vec_pretty(document)?;
-        std::fs::write(&temporary, bytes)?;
-        if let Err(error) = set_private_file_permissions(&temporary) {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(error);
-        }
-
-        atomic_replace(&temporary, &self.file).map_err(|error| {
-            let _ = std::fs::remove_file(&temporary);
-            anyhow::Error::from(error)
-        })?;
-        set_private_file_permissions(&self.file)
     }
 }
 
-#[cfg(not(windows))]
-fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(windows)]
-fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-
-    let source = source
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let destination = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+pub(super) fn discovery_store(config_dir: &Path) -> DiscoveryStore {
+    DiscoveryStore::new(config_dir, Arc::new(NativePermissions))
 }
 
 #[cfg(unix)]
@@ -151,7 +79,7 @@ fn default_config_dir_from(executable: &Path, home: Option<&Path>) -> anyhow::Re
 
 #[cfg(test)]
 mod tests {
-    use super::{DiscoveryStore, default_config_dir_from};
+    use super::{default_config_dir_from, discovery_store};
     #[cfg(windows)]
     use nyaterm_mcp_protocol::DiscoveryDocument;
 
@@ -171,7 +99,7 @@ mod tests {
     #[test]
     fn stale_discovery_can_be_removed_repeatedly() {
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-mcp-test");
-        let store = DiscoveryStore::new(&root);
+        let store = discovery_store(&root);
         store.remove().unwrap();
         store.remove().unwrap();
     }
@@ -201,7 +129,7 @@ mod tests {
     #[test]
     fn discovery_replacement_preserves_private_acl_and_removes_temporary_files() {
         let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-mcp-discovery-test");
-        let store = DiscoveryStore::new(&root);
+        let store = discovery_store(&root);
         let first = discovery_document("first-token", "first-generation");
         let second = discovery_document("second-token", "second-generation");
 
@@ -209,13 +137,17 @@ mod tests {
         store.write(&second).unwrap();
 
         let actual: DiscoveryDocument =
-            serde_json::from_slice(&std::fs::read(&store.file).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(root.join("mcp/discovery.json")).unwrap())
+                .unwrap();
         assert_eq!(actual.token, second.token);
         assert_eq!(actual.generation, second.generation);
-        crate::platform::windows_acl::assert_current_user_only(&store.directory, true);
-        crate::platform::windows_acl::assert_current_user_only(&store.file, false);
+        crate::platform::windows_acl::assert_current_user_only(&root.join("mcp"), true);
+        crate::platform::windows_acl::assert_current_user_only(
+            &root.join("mcp/discovery.json"),
+            false,
+        );
 
-        let temporary_files = std::fs::read_dir(&store.directory)
+        let temporary_files = std::fs::read_dir(root.join("mcp"))
             .unwrap()
             .filter_map(Result::ok)
             .filter(|entry| {

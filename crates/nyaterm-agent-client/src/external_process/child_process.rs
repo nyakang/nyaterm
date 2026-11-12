@@ -73,10 +73,14 @@ mod tests {
         std::fs::create_dir_all(directory.path()).unwrap();
         let wrapper = directory.path().join("mock-codex.cmd");
         let executable = std::env::current_exe().unwrap();
-        std::fs::write(&wrapper, format!(
-            "@echo off\r\n\"{}\" --exact features::ai::agent_management::tests::mock_codex_app_server --nocapture\r\n",
-            executable.display(),
-        )).unwrap();
+        std::fs::write(
+            &wrapper,
+            format!(
+                "@echo off\r\n\"{}\" --exact account::tests::mock_codex_app_server --nocapture\r\n",
+                executable.display(),
+            ),
+        )
+        .unwrap();
         let mut command = Command::new(wrapper);
         command
             .stdin(Stdio::piped())

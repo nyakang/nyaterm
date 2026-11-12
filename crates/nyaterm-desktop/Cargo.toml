@@ -17,10 +17,12 @@ hex.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 keyring.workspace = true
 nyaterm-ai-client.workspace = true
+nyaterm-agent-client.workspace = true
 nyaterm-cloud-storage.workspace = true
 nyaterm-core.workspace = true
 nyaterm-android.workspace = true
 nyaterm-mcp-protocol.workspace = true
+nyaterm-mcp-host.workspace = true
 nyaterm-otp.workspace = true
 nyaterm-preview.workspace = true
 nyaterm-translation-client.workspace = true
@@ -39,7 +41,6 @@ nyaterm-updater.workspace = true
 regex.workspace = true
 rust-i18n.workspace = true
 rand.workspace = true
-rqrr = "0.9"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -72,8 +73,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_DataExchange",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_SystemInformation",

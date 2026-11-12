@@ -83,20 +83,17 @@ impl NyaTermApp {
 }
 
 fn decode_security_otp_qr(path: &std::path::Path) -> Result<SecurityOtpEditorState, String> {
-    let image = image::open(path).map_err(|error| format!("failed to open image: {error}"))?;
-    let gray = image.to_luma8();
-    let mut prepared = rqrr::PreparedImage::prepare(gray);
-    let grid = prepared
-        .detect_grids()
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no QR code found in the image".to_string())?;
-    let (_, uri) = grid
-        .decode()
-        .map_err(|error| format!("failed to decode QR code: {error}"))?;
+    let reader =
+        image::ImageReader::open(path).map_err(|error| format!("failed to open image: {error}"))?;
+    let format = reader.format();
+    let payload = nyaterm_preview::qr::decode_first_qr(reader.into_inner(), format)
+        .map_err(|error| error.to_string())?;
+    security_otp_from_uri(payload.as_str())
+}
 
+fn security_otp_from_uri(uri: &str) -> Result<SecurityOtpEditorState, String> {
     if uri.starts_with("otpauth://totp/") {
-        let totp = nyaterm_otp::Totp::from_uri(&uri)
+        let totp = nyaterm_otp::Totp::from_uri(uri)
             .map_err(|error| format!("invalid TOTP URI: {error}"))?;
         Ok(SecurityOtpEditorState {
             id: None,
@@ -112,7 +109,7 @@ fn decode_security_otp_qr(path: &std::path::Path) -> Result<SecurityOtpEditorSta
             error: None,
         })
     } else if uri.starts_with("otpauth://hotp/") {
-        let hotp = nyaterm_otp::Hotp::from_uri(&uri)
+        let hotp = nyaterm_otp::Hotp::from_uri(uri)
             .map_err(|error| format!("invalid HOTP URI: {error}"))?;
         Ok(SecurityOtpEditorState {
             id: None,
@@ -686,5 +683,41 @@ impl NyaTermApp {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod qr_tests {
+    use super::security_otp_from_uri;
+    #[test]
+    fn imported_totp_and_hotp_keep_editor_fields() {
+        let totp = security_otp_from_uri("otpauth://totp/Fixture:user?secret=JBSWY3DPEHPK3PXP&issuer=Fixture&algorithm=SHA256&digits=8&period=45").unwrap();
+        assert_eq!(
+            (
+                &*totp.otp_type,
+                &*totp.issuer,
+                &*totp.username,
+                &*totp.algorithm,
+                &*totp.digits,
+                &*totp.period,
+                &*totp.counter
+            ),
+            ("totp", "Fixture", "user", "SHA256", "8", "45", "0")
+        );
+        let hotp = security_otp_from_uri(
+            "otpauth://hotp/Fixture:user?secret=JBSWY3DPEHPK3PXP&issuer=Fixture&counter=7",
+        )
+        .unwrap();
+        assert_eq!(
+            (&*hotp.otp_type, &*hotp.period, &*hotp.counter),
+            ("hotp", "30", "7")
+        );
+        assert!(
+            security_otp_from_uri("https://example.invalid")
+                .err()
+                .unwrap()
+                .contains("does not contain an otpauth URI")
+        );
+        assert!(security_otp_from_uri("otpauth://totp/Fixture:user?secret=!").is_err());
     }
 }

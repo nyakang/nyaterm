@@ -77,6 +77,8 @@ def dependency_errors() -> list[str]:
     dependency = re.compile(r"(?m)^\s*(gpui|gpui_platform|gpui-kit)\s*=")
     low_level = (
         "nyaterm-ai-client",
+        "nyaterm-agent-client",
+        "nyaterm-mcp-host",
         "nyaterm-cloud-storage",
         "nyaterm-updater",
         "nyaterm-preview",
@@ -108,6 +110,8 @@ def dependency_errors() -> list[str]:
     for crate, forbidden in (
         ("nyaterm-android", set()),
         ("nyaterm-ai-client", set()),
+        ("nyaterm-agent-client", set()),
+        ("nyaterm-mcp-host", set()),
         ("nyaterm-cloud-storage", set()),
         ("nyaterm-updater", set()),
         ("nyaterm-preview", set()),
@@ -137,12 +141,25 @@ def dependency_errors() -> list[str]:
                 and package != "nyaterm-core"
             )
             wrong_adapter_direction = (
-                crate in {"nyaterm-android", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
+                crate in {"nyaterm-android", "nyaterm-agent-client", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
             )
-            if wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
+            wrong_mcp_direction = (
+                crate == "nyaterm-mcp-host"
+                and package.startswith("nyaterm-")
+                and package not in {"nyaterm-core", "nyaterm-mcp-protocol"}
+            )
+            if wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
+    terminal_presentation = tomllib.loads(
+        (ROOT / "crates/nyaterm-terminal-gpui/Cargo.toml").read_text(encoding="utf-8")
+    )
+    for package in dependency_packages(terminal_presentation, workspace_dependencies):
+        if package.startswith("nyaterm-") and package not in {
+            "nyaterm-core", "nyaterm-terminal", "nyaterm-ui"
+        }:
+            errors.append(f"crate_boundary: nyaterm-terminal-gpui must not depend on {package}")
     for manifest in (ROOT / "crates").glob("*/Cargo.toml"):
         crate = manifest.parent.name
         if crate.endswith("-helper"):

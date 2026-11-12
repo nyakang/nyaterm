@@ -4,6 +4,9 @@ use std::sync::{Arc, OnceLock};
 
 use gpui::FontFeatures;
 
+pub mod decorations;
+pub mod ime;
+pub mod scrollbar;
 mod types;
 
 mod ansi;

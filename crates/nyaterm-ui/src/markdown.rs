@@ -1,3 +1,5 @@
+pub mod lightweight;
+
 use crate::text::{NyaTextState, NyaTextStyle};
 use gpui::{IntoElement, RenderOnce, SharedString};
 use gpui_base::text::TextView;

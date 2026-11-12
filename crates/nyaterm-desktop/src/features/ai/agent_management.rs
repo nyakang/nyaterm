@@ -1,20 +1,18 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use nyaterm_core::ai::{codex_initialize_request, codex_initialized_notification};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::helper_resolver::resolve_codex_executable;
 use super::helper_resolver::resolve_mcp_helper;
 use crate::thread_owner::spawn_joinable;
+use nyaterm_agent_client::executable::resolve_codex_executable;
 
-use crate::external_process::child_process::AgentChild;
+use nyaterm_agent_client::account::{CodexAccountClient, CodexAccountRequest};
+use nyaterm_agent_client::probe::{claude_auth_status, cli_version, resolve_claude_executable};
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -318,8 +316,7 @@ fn run_agent_worker(
                     &mut codex_client,
                     &stopping,
                     codex_path,
-                    "account/read",
-                    json!({ "refreshToken": false }),
+                    CodexAccountRequest::Account,
                 );
                 AgentEvent::Detected {
                     codex: codex_version,
@@ -333,15 +330,13 @@ fn run_agent_worker(
                 &mut codex_client,
                 &stopping,
                 resolve_codex_executable(codex.as_deref()).ok(),
-                "model/list",
-                json!({"limit": 100}),
+                CodexAccountRequest::Models,
             )),
             AgentCommand::Account { codex } => AgentEvent::Account(request_codex(
                 &mut codex_client,
                 &stopping,
                 resolve_codex_executable(codex.as_deref()).ok(),
-                "account/read",
-                json!({ "refreshToken": false }),
+                CodexAccountRequest::Account,
             )),
             AgentCommand::ClaudeAccount { claude } => {
                 AgentEvent::ClaudeAccount(claude_auth_status(claude.as_deref(), &stopping))
@@ -350,20 +345,14 @@ fn run_agent_worker(
                 &mut codex_client,
                 &stopping,
                 resolve_codex_executable(codex.as_deref()).ok(),
-                "account/login/start",
-                if device_code {
-                    json!({ "type": "chatgptDeviceCode" })
-                } else {
-                    json!({ "type": "chatgpt", "useHostedLoginSuccessPage": true, "appBrand": "codex" })
-                },
+                CodexAccountRequest::Login { device_code },
             )),
             AgentCommand::Cancel { codex, login_id } => AgentEvent::Cancel(
                 request_codex(
                     &mut codex_client,
                     &stopping,
                     resolve_codex_executable(codex.as_deref()).ok(),
-                    "account/login/cancel",
-                    json!({ "loginId": login_id }),
+                    CodexAccountRequest::CancelLogin { login_id },
                 )
                 .map(|_| ()),
             ),
@@ -372,8 +361,7 @@ fn run_agent_worker(
                     &mut codex_client,
                     &stopping,
                     resolve_codex_executable(codex.as_deref()).ok(),
-                    "account/logout",
-                    json!({}),
+                    CodexAccountRequest::Logout,
                 )
                 .map(|_| ()),
             ),
@@ -391,11 +379,9 @@ fn request_codex(
     client: &mut Option<CodexAccountClient>,
     stopping: &Arc<AtomicBool>,
     path: Option<PathBuf>,
-    method: &str,
-    params: Value,
+    request: CodexAccountRequest,
 ) -> Result<Value, String> {
-    let result =
-        with_codex(client, path, stopping).and_then(|client| client.request(method, params));
+    let result = with_codex(client, path, stopping).and_then(|client| client.request(request));
     if result.is_err() {
         *client = None;
     }
@@ -411,7 +397,10 @@ fn with_codex<'a>(
         return Err("Agent settings worker cancelled".into());
     }
     let path = path.ok_or_else(|| "Codex CLI was not found".to_string())?;
-    if client.as_ref().is_some_and(|current| current.path != path) {
+    if client
+        .as_ref()
+        .is_some_and(|current| current.path() != path)
+    {
         *client = None;
     }
     if client.as_mut().is_some_and(|current| !current.is_alive()) {
@@ -423,438 +412,10 @@ fn with_codex<'a>(
     Ok(client.as_mut().expect("client was initialized"))
 }
 
-fn resolve_claude_executable(configured: Option<&str>) -> Option<PathBuf> {
-    let configured = configured.map(str::trim).filter(|value| !value.is_empty());
-    if let Some(path) = configured {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    let names: &[&str] = if cfg!(windows) {
-        &["claude.cmd", "claude.exe", "claude"]
-    } else {
-        &["claude"]
-    };
-    std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
-            .find(|path| path.is_file())
-    })
-}
-
-fn cli_version(path: &Path, stopping: &AtomicBool) -> Option<String> {
-    cli_output(path, &["--version"], stopping)?
-        .lines()
-        .next()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-}
-
-fn claude_auth_status(configured: Option<&str>, stopping: &AtomicBool) -> bool {
-    resolve_claude_executable(configured)
-        .and_then(|path| cli_output(&path, &["auth", "status", "--json"], stopping))
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .is_some_and(|value| value["loggedIn"] == true)
-}
-
-fn cli_output(path: &Path, args: &[&str], stopping: &AtomicBool) -> Option<String> {
-    if stopping.load(Ordering::Acquire) {
-        return None;
-    }
-    let mut command = Command::new(path);
-    command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    hide_window(&mut command);
-    let mut child = AgentChild::spawn(&mut command).ok()?;
-    let stdout = child.child_mut().stdout.take()?;
-    let (output_tx, output_rx) = mpsc::channel();
-    let reader = spawn_joinable("nyaterm-agent-version-reader", move || {
-        use std::io::Read as _;
-        let mut output = String::new();
-        let result = stdout
-            .take(64 * 1024)
-            .read_to_string(&mut output)
-            .ok()
-            .map(|_| output);
-        let _ = output_tx.send(result);
-    })
-    .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut output = None;
-    while !stopping.load(Ordering::Acquire) && Instant::now() < deadline {
-        match child.child_mut().try_wait() {
-            Ok(Some(status)) if status.success() => match output_rx.try_recv() {
-                Ok(value) => {
-                    output = value;
-                    break;
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => break,
-            },
-            Ok(Some(_)) | Err(_) => break,
-            Ok(None) => {}
-        }
-        std::thread::sleep(WORKER_POLL_INTERVAL);
-    }
-    child.terminate();
-    let _ = reader.join();
-    output
-}
-
-struct CodexAccountClient {
-    path: PathBuf,
-    child: AgentChild,
-    writer: Option<BufWriter<ChildStdin>>,
-    lines: mpsc::Receiver<String>,
-    next_id: u64,
-    account_update: Option<Value>,
-    reader: Option<JoinHandle<()>>,
-    stopping: Arc<AtomicBool>,
-}
-
-impl CodexAccountClient {
-    fn start(path: PathBuf, stopping: Arc<AtomicBool>) -> Result<Self, String> {
-        let mut command = Command::new(&path);
-        command.args(["app-server", "--listen", "stdio://"]);
-        Self::start_with_command(path, command, stopping)
-    }
-
-    fn start_with_command(
-        path: PathBuf,
-        mut command: Command,
-        stopping: Arc<AtomicBool>,
-    ) -> Result<Self, String> {
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        hide_window(&mut command);
-        let mut child = AgentChild::spawn(&mut command)
-            .map_err(|error| format!("Failed to start Codex: {error}"))?;
-        let writer = BufWriter::new(
-            child
-                .child_mut()
-                .stdin
-                .take()
-                .ok_or("Codex stdin unavailable")?,
-        );
-        let stdout = child
-            .child_mut()
-            .stdout
-            .take()
-            .ok_or("Codex stdout unavailable")?;
-        let (tx, lines) = mpsc::channel();
-        let reader = spawn_joinable("nyaterm-codex-account-reader", move || {
-            for line in BufReader::new(stdout).lines() {
-                match line {
-                    Ok(line) => {
-                        if tx.send(line).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        })
-        .map_err(|error| error.to_string())?;
-        let mut client = Self {
-            path,
-            child,
-            writer: Some(writer),
-            lines,
-            next_id: 1,
-            account_update: None,
-            reader: Some(reader),
-            stopping,
-        };
-        client.send(&codex_initialize_request(1, env!("CARGO_PKG_VERSION")))?;
-        client.wait_response(1)?;
-        client.send(&codex_initialized_notification())?;
-        client.next_id = 2;
-        Ok(client)
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.send(&json!({ "id": id, "method": method, "params": params }))?;
-        self.wait_response(id)
-    }
-
-    fn is_alive(&mut self) -> bool {
-        matches!(self.child.child_mut().try_wait(), Ok(None))
-    }
-
-    fn send(&mut self, value: &Value) -> Result<(), String> {
-        if self.stopping.load(Ordering::Acquire) {
-            return Err("Agent settings worker cancelled".into());
-        }
-        let writer = self.writer.as_mut().ok_or("Codex stdin closed")?;
-        serde_json::to_writer(&mut *writer, value).map_err(|error| error.to_string())?;
-        writer.write_all(b"\n").map_err(|error| error.to_string())?;
-        writer.flush().map_err(|error| error.to_string())
-    }
-
-    fn wait_response(&mut self, id: u64) -> Result<Value, String> {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            if self.stopping.load(Ordering::Acquire) {
-                return Err("Agent settings worker cancelled".into());
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("Codex account request timed out".to_string());
-            }
-            let line = match self.lines.recv_timeout(remaining.min(WORKER_POLL_INTERVAL)) {
-                Ok(line) => line,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err("Codex app-server closed".into());
-                }
-            };
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if let Some(account) = account_update_from_notification(&value) {
-                self.account_update = Some(account);
-                continue;
-            }
-            if let (Some(request_id), Some(_)) = (
-                value.get("id").and_then(Value::as_u64),
-                value.get("method").and_then(Value::as_str),
-            ) {
-                self.send(&json!({ "id": request_id, "error": { "code": -32601, "message": "Unsupported request" } }))?;
-                continue;
-            }
-            if value.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            if let Some(error) = value.get("error") {
-                return Err(error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Codex request failed")
-                    .to_string());
-            }
-            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-        }
-    }
-
-    fn poll_account_update(&mut self) -> Option<Value> {
-        if let Some(account) = self.account_update.take() {
-            return Some(account);
-        }
-        while !self.stopping.load(Ordering::Acquire)
-            && let Ok(line) = self.lines.try_recv()
-        {
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if let Some(account) = account_update_from_notification(&value) {
-                return Some(account);
-            }
-        }
-        None
-    }
-}
-
-fn account_update_from_notification(value: &Value) -> Option<Value> {
-    (value.get("method").and_then(Value::as_str) == Some("account/updated")).then(|| {
-        let params = &value["params"];
-        json!({ "account": {
-            "type": params.get("authMode"),
-            "planType": params.get("planType")
-        } })
-    })
-}
-
-impl Drop for CodexAccountClient {
-    fn drop(&mut self) {
-        // Close stdin and the entire process tree before waiting for pipe EOF.
-        if let Some(writer) = self.writer.take() {
-            // Drop must not flush buffered protocol bytes into a stalled stdin.
-            let (stdin, _) = writer.into_parts();
-            drop(stdin);
-        }
-        self.child.terminate();
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
-        }
-    }
-}
-
-#[cfg(windows)]
-fn hide_window(command: &mut Command) {
-    use std::os::windows::process::CommandExt as _;
-    command.creation_flags(0x0800_0000);
-}
-
-#[cfg(not(windows))]
-fn hide_window(_command: &mut Command) {}
-
 #[cfg(test)]
 mod tests {
-    use std::io::{BufRead, Write};
-    use std::process::Command;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
-    use std::time::Duration;
-
+    use super::{AgentEvent, AgentJobEvent, AgentManagementState};
     use serde_json::json;
-
-    use super::{
-        AgentEvent, AgentJobEvent, AgentManagementState, CodexAccountClient,
-        account_update_from_notification,
-    };
-
-    #[test]
-    fn mock_codex_app_server() {
-        if std::env::var_os("NYATERM_MOCK_CODEX_ACCOUNT_SERVER").is_none() {
-            return;
-        }
-        let stdin = std::io::stdin();
-        let mut stdout = std::io::stdout().lock();
-        if std::env::var_os("NYATERM_MOCK_CODEX_KEEP_OPEN").is_some() {
-            writeln!(stdout, "{}", json!({"fixturePid": std::process::id()})).unwrap();
-            stdout.flush().unwrap();
-            std::thread::sleep(Duration::from_secs(30));
-            return;
-        }
-        for line in stdin.lock().lines() {
-            let line = line.expect("request line");
-            let Ok(request) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            let Some(id) = request.get("id").and_then(serde_json::Value::as_u64) else {
-                continue;
-            };
-            let method = request["method"].as_str().unwrap_or_default();
-            if method == "account/read" {
-                writeln!(
-                    stdout,
-                    "{}",
-                    json!({ "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } })
-                )
-                .unwrap();
-            }
-            let response = match method {
-                "initialize" => json!({ "id": id, "result": {} }),
-                "account/read" => {
-                    json!({ "id": id, "result": { "account": { "type": "chatgpt", "email": "fixture@example.invalid" } } })
-                }
-                "account/login/start" => {
-                    json!({ "id": id, "result": { "loginId": "fixture-login", "userCode": "FIXTURE-CODE" } })
-                }
-                "account/login/cancel" | "account/logout" => json!({ "id": id, "result": {} }),
-                _ => {
-                    json!({ "id": id, "error": { "code": -32601, "message": "mock rejected request" } })
-                }
-            };
-            writeln!(stdout, "{response}").unwrap();
-            stdout.flush().unwrap();
-        }
-    }
-
-    #[test]
-    fn codex_account_client_handles_interleaved_updates_and_login_lifecycle() {
-        let path = std::env::current_exe().expect("test executable");
-        let mut command = Command::new(&path);
-        command
-            .args([
-                "--exact",
-                "features::ai::agent_management::tests::mock_codex_app_server",
-                "--nocapture",
-            ])
-            .env("NYATERM_MOCK_CODEX_ACCOUNT_SERVER", "1");
-        let mut client =
-            CodexAccountClient::start_with_command(path, command, Arc::new(AtomicBool::new(false)))
-                .expect("start mock app-server");
-        let account = client
-            .request("account/read", json!({ "refreshToken": false }))
-            .expect("account response");
-        assert_eq!(account["account"]["email"], "fixture@example.invalid");
-        assert_eq!(
-            client.poll_account_update().expect("interleaved update")["account"]["planType"],
-            "plus"
-        );
-        let login = client
-            .request(
-                "account/login/start",
-                json!({ "type": "chatgptDeviceCode" }),
-            )
-            .expect("login response");
-        assert_eq!(login["loginId"], "fixture-login");
-        client
-            .request(
-                "account/login/cancel",
-                json!({ "loginId": "fixture-login" }),
-            )
-            .expect("cancel response");
-        client
-            .request("account/logout", json!({}))
-            .expect("logout response");
-        assert_eq!(
-            client.request("unknown", json!({})).unwrap_err(),
-            "mock rejected request"
-        );
-    }
-
-    #[test]
-    fn cancellation_interrupts_a_pending_account_response_and_reaps_the_client() {
-        let path = std::env::current_exe().expect("test executable");
-        let mut command = Command::new(&path);
-        command
-            .args([
-                "--exact",
-                "features::ai::agent_management::tests::mock_codex_app_server",
-                "--nocapture",
-            ])
-            .env("NYATERM_MOCK_CODEX_ACCOUNT_SERVER", "1");
-        let stopping = Arc::new(AtomicBool::new(false));
-        let mut client =
-            CodexAccountClient::start_with_command(path, command, Arc::clone(&stopping))
-                .expect("start mock app-server");
-        let (started_tx, started_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            started_tx.send(()).unwrap();
-            let result = client.wait_response(999);
-            drop(client);
-            done_tx.send(result).unwrap();
-        });
-        started_rx.recv().unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-        stopping.store(true, Ordering::Release);
-        let error = done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("cancellation must interrupt the 20 second wait")
-            .unwrap_err();
-        assert!(error.contains("cancelled"));
-        worker.join().unwrap();
-    }
-
-    #[test]
-    fn account_notification_extracts_state_without_exposing_device_code() {
-        let update = account_update_from_notification(&json!({
-            "method": "account/updated",
-            "params": { "authMode": "chatgpt", "planType": "plus" }
-        }))
-        .expect("account update");
-        assert_eq!(update["account"]["type"], "chatgpt");
-        assert_eq!(update["account"]["planType"], "plus");
-        assert!(
-            account_update_from_notification(&json!({
-                "method": "account/login/completed",
-                "params": { "userCode": "SECRET" }
-            }))
-            .is_none()
-        );
-    }
-
     #[test]
     fn stale_agent_results_cannot_restore_login_or_account_state() {
         let mut state = AgentManagementState::new();
