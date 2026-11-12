@@ -1,11 +1,9 @@
-use super::helpers::{
-    TransferProgressEventSender, log_sftp_upload_job_failure, transfer_job_remote_parent_path,
-};
+use super::helpers::{TransferProgressEventSender, transfer_job_remote_parent_path};
 use crate::features::NyaTermApp;
-use crate::features::transfers::SftpJobSession;
+use crate::features::transfers::FileTransferSession;
 use crate::models::{
-    NavItem, TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult,
-    TransferJobState, TransferJobStatus,
+    TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
+    TransferJobStatus,
 };
 use gpui::{Context, Window};
 use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
@@ -37,33 +35,12 @@ impl NyaTermApp {
         path_options: SftpPathTransferOptions,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.session.active_ssh_config_owned().is_none() {
-            self.shell
-                .set_status("start an SSH session first".to_string());
-            self.ensure_panel_open(NavItem::Transfers, cx);
-            cx.notify();
-            return false;
-        }
-        if self.session.active_file_browser_backend()
-            != Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
-        {
-            self.shell
-                .set_status("source session is unavailable".to_string());
-            cx.notify();
-            return false;
-        }
-
-        let service = match self.active_remote_file_service() {
-            Ok(service) => service,
+        let session = match self.browser_transfer_session() {
+            Ok(session) => session,
             Err(error) => {
-                self.shell.set_status(error.to_string());
-                cx.notify();
+                self.report_browser_transfer_error("download", &error, cx);
                 return false;
             }
-        };
-        let session = SftpJobSession {
-            session_id: self.session.active_id_owned(),
-            service,
         };
         self.enqueue_sftp_download_job_for_target(
             session,
@@ -77,7 +54,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn enqueue_sftp_download_job_for_target(
         &mut self,
-        session: SftpJobSession,
+        session: FileTransferSession,
         remote_path: RemoteFilePath,
         local_path: PathBuf,
         path_options: SftpPathTransferOptions,
@@ -107,6 +84,8 @@ impl NyaTermApp {
         let path_options = self
             .transfer
             .bind_transfer_job_path_options(&id, path_options);
+        self.transfer
+            .bind_transfer_job_source(&id, &session.service);
         self.shell
             .set_status(format!("remote download started for {display_path}"));
         let progress_tx = self.transfer.transfer_event_sender();
@@ -128,11 +107,18 @@ impl NyaTermApp {
                             progress_sender.send(progress);
                         },
                     )
-                    .map(TransferJobOutput::Summary)
-                    .map_err(|error| error.to_string());
+                    .map(TransferJobOutput::Summary);
+                if let Err(error) = &result {
+                    crate::features::android::labels::log_file_error(
+                        "download",
+                        session.service.kind(),
+                        &id,
+                        error,
+                    );
+                }
                 let _ = finished_tx.unbounded_send(TransferJobResult {
                     id,
-                    event: TransferJobEvent::Finished(result),
+                    event: TransferJobEvent::FileFinished(result),
                 });
             },
         );
@@ -141,7 +127,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn enqueue_sftp_upload_job_for_target(
         &mut self,
-        session: SftpJobSession,
+        session: FileTransferSession,
         local_path: PathBuf,
         remote_path: String,
         path_options: SftpPathTransferOptions,
@@ -170,10 +156,14 @@ impl NyaTermApp {
         let path_options = self
             .transfer
             .bind_transfer_job_path_options(&id, path_options);
+        self.transfer
+            .bind_transfer_job_source(&id, &session.service);
         self.shell.set_status(format!(
             "remote upload started for {}",
             local_path.display()
         ));
+        self.transfer
+            .bind_upload_target_lock(&id, target_lock.clone());
         let progress_tx = self.transfer.transfer_event_sender();
         let finished_tx = self.transfer.transfer_event_sender();
         self.submit_bulk_transfer_job("sftp-upload", id.clone(), finished_tx.clone(), move || {
@@ -198,23 +188,39 @@ impl NyaTermApp {
                             return TransferJobOutput::Summary(summary);
                         }
                         let parent_path = transfer_job_remote_parent_path(&summary.remote_path);
-                        match service.list_dir(&parent_path) {
+                        match service.list_dir_path(&RemoteFilePath::new(&parent_path)) {
                             Ok(entries) => TransferJobOutput::Uploaded {
                                 summary,
                                 parent_path,
                                 entries,
                             },
-                            Err(_) => TransferJobOutput::Summary(summary),
+                            Err(error) => {
+                                crate::features::android::labels::log_file_error(
+                                    "upload-refresh",
+                                    service.kind(),
+                                    &id,
+                                    &error,
+                                );
+                                let _ = finished_tx.unbounded_send(TransferJobResult {
+                                    id: id.clone(),
+                                    event: TransferJobEvent::FileRefreshFailed(error),
+                                });
+                                TransferJobOutput::Summary(summary)
+                            }
                         }
                     })
             })();
             if let Err(error) = &result {
-                log_sftp_upload_job_failure(&id, error);
+                crate::features::android::labels::log_file_error(
+                    "upload",
+                    service.kind(),
+                    &id,
+                    error,
+                );
             }
-            let result = result.map_err(|error| error.to_string());
             let _ = finished_tx.unbounded_send(TransferJobResult {
                 id,
-                event: TransferJobEvent::Finished(result),
+                event: TransferJobEvent::FileFinished(result),
             });
         });
         cx.notify();
@@ -403,36 +409,53 @@ impl NyaTermApp {
             return;
         }
         let promised_source = self.transfer.promised_download_source(&job_id);
-        let service = if let Some(source) = &promised_source {
-            let Some(source) = source.upgrade() else {
-                self.shell
-                    .set_status("Source session is closed; drag the item again".to_string());
-                cx.notify();
-                return;
-            };
-            (*source).clone()
+        if self
+            .transfer
+            .transfer_job(&job_id)
+            .and_then(|job| job.session_id.as_deref())
+            .is_some_and(|id| {
+                self.session.metadata(id).is_none() || self.session.is_disconnected(id)
+            })
+        {
+            let backend = promised_source
+                .as_ref()
+                .map(|source| source.kind())
+                .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
+            self.report_transfer_entry_error(
+                "transfer-retry",
+                backend,
+                &nyaterm_files::file_browser::FileTransferEntryError::Unavailable.into(),
+                cx,
+            );
+            return;
+        }
+        let frozen_service = promised_source.as_ref().and_then(|source| source.upgrade());
+        let service = if let Some(service) = frozen_service {
+            service
+        } else if self.transfer.transfer_job_is_local(&job_id) {
+            nyaterm_files::file_browser::FileBrowserService::local()
         } else {
             let session_id = self
                 .transfer
                 .transfer_job(&job_id)
                 .and_then(|job| job.session_id.clone());
-            let source = session_id.as_deref().and_then(|id| {
-                if self.session.is_disconnected(id) {
-                    return None;
+            let result = match session_id {
+                Some(id)
+                    if !self.session.is_disconnected(&id)
+                        && !self.transfer.is_promised_download(&job_id) =>
+                {
+                    self.file_browser_service_for_session(&id)
                 }
-                self.session
-                    .metadata(id)
-                    .and_then(|metadata| metadata.ssh_config.clone())
-            });
-            let result = match (session_id, source) {
-                (Some(id), Some(config)) => self.remote_file_service_for_session(&id, config),
-                _ => Err(anyhow::anyhow!("source session is unavailable")),
+                _ => Err(nyaterm_files::file_browser::FileTransferEntryError::Unavailable.into()),
             };
             match result {
                 Ok(service) => service,
                 Err(error) => {
-                    self.shell.set_status(error.to_string());
-                    cx.notify();
+                    let backend = promised_source
+                        .as_ref()
+                        .map(|source| source.kind())
+                        .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
+                    self.report_transfer_entry_error("transfer-retry", backend, &error, cx);
                     return;
                 }
             }
@@ -498,16 +521,25 @@ impl NyaTermApp {
                     job_id.clone(),
                     finished_tx.clone(),
                     move || {
-                        let _lifetime = if let Some(source) = promised_source {
+                        let _lifetime = if let Some(source) =
+                            promised_source.filter(|_| path_options.is_promised_download())
+                        {
                             match nyaterm_files::drag_export::DragSourceLifetime::new(
                                 source,
                                 vec![control.clone()],
                             ) {
                                 Ok(lifetime) => Some(lifetime),
                                 Err(error) => {
+                                    let error = anyhow::Error::new(error);
+                                    crate::features::android::labels::log_file_error(
+                                        "download-retry",
+                                        service.kind(),
+                                        &job_id,
+                                        &error,
+                                    );
                                     let _ = finished_tx.unbounded_send(TransferJobResult {
                                         id: job_id,
-                                        event: TransferJobEvent::Finished(Err(error.to_string())),
+                                        event: TransferJobEvent::FileFinished(Err(error)),
                                     });
                                     return;
                                 }
@@ -527,11 +559,18 @@ impl NyaTermApp {
                                     progress_sender.send(progress);
                                 },
                             )
-                            .map(TransferJobOutput::Summary)
-                            .map_err(|error| error.to_string());
+                            .map(TransferJobOutput::Summary);
+                        if let Err(error) = &result {
+                            crate::features::android::labels::log_file_error(
+                                "download-retry",
+                                service.kind(),
+                                &job_id,
+                                error,
+                            );
+                        }
                         let _ = finished_tx.unbounded_send(TransferJobResult {
                             id: job_id,
-                            event: TransferJobEvent::Finished(result),
+                            event: TransferJobEvent::FileFinished(result),
                         });
                     },
                 );
@@ -540,6 +579,7 @@ impl NyaTermApp {
                 local_path,
                 remote_path,
             } => {
+                let target_lock = self.transfer.upload_target_lock(&job_id);
                 let duplicate_policy = self.transfer.duplicate_policy();
                 let transfer_options = self.sftp_transfer_options();
                 let duplicate_resolver =
@@ -579,38 +619,58 @@ impl NyaTermApp {
                     move || {
                         let mut progress_sender =
                             TransferProgressEventSender::new(job_id.clone(), progress_tx);
-                        let result = service
-                            .upload_path_with_progress_and_path_options(
-                                local_path,
-                                &remote_path,
-                                control,
-                                path_options,
-                                move |progress| {
-                                    progress_sender.send(progress);
-                                },
-                            )
-                            .map(|summary| {
-                                if summary.skipped {
-                                    return TransferJobOutput::Summary(summary);
-                                }
-                                let parent_path =
-                                    transfer_job_remote_parent_path(&summary.remote_path);
-                                match service.list_dir(&parent_path) {
-                                    Ok(entries) => TransferJobOutput::Uploaded {
-                                        summary,
-                                        parent_path,
-                                        entries,
+                        let result = (|| {
+                            let _target_guard = lock_upload_target(&target_lock, &control)?;
+                            service
+                                .upload_path_with_progress_and_path_options(
+                                    local_path,
+                                    &remote_path,
+                                    control,
+                                    path_options,
+                                    move |progress| {
+                                        progress_sender.send(progress);
                                     },
-                                    Err(_) => TransferJobOutput::Summary(summary),
-                                }
-                            });
+                                )
+                                .map(|summary| {
+                                    if summary.skipped {
+                                        return TransferJobOutput::Summary(summary);
+                                    }
+                                    let parent_path =
+                                        transfer_job_remote_parent_path(&summary.remote_path);
+                                    match service.list_dir_path(&RemoteFilePath::new(&parent_path))
+                                    {
+                                        Ok(entries) => TransferJobOutput::Uploaded {
+                                            summary,
+                                            parent_path,
+                                            entries,
+                                        },
+                                        Err(error) => {
+                                            crate::features::android::labels::log_file_error(
+                                                "upload-refresh",
+                                                service.kind(),
+                                                &job_id,
+                                                &error,
+                                            );
+                                            let _ = finished_tx.unbounded_send(TransferJobResult {
+                                                id: job_id.clone(),
+                                                event: TransferJobEvent::FileRefreshFailed(error),
+                                            });
+                                            TransferJobOutput::Summary(summary)
+                                        }
+                                    }
+                                })
+                        })();
                         if let Err(error) = &result {
-                            log_sftp_upload_job_failure(&job_id, error);
+                            crate::features::android::labels::log_file_error(
+                                "upload-retry",
+                                service.kind(),
+                                &job_id,
+                                error,
+                            );
                         }
-                        let result = result.map_err(|error| error.to_string());
                         let _ = finished_tx.unbounded_send(TransferJobResult {
                             id: job_id,
-                            event: TransferJobEvent::Finished(result),
+                            event: TransferJobEvent::FileFinished(result),
                         });
                     },
                 );

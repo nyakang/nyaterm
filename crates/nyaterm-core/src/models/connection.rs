@@ -1,3 +1,4 @@
+use crate::models::android::{AdbDeviceSelector, AndroidScreenSettings, default_android_directory};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -496,6 +497,13 @@ impl Default for TelnetAutoLoginConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ConnectionType {
+    Adb {
+        device: AdbDeviceSelector,
+        #[serde(default = "default_android_directory")]
+        directory: String,
+        #[serde(default)]
+        screen: AndroidScreenSettings,
+    },
     Ssh {
         host: String,
         #[serde(default = "default_ssh_port")]

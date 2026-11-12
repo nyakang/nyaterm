@@ -158,7 +158,11 @@ impl NyaTermApp {
                         SessionLaunchConfig::Telnet(config) => Some((&config.host, config.port)),
                         SessionLaunchConfig::Rdp(config) => Some((&config.host, config.port)),
                         SessionLaunchConfig::Vnc(config) => Some((&config.host, config.port)),
-                        SessionLaunchConfig::Local(_) | SessionLaunchConfig::Serial(_) => None,
+                        SessionLaunchConfig::AdbShell(_)
+                        | SessionLaunchConfig::AdbFiles(_)
+                        | SessionLaunchConfig::AdbScreen(_)
+                        | SessionLaunchConfig::Local(_)
+                        | SessionLaunchConfig::Serial(_) => None,
                     }
                     .map(|(host, port)| (host.clone(), port))
                 }),

@@ -1778,6 +1778,75 @@ mod tests {
     }
 
     #[test]
+    fn cloud_sync_without_a_master_password_can_be_disabled_and_reenabled_after_recovery() {
+        for same_draft in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            app.update(&mut cx, |app, cx| {
+                let cloud = app
+                    .store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::CloudSync, |store| {
+                        let mut cloud = nyaterm_core::CloudSyncSettings {
+                            enabled: true,
+                            ..Default::default()
+                        };
+                        cloud.webdav.endpoint = "https://dav.example.invalid".into();
+                        store.save_cloud_sync_settings(cloud)
+                    })
+                    .unwrap();
+                app.cloud_sync.replace_loaded(cloud, Default::default());
+                assert!(!app.settings.summary().has_master_password);
+                assert!(!app.cloud_sync_form_enabled());
+                app.begin_settings_draft(cx);
+                assert!(app.pending_settings_validation_error().is_some());
+                app.toggle_cloud_sync_enabled(cx);
+                assert!(!app.cloud_sync.settings().enabled);
+                assert!(app.pending_settings_validation_error().is_none());
+
+                // Cancelling a recovery draft must leave the committed settings intact.
+                app.cancel_settings(cx);
+                assert!(app.cloud_sync.settings().enabled);
+                assert!(!app.settings.master_password().enabled);
+                app.begin_settings_draft(cx);
+                app.toggle_cloud_sync_enabled(cx);
+                // The enable guard must still reject a missing password.
+                app.toggle_cloud_sync_enabled(cx);
+                assert!(!app.cloud_sync.settings().enabled);
+                if same_draft {
+                    app.toggle_settings_master_password(cx);
+                    app.apply_settings_master_password("fixture-recovery-password".into(), cx);
+                }
+                app.apply_settings_draft(false, cx);
+            });
+            finish_settings_apply(&app, &mut cx);
+            let (settings, cloud) = stored_settings_and_cloud(&app, &mut cx);
+            assert!(!cloud.enabled);
+            assert_eq!(settings.has_master_password, same_draft);
+            if !same_draft {
+                app.update(&mut cx, |app, cx| {
+                    app.toggle_settings_master_password(cx);
+                    app.apply_settings_master_password("fixture-recovery-password".into(), cx);
+                    app.apply_settings_draft(false, cx);
+                });
+                finish_settings_apply(&app, &mut cx);
+            }
+            app.update(&mut cx, |app, cx| {
+                assert!(app.settings.summary().has_master_password);
+                assert!(app.cloud_sync_form_enabled());
+                app.toggle_cloud_sync_enabled(cx);
+                assert!(app.cloud_sync.settings().enabled);
+                app.confirm_settings_draft(cx);
+            });
+            finish_settings_apply(&app, &mut cx);
+            let (settings, cloud) = stored_settings_and_cloud(&app, &mut cx);
+            assert!(settings.has_master_password);
+            assert!(cloud.enabled);
+            assert_eq!(cloud.webdav.endpoint, "https://dav.example.invalid");
+        }
+    }
+
+    #[test]
     fn enabling_master_password_without_a_password_blocks_apply() {
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);

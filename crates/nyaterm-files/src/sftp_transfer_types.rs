@@ -10,8 +10,16 @@ pub struct SftpTransferSummary {
     pub skipped: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileTransferPhase {
+    Scanning,
+    Transferring,
+    Committing,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpTransferProgress {
+    pub phase: Option<FileTransferPhase>,
     pub remote_path: String,
     pub local_path: PathBuf,
     pub bytes_transferred: u64,
@@ -164,6 +172,13 @@ pub struct SftpDuplicateRequest {
 /// 重试期间被外部文件占用后退化为覆盖。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum SftpDuplicateCacheKey {
+    Copy {
+        source_kind: crate::file_browser::FileBrowserBackendKind,
+        source_path: Vec<u8>,
+        target_kind: crate::file_browser::FileBrowserBackendKind,
+        target_path: Vec<u8>,
+        is_directory: bool,
+    },
     Download {
         remote_path: Vec<u8>,
         local_path: PathBuf,

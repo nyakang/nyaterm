@@ -1,6 +1,6 @@
 use super::FileTransferEndpoint;
 use crate::sftp::{SftpFileType, SftpTransferControl};
-use crate::sftp_transfer_types::SftpTransferProgress;
+use crate::sftp_transfer_types::{FileTransferPhase, SftpTransferProgress};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -45,9 +45,12 @@ impl CopyProgress {
         callback: impl FnMut(SftpTransferProgress) + Send + 'static,
     ) -> Self {
         let remote_path = match destination {
-            FileTransferEndpoint::Remote { path, .. } => path.display_path.clone(),
+            FileTransferEndpoint::Remote { path, .. } | FileTransferEndpoint::Adb { path, .. } => {
+                path.display_path.clone()
+            }
             FileTransferEndpoint::Local(_) => match source {
-                FileTransferEndpoint::Remote { path, .. } => path.display_path.clone(),
+                FileTransferEndpoint::Remote { path, .. }
+                | FileTransferEndpoint::Adb { path, .. } => path.display_path.clone(),
                 FileTransferEndpoint::Local(path) => path.to_string_lossy().into_owned(),
             },
         };
@@ -59,6 +62,7 @@ impl CopyProgress {
         };
         let reporter = Self(Arc::new(Mutex::new(CopyProgressState {
             value: SftpTransferProgress {
+                phase: Some(FileTransferPhase::Scanning),
                 remote_path,
                 local_path,
                 bytes_transferred: 0,
@@ -104,6 +108,28 @@ impl CopyProgress {
                         bytes = bytes.and_then(|n| n.checked_add(metadata.len()));
                     }
                 }
+                FileTransferEndpoint::Adb { service, path } => {
+                    let properties = service.remote_file_properties_with_control(&path, control)?;
+                    anyhow::ensure!(
+                        matches!(
+                            properties.file_type,
+                            SftpFileType::File | SftpFileType::Directory
+                        ),
+                        crate::file_browser::FileTransferEntryError::UnsupportedFileType
+                    );
+                    if properties.file_type == SftpFileType::Directory {
+                        for entry in service.list_dir_path_with_control(&path, control)? {
+                            pending.push(FileTransferEndpoint::Adb {
+                                service: service.clone(),
+                                path: entry.remote_path(),
+                            });
+                        }
+                    } else {
+                        bytes = bytes
+                            .zip(properties.size)
+                            .and_then(|(a, b)| a.checked_add(b));
+                    }
+                }
                 FileTransferEndpoint::Remote { service, path } => {
                     let properties = service.remote_file_properties(&path)?;
                     if properties.file_type == SftpFileType::Directory {
@@ -133,8 +159,23 @@ impl CopyProgress {
         Ok(())
     }
 
+    pub(crate) fn set_inventory(&self, bytes: Option<u64>, items: u64) {
+        let mut state = self.0.lock().expect("copy progress lock");
+        state.stage_items = items.max(1);
+        state.value.total_bytes = bytes.and_then(|n| n.checked_mul(state.stages));
+        state.value.item_count_total = Some(state.stage_items.saturating_mul(state.stages));
+        state.value.item_count_completed = Some(0);
+        state.emit(false);
+    }
+    pub(crate) fn phase(&self, phase: FileTransferPhase) {
+        let mut state = self.0.lock().expect("copy progress lock");
+        state.value.phase = Some(phase);
+        state.emit(false);
+    }
+
     pub(crate) fn add_bytes(&self, bytes: u64) {
         let mut state = self.0.lock().expect("copy progress lock");
+        state.value.phase = Some(FileTransferPhase::Transferring);
         state.value.bytes_transferred = state.value.bytes_transferred.saturating_add(bytes);
         state.emit(false);
     }

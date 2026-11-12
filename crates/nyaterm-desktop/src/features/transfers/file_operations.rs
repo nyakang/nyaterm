@@ -23,6 +23,7 @@ use rust_i18n::t;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::features) enum FileOperationEndpoint {
     Local,
+    Adb(String),
     Session(String),
     /// A saved source with no live session. It must never fall back to local I/O.
     OfflineConnection(String),
@@ -39,6 +40,7 @@ impl FileOperationEndpoint {
     pub(in crate::features) fn kind(&self) -> FileBrowserBackendKind {
         match self {
             Self::Local => FileBrowserBackendKind::Local,
+            Self::Adb(_) => FileBrowserBackendKind::Adb,
             _ => FileBrowserBackendKind::Remote,
         }
     }
@@ -196,7 +198,8 @@ impl NyaTermApp {
         let (source_service, target_service) = match services {
             Ok(services) => services,
             Err(error) => {
-                self.shell.set_status(error.to_string());
+                self.shell
+                    .set_status(crate::features::android::labels::file_error_message(&error));
                 cx.notify();
                 return;
             }
@@ -293,20 +296,54 @@ impl NyaTermApp {
         self.submit_bulk_transfer_job("file-operation", id.clone(), tx.clone(), move || {
             let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
             let target_session_id = context.request.endpoints_target_session_id();
-            let result = context.request.into_service_request().and_then(|request| {
-                execute_file_operation(
-                    request,
-                    source_service,
-                    target_service,
-                    control,
-                    options,
-                    move |value| progress.send(value),
-                )
-                .map(|result| file_operation_output(result, target_session_id))
-            });
+            let android = matches!(
+                source_service,
+                nyaterm_files::file_browser::FileBrowserService::Adb(_)
+            ) || matches!(
+                target_service,
+                nyaterm_files::file_browser::FileBrowserService::Adb(_)
+            );
+            let backend = if android {
+                FileBrowserBackendKind::Adb
+            } else {
+                target_service.kind()
+            };
+            let cancelled = control.clone();
+            let result = context
+                .request
+                .into_service_request()
+                .map_err(anyhow::Error::msg)
+                .and_then(|request| {
+                    execute_file_operation(
+                        request,
+                        source_service,
+                        target_service,
+                        control,
+                        options,
+                        move |value| progress.send(value),
+                    )
+                    .map(|result| file_operation_output(result, target_session_id))
+                })
+                .map_err(|error| {
+                    if cancelled.is_cancelled() {
+                        anyhow::Error::new(nyaterm_android::error::AdbError::Cancelled)
+                    } else if android {
+                        error.context(nyaterm_files::adb::AdbFileError)
+                    } else {
+                        error
+                    }
+                });
+            if let Err(error) = &result {
+                crate::features::android::labels::log_file_error(
+                    "file-operation",
+                    backend,
+                    &id,
+                    error,
+                );
+            }
             let _ = tx.unbounded_send(TransferJobResult {
                 id,
-                event: TransferJobEvent::Finished(result),
+                event: TransferJobEvent::FileFinished(result),
             });
         });
         cx.notify();

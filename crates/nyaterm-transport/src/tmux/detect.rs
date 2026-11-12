@@ -102,33 +102,75 @@ fn is_tmux_binary(token: &str) -> bool {
 
 fn is_control_flag(token: &str) -> bool {
     // `-C` enters control mode, `-CC` additionally silences echo.
-    token.len() >= 2 && token.starts_with('-') && token[1..].chars().all(|c| c == 'C')
+    matches!(token, "-C" | "-CC")
+}
+
+/// A newline inside shell quoting (or after a backslash) does not submit a
+/// new command. Retain the bounded input so its next line cannot gain stronger
+/// evidence than the incomplete command it belongs to.
+fn input_continues(line: &[u8]) -> bool {
+    let mut quote = None;
+    let mut escaped = false;
+    for &byte in line {
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' && quote != Some(b'\'') {
+            escaped = true;
+        } else if quote == Some(byte) {
+            quote = None;
+        } else if quote.is_none() && matches!(byte, b'\'' | b'"') {
+            quote = Some(byte);
+        }
+    }
+    quote.is_some() || escaped
 }
 
 /// Whether `line` invokes tmux in control mode. Evaluated on the input side:
 /// the command that spawned the protocol is visible before its output is.
 ///
 /// Token-level analysis, not a full shell parser: it tracks command position
-/// across `; | & >` separators and past prefix wrappers (`sudo`, `env`,
+/// across `; | &` separators and past prefix wrappers (`sudo`, `env`,
 /// `VAR=val`), understands `ssh host tmux -CC`, and matches `tmux`/`*/tmux`
 /// followed by a `-C`/`-CC` flag. Misses (aliases, `sh -c 'tmux -CC'`,
 /// indirect launches) degrade to plain passthrough — never to a hijack.
 pub(crate) fn is_tmux_control_command(line: &str) -> bool {
+    // Expansions, escapes, redirections and comments need a full shell parser.
+    // Keep them eligible for passive discovery, never an explicit advisory.
+    if line.contains(['\\', '$', '`', '<', '>', '#', '(', ')', '{', '}']) {
+        return false;
+    }
+    let tokens = shell_tokens(line);
+    if tokens.iter().any(|raw| {
+        let token = strip_quotes(raw);
+        token.contains(['\'', '"'])
+            || (raw.starts_with('\'') && !raw.ends_with('\''))
+            || (raw.starts_with('"') && !raw.ends_with('"'))
+    }) {
+        return false;
+    }
     let mut expect_command = true;
     let mut expect_ssh_dest = false;
     let mut ssh_flag_arg = false;
     let mut tmux_seen = false;
+    let mut option_arg = false;
+    let mut wrapper: Option<&str> = None;
 
-    for raw in shell_tokens(line) {
+    for raw in tokens {
         let token = strip_quotes(raw);
         if token.is_empty() {
-            continue;
+            return false;
         }
-        if is_shell_separator(token) {
+        if raw == token && is_shell_separator(token) {
             expect_command = true;
             expect_ssh_dest = false;
             ssh_flag_arg = false;
             tmux_seen = false;
+            option_arg = false;
+            wrapper = None;
+            continue;
+        }
+        if option_arg {
+            option_arg = false;
             continue;
         }
         if expect_ssh_dest {
@@ -139,8 +181,29 @@ pub(crate) fn is_tmux_control_command(line: &str) -> bool {
                 continue;
             }
             if token.starts_with('-') {
+                if matches!(token, "-N" | "-G" | "-V" | "-Q" | "-f") {
+                    return false;
+                }
                 if SSH_FLAGS_WITH_ARG.contains(&token) {
                     ssh_flag_arg = true;
+                } else if !matches!(
+                    token,
+                    "-t" | "-tt"
+                        | "-T"
+                        | "-4"
+                        | "-6"
+                        | "-A"
+                        | "-a"
+                        | "-C"
+                        | "-v"
+                        | "-vv"
+                        | "-vvv"
+                        | "-q"
+                        | "-x"
+                        | "-X"
+                        | "-Y"
+                ) {
+                    return false;
                 }
                 continue;
             }
@@ -150,12 +213,32 @@ pub(crate) fn is_tmux_control_command(line: &str) -> bool {
         }
         if expect_command {
             if token.starts_with('-') {
-                // Option of a pending wrapper (`sudo -k tmux -CC`); options
-                // that take arguments may still swallow the command name —
-                // a documented miss, never a false positive.
+                match (wrapper, token) {
+                    (_, "--") if wrapper.is_some() => {
+                        wrapper = None;
+                    }
+                    (Some("sudo" | "doas"), "-u" | "-g")
+                    | (Some("nice"), "-n")
+                    | (Some("env"), "-u" | "-C")
+                    | (Some("stdbuf"), "-i" | "-o" | "-e") => {
+                        option_arg = true;
+                    }
+                    (Some("sudo"), "-k" | "-n" | "-E" | "-H") | (Some("env"), "-i") => {}
+                    _ => return false,
+                }
                 continue;
             }
-            if COMMAND_WRAPPERS.contains(&token) || token.contains('=') {
+            if COMMAND_WRAPPERS.contains(&token) {
+                wrapper = Some(token);
+                continue;
+            }
+            if !raw.starts_with(['\'', '"'])
+                && let Some((name, _)) = token.split_once('=')
+                && !name.is_empty()
+                && name.bytes().enumerate().all(|(i, b)| {
+                    b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
+                })
+            {
                 continue;
             }
             if token == "ssh" {
@@ -168,8 +251,19 @@ pub(crate) fn is_tmux_control_command(line: &str) -> bool {
             expect_command = false;
             continue;
         }
-        if tmux_seen && is_control_flag(token) {
-            return true;
+        if tmux_seen {
+            if is_control_flag(token) {
+                return true;
+            }
+            match token {
+                "-L" | "-S" | "-f" | "-T" | "-c" => {
+                    option_arg = true;
+                }
+                "-2" | "-u" | "-v" | "-vv" | "-D" | "-l" | "-N" => {}
+                _ => {
+                    tmux_seen = false;
+                }
+            }
         }
     }
     false
@@ -180,7 +274,7 @@ pub(crate) enum TmuxFeed {
     Passthrough(Vec<u8>),
     /// A complete startup response and session notification were confirmed.
     ///
-    /// `startup` preserves the full candidate for replay on probe failure.
+    /// `startup` preserves the bounded candidate for protocol verification.
     /// `rest` follows it; `passthrough` precedes it in the normal stream.
     Detected {
         passthrough: Vec<u8>,
@@ -230,6 +324,30 @@ enum OutTrack {
     PercentLine,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Evidence {
+    ExplicitCommand,
+    PassiveHint,
+}
+
+struct Attempt {
+    evidence: Evidence,
+    deadline: Instant,
+    hint_at: Instant,
+    hint_sent: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct Expiration {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) notice: bool,
+}
+
+pub(crate) struct Detection {
+    pub(crate) output: TmuxFeed,
+    pub(crate) notice: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct TmuxControlDetector {
     /// The next byte begins a new line.
@@ -247,12 +365,9 @@ pub(crate) struct TmuxControlDetector {
     input_line: Vec<u8>,
     /// Escape-sequence tracking state for [`Self::feed_input`].
     input_track: InputTrack,
-    /// Set when a `tmux -CC` command line was just submitted; notifications
-    /// only count while this is armed and fresh.
-    armed_at: Option<Instant>,
-    /// Short window armed by a submitted-but-invisible command line — see
-    /// [`BLIND_ARM_WINDOW`]. Set only when editing escapes preceded Enter.
-    blind_arm_at: Option<Instant>,
+    attempt: Option<Attempt>,
+    /// Candidate bytes invalidated by a new submission still belong to output.
+    released: Vec<u8>,
     /// The submitted command's own PTY echo is expected to end with one
     /// `\n`; ordinary line-start bytes are not counted as shell output
     /// until that echo tail has passed.
@@ -264,9 +379,7 @@ pub(crate) struct TmuxControlDetector {
     /// An escape sequence was consumed since the current input line began —
     /// evidence of a recall/editing gesture that gates the blind arm.
     input_saw_escape: bool,
-    /// One-shot guard so the "no control output" advisory is emitted
-    /// at most once per armed `tmux -CC` submission.
-    silence_hint_sent: bool,
+    input_last_cr: bool,
 }
 
 impl TmuxControlDetector {
@@ -281,71 +394,123 @@ impl TmuxControlDetector {
             candidate_deadline: None,
             input_line: Vec::new(),
             input_track: InputTrack::Normal,
-            armed_at: None,
-            blind_arm_at: None,
+            attempt: None,
+            released: Vec::new(),
             echo_tail: false,
             saw_shell_output: false,
             input_saw_escape: false,
-            silence_hint_sent: false,
+            input_last_cr: false,
         }
     }
 
-    /// Whether an expiring candidate counts as a `tmux -CC` attempt worth
-    /// reporting. A candidate can only exist because an armed submission
-    /// produced bytes matching the `%begin `/DCS startup prefix — the
-    /// prefix gate already rejected everything else — so its presence is
-    /// itself the evidence; checking `is_armed()` alone races the shorter
-    /// blind-arm window and drops history-recalled attempts.
-    pub(crate) fn expiry_is_attempt(&self) -> bool {
-        !self.saw_shell_output && (self.is_armed() || self.candidate.is_some())
+    fn expiry_is_attempt(&self) -> bool {
+        !self.saw_shell_output
+            && self.attempt.as_ref().is_some_and(|attempt| {
+                attempt.evidence == Evidence::ExplicitCommand && !attempt.hint_sent
+            })
     }
 
     pub(crate) fn is_armed(&self) -> bool {
-        self.armed_at
-            .is_some_and(|armed_at| armed_at.elapsed() <= ARM_WINDOW)
-            || self
-                .blind_arm_at
-                .is_some_and(|armed_at| armed_at.elapsed() <= BLIND_ARM_WINDOW)
+        self.attempt
+            .as_ref()
+            .is_some_and(|attempt| Instant::now() < attempt.deadline)
     }
 
-    /// Deadline for the "submitted but completely silent" case: an old tmux
-    /// accepts `-CC` yet never emits confirmable framing, so neither the
-    /// candidate path nor the startup probe ever engages and the screen just
-    /// freezes. Blind-armed submits count too — a history-recalled
-    /// `tmux -CC` is exactly what users retry with. This only permits an
-    /// advisory: silence never establishes the remote protocol.
-    pub(crate) fn silence_deadline(&self) -> Option<Instant> {
-        if self.done || self.candidate.is_some() || self.silence_hint_sent || self.saw_shell_output
-        {
+    fn silence_deadline(&self) -> Option<Instant> {
+        if self.done || self.candidate.is_some() || !self.expiry_is_attempt() {
             return None;
         }
-        self.armed_at
-            .or(self.blind_arm_at)
-            .map(|armed_at| armed_at + SILENT_HINT_DELAY)
+        self.attempt.as_ref().map(|attempt| attempt.hint_at)
     }
 
-    /// Whether the caller should now emit the unsupported-tmux advisory.
-    /// One-shot per arm. Firing disarms too: the caller aborts the remote
-    /// `tmux -CC`, so its `%exit` noise and the returning prompt should pass
-    /// straight through instead of sitting in a fresh candidate window.
-    pub(crate) fn expire_silence(&mut self) -> bool {
-        let elapsed = self
-            .armed_at
-            .or(self.blind_arm_at)
-            .is_some_and(|armed_at| armed_at.elapsed() >= SILENT_HINT_DELAY);
-        if !elapsed
-            || self.done
-            || self.candidate.is_some()
-            || self.silence_hint_sent
-            || self.saw_shell_output
+    fn expire_silence(&mut self) -> bool {
+        if !self
+            .silence_deadline()
+            .is_some_and(|at| Instant::now() >= at)
         {
             return false;
         }
-        self.silence_hint_sent = true;
-        self.armed_at = None;
-        self.blind_arm_at = None;
-        tracing::info!("tmux detector: silence expired -> unsupported hint");
+        if let Some(attempt) = &mut self.attempt {
+            attempt.hint_sent = true;
+        }
         true
+    }
+
+    fn reset_attempt(&mut self) {
+        if self.candidate.is_some() {
+            let bytes = self.take_candidate();
+            self.released.extend(bytes);
+        }
+        self.attempt = None;
+        self.echo_tail = false;
+        self.saw_shell_output = false;
+        self.out_track = OutTrack::Normal;
+    }
+
+    fn arm(&mut self, evidence: Evidence) {
+        let now = Instant::now();
+        self.attempt = Some(Attempt {
+            evidence,
+            deadline: now
+                + match evidence {
+                    Evidence::ExplicitCommand => ARM_WINDOW,
+                    Evidence::PassiveHint => BLIND_ARM_WINDOW,
+                },
+            hint_at: now + SILENT_HINT_DELAY,
+            hint_sent: false,
+        });
+        self.echo_tail = true;
+        self.saw_shell_output = false;
+        self.out_track = OutTrack::Normal;
+    }
+
+    /// Both the timer and incoming data use this exact expiry path.
+    pub(crate) fn expire(&mut self) -> Expiration {
+        let mut result = Expiration {
+            bytes: std::mem::take(&mut self.released),
+            notice: false,
+        };
+        if self
+            .candidate_deadline
+            .is_some_and(|at| Instant::now() >= at)
+        {
+            result.notice = self.expiry_is_attempt();
+            result.bytes.extend(self.expire_candidate());
+        } else {
+            result.notice = self.expire_silence();
+        }
+        result
+    }
+
+    pub(crate) fn feed_output(&mut self, data: &[u8]) -> Detection {
+        let expired = self.expire();
+        let output = match self.feed(data) {
+            TmuxFeed::Passthrough(bytes) if expired.bytes.is_empty() => {
+                TmuxFeed::Passthrough(bytes)
+            }
+            TmuxFeed::Passthrough(bytes) => TmuxFeed::Passthrough([expired.bytes, bytes].concat()),
+            TmuxFeed::Detected {
+                passthrough,
+                startup,
+                rest,
+            } => TmuxFeed::Detected {
+                passthrough: [expired.bytes, passthrough].concat(),
+                startup,
+                rest,
+            },
+        };
+        Detection {
+            output,
+            notice: expired.notice,
+        }
+    }
+
+    /// stderr may explain a failed launch, but can never establish stdout's
+    /// protocol. Suppress the silence advisory without disabling discovery.
+    pub(crate) fn observe_extended_output(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.saw_shell_output = true;
+        }
     }
 
     /// Track bytes written to the channel (user input, AI capture commands)
@@ -355,6 +520,11 @@ impl TmuxControlDetector {
             return;
         }
         for &byte in data {
+            let after_cr = self.input_last_cr;
+            self.input_last_cr = byte == b'\r';
+            if byte == b'\n' && after_cr {
+                continue;
+            }
             match self.input_track {
                 InputTrack::Normal => {}
                 InputTrack::Esc => {
@@ -399,29 +569,24 @@ impl TmuxControlDetector {
             }
             match byte {
                 b'\r' | b'\n' => {
+                    if self.input_line.len() < MAX_INPUT_LINE_BYTES
+                        && input_continues(&self.input_line)
+                    {
+                        self.input_line.push(b'\n');
+                        self.input_saw_escape = true;
+                        self.reset_attempt();
+                        continue;
+                    }
                     let line = std::mem::take(&mut self.input_line);
                     let saw_escape = std::mem::take(&mut self.input_saw_escape);
-                    if line.iter().all(|b| b.is_ascii_whitespace()) {
-                        // The submit carried no visible text — a recalled
-                        // command is only visible to the shell. Arm the
-                        // short blind window only when an editing escape
-                        // (arrow key, etc.) actually preceded the Enter.
-                        if saw_escape {
-                            self.blind_arm_at = Some(Instant::now());
-                            // A blind submit is a fresh attempt too — clear
-                            // the one-shot so a recalled `tmux -CC` can hit
-                            // the silence hint again.
-                            self.silence_hint_sent = false;
-                            self.echo_tail = true;
-                            self.saw_shell_output = false;
-                            self.out_track = OutTrack::Normal;
-                            tracing::info!("tmux detector: blind arm");
-                        }
+                    self.reset_attempt();
+                    if saw_escape {
+                        self.arm(Evidence::PassiveHint);
                     } else {
-                        self.blind_arm_at = None;
                         self.evaluate_input_line(&line);
                     }
                 }
+
                 0x12 | 0x10 | 0x0e => {
                     self.input_saw_escape = true;
                     self.input_line.clear();
@@ -435,9 +600,11 @@ impl TmuxControlDetector {
                     // real empty submit, not a recalled command.
                     self.input_saw_escape = false;
                     self.input_line.clear();
+                    self.reset_attempt();
                 }
                 0x7f | 0x08 => {
                     self.input_line.pop();
+                    self.input_saw_escape = true;
                 }
                 0x1b => {
                     self.input_track = InputTrack::Esc;
@@ -448,6 +615,7 @@ impl TmuxControlDetector {
                         self.input_line.push(byte);
                     } else {
                         self.input_line.clear();
+                        self.input_saw_escape = true;
                     }
                 }
             }
@@ -470,7 +638,9 @@ impl TmuxControlDetector {
                 _ if !single
                     && !double
                     && bytes[i..].starts_with(b"tmux")
-                    && is_tmux_control_command(&text[i..]) =>
+                    && is_tmux_control_command(
+                        text[i..].split([';', '|', '&', '}']).next().unwrap_or(""),
+                    ) =>
                 {
                     return true;
                 }
@@ -483,43 +653,23 @@ impl TmuxControlDetector {
 
     fn evaluate_input_line(&mut self, line: &[u8]) {
         let text = std::str::from_utf8(line).unwrap_or("");
-        // Keys pressed inside a fullscreen remote program (a nested `tmux
-        // attach`, vim, ...) still land in this line buffer even though the
-        // shell never saw them, leaving a garbage prefix on the next real
-        // command. The line the shell actually ran is the tail, so a `tmux`
-        // token outside quotes may start the match — quoted occurrences stay
-        // data (e.g. `echo 'x; tmux -CC'`) just like in a full-line parse. A
-        // false arm resolves cheaply when ordinary output hits a line start.
-        let matched = is_tmux_control_command(text) || Self::tmux_suffix_matches(text);
-        match (matched, text) {
-            (true, _) => {
-                self.armed_at = Some(Instant::now());
-                self.silence_hint_sent = false;
-                self.echo_tail = true;
-                self.saw_shell_output = false;
-                self.out_track = OutTrack::Normal;
-                tracing::info!("tmux detector: command armed");
-            }
-            // A different submitted command resolves the `tmux -CC` attempt
-            // either way — close the window rather than staying primed.
-            (false, _) if line.iter().any(|b| !b.is_ascii_whitespace()) => {
-                self.armed_at = None;
-                self.echo_tail = false;
-                self.saw_shell_output = false;
-                self.out_track = OutTrack::Normal;
-            }
-            _ => {}
+        if is_tmux_control_command(text) {
+            self.arm(Evidence::ExplicitCommand);
+        } else if Self::tmux_suffix_matches(text) {
+            // A suffix may be stale TUI input or merely an argument to echo.
+            self.arm(Evidence::PassiveHint);
         }
     }
 
     pub(crate) fn deadline(&self) -> Option<Instant> {
-        self.candidate_deadline
+        if !self.released.is_empty() {
+            return Some(Instant::now());
+        }
+        self.candidate_deadline.or_else(|| self.silence_deadline())
     }
 
-    /// Called by the SSH select loop even if the peer sends no more bytes.
-    pub(crate) fn expire_candidate(&mut self) -> Vec<u8> {
-        self.armed_at = None;
-        self.blind_arm_at = None;
+    fn expire_candidate(&mut self) -> Vec<u8> {
+        self.attempt = None;
         self.take_candidate()
     }
 
@@ -534,18 +684,12 @@ impl TmuxControlDetector {
         bytes
     }
 
-    pub(crate) fn feed(&mut self, data: &[u8]) -> TmuxFeed {
+    fn feed(&mut self, data: &[u8]) -> TmuxFeed {
         if self.done {
             return TmuxFeed::Passthrough(data.to_vec());
         }
         let mut out = Vec::new();
-        if self
-            .candidate_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            out.extend(self.expire_candidate());
-        }
-        if !self.is_armed() {
+        if !self.is_armed() && self.candidate.is_none() {
             if self.candidate.is_some() {
                 out.extend(self.take_candidate());
             }
@@ -556,6 +700,13 @@ impl TmuxControlDetector {
             return TmuxFeed::Passthrough(out);
         }
         for (i, &byte) in data.iter().enumerate() {
+            if self.candidate.is_none() && !self.is_armed() {
+                out.extend_from_slice(&data[i..]);
+                self.line_start = data
+                    .last()
+                    .is_some_and(|byte| matches!(byte, b'\n' | b'\r'));
+                break;
+            }
             if self.candidate.is_none() {
                 match self.out_track {
                     OutTrack::Normal => {}
@@ -704,6 +855,159 @@ impl TmuxControlDetector {
 mod tests {
     use super::{BLIND_ARM_WINDOW, TmuxControlDetector, TmuxFeed, is_tmux_control_command};
     const STARTUP: &[u8] = b"%begin 1 2 0\r\n%end 1 2 0\r\n%window-add @0\r\n%sessions-changed\r\n%session-changed $0 0\r\n";
+
+    #[test]
+    fn only_unambiguous_startup_options_enable_advisories() {
+        for line in [
+            "tmux new-session echo -CC",
+            "tmux display-message -C",
+            "tmux -L -CC",
+            "tmux -- -CC",
+            "echo ';' tmux -CC",
+            "sudo -u tmux -CC",
+            "echo x\\; tmux -CC",
+            "echo \"x; tmux -CC\"",
+            "tmux '-CC",
+            "tmux -CC\\",
+            "cat > tmux -CC",
+            "echo foo=bar tmux -CC",
+            "tmux -f -CC new-session",
+            "tmux -CCC",
+            "ssh -N host tmux -CC",
+            "\"\" tmux -CC",
+            "\"FOO=x\" tmux -CC",
+        ] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(format!("{line}\r").as_bytes());
+            assert!(detector.silence_deadline().is_none(), "{line}");
+        }
+        for line in [
+            "tmux -L test -CC",
+            "sudo -u root tmux -C",
+            "nice -n 5 tmux -CC",
+            "env -u TEST tmux -C",
+            "'tmux' '-CC'",
+            "ssh -p 2222 host tmux -CC",
+        ] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(format!("{line}\r\n").as_bytes());
+            assert!(detector.silence_deadline().is_some(), "{line}");
+        }
+    }
+
+    #[test]
+    fn edited_input_only_enables_passive_detection() {
+        for input in [b"tmux -CC\x1b[D\r".as_slice(), b"tmux -CCx\x7f\r"] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(input);
+            assert!(detector.silence_deadline().is_none());
+            assert!(matches!(
+                detector.feed_output(STARTUP).output,
+                TmuxFeed::Detected { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn multiline_quoted_text_never_becomes_an_explicit_command() {
+        let mut detector = TmuxControlDetector::new();
+        for input in [b"echo '\r".as_slice(), b"tmux -CC\r", b"'\r"] {
+            detector.feed_input(input);
+            assert!(detector.silence_deadline().is_none());
+        }
+        detector.feed_input(b"tmux -CC\r");
+        assert!(detector.silence_deadline().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stderr_suppresses_advisories_without_contributing_protocol_bytes() {
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"tmux -CC\r");
+        detector.observe_extended_output(STARTUP);
+        assert!(detector.candidate.is_none());
+        assert!(!detector.done);
+        tokio::time::advance(super::SILENT_HINT_DELAY).await;
+        assert!(!detector.expire().notice);
+        assert!(matches!(
+            detector.feed_output(STARTUP).output,
+            TmuxFeed::Detected { .. }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timer_and_incoming_data_have_identical_expiry_results() {
+        for input in [b"tmux -CC\r".as_slice(), b"\x1b[A\r"] {
+            for prefix in [b"\x1b".as_slice(), b"%begin 1 2 0\n", b"\x1bP1000p"] {
+                let mut timer = TmuxControlDetector::new();
+                let mut incoming = TmuxControlDetector::new();
+                for detector in [&mut timer, &mut incoming] {
+                    detector.feed_input(input);
+                    assert!(
+                        matches!(detector.feed_output(prefix).output, TmuxFeed::Passthrough(bytes) if bytes.is_empty())
+                    );
+                }
+                tokio::time::advance(super::CONFIRM_TIMEOUT).await;
+                let expired = timer.expire();
+                let later = timer.feed_output(b"tail");
+                let together = incoming.feed_output(b"tail");
+                assert_eq!(expired.notice, input.starts_with(b"tmux"));
+                assert_eq!(expired.notice, together.notice);
+                let TmuxFeed::Passthrough(later) = later.output else {
+                    panic!("passthrough")
+                };
+                let TmuxFeed::Passthrough(together) = together.output else {
+                    panic!("passthrough")
+                };
+                assert_eq!([expired.bytes, later].concat(), together);
+                assert_eq!(together, [prefix, b"tail"].concat());
+                assert!(!timer.expire().notice);
+                assert!(!incoming.expire().notice);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancel_or_new_submission_releases_candidate_without_stale_notice() {
+        for input in [b"\x03".as_slice(), b"ls\r", b"\r", b"\x1b[A\r"] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(b"tmux -CC\r");
+            detector.feed_output(b"%begin ");
+            detector.feed_input(input);
+            let expired = detector.expire();
+            assert_eq!(expired.bytes, b"%begin ");
+            assert!(!expired.notice);
+            tokio::time::advance(super::SILENT_HINT_DELAY).await;
+            assert!(!detector.expire().notice);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silence_hint_does_not_repeat_or_prevent_a_slow_valid_startup() {
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"tmux -CC\r");
+        tokio::time::advance(super::SILENT_HINT_DELAY).await;
+        assert!(detector.expire().notice);
+        assert!(!detector.expire().notice);
+        assert!(matches!(
+            detector.feed_output(STARTUP).output,
+            TmuxFeed::Detected { .. }
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn candidate_deadline_is_not_extended_by_fragments() {
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"\x1b[A\r");
+        detector.feed_output(b"%begin ");
+        let deadline = detector.deadline().unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(4)).await;
+        detector.feed_output(b"1 2 0\n");
+        assert_eq!(detector.deadline(), Some(deadline));
+        tokio::time::sleep_until(deadline).await;
+        let expired = detector.expire();
+        assert_eq!(expired.bytes, b"%begin 1 2 0\n");
+        assert!(!expired.notice);
+    }
 
     #[test]
     fn detects_control_line_and_splits_stream() {
@@ -997,36 +1301,70 @@ mod tests {
         assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
     }
 
-    #[test]
-    fn blind_armed_submit_also_gets_a_silence_deadline() {
-        // Recalling `tmux -CC` with arrow keys hides the text from input
-        // tracking, leaving only the blind arm — it must still expire into
-        // the unsupported-tmux hint instead of hanging forever.
-        let mut detector = TmuxControlDetector::new();
-        detector.feed_input(b"\x1b[A\r");
-        assert!(detector.silence_deadline().is_some());
+    #[tokio::test(start_paused = true)]
+    async fn recalled_silent_commands_never_emit_tmux_advisories() {
+        for input in [b"\x1b[A\r".as_slice(), b"\x12\r", b"\x10\r", b"\x1bOA\r"] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(input);
+            assert!(detector.is_armed());
+            assert!(detector.silence_deadline().is_none());
+            assert!(!detector.expiry_is_attempt());
+            tokio::time::advance(super::SILENT_HINT_DELAY).await;
+            assert!(!detector.expire_silence());
+        }
+    }
 
-        // The one-shot flag must not poison the retry: after a silence
-        // expiry, a blind-armed resubmission gets a fresh deadline.
-        detector.silence_hint_sent = true;
-        detector.feed_input(b"\x1b[A\r");
-        assert!(detector.silence_deadline().is_some());
+    #[tokio::test(start_paused = true)]
+    async fn explicit_silent_tmux_command_emits_one_advisory() {
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"tmux -CC\r");
+        tokio::time::sleep_until(detector.silence_deadline().unwrap()).await;
+        assert!(detector.expire_silence());
+        assert!(!detector.expire_silence());
+    }
+
+    #[test]
+    fn recall_clears_a_previous_explicit_silence_deadline() {
+        let mut detector = TmuxControlDetector::new();
+        detector.feed_input(b"tmux -CC\r");
+        detector.feed_input(b"\x03\x1b[A\r");
+        assert!(detector.silence_deadline().is_none());
+    }
+
+    #[test]
+    fn tmux_suffix_alone_does_not_enable_silence_advisories() {
+        for input in [b"echo tmux -CC\r".as_slice(), b"\x02dtmux -CC\r"] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(input);
+            assert!(detector.silence_deadline().is_none());
+            assert!(matches!(detector.feed(STARTUP), TmuxFeed::Detected { .. }));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recalled_program_partial_prefixes_expire_without_advisories() {
+        for bytes in [b"\x1b".as_slice(), b"\x1bP", b"%", b"%beg"] {
+            let mut detector = TmuxControlDetector::new();
+            detector.feed_input(b"\x1b[A\r");
+            assert!(matches!(detector.feed(bytes), TmuxFeed::Passthrough(data) if data.is_empty()));
+            assert!(!detector.expiry_is_attempt());
+            tokio::time::sleep_until(detector.deadline().unwrap()).await;
+            assert!(!detector.expiry_is_attempt());
+            assert_eq!(detector.expire_candidate(), bytes);
+            assert!(!detector.expire_silence());
+        }
     }
 
     #[tokio::test]
-    async fn blind_armed_protocol_candidate_still_aborts_after_window() {
-        // The blind arm window (5s) ends just before the candidate confirm
-        // window (5s) does, so a history-recalled `tmux -CC` whose output
-        // formed a startup candidate would expire unarmed. The withheld
-        // `%begin`-shaped bytes are themselves the evidence — the attempt
-        // must still abort the remote client.
+    async fn blind_armed_protocol_candidate_expires_without_advisory() {
+        // A protocol-looking fragment is insufficient evidence for an advisory.
         let mut detector = TmuxControlDetector::new();
         detector.feed_input(b"\x1b[A\r");
         let feed = detector.feed(b"%begin 1 2 0\n%output %0 x\n");
         assert!(matches!(feed, TmuxFeed::Passthrough(ref b) if b.is_empty()));
         tokio::time::sleep(BLIND_ARM_WINDOW + std::time::Duration::from_millis(50)).await;
         assert!(!detector.is_armed());
-        assert!(detector.expiry_is_attempt());
+        assert!(!detector.expiry_is_attempt());
     }
 
     #[test]

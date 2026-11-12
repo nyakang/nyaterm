@@ -161,6 +161,18 @@ fn check(state: &State, bytes: usize) -> io::Result<()> {
 }
 
 impl Receiver {
+    /// Discard input at a protocol boundary without consuming close or resize.
+    /// Writers enqueue under the same lock; release permits outside it.
+    pub(crate) fn discard_writes(&mut self) {
+        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut discarded = Vec::new();
+        while let Ok(write) = self.data.try_recv() {
+            discarded.push(write);
+        }
+        drop(state);
+        drop(discarded);
+    }
+
     fn control(&self) -> Option<SshCommand> {
         let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.stopped {
@@ -216,6 +228,21 @@ mod tests {
     use super::channel;
     use crate::SshCommand;
     use crate::writer_mailbox::BYTE_LIMIT;
+
+    #[test]
+    fn protocol_boundary_discards_input_and_preserves_control() {
+        let (tx, mut rx) = channel();
+        tx.write(vec![1; BYTE_LIMIT]).unwrap();
+        tx.resize(80, 24, 0, 0);
+        rx.discard_writes();
+        assert!(matches!(rx.try_recv().unwrap(), SshCommand::Resize { .. }));
+        assert!(rx.try_recv().is_err());
+        tx.write(vec![2; BYTE_LIMIT]).unwrap();
+        tx.close();
+        rx.discard_writes();
+        assert!(matches!(rx.try_recv().unwrap(), SshCommand::Close));
+        assert_eq!(tx.shared.state.lock().unwrap().bytes, 0);
+    }
 
     #[test]
     fn deferred_and_in_flight_writes_keep_their_permits_and_controls_bypass_a_full_queue() {

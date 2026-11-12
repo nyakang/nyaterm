@@ -400,3 +400,206 @@ fn background_ancestor_result_does_not_change_the_active_selection_or_scroll() {
         });
     });
 }
+
+#[test]
+fn android_initial_navigation_uses_device_directory_on_first_load_and_reset() {
+    for (directory, expected) in [
+        ("", "/sdcard/"),
+        ("/sdcard/", "/sdcard/"),
+        (
+            "/storage/emulated/0/Download",
+            "/storage/emulated/0/Download",
+        ),
+    ] {
+        let root = TestConfigDir::new("nyaterm-android-browser-initial");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            SESSION,
+            directory,
+        );
+        app.update(&mut cx, |app, cx| {
+            app.transfer.browser_directory_requests_for_test();
+            {
+                app.reset_transfer_browser_for_active_session();
+                assert_eq!(app.transfer.browser_view().path, expected);
+                assert_eq!(app.transfer.browser_view().home_dir, expected);
+                app.load_transfer_browser_for_active_session_if_needed(cx);
+                let (_, requested) = app
+                    .transfer
+                    .browser_directory_requests_for_test()
+                    .last()
+                    .unwrap();
+                assert_eq!(requested.display_path, expected);
+                assert!(nyaterm_files::adb::raw_path(requested).is_ok());
+            }
+        });
+    }
+}
+
+#[test]
+fn android_cache_rejects_host_relative_and_corrupt_paths_and_retains_valid_device_history() {
+    let root = TestConfigDir::new("nyaterm-android-browser-cache");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = crate::features::test_support::app_with_visible_android_session(
+        &mut cx,
+        root.path(),
+        SESSION,
+        "/sdcard/",
+    );
+    app.update(&mut cx, |app, cx| {
+        for path in [
+            RemoteFilePath::new("."),
+            RemoteFilePath::new(r"C:\Users\fixture"),
+            RemoteFilePath {
+                display_path: "/sdcard/".into(),
+                raw_path_token: Some("invalid-token".into()),
+            },
+        ] {
+            app.reset_transfer_browser_for_active_session();
+            app.transfer.begin_browser_directory_load_path(path);
+            app.cache_transfer_browser_session(SESSION);
+            assert!(!app.restore_transfer_browser_session_cache(SESSION, cx));
+            assert!(!app.transfer.has_browser_session_cache(SESSION));
+        }
+        app.reset_transfer_browser_for_active_session();
+        let path = RemoteFilePath::from_raw("/sdcard/Download", b"/sdcard/Download");
+        app.transfer.begin_browser_directory_load_path(path.clone());
+        app.transfer
+            .record_browser_history("/sdcard/Download".into());
+        app.cache_transfer_browser_session(SESSION);
+        assert!(app.restore_transfer_browser_session_cache(SESSION, cx));
+        assert_eq!(app.transfer.browser_remote_file_path(), path);
+        assert!(
+            app.transfer
+                .browser_view()
+                .history
+                .iter()
+                .all(|path| path.starts_with('/'))
+        );
+    });
+}
+
+#[test]
+fn typed_android_background_failure_restores_device_context_without_rewinding_active_session() {
+    let root = TestConfigDir::new("nyaterm-android-browser-event");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = crate::features::test_support::app_with_visible_android_session(
+        &mut cx,
+        root.path(),
+        SESSION,
+        "/sdcard/Download",
+    );
+    app.update(&mut cx, |app, cx| {
+        app.transfer.browser_directory_requests_for_test();
+        app.reset_transfer_browser_for_active_session();
+        app.load_transfer_browser_for_active_session_if_needed(cx);
+    });
+    let vcx = session_focus_test_window(&mut cx, &app);
+    vcx.update(|_, cx| app.update(cx, |app, cx| app.start_transfer_event_drain(cx)));
+    let id = request(&app, vcx).0;
+    vcx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let mut metadata = app.session.metadata(SESSION).unwrap().clone();
+            metadata.launch_config = crate::models::SessionLaunchConfig::Local(Default::default());
+            app.session.register_session_metadata("other", metadata);
+            app.session.select_active_session("other");
+            app.transfer
+                .begin_browser_directory_load("local-fixture".into());
+            app.transfer
+                .transfer_event_sender()
+                .unbounded_send(TransferJobResult {
+                    id,
+                    event: TransferJobEvent::FileFinished(Err(anyhow::Error::new(
+                        nyaterm_files::adb::AdbFileValidationError::InvalidPath,
+                    )
+                    .context(nyaterm_files::adb::AdbFileError))),
+                })
+                .unwrap();
+        })
+    });
+    vcx.run_until_parked();
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.transfer.browser_view().path, "local-fixture");
+            assert!(app.transfer.browser_session_cache(SESSION).is_none());
+            app.session.select_active_session(SESSION);
+            app.reset_transfer_browser_for_active_session();
+            assert_eq!(app.transfer.browser_view().path, "/sdcard/Download");
+            app.load_transfer_browser_for_active_session_if_needed(cx);
+        });
+    });
+    let id = request(&app, vcx).0;
+    vcx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.session.select_active_session("other");
+            app.transfer
+                .begin_browser_directory_load("local-fixture".into());
+            app.transfer
+                .transfer_event_sender()
+                .unbounded_send(TransferJobResult {
+                    id,
+                    event: TransferJobEvent::FileFinished(Ok(TransferJobOutput::Entries(
+                        Vec::new(),
+                    ))),
+                })
+                .unwrap();
+        })
+    });
+    vcx.run_until_parked();
+    vcx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.transfer.browser_view().path, "local-fixture");
+        let cache = app.transfer.browser_session_cache(SESSION).unwrap();
+        assert_eq!(cache.current_path, "/sdcard/Download");
+        assert_eq!(cache.home_dir, "/sdcard/Download");
+    });
+}
+
+#[test]
+fn typed_android_directory_failure_is_localized_at_the_event_boundary() {
+    let root = TestConfigDir::new("nyaterm-android-browser-failure");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = crate::features::test_support::app_with_visible_android_session(
+        &mut cx,
+        root.path(),
+        SESSION,
+        "/sdcard/",
+    );
+    app.update(&mut cx, |app, cx| {
+        app.transfer.browser_directory_requests_for_test();
+        app.reset_transfer_browser_for_active_session();
+        app.load_transfer_browser_for_active_session_if_needed(cx);
+    });
+    let vcx = session_focus_test_window(&mut cx, &app);
+    vcx.update(|_, cx| app.update(cx, |app, cx| app.start_transfer_event_drain(cx)));
+    let id = request(&app, vcx).0;
+    vcx.update(|_, cx| {
+        app.read(cx)
+            .transfer
+            .transfer_event_sender()
+            .unbounded_send(TransferJobResult {
+                id,
+                event: TransferJobEvent::FileFinished(Err(anyhow::Error::new(
+                    nyaterm_files::adb::AdbFileValidationError::InvalidPath,
+                )
+                .context(nyaterm_files::adb::AdbFileError))),
+            })
+            .unwrap();
+    });
+    vcx.run_until_parked();
+    vcx.update(|_, cx| {
+        let browser = app.read(cx).transfer.browser_view();
+        assert_eq!(browser.path, "/sdcard/");
+        assert_eq!(
+            browser.error.as_deref(),
+            Some(rust_i18n::t!("android.errors.invalidFilePath").as_ref())
+        );
+        assert!(!browser.loading);
+    });
+}

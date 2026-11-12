@@ -10,21 +10,19 @@ fn inventory(
     service: &FileBrowserService,
     path: &RemoteFilePath,
     control: &SftpTransferControl,
-) -> Result<FileInventory, String> {
+) -> anyhow::Result<FileInventory> {
     let mut found = BTreeMap::new();
     let mut pending = vec![(String::new(), path.clone())];
     while let Some((relative, path)) = pending.pop() {
-        control
-            .check_cancelled()
-            .map_err(|error| error.to_string())?;
-        let props = service
-            .remote_file_properties(&path)
-            .map_err(|error| error.to_string())?;
+        control.check_cancelled()?;
+        let props = service.remote_file_properties(&path)?;
         if !matches!(
             props.file_type,
             SftpFileType::File | SftpFileType::Directory
         ) {
-            return Err("cut does not support symbolic links or special files".into());
+            return Err(anyhow::anyhow!(
+                "cut does not support symbolic links or special files"
+            ));
         }
         if found
             .insert(
@@ -33,13 +31,12 @@ fn inventory(
             )
             .is_some()
         {
-            return Err("cannot verify ambiguous display filenames; source was kept".into());
+            return Err(anyhow::anyhow!(
+                "cannot verify ambiguous display filenames; source was kept"
+            ));
         }
         if props.file_type == SftpFileType::Directory {
-            for entry in service
-                .list_dir_path(&path)
-                .map_err(|error| error.to_string())?
-            {
+            for entry in service.list_dir_path(&path)? {
                 if entry.name == "." || entry.name == ".." {
                     continue;
                 }
@@ -53,21 +50,19 @@ fn inventory(
 fn check_no_symlink_ancestors(
     service: &FileBrowserService,
     path: &RemoteFilePath,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let mut current = path.clone();
     loop {
-        let props = service
-            .remote_file_properties(&current)
-            .map_err(|error| error.to_string())?;
+        let props = service.remote_file_properties(&current)?;
         if props.file_type == SftpFileType::Symlink {
-            return Err("cut through a symbolic link is not supported".into());
+            return Err(anyhow::anyhow!(
+                "cut through a symbolic link is not supported"
+            ));
         }
         if file_browser_path_is_root(service.kind(), &current.display_path) {
             break;
         }
-        let parent = service
-            .parent_path(&current)
-            .map_err(|error| error.to_string())?;
+        let parent = service.parent_path(&current)?;
         if parent == current {
             break;
         }
@@ -98,7 +93,7 @@ pub struct VerifiedCopyRequest {
 pub fn copy_verified(
     request: VerifiedCopyRequest,
     progress: impl FnMut(crate::sftp_transfer_types::SftpTransferProgress) + Send + 'static,
-) -> Result<FileOperationResult, String> {
+) -> anyhow::Result<FileOperationResult> {
     let VerifiedCopyRequest {
         source_service,
         target_service,
@@ -109,22 +104,19 @@ pub fn copy_verified(
         options,
     } = request;
     let before = if cut {
-        let parent = source_service
-            .parent_path(&source)
-            .map_err(|error| error.to_string())?;
+        let parent = source_service.parent_path(&source)?;
         check_no_symlink_ancestors(&source_service, &parent)?;
-        let target_parent = target_service
-            .parent_path(&target_path)
-            .map_err(|error| error.to_string())?;
+        let target_parent = target_service.parent_path(&target_path)?;
         check_no_symlink_ancestors(&target_service, &target_parent)?;
         let target_name = file_browser_name(target_service.kind(), &target_path.display_path);
         if target_service
-            .list_dir_path(&target_parent)
-            .map_err(|error| error.to_string())?
+            .list_dir_path(&target_parent)?
             .iter()
             .any(|entry| entry.name == target_name)
         {
-            return Err("destination already exists; source was kept".into());
+            return Err(anyhow::anyhow!(
+                "destination already exists; source was kept"
+            ));
         }
         Some(inventory(&source_service, &source, &control)?)
     } else {
@@ -136,10 +128,9 @@ pub fn copy_verified(
         control: control.clone(),
         options,
     }
-    .execute_with_progress(progress)
-    .map_err(|error| error.to_string())?;
+    .execute_with_progress(progress)?;
     if !summary.copied && cut {
-        return Err("copy skipped; source was kept".into());
+        return Err(anyhow::anyhow!("copy skipped; source was kept"));
     }
     if !summary.copied {
         return Ok(FileOperationResult::Skipped(
@@ -154,36 +145,30 @@ pub fn copy_verified(
     let mut source_parent_path = None;
     let mut source_entries = None;
     if let Some(before) = before {
-        control
-            .check_cancelled()
-            .map_err(|error| error.to_string())?;
+        control.check_cancelled()?;
         let after_source = inventory(&source_service, &source, &control)?;
         if after_source != before {
-            return Err("source changed during copy; source was kept".into());
+            return Err(anyhow::anyhow!(
+                "source changed during copy; source was kept"
+            ));
         }
         let destination = target_path.clone();
         let after_target = inventory(&target_service, &destination, &control)?;
         if !copied_tree_matches(&before, &after_target) {
-            return Err("copy verification failed; source was kept".into());
+            return Err(anyhow::anyhow!("copy verification failed; source was kept"));
         }
-        control
-            .check_cancelled()
-            .map_err(|error| error.to_string())?;
+        control.check_cancelled()?;
         if inventory(&source_service, &source, &control)? != before {
-            return Err("source changed during verification; source was kept".into());
+            return Err(anyhow::anyhow!(
+                "source changed during verification; source was kept"
+            ));
         }
-        source_service
-            .delete_remote_path(&source)
-            .map_err(|error| error.to_string())?;
-        let parent = source_service
-            .parent_path(&source)
-            .map_err(|error| error.to_string())?;
+        source_service.delete_remote_path(&source)?;
+        let parent = source_service.parent_path(&source)?;
         source_entries = source_service.list_dir_path(&parent).ok();
         source_parent_path = Some(parent.display_path);
     }
-    let target_parent = target_service
-        .parent_path(&target_path)
-        .map_err(|error| error.to_string())?;
+    let target_parent = target_service.parent_path(&target_path)?;
     let target_parent_path = target_parent.display_path.clone();
     let entries = target_service
         .list_dir_path(&target_parent)

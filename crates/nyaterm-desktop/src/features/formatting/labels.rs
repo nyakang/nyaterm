@@ -70,15 +70,18 @@ pub(in crate::features) fn docker_compose_project_key(
     )
 }
 
-pub(in crate::features) fn session_kind_label(kind: SessionKind) -> &'static str {
+pub(in crate::features) fn session_kind_label(kind: SessionKind) -> std::borrow::Cow<'static, str> {
     match kind {
-        SessionKind::LocalPty => "local",
-        SessionKind::Ssh => "ssh",
-        SessionKind::Telnet => "telnet",
-        SessionKind::RawTcp => "raw tcp",
-        SessionKind::Serial => "serial",
-        SessionKind::Rdp => "rdp",
-        SessionKind::Vnc => "vnc",
+        SessionKind::LocalPty => "local".into(),
+        SessionKind::Ssh => "ssh".into(),
+        SessionKind::Telnet => "telnet".into(),
+        SessionKind::RawTcp => "raw tcp".into(),
+        SessionKind::Serial => "serial".into(),
+        SessionKind::Rdp => "rdp".into(),
+        SessionKind::Vnc => "vnc".into(),
+        SessionKind::AdbShell => rust_i18n::t!("android.shell"),
+        SessionKind::AdbFiles => rust_i18n::t!("android.files"),
+        SessionKind::AdbScreen => rust_i18n::t!("android.screen"),
     }
 }
 

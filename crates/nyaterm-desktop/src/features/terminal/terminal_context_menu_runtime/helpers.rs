@@ -24,7 +24,7 @@ pub(super) fn terminal_ctx_item_with_icon(
     icon: Option<IconDef>,
     shortcut: Option<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> impl IntoElement + StatefulInteractiveElement {
     let label = label.into();
     let leading = div()
         .flex()

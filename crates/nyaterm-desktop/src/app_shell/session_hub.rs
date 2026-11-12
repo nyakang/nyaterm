@@ -13,6 +13,7 @@ use self::ssh_connections::SshConnectionPool;
 pub struct SessionHub {
     manager: Arc<SessionManager>,
     ssh_connections: SshConnectionPool,
+    android_devices: nyaterm_android::devices::SharedDeviceService,
 }
 
 impl SessionHub {
@@ -26,6 +27,7 @@ impl SessionHub {
                 },
             )),
             ssh_connections: SshConnectionPool::default(),
+            android_devices: Default::default(),
         }
     }
 
@@ -35,6 +37,9 @@ impl SessionHub {
 
     pub fn manager(&self) -> Arc<SessionManager> {
         Arc::clone(&self.manager)
+    }
+    pub(crate) fn android_devices(&self) -> nyaterm_android::devices::SharedDeviceService {
+        self.android_devices.clone()
     }
 }
 

@@ -19,8 +19,6 @@ The dialog shows:
 
 ## Which providers appear
 
-Not every provider is always shown in the terminal context menu.
-
 ### Available out of the box
 
 These providers do not require extra setup:
@@ -43,8 +41,6 @@ In **Settings → Translation**, you can configure:
 
 - **Target language**
 - **API credentials** for each provider
-
-One important detail: the settings page mainly manages target language and credentials. It does **not** define one permanent default provider for all translation actions. The actual provider is still chosen from the terminal context menu when you translate.
 
 ## Good use cases
 

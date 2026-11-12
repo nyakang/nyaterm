@@ -55,12 +55,28 @@ impl StartupCommandAction {
 
 #[derive(Clone)]
 pub(crate) enum SessionLaunchConfig {
+    AdbShell(AndroidSessionConfig),
+    AdbFiles(AndroidSessionConfig),
+    AdbScreen(AndroidSessionConfig),
     Local(LocalSessionConfig),
     Ssh(Box<SshSessionConfig>),
     Telnet(TelnetSessionConfig),
     Serial(SerialSessionConfig),
     Rdp(RdpSessionConfig),
     Vnc(VncSessionConfig),
+}
+
+#[derive(Clone)]
+pub(crate) struct AndroidSessionConfig {
+    pub name: String,
+    pub device_key: String,
+    pub device: nyaterm_core::models::android::AdbDeviceSelector,
+    pub directory: String,
+    pub screen: nyaterm_core::models::android::AndroidScreenSettings,
+    pub binding: nyaterm_android::adb::client::DeviceBinding,
+    pub client: nyaterm_android::adb::client::AdbClient,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 impl SessionLaunchConfig {
@@ -73,6 +89,10 @@ impl SessionLaunchConfig {
                 | (Self::Serial(_), ConnectionType::Serial { .. })
                 | (Self::Rdp(_), ConnectionType::Rdp { .. })
                 | (Self::Vnc(_), ConnectionType::Vnc { .. })
+                | (
+                    Self::AdbShell(_) | Self::AdbFiles(_) | Self::AdbScreen(_),
+                    ConnectionType::Adb { .. }
+                )
         )
     }
 
@@ -111,6 +131,8 @@ impl SessionLaunchConfig {
 
     pub(crate) fn encoding(&self) -> Option<&str> {
         match self {
+            Self::AdbShell(_) => Some("UTF-8"),
+            Self::AdbFiles(_) | Self::AdbScreen(_) => None,
             Self::Local(config) => Some(&config.encoding),
             Self::Ssh(config) => Some(&config.encoding),
             Self::Telnet(config) => Some(&config.encoding),
@@ -129,7 +151,13 @@ impl SessionLaunchConfig {
         let username = match self {
             Self::Ssh(config) => config.username.as_str(),
             Self::Telnet(config) => config.username.as_str(),
-            Self::Local(_) | Self::Serial(_) | Self::Rdp(_) | Self::Vnc(_) => return None,
+            Self::Local(_)
+            | Self::Serial(_)
+            | Self::Rdp(_)
+            | Self::Vnc(_)
+            | Self::AdbShell(_)
+            | Self::AdbFiles(_)
+            | Self::AdbScreen(_) => return None,
         };
         let username = username.trim();
         (!username.is_empty()).then_some(username)

@@ -121,6 +121,20 @@ impl FileManagerWorkspace {
         workspace
     }
 
+    pub(in crate::features) fn rebind_app(
+        &mut self,
+        app: Entity<NyaTermApp>,
+        cx: &mut Context<Self>,
+    ) {
+        self.app = app.downgrade();
+        self._app_observation = cx.observe(&app, |_, _, cx| cx.notify());
+        self.left.generation = self.left.generation.wrapping_add(1);
+        self.right.generation = self.right.generation.wrapping_add(1);
+        self.left.loading = false;
+        self.right.loading = false;
+        cx.notify();
+    }
+
     pub(in crate::features) fn pane(&self, id: PaneId) -> &BrowserPaneState {
         match id {
             PaneId::Left => &self.left,
@@ -221,7 +235,7 @@ impl FileManagerWorkspace {
                 pane.disconnected = disconnected;
                 if disconnected {
                     pane.loading = false;
-                    pane.status = "Disconnected".to_string();
+                    pane.status = rust_i18n::t!("fileManager.disconnected").into_owned();
                 }
             }
         }

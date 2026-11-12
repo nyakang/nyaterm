@@ -21,12 +21,6 @@ pub(crate) struct NetworkGroupEditorState {
     pub(crate) error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NetworkMovePickerState {
-    pub(crate) tab: NetworkTab,
-    pub(crate) id: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NetworkTunnelEditorField {
     Name,

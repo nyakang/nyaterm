@@ -6,6 +6,7 @@ use nyaterm_store::StoreDomain;
 
 use super::helpers::parse_port;
 use crate::features::NyaTermApp;
+use crate::features::view_widgets::dialogs::FormSaveCompletion;
 use crate::models::{NetworkProxyEditorField, NetworkProxyEditorState};
 
 impl NyaTermApp {
@@ -64,7 +65,7 @@ impl NyaTermApp {
         self.forget_text_inputs("network.proxy-editor.");
         self.shell.set_status("proxy editor opened".to_string());
         cx.notify();
-        self.open_form_dialog(
+        self.open_async_form_dialog(
             (
                 if editing {
                     t!("network.editProxy").to_string()
@@ -74,14 +75,7 @@ impl NyaTermApp {
                 520.,
                 t!("common.save").to_string(),
                 |app, _, cx| app.network_proxy_editor_dialog_content(cx),
-                |app, _, cx| {
-                    app.save_network_proxy_editor(cx);
-                    let saved = app.connection_state.active_network_proxy_editor().is_none();
-                    if saved {
-                        app.forget_text_inputs("network.proxy-editor.");
-                    }
-                    saved
-                },
+                |app, completion, cx| app.save_network_proxy_editor(completion, cx),
                 |app, cx| app.close_network_proxy_editor(cx),
             ),
             window,
@@ -149,25 +143,29 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn save_network_proxy_editor(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn save_network_proxy_editor(
+        &mut self,
+        completion: FormSaveCompletion,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(editor) = self.connection_state.active_network_proxy_editor() else {
             self.shell
                 .set_status("no proxy editor is active".to_string());
             cx.notify();
-            return;
+            return false;
         };
 
         let name = editor.name.trim().to_string();
         if name.is_empty() {
             self.set_network_proxy_editor_error("Proxy name is required", cx);
-            return;
+            return false;
         }
         let is_command = editor.is_proxy_command();
         let command = if is_command {
             let command = editor.command.trim().to_string();
             if command.is_empty() {
                 self.set_network_proxy_editor_error("ProxyCommand is required", cx);
-                return;
+                return false;
             }
             Some(command)
         } else {
@@ -179,7 +177,7 @@ impl NyaTermApp {
             let host = editor.host.trim().to_string();
             if host.is_empty() {
                 self.set_network_proxy_editor_error("Proxy host is required", cx);
-                return;
+                return false;
             }
             host
         };
@@ -188,7 +186,7 @@ impl NyaTermApp {
         } else {
             let Some(port) = parse_port(&editor.port) else {
                 self.set_network_proxy_editor_error("Proxy port must be 1-65535", cx);
-                return;
+                return false;
             };
             port
         };
@@ -227,16 +225,18 @@ impl NyaTermApp {
         let next_proxies = self.tunnel_state.proxies_with_upsert(proxy);
 
         let persisted = next_proxies.clone();
-        self.submit_store_request(
+        let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_proxies(&persisted)
             }),
             move |this, event, cx| {
+                let saved = event.outcome.is_ok();
                 match event.outcome {
                     Ok(()) => {
                         this.tunnel_state.commit_proxies(next_proxies);
                         this.connection_state.close_network_proxy_editor();
+                        this.forget_text_inputs("network.proxy-editor.");
                         this.shell.set_status(format!("proxy '{name}' saved"));
                         this.settings
                             .update_store_status(this.shell.status().to_string(), true);
@@ -250,10 +250,16 @@ impl NyaTermApp {
                             .set_network_proxy_editor_error(this.shell.status().to_string());
                     }
                 }
+                completion(saved, cx);
                 cx.notify();
             },
             cx,
         );
+        if !submitted {
+            self.connection_state
+                .set_network_proxy_editor_error(self.shell.status().to_string());
+        }
+        submitted
     }
 
     pub(in crate::features) fn set_network_proxy_editor_error(

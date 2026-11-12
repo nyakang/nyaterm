@@ -547,11 +547,7 @@ impl NyaTermApp {
         } else if id.starts_with("transfer.rename.") {
             self.apply_transfer_rename_input(text, cx);
         } else if let Some(field) = id.strip_prefix("quick-command.editor.") {
-            if field == "new-category" {
-                self.apply_quick_command_editor_new_category_input(text, cx);
-            } else {
-                self.apply_quick_command_editor_input(field, text, cx);
-            }
+            self.apply_quick_command_editor_input(field, text, cx);
         } else if let Some(index) = id
             .strip_prefix("quick-command.variable.")
             .and_then(|index| index.parse::<usize>().ok())
@@ -654,6 +650,8 @@ impl NyaTermApp {
             self.apply_interaction_word_separators(text, cx);
         } else if id.as_ref() == "settings.terminal.x11-display" {
             self.apply_terminal_x11_display(text, cx);
+        } else if id.as_ref() == "settings.android.adb-path" {
+            self.apply_android_adb_path(text, cx);
         } else if id.as_ref() == "settings.terminal.timestamp-format" {
             self.apply_terminal_timestamp_format(text, cx);
         } else if id.as_ref() == "settings.security.master-password" {

@@ -633,6 +633,39 @@ fn replace_projection(
 }
 
 #[test]
+fn disabling_cloud_sync_does_not_bypass_replica_password_rotation_guards() {
+    let dir = TestTempDir::new("nyaterm-v4-disabled-sync-password");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    store.save_master_password(Some("password")).unwrap();
+    enable(&store);
+    store.apply_v4_plan(prepared(&store), "password").unwrap();
+    let before = store
+        .load_v4_replica("destination", "password")
+        .unwrap()
+        .unwrap();
+    let mut settings = store.load_cloud_sync_settings().unwrap();
+    settings.enabled = false;
+    store.save_cloud_sync_settings(settings).unwrap();
+    drop(store);
+
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    assert!(!store.load_cloud_sync_settings().unwrap().enabled);
+    assert!(store.save_master_password(Some("next-password")).is_err());
+    assert!(store.save_master_password(None).is_err());
+    assert_eq!(
+        store.master_password_matches("password").unwrap(),
+        Some(true)
+    );
+    assert!(
+        store
+            .load_v4_replica("destination", "password")
+            .unwrap()
+            .unwrap()
+            == before
+    );
+}
+
+#[test]
 fn password_rotation_retries_after_restart_and_switches_settings_vault_and_replicas_together() {
     let dir = TestTempDir::new("nyaterm-v4-password-rotation");
     let store = ConnectionStore::open(dir.path()).unwrap();

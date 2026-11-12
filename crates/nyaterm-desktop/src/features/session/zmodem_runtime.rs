@@ -695,6 +695,7 @@ impl NyaTermApp {
             },
         };
         let progress = SftpTransferProgress {
+            phase: None,
             remote_path: format!("zmodem://{short}/{file_name}"),
             local_path: PathBuf::from(file_name),
             bytes_transferred,

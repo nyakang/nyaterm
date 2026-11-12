@@ -47,8 +47,22 @@ impl FileManagerFeatureState {
             .cloned()
     }
 
+    pub(in crate::features) fn take_embedded(
+        &mut self,
+        id: &str,
+    ) -> Option<Entity<FileManagerWorkspace>> {
+        self.sftp_workspaces.remove(id)
+    }
+
     pub(in crate::features) fn remove_sftp_session(&mut self, id: &str) {
         self.sftp_workspaces.remove(id);
+    }
+    pub(in crate::features) fn insert_android(
+        &mut self,
+        id: String,
+        workspace: Entity<FileManagerWorkspace>,
+    ) {
+        self.sftp_workspaces.insert(id, workspace);
     }
 
     pub(in crate::features) fn active_id(&self) -> Option<&str> {

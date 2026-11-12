@@ -618,7 +618,7 @@ fn sort_active_sessions(sessions: &mut [SessionInfo]) {
         left.name
             .to_lowercase()
             .cmp(&right.name.to_lowercase())
-            .then_with(|| session_kind_label(left.kind).cmp(session_kind_label(right.kind)))
+            .then_with(|| session_kind_label(left.kind).cmp(&session_kind_label(right.kind)))
     });
 }
 

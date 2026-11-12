@@ -471,6 +471,15 @@ fn recording_launch_context(
     launch_config: &SessionLaunchConfig,
 ) -> (String, String, Option<String>, Option<u16>, Option<String>) {
     match launch_config {
+        SessionLaunchConfig::AdbShell(config)
+        | SessionLaunchConfig::AdbFiles(config)
+        | SessionLaunchConfig::AdbScreen(config) => (
+            config.name.clone(),
+            "adb_shell".into(),
+            Some(config.device.serial()),
+            None,
+            None,
+        ),
         SessionLaunchConfig::Local(config) => {
             (config.name.clone(), "local".to_string(), None, None, None)
         }

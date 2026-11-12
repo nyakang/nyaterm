@@ -317,7 +317,10 @@ impl NyaTermApp {
                 SessionKind::RawTcp => raw_tcp_sessions += 1,
                 SessionKind::Serial => serial_sessions += 1,
                 SessionKind::Rdp => {}
-                SessionKind::Vnc => {}
+                SessionKind::Vnc
+                | SessionKind::AdbShell
+                | SessionKind::AdbFiles
+                | SessionKind::AdbScreen => {}
             }
         }
 

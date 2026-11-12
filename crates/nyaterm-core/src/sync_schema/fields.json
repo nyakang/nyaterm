@@ -66,7 +66,10 @@
       "clipboard": "local",
       "reconnect": "local",
       "shared": "local",
-      "view_only": "local"
+      "view_only": "local",
+      "device": "portable:endpoint",
+      "directory": "portable:android",
+      "screen": "portable:android"
     }
   },
   "ProxyConfig": {
@@ -231,8 +234,7 @@
       "updated_at": "local",
       "created_at": "local",
       "use_count": "local",
-      "sort_order": "portable:sort_order",
-      "raw_send": "portable:raw_send"
+      "sort_order": "portable:sort_order"
     }
   },
   "QuickCommandCategory": {
@@ -427,7 +429,8 @@
       "enable_idle_lock": "local",
       "idle_lock_minutes": "local",
       "has_master_password": "local",
-      "keybindings": "conditional:keybinding"
+      "keybindings": "conditional:keybinding",
+      "android_adb_path": "local"
     }
   },
   "AiSettings": {

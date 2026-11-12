@@ -17,6 +17,9 @@ pub struct SessionInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
+    AdbShell,
+    AdbFiles,
+    AdbScreen,
     LocalPty,
     Ssh,
     Telnet,
@@ -125,6 +128,8 @@ pub struct SessionDrain {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error("Android session failed: {0}")]
+    Adb(#[source] anyhow::Error),
     #[error("session background worker unavailable: {0}")]
     Worker(#[source] std::io::Error),
     #[error(

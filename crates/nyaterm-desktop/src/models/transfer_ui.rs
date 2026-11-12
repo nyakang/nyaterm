@@ -19,8 +19,10 @@ pub(crate) struct TransferBrowserDragSelectionState {
     pub(crate) additive: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct TransferBrowserFavoritesMenuState {
+    pub(crate) scroll: gpui::ScrollHandle,
+    pub(crate) focus: gpui::FocusHandle,
     pub(crate) x: Pixels,
     pub(crate) y: Pixels,
 }

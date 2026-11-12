@@ -497,6 +497,7 @@ impl NyaTermApp {
         )
         .to_string();
         job.update_progress(SftpTransferProgress {
+            phase: None,
             remote_path: format!(
                 "{protocol}://{}/{}",
                 crate::features::formatting::short_id(session_id),

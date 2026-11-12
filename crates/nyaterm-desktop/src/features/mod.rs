@@ -1,5 +1,6 @@
 mod activation;
 mod ai;
+mod android;
 mod app_state;
 mod assets;
 mod capability_runtime;

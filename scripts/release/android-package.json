@@ -1,0 +1,32 @@
+{
+  "platform_tools_version": "37.0.1",
+  "archives": {
+    "linux": {
+      "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip",
+      "sha256": "d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1"
+    },
+    "macos": {
+      "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-darwin.zip",
+      "sha256": "ee39ad5967e95c2a07f04dbcbde96b1a0c916ba376096db5d2f498b7727a5d1d"
+    },
+    "windows": {
+      "url": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip",
+      "sha256": "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99"
+    },
+    "linux_arm64": {
+      "url": "https://github.com/nmeum/android-tools/releases/download/37.0.0p1/android-tools-37.0.0p1.tar.xz",
+      "sha256": "2c6de1abe16b211c7d9f59276217e14fd9e0e18b20e331d3c84358f5dffd576e"
+    }
+  },
+  "scrcpy": {
+    "version": "5.0.1",
+    "url": "https://github.com/Genymobile/scrcpy/releases/download/v5.0.1/scrcpy-server-v5.0.1",
+    "sha256": "764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536"
+  },
+  "ffmpeg": {
+    "version": "8.0.1",
+    "commit": "894da5ca7d742e4429ffb2af534fcda0103ef593",
+    "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/894da5ca7d742e4429ffb2af534fcda0103ef593",
+    "sha256": "9dad3557314f1b7923b61aff15e30079e964c3b41276bbd43dd8bb15b8028b5f"
+  }
+}

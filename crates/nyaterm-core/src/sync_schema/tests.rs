@@ -338,3 +338,20 @@ fn ssh_compatibility_mode_syncs_as_a_terminal_option_and_can_be_cleared() {
     let applied = apply_record("connection", &original, &projection).unwrap();
     assert!(applied.get("ssh_compatibility_mode").is_none());
 }
+
+#[test]
+fn android_projection_includes_portable_device_and_screen_but_no_runtime_fields() {
+    use crate::sync_schema::{apply_record, project_record};
+    let original = serde_json::json!({"type":"adb","name":"Device","device":{"kind":"tcp","host":"example.test","port":5555,"transport_id":9},"directory":"/sdcard/","screen":{"max_size":1280,"max_fps":30,"bit_rate":8000000,"view_only":false,"future_local":1},"future":{"keep":true}});
+    let projected = project_record("connection", &original).unwrap();
+    assert!(
+        projected["endpoint"]["device"]
+            .get("transport_id")
+            .is_none()
+    );
+    assert!(projected["android"]["screen"].get("future_local").is_none());
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["future"], original["future"]);
+    assert_eq!(applied["device"]["host"], "example.test");
+    assert_eq!(applied["screen"]["future_local"], 1);
+}

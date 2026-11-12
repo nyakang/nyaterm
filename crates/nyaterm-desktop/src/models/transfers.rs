@@ -376,6 +376,7 @@ mod transfer_job_state_tests {
             let mut job = job(kind, Some("session-a"));
             job.status = TransferJobStatus::Running;
             job.update_progress(SftpTransferProgress {
+                phase: None,
                 remote_path: "/remote/file".to_string(),
                 local_path: PathBuf::from("file"),
                 bytes_transferred: 0,
@@ -503,7 +504,7 @@ pub(crate) struct TransferJobResult {
 pub(crate) struct PromisedDownloadDestination {
     pub raw_path_token: Option<String>,
     pub local_path: PathBuf,
-    pub source: std::sync::Weak<nyaterm_files::remote_file::RemoteFileService>,
+    pub source: nyaterm_files::file_browser::WeakFileBrowserService,
     pub options: nyaterm_files::sftp_transfer_types::SftpPathTransferOptions,
 }
 
@@ -527,6 +528,10 @@ pub(crate) enum TransferJobEvent {
         local_path: PathBuf,
     },
     Progress(SftpTransferProgress),
+    /// File adapters retain typed errors until the desktop event boundary.
+    FileFinished(Result<TransferJobOutput, anyhow::Error>),
+    /// The upload committed successfully, but fetching its new listing failed.
+    FileRefreshFailed(anyhow::Error),
     Finished(Result<TransferJobOutput, String>),
 }
 
@@ -638,7 +643,7 @@ pub(crate) enum TransferJobOutput {
         remote_path: String,
         raw_path_token: Option<String>,
         local_path: PathBuf,
-        baseline: crate::models::external_editor::ExternalEditorFileVersion,
+        baseline: nyaterm_files::local_revision::LocalFileVersion,
     },
     AiFileActionLoaded {
         remote_path: String,

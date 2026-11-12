@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
@@ -283,6 +284,48 @@ def read_rpm_member(path: Path, member: str) -> bytes:
     raise RuntimeError(f"{path.name} is missing {member}")
 
 
+def verify_android_resources(read, target: str) -> None:
+    """Validate resource inventory and each component's real architecture."""
+    import prepare_android
+    try:
+        manifest = json.loads(read("android-resources.json"))
+    except (KeyError, FileNotFoundError, ValueError) as error:
+        raise RuntimeError("Android resource manifest is missing or invalid") from error
+    if manifest.get("schema") != 1 or manifest.get("target") != target or manifest.get("dependencies") != prepare_android.METADATA:
+        raise RuntimeError("Android resource provenance does not match pinned dependencies")
+    files = manifest.get("files", {})
+    required = {"adb/SOURCE.json", "adb/NOTICE.txt", "android-libs/SOURCE.json", "android-libs/LICENSE.txt"}
+    if "windows" in target:
+        required.update(["adb/adb.exe", "adb/AdbWinApi.dll", "adb/AdbWinUsbApi.dll", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll", "swscale-9.dll"])
+    elif "apple" in target:
+        required.update(["adb/adb", *[f"android-libs/lib{name}.{version}.dylib" for name, version in [("avcodec", 62), ("avformat", 62), ("avutil", 60), ("swscale", 9)]]])
+    else:
+        required.update(["adb/adb", *[f"android-libs/lib{name}.so.{version}" for name, version in [("avcodec", 62), ("avformat", 62), ("avutil", 60), ("swscale", 9)]]])
+    if not required <= files.keys():
+        raise RuntimeError(f"Android resource inventory is incomplete: {required - files.keys()}")
+    for name, expected in files.items():
+        require_safe_archive_path(name)
+        if not (name.startswith(("adb/", "android-libs/")) or name in required):
+            raise RuntimeError("Unexpected Android resource path")
+        data = read(name)
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise RuntimeError(f"Android resource checksum mismatch: {name}")
+        if name.endswith((".exe", ".dll")):
+            actual = pe_machine(data)
+            machine = 0x14C if name.startswith("adb/") else 0xAA64 if target.startswith("aarch64") else 0x8664
+            if actual != machine: raise RuntimeError(f"Android resource PE architecture mismatch: {name}")
+        elif data.startswith(b"\x7fELF"):
+            if elf_machine(data) != (183 if target.startswith("aarch64") else 62): raise RuntimeError(f"Android resource ELF architecture mismatch: {name}")
+        elif name == "adb/adb" and "apple" in target:
+            if data[:4] != b"\xca\xfe\xba\xbe": raise RuntimeError("Bundled macOS ADB must be universal")
+            count = int.from_bytes(data[4:8], "big")
+            if count > 16 or len(data) < 8 + count * 20: raise RuntimeError("Invalid universal ADB header")
+            cpus = {int.from_bytes(data[8+i*20:12+i*20], "big") for i in range(count)}
+            if not {0x01000007, 0x0100000C} <= cpus: raise RuntimeError("Bundled macOS ADB is missing an architecture")
+        elif name.endswith(".dylib"):
+            if macho_cpu_type(data) != (0x0100000C if target.startswith("aarch64") else 0x01000007): raise RuntimeError(f"Android resource Mach-O architecture mismatch: {name}")
+
+
 def verify_windows_portable(path: Path, target: str, version: str) -> None:
     root = windows_portable.LAYOUT["root"]
     executables = ["NyaTerm.exe", *helper_filenames(target)]
@@ -309,6 +352,7 @@ def verify_windows_portable(path: Path, target: str, version: str) -> None:
         packaged_version = archive.read(f"{root}/VERSION").decode("utf-8").strip()
         if packaged_version != version:
             raise RuntimeError(f"{path.name} contains version {packaged_version}, expected {version}")
+        verify_android_resources(lambda name: archive.read(f"{root}/{name}"), target)
         binaries = {name: archive.read(f"{root}/{name}") for name in executables}
         machines = {name: pe_machine(data) for name, data in binaries.items()}
         conpty_machines = {
@@ -451,6 +495,7 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
         applications = [candidate for candidate in files.values() if candidate.name == "NyaTerm.exe"]
         if len(applications) != 1:
             raise RuntimeError(f"{path.name} must contain exactly one NyaTerm.exe")
+        verify_android_resources(lambda name: files[name].read_bytes(), target)
         verify_windows_application_binary(applications[0].read_bytes(), path.name)
         verify_windows_application_version(applications[0], version)
         conpty_required = [
@@ -535,6 +580,7 @@ def verify_windows_msi_database(metadata: dict, target: str, version: str) -> di
             raise RuntimeError(f"MSI contains a duplicate installed path: {relative}")
         files[relative] = row["File"]
     required = {"NyaTerm.exe", "LICENSE", "VERSION", "icon.ico", *helper_filenames(target),
+                *(name for name in windows_portable.LAYOUT["support_files"] if not name.startswith("conpty/")),
                 "conpty/LICENSE.txt", *(f"conpty/{p.as_posix()}" for p in package_native.conpty_files(target))}
     if set(files) != required or len(components) != len(files):
         raise RuntimeError(f"MSI installed file set mismatch: missing {sorted(required - files.keys())}, "
@@ -602,6 +648,7 @@ def verify_windows_msi(path: Path, target: str, version: str) -> None:
         for name in ("NyaTerm.exe", *helper_filenames(target)):
             if pe_machine(payload[name].read_bytes()) != machine:
                 raise RuntimeError(f"MSI contains the wrong PE machine for {name}")
+        verify_android_resources(lambda name: payload[name].read_bytes(), target)
         verify_windows_application_binary(payload["NyaTerm.exe"].read_bytes(), path.name)
         verify_windows_application_version(payload["NyaTerm.exe"], version)
         verify_conpty_machines(
@@ -630,6 +677,7 @@ def verify_macos_archive(path: Path, target: str, version: str) -> None:
         missing = required - names
         if missing:
             raise RuntimeError(f"{path.name} is missing: {', '.join(sorted(missing))}")
+        verify_android_resources(lambda name: archive.extractfile(f"{bundle}/Contents/MacOS/{name}").read(), target)
         packaged_version = archive.extractfile(version_file).read().decode().strip()  # type: ignore[union-attr]
         plist = plistlib.loads(archive.extractfile(info_plist).read())  # type: ignore[union-attr]
         binary = archive.extractfile(executable).read()  # type: ignore[union-attr]
@@ -722,6 +770,7 @@ def verify_appimage(path: Path, target: str, version: str) -> None:
             env={**os.environ, "APPIMAGE_EXTRACT_AND_RUN": "1"},
         )
         root = Path(directory) / "squashfs-root"
+        verify_android_resources(lambda name: (root / "usr/bin" / name).read_bytes(), target)
         executables = [
             root / "usr" / "bin" / name
             for name in ("nyaterm", *helper_filenames(target))
@@ -796,6 +845,7 @@ def verify_deb(path: Path, target: str, version: str) -> None:
             stdout=subprocess.DEVNULL,
         )
         root = Path(directory)
+        verify_android_resources(lambda name: (root / "opt" / identity.desktop_id / name).read_bytes(), target)
         desktop_content = (
             root / "usr" / "share" / "applications" / identity.linux_desktop_file
         ).read_text(encoding="utf-8")
@@ -836,6 +886,7 @@ def verify_rpm(path: Path, target: str, version: str) -> None:
             raise RuntimeError(f"{path.name} is missing {required}")
     if read_rpm_member(path, f"/opt/{identity.desktop_id}/VERSION").decode("utf-8").strip() != version:
         raise RuntimeError(f"{path.name} contains the wrong installed version")
+    verify_android_resources(lambda name: read_rpm_member(path, f"/opt/{identity.desktop_id}/{name}"), target)
     desktop_content = read_rpm_member(
         path, f"/usr/share/applications/{identity.linux_desktop_file}"
     ).decode("utf-8")

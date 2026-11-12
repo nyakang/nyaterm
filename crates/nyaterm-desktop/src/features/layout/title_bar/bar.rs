@@ -1156,6 +1156,7 @@ fn session_kind_label(kind: SessionKind) -> &'static str {
         SessionKind::Serial => "Serial",
         SessionKind::Rdp => "RDP",
         SessionKind::Vnc => "VNC",
+        SessionKind::AdbShell | SessionKind::AdbFiles | SessionKind::AdbScreen => "Android",
     }
 }
 

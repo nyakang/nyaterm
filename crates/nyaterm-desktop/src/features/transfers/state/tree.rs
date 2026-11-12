@@ -88,12 +88,12 @@ pub(super) struct TransferTreeState {
 // UTF-8 paths must retain their byte identity even when their labels collide.
 fn key(backend: FileBrowserBackendKind, path: &RemoteFilePath) -> String {
     match (backend, path.raw_path()) {
-        (FileBrowserBackendKind::Remote, Ok(Some(raw)))
+        (FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb, Ok(Some(raw)))
             if std::str::from_utf8(&raw).ok() == Some(path.display_path.as_str()) =>
         {
             path.display_path.clone()
         }
-        (FileBrowserBackendKind::Remote, _) => path.identity_key(),
+        (FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb, _) => path.identity_key(),
         (FileBrowserBackendKind::Local, _) => file_browser_identity(backend, &path.display_path),
     }
 }
@@ -194,7 +194,7 @@ impl TransferTreeState {
         let state = self.sessions.entry(session.to_string()).or_default();
         state.ensure_backend(backend);
         let root = RemoteFilePath::new(match backend {
-            FileBrowserBackendKind::Remote => "/".to_string(),
+            FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => "/".to_string(),
             FileBrowserBackendKind::Local => file_browser_root(backend, &path.display_path),
         });
         let path =
@@ -224,10 +224,12 @@ impl TransferTreeState {
                 break;
             }
             let parent = match backend {
-                FileBrowserBackendKind::Remote => match current.parent() {
-                    Ok(parent) => parent,
-                    Err(_) => break,
-                },
+                FileBrowserBackendKind::Remote | FileBrowserBackendKind::Adb => {
+                    match current.parent() {
+                        Ok(parent) => parent,
+                        Err(_) => break,
+                    }
+                }
                 FileBrowserBackendKind::Local => {
                     RemoteFilePath::new(file_browser_parent(backend, &current.display_path))
                 }

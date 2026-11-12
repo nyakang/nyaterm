@@ -351,7 +351,7 @@ NyaTerm maintains known-host records and offers three SSH host key policies:
 | Accept | Automatically accept and record new host keys |
 | Strict | Reject all unknown host keys |
 
-Known host records are stored in the local redb `known_hosts` document. Legacy `known_hosts` content from the old redb text-document path can be imported through the compatibility reader; NyaTerm does not promise to scan arbitrary filesystem locations for an old file.
+Known host records are stored in the local redb `known_hosts` document. Legacy `known_hosts` content from the old redb text-document path can be imported through the compatibility reader.
 
 If you operate in a stricter environment, verify the host key source before accepting it.
 

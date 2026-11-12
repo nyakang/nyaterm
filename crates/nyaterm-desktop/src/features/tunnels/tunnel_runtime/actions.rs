@@ -14,22 +14,6 @@ use crate::features::{
 use crate::models::NetworkTab;
 
 impl NyaTermApp {
-    pub(in crate::features) fn open_network_move_picker(
-        &mut self,
-        tab: NetworkTab,
-        id: String,
-        cx: &mut Context<Self>,
-    ) {
-        if self.connection_state.toggle_network_move_picker(tab, id) {
-            self.shell
-                .set_status(format!("choose {} group", tab.label()));
-        } else {
-            self.shell
-                .set_status("network move menu closed".to_string());
-        }
-        cx.notify();
-    }
-
     pub(in crate::features) fn move_tunnel_to_group(
         &mut self,
         tunnel_id: String,
@@ -67,7 +51,6 @@ impl NyaTermApp {
                 match event.outcome {
                     Ok(()) => {
                         this.tunnel_state.commit_tunnels(next_tunnels);
-                        this.connection_state.close_network_move_picker();
                         this.shell.set_status(format!("tunnel moved to {label}"));
                         this.settings
                             .update_store_status("tunnel group saved", true);
@@ -122,7 +105,6 @@ impl NyaTermApp {
                 match event.outcome {
                     Ok(()) => {
                         this.tunnel_state.commit_proxies(next_proxies);
-                        this.connection_state.close_network_move_picker();
                         this.shell.set_status(format!("proxy moved to {label}"));
                         this.settings.update_store_status("proxy group saved", true);
                     }

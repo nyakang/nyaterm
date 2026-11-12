@@ -22,6 +22,7 @@ sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
 packages=(
   build-essential
   clang
+  libclang-dev
   libgtk-3-dev
   libayatana-appindicator3-dev
   libdbus-1-dev

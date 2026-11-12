@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui::{FocusHandle, UniformListScrollHandle};
+use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
 use nyaterm_core::{
     CommandHistoryEntry, QuickCommand, QuickCommandCategory, QuickCommandCategoryPosition,
     QuickCommandRelativePosition, QuickCommandsConfig, quick_command_category_move_neighbor,
@@ -534,6 +534,9 @@ impl CommandFeatureState {
     fn reconcile_quick_category(&mut self) {
         self.quick.list.selected_category =
             valid_quick_category(&self.quick.list.selected_category, &self.catalog.categories);
+        if self.quick.editor.category_picker_open {
+            self.reset_quick_editor_category_highlight();
+        }
     }
 
     pub(in crate::features) fn set_quick_view_mode(&mut self, mode: QuickCommandViewMode) {
@@ -587,7 +590,6 @@ impl CommandFeatureState {
         self.quick.editor.draft = Some(editor);
         self.quick.editor.save_in_flight = None;
         self.quick.editor.category_search_draft.clear();
-        self.quick.editor.new_category_draft.clear();
         self.quick.editor.category_picker_open = false;
         self.quick.editor.icon_picker_open = false;
     }
@@ -620,7 +622,6 @@ impl CommandFeatureState {
         self.quick.editor.draft = None;
         self.quick.editor.save_in_flight = None;
         self.quick.editor.category_search_draft.clear();
-        self.quick.editor.new_category_draft.clear();
         self.quick.editor.window.clear();
         self.quick.editor.category_picker_open = false;
         self.quick.editor.icon_picker_open = false;
@@ -634,42 +635,124 @@ impl CommandFeatureState {
         &self.quick.editor.category_search_draft
     }
 
+    pub(in crate::features) fn quick_editor_category_choices(
+        &self,
+    ) -> Vec<QuickCommandCategoryChoice> {
+        if self.quick.editor.draft.is_none() {
+            return Vec::new();
+        }
+        let draft = self.quick.editor.category_search_draft.trim();
+        let query = draft.to_lowercase();
+        let mut choices = Vec::new();
+        if draft.is_empty() {
+            choices.push(QuickCommandCategoryChoice::Uncategorized);
+        }
+        choices.extend(
+            self.catalog
+                .categories
+                .iter()
+                .filter(|category| {
+                    query.is_empty() || category.name.to_lowercase().contains(&query)
+                })
+                .map(|category| QuickCommandCategoryChoice::Existing {
+                    id: category.id.clone(),
+                    name: category.name.clone(),
+                }),
+        );
+        // Match the existing save-time duplicate rule, not the fuzzy search results.
+        if !draft.is_empty()
+            && !self
+                .catalog
+                .categories
+                .iter()
+                .any(|category| category.name.eq_ignore_ascii_case(draft))
+        {
+            choices.push(QuickCommandCategoryChoice::Create(draft.to_string()));
+        }
+        choices
+    }
+
+    pub(in crate::features) fn quick_editor_category_highlight(&self) -> usize {
+        self.quick
+            .editor
+            .category_highlight
+            .min(self.quick_editor_category_choices().len().saturating_sub(1))
+    }
+
+    pub(in crate::features) fn quick_editor_category_scroll(&self) -> &ScrollHandle {
+        &self.quick.editor.category_scroll
+    }
+
+    pub(in crate::features) fn quick_editor_category_trigger_focus(&self) -> &FocusHandle {
+        &self.quick.editor.category_trigger_focus
+    }
+
+    fn reset_quick_editor_category_highlight(&mut self) {
+        let selected = self
+            .quick
+            .editor
+            .draft
+            .as_ref()
+            .filter(|editor| editor.category_draft.trim().is_empty())
+            .and_then(|editor| editor.category_id.as_deref());
+        let index = if self.quick.editor.category_search_draft.trim().is_empty() {
+            self.quick_editor_category_choices().iter().position(|choice| {
+                matches!(choice, QuickCommandCategoryChoice::Existing { id, .. } if Some(id.as_str()) == selected)
+            }).unwrap_or(0)
+        } else {
+            0
+        };
+        self.quick.editor.category_highlight = index;
+        self.quick.editor.category_scroll.scroll_to_item(index);
+    }
+
     pub(in crate::features) fn apply_quick_editor_category_search(&mut self, text: String) -> bool {
         if self.quick.editor.category_search_draft == text {
             return false;
         }
         self.quick.editor.category_search_draft = text;
+        self.reset_quick_editor_category_highlight();
         true
     }
 
-    pub(in crate::features) fn quick_editor_new_category_draft(&self) -> &str {
-        &self.quick.editor.new_category_draft
-    }
-
-    pub(in crate::features) fn apply_quick_editor_new_category(&mut self, text: String) -> bool {
-        if self.quick.editor.new_category_draft == text {
+    pub(in crate::features) fn highlight_quick_editor_category(&mut self, index: usize) -> bool {
+        if !self.quick.editor.category_picker_open
+            || index >= self.quick_editor_category_choices().len()
+            || self.quick.editor.category_highlight == index
+        {
             return false;
         }
-        self.quick.editor.new_category_draft = text;
+        self.quick.editor.category_highlight = index;
+        self.quick.editor.category_scroll.scroll_to_item(index);
         true
     }
 
-    pub(in crate::features) fn commit_quick_editor_new_category(&mut self) -> bool {
-        let draft = self.quick.editor.new_category_draft.trim().to_string();
-        if draft.is_empty() {
+    pub(in crate::features) fn move_quick_editor_category_highlight(&mut self, down: bool) -> bool {
+        let current = self.quick_editor_category_highlight();
+        let next = if down {
+            (current + 1).min(self.quick_editor_category_choices().len().saturating_sub(1))
+        } else {
+            current.saturating_sub(1)
+        };
+        self.highlight_quick_editor_category(next)
+    }
+
+    pub(in crate::features) fn commit_quick_editor_category_choice(
+        &mut self,
+        index: usize,
+    ) -> bool {
+        if !self.quick.editor.category_picker_open {
             return false;
         }
-        let Some(editor) = self.quick.editor.draft.as_mut() else {
+        let Some(choice) = self.quick_editor_category_choices().into_iter().nth(index) else {
             return false;
         };
-        editor.category_id = None;
-        editor.category_draft = draft;
-        editor.error = None;
-        editor.error_field = None;
-        self.quick.editor.category_search_draft.clear();
-        self.quick.editor.new_category_draft.clear();
-        self.quick.editor.category_picker_open = false;
-        true
+        let (category_id, category_draft) = match choice {
+            QuickCommandCategoryChoice::Uncategorized => (None, String::new()),
+            QuickCommandCategoryChoice::Existing { id, .. } => (Some(id), String::new()),
+            QuickCommandCategoryChoice::Create(name) => (None, name),
+        };
+        self.set_quick_editor_category(category_id, category_draft)
     }
 
     pub(in crate::features) fn set_quick_editor_category_picker_open(
@@ -682,11 +765,11 @@ impl CommandFeatureState {
         self.quick.editor.category_picker_open = open;
         if !open {
             self.quick.editor.category_search_draft.clear();
-            self.quick.editor.new_category_draft.clear();
         }
         if open {
             self.quick.editor.icon_picker_open = false;
         }
+        self.reset_quick_editor_category_highlight();
         true
     }
 
@@ -747,7 +830,6 @@ impl CommandFeatureState {
         editor.error = None;
         editor.error_field = None;
         self.quick.editor.category_search_draft.clear();
-        self.quick.editor.new_category_draft.clear();
         self.quick.editor.category_picker_open = false;
         true
     }
@@ -1132,6 +1214,7 @@ impl CommandCatalogState {
 /// Focus handles the quick command state needs at construction time.
 pub(in crate::features) struct QuickCommandFeatureFocus {
     pub editor: FocusHandle,
+    pub category_trigger: FocusHandle,
     pub details: FocusHandle,
     pub variable: FocusHandle,
 }
@@ -1214,6 +1297,13 @@ pub(in crate::features) struct QuickCommandDropTarget {
     pub position: QuickCommandDropPosition,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::features) enum QuickCommandCategoryChoice {
+    Uncategorized,
+    Existing { id: String, name: String },
+    Create(String),
+}
+
 /// Quick command editor draft and its optional detached window.
 struct QuickCommandEditorFeatureState {
     draft: Option<QuickCommandEditorState>,
@@ -1222,7 +1312,9 @@ struct QuickCommandEditorFeatureState {
     category_picker_open: bool,
     icon_picker_open: bool,
     category_search_draft: String,
-    new_category_draft: String,
+    category_highlight: usize,
+    category_scroll: ScrollHandle,
+    category_trigger_focus: FocusHandle,
     save_generation: u64,
     /// Generation of the in-flight save; cleared when the draft is replaced or
     /// closed, so a late store reply cannot close or fail a different draft.
@@ -1277,7 +1369,9 @@ impl QuickCommandFeatureState {
                 category_picker_open: false,
                 icon_picker_open: false,
                 category_search_draft: String::new(),
-                new_category_draft: String::new(),
+                category_highlight: 0,
+                category_scroll: ScrollHandle::new(),
+                category_trigger_focus: focus.category_trigger,
                 save_generation: 0,
                 save_in_flight: None,
             },
@@ -1322,8 +1416,8 @@ mod tests {
     use crate::test_support::{TestConfigDir, blocking_test_store};
 
     use super::{
-        CommandCatalogState, CommandFeatureInit, CommandFeatureState, QuickCommandFeatureFocus,
-        QuickCommandTooltipControl,
+        CommandCatalogState, CommandFeatureInit, CommandFeatureState, QuickCommandCategoryChoice,
+        QuickCommandFeatureFocus, QuickCommandTooltipControl,
     };
 
     fn command(id: &str) -> QuickCommand {
@@ -1369,6 +1463,7 @@ mod tests {
             selected_category: selected_category.to_string(),
             focus: QuickCommandFeatureFocus {
                 editor: focus(),
+                category_trigger: focus(),
                 details: focus(),
                 variable: focus(),
             },
@@ -1587,20 +1682,103 @@ mod tests {
     }
 
     #[test]
-    fn quick_editor_category_search_and_new_category_drafts_are_separate() {
-        let test_dir = TestConfigDir::new("nyaterm-command-state-test");
-        let mut state = command_state(test_dir.path());
+    fn quick_editor_category_choices_offer_creation_for_partial_but_not_exact_matches() {
+        let dir = TestConfigDir::new("nyaterm-command-category-choices");
+        let mut state = command_state_with_category(
+            dir.path(),
+            "all",
+            vec![category("TEST123", None, 0), category("中文分类", None, 1)],
+        );
+        assert!(state.quick_editor_category_choices().is_empty());
         state.open_quick_editor(QuickCommandEditorState::blank());
+        for text in ["", "   "] {
+            state.apply_quick_editor_category_search(text.into());
+            assert_eq!(state.quick_editor_category_choices().len(), 3);
+            assert_eq!(
+                state.quick_editor_category_choices()[0],
+                QuickCommandCategoryChoice::Uncategorized
+            );
+        }
+        for text in ["TEST123", "  test123  ", "中文分类"] {
+            state.apply_quick_editor_category_search(text.into());
+            assert_eq!(state.quick_editor_category_choices().len(), 1);
+            assert!(matches!(
+                state.quick_editor_category_choices()[0],
+                QuickCommandCategoryChoice::Existing { .. }
+            ));
+        }
+        state.apply_quick_editor_category_search("  TEST1  ".into());
+        assert_eq!(
+            state.quick_editor_category_choices(),
+            vec![
+                QuickCommandCategoryChoice::Existing {
+                    id: "TEST123".into(),
+                    name: "TEST123".into()
+                },
+                QuickCommandCategoryChoice::Create("TEST1".into()),
+            ]
+        );
+        state.apply_quick_editor_category_search("新的分类".into());
+        assert_eq!(
+            state.quick_editor_category_choices(),
+            vec![QuickCommandCategoryChoice::Create("新的分类".into())]
+        );
+    }
 
-        assert!(state.apply_quick_editor_category_search("linux".to_string()));
-        assert_eq!(state.quick_editor_category_search_draft(), "linux");
-        assert_eq!(state.quick_editor().unwrap().category_draft, "");
-
-        assert!(state.apply_quick_editor_new_category("Operations".to_string()));
-        assert!(state.commit_quick_editor_new_category());
-        assert_eq!(state.quick_editor().unwrap().category_draft, "Operations");
+    #[test]
+    fn quick_editor_category_navigation_prefers_existing_and_resets_on_search_and_reopen() {
+        let dir = TestConfigDir::new("nyaterm-command-category-navigation");
+        let mut state =
+            command_state_with_category(dir.path(), "all", vec![category("TEST123", None, 0)]);
+        state.open_quick_editor(QuickCommandEditorState::blank());
+        state.set_quick_editor_category(Some("TEST123".into()), String::new());
+        state.set_quick_editor_category_picker_open(true);
+        assert_eq!(state.quick_editor_category_highlight(), 1);
+        state.apply_quick_editor_category_search("TEST1".into());
+        assert_eq!(state.quick_editor_category_highlight(), 0);
+        assert!(!state.move_quick_editor_category_highlight(false));
+        assert!(state.move_quick_editor_category_highlight(true));
+        assert_eq!(state.quick_editor_category_highlight(), 1);
+        assert!(!state.move_quick_editor_category_highlight(true));
+        state.apply_quick_editor_category_search("TEST123".into());
+        assert_eq!(state.quick_editor_category_highlight(), 0);
+        state.set_quick_editor_category_picker_open(false);
         assert_eq!(state.quick_editor_category_search_draft(), "");
-        assert_eq!(state.quick_editor_new_category_draft(), "");
+        state.set_quick_editor_category_picker_open(true);
+        assert_eq!(state.quick_editor_category_highlight(), 1);
+        state.apply_quick_editor_category_search("TEST1".into());
+        state.highlight_quick_editor_category(1);
+        state.replace_quick_command_catalog(Vec::new(), Vec::new());
+        assert_eq!(state.quick_editor_category_highlight(), 0);
+        assert!(!state.highlight_quick_editor_category(99));
+    }
+
+    #[test]
+    fn quick_editor_category_submission_only_stages_creation_and_cannot_submit_twice() {
+        let dir = TestConfigDir::new("nyaterm-command-category-draft");
+        let mut state =
+            command_state_with_category(dir.path(), "all", vec![category("TEST123", None, 0)]);
+        state.open_quick_editor(QuickCommandEditorState::blank());
+        state.set_quick_editor_category_picker_open(true);
+        state.apply_quick_editor_category_search("TEST1".into());
+        assert!(state.commit_quick_editor_category_choice(1));
+        assert!(!state.commit_quick_editor_category_choice(1));
+        assert_eq!(state.quick_editor().unwrap().category_draft, "TEST1");
+        assert_eq!(state.quick_editor().unwrap().category_id, None);
+        assert_eq!(state.quick_editor_category_search_draft(), "");
+        assert!(!state.quick_editor_category_picker_is_open());
+        assert_eq!(state.quick_command_categories().len(), 1);
+        state.set_quick_editor_category_picker_open(true);
+        state.apply_quick_editor_category_search("test123".into());
+        assert!(state.commit_quick_editor_category_choice(0));
+        assert_eq!(
+            state.quick_editor().unwrap().category_id.as_deref(),
+            Some("TEST123")
+        );
+        assert_eq!(state.quick_editor().unwrap().category_draft, "");
+        state.set_quick_editor_category_picker_open(true);
+        assert!(state.commit_quick_editor_category_choice(0));
+        assert_eq!(state.quick_editor().unwrap().category_id, None);
     }
 
     #[test]

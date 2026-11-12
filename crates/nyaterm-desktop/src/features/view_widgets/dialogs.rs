@@ -1,6 +1,9 @@
 use rust_i18n::t;
 
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gpui::{
     AnyElement, AppContext as _, Context, Entity, ParentElement as _, Render, Subscription, Window,
@@ -11,6 +14,8 @@ use nyaterm_ui::{
 };
 
 use crate::features::NyaTermApp;
+
+pub(in crate::features) type FormSaveCompletion = Box<dyn FnOnce(bool, &mut Context<NyaTermApp>)>;
 
 type FormRenderer =
     dyn Fn(&mut NyaTermApp, &mut Window, &mut Context<NyaTermApp>) -> AnyElement + 'static;
@@ -169,6 +174,61 @@ impl NyaTermApp {
             })
             .into_dialog()
         })
+    }
+
+    /// Keep the form open until persistence completes, then close its own dialog.
+    pub(in crate::features) fn open_async_form_dialog<R, S, C>(
+        &mut self,
+        spec: (String, f32, String, R, S, C),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) where
+        R: Fn(&mut NyaTermApp, &mut Window, &mut Context<NyaTermApp>) -> AnyElement + 'static,
+        S: Fn(&mut NyaTermApp, FormSaveCompletion, &mut Context<NyaTermApp>) -> bool + 'static,
+        C: Fn(&mut NyaTermApp, &mut Context<NyaTermApp>) + 'static,
+    {
+        let (title, width, action_label, render, save, cancel) = spec;
+        let pending = Rc::new(Cell::new(false));
+        let busy = pending.clone();
+        let identity = Rc::new(RefCell::new(None::<NyaDialogHandle>));
+        let submit_identity = identity.clone();
+        let handle = self.open_guarded_form_dialog_impl(
+            (
+                title,
+                width,
+                action_label,
+                render,
+                move |app, window, cx| {
+                    let pending_completion = pending.clone();
+                    let identity = submit_identity.borrow().clone();
+                    let origin = window.window_handle();
+                    let completion: FormSaveCompletion = Box::new(move |saved, cx| {
+                        pending_completion.set(false);
+                        cx.notify();
+                        if saved {
+                            // Store completions run without a window; defer closing until
+                            // the app update has released its borrow.
+                            cx.defer(move |cx| {
+                                let _ = origin.update(cx, |_, window, cx| {
+                                    if identity.as_ref().is_some_and(|id| id.is_top(window, cx)) {
+                                        window.close_nya_dialog(cx);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                    pending.set(save(app, completion, cx));
+                    cx.notify();
+                    false
+                },
+                cancel,
+                move |_| busy.get(),
+            ),
+            false,
+            window,
+            cx,
+        );
+        *identity.borrow_mut() = Some(handle);
     }
 
     pub(in crate::features) fn open_guarded_form_dialog<R, S, C, B>(
@@ -343,3 +403,6 @@ impl NyaTermApp {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

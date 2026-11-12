@@ -6,6 +6,7 @@ use nyaterm_store::StoreDomain;
 
 use super::helpers::{network_section_key, parse_port};
 use crate::features::NyaTermApp;
+use crate::features::view_widgets::dialogs::FormSaveCompletion;
 use crate::models::{NetworkTab, NetworkTunnelEditorField, NetworkTunnelEditorState};
 
 impl NyaTermApp {
@@ -92,7 +93,7 @@ impl NyaTermApp {
         self.forget_text_inputs("network.tunnel-editor.");
         self.shell.set_status("tunnel editor opened".to_string());
         cx.notify();
-        self.open_form_dialog(
+        self.open_async_form_dialog(
             (
                 if editing {
                     t!("network.editTunnel").to_string()
@@ -102,17 +103,7 @@ impl NyaTermApp {
                 640.,
                 t!("common.save").to_string(),
                 |app, _, cx| app.network_tunnel_editor_dialog_content(cx),
-                |app, _, cx| {
-                    app.save_network_tunnel_editor(cx);
-                    let saved = app
-                        .connection_state
-                        .active_network_tunnel_editor()
-                        .is_none();
-                    if saved {
-                        app.forget_text_inputs("network.tunnel-editor.");
-                    }
-                    saved
-                },
+                |app, completion, cx| app.save_network_tunnel_editor(completion, cx),
                 |app, cx| app.close_network_tunnel_editor(cx),
             ),
             window,
@@ -217,22 +208,26 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn save_network_tunnel_editor(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn save_network_tunnel_editor(
+        &mut self,
+        completion: FormSaveCompletion,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(editor) = self.connection_state.active_network_tunnel_editor() else {
             self.shell
                 .set_status("no tunnel editor is active".to_string());
             cx.notify();
-            return;
+            return false;
         };
 
         let name = editor.name.trim().to_string();
         if name.is_empty() {
             self.set_network_tunnel_editor_error("Tunnel name is required", cx);
-            return;
+            return false;
         }
         let Some(connection_id) = editor.connection_id.clone() else {
             self.set_network_tunnel_editor_error("SSH connection is required", cx);
-            return;
+            return false;
         };
         if !self
             .connection_state
@@ -241,11 +236,11 @@ impl NyaTermApp {
             .any(|connection| connection.id == connection_id)
         {
             self.set_network_tunnel_editor_error("Selected SSH connection is missing", cx);
-            return;
+            return false;
         }
         let Some(listen_port) = parse_port(&editor.listen_port) else {
             self.set_network_tunnel_editor_error("Listen port must be 1-65535", cx);
-            return;
+            return false;
         };
         let is_dynamic = editor.is_dynamic();
         let target_host = if is_dynamic {
@@ -254,7 +249,7 @@ impl NyaTermApp {
             let value = editor.target_host.trim().to_string();
             if value.is_empty() {
                 self.set_network_tunnel_editor_error("Target host is required", cx);
-                return;
+                return false;
             }
             value
         };
@@ -263,7 +258,7 @@ impl NyaTermApp {
         } else {
             let Some(port) = parse_port(&editor.target_port) else {
                 self.set_network_tunnel_editor_error("Target port must be 1-65535", cx);
-                return;
+                return false;
             };
             port
         };
@@ -288,16 +283,18 @@ impl NyaTermApp {
         let next_tunnels = self.tunnel_state.tunnels_with_upsert(tunnel);
 
         let persisted = next_tunnels.clone();
-        self.submit_store_request(
+        let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_tunnels(&persisted)
             }),
             move |this, event, cx| {
+                let saved = event.outcome.is_ok();
                 match event.outcome {
                     Ok(()) => {
                         this.tunnel_state.commit_tunnels(next_tunnels);
                         this.connection_state.close_network_tunnel_editor();
+                        this.forget_text_inputs("network.tunnel-editor.");
                         this.shell.set_status(format!("tunnel '{name}' saved"));
                         this.settings
                             .update_store_status(this.shell.status().to_string(), true);
@@ -311,10 +308,16 @@ impl NyaTermApp {
                             .set_network_tunnel_editor_error(this.shell.status().to_string());
                     }
                 }
+                completion(saved, cx);
                 cx.notify();
             },
             cx,
         );
+        if !submitted {
+            self.connection_state
+                .set_network_tunnel_editor_error(self.shell.status().to_string());
+        }
+        submitted
     }
 
     pub(in crate::features) fn set_network_tunnel_editor_error(

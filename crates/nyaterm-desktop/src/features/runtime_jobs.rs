@@ -75,7 +75,7 @@ impl SessionStartSuccess {
         }
     }
 
-    pub(in crate::features) fn telnet(
+    pub(in crate::features) fn channel(
         manager: Arc<SessionManager>,
         session_info: SessionInfo,
         launch_config: Option<SessionLaunchConfig>,
@@ -113,10 +113,12 @@ impl Drop for PendingSession {
             } else if manager.close_detached(&session_id).is_err() {
                 // Saturating the bounded reaper must not orphan a result that
                 // never reached the window. Keep fallback joins off GPUI too.
-                let _ =
-                    nyaterm_core::runtime::worker::spawn("pending-tcp-cleanup".into(), move || {
+                let _ = nyaterm_core::runtime::worker::spawn(
+                    "pending-channel-cleanup".into(),
+                    move || {
                         let _ = manager.close(&session_id);
-                    });
+                    },
+                );
             }
         }
     }
@@ -407,6 +409,62 @@ mod session_start_tests {
     }
 
     #[test]
+    fn adb_pending_result_is_reaped_when_discarded_or_undeliverable() {
+        use nyaterm_android::adb::client::DeviceBinding;
+        use nyaterm_transport::adb_shell::AdbShellConfig;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::Duration;
+        for undeliverable in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let peer =
+                nyaterm_core::runtime::worker::spawn("adb-pending-fixture".into(), move || {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket.set_nonblocking(false).unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    for _ in 0..2 {
+                        let mut header = [0; 4];
+                        socket.read_exact(&mut header).unwrap();
+                        let size = usize::from_str_radix(std::str::from_utf8(&header).unwrap(), 16)
+                            .unwrap();
+                        let mut bytes = vec![0; size];
+                        socket.read_exact(&mut bytes).unwrap();
+                        socket.write_all(b"OKAY").unwrap();
+                    }
+                    let mut bytes = [0; 256];
+                    while socket.read(&mut bytes).unwrap() != 0 {}
+                })
+                .unwrap();
+            let manager = Arc::new(SessionManager::new());
+            let info = manager
+                .create_adb_session(AdbShellConfig {
+                    name: "fixture".into(),
+                    binding: DeviceBinding {
+                        server: address,
+                        serial: "fixture".into(),
+                        transport_id: None,
+                        generation: 1,
+                    },
+                    cols: 80,
+                    rows: 24,
+                })
+                .unwrap();
+            let success = SessionStartSuccess::channel(Arc::clone(&manager), info, None);
+            if undeliverable {
+                let (sender, receiver) = unbounded();
+                drop(receiver);
+                assert!(sender.unbounded_send(success).is_err());
+            } else {
+                drop(success);
+            }
+            assert!(manager.list_sessions().unwrap().is_empty());
+            peer.join().unwrap();
+        }
+    }
+    #[test]
     fn discarded_and_undeliverable_telnet_starts_release_their_tcp_sessions() {
         use nyaterm_transport::TelnetSessionConfig;
         use std::io::Read as _;
@@ -425,7 +483,7 @@ mod session_start_tests {
                 .unwrap();
             let (mut peer, _) = listener.accept().unwrap();
             peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            let success = SessionStartSuccess::telnet(manager.clone(), info, None);
+            let success = SessionStartSuccess::channel(manager.clone(), info, None);
             if undeliverable {
                 let (sender, receiver) = unbounded();
                 drop(receiver);
@@ -461,7 +519,7 @@ mod session_start_tests {
             })
             .unwrap();
         let (_peer, _) = listener.accept().unwrap();
-        let mut success = SessionStartSuccess::telnet(manager.clone(), info.clone(), None);
+        let mut success = SessionStartSuccess::channel(manager.clone(), info.clone(), None);
         success.accept();
         drop(success);
         assert_eq!(manager.list_sessions().unwrap()[0].id, info.id);

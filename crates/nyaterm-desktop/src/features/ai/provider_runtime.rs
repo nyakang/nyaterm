@@ -1,10 +1,12 @@
 use super::ConnectionStatus;
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
+use crate::image_presentation::render_image_from_bgra;
 use gpui::{AppContext as _, Context, PathPromptOptions, Window};
 use nyaterm_core::ai::provider_settings::{
     provider_name_taken, provider_requires_api_key, set_provider_protocol,
 };
 use nyaterm_core::ai::{AiModelReasoningEffort, AiProviderKind};
+use nyaterm_preview::icons::{self, IconDecodeError};
 
 impl NyaTermApp {
     fn spawn_ai_provider_job<T: Send + 'static>(
@@ -596,17 +598,13 @@ impl NyaTermApp {
                 if bytes.len() > 2 * 1024 * 1024 {
                     return Err("Icon exceeds 2 MiB".to_string());
                 }
-                let format = image::guess_format(&bytes).map_err(|_| "Invalid icon format")?;
-                let mime = match format {
-                    image::ImageFormat::Png => "png",
-                    image::ImageFormat::Jpeg => "jpeg",
-                    image::ImageFormat::Gif => "gif",
-                    image::ImageFormat::Bmp => "bmp",
-                    image::ImageFormat::WebP => "webp",
-                    _ => return Err("Unsupported icon format".into()),
-                };
+                let mime = icons::detect_icon_mime(&bytes).map_err(|error| match error {
+                    IconDecodeError::InvalidFormat => "Invalid icon format",
+                    IconDecodeError::UnsupportedFormat
+                    | IconDecodeError::InvalidOrOversizedImage => "Unsupported icon format",
+                })?;
                 let url = format!(
-                    "data:image/{mime};base64,{}",
+                    "data:{mime};base64,{}",
                     base64::engine::general_purpose::STANDARD.encode(bytes)
                 );
                 let image = decode_provider_icon(&url)?;
@@ -708,23 +706,44 @@ fn decode_provider_icon(url: &str) -> Result<std::sync::Arc<gpui::RenderImage>, 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|_| "Invalid icon encoding")?;
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| "Invalid icon")?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let mut pixels = reader
-        .decode()
-        .map_err(|_| "Invalid or oversized icon")?
-        .thumbnail(128, 128)
-        .to_rgba8();
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
+    let raster = icons::decode_icon(&bytes).map_err(|error| match error {
+        IconDecodeError::InvalidFormat => "Invalid icon",
+        IconDecodeError::UnsupportedFormat | IconDecodeError::InvalidOrOversizedImage => {
+            "Invalid or oversized icon"
+        }
+    })?;
+    render_image_from_bgra(raster.width, raster.height, &raster.pixels)
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::decode_provider_icon;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    #[test]
+    fn saved_provider_data_url_loads_without_rewriting_and_keeps_errors() {
+        let bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../nyaterm-app/resources/icons/32x32.png"
+        ));
+        let url = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
+        let saved = url.clone();
+        assert!(decode_provider_icon(&url).is_ok());
+        assert_eq!(url, saved);
+        for (url, message) in [
+            ("missing-comma", "Invalid icon"),
+            ("data:image/png;base64,!", "Invalid icon encoding"),
+            ("data:image/png;base64,AA==", "Invalid or oversized icon"),
+        ] {
+            assert_eq!(decode_provider_icon(url).err().as_deref(), Some(message));
+        }
+        let oversized = format!(
+            "data:image/png;base64,{}",
+            "A".repeat(2 * 1024 * 1024 * 4 / 3 + 5)
+        );
+        assert_eq!(
+            decode_provider_icon(&oversized).err().as_deref(),
+            Some("Icon exceeds 2 MiB")
+        );
     }
-    Ok(std::sync::Arc::new(gpui::RenderImage::new(vec![
-        image::Frame::new(pixels),
-    ])))
 }

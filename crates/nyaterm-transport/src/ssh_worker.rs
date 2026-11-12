@@ -646,37 +646,17 @@ pub(crate) async fn run_open_ssh_shell_session(
                 if let Some(deadline) = tmux_detector.deadline() {
                     tokio::time::sleep_until(deadline).await;
                 }
-            }, if tmux_detector.deadline().is_some() => {
-                // The candidate line outlived its confirm window without a
-                // decision: release the withheld bytes into the shell stream.
-                let was_armed = tmux_detector.expiry_is_attempt();
-                let bytes = tmux_detector.expire_candidate();
-                if !bytes.is_empty() {
-                    if was_armed {
-                        event_queue.push_async(SessionEvent::Notice {
-                            session_id: session_id.clone(),
-                            notice: SessionNotice::TmuxControlUnconfirmed,
-                        }).await;
-                    }
-                    let display = bytes;
-                    let output = shell_integration.filter_output(&display);
-                    pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
-                }
-            }
-            () = async {
-                if let Some(deadline) = tmux_detector.silence_deadline() {
-                    tokio::time::sleep_until(deadline).await;
-                }
-            }, if tmux_detector.silence_deadline().is_some() => {
-                // A submitted `tmux -CC` produced no channel output at all —
-                // typically a pre-2.x tmux that cannot speak the protocol.
-                // Advisory only: detection stays armed so a slow attach can
-                // still take over afterwards.
-                if tmux_detector.expire_silence() {
+            }, if tmux_detector.deadline().is_some() && pending_output.is_none() => {
+                let expired = tmux_detector.expire();
+                if expired.notice {
                     event_queue.push_async(SessionEvent::Notice {
                         session_id: session_id.clone(),
                         notice: SessionNotice::TmuxControlUnconfirmed,
                     }).await;
+                }
+                if !expired.bytes.is_empty() {
+                    let output = shell_integration.filter_output(&expired.bytes);
+                    pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), output));
                 }
             }
             command = command_rx.recv() => {
@@ -712,17 +692,31 @@ pub(crate) async fn run_open_ssh_shell_session(
             }
             message = channel_rx.wait(), if pending_output.is_none() => {
                 match message {
-                    Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                        let data = match tmux_detector.feed(&data) {
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        // stderr is not part of tmux's stdout framing.
+                        tmux_detector.observe_extended_output(&data);
+                        pending_output = Some(ssh_output_future(event_queue.clone(), session_id.clone(), SshIntegrationOutput { visible: data.to_vec(), ..Default::default() }));
+                    }
+                    Some(ChannelMsg::Data { data }) => {
+                        let detection = tmux_detector.feed_output(&data);
+                        if detection.notice {
+                            event_queue.push_async(SessionEvent::Notice {
+                                session_id: session_id.clone(),
+                                notice: SessionNotice::TmuxControlUnconfirmed,
+                            }).await;
+                        }
+                        let data = match detection.output {
                             tmux::TmuxFeed::Passthrough(data) => data,
                             tmux::TmuxFeed::Detected {
                                 passthrough,
                                 startup,
                                 rest,
                             } => {
+                                // Verification gate, not proof of an active control session.
                                 // Disable binary transfers before any awaited
                                 // output flush, upload cancellation or input drain.
                                 tmux_active.store(true, Ordering::Release);
+                                pending_writes.clear();
                                 // The confirmed startup frame and everything
                                 // after it belong to the control channel, not
                                 // the terminal. Bytes before it (the echoed
@@ -796,6 +790,8 @@ pub(crate) async fn run_open_ssh_shell_session(
                                         }
                                     }
                                     tmux::handshake::Verification::Exited(leftover) => {
+                                        command_rx.discard_writes();
+                                        tmux_cmd_rx.discard_pending();
                                         tmux_active.store(false, Ordering::Release);
                                         let output = shell_integration.filter_output(&leftover);
                                         ssh_output_future(event_queue.clone(), session_id.clone(), output).await;
@@ -877,6 +873,7 @@ pub(crate) async fn run_open_ssh_shell_session(
             }
         }
     }
+    tmux_active.store(false, Ordering::Release);
     drop(pending_send);
     drop(pending_resize);
     drop(pending_output);

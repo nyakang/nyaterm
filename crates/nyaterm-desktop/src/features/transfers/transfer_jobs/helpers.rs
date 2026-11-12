@@ -8,23 +8,6 @@ use std::time::{Duration, Instant};
 
 const TRANSFER_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Records the final error returned by an SFTP upload job at the asynchronous boundary.
-///
-/// The transport layer records protocol and retry details; this adds the desktop task ID
-/// so log entries can be matched to failed rows in the transfer panel. User cancellations
-/// are represented by the job state and are not logged as failures again.
-pub(super) fn log_sftp_upload_job_failure(job_id: &str, error: &anyhow::Error) {
-    if error.to_string().contains(SFTP_TRANSFER_CANCELLED) {
-        return;
-    }
-    tracing::error!(
-        transfer_id = %job_id,
-        error = %error,
-        error_chain = %format!("{error:#}"),
-        "SFTP upload job failed"
-    );
-}
-
 pub(in crate::features) fn submit_transfer_blocking_job(
     scheduler: &BlockingJobScheduler,
     name: &'static str,
@@ -91,6 +74,7 @@ pub(in crate::features) struct TransferProgressEventSender {
     tx: UnboundedSender<TransferJobResult>,
     last_sent_at: Option<Instant>,
     final_sent: bool,
+    phase: Option<nyaterm_files::sftp_transfer_types::FileTransferPhase>,
 }
 
 impl TransferProgressEventSender {
@@ -100,6 +84,7 @@ impl TransferProgressEventSender {
             tx,
             last_sent_at: None,
             final_sent: false,
+            phase: None,
         }
     }
 
@@ -119,10 +104,12 @@ impl TransferProgressEventSender {
         if completed && self.final_sent {
             return;
         }
-        if !completed && !due {
+        let phase_changed = self.phase != progress.phase;
+        if !completed && !due && !phase_changed {
             return;
         }
 
+        self.phase = progress.phase;
         self.final_sent |= completed;
         self.last_sent_at = Some(now);
         let _ = self.tx.unbounded_send(TransferJobResult {
@@ -338,6 +325,7 @@ mod tests {
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
         let mut sender = TransferProgressEventSender::new("job".into(), sender);
         let mut progress = SftpTransferProgress {
+            phase: None,
             remote_path: "/folder".into(),
             local_path: Default::default(),
             bytes_transferred: 10,

@@ -20,7 +20,8 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if let Err(error) = self.file_browser_service_for_endpoint(&endpoint) {
-            self.shell.set_status(error.to_string());
+            self.shell
+                .set_status(crate::features::android::labels::file_error_message(&error));
             cx.notify();
             return;
         }

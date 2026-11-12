@@ -982,6 +982,7 @@ impl NyaTermApp {
     ) {
         let short = short_id(session_id);
         let progress = SftpTransferProgress {
+            phase: None,
             remote_path: format!("trzsz://{short}/{}", update.file_name),
             local_path: update.local_path.clone(),
             bytes_transferred: update.bytes_transferred,
@@ -1079,6 +1080,7 @@ impl NyaTermApp {
     ) {
         let short = short_id(session_id);
         let progress = SftpTransferProgress {
+            phase: None,
             remote_path: format!("trzsz://{short}/{}", update.remote_name),
             local_path: update.local_path.clone(),
             bytes_transferred: update.bytes_transferred,

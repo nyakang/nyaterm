@@ -269,6 +269,22 @@ mod tests {
                         .into_any_element()
                     })
                 });
+            let favorites_overlay = self
+                .app
+                .read(cx)
+                .transfer
+                .browser_view()
+                .favorites_menu
+                .is_some()
+                .then(|| {
+                    self.app.update(cx, |app, cx| {
+                        crate::features::view_widgets::full_window_overlay_layer(
+                            "transfer-favorites-menu-input-layer",
+                            app.transfer_browser_favorites_menu_overlay(cx),
+                        )
+                        .into_any_element()
+                    })
+                });
             div()
                 .relative()
                 .w(px(320.))
@@ -285,6 +301,7 @@ mod tests {
                     ),
                 )
                 .children(overlay)
+                .children(favorites_overlay)
         }
     }
 
@@ -414,10 +431,20 @@ mod tests {
             );
             draw_path_fixture(vcx);
             if remote && cfg!(target_os = "linux") {
-                // Linux deliberately has no remote file drag export; the local
-                // case must still exercise the first-press drag gesture.
-                vcx.update(|_, cx| assert!(!cx.has_active_drag()));
-                assert!(vcx.debug_bounds("transfer-file-drag-preview").is_none());
+                // The gesture is recognized so unsupported native export is visible.
+                // No native selection or content provider is created on Linux.
+                vcx.update(|_, cx| {
+                    app.update(cx, |app, _| {
+                        assert_eq!(
+                            app.shell.status(),
+                            rust_i18n::t!("fileExplorer.dragPlatformUnsupported").as_ref()
+                        );
+                        assert!(!app.transfer.transfer_jobs().iter().any(|job| matches!(
+                            job.kind,
+                            crate::models::TransferJobKind::DragExport { .. }
+                        )));
+                    })
+                });
                 vcx.simulate_mouse_up(start, MouseButton::Left, Modifiers::none());
                 continue;
             }
@@ -1020,6 +1047,376 @@ mod tests {
             });
         });
         draw_path_fixture(vcx);
+    }
+
+    fn show_favorites_menu(vcx: &mut VisualTestContext, app: &Entity<NyaTermApp>, x: f32, y: f32) {
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_transfer_browser_favorites_menu(
+                    &MouseDownEvent {
+                        position: gpui::point(px(x), px(y - 18.)),
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        draw_path_fixture(vcx);
+    }
+
+    fn activate_favorites_button(vcx: &mut VisualTestContext) {
+        draw_path_fixture(vcx);
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        vcx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        vcx.simulate_event(gpui::KeyUpEvent { keystroke });
+        draw_path_fixture(vcx);
+    }
+
+    #[test]
+    fn favorites_menu_add_remove_keyboard_and_focus_restore() {
+        let test_dir = TestConfigDir::new("nyaterm-favorites-actions");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        show_favorites_menu(vcx, &app, 20., 100.);
+        assert_eq!(
+            vcx.debug_bounds("transfer-browser-favorites-menu")
+                .unwrap()
+                .size
+                .width,
+            px(220.)
+        );
+        let add = vcx
+            .debug_bounds("transfer-browser-favorite-menu-add-current")
+            .unwrap();
+        assert_eq!(add.size.height, px(32.));
+        for _ in 0..2 {
+            vcx.simulate_click(add.center(), Modifiers::none());
+            draw_path_fixture(vcx);
+            vcx.update(|_, cx| {
+                let browser = app.read(cx).transfer.browser_view();
+                assert!(browser.favorites_menu.is_some());
+                assert_eq!(
+                    browser.favorites.iter().collect::<Vec<_>>(),
+                    vec!["/remote"]
+                );
+            });
+        }
+        let remove = vcx
+            .debug_bounds("transfer-browser-favorite-menu-remove-/remote")
+            .unwrap();
+        vcx.simulate_mouse_move(remove.center(), None, Modifiers::none());
+        vcx.simulate_click(remove.center(), Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.update(|_, cx| {
+            let browser = app.read(cx).transfer.browser_view();
+            assert!(browser.favorites.is_empty());
+            assert!(browser.favorites_menu.is_some());
+            assert_eq!(browser.path, "/remote");
+        });
+        // Starting from the menu container, Tab reaches add, then the path, then remove.
+        vcx.simulate_keystrokes("tab");
+        activate_favorites_button(vcx);
+        vcx.update(|_, cx| assert_eq!(app.read(cx).transfer.browser_view().favorites.len(), 1));
+        vcx.simulate_keystrokes("tab tab");
+        activate_favorites_button(vcx);
+        vcx.update(|_, cx| {
+            assert!(app.read(cx).transfer.browser_view().favorites.is_empty());
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .favorites_menu
+                    .is_some()
+            );
+        });
+        for key in ["tab", "shift-tab", "down", "up"] {
+            for _ in 0..4 {
+                vcx.simulate_keystrokes(key);
+                draw_path_fixture(vcx);
+                vcx.update(|window, cx| {
+                    assert!(
+                        app.read(cx)
+                            .transfer
+                            .browser_view()
+                            .favorites_menu
+                            .as_ref()
+                            .unwrap()
+                            .focus
+                            .contains_focused(window, cx)
+                    );
+                });
+            }
+        }
+        vcx.simulate_keystrokes("escape");
+        draw_path_fixture(vcx);
+        vcx.update(|window, cx| {
+            let browser = app.read(cx).transfer.browser_view();
+            assert!(browser.favorites_menu.is_none());
+            assert!(browser.focus.is_focused(window));
+        });
+    }
+
+    #[test]
+    fn favorites_menu_escape_restores_tree_focus() {
+        let test_dir = TestConfigDir::new("nyaterm-favorites-tree-focus");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let mut settings = app.settings.summary().clone();
+                settings.ui_file_explorer_view_mode = nyaterm_core::TransferBrowserViewMode::Tree;
+                app.settings.replace_summary(settings);
+                app.flush_transfer_panel_snapshot(cx);
+            })
+        });
+        show_favorites_menu(vcx, &app, 20., 100.);
+        vcx.simulate_keystrokes("escape");
+        draw_path_fixture(vcx);
+        vcx.update(|window, cx| {
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .favorites_menu
+                    .is_none()
+            );
+            assert!(app.read(cx).transfer.tree_focus().is_focused(window));
+        });
+    }
+
+    #[test]
+    fn favorites_menu_directory_click_navigates_and_closes() {
+        let test_dir = TestConfigDir::new("nyaterm-favorites-navigation");
+        let target = test_dir.path().join("favorite");
+        std::fs::create_dir_all(&target).unwrap();
+        let target = target.display().to_string();
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, _| {
+                app.transfer.add_browser_favorite(target.clone());
+            })
+        });
+        show_favorites_menu(vcx, &app, 20., 100.);
+        let selector =
+            Box::leak(format!("transfer-browser-favorite-menu-item-{target}").into_boxed_str());
+        let row = vcx.debug_bounds(selector).unwrap();
+        vcx.simulate_click(row.center(), Modifiers::none());
+        wait_for_browser(vcx, &app);
+        vcx.update(|window, cx| {
+            let browser = app.read(cx).transfer.browser_view();
+            assert_eq!(browser.path, &target);
+            assert!(browser.favorites_menu.is_none());
+            assert!(browser.focus.is_focused(window));
+        });
+    }
+
+    #[test]
+    fn favorites_menu_scroll_keeps_add_fixed_and_does_not_scroll_browser() {
+        let test_dir = TestConfigDir::new("nyaterm-favorites-scroll");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.shell.set_viewport_size_for_test((320., 240.));
+                app.transfer
+                    .replace_browser_favorites((0..12).map(|i| format!("/favorite-{i}")).collect());
+                app.transfer.replace_browser_entries_for_test(
+                    (0..80)
+                        .map(super::super::tests_support::browser_entry)
+                        .collect(),
+                );
+                app.flush_transfer_panel_snapshot(cx);
+            })
+        });
+        show_favorites_menu(vcx, &app, 300., 200.);
+        let menu = vcx.debug_bounds("transfer-browser-favorites-menu").unwrap();
+        assert!(menu.right() <= px(312.));
+        assert!(menu.bottom() <= px(232.));
+        let add = vcx
+            .debug_bounds("transfer-browser-favorite-menu-add-current")
+            .unwrap();
+        let viewport = vcx
+            .debug_bounds("transfer-browser-favorites-scroll")
+            .unwrap();
+        let list_scroll = vcx.update(|_, cx| {
+            app.read(cx)
+                .transfer
+                .browser_view()
+                .list_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone()
+        });
+        let before = list_scroll.offset();
+        for _ in 0..2 {
+            vcx.simulate_event(gpui::ScrollEvent {
+                position: viewport.center(),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
+                touch_phase: gpui::TouchPhase::Moved,
+                ..Default::default()
+            });
+            draw_path_fixture(vcx);
+        }
+        assert_eq!(list_scroll.offset(), before);
+        assert_eq!(
+            vcx.debug_bounds("transfer-browser-favorite-menu-add-current"),
+            Some(add)
+        );
+        let last = vcx
+            .debug_bounds("transfer-browser-favorite-menu-item-/favorite-11")
+            .unwrap();
+        assert!(last.top() >= viewport.top());
+        assert!(last.bottom() <= viewport.bottom() + px(1.));
+        // Keyboard focus must reveal off-screen rows without moving the pinned action.
+        for _ in 0..2 {
+            vcx.simulate_keystrokes("tab");
+            draw_path_fixture(vcx);
+        }
+        let first = vcx
+            .debug_bounds("transfer-browser-favorite-menu-item-/favorite-0")
+            .unwrap();
+        assert!(first.top() >= viewport.top());
+        for _ in 0..22 {
+            vcx.simulate_keystrokes("tab");
+            draw_path_fixture(vcx);
+        }
+        let last = vcx
+            .debug_bounds("transfer-browser-favorite-menu-item-/favorite-11")
+            .unwrap();
+        assert!(last.top() >= viewport.top());
+        assert!(last.bottom() <= viewport.bottom() + px(1.));
+        assert_eq!(list_scroll.offset(), before);
+        assert_eq!(
+            vcx.debug_bounds("transfer-browser-favorite-menu-add-current"),
+            Some(add)
+        );
+    }
+
+    #[test]
+    fn favorites_menu_owns_pointer_gestures_and_outside_click_only_dismisses() {
+        use crate::models::TransferBrowserContextTarget;
+        let test_dir = TestConfigDir::new("nyaterm-favorites-pointer");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let entries = (0..8)
+            .map(super::super::tests_support::browser_entry)
+            .collect::<Vec<_>>();
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer
+                    .replace_browser_entries_for_test(entries.clone());
+                app.transfer.select_browser_entry(entries[0].identity_key());
+                window.focus(app.transfer.browser_view().focus, cx);
+                app.flush_transfer_panel_snapshot(cx);
+            });
+        });
+        draw_path_fixture(vcx);
+        let row = vcx
+            .debug_bounds("transfer-browser-entry-/remote/entry-0001")
+            .unwrap();
+        let pointer = gpui::point(row.left() + px(80.), row.center().y);
+        show_favorites_menu(vcx, &app, 20., f32::from(row.top()) - 40.);
+        assert!(
+            vcx.debug_bounds("transfer-browser-favorites-menu")
+                .unwrap()
+                .contains(&pointer)
+        );
+        for (button, click_count) in [
+            (MouseButton::Left, 1),
+            (MouseButton::Left, 2),
+            (MouseButton::Right, 1),
+            (MouseButton::Middle, 1),
+        ] {
+            vcx.simulate_mouse_move(pointer, None, Modifiers::none());
+            vcx.simulate_event(MouseDownEvent {
+                position: pointer,
+                button,
+                click_count,
+                ..Default::default()
+            });
+            vcx.simulate_mouse_move(
+                pointer + gpui::point(px(20.), px(5.)),
+                button,
+                Modifiers::none(),
+            );
+            vcx.simulate_event(MouseUpEvent {
+                position: pointer,
+                button,
+                click_count,
+                ..Default::default()
+            });
+            draw_path_fixture(vcx);
+            vcx.update(|_, cx| {
+                let app = app.read(cx);
+                let browser = app.transfer.browser_view();
+                assert!(browser.favorites_menu.is_some());
+                assert_eq!(browser.path, "/remote");
+                assert_eq!(
+                    browser.selected_remote_path.as_deref(),
+                    Some(entries[0].path.as_str())
+                );
+                assert_eq!(browser.selected_remote_paths.len(), 1);
+                assert_eq!(
+                    browser.context_target,
+                    &TransferBrowserContextTarget::CurrentDirectory
+                );
+                assert!(browser.drag_selection.is_none());
+                assert!(!app.transfer.rename_dialog_is_open());
+                assert!(!cx.has_active_drag());
+            });
+        }
+        let outside_row = vcx
+            .debug_bounds("transfer-browser-entry-/remote/entry-0004")
+            .unwrap();
+        let outside = gpui::point(outside_row.left() + px(280.), outside_row.center().y);
+        assert!(
+            !vcx.debug_bounds("transfer-browser-favorites-menu")
+                .unwrap()
+                .contains(&outside)
+        );
+        vcx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::none());
+        vcx.update(|_, cx| {
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .favorites_menu
+                    .is_some()
+            )
+        });
+        vcx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.transfer.browser_view().favorites_menu.is_none());
+            assert_eq!(
+                app.transfer.browser_view().selected_remote_path.as_deref(),
+                Some(entries[0].path.as_str())
+            );
+        });
+        vcx.simulate_click(outside, Modifiers::none());
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .selected_remote_path
+                    .as_deref(),
+                Some(entries[4].path.as_str())
+            );
+        });
     }
 
     #[test]

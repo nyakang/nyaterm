@@ -211,10 +211,10 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         })
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|panel, event: &MouseDownEvent, _window, cx| {
+                            cx.listener(|panel, event: &MouseDownEvent, window, cx| {
                                 panel.with_app(cx, |this, cx| {
                                     cx.stop_propagation();
-                                    this.open_transfer_browser_favorites_menu(event, cx);
+                                    this.open_transfer_browser_favorites_menu(event, window, cx);
                                 })
                             }),
                         )
@@ -620,11 +620,15 @@ impl NyaTermApp {
             self.sync_transfer_browser_to_cwd(crate::models::TransferCwdSyncReason::Automatic, cx);
         }
         self.forget_text_inputs("transfer.browser.path");
-        self.focus_transfer_browser_after_path_edit(window, cx);
+        self.restore_transfer_browser_focus(window, cx);
         cx.notify();
     }
 
-    fn focus_transfer_browser_after_path_edit(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::features::pages::transfers) fn restore_transfer_browser_focus(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let focus = if self.settings.summary().ui_file_explorer_view_mode
             == nyaterm_core::TransferBrowserViewMode::Tree
         {
@@ -676,7 +680,7 @@ impl NyaTermApp {
         self.transfer.finish_browser_path_edit();
         self.forget_text_inputs("transfer.browser.path");
         self.open_transfer_browser_directory(path, window, cx);
-        self.focus_transfer_browser_after_path_edit(window, cx);
+        self.restore_transfer_browser_focus(window, cx);
     }
 }
 
@@ -1260,7 +1264,7 @@ fn transfer_browser_path_history_list(
                     panel.with_app(cx, |this, cx| {
                         this.transfer.dismiss_browser_path_edit();
                         this.open_transfer_browser_directory(open_path.clone(), window, cx);
-                        this.focus_transfer_browser_after_path_edit(window, cx);
+                        this.restore_transfer_browser_focus(window, cx);
                     })
                 }))
                 .child(truncate_preview(&display_path, 72)),

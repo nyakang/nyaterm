@@ -243,6 +243,9 @@ impl TraySnapshot {
             .map(|session| {
                 let protocol = match session.kind {
                     SessionKind::LocalPty => t!("tray.local").to_string(),
+                    SessionKind::AdbShell => t!("android.shell").into_owned(),
+                    SessionKind::AdbFiles => t!("android.files").into_owned(),
+                    SessionKind::AdbScreen => t!("android.screen").into_owned(),
                     kind => protocol_key(kind).to_uppercase(),
                 };
                 TrayEntry::action(
@@ -377,6 +380,9 @@ fn protocol_key(kind: SessionKind) -> &'static str {
         SessionKind::Serial => "serial",
         SessionKind::Rdp => "rdp",
         SessionKind::Vnc => "vnc",
+        SessionKind::AdbShell => "adb shell",
+        SessionKind::AdbFiles => "adb files",
+        SessionKind::AdbScreen => "adb screen",
     }
 }
 

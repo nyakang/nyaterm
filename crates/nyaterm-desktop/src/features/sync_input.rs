@@ -943,6 +943,8 @@ impl NyaTermApp {
                 metadata.launch_config,
                 crate::models::SessionLaunchConfig::Rdp(_)
                     | crate::models::SessionLaunchConfig::Vnc(_)
+                    | crate::models::SessionLaunchConfig::AdbFiles(_)
+                    | crate::models::SessionLaunchConfig::AdbScreen(_)
             )
         })
     }

@@ -80,7 +80,6 @@ NyaTerm includes an AI Assistant panel for command generation, terminal output e
 - **NyaTerm is** a terminal workspace with tabs, horizontal splits, and vertical splits
 - **NyaTerm is** an SFTP browser with a transfer queue and local-edit-then-upload-back workflow
 - **NyaTerm supports** SSH, Local Terminal, Telnet, Serial, RDP, and VNC sessions
-- **NyaTerm is not** a shell replacement; it connects to remote shells, local shells, Telnet endpoints, and serial devices
 
 ---
 

@@ -196,6 +196,7 @@ impl ConnectionStore {
                 &["appearance", "bold_default_foreground"],
                 false,
             ),
+            android_adb_path: json_string(&value, &["android", "adb_path"], ""),
             x11_display: json_string(&value, &["terminal", "x11_display"], ""),
             terminal_scrollback_lines: json_u32(&value, &["terminal", "scrollback_lines"], 5000)
                 .clamp(100, 100_000),
@@ -1632,6 +1633,11 @@ impl ConnectionStore {
         settings: &AppSettingsSummary,
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
+        set_nested_json_string(
+            &mut value,
+            &["android", "adb_path"],
+            settings.android_adb_path.clone(),
+        );
         set_nested_json_value(
             &mut value,
             &["general", "startup_restore"],

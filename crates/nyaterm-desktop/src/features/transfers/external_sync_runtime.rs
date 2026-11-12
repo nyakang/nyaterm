@@ -1,10 +1,9 @@
 //! Owned runtime for watching files opened in an external editor.
 
-use crate::models::external_editor::ExternalEditorFileVersion;
 use crate::thread_owner::{BackgroundCleanup, spawn_joinable};
-use sha2::{Digest, Sha256};
+use nyaterm_files::local_revision::{LocalFileVersion, read_local_file_version};
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -30,7 +29,7 @@ impl ExternalEditorWatcher {
         raw_path_token: Option<String>,
         local_path: PathBuf,
         transfer_tx: UnboundedSender<TransferJobResult>,
-        baseline: ExternalEditorFileVersion,
+        baseline: LocalFileVersion,
         cleanup: BackgroundCleanup,
     ) -> std::io::Result<Self> {
         let (stop_tx, stop_rx) = mpsc::channel();
@@ -113,7 +112,7 @@ fn watch_external_editor_file(
     transfer_tx: UnboundedSender<TransferJobResult>,
     stop_rx: mpsc::Receiver<()>,
     timings: WatchTimings,
-    mut baseline: ExternalEditorFileVersion,
+    mut baseline: LocalFileVersion,
 ) {
     let mut first_scan = true;
     loop {
@@ -148,7 +147,7 @@ fn watch_external_editor_file(
         if wait_for_stop(&stop_rx, timings.settle) {
             break;
         }
-        let version = match read_external_editor_version(&local_path, || {
+        let version = match read_local_file_version(&local_path, || {
             wait_for_stop(&stop_rx, Duration::ZERO)
         }) {
             Ok(version) => version,
@@ -203,47 +202,6 @@ fn report_watch_error(tx: &UnboundedSender<TransferJobResult>, job_id: &str, err
     });
 }
 
-/// Streams on a worker; refuses to label a changing file as a stable version.
-pub(in crate::features) fn read_external_editor_version(
-    path: &Path,
-    mut cancelled: impl FnMut() -> bool,
-) -> io::Result<ExternalEditorFileVersion> {
-    let mut file = fs::File::open(path)?;
-    let before = file.metadata()?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut len = 0_u64;
-    loop {
-        if cancelled() {
-            return Err(io::ErrorKind::Interrupted.into());
-        }
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-        len += read as u64;
-    }
-    let after = file.metadata()?;
-    let current = fs::metadata(path)?;
-    if len != before.len()
-        || before.len() != after.len()
-        || after.len() != current.len()
-        || before.modified().ok() != after.modified().ok()
-        || after.modified().ok() != current.modified().ok()
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            "external edit changed while reading",
-        ));
-    }
-    Ok(ExternalEditorFileVersion {
-        len,
-        modified: current.modified().ok(),
-        digest: digest.finalize().into(),
-    })
-}
-
 fn wait_for_stop(stop_rx: &mpsc::Receiver<()>, timeout: Duration) -> bool {
     match stop_rx.recv_timeout(timeout) {
         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => true,
@@ -258,11 +216,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use futures::channel::mpsc::unbounded;
+    use nyaterm_files::local_revision::read_local_file_version;
 
-    use super::{
-        ExternalEditorWatcher, WatchTimings, read_external_editor_version,
-        watch_external_editor_file,
-    };
+    use super::{ExternalEditorWatcher, WatchTimings, watch_external_editor_file};
 
     #[gpui::test]
     fn dropping_a_watcher_signals_stop_and_registers_its_join(cx: &mut gpui::TestAppContext) {
@@ -310,7 +266,7 @@ mod tests {
         fs::create_dir_all(root.path()).unwrap();
         let path = root.path().join("edit.txt");
         fs::write(&path, "value=1").unwrap();
-        let baseline = read_external_editor_version(&path, || false).unwrap();
+        let baseline = read_local_file_version(&path, || false).unwrap();
         // The editor can save before its completion event reaches the UI.
         fs::write(&path, "value=2").unwrap();
         let (tx, mut rx) = unbounded();
@@ -354,14 +310,14 @@ mod tests {
         fs::create_dir_all(root.path()).unwrap();
         let path = root.path().join("edit.txt");
         fs::write(&path, "unchanged").unwrap();
-        let baseline = read_external_editor_version(&path, || false).unwrap();
+        let baseline = read_local_file_version(&path, || false).unwrap();
         fs::File::options()
             .write(true)
             .open(&path)
             .unwrap()
             .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(42))
             .unwrap();
-        let current = read_external_editor_version(&path, || false).unwrap();
+        let current = read_local_file_version(&path, || false).unwrap();
         assert_ne!(baseline.modified, current.modified);
         assert_eq!(baseline.digest, current.digest);
         let (tx, mut rx) = unbounded();
@@ -389,29 +345,6 @@ mod tests {
     }
 
     #[test]
-    fn version_read_rejects_concurrent_edits_and_honors_stop_between_chunks() {
-        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-external-watch");
-        fs::create_dir_all(root.path()).unwrap();
-        let path = root.path().join("edit.txt");
-        fs::write(&path, vec![b'a'; 128 * 1024]).unwrap();
-        let mut calls = 0;
-        let result = read_external_editor_version(&path, || {
-            calls += 1;
-            if calls == 2 {
-                fs::write(&path, "new version").unwrap();
-            }
-            false
-        });
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
-        assert_eq!(
-            read_external_editor_version(&path, || true)
-                .unwrap_err()
-                .kind(),
-            std::io::ErrorKind::Interrupted
-        );
-    }
-
-    #[test]
     fn watcher_stop_wakes_interval_wait_without_polling_delay() {
         let path = std::env::temp_dir().join(format!(
             "nyaterm-external-watch-{}-{}",
@@ -419,7 +352,7 @@ mod tests {
             nyaterm_core::uuid()
         ));
         fs::write(&path, b"initial").expect("write fixture");
-        let baseline = read_external_editor_version(&path, || false).unwrap();
+        let baseline = read_local_file_version(&path, || false).unwrap();
         let (transfer_tx, _transfer_rx) = unbounded();
         let (stop_tx, stop_rx) = mpsc::channel();
         let worker_path = path.clone();

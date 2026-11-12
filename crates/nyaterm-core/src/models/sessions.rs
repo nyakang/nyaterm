@@ -145,6 +145,7 @@ impl SavedConnection {
 
     pub fn kind_label(&self) -> &'static str {
         match self.config {
+            ConnectionType::Adb { .. } => "ADB",
             ConnectionType::Ssh { .. } => "SSH",
             ConnectionType::LocalTerminal { .. } => "Local",
             ConnectionType::Telnet { .. } => "Telnet",
@@ -156,6 +157,7 @@ impl SavedConnection {
 
     pub fn endpoint(&self) -> String {
         match &self.config {
+            ConnectionType::Adb { device, .. } => device.serial(),
             ConnectionType::Ssh {
                 host,
                 port,
@@ -313,6 +315,14 @@ impl<'de> Deserialize<'de> for SavedConnection {
             // These input-only aliases are handled by the established agent migration.
             fields.remove("agent_endpoint");
             fields.remove("agent_forwarding");
+            // This Android-only flag was removed before release; never revive it as opaque data.
+            if matches!(connection.config, ConnectionType::Adb { .. })
+                && let Some(screen) = fields
+                    .get_mut("screen")
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                screen.remove("view_only");
+            }
         }
         connection.extensions = ConnectionExtensions(extensions);
         Ok(connection)

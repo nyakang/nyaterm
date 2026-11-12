@@ -15,6 +15,7 @@ use self::selectors::{
 pub(in crate::features::pages::connections) use groups::ordered_connection_groups;
 
 use crate::models::ConnectionEditorFocusTarget;
+mod android;
 mod authentication;
 mod layout;
 mod local;
@@ -703,6 +704,7 @@ impl NyaTermApp {
                 ConnectionKindTab::Serial,
                 ConnectionKindTab::Rdp,
                 ConnectionKindTab::Vnc,
+                ConnectionKindTab::Adb,
             ]
             .into_iter()
             .map(|kind| {
@@ -1071,6 +1073,13 @@ impl NyaTermApp {
                         jump: jump_label.clone(),
                     },
                     SshConnectionSectionOptions { auth: auth_options },
+                    cx,
+                ))
+            })
+            .when(editor.kind == ConnectionKindTab::Adb, |this| {
+                this.child(android::section(
+                    section_context,
+                    self.android.tracker.snapshot(),
                     cx,
                 ))
             })

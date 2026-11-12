@@ -4,7 +4,6 @@
 mod chrome;
 mod connections;
 pub(crate) mod event_wake;
-pub(crate) mod external_editor;
 mod layout_state;
 mod navigation;
 mod network;
@@ -12,7 +11,7 @@ mod prompts;
 pub(crate) mod recording;
 mod remote;
 mod security;
-mod session;
+pub(crate) mod session;
 mod session_event_bridge;
 pub(crate) mod terminal;
 mod transfer_preview;

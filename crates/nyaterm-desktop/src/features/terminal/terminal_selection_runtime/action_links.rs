@@ -170,20 +170,11 @@ impl NyaTermApp {
             item.start,
             item.end
         );
-        let preview = match &default.target {
-            ActionLinkTarget::CopyText(text) | ActionLinkTarget::PasteText(text) => {
-                format!("{} {text}", default.label)
-            }
-            target => target.text().to_owned(),
-        };
         let next = ActionLinkTooltipState {
             session_id,
             x: event.position.x,
             y: event.position.y,
-            kind_label: item.kind.label().to_string(),
-            value: item.value.clone(),
-            default_action_label: default.label.clone(),
-            default_action_preview: preview,
+            default_action: default,
             has_more_actions: actions.len() > 1,
             match_key: match_key.clone(),
         };
@@ -779,10 +770,15 @@ mod tests {
             session_id: "local".to_string(),
             x: px(10.0),
             y: px(20.0),
-            kind_label: "host".to_string(),
-            value: "example.com".to_string(),
-            default_action_label: "Open".to_string(),
-            default_action_preview: "https://example.com".to_string(),
+            default_action: crate::action_links::ActionLinkAction {
+                id: "open".into(),
+                label: "Open Link".into(),
+                target: crate::action_links::ActionLinkTarget::OpenUrl(
+                    "https://example.com".into(),
+                ),
+                mac_format: None,
+                is_default: true,
+            },
             has_more_actions: false,
             match_key: match_key.to_string(),
         }
@@ -822,6 +818,36 @@ mod tests {
         assert!(clear_action_link_tooltip_state(&mut visible, &mut pending));
         assert!(visible.is_none());
         assert!(pending.is_none());
+    }
+
+    #[test]
+    fn dragging_terminal_selection_cancels_visible_and_pending_action_link_tooltips() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-selection-hides-action-link-tooltip");
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, cx| {
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_action_links_enabled = true;
+            app.settings.replace_summary(settings);
+            app.terminal.layout.surface_bounds =
+                Some(Bounds::new(point(px(0.), px(0.)), size(px(500.), px(300.))));
+            app.terminal.menus.action_link_tooltip = Some(tooltip("visible"));
+            app.terminal.menus.action_link_hover_pending =
+                Some(("pending".into(), 1, tooltip("pending")));
+            app.terminal.selection.dragging = true;
+            app.update_action_link_hover(
+                &gpui::MouseMoveEvent {
+                    position: point(px(10.), px(20.)),
+                    pressed_button: Some(gpui::MouseButton::Left),
+                    modifiers: gpui::Modifiers::default(),
+                },
+                cx,
+            );
+            assert!(app.terminal.menus.action_link_tooltip.is_none());
+            assert!(app.terminal.menus.action_link_hover_pending.is_none());
+            assert!(!app.apply_action_link_tooltip_delay(1));
+        });
     }
 
     #[test]

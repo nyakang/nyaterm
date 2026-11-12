@@ -745,11 +745,35 @@ impl ConnectionStore {
             &mut settings,
         )
         .map_err(StorageError::InvalidData)?;
-        let merged_settings = merge_imported_settings(
+        let has_local_master_password = current_settings
+            .get("security")
+            .and_then(|security| security.get("master_password"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|password| !password.is_empty());
+        let mut merged_settings = merge_imported_settings(
             settings,
             current_settings,
             snapshot.meta.snapshot_kind == PortableSnapshotKind::Sync,
         );
+
+        if snapshot.meta.snapshot_kind == PortableSnapshotKind::Backup && !has_local_master_password
+        {
+            // Backups omit the source master password. Keep imported provider
+            // settings usable without enabling sync until this device has one.
+            // Normalize the retained fallback too, without changing precedence
+            // or discarding unknown fields in either document.
+            for value in merged_settings
+                .get_mut("cloud_sync")
+                .into_iter()
+                .chain(legacy_cloud_sync.as_mut())
+            {
+                if let Some(enabled) = value.get_mut("enabled")
+                    && enabled.as_bool() == Some(true)
+                {
+                    *enabled = serde_json::Value::Bool(false);
+                }
+            }
+        }
 
         let txn = self.db.begin_write()?;
         {

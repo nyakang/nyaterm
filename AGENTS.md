@@ -71,6 +71,12 @@ must include explicit conversion logic and tests.
   framebuffer and input models, certificate policy, clipboard state, and the
   RDP/VNC helper IPC contracts. It owns no protocol decoder; both live in the
   helper crates below.
+* `crates/nyaterm-android`: UI-independent ADB server client, shared device
+  tracker, native Shell v2 and Sync channels, bounded Android helper IPC and
+  screen process supervision. It may depend on core, but not GPUI, desktop,
+  store, transport, files, or decoder libraries.
+* `crates/nyaterm-android-helper`: isolated scrcpy protocol, H.264 decoding,
+  BGRA conversion and Android input enforcement. Only this helper links FFmpeg.
 * `crates/nyaterm-rdp-helper`: isolated IronRDP helper process that communicates
   with the application through the typed IPC protocol in
   `nyaterm-remote-desktop`.
@@ -266,18 +272,21 @@ Use package-specific checks while iterating:
 * `cargo test -p <crate-name>`
 * `cargo run -p nyaterm-app --bin nyaterm`
 
-Builtin/IronRDP and VNC run in helper processes that the application resolves
+Builtin/IronRDP, VNC and Android screen run in helper processes that the application resolves
 beside its own executable. Windows Native RDP is the explicitly selected
 in-process system-component exception and requires MSVC with ATL when building.
 `cargo run -p nyaterm-app --bin nyaterm` builds only the application, so build the
 helpers into the same target directory first or the helper backends fail with
 `HelperMissing`:
 
-* `cargo build -p nyaterm-rdp-helper -p nyaterm-vnc-helper`
+* `python3 scripts/release/prepare_android.py` (export its reported `FFMPEG_DIR`)
+* `cargo build -p nyaterm-rdp-helper -p nyaterm-vnc-helper -p nyaterm-android-helper`
 
-A bare `cargo build` or `cargo check` covers all three: they are the workspace
+A bare `cargo build` or `cargo check` covers the app and helpers: they are the workspace
 `default-members`. `NYATERM_RDP_HELPER` and `NYATERM_VNC_HELPER` override the
-lookup with an explicit path. `scripts/release/package_native.py` is what puts the
+lookup with an explicit path; `NYATERM_ANDROID_HELPER` does the same for Android.
+See `crates/nyaterm-android/README.md` for pinned dependencies and acceptance probes.
+`scripts/release/package_native.py` is what puts the
 helpers next to the application in release packages; its `HELPER_BINS` list must
 name every helper.
 

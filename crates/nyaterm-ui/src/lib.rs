@@ -5,6 +5,7 @@ mod button;
 pub mod chat;
 mod child_window;
 mod command;
+mod compact_menu;
 mod dialog;
 mod document_editor;
 pub mod document_snapshot;
@@ -20,6 +21,7 @@ pub mod notification;
 mod number_input;
 pub mod plot;
 mod popover;
+pub mod presentation;
 pub mod resize_handle;
 mod root;
 mod selectable_text;
@@ -42,6 +44,7 @@ pub use command::{
     NyaCommand, NyaCommandIndex, NyaCommandItem, NyaCommandState, command_row_highlight_index,
     command_row_selection_wash,
 };
+pub use compact_menu::NyaCompactMenuRow;
 pub use dialog::{
     NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogHandle, NyaDialogWindowExt,
 };

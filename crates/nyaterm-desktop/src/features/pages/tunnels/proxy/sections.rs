@@ -6,7 +6,7 @@ use gpui::prelude::*;
 use gpui::{Context, FontWeight, IntoElement, SharedString, div, px, rgb, rgba, svg};
 
 use super::super::common::{NetworkItemMenuConfig, network_item_overflow_menu};
-use super::rows::{proxy_move_picker, proxy_network_row};
+use super::rows::proxy_network_row;
 use crate::features::NyaTermApp;
 use crate::models::NetworkTab;
 use nyaterm_core::{ProxyConfig, ProxyGroup, truncate_preview};
@@ -93,9 +93,6 @@ pub(in crate::features::pages::tunnels) fn proxy_section(
         );
     } else {
         for (index, proxy) in section.proxies.into_iter().enumerate() {
-            let move_picker_open = app
-                .connection_state
-                .network_move_picker_is_open(NetworkTab::Proxies, &proxy.id);
             rows = rows.child(
                 div()
                     .flex()
@@ -103,16 +100,7 @@ pub(in crate::features::pages::tunnels) fn proxy_section(
                     .when(index + 1 < item_count, |this| {
                         this.border_b_1().border_color(rgb(palette.border))
                     })
-                    .child(proxy_network_row(&proxy, app, cx))
-                    .when(move_picker_open, |this| {
-                        this.child(proxy_move_picker(
-                            palette,
-                            proxy.id.clone(),
-                            proxy.group_id.clone(),
-                            app.tunnel_state.proxy_groups(),
-                            cx,
-                        ))
-                    }),
+                    .child(proxy_network_row(&proxy, app, cx)),
             );
         }
     }
@@ -196,7 +184,7 @@ pub(in crate::features::pages::tunnels) fn proxy_section(
                             edit_label: t!("network.renameGroup"),
                             move_label: t!("network.moveToGroup"),
                             delete_label: t!("network.deleteGroup"),
-                            can_move: false,
+                            move_items: Vec::new(),
                         },
                         cx.listener(move |this, _, window, cx| {
                             this.open_network_group_editor(
@@ -206,7 +194,6 @@ pub(in crate::features::pages::tunnels) fn proxy_section(
                                 cx,
                             );
                         }),
-                        cx.listener(|_, _, _, _| {}),
                         cx.listener(move |this, _, window, cx| {
                             this.open_network_group_delete_confirm(
                                 NetworkTab::Proxies,

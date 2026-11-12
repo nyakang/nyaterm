@@ -304,6 +304,36 @@ impl FileManagerWorkspace {
             app.submit_file_transfer(id, intent, cx)
         });
     }
+
+    pub(super) fn drop_external_files(
+        &self,
+        paths: &gpui::ExternalPaths,
+        pane: PaneId,
+        directory: RemoteFilePath,
+        writable: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let endpoint = self.pane(pane).endpoint.clone();
+        let paths = paths.paths().to_vec();
+        let disconnected = self.pane(pane).disconnected;
+        self.dispatch_app(window, cx, move |app, _, cx| {
+            if disconnected || !writable {
+                app.report_transfer_entry_error(
+                    "drop-upload",
+                    endpoint.kind(),
+                    &anyhow::Error::new(if disconnected {
+                        nyaterm_files::file_browser::FileTransferEntryError::Unavailable
+                    } else {
+                        nyaterm_files::file_browser::FileTransferEntryError::InvalidDestination
+                    }),
+                    cx,
+                );
+            } else {
+                app.upload_external_paths_to_endpoint(endpoint, directory, paths, cx);
+            }
+        });
+    }
 }
 
 pub(super) struct FileManagerDragPreview {

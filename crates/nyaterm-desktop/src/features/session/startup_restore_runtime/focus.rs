@@ -11,6 +11,8 @@ impl NyaTermApp {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.ensure_startup_restore_focus_handoff(window, cx);
+            } else {
+                this.android.release_all_inputs();
             }
         })
         .detach();

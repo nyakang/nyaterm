@@ -1,14 +1,14 @@
 use crate::features::NyaTermApp;
 use crate::features::session::UploadBatchDuplicateResolver;
-use crate::features::transfers::SftpJobSession;
-use crate::models::{NavItem, TransferPathPromptKind, TransferPathPromptResult};
+use crate::features::transfers::FileTransferSession;
+use crate::models::{TransferPathPromptKind, TransferPathPromptResult};
 use gpui::{Context, PathPromptOptions, SharedString, Window};
 use nyaterm_core::truncate_preview;
+use nyaterm_files::file_browser::FileTransferEntryError;
 use nyaterm_files::sftp::RemoteFilePath;
 use nyaterm_files::sftp_transfer_types::{
     SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
 };
-use nyaterm_transport::SshSessionConfig;
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ struct PendingBrowserUpload {
     kind: TransferPathPromptKind,
     remote_path: String,
     session_id: Option<String>,
-    config: SshSessionConfig,
+    service: nyaterm_files::file_browser::FileBrowserService,
     path_options: SftpPathTransferOptions,
 }
 
@@ -26,7 +26,7 @@ struct BrowserUploadRequest {
     paths: Vec<PathBuf>,
     remote_path: String,
     session_id: Option<String>,
-    config: SshSessionConfig,
+    service: nyaterm_files::file_browser::FileBrowserService,
     path_options: SftpPathTransferOptions,
     fallback_name: &'static str,
 }
@@ -37,9 +37,11 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.transfer.path_prompt_is_open() {
-            self.shell
-                .set_status("native path picker is already open".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "path-picker",
+                &FileTransferEntryError::PickerAlreadyOpen.into(),
+                cx,
+            );
             return;
         }
         let options = PathPromptOptions {
@@ -203,25 +205,30 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if remote_paths.is_empty() {
-            self.shell
-                .set_status("select remote items before downloading".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "download",
+                &FileTransferEntryError::NoSelection.into(),
+                cx,
+            );
             return;
         }
         if self.transfer.path_prompt_is_open() {
-            self.shell
-                .set_status("native path picker is already open".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "path-picker",
+                &FileTransferEntryError::PickerAlreadyOpen.into(),
+                cx,
+            );
             return;
         }
-        let Some(config) = self.session.active_ssh_config_owned() else {
-            self.shell
-                .set_status("start an SSH session first".to_string());
-            self.shell.select_nav(NavItem::Transfers);
-            cx.notify();
-            return;
+        let session = match self.browser_transfer_session() {
+            Ok(session) => session,
+            Err(error) => {
+                self.report_browser_transfer_error("transfer-start", &error, cx);
+                return;
+            }
         };
-        let session_id = self.session.active_id_owned();
+        let session_id = session.session_id;
+        let service = session.service;
 
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
@@ -241,9 +248,11 @@ impl NyaTermApp {
             .transfer
             .begin_path_prompt(TransferPathPromptKind::DownloadDirectory)
         {
-            self.shell
-                .set_status("native path picker is already open".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "path-picker",
+                &FileTransferEntryError::PickerAlreadyOpen.into(),
+                cx,
+            );
             return;
         }
         let receiver = cx.prompt_for_paths(options);
@@ -266,7 +275,7 @@ impl NyaTermApp {
                 this.apply_transfer_download_start_prompt_result(
                     remote_paths,
                     session_id,
-                    config,
+                    service,
                     path_options,
                     result,
                     cx,
@@ -299,24 +308,30 @@ impl NyaTermApp {
                 | TransferPathPromptKind::UploadDirectory
                 | TransferPathPromptKind::UploadDirectoryContents
         ) {
-            self.shell
-                .set_status("browser upload requires a file or directory".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "upload",
+                &FileTransferEntryError::InvalidDestination.into(),
+                cx,
+            );
             return;
         }
         if self.transfer.path_prompt_is_open() {
-            self.shell
-                .set_status("native path picker is already open".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "path-picker",
+                &FileTransferEntryError::PickerAlreadyOpen.into(),
+                cx,
+            );
             return;
         }
-        let Some(config) = self.session.active_ssh_config_owned() else {
-            self.shell
-                .set_status("start an SSH session first".to_string());
-            cx.notify();
-            return;
+        let session = match self.browser_transfer_session() {
+            Ok(session) => session,
+            Err(error) => {
+                self.report_browser_transfer_error("transfer-start", &error, cx);
+                return;
+            }
         };
-        let session_id = self.session.active_id_owned();
+        let session_id = session.session_id;
+        let service = session.service;
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
             .then(|| self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>);
@@ -348,9 +363,11 @@ impl NyaTermApp {
             remote_path.trim_end_matches('/').to_string()
         };
         if !self.transfer.begin_path_prompt(kind) {
-            self.shell
-                .set_status("native path picker is already open".to_string());
-            cx.notify();
+            self.report_browser_transfer_error(
+                "path-picker",
+                &FileTransferEntryError::PickerAlreadyOpen.into(),
+                cx,
+            );
             return;
         }
         let receiver = cx.prompt_for_paths(options);
@@ -366,7 +383,7 @@ impl NyaTermApp {
             kind,
             remote_path,
             session_id,
-            config,
+            service,
             path_options,
         };
         let scheduler = self.blocking_jobs.clone();
@@ -405,7 +422,7 @@ impl NyaTermApp {
         &mut self,
         remote_paths: Vec<RemoteFilePath>,
         session_id: Option<String>,
-        config: SshSessionConfig,
+        service: nyaterm_files::file_browser::FileBrowserService,
         path_options: SftpPathTransferOptions,
         result: TransferPathPromptResult,
         cx: &mut Context<Self>,
@@ -418,50 +435,40 @@ impl NyaTermApp {
         }
         // 回调直接更新 App；延迟发布能覆盖成功、取消、失败及下面所有提前返回。
         self.defer_transfer_panel_snapshot_flush(cx);
+        let source_session_id = session_id.clone();
+        self.with_transfer_browser_session(source_session_id.as_deref(), |this| {
         match result {
             TransferPathPromptResult::Selected(paths) => {
                 let Some(directory) = paths.into_iter().next() else {
-                    self.shell.set_status("path picker cancelled".to_string());
+                    this.shell.set_status("path picker cancelled".to_string());
                     return;
                 };
                 let total = remote_paths.len();
-                let Some(service_session_id) = session_id.as_deref() else {
-                    self.shell
-                        .set_status("source session is unavailable".to_string());
-                    return;
-                };
-                if self
-                    .session
-                    .file_browser_backend_for_session(service_session_id)
-                    != Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
-                {
-                    self.shell
-                        .set_status("source session is unavailable".to_string());
+                if session_id.as_deref().is_none_or(|id| this.session.metadata(id).is_none() || this.session.is_disconnected(id))
+                    || matches!(&service, nyaterm_files::file_browser::FileBrowserService::Adb(service) if service.control.is_cancelled()) {
+                    this.report_transfer_entry_error("download", service.kind(), &FileTransferEntryError::Unavailable.into(), cx);
                     return;
                 }
-                let targets = match self
+                let targets = match this
                     .resolve_transfer_download_targets(remote_paths, Some(directory.clone()))
                 {
                     Ok(targets) => targets,
                     Err(error) => {
-                        self.shell.set_status(error.to_string());
+                        this.report_transfer_entry_error(
+                            "download-target",
+                            service.kind(),
+                            &error,
+                            cx,
+                        );
                         return;
                     }
                 };
-                let service = match self.remote_file_service_for_session(service_session_id, config)
-                {
-                    Ok(service) => service,
-                    Err(error) => {
-                        self.shell.set_status(error.to_string());
-                        return;
-                    }
-                };
-                let session = SftpJobSession {
+                let session = FileTransferSession {
                     session_id,
                     service,
                 };
                 for (remote_path, local_path) in targets {
-                    self.enqueue_sftp_download_job_for_target(
+                    this.enqueue_sftp_download_job_for_target(
                         session.clone(),
                         remote_path,
                         local_path,
@@ -469,27 +476,34 @@ impl NyaTermApp {
                         cx,
                     );
                 }
-                self.shell
+                this.shell
                     .set_status(format!("{total} remote download job(s) started"));
-                self.transfer.browser.status =
+                this.transfer.browser.status =
                     format!("Downloading {total} item(s) to {}", directory.display());
             }
             TransferPathPromptResult::Cancelled => {
-                self.shell
+                this.shell
                     .set_status("download directory selection cancelled".to_string());
-                self.transfer.browser.status = "download selection cancelled".to_string();
+                this.transfer.browser.status = "download selection cancelled".to_string();
             }
-            TransferPathPromptResult::Failed(error) => {
-                self.shell
-                    .set_status(format!("path picker failed: {error}"));
-                self.transfer.browser.status = self.shell.status().to_string();
+            TransferPathPromptResult::Failed(_) => {
+                this.report_transfer_entry_error(
+                    "path-picker",
+                    service.kind(),
+                    &FileTransferEntryError::PickerFailed.into(),
+                    cx,
+                );
             }
             TransferPathPromptResult::Closed => {
-                self.shell
-                    .set_status("path picker closed before returning".to_string());
-                self.transfer.browser.status = self.shell.status().to_string();
+                this.report_transfer_entry_error(
+                    "path-picker",
+                    service.kind(),
+                    &FileTransferEntryError::PickerClosed.into(),
+                    cx,
+                );
             }
         }
+        });
     }
 
     fn apply_transfer_browser_upload_path_prompt_result(
@@ -502,7 +516,7 @@ impl NyaTermApp {
             kind,
             remote_path,
             session_id,
-            config,
+            service,
             path_options,
         } = pending;
         if !self.transfer.finish_path_prompt(kind) {
@@ -510,7 +524,8 @@ impl NyaTermApp {
         }
         // 同一次延迟发布读取回调结束后的最终状态，也覆盖空选择的提前返回。
         self.defer_transfer_panel_snapshot_flush(cx);
-        match result {
+        let source_session_id = session_id.clone();
+        self.with_transfer_browser_session(source_session_id.as_deref(), |this| match result {
             TransferPathPromptResult::Selected(paths) => {
                 if paths.is_empty() {
                     let status = if kind == TransferPathPromptKind::UploadDirectoryContents {
@@ -518,8 +533,8 @@ impl NyaTermApp {
                     } else {
                         "upload selection cancelled".to_string()
                     };
-                    self.shell.set_status(status.clone());
-                    self.transfer.browser.status = status;
+                    this.shell.set_status(status.clone());
+                    this.transfer.browser.status = status;
                     return;
                 }
                 let fallback = match kind {
@@ -528,12 +543,12 @@ impl NyaTermApp {
                     TransferPathPromptKind::UploadDirectoryContents => "uploaded_item",
                     TransferPathPromptKind::DownloadDirectory => unreachable!(),
                 };
-                self.enqueue_transfer_browser_upload_paths(
+                this.enqueue_transfer_browser_upload_paths(
                     BrowserUploadRequest {
                         paths,
                         remote_path,
                         session_id,
-                        config,
+                        service,
                         path_options,
                         fallback_name: fallback,
                     },
@@ -541,20 +556,26 @@ impl NyaTermApp {
                 );
             }
             TransferPathPromptResult::Cancelled => {
-                self.shell.set_status("path picker cancelled".to_string());
-                self.transfer.browser.status = "upload selection cancelled".to_string();
+                this.shell.set_status("path picker cancelled".to_string());
+                this.transfer.browser.status = "upload selection cancelled".to_string();
             }
-            TransferPathPromptResult::Failed(error) => {
-                self.shell
-                    .set_status(format!("path picker failed: {error}"));
-                self.transfer.browser.status = self.shell.status().to_string();
+            TransferPathPromptResult::Failed(_) => {
+                this.report_transfer_entry_error(
+                    "path-picker",
+                    service.kind(),
+                    &FileTransferEntryError::PickerFailed.into(),
+                    cx,
+                );
             }
             TransferPathPromptResult::Closed => {
-                self.shell
-                    .set_status("path picker closed before returning".to_string());
-                self.transfer.browser.status = self.shell.status().to_string();
+                this.report_transfer_entry_error(
+                    "path-picker",
+                    service.kind(),
+                    &FileTransferEntryError::PickerClosed.into(),
+                    cx,
+                );
             }
-        }
+        });
     }
 
     pub(in crate::features) fn set_transfer_browser_external_drop_hover(
@@ -577,30 +598,85 @@ impl NyaTermApp {
         if self.session.active_file_browser_backend()
             == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
         {
-            let status = "upload by dropping files is unavailable for local browsing".to_string();
-            self.shell.set_status(status.clone());
-            self.transfer.set_browser_status(status);
-            cx.notify();
+            self.report_browser_transfer_error(
+                "drop-upload",
+                &FileTransferEntryError::UnsupportedBackend.into(),
+                cx,
+            );
             return;
         }
         if paths.is_empty() {
-            let status = t!("fileExplorer.externalDropPathsRequired").to_string();
-            self.shell.set_status(status.clone());
-            self.transfer.set_browser_status(status);
-            cx.notify();
+            self.report_browser_transfer_error(
+                "drop-upload",
+                &FileTransferEntryError::NoSelection.into(),
+                cx,
+            );
             return;
         }
         self.start_transfer_browser_upload_paths(paths, cx);
     }
 
-    fn start_transfer_browser_upload_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let Some(config) = self.session.active_ssh_config_owned() else {
-            self.shell
-                .set_status("start an SSH session first".to_string());
-            cx.notify();
-            return;
+    pub(in crate::features) fn upload_external_paths_to_endpoint(
+        &mut self,
+        endpoint: crate::features::file_manager::PaneEndpoint,
+        directory: RemoteFilePath,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let service = match self.file_browser_service_for_endpoint(&endpoint) {
+            Ok(service) => service,
+            Err(error) => {
+                self.report_transfer_entry_error("drop-upload", endpoint.kind(), &error, cx);
+                return;
+            }
         };
-        let session_id = self.session.active_id_owned();
+        if service.kind() != nyaterm_files::file_browser::FileBrowserBackendKind::Local
+            && let Err(error) = directory.raw_path().and_then(|raw| {
+                anyhow::ensure!(
+                    raw.is_none_or(|raw| raw == directory.display_path.as_bytes()),
+                    FileTransferEntryError::InvalidDestination
+                );
+                Ok(())
+            })
+        {
+            self.report_transfer_entry_error("drop-upload", service.kind(), &error, cx);
+            return;
+        }
+        let options = self.sftp_download_path_options();
+        let session_id = match &endpoint {
+            crate::features::file_manager::PaneEndpoint::Adb(key) => self
+                .session
+                .session_ids()
+                .find(|id| {
+                    self.android_config_for_session(id)
+                        .is_some_and(|config| config.device_key == *key)
+                })
+                .map(str::to_string),
+            _ => endpoint.session_id().map(str::to_string),
+        };
+        self.enqueue_transfer_browser_upload_paths(
+            BrowserUploadRequest {
+                paths,
+                remote_path: directory.display_path,
+                session_id,
+                service,
+                path_options: options,
+                fallback_name: "uploaded_item",
+            },
+            cx,
+        );
+    }
+
+    fn start_transfer_browser_upload_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let session = match self.browser_transfer_session() {
+            Ok(session) => session,
+            Err(error) => {
+                self.report_browser_transfer_error("transfer-start", &error, cx);
+                return;
+            }
+        };
+        let session_id = session.session_id;
+        let service = session.service;
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
             .then(|| self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>);
@@ -615,7 +691,7 @@ impl NyaTermApp {
                 paths,
                 remote_path,
                 session_id,
-                config,
+                service,
                 path_options,
                 fallback_name: "uploaded_item",
             },
@@ -632,11 +708,29 @@ impl NyaTermApp {
             paths,
             remote_path,
             session_id,
-            config,
+            service,
             mut path_options,
             fallback_name,
         } = request;
         if paths.is_empty() {
+            self.report_transfer_entry_error(
+                "upload",
+                service.kind(),
+                &FileTransferEntryError::NoSelection.into(),
+                cx,
+            );
+            return;
+        }
+        if session_id.as_deref().is_some_and(|id| {
+            self.session.metadata(id).is_none() || self.session.is_disconnected(id)
+        }) || matches!(&service, nyaterm_files::file_browser::FileBrowserService::Adb(service) if service.control.is_cancelled())
+        {
+            self.report_transfer_entry_error(
+                "upload",
+                service.kind(),
+                &FileTransferEntryError::Unavailable.into(),
+                cx,
+            );
             return;
         }
         let total = paths.len();
@@ -649,39 +743,43 @@ impl NyaTermApp {
                 path_options.transfer_options().clone(),
             );
         }
-        self.transfer.set_remote_path(remote_path.clone());
-        self.transfer.browser.status = if total == 1 {
-            format!(
-                "Uploading {} to {}",
-                paths[0].display(),
-                truncate_preview(&remote_path, 48)
-            )
-        } else {
-            format!(
-                "Uploading {total} items to {}",
-                truncate_preview(&remote_path, 48)
-            )
-        };
-        let Some(service_session_id) = session_id.as_deref() else {
-            self.shell
-                .set_status("source session is unavailable".to_string());
-            return;
-        };
-        let service = match self.remote_file_service_for_session(service_session_id, config) {
-            Ok(service) => service,
-            Err(error) => {
-                self.shell.set_status(error.to_string());
-                return;
-            }
-        };
-        let session = SftpJobSession {
+        if session_id.as_deref() == self.session.active_id() {
+            self.transfer.set_remote_path(remote_path.clone());
+            self.transfer.browser.status = if total == 1 {
+                format!(
+                    "Uploading {} to {}",
+                    paths[0].display(),
+                    truncate_preview(&remote_path, 48)
+                )
+            } else {
+                format!(
+                    "Uploading {total} items to {}",
+                    truncate_preview(&remote_path, 48)
+                )
+            };
+        }
+        let session = FileTransferSession {
             session_id,
             service,
         };
         let mut target_locks: HashMap<String, Arc<Mutex<()>>> = HashMap::new();
         for path in paths {
             let upload_name = transfer_upload_local_name(&path, fallback_name);
-            let target_path = transfer_upload_remote_child_path(&remote_path, &upload_name);
+            let target_path = match session
+                .service
+                .child_path(&RemoteFilePath::new(&remote_path), &upload_name)
+            {
+                Ok(path) => path.display_path,
+                Err(error) => {
+                    self.report_transfer_entry_error(
+                        "upload-target",
+                        session.service.kind(),
+                        &error,
+                        cx,
+                    );
+                    continue;
+                }
+            };
             let target_lock = Arc::clone(
                 target_locks
                     .entry(target_path.clone())
@@ -730,10 +828,11 @@ fn transfer_download_targets(
     remote_paths
         .into_iter()
         .map(|remote_path| {
-            let name = nyaterm_files::download_path::file_name(&remote_path.display_path)?;
+            let name = nyaterm_files::download_path::file_name(&remote_path.display_path)
+                .map_err(|_| FileTransferEntryError::InvalidDestination)?;
             anyhow::ensure!(
                 names.insert(nyaterm_files::download_path::target_key(name)),
-                "selected remote items have conflicting local names"
+                FileTransferEntryError::InvalidDestination
             );
             let target = directory.join(name);
             Ok((remote_path, target))
@@ -784,6 +883,7 @@ fn local_directory_children(directories: &[PathBuf]) -> Result<Vec<PathBuf>, Str
     Ok(children)
 }
 
+#[cfg(test)]
 fn transfer_upload_remote_child_path(remote_dir: &str, name: &str) -> String {
     let remote_dir = remote_dir.trim();
     if remote_dir == "/" {
@@ -806,6 +906,311 @@ mod tests {
     use gpui::{AppContext as _, Context, TestAppContext};
     use nyaterm_core::{AppRuntime, AppSettingsSummary, RuntimeMode, test_support::TestTempDir};
     use std::path::PathBuf;
+
+    #[test]
+    fn adb_upload_picker_keeps_original_session_and_directory_when_active_tab_changes() {
+        use crate::models::{TransferJobKind, TransferPathPromptKind};
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-adb-picker-source");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "adb-source",
+            "/device",
+        );
+        let input = root.path().join("fixture.txt");
+        std::fs::write(&input, b"fixture").unwrap();
+        cx.update_entity(&app, |app, cx| {
+            app.prompt_transfer_browser_upload_path_at(
+                TransferPathPromptKind::UploadFile,
+                "/device/uploads".into(),
+                cx,
+            );
+            let metadata = app.session.metadata("adb-source").unwrap().clone();
+            app.session.register_session_metadata("other", metadata);
+            app.session.select_active_session("other");
+            app.transfer.browser.path = "/other".into();
+            app.transfer.set_remote_path("/other");
+        });
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|options| {
+            assert!(options.files && options.multiple);
+            Some(vec![input.clone()])
+        });
+        cx.run_until_parked();
+        app.update(&mut cx, |app, _| {
+            let job = app
+                .transfer
+                .transfer_jobs()
+                .iter()
+                .find(|job| matches!(job.kind, TransferJobKind::Upload { .. }))
+                .unwrap();
+            assert_eq!(job.session_id.as_deref(), Some("adb-source"));
+            let TransferJobKind::Upload {
+                remote_path,
+                local_path,
+            } = &job.kind
+            else {
+                panic!("expected upload")
+            };
+            assert_eq!(remote_path, "/device/uploads/fixture.txt");
+            assert_eq!(local_path, &input);
+            assert_eq!(app.transfer.browser.path, "/other");
+        });
+    }
+
+    #[test]
+    fn adb_download_jobs_use_queue_controls_and_offline_entries_report_visible_error() {
+        use crate::models::TransferJobStatus;
+        use nyaterm_files::sftp::RemoteFilePath;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-adb-download-controls");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "adb",
+            "/device",
+        );
+        app.update(&mut cx, |app, cx| {
+            let options = app.sftp_download_path_options();
+            assert!(app.start_sftp_download_job_for_target(
+                RemoteFilePath::new("/device/file"),
+                root.path().join("file"),
+                options,
+                cx
+            ));
+            let job = app.transfer.transfer_jobs().last().unwrap();
+            let id = job.id.clone();
+            assert_eq!(job.session_id.as_deref(), Some("adb"));
+            assert!(job.control.is_some());
+            app.pause_transfer_job(&id, cx);
+            assert_eq!(
+                app.transfer.transfer_job(&id).unwrap().status,
+                TransferJobStatus::Paused
+            );
+            app.resume_transfer_job(&id, cx);
+            assert!(matches!(
+                app.transfer.transfer_job(&id).unwrap().status,
+                TransferJobStatus::Queued | TransferJobStatus::Running
+            ));
+            app.cancel_transfer_job(&id, cx);
+            assert!(
+                app.transfer
+                    .transfer_job(&id)
+                    .unwrap()
+                    .control
+                    .as_ref()
+                    .unwrap()
+                    .is_cancelled()
+            );
+            app.active_file_browser_service()
+                .unwrap()
+                .downgrade()
+                .unwrap()
+                .upgrade()
+                .unwrap();
+            let nyaterm_files::file_browser::FileBrowserService::Adb(service) =
+                app.active_file_browser_service().unwrap()
+            else {
+                panic!("expected ADB")
+            };
+            service.cancel();
+            let count = app.transfer.transfer_jobs().len();
+            app.handle_transfer_browser_external_file_drop(vec![root.path().join("input")], cx);
+            assert_eq!(app.transfer.transfer_jobs().len(), count);
+            assert_eq!(
+                app.transfer.browser.status,
+                rust_i18n::t!("fileExplorer.transferSourceUnavailable").as_ref()
+            );
+        });
+    }
+
+    #[test]
+    fn adb_picker_failure_is_localized_and_cancellation_does_not_create_a_job() {
+        use crate::models::{TransferPathPromptKind, TransferPathPromptResult};
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-adb-picker-error");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "adb",
+            "/device",
+        );
+        app.update(&mut cx, |app, cx| {
+            for result in [
+                TransferPathPromptResult::Failed("sensitive picker details".into()),
+                TransferPathPromptResult::Cancelled,
+            ] {
+                let session = app.browser_transfer_session().unwrap();
+                let kind = TransferPathPromptKind::UploadFile;
+                assert!(app.transfer.begin_path_prompt(kind));
+                app.apply_transfer_browser_upload_path_prompt_result(
+                    super::PendingBrowserUpload {
+                        kind,
+                        remote_path: "/device".into(),
+                        session_id: session.session_id,
+                        service: session.service,
+                        path_options: app.sftp_download_path_options(),
+                    },
+                    result,
+                    cx,
+                );
+                assert!(!app.transfer.browser.status.contains("sensitive"));
+                assert!(app.transfer.transfer_jobs().is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn adb_download_picker_keeps_original_source_and_preserves_the_new_tabs_browser_status() {
+        use crate::models::{TransferJobKind, TransferPathPromptKind, TransferPathPromptResult};
+        use nyaterm_files::sftp::RemoteFilePath;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-adb-download-picker-switch");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "original",
+            "/device",
+        );
+        app.update(&mut cx, |app, cx| {
+            let session = app.browser_transfer_session().unwrap();
+            let metadata = app.session.metadata("original").unwrap().clone();
+            app.session.register_session_metadata("other", metadata);
+            app.session.select_active_session("other");
+            app.transfer.browser.path = "/other".into();
+            app.transfer.browser.status = "other status".into();
+            app.transfer.set_remote_path("/other");
+            assert!(
+                app.transfer
+                    .begin_path_prompt(TransferPathPromptKind::DownloadDirectory)
+            );
+            let options = app.sftp_download_path_options();
+            app.apply_transfer_download_start_prompt_result(
+                vec![RemoteFilePath::new("/device/file")],
+                session.session_id,
+                session.service,
+                options,
+                TransferPathPromptResult::Selected(vec![root.path().join("downloads")]),
+                cx,
+            );
+            let job = app.transfer.transfer_jobs().last().unwrap();
+            assert_eq!(job.session_id.as_deref(), Some("original"));
+            let TransferJobKind::Download {
+                remote_path,
+                local_path,
+                ..
+            } = &job.kind
+            else {
+                panic!("expected download")
+            };
+            assert_eq!(remote_path, "/device/file");
+            assert_eq!(local_path, &root.path().join("downloads/file"));
+            assert_eq!(app.transfer.browser.path, "/other");
+            assert_eq!(app.transfer.browser.status, "other status");
+        });
+    }
+
+    #[test]
+    fn adb_external_drop_and_retry_keep_the_original_endpoint_and_report_its_disconnect() {
+        use crate::features::file_manager::PaneEndpoint;
+        use crate::models::TransferJobStatus;
+        use nyaterm_files::sftp::RemoteFilePath;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-adb-drop-retry");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "original",
+            "/device",
+        );
+        let vcx = crate::features::test_support::session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let key = app
+                    .android_config_for_session("original")
+                    .unwrap()
+                    .device_key;
+                app.upload_external_paths_to_endpoint(
+                    PaneEndpoint::Adb(key),
+                    RemoteFilePath::new("/device/drop-target"),
+                    vec![root.path().join("input")],
+                    cx,
+                );
+                let job = app.transfer.transfer_jobs().last().unwrap();
+                let id = job.id.clone();
+                let source = app.transfer.promised_download_source(&id).unwrap();
+                app.transfer.transfer_job_mut(&id).unwrap().status = TransferJobStatus::Failed;
+                let metadata = app.session.metadata("original").unwrap().clone();
+                app.session.register_session_metadata("other", metadata);
+                app.session.select_active_session("other");
+                app.retry_transfer_job(id.clone(), window, cx);
+                assert_eq!(
+                    app.transfer
+                        .transfer_job(&id)
+                        .unwrap()
+                        .session_id
+                        .as_deref(),
+                    Some("original")
+                );
+                let current_source = app.transfer.promised_download_source(&id).unwrap();
+                let (
+                    nyaterm_files::file_browser::WeakFileBrowserService::Adb(original),
+                    nyaterm_files::file_browser::WeakFileBrowserService::Adb(retry),
+                ) = (source, current_source)
+                else {
+                    panic!("expected ADB sources")
+                };
+                assert!(std::sync::Weak::ptr_eq(&original, &retry));
+                app.transfer.transfer_job_mut(&id).unwrap().status = TransferJobStatus::Failed;
+                app.session.metadata_mut("original").unwrap().disconnected = true;
+                app.retry_transfer_job(id.clone(), window, cx);
+                assert_eq!(
+                    app.transfer.transfer_job(&id).unwrap().status,
+                    TransferJobStatus::Failed
+                );
+                assert_eq!(
+                    app.transfer.browser.status,
+                    rust_i18n::t!("fileExplorer.transferSourceUnavailable").as_ref()
+                );
+            })
+        });
+    }
+
+    #[test]
+    fn closing_an_adb_view_keeps_submitted_transfers_alive_until_explicit_cancellation() {
+        use nyaterm_files::sftp::RemoteFilePath;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-adb-close-transfer");
+        let app = crate::features::test_support::app_with_visible_android_session(
+            &mut cx,
+            root.path(),
+            "original",
+            "/device",
+        );
+        app.update(&mut cx, |app, cx| {
+            let options = app.sftp_download_path_options();
+            assert!(app.start_sftp_download_job_for_target(
+                RemoteFilePath::new("/device/file"),
+                root.path().join("file"),
+                options,
+                cx
+            ));
+            let job = app.transfer.transfer_jobs().last().unwrap();
+            let id = job.id.clone();
+            let control = job.control.as_ref().unwrap().clone();
+            app.remove_session_state("original", cx);
+            assert!(!control.is_cancelled());
+            app.cancel_transfer_job(&id, cx);
+            assert!(control.is_cancelled());
+        });
+    }
 
     fn assert_settings_path_picker_updates_existing_input(
         input_id: &str,

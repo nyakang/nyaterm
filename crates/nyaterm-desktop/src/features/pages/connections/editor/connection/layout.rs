@@ -170,6 +170,7 @@ pub(super) fn connection_editor_frame(
                                         NyaTabItem::new(serial_label),
                                         NyaTabItem::new("RDP"),
                                         NyaTabItem::new("VNC"),
+                                        NyaTabItem::new("Android"),
                                     ])
                                     .selected_index(match editor.kind {
                                         ConnectionKindTab::Ssh => 0,
@@ -178,6 +179,7 @@ pub(super) fn connection_editor_frame(
                                         ConnectionKindTab::Serial => 3,
                                         ConnectionKindTab::Rdp => 4,
                                         ConnectionKindTab::Vnc => 5,
+                                        ConnectionKindTab::Adb => 6,
                                     })
                                     .on_select(cx.listener(|this, index, _, cx| {
                                         let kind = match *index {
@@ -186,7 +188,8 @@ pub(super) fn connection_editor_frame(
                                             2 => ConnectionKindTab::Telnet,
                                             3 => ConnectionKindTab::Serial,
                                             4 => ConnectionKindTab::Rdp,
-                                            _ => ConnectionKindTab::Vnc,
+                                            5 => ConnectionKindTab::Vnc,
+                                            _ => ConnectionKindTab::Adb,
                                         };
                                         this.set_connection_editor_kind(kind, cx);
                                     })),

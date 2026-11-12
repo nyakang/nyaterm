@@ -20,6 +20,7 @@ pub(crate) struct WorkspaceTabTransferBundle {
     completion: Vec<super::commands::CompletionSessionTransfer>,
     terminal: TerminalSessionTransferBundle,
     transfer: TransferSessionTransferBundle,
+    android: super::android::AndroidTabTransfer,
     sync_input: SyncInputTransferBundle,
     source_index: usize,
     source_active_id: Option<String>,
@@ -252,6 +253,9 @@ impl NyaTermApp {
         };
         let terminal = self.terminal.detach_sessions_for_transfer(frames);
         let transfer = self.transfer.detach_sessions_for_transfer(&session_ids);
+        let android = self
+            .android
+            .detach_tab(&session_ids, &mut self.file_manager);
         let sync_input = self.sync_input.detach_sessions_for_transfer(&session_ids);
         let catalog = self
             .session
@@ -294,6 +298,7 @@ impl NyaTermApp {
             completion,
             terminal,
             transfer,
+            android,
             sync_input,
             source_index,
             source_active_id,
@@ -310,6 +315,12 @@ impl NyaTermApp {
         if let Err(error) = self.can_accept_tab_tree(&bundle.session_ids, placement) {
             return Err(Box::new((error, bundle)));
         }
+        if !self.android.can_attach_tab(&bundle.android) {
+            return Err(Box::new((
+                rust_i18n::t!("android.errors.leaseConflict").into_owned(),
+                bundle,
+            )));
+        }
         let insert_index = match placement {
             MoveTabPlacement::BeforeTab(tab_id) => self.session.session_index(tab_id),
             MoveTabPlacement::AfterTab(tab_id) => {
@@ -323,6 +334,7 @@ impl NyaTermApp {
             completion,
             terminal,
             transfer,
+            android,
             sync_input,
             pane_root,
             source_index,
@@ -341,6 +353,7 @@ impl NyaTermApp {
                     completion,
                     terminal,
                     transfer,
+                    android,
                     sync_input,
                     source_index,
                     source_active_id,
@@ -353,6 +366,9 @@ impl NyaTermApp {
         for id in &session_ids {
             self.ensure_sftp_session_view(id, cx);
         }
+        self.android
+            .attach_tab(android, &mut self.file_manager, cx.entity(), cx);
+        self.ensure_android_clock(cx);
         self.commands.accept_completion_sessions(completion);
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(transfer);
@@ -409,6 +425,9 @@ impl NyaTermApp {
         for id in &bundle.session_ids {
             self.ensure_sftp_session_view(id, cx);
         }
+        self.android
+            .attach_tab(bundle.android, &mut self.file_manager, cx.entity(), cx);
+        self.ensure_android_clock(cx);
         self.commands.accept_completion_sessions(bundle.completion);
         self.rebind_zmodem_recording();
         self.transfer.attach_sessions_from_transfer(bundle.transfer);
