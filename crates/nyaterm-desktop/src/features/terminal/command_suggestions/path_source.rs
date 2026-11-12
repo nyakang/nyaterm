@@ -5,7 +5,8 @@ use crate::blocking_jobs::BlockingJobScheduler;
 use crate::features::NyaTermApp;
 use nyaterm_core::completion::matching::TextMatcher;
 use nyaterm_core::completion::path::{
-    PathEntry, PathQuery, path_candidates, path_query_for_input, resolve_directory,
+    MAX_LISTED_ENTRIES, PathEntry, PathQuery, path_candidates, path_query_for_input,
+    resolve_directory,
 };
 use nyaterm_core::completion::types::{CompletionCandidate, CompletionScope, ShellDialect};
 use nyaterm_files::file_browser::{FileBrowserBackendKind, FileBrowserService};
@@ -14,7 +15,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Directory listings are reused while typing a path segment by segment.
-const LISTING_TTL: Duration = Duration::from_secs(4);
+const LISTING_TTL: Duration = Duration::from_secs(2);
+/// A job that never reported back (panic, cancelled before it ran) must not
+/// block its directory forever.
+const IN_FLIGHT_STALE: Duration = Duration::from_secs(10);
 /// The first listing of a session may have to open the SFTP channel, which
 /// costs about as much as the SSH login itself; later ones reuse it.
 const COLD_LISTING_BUDGET: Duration = Duration::from_millis(2500);
@@ -28,7 +32,7 @@ type Listing = Arc<Vec<PathEntry>>;
 
 struct Shared {
     listings: HashMap<CacheKey, (Instant, Listing)>,
-    in_flight: HashSet<CacheKey>,
+    in_flight: HashMap<CacheKey, Instant>,
     /// Sessions that completed one listing, so their channel is open.
     warm_sessions: HashSet<String>,
 }
@@ -38,7 +42,7 @@ fn shared() -> &'static Mutex<Shared> {
     SHARED.get_or_init(|| {
         Mutex::new(Shared {
             listings: HashMap::new(),
-            in_flight: HashSet::new(),
+            in_flight: HashMap::new(),
             warm_sessions: HashSet::new(),
         })
     })
@@ -54,6 +58,23 @@ fn cached(key: &CacheKey) -> Option<Listing> {
         .get(key)
         .filter(|(at, _)| at.elapsed() < LISTING_TTL)
         .map(|(_, listing)| listing.clone())
+}
+
+fn is_running(key: &CacheKey) -> bool {
+    lock()
+        .in_flight
+        .get(key)
+        .is_some_and(|started| started.elapsed() < IN_FLIGHT_STALE)
+}
+
+/// Leaves `in_flight` even when the job panics or unwinds, so a failed listing
+/// cannot make every later keystroke in that directory wait out the budget.
+struct InFlightGuard(CacheKey);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        lock().in_flight.remove(&self.0);
+    }
 }
 
 /// Called by the listing job itself, so a result that arrives after the
@@ -90,9 +111,14 @@ impl PathSource {
     fn start_listing(&self, key: CacheKey) -> bool {
         {
             let mut shared = lock();
-            if !shared.in_flight.insert(key.clone()) {
+            let running = shared
+                .in_flight
+                .get(&key)
+                .is_some_and(|started| started.elapsed() < IN_FLIGHT_STALE);
+            if running {
                 return true;
             }
+            shared.in_flight.insert(key.clone(), Instant::now());
         }
         let service = self.service.clone();
         let query = self.query.clone();
@@ -100,6 +126,7 @@ impl PathSource {
         let started = Instant::now();
         let job_key = key.clone();
         let task = self.jobs.submit_task("path-completion", move |_| {
+            let _guard = InFlightGuard(job_key.clone());
             let home = query
                 .dir_text
                 .starts_with('~')
@@ -108,8 +135,9 @@ impl PathSource {
             let listing = resolve_directory(&query, cwd.as_deref(), home.as_deref())
                 .and_then(|dir| match service.list_dir(&dir) {
                     Ok(entries) => Some(entries),
-                    Err(error) => {
-                        tracing::info!(%error, "path completion listing failed");
+                    // The error text can embed the listed path, so it is not logged.
+                    Err(_) => {
+                        tracing::info!("path completion listing failed");
                         None
                     }
                 })
@@ -117,6 +145,7 @@ impl PathSource {
                     Arc::new(
                         entries
                             .into_iter()
+                            .take(MAX_LISTED_ENTRIES)
                             .map(|entry| PathEntry {
                                 is_dir: entry.is_directory(),
                                 size: entry.size,
@@ -171,7 +200,7 @@ impl PathSource {
                     if let Some(listing) = cached(&key) {
                         break Some(listing);
                     }
-                    let running = lock().in_flight.contains(&key);
+                    let running = is_running(&key);
                     if !running || started.elapsed() >= budget {
                         // The job stores its result and leaves `in_flight` in one
                         // step, so a finished job is visible in the cache now.
@@ -243,8 +272,9 @@ impl NyaTermApp {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::*;
+    use super::{BlockingJobScheduler, FileBrowserService, PathSource};
     use nyaterm_core::completion::path::path_query_for_input;
+    use nyaterm_core::completion::types::{CompletionScope, ShellDialect};
 
     fn source(input: &str, dir: &std::path::Path) -> PathSource {
         PathSource {
@@ -285,5 +315,24 @@ mod tests {
             futures::executor::block_on(source.candidates(input, |_| std::future::ready(())))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_job_that_never_reported_does_not_block_its_directory_for_ever() {
+        let key: super::CacheKey = ("stale-test".into(), None, "/x/".into());
+        super::lock()
+            .in_flight
+            .insert(key.clone(), std::time::Instant::now());
+        assert!(super::is_running(&key));
+        {
+            let _guard = super::InFlightGuard(key.clone());
+        }
+        assert!(!super::is_running(&key), "guard clears the claim on drop");
+        super::lock().in_flight.insert(
+            key.clone(),
+            std::time::Instant::now() - super::IN_FLIGHT_STALE - std::time::Duration::from_secs(1),
+        );
+        assert!(!super::is_running(&key), "an old claim is ignored");
+        super::lock().in_flight.remove(&key);
     }
 }

@@ -216,12 +216,32 @@ pub fn escape_shell_path(path: &str) -> String {
     out
 }
 
+/// Unicode format and line/paragraph separators (categories Cf, Zl, Zp) are
+/// invisible or reorder the text around them, so a remote file name could
+/// make the popup show something other than what would be inserted.
+fn is_invisible_format(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
+
 fn entry_is_safe(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
         && !name.contains('/')
-        && !name.chars().any(char::is_control)
+        && !name
+            .chars()
+            .any(|ch| ch.is_control() || is_invisible_format(ch))
 }
 
 fn human_size(size: u64) -> String {
@@ -282,7 +302,14 @@ pub fn path_candidates(
             } else {
                 entry.name.clone()
             };
-            let insert_text = escape_shell_path(&format!("{}{display}", query.dir_text));
+            // A bare name that starts with `~`, `=` or `-` would be expanded or
+            // read as an option, so anchor it to the current directory.
+            let anchor = if query.dir_text.is_empty() && display.starts_with(['~', '=', '-']) {
+                "./"
+            } else {
+                ""
+            };
+            let insert_text = escape_shell_path(&format!("{anchor}{}{display}", query.dir_text));
             let mut candidate = CompletionCandidate {
                 indices: matcher.indices(&entry.name),
                 display,
@@ -312,7 +339,13 @@ pub fn path_candidates(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        PathEntry, PathQuery, escape_shell_path, path_candidates, path_query, path_query_for_input,
+        resolve_directory,
+    };
+    use crate::completion::matching::TextMatcher;
+    use crate::completion::parser::parse_context;
+    use crate::completion::types::{CompletionScope, ShellDialect};
 
     fn query(input: &str) -> Option<PathQuery> {
         path_query_for_input(input, ShellDialect::Bash, CompletionScope::legacy())
@@ -435,6 +468,35 @@ mod tests {
         let got = path_candidates(&q, &entries, "cd /var/", &mut TextMatcher::default(), 8);
         let shown: Vec<_> = got.iter().map(|c| c.insert_text.as_str()).collect();
         assert_eq!(shown, ["/var/lib/", "/var/log/"]);
+    }
+
+    #[test]
+    fn hides_names_with_invisible_or_reordering_characters() {
+        let q = query("cat /tmp/a").unwrap();
+        let entries = [
+            entry("a\u{202E}gpj.sh", false),
+            entry("a\u{200B}b", false),
+            entry("a\u{2028}b", false),
+            entry("ascii", false),
+        ];
+        let got = path_candidates(&q, &entries, "cat /tmp/a", &mut TextMatcher::default(), 8);
+        let shown: Vec<_> = got.iter().map(|c| c.display.as_str()).collect();
+        assert_eq!(shown, ["ascii"]);
+    }
+
+    #[test]
+    fn bare_names_that_look_like_options_or_expansions_are_anchored() {
+        let q = path_query_for_input("cd ", ShellDialect::Bash, CompletionScope::legacy()).unwrap();
+        let entries = [
+            entry("~tmp", true),
+            entry("-odd", true),
+            entry("=eq", true),
+            entry("plain", true),
+        ];
+        let got = path_candidates(&q, &entries, "cd ", &mut TextMatcher::default(), 8);
+        let mut inserted: Vec<_> = got.iter().map(|c| c.insert_text.clone()).collect();
+        inserted.sort();
+        assert_eq!(inserted, ["./-odd/", "./=eq/", "./~tmp/", "plain/"]);
     }
 
     #[test]
