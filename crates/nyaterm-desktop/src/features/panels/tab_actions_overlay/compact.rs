@@ -212,7 +212,6 @@ impl NyaTermApp {
         let multiplex_startup_session_id = session_id.clone();
         let split_horizontal_session_id = session_id.clone();
         let split_vertical_session_id = session_id.clone();
-        let android_screen_session_id = session_id.clone();
         let reconnect_session_id = session_id.clone();
         let disconnect_session_id = session_id.clone();
         let info_session_id = session_id.clone();
@@ -667,23 +666,6 @@ impl NyaTermApp {
                                         },
                                     ),
                                     ssh_submenu,
-                                ))
-                            })
-                            .when(support.android_screen, |this| {
-                                this.child(tab_menu_item_enabled(
-                                    palette,
-                                    "tab-ctx-android-screen",
-                                    t!("android.screen"),
-                                    availability.android_screen,
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.close_tab_actions(cx);
-                                        this.run_tab_target_action(
-                                            crate::features::shell::tab_mouse::TabActionTarget::Session(android_screen_session_id.clone()),
-                                            "android_screen",
-                                            window,
-                                            cx,
-                                        );
-                                    }),
                                 ))
                             })
                             .when(support.reconnect, |this| {

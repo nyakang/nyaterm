@@ -17,6 +17,27 @@ use rust_i18n::t;
 use std::sync::Arc;
 
 impl NyaTermApp {
+    pub(in crate::features) fn android_screen_button_available(&self, id: &str) -> bool {
+        matches!(
+            self.session
+                .metadata(id)
+                .map(|metadata| &metadata.launch_config),
+            Some(SessionLaunchConfig::AdbShell(_))
+        ) && self
+            .tab_action_policy_for(id, &self.tab_root_for_session(id))
+            .is_some_and(|policy| policy.availability.android_screen)
+    }
+
+    pub(in crate::features) fn open_android_screen_from_terminal(
+        &mut self,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.android_screen_button_available(id) {
+            self.android_open_from_session(id, AndroidViewKind::Screen, cx);
+        }
+    }
+
     pub(super) fn report_android_error(
         &mut self,
         operation: &'static str,
@@ -305,7 +326,7 @@ impl NyaTermApp {
         }
         if kind == AndroidViewKind::Shell {
             self.begin_background_session_start(
-                t!("android.shellTitle", name = config.name).into_owned(),
+                config.name.clone(),
                 SessionLaunchConfig::AdbShell(config.clone()),
                 Some(config.device_key),
                 AiExecutionProfile::SendOnly,

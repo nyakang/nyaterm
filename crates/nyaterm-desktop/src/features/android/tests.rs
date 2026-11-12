@@ -8,6 +8,44 @@ use nyaterm_files::adb::AdbFileService;
 use std::sync::Arc;
 
 #[test]
+fn adb_shell_uses_connection_name_and_preserves_custom_label() {
+    use crate::features::test_support::app_with_visible_android_session;
+
+    let root = TestConfigDir::new("nyaterm-adb-label");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "shell", "/sdcard/");
+    app.update(&mut cx, |app, _| {
+        let name = app.android_config_for_session("shell").unwrap().name;
+        assert_eq!(app.session.session_info("shell").unwrap().name, name);
+        assert_eq!(app.session.display_name("shell"), Some(name.clone()));
+        app.session
+            .set_custom_name("shell".into(), "My device".into());
+        assert_eq!(
+            app.session.display_name("shell").as_deref(),
+            Some("My device")
+        );
+        assert_eq!(app.session.session_info("shell").unwrap().name, name);
+    });
+}
+
+#[test]
+fn adb_screen_button_requires_its_own_live_shell_and_device() {
+    use crate::features::test_support::app_with_visible_android_session;
+
+    let root = TestConfigDir::new("nyaterm-adb-screen-button");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "shell", "/sdcard/");
+    app.update(&mut cx, |app, _| {
+        assert!(app.android_screen_button_available("shell"));
+        assert!(!app.android_screen_button_available("missing"));
+        app.android.file_service("android-device").unwrap().cancel();
+        assert!(!app.android_screen_button_available("shell"));
+    });
+}
+
+#[test]
 fn closing_android_views_keeps_other_channels_and_submitted_file_service_alive() {
     let root = TestConfigDir::new("nyaterm-android-view-lifecycle");
     let mut cx = gpui::TestAppContext::single();
@@ -154,8 +192,7 @@ fn restored_android_files_initializes_both_panes_and_standard_manager_reuses_exi
 }
 
 #[test]
-fn android_screen_menu_uses_runtime_policy_and_focuses_screen_for_the_target_device() {
-    use crate::features::shell::tab_mouse::TabActionTarget;
+fn adb_screen_button_uses_runtime_policy_and_focuses_screen_for_the_target_device() {
     use crate::features::test_support::{
         app_with_visible_android_session, session_focus_test_window,
     };
@@ -192,10 +229,9 @@ fn android_screen_menu_uses_runtime_policy_and_focuses_screen_for_the_target_dev
         );
     });
     let vcx = session_focus_test_window(&mut cx, &app);
-    vcx.update(|window, cx| {
+    vcx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            let target = TabActionTarget::Session("shell".into());
-            assert!(app.tab_target_action_enabled(&target, "android_screen"));
+            assert!(app.android_screen_button_available("shell"));
             app.android
                 .pending
                 .insert("android-device".into(), "pending".into());
@@ -205,13 +241,14 @@ fn android_screen_menu_uses_runtime_policy_and_focuses_screen_for_the_target_dev
                     .availability
                     .android_screen
             );
-            app.run_tab_target_action(target.clone(), "android_screen", window, cx);
+            app.open_android_screen_from_terminal("shell", cx);
             assert_eq!(app.session.active_id(), Some("shell"));
             app.android.pending.clear();
             app.session.metadata_mut("shell").unwrap().disconnected = true;
-            assert!(!app.tab_target_action_enabled(&target, "android_screen"));
+            assert!(!app.android_screen_button_available("shell"));
             app.session.metadata_mut("shell").unwrap().disconnected = false;
-            app.run_tab_target_action(target, "android_screen", window, cx);
+            app.session.select_active_session("other-screen");
+            app.open_android_screen_from_terminal("shell", cx);
             assert_eq!(app.session.active_id(), Some("screen"));
             assert_eq!(app.android.views.len(), 3);
             assert!(

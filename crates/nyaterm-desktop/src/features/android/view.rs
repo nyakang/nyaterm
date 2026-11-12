@@ -11,6 +11,36 @@ use rust_i18n::t;
 use std::time::{Duration, Instant};
 
 impl NyaTermApp {
+    pub(in crate::features) fn android_screen_button(
+        &self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let available = self.android_screen_button_available(&id);
+        div()
+            .id(format!("android-screen-button-overlay-{id}"))
+            .absolute()
+            .occlude()
+            .top_2()
+            .right_2()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                nyaterm_ui::NyaIconButton::new(
+                    format!("android-screen-button-{id}"),
+                    "icons/conn/rdp.svg",
+                )
+                .size(px(28.))
+                .tooltip(t!("android.screen"))
+                .disabled(!available)
+                .on_click(cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.open_android_screen_from_terminal(&id, cx);
+                })),
+            )
+    }
+
     pub(in crate::features) fn android_view(
         &mut self,
         id: String,

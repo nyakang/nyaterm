@@ -65,7 +65,7 @@ pub(super) fn session_info_from_metadata(
             id: session_id.to_string(),
             name: match metadata.launch_config {
                 SessionLaunchConfig::AdbShell(_) => {
-                    rust_i18n::t!("android.shellTitle", name = config.name)
+                    std::borrow::Cow::Borrowed(config.name.as_str())
                 }
                 SessionLaunchConfig::AdbFiles(_) => {
                     rust_i18n::t!("android.filesTitle", name = config.name)
