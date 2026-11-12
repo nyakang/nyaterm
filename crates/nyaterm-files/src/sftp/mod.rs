@@ -1,8 +1,8 @@
 //! SFTP browsing and file transfer.
 //!
-//! Domain-specific SFTP implementation. Protocol, retry, resume, and progress contracts
-//! remain unchanged; downloads additionally validate remote names, local path boundaries,
-//! and symbolic links to prevent server-controlled names from redirecting local writes.
+//! Domain-specific SFTP implementation. Upload retries validate task-owned remote
+//! targets; downloads validate remote names, local path boundaries, and symbolic
+//! links to prevent server-controlled names from redirecting local writes.
 
 use crate::remote_file::copy_progress::CopyProgress;
 use crate::remote_file::{
@@ -55,7 +55,10 @@ use remote_metadata::{
 };
 mod transfer_paths;
 mod tuning;
+mod upload;
+use upload::{upload_local_file, upload_local_file_bytes};
 mod upload_metadata;
+pub(crate) mod upload_runtime;
 use transfer_paths::{
     SftpLocalDownloadTargetContext, SftpRemoteWriteTargetContext, remote_join,
     resolve_local_download_target, resolve_remote_upload_target, resolve_remote_write_target,
@@ -65,7 +68,7 @@ use transfer_paths::{remote_conflict_candidate, resolve_duplicate_decision};
 use tuning::TransferParameters;
 #[cfg(test)]
 use upload_metadata::upload_file_mode as remote_upload_file_mode;
-use upload_metadata::{UploadMetadata, finish_upload_metadata};
+use upload_runtime::{UploadRetryUnsafe, UploadRuntime};
 
 pub const SFTP_TRANSFER_CANCELLED: &str = "SFTP transfer cancelled";
 
@@ -336,6 +339,27 @@ async fn close_sftp_session(session: OpenSftpSession) {
         return;
     }
     force_close_sftp_session(session).await;
+}
+
+async fn close_upload_session(session: OpenSftpSession, runtime: &UploadRuntime) {
+    if runtime.retry_ready() {
+        close_sftp_session(session).await;
+        return;
+    }
+    // An uncertain request may still be running on the server. Do not retain
+    // the compatibility channel for another operation or a manual retry.
+    let _ = SFTP_COMPATIBILITY_CACHE.try_with(|cache| {
+        if let Some(cache) = cache {
+            let mut cached = cache.lock().unwrap_or_else(|error| error.into_inner());
+            if cached
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.sftp, &session.sftp))
+            {
+                *cached = None;
+            }
+        }
+    });
+    let _ = tokio::time::timeout(Duration::from_secs(5), force_close_sftp_session(session)).await;
 }
 
 async fn force_close_sftp_session(session: OpenSftpSession) {
@@ -2260,31 +2284,36 @@ impl SftpService {
         let config = self.config.clone();
         let factory = self.session_factory();
         self.run_operation("upload_file", async move {
-            let upload_metadata = UploadMetadata::default();
+            let upload_state = UploadRuntime::default();
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let codec = SftpPathCodec::from_ssh_config(&config)?;
             let raw_path = codec.encode_path(&remote_path)?;
             let mut last_error = None;
             for _attempt in 0..=options.max_retries() {
                 control.check_cancelled()?;
+                anyhow::ensure!(upload_state.retry_ready(), UploadRetryUnsafe);
                 let result = async {
                     let session = factory
                         .open_with_config(
                             TransferParameters::new(&options, &config.sftp).client_config(),
                         )
                         .await?;
-                    let bytes = upload_local_file_bytes(
-                        &session.sftp,
-                        raw_path.clone(),
-                        &local_path,
-                        &remote_path,
-                        &control,
-                        &options,
-                        &upload_metadata,
-                        &mut progress,
-                    )
+                    let bytes = async {
+                        upload_state.validate(&session.sftp, &control).await?;
+                        upload_local_file_bytes(
+                            &session.sftp,
+                            raw_path.clone(),
+                            &local_path,
+                            &remote_path,
+                            &control,
+                            &options,
+                            &upload_state,
+                            &mut progress,
+                        )
+                        .await
+                    }
                     .await;
-                    close_sftp_session(session).await;
+                    close_upload_session(session, &upload_state).await;
                     let bytes = bytes?;
                     Ok(SftpTransferSummary {
                         remote_path: remote_path.clone(),
@@ -2297,6 +2326,13 @@ impl SftpService {
                 match result {
                     Ok(summary) => return Ok(summary),
                     Err(error) if is_sftp_transfer_cancelled(&error) => return Err(error),
+                    Err(error) if error.is::<UploadRetryUnsafe>() => {
+                        upload_state.block();
+                        return Err(error);
+                    }
+                    Err(error) if !upload_state.retry_ready() => {
+                        return Err(error.context(UploadRetryUnsafe));
+                    }
                     Err(error) => last_error = Some(error),
                 }
             }
@@ -2321,30 +2357,35 @@ impl SftpService {
         let config = self.config.clone();
         let factory = self.session_factory();
         self.run_operation("upload_remote_file", async move {
-            let upload_metadata = UploadMetadata::default();
+            let upload_state = UploadRuntime::default();
             let codec = SftpPathCodec::from_ssh_config(&config)?;
             let raw_path = remote_file_path_bytes(&codec, &remote_path)?;
             let mut last_error = None;
             for _attempt in 0..=options.max_retries() {
                 control.check_cancelled()?;
+                anyhow::ensure!(upload_state.retry_ready(), UploadRetryUnsafe);
                 let result = async {
                     let session = factory
                         .open_with_config(
                             TransferParameters::new(&options, &config.sftp).client_config(),
                         )
                         .await?;
-                    let bytes = upload_local_file_bytes(
-                        &session.sftp,
-                        raw_path.clone(),
-                        &local_path,
-                        &remote_path.display_path,
-                        &control,
-                        &options,
-                        &upload_metadata,
-                        &mut progress,
-                    )
+                    let bytes = async {
+                        upload_state.validate(&session.sftp, &control).await?;
+                        upload_local_file_bytes(
+                            &session.sftp,
+                            raw_path.clone(),
+                            &local_path,
+                            &remote_path.display_path,
+                            &control,
+                            &options,
+                            &upload_state,
+                            &mut progress,
+                        )
+                        .await
+                    }
                     .await;
-                    close_sftp_session(session).await;
+                    close_upload_session(session, &upload_state).await;
                     let bytes = bytes?;
                     Ok(SftpTransferSummary {
                         remote_path: remote_path.display_path.clone(),
@@ -2357,6 +2398,13 @@ impl SftpService {
                 match result {
                     Ok(summary) => return Ok(summary),
                     Err(error) if is_sftp_transfer_cancelled(&error) => return Err(error),
+                    Err(error) if error.is::<UploadRetryUnsafe>() => {
+                        upload_state.block();
+                        return Err(error);
+                    }
+                    Err(error) if !upload_state.retry_ready() => {
+                        return Err(error.context(UploadRetryUnsafe));
+                    }
                     Err(error) => last_error = Some(error),
                 }
             }
@@ -2463,7 +2511,7 @@ impl SftpService {
         let config = self.config.clone();
         let factory = self.session_factory();
         self.run_operation("upload_path", async move {
-            let upload_metadata = UploadMetadata::default();
+            let upload_state = path_options.upload_runtime().clone();
             let metadata = tokio::fs::metadata(&local_path).await?;
             let remote_path = resolve_remote_upload_target(&local_path, &remote_path)?;
             let codec = SftpPathCodec::from_ssh_config(&config)?;
@@ -2471,6 +2519,7 @@ impl SftpService {
             let mut last_error = None;
             for _attempt in 0..=path_options.transfer_options().max_retries() {
                 control.check_cancelled()?;
+                anyhow::ensure!(upload_state.retry_ready(), UploadRetryUnsafe);
                 let result = async {
                     let session = factory
                         .open_with_config(
@@ -2479,67 +2528,88 @@ impl SftpService {
                         )
                         .await?;
                     let sftp = Arc::clone(&session.sftp);
-                    control.wait_if_paused().await?;
-                    let Some(remote_target) =
-                        resolve_remote_write_target(SftpRemoteWriteTargetContext {
-                            sftp: &sftp,
-                            codec: &codec,
-                            local_path: &local_path,
-                            remote_path: &remote_path,
-                            is_directory: metadata.is_dir(),
-                            path_options: &path_options,
-                        })
-                        .await?
-                    else {
-                        close_sftp_session(session).await;
-                        return Ok(SftpTransferSummary {
-                            remote_path: remote_path.clone(),
-                            local_path: local_path.clone(),
-                            bytes: 0,
-                            skipped: true,
-                        });
-                    };
-                    let bytes = if metadata.is_dir() {
-                        let contents_options = path_options.for_directory_contents();
-                        upload_local_directory(
-                            Arc::clone(&sftp),
-                            &local_path,
-                            &remote_target,
-                            LocalDirectoryUploadContext {
+                    let result = async {
+                        upload_state.validate(&sftp, &control).await?;
+                        control.wait_if_paused().await?;
+                        let Some(remote_target) =
+                            resolve_remote_write_target(SftpRemoteWriteTargetContext {
+                                sftp: &sftp,
                                 codec: &codec,
-                                factory: &factory,
+                                local_path: &local_path,
+                                remote_path: &remote_path,
+                                is_directory: metadata.is_dir(),
+                                path_options: &path_options,
                                 control: &control,
-                                path_options: &contents_options,
-                                upload_metadata: &upload_metadata,
-                            },
-                            &mut progress,
-                        )
-                        .await?
-                    } else {
-                        upload_local_file(
-                            &sftp,
-                            &codec,
-                            &local_path,
-                            &remote_target,
-                            &control,
-                            path_options.transfer_options(),
-                            &upload_metadata,
-                            &mut progress,
-                        )
-                        .await?
-                    };
-                    close_sftp_session(session).await;
-                    Ok(SftpTransferSummary {
-                        remote_path: remote_target,
-                        local_path: local_path.clone(),
-                        bytes,
-                        skipped: false,
-                    })
+                            })
+                            .await?
+                        else {
+                            return Ok(SftpTransferSummary {
+                                remote_path: remote_path.clone(),
+                                local_path: local_path.clone(),
+                                bytes: 0,
+                                skipped: true,
+                            });
+                        };
+                        let bytes = if metadata.is_dir() {
+                            let contents_options = path_options.for_directory_contents();
+                            upload_local_directory(
+                                Arc::clone(&sftp),
+                                &local_path,
+                                &remote_target,
+                                LocalDirectoryUploadContext {
+                                    codec: &codec,
+                                    factory: &factory,
+                                    control: &control,
+                                    path_options: &contents_options,
+                                    upload_state: &upload_state,
+                                },
+                                &mut progress,
+                            )
+                            .await?
+                        } else {
+                            upload_local_file(
+                                &sftp,
+                                &codec,
+                                &local_path,
+                                &remote_target,
+                                &control,
+                                path_options.transfer_options(),
+                                &upload_state,
+                                &mut progress,
+                            )
+                            .await?
+                        };
+                        Ok(SftpTransferSummary {
+                            remote_path: remote_target,
+                            local_path: local_path.clone(),
+                            bytes,
+                            skipped: false,
+                        })
+                    }
+                    .await;
+                    if upload_state
+                        .finish_directories(&sftp, &control)
+                        .await
+                        .is_err()
+                    {
+                        upload_state.block();
+                    }
+                    close_upload_session(session, &upload_state).await;
+                    if result.is_ok() && !upload_state.retry_ready() {
+                        return Err(anyhow::Error::new(UploadRetryUnsafe));
+                    }
+                    result
                 }
                 .await;
                 match result {
                     Ok(summary) => return Ok(summary),
                     Err(error) if is_sftp_transfer_cancelled(&error) => return Err(error),
+                    Err(error)
+                        if error.is::<UploadRetryUnsafe>() || !upload_state.retry_ready() =>
+                    {
+                        upload_state.block();
+                        return Err(error.context(UploadRetryUnsafe));
+                    }
                     Err(error) => last_error = Some(error),
                 }
             }
@@ -2925,33 +2995,11 @@ mod filename_tests;
 mod overwrite_tests;
 #[cfg(test)]
 mod upload_metadata_tests;
+#[cfg(test)]
+mod upload_retry_tests;
 
 fn last_sftp_retry_error(last_error: Option<anyhow::Error>) -> anyhow::Error {
     last_error.unwrap_or_else(|| anyhow::anyhow!("SFTP transfer failed before starting"))
-}
-
-async fn preserve_remote_modified_time_bytes(
-    sftp: &SftpSession,
-    remote_path: Vec<u8>,
-    local_metadata: Option<std::fs::Metadata>,
-) {
-    let Some(local_metadata) = local_metadata else {
-        return;
-    };
-    let Some(mtime) = local_metadata.modified().ok().and_then(sftp_timestamp_secs) else {
-        return;
-    };
-    let atime = local_metadata
-        .accessed()
-        .ok()
-        .and_then(sftp_timestamp_secs)
-        .unwrap_or(mtime);
-    let attrs = russh_sftp::protocol::FileAttributes {
-        atime: Some(atime),
-        mtime: Some(mtime),
-        ..russh_sftp::protocol::FileAttributes::empty()
-    };
-    let _ = sftp.set_metadata_bytes(remote_path, attrs).await;
 }
 
 fn sftp_timestamp_secs(time: SystemTime) -> Option<u32> {
@@ -3496,98 +3544,6 @@ where
     }
 }
 
-#[expect(clippy::too_many_arguments)]
-async fn upload_local_file<F>(
-    sftp: &SftpSession,
-    codec: &SftpPathCodec,
-    local_path: &Path,
-    remote_path: &str,
-    control: &SftpTransferControl,
-    options: &SftpTransferOptions,
-    upload_metadata: &UploadMetadata,
-    progress: &mut F,
-) -> anyhow::Result<u64>
-where
-    F: FnMut(SftpTransferProgress) + Send,
-{
-    upload_local_file_bytes(
-        sftp,
-        codec.encode_path(remote_path)?,
-        local_path,
-        remote_path,
-        control,
-        options,
-        upload_metadata,
-        progress,
-    )
-    .await
-}
-
-#[expect(clippy::too_many_arguments)]
-async fn upload_local_file_bytes<F>(
-    sftp: &SftpSession,
-    raw_path: Vec<u8>,
-    local_path: &Path,
-    remote_path: &str,
-    control: &SftpTransferControl,
-    options: &SftpTransferOptions,
-    upload_metadata: &UploadMetadata,
-    progress: &mut F,
-) -> anyhow::Result<u64>
-where
-    F: FnMut(SftpTransferProgress) + Send,
-{
-    control.wait_if_paused().await?;
-    let mut local = tokio::fs::File::open(local_path).await?;
-    let local_metadata = local.metadata().await.ok();
-    let total_bytes = local_metadata.as_ref().map(|metadata| metadata.len());
-    let original = upload_metadata.capture(sftp, &raw_path, control).await?;
-    let mut remote = await_sftp_request(control, sftp.create_bytes(raw_path.clone())).await?;
-    let mut buffer = vec![0_u8; sftp_upload_buffer_size(options)];
-    let mut bytes = 0_u64;
-    progress(SftpTransferProgress {
-        phase: None,
-        remote_path: remote_path.to_string(),
-        local_path: local_path.to_path_buf(),
-        bytes_transferred: bytes,
-        total_bytes,
-        item_count_completed: None,
-        item_count_total: None,
-    });
-    loop {
-        control.wait_if_paused().await?;
-        let read = local.read(&mut buffer).await?;
-        if read == 0 {
-            break;
-        }
-        await_sftp_request(control, remote.write_all(&buffer[..read])).await?;
-        control.wait_if_paused().await?;
-        bytes += read as u64;
-        progress(SftpTransferProgress {
-            phase: None,
-            remote_path: remote_path.to_string(),
-            local_path: local_path.to_path_buf(),
-            bytes_transferred: bytes,
-            total_bytes,
-            item_count_completed: None,
-            item_count_total: None,
-        });
-    }
-    await_sftp_request(control, remote.shutdown()).await?;
-    finish_upload_metadata(
-        sftp,
-        raw_path.clone(),
-        original.as_ref(),
-        options.default_file_mode,
-        control,
-    )
-    .await?;
-    if options.preserve_timestamps {
-        preserve_remote_modified_time_bytes(sftp, raw_path, local_metadata).await;
-    }
-    Ok(bytes)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocalDirectoryUploadFileInventory {
     local_path: PathBuf,
@@ -3621,7 +3577,7 @@ struct LocalDirectoryUploadContext<'a> {
     factory: &'a SftpSessionFactory,
     control: &'a SftpTransferControl,
     path_options: &'a SftpPathTransferOptions,
-    upload_metadata: &'a UploadMetadata,
+    upload_state: &'a UploadRuntime,
 }
 
 async fn upload_local_directory<F>(
@@ -3644,6 +3600,7 @@ where
         inventory,
         context.control,
         context.path_options,
+        context.upload_state,
     )
     .await?;
     if context.factory.config.sftp.compatibility_mode {
@@ -3669,7 +3626,7 @@ where
                 &entry.remote_path,
                 context.control,
                 context.path_options.transfer_options(),
-                context.upload_metadata,
+                context.upload_state,
                 &mut report,
             )
             .await?;
@@ -3748,9 +3705,12 @@ async fn plan_local_directory_upload_entries(
     inventory: LocalDirectoryUploadInventory,
     control: &SftpTransferControl,
     path_options: &SftpPathTransferOptions,
+    upload_state: &UploadRuntime,
 ) -> anyhow::Result<Vec<LocalDirectoryUploadEntry>> {
     control.wait_if_paused().await?;
-    ensure_remote_dir(sftp, codec, remote_path, control).await?;
+    upload_state
+        .ensure_directory(sftp, codec.encode_path(remote_path)?, control)
+        .await?;
     let mut directory_targets = HashMap::new();
     directory_targets.insert(PathBuf::new(), remote_path.to_string());
 
@@ -3772,12 +3732,15 @@ async fn plan_local_directory_upload_entries(
             remote_path: &remote_child,
             is_directory: true,
             path_options,
+            control,
         })
         .await?
         else {
             continue;
         };
-        ensure_remote_dir(sftp, codec, &remote_child, control).await?;
+        upload_state
+            .ensure_directory(sftp, codec.encode_path(&remote_child)?, control)
+            .await?;
         directory_targets.insert(directory.relative_path, remote_child);
     }
 
@@ -3800,6 +3763,7 @@ async fn plan_local_directory_upload_entries(
             remote_path: &remote_child,
             is_directory: false,
             path_options,
+            control,
         })
         .await?
         else {
@@ -3860,7 +3824,7 @@ where
         let worker_queue = Arc::clone(&queue);
         let worker_control = context.control.clone();
         let worker_options = context.path_options.transfer_options().clone();
-        let worker_metadata = context.upload_metadata.clone();
+        let worker_metadata = context.upload_state.clone();
         let worker_bytes_transferred = Arc::clone(&bytes_transferred);
         let worker_item_count_completed = Arc::clone(&item_count_completed);
         let worker_large_lane = Arc::clone(&large_lane);
@@ -3877,7 +3841,7 @@ where
                 } else {
                     None
                 };
-                upload_local_directory_entry(
+                let result = upload_local_directory_entry(
                     Arc::clone(&worker_sftp.sftp),
                     codec,
                     entry,
@@ -3890,7 +3854,14 @@ where
                     item_count_total,
                     worker_progress_tx.clone(),
                 )
-                .await?;
+                .await;
+                if result.is_err() {
+                    worker_queue
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("upload queue lock poisoned"))?
+                        .clear();
+                    return result;
+                }
             }
             Ok::<(), anyhow::Error>(())
         });
@@ -3905,6 +3876,7 @@ where
     let mut watchdog = tokio::time::interval(Duration::from_secs(1));
     watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut remaining_workers = worker_count;
+    let mut first_error = None;
     let mut progress_closed = false;
     let result = async {
     while remaining_workers > 0 {
@@ -3930,12 +3902,15 @@ where
                         remaining_workers -= 1;
                     }
                     Some(Ok(Err(error))) => {
-                        workers.abort_all();
-                        return Err(error);
+                        queue.lock().map_err(|_| anyhow::anyhow!("upload queue lock poisoned"))?.clear();
+                        first_error.get_or_insert(error);
+                        remaining_workers -= 1;
                     }
                     Some(Err(error)) => {
-                        workers.abort_all();
-                        return Err(anyhow::anyhow!("SFTP directory upload worker failed: {error}"));
+                        queue.lock().map_err(|_| anyhow::anyhow!("upload queue lock poisoned"))?.clear();
+                        context.upload_state.block();
+                        first_error.get_or_insert_with(|| anyhow::anyhow!("SFTP directory upload worker failed: {error}"));
+                        remaining_workers -= 1;
                     }
                     None => break,
                 }
@@ -3972,9 +3947,15 @@ where
     while let Ok(progress_update) = progress_rx.try_recv() {
         progress(progress_update);
     }
-    Ok(bytes_transferred.load(Ordering::Relaxed))
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(bytes_transferred.load(Ordering::Relaxed)),
+    }
     }
     .await;
+    // Aborted workers must be reaped before their sessions or directory
+    // snapshots can be reused. Their unfinished entries remain unsafe.
+    while workers.join_next().await.is_some() {}
     pool.close_all().await;
     result
 }
@@ -3995,7 +3976,7 @@ async fn upload_local_directory_entry(
     entry: LocalDirectoryUploadEntry,
     control: SftpTransferControl,
     options: SftpTransferOptions,
-    upload_metadata: UploadMetadata,
+    upload_state: UploadRuntime,
     bytes_transferred: Arc<AtomicU64>,
     item_count_completed: Arc<AtomicU64>,
     expected_bytes: u64,
@@ -4030,7 +4011,7 @@ async fn upload_local_directory_entry(
         &entry.remote_path,
         &control,
         &options,
-        &upload_metadata,
+        &upload_state,
         &mut aggregate_progress,
     )
     .await?;
@@ -4150,25 +4131,6 @@ fn directory_transfer_progress(
         item_count_completed: Some(item_count_completed.min(item_count_total)),
         item_count_total: Some(item_count_total),
     }
-}
-
-async fn ensure_remote_dir(
-    sftp: &SftpSession,
-    codec: &SftpPathCodec,
-    remote_path: &str,
-    control: &SftpTransferControl,
-) -> anyhow::Result<()> {
-    control.wait_if_paused().await?;
-    if sftp
-        .try_exists_bytes(codec.encode_path(remote_path)?)
-        .await?
-    {
-        return Ok(());
-    }
-    control.wait_if_paused().await?;
-    sftp.create_dir_bytes(codec.encode_path(remote_path)?)
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]

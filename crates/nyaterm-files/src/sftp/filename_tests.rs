@@ -15,7 +15,7 @@ pub(super) struct Files {
     pub(super) attributes: HashMap<Vec<u8>, FileAttributes>,
     pub(super) links: HashMap<Vec<u8>, Vec<u8>>,
     pub(super) stat_error: Option<u32>,
-    pub(super) setstat_error: Option<u32>,
+    pub(super) chmod_error: Option<u32>,
     pub(super) ignore_chmod: bool,
     pub(super) fail_chmod_once: bool,
     pub(super) clear_special_on_write: bool,
@@ -48,6 +48,12 @@ pub(super) struct Files {
     pub(super) fail_read_at: Option<u64>,
     pub(super) fail_read_paths: HashSet<Vec<u8>>,
     pub(super) transient_read_failure: bool,
+    pub(super) fail_write_once_at: Option<u64>,
+    pub(super) fail_write_paths: HashSet<Vec<u8>>,
+    pub(super) disconnect_on_request: Option<u8>,
+    pub(super) open_flags: Vec<(Vec<u8>, u32)>,
+    pub(super) replace_on_open: Option<Vec<u8>>,
+    pub(super) change_before_fstat: bool,
 }
 
 fn number(input: &mut &[u8]) -> u32 {
@@ -82,8 +88,8 @@ fn default_attributes(size: usize, directory: bool, modified: Option<u32>) -> Fi
         size: Some(size as u64),
         permissions: Some(if directory { 0o040755 } else { 0o100644 }),
         // Ownership is opt-in so browsing fixtures do not attempt SSH name lookups.
-        atime: modified,
-        mtime: modified,
+        atime: Some(modified.unwrap_or(1)),
+        mtime: Some(modified.unwrap_or(1)),
         ..FileAttributes::empty()
     }
 }
@@ -149,6 +155,18 @@ fn reply(
             };
             if kind == 3 {
                 let flags = number(&mut input);
+                files.open_flags.push((path.clone(), flags));
+                if let Some(replacement) = files.replace_on_open.take() {
+                    files.contents.insert(path.clone(), replacement);
+                    files
+                        .attributes
+                        .insert(path.clone(), default_attributes(0, false, Some(42)));
+                }
+                if flags & 32 != 0
+                    && (files.contents.contains_key(&path) || files.links.contains_key(&path))
+                {
+                    return status(id, 4);
+                }
                 if flags & 8 != 0 {
                     if !files.contents.contains_key(&path) {
                         files
@@ -190,9 +208,6 @@ fn reply(
                 path
             };
             let path = files.links.get(&path).cloned().unwrap_or(path);
-            if let Some(error) = files.setstat_error {
-                return status(id, error);
-            }
             let flags = number(&mut input);
             let mut update = FileAttributes::empty();
             if flags & 1 != 0 {
@@ -211,8 +226,20 @@ fn reply(
                 update.mtime = Some(number(&mut input));
             }
             files.attribute_updates.push(update.clone());
+            if update.permissions.is_some()
+                && let Some(error) = files.chmod_error
+            {
+                return status(id, error);
+            }
             if update.permissions.is_some() && std::mem::take(&mut files.fail_chmod_once) {
                 return status(id, 3);
+            }
+            if let Some(size) = update.size {
+                files
+                    .contents
+                    .get_mut(&path)
+                    .unwrap()
+                    .resize(size as usize, 0);
             }
             let current = files
                 .attributes
@@ -274,11 +301,22 @@ fn reply(
                 }
                 if files.change_owner_on_write {
                     attrs.uid = Some(2000);
+                    attrs.gid.get_or_insert(2001);
                 }
             }
             let offset = u64::from_be_bytes(input[..8].try_into().unwrap()) as usize;
             input = &input[8..];
             let bytes = string(&mut input);
+            if files
+                .fail_write_once_at
+                .is_some_and(|at| offset as u64 >= at)
+            {
+                files.fail_write_once_at = None;
+                return status(id, 4);
+            }
+            if files.fail_write_paths.contains(&path) {
+                return status(id, 4);
+            }
             files.writes.push(bytes.len());
             let content = files.contents.get_mut(&path).unwrap();
             content.resize(content.len().max(offset + bytes.len()), 0);
@@ -301,6 +339,11 @@ fn reply(
                 return status(id, error);
             }
             let directory = files.directories.contains(&path);
+            if kind == 8 && std::mem::take(&mut files.change_before_fstat) {
+                files
+                    .attributes
+                    .insert(path.clone(), default_attributes(0, false, Some(42)));
+            }
             if !directory && !files.contents.contains_key(&path) && !files.links.contains_key(&path)
             {
                 return status(id, 2);
@@ -390,6 +433,18 @@ fn reply(
             files.contents.insert(target, content);
             return status(id, 0);
         }
+        19 => {
+            let path = string(&mut input);
+            let Some(target) = files.links.get(&path) else {
+                return status(id, 2);
+            };
+            packet.push(104);
+            packet.extend_from_slice(&id.to_be_bytes());
+            packet.extend_from_slice(&1_u32.to_be_bytes());
+            push_string(&mut packet, target);
+            push_string(&mut packet, b"");
+            attributes(&mut packet, 0, false, files.modified);
+        }
         200 => {
             let extension = string(&mut input);
             if extension == b"limits@openssh.com" {
@@ -411,7 +466,7 @@ pub(super) fn service(encoding: &str) -> (SftpService, Arc<Mutex<Files>>) {
     service_with_config(encoding, Default::default(), None)
 }
 
-fn service_with_config(
+pub(super) fn service_with_config(
     encoding: &str,
     client_config: russh_sftp::client::Config,
     limits: Option<[u64; 4]>,
@@ -447,6 +502,19 @@ fn service_with_config(
                         &mut enumerated,
                         &mut handles,
                     );
+                    let disconnect = {
+                        let mut files = peer_files.lock().unwrap();
+                        if files.disconnect_on_request == Some(packet[0]) {
+                            files.disconnect_on_request = None;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if disconnect {
+                        let _ = writer.lock().await.shutdown().await;
+                        break;
+                    }
                     let is_read = packet[0] == 5;
                     let is_write = packet[0] == 6;
                     let request_kind = packet[0];
@@ -526,6 +594,7 @@ fn service_with_config(
                         tokio::spawn(send);
                     }
                 }
+                peer_files.lock().unwrap().open_handles -= handles.len();
             });
             Ok(OpenSftpSession {
                 sftp: Arc::new(SftpSession::new_with_config(client, client_config).await?),
@@ -1000,13 +1069,14 @@ fn uploads_use_full_write_packets_and_wait_for_the_configured_ack_window() -> an
                 parameters.payload
             }
         );
-        // The only EXTENDED request permitted here is server-limit discovery.
+        // Flush drains the ACK window before handle-based metadata/checkpoint
+        // reads and issues one fsync on servers advertising that extension.
         assert_eq!(
             peer.request_kinds
                 .iter()
                 .filter(|kind| **kind == 200)
                 .count(),
-            usize::from(limits.is_some())
+            1 + usize::from(limits.is_some())
         );
         assert_eq!(peer.active_writes, 0);
         assert_eq!(peer.open_handles, 0);

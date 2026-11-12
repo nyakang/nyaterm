@@ -9,6 +9,8 @@ fn original(mode: u32) -> FileAttributes {
         uid: Some(1234),
         gid: Some(4321),
         permissions: Some(0o100000 | mode),
+        atime: Some(1),
+        mtime: Some(1),
         ..FileAttributes::empty()
     }
 }
@@ -62,7 +64,12 @@ fn overwrite_preserves_ownership_and_full_mode_despite_configured_default() -> a
                     .all(|attrs| attrs.uid.is_none() && attrs.gid.is_none())
             );
             if mode & 0o6000 == 0 {
-                assert!(files.attribute_updates.is_empty());
+                assert!(
+                    files
+                        .attribute_updates
+                        .iter()
+                        .all(|attrs| attrs.permissions.is_none())
+                );
             }
         }
     }
@@ -141,7 +148,7 @@ fn rejected_or_ignored_permission_restore_and_ownership_changes_are_reported() -
             files.attributes.insert(b"/file".to_vec(), original(0o6755));
             files.clear_special_on_write = true;
             match failure {
-                "denied" => files.setstat_error = Some(3),
+                "denied" => files.chmod_error = Some(3),
                 "ignored" => files.ignore_chmod = true,
                 "owner" => files.change_owner_on_write = true,
                 _ => unreachable!(),
@@ -152,9 +159,7 @@ fn rejected_or_ignored_permission_restore_and_ownership_changes_are_reported() -
         fs::write(&local, b"new")?;
         let error = service.upload_file(&local, "/file").unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("contents may already have changed"),
+            format!("{error:#}").contains("contents may already have changed"),
             "{error:#}"
         );
         assert_eq!(files.lock().unwrap().contents[b"/file".as_slice()], b"new");
@@ -227,8 +232,74 @@ fn retries_preserve_first_metadata_snapshot_for_files_and_directory_children() -
             files.attributes[remote.as_bytes()].permissions,
             Some(0o106755)
         );
-        assert_eq!(files.attribute_updates.len(), 2);
+        assert_eq!(
+            files
+                .attribute_updates
+                .iter()
+                .filter(|attrs| attrs.permissions.is_some())
+                .count(),
+            2
+        );
     }
+    Ok(())
+}
+
+#[test]
+fn manual_retry_restores_the_first_mode_and_preserves_requested_timestamps() -> anyhow::Result<()> {
+    let (service, files) = service("UTF-8");
+    {
+        let mut files = files.lock().unwrap();
+        files.contents.insert(b"/file".to_vec(), b"old".to_vec());
+        files.attributes.insert(b"/file".to_vec(), original(0o6755));
+        files.clear_special_on_write = true;
+        files.fail_chmod_once = true;
+    }
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("source");
+    fs::write(&source, b"new")?;
+    let options = SftpPathTransferOptions::default().with_transfer_options(
+        SftpTransferOptions::default()
+            .with_default_file_permissions("644")
+            .with_preserve_timestamps(true),
+    );
+    let retry = options.with_transfer_options(options.transfer_options().clone());
+    assert!(
+        service
+            .upload_path_with_progress_and_path_options(
+                &source,
+                "/file",
+                SftpTransferControl::new(),
+                options,
+                |_| {},
+            )
+            .is_err()
+    );
+    assert_eq!(
+        files.lock().unwrap().attributes[b"/file".as_slice()].permissions,
+        Some(0o100755)
+    );
+    service.upload_path_with_progress_and_path_options(
+        &source,
+        "/file",
+        SftpTransferControl::new(),
+        retry,
+        |_| {},
+    )?;
+    let files = files.lock().unwrap();
+    let attrs = &files.attributes[b"/file".as_slice()];
+    assert_eq!(attrs.permissions, Some(0o106755));
+    assert_eq!((attrs.uid, attrs.gid), (Some(1234), Some(4321)));
+    assert_eq!(
+        attrs.mtime,
+        fs::metadata(&source)?
+            .modified()
+            .ok()
+            .and_then(super::sftp_timestamp_secs)
+    );
+    assert!(
+        !files.request_kinds.contains(&9),
+        "metadata changes must use FSETSTAT"
+    );
     Ok(())
 }
 
