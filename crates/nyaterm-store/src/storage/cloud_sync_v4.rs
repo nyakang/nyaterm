@@ -778,7 +778,7 @@ impl ConnectionStore {
         {
             return Err(StorageError::CloudSyncLocalChanged);
         }
-        let replica = SyncReplica::load(&prepared.plan.replica, prepared.local.writer)
+        let mut replica = SyncReplica::load(&prepared.plan.replica, prepared.local.writer)
             .map_err(|_| invalid())?;
         if replica
             .materialize(&current.projection.values, &prepared.plan.scope)
@@ -808,13 +808,27 @@ impl ConnectionStore {
         // Preserve the complete live document, including the encrypted local
         // verifier. A redacted portable-backup projection is never applied here.
         let original_settings = entities["settings"].clone();
-        let application = constrain_application(
+        let bound_original = bound_collections(&entities);
+        let mut application = constrain_application(
             &snapshot,
             &current.projection.values,
             &prepared.plan.effective,
             &prepared.plan.scope,
             &prepared.trust_approvals,
         )?;
+        // A remote address change must neither move this device's stored
+        // password to a new target nor stay deferred forever. Keep the address
+        // already in use here and re-publish it, so the field settles. A scope
+        // that publishes credentials has no such binding to protect.
+        let (retained_labels, retained_endpoints) = if prepared.plan.scope.secrets {
+            (Vec::new(), Vec::new())
+        } else {
+            secrets::retain_bound_endpoints(
+                &mut application.effective,
+                &current.projection.values,
+                &bound_original,
+            )?
+        };
         reconstruct(&mut entities, &application.effective, &prepared.plan.scope)?;
         let sessions: SessionsConfig = serde_json::from_value(entities["sessions"].clone())?;
         validate_relationships(&entities)?;
@@ -828,11 +842,23 @@ impl ConnectionStore {
             .cloned()
             .map(PreparedConnectionForStorage)
             .collect::<Vec<_>>();
-        prepared.local.replica = Some(prepared.plan.replica);
+        // Without a retained address the plan's exact snapshot is stored, so an
+        // apply with nothing to publish keeps the byte-identical record.
+        prepared.local.replica = if retained_endpoints.is_empty() {
+            Some(prepared.plan.replica)
+        } else {
+            for retained in &retained_endpoints {
+                replica
+                    .reassert(&retained.field, retained.value.clone())
+                    .map_err(|_| invalid())?;
+            }
+            Some(replica.snapshot())
+        };
         entities.insert("sessions".into(), serde_json::to_value(&sessions)?);
         entities.insert("notes".into(), serde_json::to_value(&notes)?);
         prepared.local.conflicts = prepared.plan.conflicts;
         prepared.local.deferred = application.deferred;
+        prepared.local.kept = retained_labels;
         prepared.local.scope = prepared.plan.scope;
         let txn = self.db.begin_write()?;
         let current_hash = txn
@@ -1034,6 +1060,37 @@ impl ConnectionStore {
         }
         Ok(prepared.local)
     }
+}
+
+/// Only the collections a credential redirect can touch. `sessions` may be
+/// megabytes and `notes` never participates, so the snapshot is trimmed instead
+/// of cloned wholesale.
+fn bound_collections(entities: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    let connections = entities
+        .get("sessions")
+        .and_then(|sessions| sessions.get("connections"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    BTreeMap::from([
+        (
+            "v4_local_auth_identities".to_string(),
+            entities
+                .get("v4_local_auth_identities")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "sessions".to_string(),
+            json!({ "connections": connections }),
+        ),
+        (
+            "proxies".to_string(),
+            entities
+                .get("proxies")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+    ])
 }
 
 fn constrain_application(

@@ -3672,7 +3672,22 @@
     "keywordHighlightMasterHint": "关闭后，通用规则、自定义规则和命令输出高亮均不生效；各项设置会保留。",
     "keywordHighlightGeneralRules": "通用规则",
     "keywordHighlightSpecializedRules": "命令输出专用规则",
-    "keywordHighlightSpecializedHint": "用于网络设备、权限、日志、SQL 等输出，需开启「按命令输出类型高亮」。"
+    "keywordHighlightSpecializedHint": "用于网络设备、权限、日志、SQL 等输出，需开启「按命令输出类型高亮」。",
+    "syncConflictSelectAll": "全选冲突",
+    "syncConflictClearSelection": "清空",
+    "syncConflictKeepLocal": "选中项保留本地值",
+    "syncConflictKeepRemote": "选中项保留远端值",
+    "syncConflictSelectionSummary": "已选 %{selected} / %{total} 项 · 已暂存 %{staged} 项",
+    "syncConflictSelectGroup": "选择该组",
+    "syncConflictGroupTitle": "候选组合 %{group} · %{count} 个字段",
+    "syncConflictApplyGroupChoice": "全部设为此值",
+    "syncConflictApplyStaged": "应用所选（%{count}）",
+    "syncConflictGroupMoreFields": "… 还有 %{count} 个字段",
+    "syncConflictShowDetails": "显示详细冲突列表（%{count}）",
+    "syncConflictHideDetails": "隐藏详细冲突列表",
+    "syncLocalChangeRetry": "本地有新的更改，正在重新同步…",
+    "syncV3DeferredFields": "暂缓字段：%{fields}",
+    "syncV3KeptEndpoints": "已保留本机地址（本机保存了密码）：%{entries}"
   },
   "sshAuth": {
     "additionalPasswordRequired": "服务器要求额外验证账户密码。此密码仅用于本次连接。",

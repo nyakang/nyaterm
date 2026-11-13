@@ -3672,7 +3672,22 @@
     "keywordHighlightMasterHint": "オフにすると、汎用ルール、カスタムルール、コマンド出力の強調表示が無効になります。各設定は保持されます。",
     "keywordHighlightGeneralRules": "汎用ルール",
     "keywordHighlightSpecializedRules": "コマンド出力専用ルール",
-    "keywordHighlightSpecializedHint": "ネットワーク機器、パーミッション、ログ、SQL などの出力用です。コマンド出力の強調表示を有効にする必要があります。"
+    "keywordHighlightSpecializedHint": "ネットワーク機器、パーミッション、ログ、SQL などの出力用です。コマンド出力の強調表示を有効にする必要があります。",
+    "syncConflictSelectAll": "すべての競合を選択",
+    "syncConflictClearSelection": "クリア",
+    "syncConflictKeepLocal": "選択項目にローカル値を保持",
+    "syncConflictKeepRemote": "選択項目にリモート値を保持",
+    "syncConflictSelectionSummary": "%{selected} / %{total} 件選択 · %{staged} 件ステージ済み",
+    "syncConflictSelectGroup": "このグループを選択",
+    "syncConflictGroupTitle": "候補パターン %{group} · %{count} 項目",
+    "syncConflictApplyGroupChoice": "すべてに適用",
+    "syncConflictApplyStaged": "選択を適用（%{count}）",
+    "syncConflictGroupMoreFields": "… 他 %{count} 項目",
+    "syncConflictShowDetails": "詳細な競合リストを表示（%{count}）",
+    "syncConflictHideDetails": "詳細な競合リストを隠す",
+    "syncLocalChangeRetry": "ローカルに新しい変更があったため再同期します…",
+    "syncV3DeferredFields": "保留したフィールド：%{fields}",
+    "syncV3KeptEndpoints": "保存済みパスワードが紐づくため、この端末のアドレスを保持しました：%{entries}"
   },
   "sshAuth": {
     "additionalPasswordRequired": "サーバーで追加のアカウントパスワード認証が必要です。このパスワードは今回の接続にのみ使用されます。",

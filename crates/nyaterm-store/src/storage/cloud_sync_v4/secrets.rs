@@ -1,7 +1,7 @@
 //! Read-only credential preparation and transaction-local re-encryption. Master
 //! keys remain local; no key file is created or replaced during synchronization.
 mod bound;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use nyaterm_core::sync_schema::secrets::{
     EncryptedSecretValue, SecretReference, SecretValueCodec, payload_fields, secret_fields,
@@ -475,72 +475,151 @@ pub(super) fn bound_edits(
     edits
 }
 
+/// A record whose address this device will not take from the replica because a
+/// credential of its own is bound to it.
+pub(super) struct RetainedEndpoint {
+    pub field: SyncFieldId,
+    /// The address already stored on this device.
+    pub value: SyncValue,
+}
+
+const BOUND_COLLECTIONS: &[(&str, &str, &str)] = &[
+    ("sessions", "connections", "connection"),
+    ("proxies", "", "proxy"),
+];
+
+fn identities(entities: &BTreeMap<String, Value>) -> Result<BTreeSet<String>, StorageError> {
+    Ok(serde_json::from_value(
+        entities
+            .get("v4_local_auth_identities")
+            .cloned()
+            .ok_or_else(invalid)?,
+    )?)
+}
+
+fn collection<'a>(
+    entities: &'a BTreeMap<String, Value>,
+    entity: &str,
+    section: &str,
+) -> Option<&'a Value> {
+    let value = entities.get(entity)?;
+    if section.is_empty() {
+        Some(value)
+    } else {
+        value.get(section)
+    }
+}
+
+/// Whether the record keeps credential material that this scope never publishes.
+fn keeps_scoped_secret(
+    kind: &str,
+    record: &Value,
+    id: &str,
+    identities: &BTreeSet<String>,
+) -> bool {
+    let password = if kind == "connection" {
+        record.pointer("/auth/password")
+    } else {
+        record.get("password")
+    };
+    password.is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+        || (kind == "connection"
+            && identities.contains(&entity_key(CONNECTION_PASSWORD_PREFIX, id)))
+}
+
 /// Excluding credential scope must also protect credentials embedded in core
-/// records. Remote deletion or endpoint changes cannot destroy/redirect those
-/// slots merely because the portable metadata is otherwise valid.
+/// records: a remote deletion cannot destroy them merely because the portable
+/// metadata is otherwise valid. Address moves of a record that still exists are
+/// resolved by `retain_bound_endpoints` instead of being rejected here.
 pub(super) fn validate_excluded_bindings(
     candidate: &BTreeMap<String, Value>,
     original: &BTreeMap<String, Value>,
 ) -> Result<(), StorageError> {
-    let identities: std::collections::BTreeSet<String> = serde_json::from_value(
-        original
-            .get("v4_local_auth_identities")
+    let identities = identities(original)?;
+    for &(entity, section, kind) in BOUND_COLLECTIONS {
+        let old = collection(original, entity, section)
             .cloned()
-            .ok_or_else(invalid)?,
-    )?;
-    for (entity, section, kind) in [
-        ("sessions", "connections", "connection"),
-        ("proxies", "", "proxy"),
-    ] {
-        let collection = |entities: &BTreeMap<String, Value>| {
-            let value = &entities[entity];
-            if section.is_empty() {
-                value.clone()
-            } else {
-                value[section].clone()
-            }
-        };
-        let old = collection(original);
-        let next = collection(candidate);
-        let by_id = next
-            .as_array()
-            .ok_or_else(invalid)?
-            .iter()
-            .filter_map(|record| {
-                record
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(|id| (id, record))
-            })
-            .collect::<BTreeMap<_, _>>();
+            .ok_or_else(invalid)?;
+        let next = collection(candidate, entity, section)
+            .cloned()
+            .ok_or_else(invalid)?;
+        let next = next.as_array().ok_or_else(invalid)?;
         for record in old.as_array().ok_or_else(invalid)? {
             let id = record
                 .get("id")
                 .and_then(Value::as_str)
                 .ok_or_else(invalid)?;
-            let password = if kind == "connection" {
-                record.pointer("/auth/password")
-            } else {
-                record.get("password")
-            };
-            let has_secret = password
-                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
-                || (kind == "connection"
-                    && identities.contains(&entity_key(CONNECTION_PASSWORD_PREFIX, id)));
-            if !has_secret {
+            if !keeps_scoped_secret(kind, record, id, &identities) {
                 continue;
             }
-            let next = by_id.get(id).ok_or_else(invalid)?;
-            let before =
-                nyaterm_core::sync_schema::project_record(kind, record).map_err(|_| invalid())?;
-            let after =
-                nyaterm_core::sync_schema::project_record(kind, next).map_err(|_| invalid())?;
-            for field in ["endpoint", "authentication"] {
-                if before.get(field) != after.get(field) {
-                    return Err(invalid());
-                }
+            if !next
+                .iter()
+                .any(|record| record.get("id").and_then(Value::as_str) == Some(id))
+            {
+                return Err(invalid());
             }
         }
     }
     Ok(())
+}
+
+/// A remote address change must neither carry a stored credential to a new
+/// target nor be deferred on every pass. The record keeps the address this
+/// device already uses, and the replica is told to re-publish it: the choice is
+/// causally newer than the remote value, so the field settles in one pass and
+/// no password is ever deleted. Returns the record labels for the status line
+/// plus the values the caller must reassert in the replica.
+pub(super) fn retain_bound_endpoints(
+    effective: &mut SyncValues,
+    local: &SyncValues,
+    entities: &BTreeMap<String, Value>,
+) -> Result<(Vec<String>, Vec<RetainedEndpoint>), StorageError> {
+    let identities = identities(entities)?;
+    let mut labels = Vec::new();
+    let mut retained = Vec::new();
+    for &(entity, section, kind) in BOUND_COLLECTIONS {
+        let Some(records) = collection(entities, entity, section).and_then(Value::as_array) else {
+            continue;
+        };
+        for record in records {
+            let Some(id) = record.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if !keeps_scoped_secret(kind, record, id, &identities) {
+                continue;
+            }
+            let resource = SyncResourceId::new(kind, id);
+            // A remote deletion keeps its own guard; only address moves of a
+            // record that still exists are pinned back to the local value.
+            let present = effective
+                .get(&SyncFieldId::presence(resource.clone()).key())
+                .and_then(|value| value.decode().ok())
+                .and_then(|value| value.as_bool());
+            if present != Some(true) {
+                continue;
+            }
+            let field = SyncFieldId::new(resource, "endpoint");
+            let Some(current) = local.get(&field.key()).cloned() else {
+                continue;
+            };
+            if effective.get(&field.key()) == Some(&current) {
+                continue;
+            }
+            // A missing field is a tombstone downstream, so the local group is
+            // written back explicitly instead of being dropped.
+            effective.insert(field.key(), current.clone());
+            labels.push(
+                record
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id)
+                    .to_string(),
+            );
+            retained.push(RetainedEndpoint {
+                field,
+                value: current,
+            });
+        }
+    }
+    Ok((labels, retained))
 }

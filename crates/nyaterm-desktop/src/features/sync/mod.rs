@@ -7,7 +7,10 @@ mod cloud_sync_v4;
 pub(crate) mod io_runtime;
 pub(crate) mod operation;
 mod state;
+pub(in crate::features) use cloud_sync_v4::ConflictSummary as V4ConflictSummary;
 pub(in crate::features) use cloud_sync_v4::PreviewSummary as V4PreviewSummary;
+#[cfg(test)]
+pub(crate) use cloud_sync_v4::SyncReport as V4SyncReport;
 
 pub(crate) use auto_sync::{AutoSyncRequest, AutoSyncResult, AutoSyncTrigger, run_auto_sync};
 pub(in crate::features) use cloud_sync_provider::{

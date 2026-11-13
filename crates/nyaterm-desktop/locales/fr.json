@@ -3672,7 +3672,22 @@
     "keywordHighlightMasterHint": "La désactivation suspend les règles générales, les règles personnalisées et la coloration des sorties de commande. Vos préférences sont conservées.",
     "keywordHighlightGeneralRules": "Règles générales",
     "keywordHighlightSpecializedRules": "Règles des sorties de commande",
-    "keywordHighlightSpecializedHint": "Pour les sorties réseau, les permissions, les journaux et SQL. Nécessite la coloration des sorties de commande."
+    "keywordHighlightSpecializedHint": "Pour les sorties réseau, les permissions, les journaux et SQL. Nécessite la coloration des sorties de commande.",
+    "syncConflictSelectAll": "Tout sélectionner",
+    "syncConflictClearSelection": "Effacer",
+    "syncConflictKeepLocal": "Garder les valeurs locales pour la sélection",
+    "syncConflictKeepRemote": "Garder les valeurs distantes pour la sélection",
+    "syncConflictSelectionSummary": "%{selected} sur %{total} sélectionnés · %{staged} en attente",
+    "syncConflictSelectGroup": "Sélectionner ce groupe",
+    "syncConflictGroupTitle": "Modèle de choix %{group} · %{count} champs",
+    "syncConflictApplyGroupChoice": "Appliquer à tous",
+    "syncConflictApplyStaged": "Appliquer la sélection (%{count})",
+    "syncConflictGroupMoreFields": "… %{count} champs de plus",
+    "syncConflictShowDetails": "Afficher la liste détaillée des conflits (%{count})",
+    "syncConflictHideDetails": "Masquer la liste détaillée des conflits",
+    "syncLocalChangeRetry": "Des modifications locales sont arrivées pendant la synchronisation ; nouvelle tentative…",
+    "syncV3DeferredFields": "Champs reportés : %{fields}",
+    "syncV3KeptEndpoints": "Adresse de cet appareil conservée, un mot de passe enregistré y étant associé : %{entries}"
   },
   "sshAuth": {
     "additionalPasswordRequired": "Le serveur demande un mot de passe de compte supplémentaire. Il sera utilisé uniquement pour cette connexion.",

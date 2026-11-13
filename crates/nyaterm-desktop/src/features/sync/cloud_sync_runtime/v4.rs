@@ -14,7 +14,18 @@ enum JobResult {
 }
 
 enum PreviewDecision {
-    Conflict(usize, usize),
+    Conflicts(Vec<(usize, usize)>),
+}
+
+/// The worker persists `last_checked_at_ms` / `last_synced_at_ms` when it
+/// finishes; the in-memory copy predates that write and would keep showing
+/// "上次同步: 从未" after a verified publication.
+fn reload_cloud_sync_state(app: &mut NyaTermApp) -> nyaterm_core::CloudSyncState {
+    app.store_blocking_client()
+        .request_fn(StoreDomain::CloudSync, |store| {
+            store.load_cloud_sync_state()
+        })
+        .unwrap_or_else(|_| app.cloud_sync.state().clone())
 }
 
 impl NyaTermApp {
@@ -117,17 +128,13 @@ impl NyaTermApp {
     pub(in crate::features) fn apply_cloud_sync_v3_preview(&mut self, cx: &mut Context<Self>) {
         self.run_cloud_sync_v3_job(true, None, cx);
     }
-    pub(in crate::features) fn resolve_cloud_sync_v3_preview(
+    /// Applies every staged conflict decision in one background job.
+    pub(in crate::features) fn resolve_cloud_sync_v3_preview_batch(
         &mut self,
-        conflict: usize,
-        candidate: usize,
+        decisions: Vec<(usize, usize)>,
         cx: &mut Context<Self>,
     ) {
-        self.run_cloud_sync_v3_job(
-            false,
-            Some(PreviewDecision::Conflict(conflict, candidate)),
-            cx,
-        );
+        self.run_cloud_sync_v3_job(false, Some(PreviewDecision::Conflicts(decisions)), cx);
     }
 
     fn run_cloud_sync_v3_job(
@@ -136,6 +143,7 @@ impl NyaTermApp {
         resolution: Option<PreviewDecision>,
         cx: &mut Context<Self>,
     ) {
+        let started_at = std::time::Instant::now();
         if self.block_cloud_sync_for_settings_draft(cx) {
             return;
         }
@@ -199,12 +207,13 @@ impl NyaTermApp {
             if let Some(decision) = resolution {
                 let mut preview = previous.ok_or(CloudSyncError::LocalChangedDuringSync)?;
                 match decision {
-                    PreviewDecision::Conflict(conflict, candidate) => preview.resolve(
-                        &store,
-                        options.master_password.expose_secret(),
-                        conflict,
-                        candidate,
-                    )?,
+                    PreviewDecision::Conflicts(decisions) => {
+                        preview.resolve_batch(
+                            &store,
+                            options.master_password.expose_secret(),
+                            &decisions,
+                        )?;
+                    }
                 }
                 return Ok(JobResult::Preview(Box::new(preview)));
             }
@@ -229,32 +238,37 @@ impl NyaTermApp {
                 match result {
                     Ok(JobResult::Preview(preview)) => {
                         this.cloud_sync.set_v4_preview(*preview);
-                        this.cloud_sync.complete_job(
-                            this.cloud_sync.state().clone(),
-                            t!("settings.syncV3PreviewReady").to_string(),
-                        );
+                        let state = reload_cloud_sync_state(this);
+                        this.cloud_sync
+                            .complete_job(state, t!("settings.syncV3PreviewReady").to_string());
                     }
                     Ok(JobResult::Applied(report)) => {
-                        let mut message = if report.verified {
-                            t!("settings.syncV3Verified", count = report.conflicts).to_string()
-                        } else {
-                            t!(
-                                "settings.syncV3Pending",
-                                detail = report.publication_error.unwrap_or_default()
-                            )
-                            .to_string()
-                        };
-                        if report.deferred > 0 {
-                            message.push_str(&format!(
-                                " · {}",
-                                t!("settings.syncV3Deferred", count = report.deferred)
-                            ));
-                        }
-                        this.cloud_sync
-                            .complete_job(this.cloud_sync.state().clone(), message);
+                        let state = reload_cloud_sync_state(this);
+                        this.cloud_sync.complete_job(state, report.status_message());
+                        // A finished manual sync must land in the history list;
+                        // otherwise the panel tells the user "no conflicts and
+                        // no successful sync" while the status bar just said
+                        // the apply was verified.
+                        let entry = report.history_entry(
+                            "manual_push",
+                            Some(this.cloud_sync.settings().provider.clone()),
+                            Some(started_at.elapsed().as_millis() as u64),
+                        );
+                        this.queue_cloud_sync_history_refresh(Some(entry), cx);
                         this.refresh_store_from_runtime_and_sync_theme(cx);
                     }
-                    Err(error) => this.cloud_sync.fail_job_with_status(error.to_string()),
+                    Err(error) => {
+                        let message = error.to_string();
+                        let entry = nyaterm_core::CloudSyncHistoryEntry::sync(
+                            "failed",
+                            "manual_push",
+                            Some(this.cloud_sync.settings().provider.clone()),
+                            None,
+                            message.clone(),
+                        );
+                        this.queue_cloud_sync_history_refresh(Some(entry), cx);
+                        this.cloud_sync.fail_job_with_status(message.clone());
+                    }
                 }
                 this.shell.set_status(this.cloud_sync.status().to_string());
                 this.request_settings_panel_refresh(cx);

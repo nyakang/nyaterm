@@ -30,7 +30,7 @@ use nyaterm_ui::{
     NyaSliderValue,
 };
 use rust_i18n::t;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Background colours are resolved by the app because the panel is cached: it
@@ -491,7 +491,17 @@ pub(in crate::features) struct SettingsPanel {
     focus: FocusHandle,
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
     pub(in crate::features::pages::settings) pane_width: f32,
+    pub(in crate::features::pages::settings) pane_height: f32,
     pub(in crate::features::pages::settings) content_width: f32,
+    /// Staged V4 conflict selections and candidate choices. They survive
+    /// presentation refreshes and are reset whenever the conflict summary
+    /// changes (a new preview or an applied batch).
+    pub(in crate::features::pages::settings) cloud_sync_conflict_selection: BTreeSet<usize>,
+    pub(in crate::features::pages::settings) cloud_sync_conflict_choices: BTreeMap<usize, usize>,
+    pub(in crate::features::pages::settings) cloud_sync_conflict_signature: u64,
+    /// Whether the per-field conflict rows are expanded below the group cards.
+    /// Off by default: the grouped cards are the primary surface.
+    pub(in crate::features::pages::settings) cloud_sync_conflict_rows_visible: bool,
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<SettingsSnapshot>,
     pub(in crate::features) settings: SettingsPresentation,
@@ -564,7 +574,12 @@ impl SettingsPanel {
         Self {
             content_scroll_handles: HashMap::new(),
             pane_width: 0.,
+            pane_height: 0.,
             content_width: 0.,
+            cloud_sync_conflict_selection: BTreeSet::new(),
+            cloud_sync_conflict_choices: BTreeMap::new(),
+            cloud_sync_conflict_signature: 0,
+            cloud_sync_conflict_rows_visible: false,
             app,
             focus: cx.focus_handle(),
             snapshot: None,
@@ -1102,11 +1117,12 @@ impl Focusable for SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.paint_count += 1;
         }
+        self.pane_height = f32::from(window.viewport_size().height);
 
         let Some(snapshot) = self.snapshot.clone() else {
             return div()

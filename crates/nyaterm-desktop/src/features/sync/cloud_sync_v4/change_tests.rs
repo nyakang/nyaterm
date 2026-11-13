@@ -24,6 +24,14 @@ struct Fixture {
 
 impl Fixture {
     fn new(scope: SyncScope) -> Self {
+        Self::build(scope, "s3")
+    }
+
+    fn local_directory(scope: SyncScope) -> Self {
+        Self::build(scope, "local_directory")
+    }
+
+    fn build(scope: SyncScope, provider: &'static str) -> Self {
         let dir = TestConfigDir::new("nyaterm-v4-local-change");
         let remote = TestConfigDir::new("nyaterm-v4-local-change-remote");
         let store = blocking_test_store(dir.path());
@@ -32,7 +40,7 @@ impl Fixture {
         let settings = CloudSyncSettings {
             enabled: true,
             protocol_version: 4,
-            provider: "s3".into(),
+            provider: provider.into(),
             v4_scope: scope,
             ..Default::default()
         };
@@ -367,12 +375,6 @@ fn v4_change_preflight_keeps_initial_scope_publication_and_deferred_work() {
                     .unwrap(),
             )
         },
-        |view| {
-            view.record.deferred.push(SyncFieldId::new(
-                SyncResourceId::new("connection", "server"),
-                "endpoint",
-            ))
-        },
     ];
     for update in variants {
         let mut variant = local::load(&fixture.store, &fixture.settings, &fixture.options).unwrap();
@@ -382,6 +384,44 @@ fn v4_change_preflight_keeps_initial_scope_publication_and_deferred_work() {
                 .unwrap()
         );
     }
+    // A deferred field is merged into the local replica already; retrying it is
+    // local work and must not pull the whole remote state on every edit. It is
+    // retried as soon as a local edit lands (`edited`) or new remote work is
+    // observed.
+    let mut deferred_only =
+        local::load(&fixture.store, &fixture.settings, &fixture.options).unwrap();
+    deferred_only.record.deferred.push(SyncFieldId::new(
+        SyncResourceId::new("connection", "server"),
+        "endpoint",
+    ));
+    assert!(
+        !local::needs_remote(
+            &deferred_only,
+            &nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE
+        )
+        .unwrap()
+    );
+    let mut deferred_but_edited =
+        local::load(&fixture.store, &fixture.settings, &fixture.options).unwrap();
+    deferred_but_edited.record.deferred.push(SyncFieldId::new(
+        SyncResourceId::new("connection", "server"),
+        "endpoint",
+    ));
+    deferred_but_edited
+        .projection
+        .edited
+        .insert(SyncFieldId::new(
+            SyncResourceId::new("connection", "server"),
+            "endpoint",
+        ));
+    assert!(
+        local::needs_remote(
+            &deferred_but_edited,
+            &nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE
+        )
+        .unwrap(),
+        "a local edit that may unblock the deferred field still reaches the adapter"
+    );
     assert!(
         !local::needs_remote(&view, &nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE).unwrap()
     );
@@ -436,4 +476,92 @@ fn v4_preflight_view_still_rejects_a_concurrent_local_write_at_apply() {
         .unwrap()
         .unwrap();
     assert_eq!(saved.name, "Saved during preflight");
+}
+
+/// The settings panel reads `last_checked_at_ms` / `last_synced_at_ms` from the
+/// persisted sync state. The V4 flows own Apply themselves, so nothing else
+/// writes those timestamps: without recording them here the panel would claim
+/// a verified publication while showing "上次同步: 从未".
+#[test]
+fn a_v4_check_and_a_verified_publication_record_their_timestamps() {
+    use super::apply_and_publish;
+    let fixture = Fixture::local_directory(SyncScope::default());
+    let state = || {
+        fixture
+            .store
+            .request_fn(StoreDomain::CloudSync, |store| {
+                store.load_cloud_sync_state()
+            })
+            .unwrap()
+    };
+    assert!(state().last_checked_at_ms.is_none());
+    assert!(state().last_synced_at_ms.is_none());
+
+    let _io = IoScope::new("v4-timestamp-test");
+    let control = CloudSyncOperationControl::default();
+    let preview = preview_on_change(
+        &fixture.store,
+        &fixture.settings,
+        &fixture.options,
+        true,
+        &control,
+    )
+    .unwrap()
+    .expect("the local directory remote is available");
+    let checked = state();
+    assert!(checked.last_checked_at_ms.is_some());
+    assert!(
+        checked.last_synced_at_ms.is_none(),
+        "a preview is a check, not a sync"
+    );
+
+    fixture
+        .store
+        .request_fn(StoreDomain::Connections, |store| {
+            let mut connection = store.get_connection("server")?.unwrap();
+            connection.name = "Renamed".into();
+            store.save_connection(&connection)
+        })
+        .unwrap();
+    let report = apply_and_publish(
+        &fixture.store,
+        &fixture.settings,
+        &fixture.options,
+        preview,
+        &control,
+    )
+    .unwrap();
+    assert!(report.verified, "{:?}", report.publication_error);
+    let synced = state();
+    assert!(synced.last_synced_at_ms.is_some());
+    assert!(synced.last_checked_at_ms.unwrap() >= checked.last_checked_at_ms.unwrap());
+
+    // A later pass with nothing to publish still proves both sides identical:
+    // it refreshes the sync timestamp too, so the panel can never show
+    // "上次同步: 从未" while the status bar reports a verified pass.
+    let preview = preview_on_change(
+        &fixture.store,
+        &fixture.settings,
+        &fixture.options,
+        true,
+        &control,
+    )
+    .unwrap()
+    .expect("the local directory remote is available");
+    let report = apply_and_publish(
+        &fixture.store,
+        &fixture.settings,
+        &fixture.options,
+        preview,
+        &control,
+    )
+    .unwrap();
+    assert!(report.verified);
+    assert!(!report.published);
+    let again = state();
+    assert!(
+        again.last_synced_at_ms.unwrap() >= synced.last_synced_at_ms.unwrap(),
+        "a verified no-op pass is still a completed sync"
+    );
+    assert!(again.last_checked_at_ms.unwrap() >= again.last_synced_at_ms.unwrap());
 }

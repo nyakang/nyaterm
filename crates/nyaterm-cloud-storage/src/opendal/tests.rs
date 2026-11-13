@@ -824,3 +824,67 @@ fn s3_listing_never_forwards_session_credentials_across_redirects() {
     ));
     assert!(target.requests.lock().unwrap().is_empty());
 }
+
+/// Reported in the field: `S3 request failed (connection reset)`. A gateway
+/// retired an idle keep-alive socket and the listing — the first request of the
+/// sync — failed outright. Idempotent requests are now replayed.
+#[test]
+fn a_reset_on_the_first_listing_is_retried_instead_of_failing_the_sync() {
+    use crate::test_support::http::{Reply, Server};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = attempts.clone();
+    let server = Server::new(move |request| {
+        if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Reply::disconnect();
+        }
+        let url = url::Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+        let query: std::collections::BTreeMap<_, _> = url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        let mut prefix = query.get("prefix").cloned().unwrap_or_default();
+        if !prefix.ends_with('/') {
+            prefix.push('/');
+        }
+        Reply::new(
+            200,
+            format!(
+                "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+                 <IsTruncated>false</IsTruncated>\
+                 <Contents><Key>{prefix}a.nya</Key><Size>3</Size><ETag>etag</ETag>\
+                 <LastModified>2026-11-04T00:00:00Z</LastModified></Contents>\
+                 </ListBucketResult>"
+            ),
+        )
+    });
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    let files = remote.list_files("sync/v5/registry").unwrap();
+    assert_eq!(files, vec!["sync/v5/registry/a.nya".to_string()]);
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        2,
+        "the reset attempt is replayed once and succeeds"
+    );
+}
+
+#[test]
+fn a_rejected_listing_is_not_retried() {
+    use crate::test_support::http::{Reply, Server};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = attempts.clone();
+    let server = Server::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Reply::new(403, "")
+    });
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    assert!(remote.list_files("sync/v5/registry").is_err());
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a permission failure is permanent and must not be replayed"
+    );
+}

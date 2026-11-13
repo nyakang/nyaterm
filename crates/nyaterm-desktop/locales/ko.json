@@ -3672,7 +3672,22 @@
     "keywordHighlightMasterHint": "끄면 일반 규칙, 사용자 지정 규칙 및 명령 출력 강조가 비활성화됩니다. 각 설정은 유지됩니다.",
     "keywordHighlightGeneralRules": "일반 규칙",
     "keywordHighlightSpecializedRules": "명령 출력 전용 규칙",
-    "keywordHighlightSpecializedHint": "네트워크 장비, 권한, 로그, SQL 등의 출력에 사용됩니다. 명령 출력 강조를 켜야 합니다."
+    "keywordHighlightSpecializedHint": "네트워크 장비, 권한, 로그, SQL 등의 출력에 사용됩니다. 명령 출력 강조를 켜야 합니다.",
+    "syncConflictSelectAll": "모든 충돌 선택",
+    "syncConflictClearSelection": "지우기",
+    "syncConflictKeepLocal": "선택 항목에 로컬 값 유지",
+    "syncConflictKeepRemote": "선택 항목에 원격 값 유지",
+    "syncConflictSelectionSummary": "%{selected} / %{total}개 선택 · %{staged}개 대기 중",
+    "syncConflictSelectGroup": "이 그룹 선택",
+    "syncConflictGroupTitle": "후보 패턴 %{group} · %{count}개 필드",
+    "syncConflictApplyGroupChoice": "전체 적용",
+    "syncConflictApplyStaged": "선택 항목 적용(%{count})",
+    "syncConflictGroupMoreFields": "… %{count}개 필드 더",
+    "syncConflictShowDetails": "자세한 충돌 목록 표시(%{count})",
+    "syncConflictHideDetails": "자세한 충돌 목록 숨기기",
+    "syncLocalChangeRetry": "로컬 변경이 발생하여 다시 동기화합니다…",
+    "syncV3DeferredFields": "보류된 필드: %{fields}",
+    "syncV3KeptEndpoints": "저장된 비밀번호가 연결되어 있어 이 기기의 주소를 유지했습니다: %{entries}"
   },
   "sshAuth": {
     "additionalPasswordRequired": "서버에서 추가 계정 비밀번호 인증을 요구합니다. 이 비밀번호는 이번 연결에만 사용됩니다.",

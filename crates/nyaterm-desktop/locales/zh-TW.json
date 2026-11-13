@@ -3672,7 +3672,22 @@
     "keywordHighlightMasterHint": "關閉後，通用規則、自訂規則和指令輸出高亮均不生效；各項設定會保留。",
     "keywordHighlightGeneralRules": "通用規則",
     "keywordHighlightSpecializedRules": "指令輸出專用規則",
-    "keywordHighlightSpecializedHint": "用於網路設備、權限、日誌、SQL 等輸出，需開啟「依指令輸出類型上色」。"
+    "keywordHighlightSpecializedHint": "用於網路設備、權限、日誌、SQL 等輸出，需開啟「依指令輸出類型上色」。",
+    "syncConflictSelectAll": "全選衝突",
+    "syncConflictClearSelection": "清空",
+    "syncConflictKeepLocal": "選中項保留本機值",
+    "syncConflictKeepRemote": "選中項保留遠端值",
+    "syncConflictSelectionSummary": "已選 %{selected} / %{total} 項 · 已暫存 %{staged} 項",
+    "syncConflictSelectGroup": "選擇該組",
+    "syncConflictGroupTitle": "候選組合 %{group} · %{count} 個欄位",
+    "syncConflictApplyGroupChoice": "全部設為此值",
+    "syncConflictApplyStaged": "套用所選（%{count}）",
+    "syncConflictGroupMoreFields": "… 還有 %{count} 個欄位",
+    "syncConflictShowDetails": "顯示詳細衝突清單（%{count}）",
+    "syncConflictHideDetails": "隱藏詳細衝突清單",
+    "syncLocalChangeRetry": "本機有新的變更，正在重新同步…",
+    "syncV3DeferredFields": "暫緩欄位：%{fields}",
+    "syncV3KeptEndpoints": "已保留本機位址（本機儲存了密碼）：%{entries}"
   },
   "sshAuth": {
     "additionalPasswordRequired": "伺服器要求額外驗證帳戶密碼。此密碼僅用於本次連線。",

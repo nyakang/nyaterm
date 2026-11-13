@@ -1,6 +1,10 @@
 //! Automatic synchronization scheduling with caller-supplied monotonic time.
 use std::time::{Duration, Instant};
 
+/// A concurrent local write invalidates the prepared snapshot. One short pause
+/// is enough for the debounced save that raced the job to settle.
+pub const LOCAL_CHANGED_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoSyncTrigger {
     Startup,
@@ -38,6 +42,10 @@ pub enum AutoSyncCompletion {
     },
     Success,
     V4Unverified,
+    /// A local write raced the job, so the snapshot it prepared is stale.
+    /// Nothing is broken and nothing needs a backoff: re-read both sides and
+    /// try again shortly.
+    LocalChanged,
     Conflict {
         overwrite_blocked: bool,
     },
@@ -53,6 +61,9 @@ impl AutoSyncCompletion {
             nyaterm_core::CloudSyncError::Conflict(preview) => Self::Conflict {
                 overwrite_blocked: preview.overwrite_blocked,
             },
+            // Losing the race against a local edit is ordinary traffic, not a
+            // transport or configuration failure.
+            nyaterm_core::CloudSyncError::LocalChangedDuringSync => Self::LocalChanged,
             error => Self::Failure {
                 permanent: permanent_auto_sync_error(error),
                 retry_after: error.retry_after(),
@@ -172,6 +183,14 @@ impl AutoSyncSchedule {
                 self.pending = Some(AutoSyncTrigger::Retry);
                 self.next_due = now + auto_sync_backoff(self.failures);
                 self.failures = self.failures.saturating_add(1);
+                self.retry_not_before = Some(self.next_due);
+            }
+            AutoSyncCompletion::LocalChanged => {
+                // Never treat this as a failure: the exponential backoff would
+                // stall a healthy sync for minutes while every attempt also
+                // re-reads the whole remote replica.
+                self.pending = Some(AutoSyncTrigger::Retry);
+                self.next_due = now + LOCAL_CHANGED_RETRY_DELAY;
                 self.retry_not_before = Some(self.next_due);
             }
             AutoSyncCompletion::Debouncing(remaining) => {

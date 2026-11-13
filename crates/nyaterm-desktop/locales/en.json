@@ -3672,7 +3672,22 @@
     "keywordHighlightMasterHint": "Turning this off disables general rules, custom rules and command-output highlighting. Your preferences are kept.",
     "keywordHighlightGeneralRules": "General rules",
     "keywordHighlightSpecializedRules": "Command-output rules",
-    "keywordHighlightSpecializedHint": "For network devices, permissions, logs and SQL output. Requires command-output highlighting."
+    "keywordHighlightSpecializedHint": "For network devices, permissions, logs and SQL output. Requires command-output highlighting.",
+    "syncConflictSelectAll": "Select all conflicts",
+    "syncConflictClearSelection": "Clear",
+    "syncConflictKeepLocal": "Keep local values for selected",
+    "syncConflictKeepRemote": "Keep remote values for selected",
+    "syncConflictSelectionSummary": "%{selected} of %{total} selected · %{staged} staged",
+    "syncConflictSelectGroup": "Select this group",
+    "syncConflictGroupTitle": "Choice pattern %{group} · %{count} fields",
+    "syncConflictApplyGroupChoice": "Apply to all",
+    "syncConflictApplyStaged": "Apply selected (%{count})",
+    "syncConflictGroupMoreFields": "… %{count} more fields",
+    "syncConflictShowDetails": "Show detailed conflict list (%{count})",
+    "syncConflictHideDetails": "Hide detailed conflict list",
+    "syncLocalChangeRetry": "Local changes landed during the sync; retrying…",
+    "syncV3DeferredFields": "Deferred fields: %{fields}",
+    "syncV3KeptEndpoints": "Kept this device’s address because a saved password is bound to it: %{entries}"
   },
   "sshAuth": {
     "additionalPasswordRequired": "The server requires an additional account password. This password is used for this connection only.",
