@@ -2044,6 +2044,42 @@ impl ConnectionStore {
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()
     }
+
+    /// Per-connection-kind "default session settings" drafts, keyed by a
+    /// stable connection-kind id. Stored as schema-neutral JSON so older
+    /// versions ignore the key and newer versions diagnose malformed entries.
+    pub fn load_default_session_settings(&self) -> Result<Option<serde_json::Value>, StorageError> {
+        let value = self.load_settings_value()?;
+        Ok(json_path(&value, &["default_session"])
+            .and_then(|entry| entry.as_object())
+            .filter(|entry| !entry.is_empty())
+            .cloned()
+            .map(serde_json::Value::Object))
+    }
+
+    pub fn save_default_session_settings(
+        &self,
+        kind: &str,
+        settings: &serde_json::Value,
+    ) -> Result<(), StorageError> {
+        if !settings.is_object() {
+            return Err(StorageError::InvalidData(
+                "default session settings must be a JSON object".into(),
+            ));
+        }
+        let mut value = self.load_settings_value()?;
+        let mut entry = json_path(&value, &["default_session"])
+            .and_then(|entry| entry.as_object())
+            .cloned()
+            .unwrap_or_default();
+        entry.insert(kind.to_string(), settings.clone());
+        set_nested_json_value(
+            &mut value,
+            &["default_session"],
+            serde_json::Value::Object(entry),
+        );
+        self.save_settings_value(&value)
+    }
 }
 
 fn default_activity_left_bottom() -> Vec<String> {

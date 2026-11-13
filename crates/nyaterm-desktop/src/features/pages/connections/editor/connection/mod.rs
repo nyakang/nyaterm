@@ -193,7 +193,9 @@ impl NyaTermApp {
             }
         }
         let palette = self.theme_palette();
-        let title = if editor.id.is_some() {
+        let title = if editor.defaults_mode {
+            t!("menu.defaultSessionSettings")
+        } else if editor.id.is_some() {
             t!("dialog.editConnection")
         } else {
             t!("dialog.newConnection")

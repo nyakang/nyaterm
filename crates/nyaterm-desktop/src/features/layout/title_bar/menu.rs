@@ -116,6 +116,10 @@ impl NyaTermApp {
                 self.prepare_title_menu(cx);
                 self.open_connection_editor(None, None, false, window, cx);
             }
+            TitleMenuCommand::DefaultSessionSettings => {
+                self.prepare_title_menu(cx);
+                self.open_default_session_settings(window, cx);
+            }
             TitleMenuCommand::ImportConfig => {
                 window.close_nya_dialog(cx);
                 self.open_connection_import_dialog(window, cx);
@@ -284,6 +288,9 @@ impl NyaTermApp {
                 .icon("icons/conn/add.svg")
                 .shortcut(self.display_shortcut_for("tab.newSession", "Ctrl+Shift+T"))
                 .command(TitleMenuCommand::NewSession),
+            TitleMenuDefinition::action(t!("menu.defaultSessionSettings"))
+                .icon("icons/settings.svg")
+                .command(TitleMenuCommand::DefaultSessionSettings),
             TitleMenuDefinition::action(t!("fileManager.tabTitle"))
                 .icon("icons/file-manager.svg")
                 .command(TitleMenuCommand::OpenFileManager),

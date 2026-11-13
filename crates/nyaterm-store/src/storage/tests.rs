@@ -9264,3 +9264,43 @@ fn android_connections_and_adb_path_survive_database_reopen() {
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn default_session_settings_round_trip_per_kind_and_reject_non_objects() {
+    let dir = unique_temp_dir("default-session-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert_eq!(store.load_default_session_settings().unwrap(), None);
+
+    let ssh = serde_json::json!({"name": "", "config": {"type": "ssh"}});
+    let telnet = serde_json::json!({"name": "", "port": 23});
+    store.save_default_session_settings("ssh", &ssh).unwrap();
+    store
+        .save_default_session_settings("telnet", &telnet)
+        .unwrap();
+
+    let stored = store.load_default_session_settings().unwrap().unwrap();
+    assert_eq!(stored.get("ssh"), Some(&ssh));
+    assert_eq!(stored.get("telnet"), Some(&telnet));
+
+    // Saving one kind preserves the sibling entry and round-trips values.
+    let updated_ssh = serde_json::json!({"name": "", "port": 2222});
+    store
+        .save_default_session_settings("ssh", &updated_ssh)
+        .unwrap();
+    let stored = store.load_default_session_settings().unwrap().unwrap();
+    assert_eq!(stored.get("ssh"), Some(&updated_ssh));
+    assert_eq!(stored.get("telnet"), Some(&telnet));
+
+    assert!(
+        store
+            .save_default_session_settings("bad", &serde_json::json!([1, 2]))
+            .is_err()
+    );
+    assert_eq!(
+        store.load_default_session_settings().unwrap().unwrap(),
+        stored
+    );
+
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}

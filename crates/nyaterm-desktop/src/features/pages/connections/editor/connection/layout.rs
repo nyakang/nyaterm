@@ -49,7 +49,7 @@ pub(super) fn connection_editor_frame(
         validation_error,
         save_enabled,
     } = frame;
-    let sections = ConnectionEditorSection::for_kind(editor.kind);
+    let sections = ConnectionEditorSection::for_kind(editor.kind, editor.defaults_mode);
     let local_label = t!("dialog.localTerminal");
     let serial_label = t!("dialog.serial");
     let cancel_label = t!("common.cancel");
@@ -68,7 +68,7 @@ pub(super) fn connection_editor_frame(
             let Some(editor) = this.connection_state.active_editor_draft() else {
                 return;
             };
-            let sections = ConnectionEditorSection::for_kind(editor.kind);
+            let sections = ConnectionEditorSection::for_kind(editor.kind, editor.defaults_mode);
             let index = sections
                 .iter()
                 .position(|section| *section == editor.section)
