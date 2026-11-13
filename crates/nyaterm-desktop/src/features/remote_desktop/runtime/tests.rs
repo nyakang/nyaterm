@@ -1378,6 +1378,129 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
 }
 
 #[test]
+fn hidden_window_defers_remote_desktop_uploads_until_it_is_presented_again() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::{TestAppContext, WindowVisibility};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::{PixelFormat, RDP_FRAMEBUFFER_LIMITS, RdpFrameEvent};
+
+    let root = TestTempDir::new("nyaterm-remote-hidden-upload");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "remote");
+    struct EmptyView;
+    impl gpui::Render for EmptyView {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+    let (_, cx) = cx.add_window_view(|_, _| EmptyView);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.remote_desktop.insert_connecting("remote".into());
+            app.observe_remote_desktop_window_visibility(window, cx);
+            app.reset_rdp_framebuffer("remote", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
+            assert!(app.remote_desktop.sessions["remote"].texture.is_some());
+            assert!(!app.remote_desktop.sessions["remote"].texture_dirty);
+        });
+    });
+
+    // A minimized window never acquires a drawable surface, so every upload
+    // queued for it would stay in the renderer until the window is restored.
+    cx.simulate_visibility_change(WindowVisibility::Hidden);
+    cx.update(|window, cx| {
+        assert!(!window.is_visible());
+        app.update(cx, |app, _| {
+            app.apply_rdp_frame_batch(
+                "remote",
+                vec![RdpFrameEvent::Bitmap {
+                    epoch: 1,
+                    full: false,
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                    stride: 8,
+                    format: PixelFormat::Bgra8,
+                    pixels: vec![1; 16].into(),
+                }],
+                window,
+            );
+            let session = &app.remote_desktop.sessions["remote"];
+            assert!(session.texture.is_some());
+            assert!(
+                session.texture_dirty,
+                "a hidden window must defer the upload instead of queueing it"
+            );
+        });
+    });
+
+    cx.simulate_visibility_change(WindowVisibility::Visible);
+    cx.update(|window, cx| {
+        assert!(window.is_visible());
+        app.update(cx, |app, _| {
+            let session = &app.remote_desktop.sessions["remote"];
+            assert!(session.texture.is_some());
+            assert!(
+                !session.texture_dirty,
+                "becoming visible must upload the deferred framebuffer"
+            );
+        });
+    });
+}
+
+#[test]
+fn hidden_window_does_not_create_remote_desktop_textures() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::{TestAppContext, WindowVisibility};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_remote_desktop::RDP_FRAMEBUFFER_LIMITS;
+
+    let root = TestTempDir::new("nyaterm-remote-hidden-create");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "remote");
+    struct EmptyView;
+    impl gpui::Render for EmptyView {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+    let (_, cx) = cx.add_window_view(|_, _| EmptyView);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.remote_desktop.insert_connecting("remote".into());
+            app.observe_remote_desktop_window_visibility(window, cx);
+        });
+    });
+
+    cx.simulate_visibility_change(WindowVisibility::Hidden);
+    cx.update(|window, cx| {
+        app.update(cx, |app, _| {
+            app.reset_rdp_framebuffer("remote", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
+            assert!(app.remote_desktop.sessions["remote"].texture.is_none());
+            assert!(app.remote_desktop.sessions["remote"].texture_dirty);
+        });
+    });
+
+    cx.simulate_visibility_change(WindowVisibility::Visible);
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            assert!(app.remote_desktop.sessions["remote"].texture.is_some());
+            assert!(!app.remote_desktop.sessions["remote"].texture_dirty);
+        });
+    });
+}
+
+#[test]
 fn unsupported_activex_never_queues_a_helper_or_waits_for_layout_on_start_or_retry() {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::SessionLaunchConfig;
