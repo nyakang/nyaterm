@@ -2,7 +2,8 @@ use super::events::set_rdp_view_error;
 use super::lifecycle::clear_rdp_reconnect_after_frame;
 use crate::features::NyaTermApp;
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
-use gpui::{Bounds, DevicePixels, Point, Size, Window, point, size};
+use anyhow::Context as _;
+use gpui::{Bounds, Context, DevicePixels, Point, Size, Window, point, size};
 use nyaterm_remote_desktop::{
     DirtyRect, Framebuffer, FramebufferLimits, RdpErrorKind, RdpFrameEvent, RemoteCursorEvent,
 };
@@ -38,7 +39,7 @@ impl NyaTermApp {
         limits: FramebufferLimits,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id);
+        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -85,7 +86,12 @@ impl NyaTermApp {
         frames: Vec<RdpFrameEvent>,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id);
+        // Texture uploads are held in the renderer's sprite atlas until a frame
+        // reaches it. A minimized or occluded window never acquires a drawable
+        // surface, so that queue is never drained: keeping the framebuffer
+        // current on the CPU and uploading it when the window is presented
+        // again is what keeps a streaming desktop from growing without bound.
+        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -145,9 +151,20 @@ impl NyaTermApp {
                 framebuffer.width() * 4,
             )
         } else {
-            nyaterm_remote_desktop::merge_dirty_rects(dirty)
-                .into_iter()
-                .try_for_each(|rect| upload_rdp_rect(window, texture, framebuffer, rect))
+            let mut result = Ok(());
+            for rect in nyaterm_remote_desktop::merge_dirty_rects(dirty) {
+                result = upload_rdp_rect(
+                    window,
+                    texture,
+                    framebuffer,
+                    rect,
+                    &mut session.upload_staging,
+                );
+                if result.is_err() {
+                    break;
+                }
+            }
+            result
         };
         if let Err(error) = result {
             self.stop_remote_desktop_uploads(
@@ -165,7 +182,7 @@ impl NyaTermApp {
         cursors: Vec<RemoteCursorEvent>,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id);
+        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -199,11 +216,49 @@ impl NyaTermApp {
         }
     }
 
+    /// Re-upload whatever the hidden window missed once it is presented again.
+    ///
+    /// The framebuffer stayed current while uploads were suspended, so one full
+    /// upload restores the texture. Registering this before the first paint also
+    /// covers a session restored into a still-minimized window.
+    pub(in crate::features) fn observe_remote_desktop_window_visibility(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.observe_window_visibility(window, |this, visibility, window, cx| {
+            if visibility.is_visible() {
+                this.resume_remote_desktop_uploads(window, cx);
+            }
+        })
+        .detach();
+    }
+
+    fn resume_remote_desktop_uploads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session_id) = self.session.active_id().map(str::to_string) else {
+            return;
+        };
+        if self
+            .remote_desktop
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.texture_dirty || session.texture.is_none())
+        {
+            self.prepare_remote_desktop_textures(&session_id, window);
+        }
+        cx.notify();
+    }
+
     pub(in crate::features::remote_desktop) fn prepare_remote_desktop_textures(
         &mut self,
         session_id: &str,
         window: &mut Window,
     ) {
+        // Never queue an upload the renderer cannot drain yet (see
+        // `apply_rdp_frame_batch`). Framebuffer changes are already flagged dirty.
+        if !window.is_visible() {
+            return;
+        }
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -274,27 +329,114 @@ fn prepare_textures(
     Ok(())
 }
 
+/// Copies one dirty rectangle out of the framebuffer rows into `staging`.
+///
+/// The framebuffer keeps the full desktop stride, so addressing a rectangle as
+/// one slice (`(height - 1) * stride + row_bytes`) spans whole rows for every
+/// rectangle. RDP servers send narrow, desktop-tall rectangles (a 128 x 832
+/// column is routine), and the upload path copies whatever slice it is handed,
+/// which turned a 416 KiB update into a 4.9 MiB allocation. Packing the rows
+/// keeps the copy at `width * height * 4` bytes and lets one session-scoped
+/// buffer serve every frame.
+fn pack_rect_rows<'a>(
+    pixels: &[u8],
+    stride: usize,
+    rect: DirtyRect,
+    staging: &'a mut Vec<u8>,
+) -> anyhow::Result<&'a [u8]> {
+    anyhow::ensure!(
+        stride > 0 && rect.width > 0 && rect.height > 0,
+        "invalid remote desktop rectangle"
+    );
+    let row_bytes = usize::try_from(rect.width)
+        .context("remote desktop rectangle width overflow")?
+        .checked_mul(4)
+        .context("remote desktop rectangle row size overflow")?;
+    let rows = usize::try_from(rect.height).context("remote desktop rectangle height overflow")?;
+    let column_offset = usize::try_from(rect.x)
+        .context("remote desktop rectangle origin overflow")?
+        .checked_mul(4)
+        .context("remote desktop rectangle origin overflow")?;
+    let first_row = usize::try_from(rect.y)
+        .context("remote desktop rectangle origin overflow")?
+        .checked_mul(stride)
+        .and_then(|offset| offset.checked_add(column_offset))
+        .context("remote desktop rectangle offset overflow")?;
+    anyhow::ensure!(
+        column_offset + row_bytes <= stride,
+        "remote desktop rectangle is wider than the framebuffer stride"
+    );
+    let end = first_row
+        .checked_add(
+            (rows - 1)
+                .checked_mul(stride)
+                .context("remote desktop rectangle span overflow")?,
+        )
+        .and_then(|offset| offset.checked_add(row_bytes))
+        .context("remote desktop rectangle span overflow")?;
+    anyhow::ensure!(
+        end <= pixels.len(),
+        "remote desktop rectangle is outside the framebuffer"
+    );
+    let len = row_bytes
+        .checked_mul(rows)
+        .context("remote desktop rectangle payload overflow")?;
+    staging.clear();
+    staging
+        .try_reserve(len)
+        .context("failed to allocate remote desktop upload buffer")?;
+    for row in 0..rows {
+        let start = first_row + row * stride;
+        staging.extend_from_slice(&pixels[start..start + row_bytes]);
+    }
+    Ok(staging.as_slice())
+}
+
 pub(super) fn upload_rdp_rect(
     window: &mut Window,
     texture: gpui::DynamicTexture,
     framebuffer: &Framebuffer,
     rect: DirtyRect,
+    staging: &mut Vec<u8>,
 ) -> anyhow::Result<()> {
-    let stride = framebuffer.width() * 4;
-    let start = (u64::from(rect.y) * u64::from(stride) + u64::from(rect.x) * 4) as usize;
-    let row_bytes = rect.width * 4;
-    let len = (u64::from(rect.height - 1) * u64::from(stride) + u64::from(row_bytes)) as usize;
-    let pixels = &framebuffer.pixels()[start..start + len];
-    window.update_dynamic_texture(
-        texture,
-        Bounds::new(
-            point(DevicePixels(rect.x as i32), DevicePixels(rect.y as i32)),
-            size(
-                DevicePixels(rect.width as i32),
-                DevicePixels(rect.height as i32),
-            ),
+    anyhow::ensure!(
+        rect.width > 0 && rect.height > 0,
+        "invalid remote desktop rectangle"
+    );
+    let stride = usize::try_from(framebuffer.width())
+        .context("remote desktop framebuffer width overflow")?
+        .checked_mul(4)
+        .context("remote desktop framebuffer row size overflow")?;
+    let bounds = Bounds::new(
+        point(DevicePixels(rect.x as i32), DevicePixels(rect.y as i32)),
+        size(
+            DevicePixels(rect.width as i32),
+            DevicePixels(rect.height as i32),
         ),
-        pixels,
-        stride,
-    )
+    );
+    let row_bytes = usize::try_from(rect.width)
+        .context("remote desktop rectangle width overflow")?
+        .checked_mul(4)
+        .context("remote desktop rectangle row size overflow")?;
+    if row_bytes == stride {
+        // Full-width runs already are contiguous rows; hand the framebuffer
+        // slice straight to the texture upload instead of copying it.
+        let rows =
+            usize::try_from(rect.height).context("remote desktop rectangle height overflow")?;
+        let start = usize::try_from(rect.y)
+            .context("remote desktop rectangle origin overflow")?
+            .checked_mul(stride)
+            .context("remote desktop rectangle offset overflow")?;
+        let len = (rows - 1)
+            .checked_mul(stride)
+            .and_then(|offset| offset.checked_add(row_bytes))
+            .context("remote desktop rectangle span overflow")?;
+        let pixels = framebuffer
+            .pixels()
+            .get(start..start + len)
+            .context("remote desktop rectangle is outside the framebuffer")?;
+        return window.update_dynamic_texture(texture, bounds, pixels, stride as u32);
+    }
+    let packed = pack_rect_rows(framebuffer.pixels(), stride, rect, staging)?;
+    window.update_dynamic_texture(texture, bounds, packed, row_bytes as u32)
 }
