@@ -29,6 +29,38 @@ spec.loader.exec_module(focal)
 
 class AndroidReleaseTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix" and all(shutil.which(tool) for tool in
+                         ("cc", "patchelf", "readelf")), "native ELF tools required")
+    def test_focal_removes_adb_build_tree_paths_before_audit_and_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, stage = root / "source", root / "stage"
+            stage_android_fixture(source, "x86_64-unknown-linux-gnu")
+            stage.mkdir()
+            code = root / "probe.c"
+            code.write_text("int main(void) { return 0; }\n")
+            adb = source / "adb/adb"
+            subprocess.run(["cc", str(code), "-Wl,-rpath,$ORIGIN/:$ORIGIN/../../../lib64",
+                            "-o", str(adb)], check=True)
+            original = adb.read_bytes()
+            for name in focal.ANDROID_LIBRARIES:
+                subprocess.run(["cc", "-shared", "-fPIC", str(code), "-o",
+                                str(source / "android-libs" / name)], check=True)
+            def inspect(binary, **kwargs):
+                dynamic = subprocess.check_output(["readelf", "-d", str(binary)], text=True)
+                if binary.name == "adb":
+                    self.assertNotIn("(RUNPATH)", dynamic)
+                    self.assertNotIn("(RPATH)", dynamic)
+                else:
+                    self.assertIn("[$ORIGIN]", dynamic)
+                return {}
+            with mock.patch.object(focal, "audit", side_effect=inspect):
+                focal.stage_android(source, stage)
+            self.assertEqual(adb.read_bytes(), original)
+            self.assertNotEqual((stage / "adb/adb").read_bytes(), original)
+            verify_native_package.verify_android_resources(
+                lambda name: (stage / name).read_bytes(), "x86_64-unknown-linux-gnu")
+
+    @unittest.skipUnless(os.name == "posix" and all(shutil.which(tool) for tool in
                          ("cc", "dpkg-shlibdeps")), "Debian ELF tools required")
     def test_focal_deb_resolves_private_ffmpeg_and_retains_system_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:

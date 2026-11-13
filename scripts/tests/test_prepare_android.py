@@ -277,9 +277,67 @@ class PrepareAndroidTests(unittest.TestCase):
                 self.assertEqual(self.commands, [])
             ensure.assert_not_called()
 
+    def test_arm64_cross_configuration_invalidates_cached_native_configuration(self) -> None:
+        self.prefix = self.staging / "ffmpeg" / ARM64
+        with self.preparation():
+            prepare_android.prepare_ffmpeg(ARM64)
+            command = self.commands[0]
+            self.assertIn("--enable-cross-compile", command)
+            self.assertIn("--cc=cl.exe -MT", command)
+            self.assertIn("--cxx=cl.exe -MT", command)
+            self.assertNotIn("--extra-cflags=-MT", command)
+            self.assertIn("--as=clang --target=aarch64-pc-windows-msvc", command)
+            stamp = self.prefix / "SOURCE.json"
+            previous = json.loads(stamp.read_text())
+            previous["configure"] = [arg for arg in previous["configure"]
+                                     if arg != "--enable-cross-compile" and not arg.startswith("--as=")]
+            stamp.write_text(json.dumps(previous))
+            self.commands.clear()
+            prepare_android.prepare_ffmpeg(ARM64)
+            self.assertIn("--enable-cross-compile", self.commands[0])
+            self.commands.clear()
+            prepare_android.prepare_ffmpeg(ARM64)
+            self.assertEqual(self.commands, [])
+
+    def test_x64_keeps_native_configuration(self) -> None:
+        with self.preparation():
+            prepare_android.prepare_ffmpeg(X64)
+        self.assertNotIn("--enable-cross-compile", self.commands[0])
+        self.assertFalse(any(arg.startswith("--as=") for arg in self.commands[0]))
+
     def test_unsupported_windows_target_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported Windows FFmpeg target"):
             prepare_android.ensure_windows_import_libraries(self.prefix, "i686-pc-windows-msvc")
+
+
+class DebianLibraryOwnershipTests(unittest.TestCase):
+    def test_canonical_library_keeps_multiarch_package_identity(self):
+        path = Path("/lib/aarch64-linux-gnu/libprotobuf.so.23")
+        resolved = Path("/usr/lib/aarch64-linux-gnu/libprotobuf.so.23.0.4")
+        with mock.patch.object(Path, "resolve", return_value=resolved), \
+                mock.patch.object(Path, "exists", return_value=False), \
+                mock.patch.object(prepare_android.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, f"libprotobuf23:arm64: {resolved}\n", "")) as run:
+            self.assertEqual(prepare_android.debian_library_package(path), "libprotobuf23:arm64")
+            self.assertEqual(run.call_args.args[0], ["dpkg-query", "-S", str(resolved)])
+
+    def test_original_path_is_used_when_database_owns_symlink(self):
+        path, resolved = Path("/lib/libexample.so.1"), Path("/usr/lib/libexample.so.1.0")
+        with mock.patch.object(Path, "resolve", return_value=resolved), \
+                mock.patch.object(Path, "exists", return_value=False), \
+                mock.patch.object(prepare_android.subprocess, "run", side_effect=[
+                    subprocess.CompletedProcess([], 1, "", "missing"),
+                    subprocess.CompletedProcess([], 0, f"libexample1: {path}\n", "")]):
+            self.assertEqual(prepare_android.debian_library_package(path), "libexample1")
+
+    def test_missing_or_ambiguous_ownership_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "library.so"
+            path.touch()
+            for code, output in ((1, ""), (0, f"one: {path}\ntwo: {path}\n")):
+                with self.subTest(code=code), mock.patch.object(prepare_android.subprocess, "run",
+                        return_value=subprocess.CompletedProcess([], code, output, "")), self.assertRaises(ValueError):
+                    prepare_android.debian_library_package(path)
 
 
 class MsvcToolDiscoveryTests(unittest.TestCase):

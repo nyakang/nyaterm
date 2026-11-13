@@ -44,7 +44,7 @@
   <a href="LICENSE">
     <img
       alt="License"
-      src="https://img.shields.io/badge/License-MIT-0EA5E9.svg?style=flat-square&logo=readthedocs&labelColor=334155&label=%E5%8D%8F%E8%AE%AE&v=2"
+      src="https://img.shields.io/badge/License-Apache%202.0-0EA5E9.svg?style=flat-square&logo=readthedocs&labelColor=334155&label=%E5%8D%8F%E8%AE%AE&v=2"
     >
   </a>
 </p>
@@ -418,4 +418,4 @@ cargo run -p nyaterm-app --bin nyaterm
 <a name="许可证"></a>
 # 许可证
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目基于 [Apache License 2.0](LICENSE) 开源。
