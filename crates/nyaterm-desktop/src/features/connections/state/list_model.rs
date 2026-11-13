@@ -550,6 +550,43 @@ mod tests {
     }
 
     #[test]
+    fn tag_search_keeps_ancestors_and_only_matching_connections() {
+        let groups = vec![
+            group("parent", "Parent", None, 0),
+            group("child", "Child", Some("parent"), 0),
+        ];
+        let mut connections = vec![
+            connection("hit", "Bastion", Some("child"), 0),
+            connection("other", "Database", Some("child"), 1),
+            connection("root", "Root", None, 0),
+        ];
+        connections[0].tags = vec!["生产环境".into()];
+        connections[2].tags = vec!["生产环境".into()];
+        let sections =
+            connection_sections(&connections, &groups, "生产", ConnectionSortMode::Default);
+        assert_eq!(sections[0].group_id.as_deref(), Some("parent"));
+        assert_eq!(sections[0].total_count, 1);
+        assert_eq!(sections[1].group_id.as_deref(), Some("child"));
+        let expanded = groups.iter().map(|group| group.id.clone()).collect();
+        let ids: Vec<_> = flatten_connection_rows(&sections, &expanded, None)
+            .into_iter()
+            .filter_map(|row| match row {
+                ConnectionListRow::Connection { connection_id, .. } => Some(connection_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["hit", "root"]);
+        let cleared = connection_sections(&connections, &groups, "", ConnectionSortMode::Default);
+        assert_eq!(
+            cleared
+                .iter()
+                .map(|section| section.connections.len())
+                .sum::<usize>(),
+            3
+        );
+    }
+
+    #[test]
     fn nested_groups_render_children_before_connections_and_root_last() {
         let groups = vec![
             group("parent", "Parent", None, 0),

@@ -91,9 +91,18 @@ impl ConnectionSearch {
             connection.id
         )
         .to_ascii_lowercase();
-        // Keep eligibility identical to the original concatenated-field filter.
-        // Field scoring must neither drop cross-field hits nor add new matches.
-        if inherited.is_none() && !haystack.contains(&self.query) {
+        // Match tags individually so adjacent tags cannot create a synthetic hit.
+        // Preserve cross-field matches from the original text filter.
+        let tag_rank = connection
+            .tags
+            .iter()
+            .map(|tag| text_rank(tag, &self.query, [500, 450, 400]))
+            .max()
+            .unwrap_or_default();
+        if inherited.is_none()
+            && tag_rank == ConnectionSearchRank::default()
+            && !haystack.contains(&self.query)
+        {
             return None;
         }
         let host = match &connection.config {
@@ -107,7 +116,7 @@ impl ConnectionSearch {
             } => host.as_str(),
             _ => "",
         };
-        let mut rank = inherited.unwrap_or(ConnectionSearchRank(1));
+        let mut rank = inherited.unwrap_or(ConnectionSearchRank(1)).max(tag_rank);
         for (text, weights) in [
             (connection.name.as_str(), [1000, 900, 800]),
             (host, [1000, 900, 800]),
@@ -207,6 +216,42 @@ mod tests {
             );
         }
         assert!(!ConnectionSearch::new("absent", &[]).matches_connection(&connection));
+    }
+
+    #[test]
+    fn tags_support_case_insensitive_substrings_and_chinese_without_cross_tag_hits() {
+        let mut entry = connection(None);
+        entry.tags = vec!["Production".into(), "上海数据库".into(), "Team Blue".into()];
+        for query in ["  PRODUCTION  ", "duct", "上海", "数据库", "team blue"] {
+            assert!(ConnectionSearch::new(query, &[]).matches_connection(&entry));
+        }
+        for query in ["absent", "Production 上海", "Blue Gateway"] {
+            assert!(!ConnectionSearch::new(query, &[]).matches_connection(&entry));
+        }
+        assert!(!ConnectionSearch::new("production", &[]).matches_connection(&connection(None)));
+    }
+
+    #[test]
+    fn tag_relevance_prefers_exact_then_prefix_then_substring_below_direct_fields() {
+        let mut entry = connection(None);
+        let search = ConnectionSearch::new("prod", &[]);
+        for (tag, expected) in [("prod", 500), ("production", 450), ("my-prod", 400)] {
+            entry.tags = vec![tag.into()];
+            assert_eq!(
+                search.rank_connection(&entry),
+                Some(ConnectionSearchRank(expected))
+            );
+        }
+        entry.tags = vec!["prod".into(), "production".into()];
+        assert_eq!(
+            search.rank_connection(&entry),
+            Some(ConnectionSearchRank(500))
+        );
+        entry.name = "production".into();
+        assert_eq!(
+            search.rank_connection(&entry),
+            Some(ConnectionSearchRank(900))
+        );
     }
 
     #[test]
