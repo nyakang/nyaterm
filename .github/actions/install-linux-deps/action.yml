@@ -5,7 +5,7 @@ inputs:
   extra_packages:
     description: Additional space-separated apt packages
     required: false
-    default: 'libclang-dev cmake ninja-build libprotobuf-dev protobuf-compiler libusb-1.0-0-dev libssl-dev zlib1g-dev libbrotli-dev liblz4-dev libpcre2-dev libzstd-dev'
+    default: 'libclang-dev cmake ninja-build libgtest-dev libprotobuf-dev protobuf-compiler libusb-1.0-0-dev libssl-dev zlib1g-dev libbrotli-dev liblz4-dev libpcre2-dev libzstd-dev'
 
 runs:
   using: composite

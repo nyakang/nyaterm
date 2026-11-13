@@ -86,7 +86,13 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.github/actions/install-linux-deps
         with:
-          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm libclang-dev cmake ninja-build libprotobuf-dev protobuf-compiler libusb-1.0-0-dev libssl-dev zlib1g-dev libbrotli-dev liblz4-dev libpcre2-dev libzstd-dev
+          extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm libclang-dev cmake ninja-build libgtest-dev libprotobuf-dev protobuf-compiler libusb-1.0-0-dev libssl-dev zlib1g-dev libbrotli-dev liblz4-dev libpcre2-dev libzstd-dev
+      - name: Test RPM resource integrity
+        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          command -v rpmbuild
+          command -v rpm2cpio
+          python -m unittest scripts.tests.test_android_release_integration.AndroidReleaseTests.test_real_rpm_preserves_android_resource_bytes
       - name: Install AppImage tooling
         if: runner.os == 'Linux'
         shell: bash
@@ -161,6 +167,14 @@ jobs:
           Write-Host "Using MSVC linker: $linker"
           python scripts/release/package_native.py "$env:TARGET"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload failed FFmpeg configuration log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-config-${{ matrix.label }}
+          path: target/android-deps/ffmpeg-build/**/ffbuild/config.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Test Windows FFmpeg import library links and cached repair
         if: runner.os == 'Windows'
         shell: pwsh

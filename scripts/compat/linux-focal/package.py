@@ -19,8 +19,10 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts/release"))
 import linux_icons
+import prepare_android
 
-BINARIES = ("nyaterm", "nyaterm-mcp", "nyaterm-rdp-helper", "nyaterm-vnc-helper")
+BINARIES = ("nyaterm", "nyaterm-mcp", "nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-android-helper")
+ANDROID_LIBRARIES = {"libavcodec.so.62", "libavformat.so.62", "libavutil.so.60", "libswscale.so.9"}
 LIMITS = {"GLIBC": (2, 31), "GLIBCXX": (3, 4, 28), "CXXABI": (1, 3, 12)}
 # These SONAMEs are supplied by the documented focal desktop. No newer SSL/FFI,
 # private libc, or bundled replacement loader is accepted silently.
@@ -60,21 +62,24 @@ def check_versions(output):
     return requirements
 
 
-def audit(binary):
+def audit(binary, *, android=False, shared=False):
     with binary.open("rb") as handle:
         header = handle.read(20)
     if (len(header) < 20 or header[:6] != b"\x7fELF\x02\x01"
             or struct.unpack_from("<H", header, 18)[0] != 62):
         raise ValueError(str(binary) + ": expected little-endian ELF64 x86-64")
-    versions = check_versions(command("readelf", "--version-info", "--wide", str(binary)))
+    version_output = command("readelf", "--version-info", "--wide", str(binary))
+    versions = check_versions(version_output.partition("Version needs section")[2] if shared else version_output)
     program_headers = command("readelf", "--program-headers", "--wide", str(binary))
-    if "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]" not in program_headers:
+    if not shared and "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]" not in program_headers:
         raise ValueError(str(binary) + ": expected the system x86-64 loader")
     dynamic = command("readelf", "--dynamic", "--wide", str(binary))
-    if "(RPATH)" in dynamic or "(RUNPATH)" in dynamic:
-        raise ValueError(str(binary) + ": unexpected library search path")
+    allowed_paths = {"$ORIGIN"} if shared else {"$ORIGIN/android-libs", "$ORIGIN/../android-libs"}
+    for search_path in re.findall(r"\((?:RUNPATH|RPATH)\).*\[([^]]*)\]", dynamic):
+        if not android or not set(search_path.split(":")) <= allowed_paths:
+            raise ValueError(str(binary) + ": unexpected library search path")
     needed = re.findall(r"\(NEEDED\).*Shared library: \[([^]]+)\]", dynamic)
-    unknown = set(needed) - SYSTEM_LIBRARIES
+    unknown = set(needed) - SYSTEM_LIBRARIES - (ANDROID_LIBRARIES if android else set())
     if unknown:
         raise ValueError("unreviewed runtime libraries: " + ", ".join(sorted(unknown)))
     # Checks transitive dependencies and unversioned GTK/GLib symbols too.
@@ -83,6 +88,35 @@ def audit(binary):
         raise ValueError(str(binary) + ": unresolved runtime dependencies:\n" + linkage)
     return {"name": binary.name, "sha256": sha256(binary),
             "versions": versions, "needed": needed, "ldd": linkage}
+
+
+def stage_android(binary_dir, stage):
+    for name in ("adb", "android-libs"):
+        shutil.copytree(binary_dir / name, stage / name)
+    expected = {"adb/adb", "adb/NOTICE.txt", "adb/SOURCE.json", "android-libs/LICENSE.txt",
+                "android-libs/SOURCE.json", *["android-libs/" + name for name in ANDROID_LIBRARIES]}
+    actual = {path.relative_to(stage).as_posix() for directory in (stage / "adb", stage / "android-libs")
+              for path in directory.rglob("*") if path.is_file()}
+    if actual != expected:
+        raise ValueError("unexpected or missing Android runtime files")
+    (stage / "adb/adb").chmod(0o755)
+    for name in expected - {"adb/adb"}:
+        (stage / name).chmod(0o644)
+    # Official x64 platform-tools carries Android build-tree lib64 search
+    # paths. This ADB uses only system libraries; remove those paths from the
+    # package copy before auditing and hashing, without relaxing the ABI gate.
+    subprocess.run(["patchelf", "--remove-rpath", str(stage / "adb/adb")], check=True)
+    # Resolve sibling FFmpeg dependencies without a global LD_LIBRARY_PATH.
+    for name in sorted(ANDROID_LIBRARIES):
+        subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(stage / "android-libs" / name)], check=True)
+    reports = [audit(stage / "adb/adb")]
+    reports.extend(audit(stage / "android-libs" / name, android=True, shared=True)
+                   for name in sorted(ANDROID_LIBRARIES))
+    for name in ("adb/SOURCE.json", "adb/NOTICE.txt", "android-libs/SOURCE.json", "android-libs/LICENSE.txt"):
+        if not (stage / name).is_file() or not (stage / name).stat().st_size:
+            raise ValueError("missing Android provenance/license: " + name)
+    prepare_android.write_resource_manifest(stage, "x86_64-unknown-linux-gnu")
+    return reports
 
 
 def audit_opengl(runtime):
@@ -169,7 +203,7 @@ def create_deb(stage, output, version):
             Depends: bash, {}
             Recommends: libvulkan1 | mesa-vulkan-drivers
             Description: NyaTerm Ubuntu 20.04 compatibility build with GPU rendering and a CPU fallback
-             Includes the application, MCP/RDP/VNC helpers and a checksum-pinned Mesa runtime.
+             Includes MCP/RDP/VNC/Android helpers, ADB, FFmpeg and a checksum-pinned Mesa runtime.
              Requires X11. Does not replace libc or system graphics drivers.
             """).format(version.replace("-", "~"), dependencies), encoding="utf-8")
         linux_icons.normalize_permissions(root)
@@ -196,6 +230,16 @@ def deb_dependencies(binaries):
             "Source: nyaterm-compat\nPackage: nyaterm-compat\nArchitecture: any\n"
             "Description: NyaTerm compatibility build\n", encoding="utf-8")
         args = ["dpkg-shlibdeps", "-O"]
+        private_libraries = binaries[0].parent / "android-libs"
+        if private_libraries.is_dir():
+            # Give private FFmpeg SONAMEs local ownership, then exclude only our
+            # own package. System dependencies of those DSOs are still scanned.
+            shlibs = scratch / "android.shlibs"
+            shlibs.write_text("".join(name.split(".so.")[0] + " " + name.split(".so.")[1]
+                                      + " nyaterm-compat\n" for name in sorted(ANDROID_LIBRARIES)))
+            args.extend(["-L" + str(shlibs), "-xnyaterm-compat", "-l" + str(private_libraries.resolve())])
+            binaries = [*binaries, binaries[0].parent / "adb/adb",
+                        *[private_libraries / name for name in sorted(ANDROID_LIBRARIES)]]
         for binary in binaries:
             args.extend(["-e", str(binary.resolve())])
         environment = dict(os.environ, LC_ALL="C")
@@ -213,7 +257,6 @@ def create_package(binary_dir, output, version, opengl, deb=False):
         raise ValueError("package and resolve libraries inside the focal / glibc 2.31 image")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?", version):
         raise ValueError("invalid artifact version")
-    reports = [audit(binary_dir / name) for name in BINARIES]
     graphics = audit_opengl(opengl)
     output.mkdir(parents=True, exist_ok=True)
     label = "NyaTerm_{}_linux_x64_glibc231".format(version)
@@ -223,6 +266,8 @@ def create_package(binary_dir, output, version, opengl, deb=False):
         for name in BINARIES:
             shutil.copy2(binary_dir / name, stage / name)
             (stage / name).chmod(0o755)
+        android_reports = stage_android(binary_dir, stage)
+        reports = [audit(stage / name, android=name == "nyaterm-android-helper") for name in BINARIES]
         # Portable mode keeps all data beside the application, without touching
         # installed NyaTerm data or depending on a fixed installation prefix.
         (stage / "nyaterm-portable").touch()
@@ -241,7 +286,8 @@ def create_package(binary_dir, output, version, opengl, deb=False):
             (stage / "opengl" / name).chmod(0o644)
         (stage / "abi-report.json").write_text(json.dumps(
             {"baseline": "Ubuntu 20.04 x86_64 / glibc 2.31", "version": version,
-             "binaries": reports, "opengl_libraries": graphics}, indent=2) + "\n", encoding="utf-8")
+             "binaries": reports, "opengl_libraries": graphics,
+             "android_runtime": android_reports}, indent=2) + "\n", encoding="utf-8")
         linux_icons.normalize_permissions(stage)
         if deb:
             create_deb(stage, output, version)
