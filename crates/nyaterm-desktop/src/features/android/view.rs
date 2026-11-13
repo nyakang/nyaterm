@@ -1,5 +1,6 @@
 use super::labels::AndroidError;
 use crate::features::NyaTermApp;
+use crate::features::view_widgets::color_icon;
 use crate::widgets::small_button;
 use gpui::{
     Bounds, Context, DevicePixels, IntoElement, KeyDownEvent, MouseButton, Pixels, Point, Size,
@@ -11,6 +12,38 @@ use rust_i18n::t;
 use std::time::{Duration, Instant};
 
 impl NyaTermApp {
+    pub(in crate::features) fn android_screen_button(
+        &self,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let available = self.android_screen_button_available(&id);
+        div()
+            .id(format!("android-screen-button-overlay-{id}"))
+            .absolute()
+            .occlude()
+            .top_2()
+            .right_2()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                nyaterm_ui::NyaButton::new(
+                    format!("android-screen-button-{id}"),
+                    t!("android.screen"),
+                )
+                .content(color_icon("color/session/scrcpy.svg", 22.))
+                .small()
+                .height(px(30.))
+                .tooltip(t!("android.screen"))
+                .disabled(!available)
+                .on_click(cx.listener(move |app, _, _, cx| {
+                    cx.stop_propagation();
+                    app.open_android_screen_from_terminal(&id, cx);
+                })),
+            )
+    }
+
     pub(in crate::features) fn android_view(
         &mut self,
         id: String,
@@ -240,10 +273,7 @@ impl NyaTermApp {
             .gap_1()
             .h(px(36.))
             .px_2()
-            .bg(rgb(palette.surface))
-            .tooltip(|window, cx| {
-                nyaterm_ui::NyaTooltip::new(t!("android.inputHint").into_owned()).build(window, cx)
-            });
+            .bg(rgb(palette.surface));
         for (action, label, keycode) in [
             ("back", t!("android.back"), 4),
             ("home", t!("android.home"), 3),
@@ -328,6 +358,15 @@ impl NyaTermApp {
                     app.reconnect_session(reconnect.clone(), window, cx);
                 }),
             ));
+        toolbar = toolbar.child(div().flex_1()).child(
+            nyaterm_ui::NyaIconButton::new(
+                format!("android-input-help-{id}"),
+                "icons/menu/info.svg",
+            )
+            .size(px(28.))
+            .icon_size(px(18.))
+            .tooltip(t!("android.inputHint")),
+        );
         let app = cx.weak_entity();
         let bounds_id = id.clone();
         let image = canvas(

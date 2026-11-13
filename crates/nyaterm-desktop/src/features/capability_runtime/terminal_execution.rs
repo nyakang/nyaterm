@@ -109,6 +109,7 @@ pub(in crate::features) struct TerminalExecutionState {
     jobs: HashMap<String, jobs::TerminalJob>,
     waiters: HashMap<String, Vec<TerminalExecutionWaiter>>,
     clock_armed: bool,
+    background_closed: bool,
 }
 
 impl TerminalExecutionState {
@@ -1088,7 +1089,7 @@ impl NyaTermApp {
         for job in state
             .jobs
             .values_mut()
-            .filter(|job| job.session_id == session_id && job.finished.is_none())
+            .filter(|job| job.target.session_id() == Some(session_id) && job.finished.is_none())
         {
             job.receiver = None; // Receiver closure asks the auxiliary worker to close its own channel.
             job.disconnect();
@@ -1264,3 +1265,5 @@ impl NyaTermApp {
 mod tests;
 
 mod jobs;
+
+mod background_jobs;

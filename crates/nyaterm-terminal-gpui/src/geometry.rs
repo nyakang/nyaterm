@@ -144,12 +144,7 @@ pub fn terminal_gutter_metrics(
     } else {
         0.0
     };
-    let trailing_padding_width = if timestamp_width > 0.0 || line_number_width > 0.0 {
-        // Tauri: 8px right padding, a 1px border, and a 10px separator gap.
-        19.0
-    } else {
-        0.0
-    };
+    let trailing_padding_width = crate::command_blocks::COMMAND_RAIL_WIDTH;
 
     TerminalGutterMetrics {
         timestamp_width,
@@ -267,6 +262,10 @@ pub fn terminal_snapshot_covers_display_offset(
     };
     let desired_end = real_total_rows.saturating_sub(display_offset);
     let desired_start = desired_end.saturating_sub(viewport_rows);
+    if let Some(index) = snapshot.display_rows.as_ref() {
+        let needed = index.source_window(display_offset, viewport_rows);
+        return snapshot_start <= needed.start && needed.end <= snapshot_end;
+    }
     if let Some(index) = snapshot.logical_lines.as_ref() {
         if index.physical_rows() != real_total_rows {
             return false;

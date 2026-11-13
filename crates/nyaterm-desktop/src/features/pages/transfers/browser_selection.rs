@@ -93,6 +93,9 @@ impl NyaTermApp {
     ) {
         window.focus(self.transfer.browser_view().focus, cx);
         self.transfer.clear_browser_rename_click();
+        if self.transfer.consume_browser_selection_click(&identity) {
+            self.select_transfer_browser_entry(identity.clone(), cx);
+        }
         let modifiers = event.modifiers();
         if event.click_count() >= 2 && !modifiers.modified() {
             self.open_transfer_browser_entry_from_double_click(identity, window, cx);
@@ -132,6 +135,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         window.focus(self.transfer.browser_view().focus, cx);
+        self.transfer.cancel_browser_selection_click();
         self.transfer
             .arm_browser_rename_click(&path, event.click_count == 1 && !event.modifiers.modified());
 
@@ -160,6 +164,7 @@ impl NyaTermApp {
                     .contains(&path))
         {
             self.transfer.clear_browser_drag_selection();
+            self.transfer.defer_browser_selection_click(path);
             return;
         }
 
@@ -207,6 +212,7 @@ impl NyaTermApp {
         self.transfer
             .set_browser_drag_selection(TransferBrowserDragSelectionState {
                 anchor_path,
+                last_path: path,
                 base_selection,
                 additive,
             });
@@ -251,14 +257,25 @@ impl NyaTermApp {
     ) {
         if !event.dragging() {
             self.transfer.clear_browser_drag_selection();
+            self.transfer.cancel_browser_selection_click();
             return;
         }
 
         self.transfer.cancel_browser_pending_rename();
 
-        let Some(drag_selection) = self.transfer.browser_view().drag_selection.clone() else {
+        let Some(mut drag_selection) = self.transfer.browser_view().drag_selection.clone() else {
             return;
         };
+
+        // A move within the pressed row is still a click, not a range gesture.
+        // In particular, do not add back an entry just toggled off with Ctrl.
+        if drag_selection.last_path == path {
+            return;
+        }
+        self.transfer.cancel_browser_selection_click();
+        drag_selection.last_path = path.clone();
+        self.transfer
+            .set_browser_drag_selection(drag_selection.clone());
 
         self.apply_transfer_browser_range(
             drag_selection.anchor_path,

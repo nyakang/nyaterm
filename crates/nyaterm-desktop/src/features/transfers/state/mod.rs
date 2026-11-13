@@ -9,6 +9,7 @@ mod admission;
 mod browser;
 mod clipboard;
 mod delete;
+mod privilege;
 pub(in crate::features) use browser::TransferSessionTransferBundle;
 pub(in crate::features) use clipboard::TransferFileClipboard;
 pub(super) use delete::TransferDeleteOutcome;
@@ -56,6 +57,8 @@ struct TransferRetryContext {
 }
 
 pub(in crate::features) struct TransferFeatureState {
+    pub(super) sudo_prompt: Option<super::privilege_runtime::FileSudoPrompt>,
+    external_file_tasks: HashMap<String, std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     file_operations: HashMap<String, super::file_operations::FileOperationContext>,
     clipboard: Option<TransferFileClipboard>,
     clipboard_generation: u64,
@@ -204,6 +207,7 @@ pub(super) struct TransferBrowserState {
     pub(super) selected_remote_path: Option<String>,
     pub(super) selected_remote_paths: HashSet<String>,
     pub(super) drag_selection: Option<TransferBrowserDragSelectionState>,
+    pub(super) pending_selection_click: Option<String>,
     pub(super) external_drop_hover: bool,
     pub(super) context_target: TransferBrowserContextTarget,
     pub(super) rename_click_candidate: Option<String>,
@@ -369,6 +373,8 @@ impl TransferFeatureState {
     ) -> Self {
         let (tx, rx) = unbounded();
         Self {
+            sudo_prompt: None,
+            external_file_tasks: HashMap::new(),
             file_operations: HashMap::new(),
             clipboard: None,
             clipboard_generation: 0,
@@ -422,6 +428,7 @@ impl TransferFeatureState {
                 external_drop_hover: false,
                 context_target: TransferBrowserContextTarget::default(),
                 rename_click_candidate: None,
+                pending_selection_click: None,
                 pending_rename: None,
                 pending_rename_token: 0,
                 favorites_menu: None,

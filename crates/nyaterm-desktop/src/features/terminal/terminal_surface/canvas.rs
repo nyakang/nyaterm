@@ -1030,6 +1030,13 @@ impl NyaTermApp {
                                                 .min_h_0()
                                                 .relative()
                                                 .child(output)
+                                                .when(
+                                                    matches!(
+                                                        self.session.metadata(&output_session_id).map(|metadata| &metadata.launch_config),
+                                                        Some(SessionLaunchConfig::AdbShell(_))
+                                                    ),
+                                                    |this| this.child(self.android_screen_button(output_session_id.clone(), cx)),
+                                                )
                                                 .when(output_session_id.is_empty(), |this| {
                                                     this.child(terminal_bounds_tracker(
                                                         cx.entity(),

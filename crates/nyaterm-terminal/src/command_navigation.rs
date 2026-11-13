@@ -69,6 +69,7 @@ impl TerminalCore {
         if !(first..=last).contains(&anchor.logical_line) {
             return;
         }
+        self.primary_lines.command_blocks.start(anchor.logical_line);
         self.primary_lines
             .metadata
             .entry(anchor.logical_line)
@@ -94,6 +95,7 @@ impl TerminalCore {
             cursor -= 1usize;
         }
         let logical = self.active_line_state().logical_line(cursor);
+        self.active_line_state_mut().command_blocks.start(logical);
         self.active_line_state_mut()
             .metadata
             .entry(logical)

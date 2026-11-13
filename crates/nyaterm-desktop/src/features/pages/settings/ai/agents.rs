@@ -422,6 +422,7 @@ impl SettingsPanel {
             t!("ai.mcp.helperMissing")
         };
         let mcp = div()
+            .child(self.mcp_background_tasks_content(cx))
             .flex()
             .flex_col()
             .gap_4()

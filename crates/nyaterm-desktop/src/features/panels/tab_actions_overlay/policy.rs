@@ -162,7 +162,6 @@ impl TabActionPolicy {
             || self.support.disconnect
             || self.support.ai
             || self.support.rdp_secure_attention
-            || self.support.android_screen
     }
 
     pub(in crate::features) fn supports_submenu(self, submenu: TabActionsSubmenu) -> bool {

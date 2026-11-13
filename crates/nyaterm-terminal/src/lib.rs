@@ -17,7 +17,9 @@ pub mod action_links;
 pub mod agent_capture;
 mod cell_string;
 mod cells;
+pub mod command_blocks;
 pub mod command_navigation;
+pub mod display_rows;
 pub mod editing;
 mod encoding;
 mod graphics;
@@ -315,6 +317,8 @@ impl TerminalHistoryState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSnapshotMeta {
+    pub command_blocks: Arc<[command_blocks::CommandBlock]>,
+    pub display_rows: Option<Arc<display_rows::TerminalDisplayRows>>,
     pub history: TerminalHistoryState,
     pub cols: usize,
     pub viewport_rows: usize,
@@ -349,6 +353,8 @@ pub struct TerminalDamageSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSnapshot {
+    pub command_blocks: Arc<[command_blocks::CommandBlock]>,
+    pub display_rows: Option<Arc<display_rows::TerminalDisplayRows>>,
     pub history: TerminalHistoryState,
     pub cols: usize,
     pub viewport_rows: usize,
@@ -382,7 +388,7 @@ impl TerminalSnapshot {
         history: TerminalHistoryState,
     ) -> Option<std::ops::Range<usize>> {
         let change = history.changes_since(self.history)?;
-        if self.logical_lines.is_some() {
+        if self.logical_lines.is_some() || self.display_rows.is_some() {
             return None;
         }
         let end = self.total_rows.checked_sub(self.display_offset)?;
@@ -402,7 +408,7 @@ impl TerminalSnapshot {
             return Some(self.clone());
         }
         // Native selection text is tied to its source viewport and may be large.
-        if self.logical_lines.is_some() || self.selection.is_some() {
+        if self.logical_lines.is_some() || self.display_rows.is_some() || self.selection.is_some() {
             return None;
         }
         let end = self.total_rows.checked_sub(self.display_offset)?;
@@ -447,6 +453,8 @@ impl TerminalSnapshot {
             viewport_rows: meta.viewport_rows,
             row_data,
             logical_lines: None,
+            command_blocks: meta.command_blocks,
+            display_rows: meta.display_rows,
             cursor: meta.cursor,
             selection: meta.selection,
             scrollback_len: meta.scrollback_len,
@@ -690,6 +698,7 @@ struct LineMetadata {
 
 #[derive(Debug, Default)]
 struct ScreenLineState {
+    command_blocks: command_blocks::CommandBlocks,
     /// Logical first retained input row after a local clear.
     clear_line_origin: Option<i64>,
     line_numbers: line_numbers::LineNumbers,
@@ -722,6 +731,7 @@ impl ScreenLineState {
         let first = self.logical_line(topmost);
         let last = self.logical_line(bottommost);
         self.line_numbers.retain_from(first);
+        self.command_blocks.retain(first, last);
         let before = self.metadata.len();
         let mut retained = self.metadata.split_off(&first);
         if let Some(after_last) = last.checked_add(1) {
@@ -790,6 +800,7 @@ pub struct TerminalCore {
     snapshot_row_cache: Mutex<TerminalSnapshotRowCache>,
     search_cache: Mutex<TerminalSearchCache>,
     last_damage_summary: TerminalDamageSummary,
+    collapsed_commands: std::collections::BTreeSet<command_blocks::CommandBlockId>,
     logical_line_snapshots: bool,
     logical_line_index: logical_lines::LogicalLineIndexCache,
     rows: usize,
@@ -979,6 +990,7 @@ impl TerminalCore {
             snapshot_row_cache: Mutex::new(TerminalSnapshotRowCache::default()),
             search_cache: Mutex::new(TerminalSearchCache::default()),
             last_damage_summary: TerminalDamageSummary::default(),
+            collapsed_commands: Default::default(),
             logical_line_snapshots: false,
             logical_line_index: logical_lines::LogicalLineIndexCache::default(),
             rows,
@@ -1026,6 +1038,14 @@ impl TerminalCore {
                     cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER),
                 )
             });
+    }
+
+    fn command_block_display_supported(&self) -> bool {
+        !self
+            .term
+            .mode()
+            .intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE)
+            && self.scroll_region() == (0, self.rows.saturating_sub(1))
     }
 
     /// Coordinate-sensitive protocols and graphics retain the standard grid.
@@ -1092,6 +1112,8 @@ impl TerminalCore {
         let navigation =
             cols_changed.then(|| std::mem::take(&mut self.primary_lines.command_navigation));
         let pending_prompt = self.primary_lines.pending_command_prompt;
+        let blocks_before_reflow =
+            cols_changed.then(|| std::mem::take(&mut self.primary_lines.command_blocks));
         // A width reflow rewrites grid coordinates arbitrarily and rebuilds the
         // numbering indices, so remember the cursor's pinned number to re-anchor
         // it afterwards. Row-only growth keeps logical identities instead (see
@@ -1215,6 +1237,36 @@ impl TerminalCore {
                 .selection
                 .and_then(|(start, end)| Some((remap(start)?, remap(end)?)));
             let mapped_prompt = pending_prompt.and_then(remap);
+            let mut blocks = blocks_before_reflow.unwrap_or_default();
+            blocks.entries.retain_mut(|block| {
+                let Some(start) = remap(block.start) else {
+                    return false;
+                };
+                let output = block.output.and_then(remap);
+                let end = block.end.and_then(|end| {
+                    remap(end).or_else(|| {
+                        let mut line = *restored.points.get(&(end - 1))?;
+                        while line < self.term.primary_grid().bottommost_line()
+                            && self.term.primary_grid()[line][Column(self.cols - 1)]
+                                .flags
+                                .contains(Flags::WRAPLINE)
+                        {
+                            line += 1;
+                        }
+                        Some(self.primary_lines.logical_line(line) + 1)
+                    })
+                });
+                if block.output.is_some() && output.is_none()
+                    || block.end.is_some() && end.is_none()
+                {
+                    return false;
+                }
+                block.start = start;
+                block.output = output;
+                block.end = end;
+                true
+            });
+            self.primary_lines.command_blocks = blocks;
             self.primary_lines.command_navigation.revision = navigation.revision.wrapping_add(1);
             self.primary_lines.command_navigation.position = mapped_position;
             self.primary_lines.command_navigation.selection = mapped_selection;
@@ -1509,6 +1561,8 @@ impl TerminalCore {
 
     /// Discard history and completed output while retaining the editable input rows.
     pub fn clear_except_input(&mut self) {
+        self.active_line_state_mut().command_blocks = Default::default();
+        self.collapsed_commands.clear();
         self.active_line_state_mut().command_navigation = Default::default();
         self.active_line_state_mut().pending_command_prompt = None;
         for metadata in self.active_line_state_mut().metadata.values_mut() {
@@ -1765,7 +1819,9 @@ impl TerminalCore {
     ) -> (TerminalSnapshot, TerminalSnapshotBuildStats) {
         let max_offset = self.scrollback_len();
         let offset = offset.min(max_offset);
-        if self.logical_line_snapshots && self.logical_line_display_supported() {
+        if (self.logical_line_snapshots && self.logical_line_display_supported())
+            || (!self.collapsed_commands.is_empty() && self.command_block_display_supported())
+        {
             return self.viewport_snapshot_with_window_and_stats(offset, 0, 0);
         }
         let (mut snapshot, stats) = snapshot_from_term(
@@ -1832,6 +1888,33 @@ impl TerminalCore {
             older_rows = anchor.saturating_sub(start);
             newer_rows = end.saturating_sub(anchor + self.rows).min(offset);
         }
+        let display_rows =
+            if !self.collapsed_commands.is_empty() && self.command_block_display_supported() {
+                let state = self.active_line_state();
+                let cursor = state.logical_line(self.term.grid().cursor.point.line);
+                let first = state.logical_line(self.term.topmost_line());
+                let blocks = state.command_blocks.snapshot(
+                    first,
+                    cursor,
+                    state.logical_line(self.term.bottommost_line()),
+                );
+                let index = display_rows::TerminalDisplayRows::new(
+                    scrollback_len + self.rows,
+                    logical_lines.clone(),
+                    &blocks,
+                    &self.collapsed_commands,
+                    (cursor - first).max(0) as usize,
+                );
+                let range = index.source_window(offset, self.rows);
+                let anchor = scrollback_len - offset;
+                older_rows = older_rows.max(anchor.saturating_sub(range.start));
+                newer_rows = newer_rows
+                    .max(range.end.saturating_sub(anchor + self.rows))
+                    .min(offset);
+                Some(Arc::new(index))
+            } else {
+                None
+            };
         let (mut snapshot, stats) = snapshot_window_from_term(
             &self.term,
             TerminalSnapshotWindow {
@@ -1844,6 +1927,7 @@ impl TerminalCore {
             &self.snapshot_row_cache,
         );
         snapshot.logical_lines = logical_lines;
+        snapshot.display_rows = display_rows;
         snapshot.images = self
             .graphics
             .viewport_images_for_screen(
@@ -2333,6 +2417,12 @@ impl TerminalCore {
             metadata.input_start_col = None;
             metadata.input_end_col = None;
         }
+        if erased_input {
+            self.active_line_state_mut()
+                .command_blocks
+                .entries
+                .retain(|block| block.start != logical_line);
+        }
         if should_revise {
             let state = self.active_line_state_mut();
             if let Some(origin) = state.clear_line_origin.as_mut() {
@@ -2431,6 +2521,9 @@ impl TerminalCore {
         }
         let reset_generation = self.term.reset_generation();
         if reset_generation != self.consumed_reset_generation {
+            self.primary_lines.command_blocks = Default::default();
+            self.alternate_lines.command_blocks = Default::default();
+            self.collapsed_commands.clear();
             self.primary_lines.metadata.clear();
             self.alternate_lines.metadata.clear();
             self.primary_lines.line_numbers = Default::default();
@@ -2495,6 +2588,7 @@ impl TerminalCore {
             state.last_cursor_line = None;
             state.reflow_number_anchor = None;
             state.metadata.clear();
+            state.command_blocks = Default::default();
             state.line_numbers = Default::default();
             state.command_navigation = Default::default();
             state.pending_command_prompt = None;
@@ -2560,6 +2654,20 @@ impl TerminalCore {
         }
         let point = self.term.renderable_content().cursor.point;
         let logical_line = self.active_line_state().logical_line(point.line);
+        {
+            let state = self.active_line_state_mut();
+            match boundary {
+                ShellBoundaryKind::PromptStart => state.command_blocks.finish(logical_line),
+                ShellBoundaryKind::InputStart => state.command_blocks.start(logical_line),
+                ShellBoundaryKind::OutputStart => state
+                    .command_blocks
+                    .output(logical_line + i64::from(point.column.0 > 0)),
+                ShellBoundaryKind::Finished { .. } => state
+                    .command_blocks
+                    .finish(logical_line + i64::from(point.column.0 > 0)),
+            }
+        }
+        self.update_command_output_counts();
         let metadata = self
             .active_line_state_mut()
             .metadata
@@ -2632,6 +2740,67 @@ impl TerminalCore {
                 }
             }
         }
+    }
+
+    fn update_command_output_counts(&mut self) {
+        let state = self.active_line_state();
+        let counts = state
+            .command_blocks
+            .entries
+            .iter()
+            .rev()
+            .take(2)
+            .filter_map(|block| {
+                let start = block.output?;
+                let end = block.end?;
+                if block.output_lines != 0 || start >= end {
+                    return None;
+                }
+                let mut first =
+                    (start - state.logical_origin).max(i64::from(self.term.topmost_line().0));
+                let last =
+                    (end - state.logical_origin).min(i64::from(self.term.bottommost_line().0) + 1);
+                // Preserve the complete hard line when input and output share it.
+                while first < last
+                    && first > i64::from(self.term.topmost_line().0)
+                    && self.term.grid()[Line(first as i32 - 1)][Column(self.cols - 1)]
+                        .flags
+                        .contains(Flags::WRAPLINE)
+                {
+                    first += 1;
+                }
+                let count = (first..last)
+                    .filter(|line| {
+                        *line + 1 == last
+                            || !self.term.grid()[Line(*line as i32)][Column(self.cols - 1)]
+                                .flags
+                                .contains(Flags::WRAPLINE)
+                    })
+                    .count();
+                Some((block.id, first + state.logical_origin, count))
+            })
+            .collect::<Vec<_>>();
+        for (id, output, count) in counts {
+            if let Some(block) = self
+                .active_line_state_mut()
+                .command_blocks
+                .entries
+                .iter_mut()
+                .rev()
+                .take(2)
+                .find(|block| block.id == id)
+            {
+                block.output = Some(output);
+                block.output_lines = count;
+            }
+        }
+    }
+
+    pub fn set_collapsed_commands(
+        &mut self,
+        ids: std::collections::BTreeSet<command_blocks::CommandBlockId>,
+    ) {
+        self.collapsed_commands = ids;
     }
 
     fn commit_shell_input_range(&mut self, start: i64, end: i64) {
@@ -2893,8 +3062,10 @@ fn snapshot_window_from_term(
         visible: cursor_visible,
         blinking: cursor_blinking,
     };
-    let snapshot = TerminalSnapshot::from_rows(
+    let mut snapshot = TerminalSnapshot::from_rows(
         TerminalSnapshotMeta {
+            command_blocks: Arc::from([]),
+            display_rows: None,
             history: history_state_from_term(term, line_state),
             cols,
             viewport_rows,
@@ -2932,6 +3103,16 @@ fn snapshot_window_from_term(
         },
         row_data,
     );
+    if !content.mode.contains(TermMode::ALT_SCREEN) {
+        snapshot.command_blocks = line_state
+            .command_blocks
+            .snapshot(
+                line_state.logical_line(term.topmost_line()),
+                line_state.logical_line(cursor_point.line),
+                line_state.logical_line(term.bottommost_line()),
+            )
+            .into();
+    }
     (snapshot, stats)
 }
 

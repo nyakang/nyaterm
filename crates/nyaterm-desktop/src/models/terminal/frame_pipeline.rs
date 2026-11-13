@@ -66,6 +66,17 @@ pub(super) fn terminal_frame_output_commands(
 }
 
 impl TerminalFramePipeline {
+    pub(crate) fn set_collapsed_commands(
+        &self,
+        session_id: String,
+        ids: std::collections::BTreeSet<nyaterm_terminal::command_blocks::CommandBlockId>,
+    ) {
+        self.arm_event_wakes();
+        let _ = self
+            .command_tx
+            .send(TerminalFrameCommand::SetCollapsedCommands { session_id, ids });
+    }
+
     pub(crate) fn set_keyword_rules(&self, rules: Arc<Vec<ResolvedKeywordHighlightRule>>) {
         let Ok(mut current) = self.keyword_rules.lock() else {
             return;

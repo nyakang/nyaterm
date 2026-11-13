@@ -170,7 +170,7 @@ pub(super) fn connection_editor_frame(
                                         NyaTabItem::new(serial_label),
                                         NyaTabItem::new("RDP"),
                                         NyaTabItem::new("VNC"),
-                                        NyaTabItem::new("Android"),
+                                        NyaTabItem::new("ADB"),
                                     ])
                                     .selected_index(match editor.kind {
                                         ConnectionKindTab::Ssh => 0,

@@ -246,6 +246,7 @@ pub struct SftpPathTransferOptions {
     download_owner: String,
     promised_type: Option<crate::sftp::SftpFileType>,
     download_runtime: Arc<Mutex<download_targets::DownloadRuntime>>,
+    upload_runtime: crate::sftp::upload_runtime::UploadRuntime,
 }
 
 impl std::fmt::Debug for SftpPathTransferOptions {
@@ -282,6 +283,7 @@ impl Default for SftpPathTransferOptions {
             download_owner: nyaterm_core::uuid(),
             promised_type: None,
             download_runtime: Arc::default(),
+            upload_runtime: Default::default(),
         }
     }
 }
@@ -301,6 +303,7 @@ impl SftpPathTransferOptions {
             download_owner: nyaterm_core::uuid(),
             promised_type: None,
             download_runtime: Arc::default(),
+            upload_runtime: Default::default(),
         }
     }
 
@@ -342,6 +345,10 @@ impl SftpPathTransferOptions {
         &self.transfer
     }
 
+    pub(crate) fn upload_runtime(&self) -> &crate::sftp::upload_runtime::UploadRuntime {
+        &self.upload_runtime
+    }
+
     /// Create a sibling download with its own prompt decisions and reservation identity,
     /// sharing only this batch's final-target reservations.
     pub fn clone_for_download_batch(&self) -> Self {
@@ -361,6 +368,7 @@ impl SftpPathTransferOptions {
             download_owner: self.download_owner.clone(),
             promised_type: self.promised_type,
             download_runtime: Arc::clone(&self.download_runtime),
+            upload_runtime: self.upload_runtime.clone(),
         }
     }
 

@@ -267,7 +267,7 @@ async fn handle_connection(
         &mut writer,
         rpc_ok(
             request.id,
-            json!({ "authenticated": true, "features": ["client_resume", "mcp_lifecycle"] }),
+            json!({ "authenticated": true, "features": ["client_resume", "mcp_lifecycle", "connection_targets"] }),
         ),
     )
     .await

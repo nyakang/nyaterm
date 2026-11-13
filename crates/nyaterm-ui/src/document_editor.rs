@@ -145,6 +145,15 @@ impl NyaDocumentEditorState {
         }
     }
 
+    /// Update a source editor's syntax without replacing its content or selection.
+    pub fn set_source_language(&mut self, language: &str, cx: &mut Context<Self>) {
+        if self.editor.read(cx).language_name().as_ref() != language {
+            self.editor.update(cx, |editor, cx| {
+                editor.set_highlighter(language.to_string(), cx)
+            });
+        }
+    }
+
     pub fn set_font_size(&mut self, font_size: f32, cx: &mut Context<Self>) {
         if self.font_size != Some(font_size) {
             self.font_size = Some(font_size);
@@ -317,6 +326,44 @@ mod tests {
     use crate::document_snapshot::NyaDocumentSnapshot;
     use crate::root::nya_root;
     use gpui::{AppContext as _, Focusable as _, Modifiers, MouseButton, TestAppContext};
+
+    #[gpui::test]
+    fn read_only_source_switches_language_even_when_content_is_unchanged(cx: &mut TestAppContext) {
+        use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+
+        cx.update(gpui_kit::init);
+        let (document, cx) = cx.add_window_view(|window, cx| {
+            let mut document =
+                NyaDocumentEditorState::new_source(window, cx, "print(123)", "plain");
+            document.set_read_only(true, cx);
+            document
+        });
+        for language in ["python", "json", "plain", "python"] {
+            document.update(cx, |document, cx| {
+                document.set_source_language(language, cx);
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+                let document = document.read(cx);
+                let editor = document.editor.read(cx);
+                assert!(document.read_only);
+                assert_eq!(editor.language_name().as_ref(), language);
+                assert_eq!(editor.text().to_string(), "print(123)");
+                if language == "python" {
+                    let mut highlighter = SyntaxHighlighter::new(&editor.language_name());
+                    highlighter.update(None, editor.text(), None);
+                    for theme in [
+                        HighlightTheme::default_dark(),
+                        HighlightTheme::default_light(),
+                    ] {
+                        let styles = highlighter.styles(&(0..10), theme.as_ref());
+                        assert!(styles.iter().any(|(range, _)| range.contains(&6)));
+                    }
+                }
+            });
+        }
+    }
 
     #[gpui::test]
     fn source_placeholder_preserves_bash_language_and_unicode_content(cx: &mut TestAppContext) {

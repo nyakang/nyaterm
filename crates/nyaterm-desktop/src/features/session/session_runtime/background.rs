@@ -465,8 +465,7 @@ impl NyaTermApp {
                     session_manager
                         .create_adb_session_with_cancel(
                             nyaterm_transport::adb_shell::AdbShellConfig {
-                                name: rust_i18n::t!("android.shellTitle", name = config.name)
-                                    .into_owned(),
+                                name: config.name.clone(),
                                 binding: config.binding.clone(),
                                 cols: config.cols,
                                 rows: config.rows,
@@ -1311,7 +1310,7 @@ fn create_session_from_launch_config(
     match launch_config {
         SessionLaunchConfig::AdbShell(config) => session_manager
             .create_adb_session(nyaterm_transport::adb_shell::AdbShellConfig {
-                name: rust_i18n::t!("android.shellTitle", name = config.name).into_owned(),
+                name: config.name.clone(),
                 binding: config.binding.clone(),
                 cols: config.cols,
                 rows: config.rows,

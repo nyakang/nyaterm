@@ -21,7 +21,7 @@ impl TerminalSurface {
         &mut self,
         snapshot: &TerminalSnapshot,
     ) -> Option<Arc<TerminalUnwrappedLayout>> {
-        if self.wrap_mode != TerminalWrapMode::None {
+        if self.wrap_mode != TerminalWrapMode::None && snapshot.display_rows.is_none() {
             return None;
         }
         let offset = -f32::from(self.horizontal_scroll.offset().x) / self.cell_width.max(1.0);
@@ -96,6 +96,9 @@ impl TerminalSurface {
         let Some(layout) = self.painted_unwrapped.as_ref() else {
             return (None, None);
         };
+        if !layout.unwrapped {
+            return (None, None);
+        }
         let content_width = layout.width_cols as f32 * self.cell_width;
         // This node measures the scrollbar range only. Overflow::Scroll would
         // also pan on wheel input (including mapping vertical wheel to X),
@@ -132,20 +135,35 @@ impl TerminalSurface {
         // Keep the lane when glyphs are hidden in no-wrap mode. Switching the
         // display policy must not resize the remote application's grid.
         let mut rows = div().absolute().left_0().top(px(offset)).flex().flex_col();
-        if self.painted_unwrapped.is_none() {
+        if self
+            .painted_unwrapped
+            .as_ref()
+            .is_none_or(|layout| !layout.unwrapped)
+        {
             let visible = terminal_surface_visible_rows_for_viewport(
                 self.viewport_rows,
-                snapshot.row_count(),
+                self.painted_unwrapped
+                    .as_ref()
+                    .map_or(snapshot.row_count(), |layout| layout.viewport_rows),
                 offset,
                 cell_height,
             );
             rows = rows.top(px(offset + visible.start as f32 * cell_height));
             for row in visible {
-                let marker = if snapshot.row(row).is_some_and(|row| row.wraps_to_next) {
-                    "↪"
-                } else {
-                    ""
-                };
+                let source = self
+                    .painted_unwrapped
+                    .as_ref()
+                    .map_or(row, |layout| layout.first_source_row(row));
+                let summary = self
+                    .painted_unwrapped
+                    .as_ref()
+                    .is_some_and(|layout| layout.summary(row).is_some());
+                let marker =
+                    if !summary && snapshot.row(source).is_some_and(|row| row.wraps_to_next) {
+                        "↪"
+                    } else {
+                        ""
+                    };
                 rows = rows.child(
                     div()
                         .h(px(cell_height))

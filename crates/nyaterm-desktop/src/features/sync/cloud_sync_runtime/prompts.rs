@@ -6,6 +6,12 @@ impl NyaTermApp {
     pub(crate) fn cloud_sync_session_restore_blocked(&self) -> bool {
         cloud_sync_restore_is_blocked(
             self.session.has_live_remote_sessions()
+                || self
+                    .mcp
+                    .capabilities
+                    .terminal_executions
+                    .has_background_operations()
+                || self.mcp.capabilities.has_active_requests()
                 || self.remote_desktop.blocks_configuration_replacement(),
             self.session.start_is_busy(),
         )

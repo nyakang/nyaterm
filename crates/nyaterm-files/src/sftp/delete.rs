@@ -1,9 +1,8 @@
 //! Server-side directory deletion with a byte-preserving SFTP fallback.
 
 use super::{
-    RemoteFilePath, SftpPathCodec, SftpSessionPool, SshMultiplexHandle, SshSessionConfig,
-    close_sftp_session, directory_upload_worker_count, open_sftp_session,
-    sftp_directory_concurrency,
+    RemoteFilePath, SftpPathCodec, SftpSessionPool, close_sftp_session,
+    directory_upload_worker_count, sftp_directory_concurrency,
 };
 use crate::sftp_transfer_types::SftpTransferOptions;
 use nyaterm_transport::ssh_execution::{exec_ssh_command, exec_ssh_command_with_multiplex};
@@ -65,17 +64,18 @@ fn fast_remove_command(codec: &SftpPathCodec, display: &str, raw: &[u8]) -> Opti
 }
 
 pub(super) async fn delete_remote_path(
-    config: &SshSessionConfig,
-    multiplex: Option<&SshMultiplexHandle>,
+    factory: &super::session::SftpSessionFactory,
     codec: &SftpPathCodec,
     path: &RemoteFilePath,
     raw_path: Vec<u8>,
 ) -> anyhow::Result<()> {
+    let config = &factory.config;
+    let multiplex = factory.multiplex.as_ref();
     // The token is authoritative for SFTP; validating only its display label is insufficient.
     ensure_safe_target(path.display_path.trim().as_bytes())?;
     ensure_safe_target(&raw_path)?;
     let raw_path = normalize_path(&raw_path).to_vec();
-    let session = open_sftp_session(config, multiplex).await?;
+    let session = factory.open().await?;
     let metadata = session.sftp.symlink_metadata_bytes(raw_path.clone()).await;
     let attrs = match metadata {
         Ok(attrs) => attrs,
@@ -95,7 +95,9 @@ pub(super) async fn delete_remote_path(
     }
     close_sftp_session(session).await;
 
-    if let Some(command) = fast_remove_command(codec, &path.display_path, &raw_path) {
+    if factory.sudo.is_none()
+        && let Some(command) = fast_remove_command(codec, &path.display_path, &raw_path)
+    {
         let output = match multiplex {
             Some(multiplex) => {
                 exec_ssh_command_with_multiplex(
@@ -120,7 +122,7 @@ pub(super) async fn delete_remote_path(
         );
     }
 
-    let session = open_sftp_session(config, multiplex).await?;
+    let session = factory.open().await?;
     let max_open_handles = session.sftp.max_open_handles();
     let inventory = collect_inventory(&session.sftp, raw_path).await;
     close_sftp_session(session).await;
@@ -139,7 +141,7 @@ pub(super) async fn delete_remote_path(
     } else {
         concurrency.session_pool_size
     };
-    let pool = SftpSessionPool::open(config, multiplex, pool_size, Config::default()).await?;
+    let pool = SftpSessionPool::open(factory, pool_size, Config::default()).await?;
     let result = remove_inventory(pool.clone(), inventory, workers).await;
     pool.close_all().await;
     result

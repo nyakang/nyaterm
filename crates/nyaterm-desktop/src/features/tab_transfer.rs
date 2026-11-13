@@ -219,7 +219,9 @@ impl NyaTermApp {
         {
             return Err("stop the active recording before moving this tab".to_string());
         }
-        if self.transfer.session_has_active_transfer(&session_ids) {
+        if self.transfer.session_has_active_transfer(&session_ids)
+            || self.transfer.has_external_file_tasks(&session_ids)
+        {
             return Err(
                 "wait for active file transfers to finish before moving this tab".to_string(),
             );
@@ -234,6 +236,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> Result<WorkspaceTabTransferBundle, String> {
         let session_ids = self.can_transfer_tab_tree(root_tab_id, source_revision, cx)?;
+        self.cancel_file_sudo_for_sessions(&session_ids, cx);
         let source_index = self.session.session_index(root_tab_id).unwrap_or(0);
         let source_active_id = self.session.active_id_owned();
         let source_terminal_tree = self.shell.terminal_window_tree();

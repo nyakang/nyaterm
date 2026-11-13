@@ -75,6 +75,29 @@ impl FileManagerWorkspace {
                 }),
             );
         }
+        if let Some(session) = endpoint.session_id().map(str::to_owned) {
+            let (available, status) = self.read_app(cx, |app| {
+                (
+                    app.file_sudo_available(&session),
+                    app.file_sudo_status(&session),
+                )
+            });
+            if available || status.is_sudo() {
+                navigation = navigation.child(
+                    small_button(
+                        format!("fm-sudo-{}", pane.as_str()),
+                        crate::features::transfers::privilege_runtime::sudo_label(status),
+                        cx.listener(move |this, _, window, cx| {
+                            let session = session.clone();
+                            this.dispatch_app(window, cx, move |app, window, cx| {
+                                app.toggle_file_sudo(session, window, cx)
+                            });
+                        }),
+                    )
+                    .disabled(status.is_busy()),
+                );
+            }
+        }
         let path_view = if state.path_editing {
             div()
                 .h(px(24.))

@@ -15,6 +15,7 @@ pub(crate) struct TransferBrowserColumnResizeState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TransferBrowserDragSelectionState {
     pub(crate) anchor_path: String,
+    pub(crate) last_path: String,
     pub(crate) base_selection: HashSet<String>,
     pub(crate) additive: bool,
 }

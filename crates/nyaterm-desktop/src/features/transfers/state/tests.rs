@@ -311,6 +311,50 @@ fn cut_clipboard_only_settles_successful_jobs_from_the_current_generation() {
 }
 
 #[test]
+fn browser_ctrl_toggle_keeps_active_selection_consistent() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut transfer = transfer_state(&cx);
+    transfer.replace_browser_entries_for_test(vec![
+        file_entry("/a"),
+        file_entry("/b"),
+        file_entry("/c"),
+    ]);
+    transfer.select_browser_entry("/a".into());
+    transfer.toggle_browser_path_mark("/b".into());
+    transfer.toggle_browser_path_mark("/c".into());
+
+    assert_eq!(transfer.toggle_browser_path_mark("/a".into()), 2);
+    assert_eq!(transfer.browser.selected_remote_path.as_deref(), Some("/c"));
+    assert!(!transfer.browser.selected_remote_paths.contains("/a"));
+    assert_eq!(transfer.toggle_browser_path_mark("/a".into()), 3);
+    assert_eq!(transfer.browser.selected_remote_path.as_deref(), Some("/a"));
+    assert_eq!(transfer.toggle_browser_path_mark("/a".into()), 2);
+    assert_eq!(transfer.browser.selected_remote_path.as_deref(), Some("/b"));
+    transfer.toggle_browser_path_mark("/b".into());
+    assert_eq!(transfer.browser.selected_remote_path.as_deref(), Some("/c"));
+    assert_eq!(transfer.toggle_browser_path_mark("/c".into()), 0);
+    assert!(transfer.browser.selected_remote_path.is_none());
+}
+
+#[test]
+fn browser_deferred_selection_is_cancelled_by_navigation_and_context_menu() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut transfer = transfer_state(&cx);
+    transfer.defer_browser_selection_click("/a".into());
+    assert!(!transfer.consume_browser_selection_click("/b"));
+    assert!(transfer.consume_browser_selection_click("/a"));
+    assert!(!transfer.consume_browser_selection_click("/a"));
+    transfer.defer_browser_selection_click("/a".into());
+    transfer.begin_browser_directory_load("/next".into());
+    assert!(!transfer.consume_browser_selection_click("/a"));
+    transfer.defer_browser_selection_click("/a".into());
+    transfer.set_browser_context_target(TransferBrowserContextTarget::CurrentDirectory);
+    assert!(!transfer.consume_browser_selection_click("/a"));
+}
+
+#[test]
 fn browser_rename_click_requires_selection_before_mouse_down() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);

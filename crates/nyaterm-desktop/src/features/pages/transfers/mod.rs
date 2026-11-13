@@ -30,6 +30,7 @@ mod overlays_upload;
 pub(in crate::features) mod panel;
 pub(in crate::features::pages::transfers) mod path_bar;
 mod preview;
+mod privilege;
 mod properties;
 mod properties_dialog;
 mod queue;

@@ -54,12 +54,17 @@ impl NyaTermApp {
 
     pub(in crate::features) fn enqueue_sftp_download_job_for_target(
         &mut self,
-        session: FileTransferSession,
+        mut session: FileTransferSession,
         remote_path: RemoteFilePath,
         local_path: PathBuf,
         path_options: SftpPathTransferOptions,
         cx: &mut Context<Self>,
     ) {
+        if let Err(error) = self.refresh_manual_transfer_session(&mut session) {
+            self.shell.set_status(error.to_string());
+            cx.notify();
+            return;
+        }
         let id = self.transfer.next_transfer_job_id("sftp-download");
         let control = SftpTransferControl::new();
         let display_path = remote_path.display_path.clone();
@@ -127,13 +132,18 @@ impl NyaTermApp {
 
     pub(in crate::features) fn enqueue_sftp_upload_job_for_target(
         &mut self,
-        session: FileTransferSession,
+        mut session: FileTransferSession,
         local_path: PathBuf,
         remote_path: String,
         path_options: SftpPathTransferOptions,
         target_lock: Arc<Mutex<()>>,
         cx: &mut Context<Self>,
     ) {
+        if let Err(error) = self.refresh_manual_transfer_session(&mut session) {
+            self.shell.set_status(error.to_string());
+            cx.notify();
+            return;
+        }
         let id = self.transfer.next_transfer_job_id("sftp-upload");
         let control = SftpTransferControl::new();
         self.transfer.enqueue_transfer_job(TransferJobState {
@@ -408,7 +418,30 @@ impl NyaTermApp {
         if self.retry_file_operation(&job_id, cx) {
             return;
         }
-        let promised_source = self.transfer.promised_download_source(&job_id);
+        let mut promised_source = self.transfer.promised_download_source(&job_id);
+        // A user retry is a new operation. ADB keeps its device lease, while SSH
+        // must acquire the currently authorized manual identity.
+        if promised_source.as_ref().is_some_and(|source| {
+            source.kind() == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+        }) && let Some(session) = self
+            .transfer
+            .transfer_job(&job_id)
+            .and_then(|job| job.session_id.clone())
+        {
+            match self.file_browser_service_for_session(&session) {
+                Ok(_) => {
+                    promised_source = self
+                        .session
+                        .weak_remote_file_service(&self.ssh_scoped_session_id(&session))
+                        .map(Into::into);
+                }
+                Err(error) => {
+                    self.shell.set_status(error.to_string());
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         if self
             .transfer
             .transfer_job(&job_id)

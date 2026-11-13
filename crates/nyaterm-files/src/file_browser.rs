@@ -149,6 +149,17 @@ impl std::fmt::Debug for FileBrowserService {
 }
 
 impl FileBrowserService {
+    pub fn is_sudo(&self) -> bool {
+        matches!(self, Self::Remote(service) if service.access_mode() == crate::sftp::sudo::FileAccessMode::SudoRoot)
+    }
+
+    pub fn same_execution_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Remote(left), Self::Remote(right)) => left.same_execution_identity(right),
+            (Self::Local(_), Self::Local(_)) | (Self::Adb(_), Self::Adb(_)) => true,
+            _ => false,
+        }
+    }
     pub fn downgrade(&self) -> Option<WeakFileBrowserService> {
         match self {
             Self::Local(_) => None,

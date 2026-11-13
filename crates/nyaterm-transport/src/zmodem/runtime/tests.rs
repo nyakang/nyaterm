@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{FINISH_WAIT, Shared, ZmodemRuntime, strip_finish_trailer};
+use super::{FINISH_WAIT, Shared, ZmodemRuntime, strip_finish_trailer, strip_finish_trailer_with};
 use crate::zmodem::{
     ZmodemAction, ZmodemDirection, ZmodemEvent, ZmodemTransfer, ZmodemTransferOptions,
 };
@@ -346,40 +346,82 @@ fn complete_upload_newline_is_consumed_when_optional_xon_never_arrives() {
 #[test]
 fn finish_trailers_can_arrive_after_a_short_wait() {
     for direction in [ZmodemDirection::Upload, ZmodemDirection::Download] {
-        let manager = SessionManager::new();
-        let consumer = manager.register_event_consumer();
-        manager.assign_session_event_consumer("test", consumer);
         let mut pending = VecDeque::from([output(b"\r")]);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(20));
-                manager.event_queue.push(output(b"\x8a"));
-                std::thread::sleep(Duration::from_millis(20));
-                manager.event_queue.push(output(b"\x91OOprompt"));
-            });
-            let consumed = strip_finish_trailer(
-                &manager,
-                "test",
-                consumer,
-                &Shared::default(),
-                direction,
-                &mut pending,
-            );
-            assert_eq!(
-                consumed,
-                if direction == ZmodemDirection::Upload {
-                    b"\r\x8a\x91".as_slice()
-                } else {
-                    b"\r\x8a\x91OO".as_slice()
-                }
-            );
-        });
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let mut arrivals = [
+            VecDeque::new(),
+            VecDeque::from([output(b"\x8a")]),
+            VecDeque::new(),
+            VecDeque::from([output(b"\x91OOprompt")]),
+        ]
+        .into_iter();
+        let consumed = strip_finish_trailer_with(
+            "test",
+            direction,
+            &mut pending,
+            || elapsed.get() < FINISH_WAIT,
+            || {
+                elapsed.set(elapsed.get() + Duration::from_millis(20));
+                arrivals.next()
+            },
+        );
+        assert_eq!(elapsed.get(), Duration::from_millis(80));
+        assert_eq!(
+            consumed,
+            if direction == ZmodemDirection::Upload {
+                b"\r\x8a\x91".as_slice()
+            } else {
+                b"\r\x8a\x91OO".as_slice()
+            }
+        );
         assert_eq!(
             output_bytes(pending),
             if direction == ZmodemDirection::Upload {
                 b"OOprompt".as_slice()
             } else {
                 b"prompt".as_slice()
+            }
+        );
+    }
+}
+
+#[test]
+fn finish_trailers_arriving_at_the_deadline_preserve_unmatched_output() {
+    for direction in [ZmodemDirection::Upload, ZmodemDirection::Download] {
+        let mut pending = VecDeque::from([output(b"\r")]);
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let mut arrivals = [
+            (Duration::from_millis(20), output(b"\x8a")),
+            (FINISH_WAIT, output(b"\x91OOprompt")),
+        ]
+        .into_iter();
+        let consumed = strip_finish_trailer_with(
+            "test",
+            direction,
+            &mut pending,
+            || elapsed.get() < FINISH_WAIT,
+            || {
+                arrivals.next().map(|(at, event)| {
+                    elapsed.set(at);
+                    VecDeque::from([event])
+                })
+            },
+        );
+        assert_eq!(elapsed.get(), FINISH_WAIT);
+        assert_eq!(
+            consumed,
+            if direction == ZmodemDirection::Upload {
+                b"\r\x8a".as_slice()
+            } else {
+                b"".as_slice()
+            }
+        );
+        assert_eq!(
+            output_bytes(pending),
+            if direction == ZmodemDirection::Upload {
+                b"\x91OOprompt".as_slice()
+            } else {
+                b"\r\x8a\x91OOprompt".as_slice()
             }
         );
     }

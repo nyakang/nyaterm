@@ -76,7 +76,7 @@ impl DragSourceLifetime {
         let task = runtime
             .spawn(async move {
                 loop {
-                    if source.upgrade().is_none() {
+                    if source.upgrade().is_none_or(|service| matches!(service, FileBrowserService::Remote(ref remote) if !remote.authorization_is_valid())) {
                         for control in &watched {
                             control.cancel();
                         }

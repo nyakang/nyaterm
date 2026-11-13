@@ -1,8 +1,10 @@
 //! Local and remote target selection for SFTP transfers.
 
+use super::upload_runtime::UploadRetryUnsafe;
 use super::{
     SftpDuplicateDecision, SftpDuplicatePolicy, SftpDuplicateRequest, SftpDuplicateResolver,
-    SftpPathCodec, SftpPathTransferOptions, SftpTransferDirection,
+    SftpPathCodec, SftpPathTransferOptions, SftpTransferControl, SftpTransferDirection,
+    await_sftp_request,
 };
 use crate::download_path::{DownloadTargetAccess, root_for_target};
 use crate::sftp_transfer_types::SftpDuplicateCacheKey;
@@ -131,39 +133,66 @@ pub(super) struct SftpRemoteWriteTargetContext<'a> {
     pub(super) remote_path: &'a str,
     pub(super) is_directory: bool,
     pub(super) path_options: &'a SftpPathTransferOptions,
+    pub(super) control: &'a SftpTransferControl,
 }
 
 pub(super) async fn resolve_remote_write_target(
     context: SftpRemoteWriteTargetContext<'_>,
 ) -> anyhow::Result<Option<String>> {
-    if !context
-        .sftp
-        .try_exists_bytes(context.codec.encode_path(context.remote_path)?)
-        .await?
-    {
-        return Ok(Some(context.remote_path.to_string()));
+    let key = SftpDuplicateCacheKey::Upload {
+        local_path: context.local_path.to_path_buf(),
+        remote_path: context.remote_path.to_string(),
+        is_directory: context.is_directory,
+    };
+    let runtime = context.path_options.upload_runtime();
+    if let Some(selected) = runtime.selected(&key) {
+        return Ok(selected);
     }
-
-    let local_path = context.local_path.display().to_string();
-    let decision = resolve_duplicate_decision_for_path(
-        context.path_options,
-        SftpDuplicateCacheKey::Upload {
-            local_path: context.local_path.to_path_buf(),
-            remote_path: context.remote_path.to_string(),
-            is_directory: context.is_directory,
-        },
-        SftpTransferDirection::Upload,
-        &local_path,
-        context.remote_path,
-        context.is_directory,
-    )?;
-    match decision {
-        SftpDuplicateDecision::Overwrite => Ok(Some(context.remote_path.to_string())),
-        SftpDuplicateDecision::Skip => Ok(None),
-        SftpDuplicateDecision::Rename => Ok(Some(
+    let exists = await_sftp_request(
+        context.control,
+        context
+            .sftp
+            .try_exists_bytes(context.codec.encode_path(context.remote_path)?),
+    )
+    .await?;
+    let decision = if exists {
+        resolve_duplicate_decision_for_path(
+            context.path_options,
+            key.clone(),
+            SftpTransferDirection::Upload,
+            &context.local_path.display().to_string(),
+            context.remote_path,
+            context.is_directory,
+        )?
+    } else {
+        SftpDuplicateDecision::Overwrite
+    };
+    let selected = match decision {
+        SftpDuplicateDecision::Overwrite => Some(context.remote_path.to_string()),
+        SftpDuplicateDecision::Skip => None,
+        SftpDuplicateDecision::Rename => Some(
             resolve_renamed_remote_target(context.sftp, context.codec, context.remote_path).await?,
-        )),
+        ),
+    };
+    if let Some(target) = &selected {
+        let remembered = runtime
+            .remember_target(
+                context.sftp,
+                context.codec.encode_path(target)?,
+                context.is_directory,
+                !exists || decision == SftpDuplicateDecision::Rename,
+                context.control,
+            )
+            .await;
+        if let Err(error) = remembered {
+            // A cached decision is not an ownership grant if its associated
+            // target could not be captured after the user answered.
+            runtime.block();
+            return Err(error.context(UploadRetryUnsafe));
+        }
     }
+    runtime.select(key, selected.clone());
+    Ok(selected)
 }
 
 fn resolve_duplicate_decision_for_path(

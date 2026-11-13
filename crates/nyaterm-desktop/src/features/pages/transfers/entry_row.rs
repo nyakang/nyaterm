@@ -150,6 +150,7 @@ pub(super) fn transfer_browser_entry_row(
     let drag_name = entry.name.clone();
     let mouse_down_path = entry_identity.clone();
     let mouse_move_path = entry_identity.clone();
+    let mouse_up_out_path = entry_identity.clone();
     let context_path = entry_identity.clone();
     let is_selected = selected_remote_path.as_deref() == Some(entry_identity.as_str());
     let is_marked = selected_remote_paths.contains(&entry_identity);
@@ -320,6 +321,15 @@ pub(super) fn transfer_browser_entry_row(
                 }
             })
         }))
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(move |panel, _, _, cx| {
+                panel.with_app(cx, |this, _| {
+                    this.transfer
+                        .consume_browser_selection_click(&mouse_up_out_path);
+                });
+            }),
+        )
         .child(
             div()
                 .min_w_0()

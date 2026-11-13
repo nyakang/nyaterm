@@ -1216,6 +1216,7 @@ impl NyaTermApp {
         if self.transfer.finish_browser_drag_selection() {
             cx.notify();
         }
+        self.transfer.cancel_browser_selection_click();
     }
 
     /// Whether the main window should be held back for a modal child window.

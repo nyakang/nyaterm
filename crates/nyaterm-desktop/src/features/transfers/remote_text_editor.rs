@@ -67,12 +67,13 @@ impl RemoteTextEditor {
     pub(in crate::features) fn new_read_only(
         app: Entity<NyaTermApp>,
         id: String,
+        path: &str,
         content: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let document = cx.new(|cx| {
-            NyaDocumentEditorState::new_source(window, cx, content, language_for_path(&id))
+            NyaDocumentEditorState::new_source(window, cx, content, language_for_path(path))
         });
         let subscription = cx.subscribe(&document, |_, _, _: &NyaDocumentEditorEvent, _| {});
         Self {
@@ -88,9 +89,13 @@ impl RemoteTextEditor {
     pub(in crate::features) fn sync_read_only(
         &mut self,
         id: &str,
+        path: &str,
         content: &str,
         cx: &mut Context<Self>,
     ) {
+        self.document.update(cx, |document, cx| {
+            document.set_source_language(language_for_path(path), cx);
+        });
         if self.tab_id != id || !self.document.read(cx).content_equals(content, cx) {
             self.tab_id = id.to_string();
             self.document
@@ -206,6 +211,7 @@ mod tests {
 
     #[test]
     fn remote_editor_chooses_supported_syntax_from_extension() {
+        assert_eq!(language_for_path("/root/test.py"), "python");
         assert_eq!(language_for_path("/home/user/main.rs"), "rust");
         assert_eq!(language_for_path("/home/user/config.yaml"), "yaml");
         assert_eq!(language_for_path("/home/user/component.tsx"), "tsx");

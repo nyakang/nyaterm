@@ -488,6 +488,20 @@ pub(super) fn run_terminal_frame_processor(
             push_terminal_frame_worker_event(queue, event);
         };
         match command {
+            TerminalFrameCommand::SetCollapsedCommands { session_id, ids } => {
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    session.screen.set_collapsed_commands(ids);
+                    session.revision = session.revision.saturating_add(1);
+                    session.action_link_cache = None;
+                    push_event(
+                        &event_queue,
+                        TerminalFrameEvent::Snapshot(
+                            session.resized_live_snapshot_event(session_id, Instant::now()),
+                        ),
+                    );
+                }
+            }
+
             TerminalFrameCommand::SetLogicalLineSnapshots { enabled } => {
                 logical_line_snapshots = enabled;
                 for (session_id, session) in &mut sessions {

@@ -15,8 +15,7 @@ pub(super) fn tab_actions_menu_content_height(policy: TabActionPolicy) -> f32 {
         + usize::from(support.reconnect)
         + usize::from(support.disconnect)
         + usize::from(support.ai)
-        + usize::from(support.rdp_secure_attention)
-        + usize::from(support.android_screen);
+        + usize::from(support.rdp_secure_attention);
     // Tauri always exposes Merge All Panes for terminal sessions. Flattening an
     // already-flat workspace is a harmless no-op.
     let split_rows = if support.split { 3 } else { 0 };
@@ -92,6 +91,10 @@ mod tests {
 
         assert_eq!(tab_actions_menu_content_height(saved_ssh), 604.);
         assert_eq!(tab_actions_menu_content_height(local), 520.);
+        assert_eq!(
+            tab_actions_menu_content_height(policy(TabSessionCapability::AdbShell, false)),
+            tab_actions_menu_content_height(local),
+        );
         assert_eq!(tab_actions_menu_content_height(saved_vnc), 306.);
     }
 

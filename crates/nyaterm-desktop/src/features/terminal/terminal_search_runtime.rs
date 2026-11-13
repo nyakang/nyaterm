@@ -481,6 +481,24 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(session_id) = self.session.active_id_owned() {
+            let hidden = self.terminal.view.views.get(&session_id).and_then(|view| {
+                view.frame_snapshot
+                    .as_ref()?
+                    .command_blocks
+                    .iter()
+                    .find(|block| {
+                        block.output.contains(&abs_line)
+                            && view.command_blocks.collapsed.contains(&block.id)
+                    })
+                    .map(|block| block.id)
+            });
+            if let Some(id) = hidden {
+                self.terminal_command_block_action(
+                    &session_id,
+                    crate::models::terminal::command_blocks::CommandBlockAction::Toggle(id),
+                    cx,
+                );
+            }
             if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
                 let total = view.total_rows_for_ui();
                 let rows = view.viewport_rows_for_ui();
