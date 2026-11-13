@@ -619,9 +619,12 @@ fn wrap_shell_integration_payload(
         }
         // The ready marker must be emitted before `fc -P`: a failed pop aborts the
         // remainder of its physical line, which previously swallowed the marker and
-        // stalled startup for the full integration timeout.
+        // stalled startup for the full integration timeout. The guarded pop must
+        // also stay on the marker's physical line: the shell echoes each injected
+        // line before executing it, so a trailing cleanup line would be echoed
+        // after the marker is already visible and leak into the terminal (#1235).
         ShellKind::Zsh => format!(
-            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true\nprintf '{ready}'\nif [ \"${{NYATERM_INJ_HISTORY_PUSHED:-1}}\" = 0 ]; then unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P 2>/dev/null; else unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fi\n"
+            "\n__nyaterm_install_prompt {install_arg} 2>/dev/null || true\nprintf '{ready}'; if [ \"${{NYATERM_INJ_HISTORY_PUSHED:-1}}\" = 0 ]; then unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P 2>/dev/null; else unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fi\n"
         ),
         ShellKind::Fish => format!(
             "\n __nyaterm_install_prompt {install_arg} 2>/dev/null; or true\n printf '{ready}'\n"
@@ -1748,6 +1751,41 @@ mod tests {
             let pop = script.find("fc -P 2>/dev/null").unwrap();
             assert!(ready < pop);
             assert!(script.contains("unset NYATERM_INJ_HISTORY_PUSHED NYATERM_INJ; fc -P"));
+        }
+    }
+
+    #[test]
+    fn ready_marker_stays_on_the_final_physical_line() {
+        // The shell echoes each injected physical line before executing it, so
+        // any physical line after the ready marker's line is echoed past the
+        // marker and shown to the user whenever SSH channel packetization
+        // delivers it in a later arrival window (#1235).
+        let ready_marker = build_ssh_ready_marker("final-marker-line");
+        for shell in [ShellKind::Bash, ShellKind::Zsh, ShellKind::Fish] {
+            for mode in [ShellIntegrationMode::Full, ShellIntegrationMode::CwdOnly] {
+                let integration = super::prepare_shell_integration(shell, &ready_marker, mode)
+                    .expect("prepared shell integration");
+                let scripts = [
+                    String::from_utf8(integration.inline_script()).expect("utf8 inline script"),
+                    String::from_utf8(
+                        integration
+                            .uploaded_script("/tmp/nyaterm-probe/script.sh", "/tmp/nyaterm-probe"),
+                    )
+                    .expect("utf8 uploaded script"),
+                ];
+                for script in scripts {
+                    let marker_line = script
+                        .split_inclusive('\n')
+                        .position(|line| line.contains("NyaTermReady:final-marker-line"))
+                        .expect("script emits the ready marker");
+                    let line_count = script.split_inclusive('\n').count();
+                    assert_eq!(
+                        marker_line + 1,
+                        line_count,
+                        "ready marker must stay on the final physical line for {shell:?} {mode:?}: {script:?}"
+                    );
+                }
+            }
         }
     }
 
