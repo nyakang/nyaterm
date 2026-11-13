@@ -11,7 +11,7 @@ if [[ "$(uname -m)" != x86_64 ]]; then
 fi
 echo '== Executables and system libraries (default GPU path) =='
 private_libs="$PWD/opengl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-for binary in nyaterm nyaterm-mcp nyaterm-rdp-helper nyaterm-vnc-helper; do
+for binary in nyaterm nyaterm-mcp nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-android-helper adb/adb; do
   if [[ ! -x "$binary" ]]; then echo "ERROR: missing executable: $binary"; failed=1; continue; fi
   output="$(LC_ALL=C ldd -r "./$binary" 2>&1)"
   status=$?

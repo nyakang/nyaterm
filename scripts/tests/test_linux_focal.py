@@ -13,6 +13,7 @@ import tempfile
 import textwrap
 import unittest
 from unittest import mock
+from scripts.tests.test_verify_native_package import stage_android_fixture
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "compat/linux-focal/package.py"
@@ -183,8 +184,10 @@ print(count.value)
                 (root / name).chmod(0o600)
             runtime = root / "opengl"
             runtime.mkdir()
+            stage_android_fixture(root, "x86_64-unknown-linux-gnu")
             with mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"), \
-                    mock.patch.object(focal, "audit", side_effect=lambda p: {"name": p.name}), \
+                    mock.patch.object(focal, "audit", side_effect=lambda p, **kwargs: {"name": p.name}), \
+                    mock.patch.object(focal.subprocess, "run"), \
                     mock.patch.object(focal, "audit_opengl", return_value=[]):
                 previous_umask = os.umask(0o077)
                 try:
@@ -199,14 +202,16 @@ print(count.value)
                     if member.isdir():
                         self.assertEqual(member.mode, 0o755)
                     elif member.isfile():
-                        executable = Path(member.name).name in (*focal.BINARIES, "start-nyaterm.sh", "diagnose.sh")
+                        executable = Path(member.name).name in (*focal.BINARIES, "adb", "start-nyaterm.sh", "diagnose.sh")
                         self.assertEqual(member.mode, 0o755 if executable else 0o644)
                 for name in (*focal.BINARIES, "nyaterm-portable", "diagnose.sh", "LICENSE",
                              "OFFLINE-README.zh-CN.md", "abi-report.json", "start-nyaterm.sh",
-                             "opengl/opengl-lock.txt", "opengl/egl_desktop.c"):
+                             "opengl/opengl-lock.txt", "opengl/egl_desktop.c", "adb/adb",
+                             "android-resources.json", "android-libs/libavcodec.so.62"):
                     self.assertIn(prefix + name, handle.getnames())
                 report = json.load(handle.extractfile(prefix + "abi-report.json"))
-                self.assertEqual(len(report["binaries"]), 4)
+                self.assertEqual(len(report["binaries"]), 5)
+                self.assertEqual(len(report["android_runtime"]), 5)
             self.assertTrue(archive.with_name(archive.name + ".sha256").is_file())
 
     def test_packaging_refuses_validation_on_newer_host(self):

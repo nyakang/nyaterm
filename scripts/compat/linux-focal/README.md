@@ -43,15 +43,20 @@ file. `NYATERM_FOCAL_VERSION` optionally labels a compatibility packaging revisi
 (for example, `2.0.1+compat.2` for tag `compat-glibc231-2.0.1-r2`) while the
 application keeps its upstream version. Pass this variable into the container;
 use an independent `NYATERM_FOCAL_DIST` so existing release assets remain intact.
-All four executables must pass the following **before** archive creation:
+The application, four helpers and ADB must pass the following **before** archive creation:
 
 - ELF64 x86-64 with the system `/lib64/ld-linux-x86-64.so.2` interpreter;
 - GLIBC ≤ 2.31, GLIBCXX ≤ 3.4.28, CXXABI ≤ 1.3.12, no private libc ABI;
 - reviewed focal SONAMEs, no RPATH/RUNPATH into a build machine;
 - `ldd -r` on focal, checking transitive dependencies and unversioned GLib APIs.
 
-The archive includes `abi-report.json`, all helpers, a portable-mode marker,
-license, target-side read-only diagnosis and Chinese offline instructions. It
+FFmpeg is built inside focal using a separate dependency cache. Its shared libraries
+are audited against the same ABI limits; only the Android helper and FFmpeg may use
+their explicitly allowed `$ORIGIN` library paths. Android resource hashes are written
+after relocation, and the extracted tarball and deb run ADB and helper IPC smoke probes.
+
+The archive includes `abi-report.json`, all helpers, ADB, FFmpeg, Android resource
+hashes, a portable-mode marker, license, target-side read-only diagnosis and Chinese offline instructions. It
 also includes a **private CPU OpenGL fallback runtime**. `start-nyaterm.sh` now
 defaults to the system graphics stack, where GPUI prefers available hardware GPUs;
 `start-nyaterm.sh --software` selects the bundled fallback without requiring
@@ -91,7 +96,7 @@ existing single-instance lock. Restore only backups supported by the destination
 version, and keep the original backup before testing an older compatibility build.
 
 Debian `Depends` is generated with focal's `dpkg-shlibdeps` over the application
-and all three helpers, plus `bash` for the launcher. Missing package ownership or
+and all four helpers, ADB and FFmpeg, plus `bash` for the launcher. Missing package ownership or
 dependency metadata fails packaging. The SONAME audit remains a separate ABI gate.
 Review the resulting dependencies against the target's package database before
 choosing the deb; continue using the tarball on customized systems that reject them.

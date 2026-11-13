@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
 import package_native
 import verify_native_package
 import windows_msi
-from scripts.tests.test_verify_native_package import fake_pe
+from scripts.tests.test_verify_native_package import fake_pe, stage_android_fixture
 
 
 def stage_payload(root: Path, target: str) -> None:
@@ -33,9 +33,18 @@ def stage_payload(root: Path, target: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(fake_pe(0xAA64 if "arm64" in relative.parts else 0x8664))
     (root / "conpty/LICENSE.txt").write_text("ConPTY test license", encoding="utf-8")
+    stage_android_fixture(root, target)
 
 
 class WindowsMsiTests(unittest.TestCase):
+    def test_staged_payload_contains_valid_android_resources_for_both_architectures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
+                root = Path(directory) / target
+                stage_payload(root, target)
+                verify_native_package.verify_android_resources(
+                    lambda name: (root / name).read_bytes(), target)
+
     def test_only_stable_releases_include_msi(self) -> None:
         for version, expected in (("2.0.0", True), ("2.0.0+build-with-hyphen", True),
                                   ("2.0.0-preview.1", False), ("2.0.0-rc.1", False),

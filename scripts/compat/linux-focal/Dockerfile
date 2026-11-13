@@ -16,7 +16,7 @@ RUN --mount=type=secret,id=proxy_ca,mode=0444 \
     fi; \
     sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list && \
     apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-      build-essential dpkg-dev clang ca-certificates curl git pkg-config python3 binutils \
+      build-essential dpkg-dev clang libclang-dev ca-certificates curl git pkg-config python3 binutils patchelf \
       libgtk-3-dev libayatana-appindicator3-dev libdbus-1-dev \
       libfontconfig1-dev libfreetype6-dev libssl-dev libudev-dev libwayland-dev \
       libx11-dev libx11-xcb-dev libxcb-cursor-dev libxcb-icccm4-dev \

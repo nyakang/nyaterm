@@ -1,6 +1,6 @@
 # Ubuntu 20.04 定制环境离线版
 
-此包在 Ubuntu 20.04 x86-64 原生构建，主程序与 MCP/RDP/VNC 辅助程序都经过
+此包在 Ubuntu 20.04 x86-64 原生构建，主程序与 MCP/RDP/VNC/Android 辅助程序、ADB 和 FFmpeg 都经过
 GLIBC ≤ 2.31、GLIBCXX ≤ 3.4.28、CXXABI ≤ 1.3.12 检查，以及 focal 上的
 `ldd -r` 检查。附带独立的 OpenGL 软件渲染库及其所需 C++ 库，所有附带库也检查
 GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动。
@@ -9,7 +9,7 @@ GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动�
 
 1. 在摆渡前和摆渡后，在压缩包所在目录执行 `sha256sum -c *.tar.gz.sha256`。
 2. 解压到当前用户可写目录，例如 `~/apps/`。无需 root、apt、Rust、Python、FUSE
-   或联网下载。保留主程序与三个辅助程序的相对位置。
+   或联网下载。保留主程序、四个辅助程序、`adb/` 和 `android-libs/` 的相对位置。
 3. 从目标电脑的 X11 桌面终端进入解压目录，执行 `bash diagnose.sh`。
 4. 执行 **`./start-nyaterm.sh`**，默认使用系统图形栈，优先选择可用的硬件 GPU。
    首次启动会在包内生成 `data/`，包含设置和凭据，迁移前请备份。
