@@ -1,9 +1,12 @@
+use std::cell::Cell;
+
 use rust_i18n::t;
 
 use gpui::{Context, Window};
 use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
+use crate::features::view_widgets::dialogs::FormSaveCompletion;
 use crate::models::{NetworkGroupEditorState, NetworkTab};
 
 impl NyaTermApp {
@@ -50,7 +53,8 @@ impl NyaTermApp {
         self.shell
             .set_status("network group editor opened".to_string());
         cx.notify();
-        self.open_form_dialog(
+        let autofocus = Cell::new(true);
+        self.open_async_form_dialog(
             (
                 if editing {
                     t!("network.renameGroup").to_string()
@@ -59,15 +63,22 @@ impl NyaTermApp {
                 },
                 420.,
                 t!("common.save").to_string(),
-                |app, _, cx| app.network_group_editor_dialog_content(cx),
-                |app, _, cx| {
-                    app.save_network_group_editor(cx);
-                    let saved = app.connection_state.active_network_group_editor().is_none();
-                    if saved {
-                        app.forget_text_inputs("network.group-editor.");
+                move |app, window, cx| {
+                    let content = app.network_group_editor_dialog_content(cx);
+                    if autofocus.replace(false) {
+                        let field = app.existing_text_input("network.group-editor.name");
+                        // Focus after the dialog and its input have mounted, once per open.
+                        window.defer(cx, move |window, cx| {
+                            if let Some(field) = field {
+                                field.update(cx, |field, cx| {
+                                    field.focus_with_cursor_at_end(window, cx);
+                                });
+                            }
+                        });
                     }
-                    saved
+                    content
                 },
+                |app, completion, cx| app.save_network_group_editor(completion, cx),
                 |app, cx| app.close_network_group_editor(cx),
             ),
             window,
@@ -94,24 +105,28 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn save_network_group_editor(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn save_network_group_editor(
+        &mut self,
+        completion: FormSaveCompletion,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(editor) = self.connection_state.active_network_group_editor() else {
             self.shell
                 .set_status("no network group editor is active".to_string());
             cx.notify();
-            return;
+            return false;
         };
         let name = editor.name.trim().to_string();
         if name.is_empty() {
             self.connection_state
                 .set_network_group_editor_error("Group name is required".to_string());
             cx.notify();
-            return;
+            return false;
         }
 
         match editor.tab {
-            NetworkTab::Tunnels => self.save_tunnel_group(editor.id, name, cx),
-            NetworkTab::Proxies => self.save_proxy_group(editor.id, name, cx),
+            NetworkTab::Tunnels => self.save_tunnel_group(editor.id, name, completion, cx),
+            NetworkTab::Proxies => self.save_proxy_group(editor.id, name, completion, cx),
         }
     }
 
@@ -119,8 +134,9 @@ impl NyaTermApp {
         &mut self,
         group_id: Option<String>,
         name: String,
+        completion: FormSaveCompletion,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(groups) = self
             .tunnel_state
             .tunnel_groups_with_upsert(group_id.as_deref(), name.clone())
@@ -128,20 +144,22 @@ impl NyaTermApp {
             self.shell
                 .set_status("tunnel group is no longer available".to_string());
             cx.notify();
-            return;
+            return false;
         };
 
         let persisted = groups.clone();
-        self.submit_store_request(
+        let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_tunnel_groups(&persisted)
             }),
             move |this, event, cx| {
+                let saved = event.outcome.is_ok();
                 match event.outcome {
                     Ok(()) => {
                         this.tunnel_state.commit_tunnel_groups(groups);
                         this.connection_state.close_network_group_editor();
+                        this.forget_text_inputs("network.group-editor.");
                         this.shell
                             .set_status(format!("tunnel group '{name}' saved"));
                         this.settings
@@ -152,20 +170,29 @@ impl NyaTermApp {
                             .set_status(format!("failed to save tunnel group: {error}"));
                         this.settings
                             .update_store_status(this.shell.status().to_string(), false);
+                        this.connection_state
+                            .set_network_group_editor_error(this.shell.status().to_string());
                     }
                 }
+                completion(saved, cx);
                 cx.notify();
             },
             cx,
         );
+        if !submitted {
+            self.connection_state
+                .set_network_group_editor_error(self.shell.status().to_string());
+        }
+        submitted
     }
 
     pub(in crate::features) fn save_proxy_group(
         &mut self,
         group_id: Option<String>,
         name: String,
+        completion: FormSaveCompletion,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(groups) = self
             .tunnel_state
             .proxy_groups_with_upsert(group_id.as_deref(), name.clone())
@@ -173,20 +200,22 @@ impl NyaTermApp {
             self.shell
                 .set_status("proxy group is no longer available".to_string());
             cx.notify();
-            return;
+            return false;
         };
 
         let persisted = groups.clone();
-        self.submit_store_request(
+        let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_proxy_groups(&persisted)
             }),
             move |this, event, cx| {
+                let saved = event.outcome.is_ok();
                 match event.outcome {
                     Ok(()) => {
                         this.tunnel_state.commit_proxy_groups(groups);
                         this.connection_state.close_network_group_editor();
+                        this.forget_text_inputs("network.group-editor.");
                         this.shell.set_status(format!("proxy group '{name}' saved"));
                         this.settings
                             .update_store_status(this.shell.status().to_string(), true);
@@ -196,12 +225,20 @@ impl NyaTermApp {
                             .set_status(format!("failed to save proxy group: {error}"));
                         this.settings
                             .update_store_status(this.shell.status().to_string(), false);
+                        this.connection_state
+                            .set_network_group_editor_error(this.shell.status().to_string());
                     }
                 }
+                completion(saved, cx);
                 cx.notify();
             },
             cx,
         );
+        if !submitted {
+            self.connection_state
+                .set_network_group_editor_error(self.shell.status().to_string());
+        }
+        submitted
     }
 
     pub(in crate::features) fn open_network_group_delete_confirm(
