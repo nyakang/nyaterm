@@ -62,6 +62,12 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) framebuffer: Option<Framebuffer>,
     pub(super) texture: Option<DynamicTexture>,
     pub(super) texture_dirty: bool,
+    /// Scratch buffer for packing dirty rectangles before texture uploads.
+    ///
+    /// Capacity survives between frames so steady-state uploads allocate
+    /// nothing; without it every rectangle allocated a fresh multi-megabyte
+    /// staging buffer in the upload path.
+    pub(super) upload_staging: Vec<u8>,
     pub(super) uploads_stopped: bool,
     pub(super) cursor_shape: Option<CursorShape>,
     pub(super) cursor_position: CursorPosition,
@@ -116,6 +122,7 @@ impl Default for RemoteDesktopSessionState {
             framebuffer: None,
             texture: None,
             texture_dirty: false,
+            upload_staging: Vec::new(),
             uploads_stopped: false,
             cursor_shape: None,
             cursor_position: CursorPosition::default(),

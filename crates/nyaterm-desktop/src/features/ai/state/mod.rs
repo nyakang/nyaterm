@@ -1313,7 +1313,6 @@ impl AiFeatureState {
                     message.reasoning_content = output.reasoning;
                     message.command_cards = output.command_cards;
                 }
-                self.chat.prompt_draft.clear();
                 if output.mode == AiMode::Agent && command_count == 0 && !has_native_call {
                     self.agent.loop_state = None;
                     self.agent.task_prompt = None;
@@ -1321,7 +1320,9 @@ impl AiFeatureState {
                 Some(AiChatFinishEffect {
                     session_id,
                     succeeded: true,
-                    clear_prompt_input: true,
+                    // The submitted prompt was cleared when the request
+                    // started. Text entered during the run is the next draft.
+                    clear_prompt_input: false,
                     refresh_usage_counts: true,
                     auto_execute_first: output.auto_execute_first
                         && !self.chat.command_cards.is_empty(),
