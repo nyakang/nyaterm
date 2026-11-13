@@ -143,6 +143,31 @@ def adb_protoc(build: Path) -> Path:
     return wrapper.resolve()
 
 
+def debian_library_package(path: Path) -> str:
+    # ldd and dpkg can use different spellings on usr-merged distributions.
+    # Query the canonical file as well as aliases, but never match by basename:
+    # provenance must identify the library we actually copied.
+    candidates = [path.resolve(), path]
+    for candidate in list(candidates):
+        name = str(candidate)
+        alias = Path(name[4:]) if name.startswith("/usr/lib/") else (
+            Path("/usr" + name) if name.startswith("/lib/") else None)
+        if alias is not None and alias.exists() and alias.samefile(path):
+            candidates.append(alias)
+    for candidate in dict.fromkeys(candidates):
+        result = subprocess.run(["dpkg-query", "-S", str(candidate)],
+                                text=True, capture_output=True)
+        if result.returncode == 1:
+            continue
+        result.check_returncode()
+        owners = {line.rsplit(": ", 1)[0] for line in result.stdout.splitlines()
+                  if ": " in line and line.rsplit(": ", 1)[1] == str(candidate)}
+        if len(owners) != 1:
+            raise ValueError(f"Ambiguous package ownership for {candidate}")
+        return owners.pop()
+    raise ValueError(f"No Debian package owns bundled library {path}")
+
+
 def prepare_adb(target: str) -> Path:
     key = "windows" if "windows" in target else "macos" if "apple" in target else "linux"
     output = STAGING / "adb" / target
@@ -174,7 +199,7 @@ def prepare_adb(target: str) -> Path:
             staged_library = libraries / path.name
             shutil.copy2(path.resolve(), staged_library)
             subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(staged_library)], check=True)
-            package = subprocess.check_output(["dpkg-query", "-S", str(path)], text=True).split(": ")[0]
+            package = debian_library_package(path)
             version = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", package], text=True)
             copyright_file = Path("/usr/share/doc") / package.split(":")[0] / "copyright"
             if copyright_file.is_file(): library_notices.append(copyright_file.read_text())
@@ -224,7 +249,11 @@ def prepare_ffmpeg(target: str) -> Path:
         if target.startswith("aarch64"):
             # Release runners execute on x64. Never execute ARM64 configure probes;
             # LLVM assembles FFmpeg's GNU-style ARM64 sources directly to COFF.
-            options.extend(["--enable-cross-compile",
+            # -MT in extra-cflags also reaches Clang's assembler, where it
+            # consumes the following -c as a dependency target. Keep the CRT
+            # option on the MSVC compiler commands instead.
+            options.remove("--extra-cflags=-MT")
+            options.extend(["--cc=cl.exe -MT", "--cxx=cl.exe -MT", "--enable-cross-compile",
                             "--as=clang --target=aarch64-pc-windows-msvc"])
     elif "apple" in target:
         options.extend(["--install-name-dir=@rpath", "--arch=aarch64" if target.startswith("aarch64") else "--arch=x86_64"])
