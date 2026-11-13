@@ -324,15 +324,7 @@ def copy_android_resources(destination: Path, target: str) -> list[Path]:
     if not adb.is_dir() or not ffmpeg.is_dir():
         raise FileNotFoundError("Run prepare_android.py before packaging")
     prepare_android.stage_runtime(adb, ffmpeg, destination)
-    files = [path for directory in (destination / "adb", destination / "android-libs")
-             for path in directory.rglob("*") if path.is_file()]
-    if "windows" in target:
-        files.extend(destination / name for name in ("avcodec-62.dll", "avformat-62.dll", "avutil-60.dll", "swscale-9.dll"))
-    manifest = {"schema": 1, "target": target, "dependencies": prepare_android.METADATA,
-                "files": {path.relative_to(destination).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(files)}}
-    output = destination / "android-resources.json"
-    output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return [*files, output]
+    return prepare_android.write_resource_manifest(destination, target)
 
 
 def copy_release_documents(destination: Path, version: str) -> None:
@@ -869,6 +861,16 @@ def create_linux_rpm(
             "_build_id_links none",
             "--define",
             "debug_package %{nil}",
+            # Resource hashes cover the exact staged binaries. RPM's default
+            # strip hooks otherwise rewrite ADB and FFmpeg after hashing.
+            "--define",
+            "__strip /bin/true",
+            "--define",
+            "__brp_strip %{nil}",
+            "--define",
+            "__brp_strip_static_archive %{nil}",
+            "--define",
+            "__brp_strip_comment_note %{nil}",
             "-bb",
             str(spec_path),
         ]

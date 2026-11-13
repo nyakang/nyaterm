@@ -9,6 +9,7 @@ fi
 # Keep host compiler flags, modern pkg-config paths and build outputs isolated.
 unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS PKG_CONFIG_PATH PKG_CONFIG_SYSROOT_DIR LD_LIBRARY_PATH
 export CARGO_TARGET_DIR="$PWD/target/linux-focal"
+export NYATERM_ANDROID_DEPS_DIR="$CARGO_TARGET_DIR/android-deps"
 export CARGO_HOME="${NYATERM_FOCAL_CARGO_HOME:-$CARGO_TARGET_DIR/cargo}"
 export CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 export CARGO_PROFILE_RELEASE_STRIP=debuginfo
@@ -17,6 +18,9 @@ export CARGO_PROFILE_RELEASE_STRIP=debuginfo
 # direct binary launches and MCP discovery, rather than relying on the wrapper.
 export NYATERM_PACKAGE_MANAGER='NyaTerm glibc 2.31 compatibility packages'
 export NYATERM_LINUX_COMPAT=glibc231
+python3 scripts/release/prepare_android.py --target x86_64-unknown-linux-gnu
+export FFMPEG_DIR="$NYATERM_ANDROID_DEPS_DIR/ffmpeg/x86_64-unknown-linux-gnu"
+export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
 # Default members include the MCP bridge; the Windows-only RDP integration is
 # not shipped in the focal package.
 cargo build --release --locked --target x86_64-unknown-linux-gnu
@@ -33,6 +37,6 @@ fi
 python3 scripts/compat/linux-focal/package.py --binary-dir "$binary_dir" \
   --opengl "$CARGO_TARGET_DIR/opengl" --output "${NYATERM_FOCAL_DIST:-dist}" "${package_options[@]}"
 if [[ "${NYATERM_FOCAL_TESTS:-1}" == 1 ]]; then
-  cargo test --release --locked --target x86_64-unknown-linux-gnu \
-    -p nyaterm-rdp-helper -p nyaterm-vnc-helper --test lifecycle
+  LD_LIBRARY_PATH="$FFMPEG_DIR/lib" cargo test --release --locked --target x86_64-unknown-linux-gnu \
+    -p nyaterm-rdp-helper -p nyaterm-vnc-helper -p nyaterm-android-helper --test lifecycle
 fi

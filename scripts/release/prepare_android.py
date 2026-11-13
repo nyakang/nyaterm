@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import struct
 import re
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -19,7 +20,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 METADATA_PATH = Path(__file__).with_name("android-package.json")
 METADATA = json.loads(METADATA_PATH.read_text())
-STAGING = ROOT / "target" / "android-deps"
+STAGING = Path(os.environ.get("NYATERM_ANDROID_DEPS_DIR", ROOT / "target" / "android-deps")).resolve()
 WINDOWS_FFMPEG_LIBRARIES = {"avcodec": 62, "avformat": 62, "avutil": 60, "swscale": 9}
 
 
@@ -102,11 +103,44 @@ def download(metadata: dict, name: str) -> Path:
 def extract_tar(archive: Path, destination: Path) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as handle:
-        handle.extractall(destination, filter="data")
+        if hasattr(tarfile, "data_filter"):
+            handle.extractall(destination, filter="data")
+        else:
+            # Older focal Python has no extraction filters. Source archives only
+            # need directories and regular files; reject links and special files.
+            root = destination.resolve()
+            members = handle.getmembers()
+            for member in members:
+                path = (root / member.name).resolve()
+                if (root not in path.parents or not (member.isfile() or member.isdir())
+                        or "\\" in member.name):
+                    raise ValueError("Unsafe source archive member: " + member.name)
+            handle.extractall(destination, members=members)
     directories = [entry for entry in destination.iterdir() if entry.is_dir()]
     if len(directories) != 1:
         raise ValueError("Expected one source archive root")
     return directories[0]
+
+
+def adb_protoc(build: Path) -> Path:
+    compiler = shutil.which("protoc")
+    if compiler is None:
+        raise FileNotFoundError("protoc is required to build bundled ADB")
+    version = subprocess.check_output([compiler, "--version"], text=True).strip()
+    match = re.fullmatch(r"libprotoc (\d+)\.(\d+)(?:\.\d+)?", version)
+    if not match:
+        raise ValueError("Unrecognized protoc version: " + version)
+    release = tuple(map(int, match.groups()))
+    if release < (3, 12):
+        raise ValueError("ADB requires protoc >= 3.12")
+    if release >= (3, 15):
+        return Path(compiler)
+    build.mkdir(parents=True, exist_ok=True)
+    wrapper = build / "protoc-optional"
+    wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(compiler)
+                       + ' --experimental_allow_proto3_optional "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    return wrapper.resolve()
 
 
 def prepare_adb(target: str) -> Path:
@@ -117,7 +151,9 @@ def prepare_adb(target: str) -> Path:
         package = download(METADATA["archives"]["linux_arm64"], "android-tools-37.0.0p1.tar.xz")
         source = extract_tar(package, STAGING / "android-tools-source")
         build = STAGING / "android-tools-build" / target
+        protoc = adb_protoc(build)
         subprocess.run(["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
+                        f"-DProtobuf_PROTOC_EXECUTABLE={protoc}",
                         "-DCMAKE_BUILD_TYPE=Release", "-DANDROID_TOOLS_USE_BUNDLED_FMT=ON", "-DANDROID_TOOLS_PATCH_VENDOR=OFF",
                         "-DANDROID_TOOLS_USE_BUNDLED_LIBUSB=ON", "-DANDROID_TOOLS_ADB_ENABLE_MDNS=OFF"], check=True)
         subprocess.run(["cmake", "--build", str(build), "--target", "adb", "--parallel", "4"], check=True)
@@ -229,13 +265,28 @@ def stage_runtime(adb: Path | None, ffmpeg: Path | None, destination: Path) -> N
             shutil.copy2(ffmpeg / name, output / name)
 
 
+def write_resource_manifest(destination: Path, target: str) -> list[Path]:
+    files = [path for directory in (destination / "adb", destination / "android-libs")
+             for path in directory.rglob("*") if path.is_file()]
+    if "windows" in target:
+        files.extend(destination / f"{name}-{major}.dll"
+                     for name, major in WINDOWS_FFMPEG_LIBRARIES.items())
+    manifest = {"schema": 1, "target": target, "dependencies": METADATA,
+                "files": {path.relative_to(destination).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in sorted(files)}}
+    output = destination / "android-resources.json"
+    output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return [*files, output]
+
+
 def prepare(target: str, *, adb_only: bool = False) -> tuple[Path, Path | None]:
     adb = prepare_adb(target)
     prepare_scrcpy()
     ffmpeg = None if adb_only else prepare_ffmpeg(target)
+    target_dir = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
     for profile in ["debug", "release"]:
-        stage_runtime(adb, ffmpeg, ROOT / "target" / profile)
-        stage_runtime(adb, ffmpeg, ROOT / "target" / target / profile)
+        stage_runtime(adb, ffmpeg, target_dir / profile)
+        stage_runtime(adb, ffmpeg, target_dir / target / profile)
     return adb, ffmpeg
 
 

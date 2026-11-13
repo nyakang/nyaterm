@@ -43,7 +43,7 @@ jobs:
               output.write('version=' + tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version'] + '\n')
           PY
       - name: Test ABI gate and renderer selection
-        run: python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher
+        run: python3 -m unittest scripts.tests.test_linux_focal scripts.tests.test_linux_focal_launcher scripts.tests.test_android_release_integration
       - name: Build focal toolchain image
         env:
           RUST_VERSION: ${{ steps.identity.outputs.rust }}
