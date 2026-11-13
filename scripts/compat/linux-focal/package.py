@@ -102,6 +102,10 @@ def stage_android(binary_dir, stage):
     (stage / "adb/adb").chmod(0o755)
     for name in expected - {"adb/adb"}:
         (stage / name).chmod(0o644)
+    # Official x64 platform-tools carries Android build-tree lib64 search
+    # paths. This ADB uses only system libraries; remove those paths from the
+    # package copy before auditing and hashing, without relaxing the ABI gate.
+    subprocess.run(["patchelf", "--remove-rpath", str(stage / "adb/adb")], check=True)
     # Resolve sibling FFmpeg dependencies without a global LD_LIBRARY_PATH.
     for name in sorted(ANDROID_LIBRARIES):
         subprocess.run(["patchelf", "--set-rpath", "$ORIGIN", str(stage / "android-libs" / name)], check=True)

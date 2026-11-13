@@ -277,6 +277,31 @@ class PrepareAndroidTests(unittest.TestCase):
                 self.assertEqual(self.commands, [])
             ensure.assert_not_called()
 
+    def test_arm64_cross_configuration_invalidates_cached_native_configuration(self) -> None:
+        self.prefix = self.staging / "ffmpeg" / ARM64
+        with self.preparation():
+            prepare_android.prepare_ffmpeg(ARM64)
+            command = self.commands[0]
+            self.assertIn("--enable-cross-compile", command)
+            self.assertIn("--as=clang --target=aarch64-pc-windows-msvc", command)
+            stamp = self.prefix / "SOURCE.json"
+            previous = json.loads(stamp.read_text())
+            previous["configure"] = [arg for arg in previous["configure"]
+                                     if arg != "--enable-cross-compile" and not arg.startswith("--as=")]
+            stamp.write_text(json.dumps(previous))
+            self.commands.clear()
+            prepare_android.prepare_ffmpeg(ARM64)
+            self.assertIn("--enable-cross-compile", self.commands[0])
+            self.commands.clear()
+            prepare_android.prepare_ffmpeg(ARM64)
+            self.assertEqual(self.commands, [])
+
+    def test_x64_keeps_native_configuration(self) -> None:
+        with self.preparation():
+            prepare_android.prepare_ffmpeg(X64)
+        self.assertNotIn("--enable-cross-compile", self.commands[0])
+        self.assertFalse(any(arg.startswith("--as=") for arg in self.commands[0]))
+
     def test_unsupported_windows_target_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported Windows FFmpeg target"):
             prepare_android.ensure_windows_import_libraries(self.prefix, "i686-pc-windows-msvc")

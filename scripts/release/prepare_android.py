@@ -221,6 +221,11 @@ def prepare_ffmpeg(target: str) -> Path:
     if "windows" in target:
         options = ["sh", *options, "--toolchain=msvc", "--target-os=win32", "--extra-cflags=-MT",
                    "--arch=aarch64" if target.startswith("aarch64") else "--arch=x86_64"]
+        if target.startswith("aarch64"):
+            # Release runners execute on x64. Never execute ARM64 configure probes;
+            # LLVM assembles FFmpeg's GNU-style ARM64 sources directly to COFF.
+            options.extend(["--enable-cross-compile",
+                            "--as=clang --target=aarch64-pc-windows-msvc"])
     elif "apple" in target:
         options.extend(["--install-name-dir=@rpath", "--arch=aarch64" if target.startswith("aarch64") else "--arch=x86_64"])
     provenance = {**METADATA["ffmpeg"], "target": target, "configure": [option.replace(str(prefix), "${FFMPEG_DIR}").replace(str(source), "${FFMPEG_SOURCE}") for option in options]}
