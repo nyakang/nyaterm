@@ -6,7 +6,9 @@ use zeroize::Zeroize;
 
 use gpui::Context;
 use nyaterm_core::command_starts_suggestion_suppressing_program;
-use nyaterm_core::command_suggestion_suppression::command_starts_line_editor;
+use nyaterm_core::command_suggestion_suppression::{
+    command_enters_foreign_shell, command_leaves_shell, command_starts_line_editor,
+};
 use nyaterm_core::completion::types::ShellDialect;
 use nyaterm_core::terminal::editing::{
     EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase, ShellLineEditing,
@@ -107,9 +109,25 @@ impl NyaTermApp {
             self.terminal.assist.command_suggestion_suppression =
                 CommandSuggestionSuppression::None;
         }
+        // Ctrl+D on an empty line at a shell prompt ends that shell. While a
+        // program runs it only closes that program's stdin, so it is ignored.
+        if !was_suppressed
+            && text == "\u{4}"
+            && self.terminal.editing.predicted_input().value.is_empty()
+        {
+            self.terminal.editing.state_mut().foreign_shells.leave();
+        }
         if !was_suppressed && text.contains(['\r', '\n']) {
             let submitted = get_tracked_submission_command(self.terminal.editing.predicted_input());
             if !submitted.is_empty() {
+                let entered = command_enters_foreign_shell(&submitted);
+                let state = self.terminal.editing.state_mut();
+                if entered > 0 {
+                    let outer_prompt = state.line_editor_prompt.clone();
+                    state.foreign_shells.enter(entered, outer_prompt.as_deref());
+                } else if command_leaves_shell(&submitted) {
+                    state.foreign_shells.leave();
+                }
                 if command_starts_suggestion_suppressing_program(&submitted) {
                     self.terminal.assist.command_suggestion_suppression =
                         CommandSuggestionSuppression::InteractiveProgram;
@@ -216,6 +234,10 @@ impl NyaTermApp {
             return;
         }
         self.terminal.editing.activate(id);
+        if self.session.is_disconnected(id) {
+            // A reconnect starts a fresh shell on the session's own host.
+            self.terminal.editing.state_mut().foreign_shells.reset();
+        }
         if self.session.is_disconnected(id)
             || self.active_terminal_uses_alternate_screen()
             || self.is_credential_prompt_input_mode()
@@ -311,7 +333,14 @@ impl NyaTermApp {
         } else {
             None
         };
+        // A line that was just submitted stays on screen, still marked, until the
+        // shell reports the command started. Recovering from it would resurrect
+        // the executed command as the new input (`clear` wipes the screen right
+        // after, leaving every later keystroke appended to the dead text).
+        let marked_line_was_submitted = state.submitted_anchor.is_some()
+            && state.submitted_anchor == snapshot.shell_input_anchor;
         if mapping.is_none()
+            && !marked_line_was_submitted
             && state.model.phase != EditPhase::Pending
             && (state.model.input.desynced
                 || state.model.input.line_rewrite_required
@@ -381,6 +410,9 @@ impl NyaTermApp {
                     }
                 });
             state.observe_editor_evidence(backend);
+            if let Some(prefix) = prompt.as_deref().filter(|prefix| !prefix.trim().is_empty()) {
+                state.foreign_shells.note_prompt(prefix);
+            }
             if state.echo_line_editor
                 && prompt
                     .as_ref()
@@ -452,6 +484,14 @@ impl NyaTermApp {
             } else {
                 "Suggestion fill confirmed"
             });
+            // Accepting a directory leaves the cursor right after its `/`, so
+            // offer its entries at once instead of waiting for another key.
+            if !execute_requested
+                && self.terminal.editing.assist_input().value.ends_with('/')
+                && self.command_suggestions_allowed_for_session(id)
+            {
+                self.refresh_command_suggestions(cx);
+            }
             cx.notify();
         }
     }
@@ -607,6 +647,54 @@ mod tests {
                     .value
                     .is_empty()
             );
+        });
+    }
+
+    #[test]
+    fn input_is_confirmed_again_after_clear_wipes_the_screen() {
+        let dir = TestConfigDir::new("nyaterm-shell-edit-clear");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            // The view is rebuilt from the whole byte stream each time, which
+            // is exactly what one persistent screen would have received.
+            let mut stream = String::new();
+            let mut feed = |app: &mut crate::features::NyaTermApp, text: &str| {
+                stream.push_str(text);
+                app.terminal
+                    .seed_session_view("s1".into(), stream.clone(), "UTF-8");
+            };
+            feed(app, "\x1b]133;A\x07$ \x1b]133;B\x07");
+            app.note_shell_editing_input(b"clear", cx);
+            feed(app, "clear");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed(), "before clear");
+            app.note_shell_editing_input(b"\r", cx);
+            // The shell has not reported the command start yet, so the marked
+            // line is still on screen. It must not come back as new input.
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.terminal.editing.predicted_input().value.is_empty());
+            feed(app, "\r\n\x1b]133;C\x07");
+            app.reconcile_shell_editing("s1", cx);
+            feed(
+                app,
+                "\x1b[H\x1b[2J\x1b[3J\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07",
+            );
+            app.reconcile_shell_editing("s1", cx);
+            app.note_shell_editing_input(b"cd /", cx);
+            feed(app, "cd /");
+            app.reconcile_shell_editing("s1", cx);
+            let state = app.terminal.editing.state().unwrap();
+            assert!(
+                app.command_suggestion_input_is_confirmed(),
+                "after clear: phase={:?} mapping={} desynced={} value={:?}",
+                state.model.phase,
+                state.mapping.is_some(),
+                state.model.input.desynced,
+                state.model.input.value,
+            );
+            assert_eq!(app.terminal.editing.predicted_input().value, "cd /");
         });
     }
 

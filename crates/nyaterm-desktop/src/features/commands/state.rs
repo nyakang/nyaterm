@@ -58,6 +58,8 @@ pub(in crate::features) struct CommandFeatureInit {
     pub focus: QuickCommandFeatureFocus,
     pub store: StoreBlockingClient,
     pub scheduler: BlockingJobScheduler,
+    /// `<config dir>/completions`, holding user completion specs.
+    pub completion_specs_dir: Option<std::path::PathBuf>,
 }
 
 struct CommandCatalogState {
@@ -89,7 +91,11 @@ impl CommandFeatureState {
         let catalog = CommandCatalogState::new(init.commands, init.categories);
         let selected_category = valid_quick_category(&init.selected_category, &catalog.categories);
         let runtime = CommandRuntimeState::new(init.store.clone(), init.scheduler);
-        let completion = CompletionRuntime::new(init.store, runtime.result_sender());
+        let completion = CompletionRuntime::new_with_user_specs(
+            init.store,
+            runtime.result_sender(),
+            init.completion_specs_dir,
+        );
         Self {
             catalog,
             quick: QuickCommandFeatureState::new(
@@ -1469,6 +1475,7 @@ mod tests {
             },
             store,
             scheduler: BlockingJobScheduler::new(),
+            completion_specs_dir: None,
         })
     }
 
