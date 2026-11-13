@@ -319,6 +319,7 @@ impl NyaTermApp {
         self.start_session_start_event_drain(cx);
         self.start_credential_autofill_match_drain(cx);
         self.start_remote_desktop_event_drain(cx);
+        self.observe_remote_desktop_window_visibility(window, cx);
         self.start_prompt_activation_drain(window, cx);
         self.start_shell_persistence_debounce(cx);
         // The restored panel width decides which process-table sort columns exist, and

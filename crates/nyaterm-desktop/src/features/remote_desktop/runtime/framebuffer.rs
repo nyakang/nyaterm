@@ -2,7 +2,7 @@ use super::events::set_rdp_view_error;
 use super::lifecycle::clear_rdp_reconnect_after_frame;
 use crate::features::NyaTermApp;
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
-use gpui::{Bounds, DevicePixels, Point, Size, Window, point, size};
+use gpui::{Bounds, Context, DevicePixels, Point, Size, Window, point, size};
 use nyaterm_remote_desktop::{
     DirtyRect, Framebuffer, FramebufferLimits, RdpErrorKind, RdpFrameEvent, RemoteCursorEvent,
 };
@@ -38,7 +38,7 @@ impl NyaTermApp {
         limits: FramebufferLimits,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id);
+        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -85,7 +85,12 @@ impl NyaTermApp {
         frames: Vec<RdpFrameEvent>,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id);
+        // Texture uploads are held in the renderer's sprite atlas until a frame
+        // reaches it. A minimized or occluded window never acquires a drawable
+        // surface, so that queue is never drained: keeping the framebuffer
+        // current on the CPU and uploading it when the window is presented
+        // again is what keeps a streaming desktop from growing without bound.
+        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -165,7 +170,7 @@ impl NyaTermApp {
         cursors: Vec<RemoteCursorEvent>,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id);
+        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -199,11 +204,49 @@ impl NyaTermApp {
         }
     }
 
+    /// Re-upload whatever the hidden window missed once it is presented again.
+    ///
+    /// The framebuffer stayed current while uploads were suspended, so one full
+    /// upload restores the texture. Registering this before the first paint also
+    /// covers a session restored into a still-minimized window.
+    pub(in crate::features) fn observe_remote_desktop_window_visibility(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.observe_window_visibility(window, |this, visibility, window, cx| {
+            if visibility.is_visible() {
+                this.resume_remote_desktop_uploads(window, cx);
+            }
+        })
+        .detach();
+    }
+
+    fn resume_remote_desktop_uploads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session_id) = self.session.active_id().map(str::to_string) else {
+            return;
+        };
+        if self
+            .remote_desktop
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.texture_dirty || session.texture.is_none())
+        {
+            self.prepare_remote_desktop_textures(&session_id, window);
+        }
+        cx.notify();
+    }
+
     pub(in crate::features::remote_desktop) fn prepare_remote_desktop_textures(
         &mut self,
         session_id: &str,
         window: &mut Window,
     ) {
+        // Never queue an upload the renderer cannot drain yet (see
+        // `apply_rdp_frame_batch`). Framebuffer changes are already flagged dirty.
+        if !window.is_visible() {
+            return;
+        }
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
