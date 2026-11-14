@@ -250,7 +250,15 @@ fn special_plugin_entries_fail_without_publishing_the_database() {
     let root = TestTempDir::new("nyaterm-data-directory-special");
     let local = root.join("local");
     fixture(&local);
-    let _socket = std::os::unix::net::UnixListener::bind(local.join("plugins/socket")).unwrap();
+    // Bind at a short path before moving into the fixture: macOS limits the
+    // socket address length even when the filesystem accepts the final path.
+    let socket_root = TestTempDir::from_path(
+        std::env::temp_dir().join(format!("nyaterm-{}", uuid::Uuid::new_v4().simple())),
+    );
+    fs::create_dir_all(socket_root.path()).unwrap();
+    let socket_path = socket_root.join("s");
+    let _socket = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    fs::rename(socket_path, local.join("plugins/socket")).unwrap();
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
@@ -576,7 +584,10 @@ fn explicit_recovery_selection_persists_and_does_not_switch_back_when_disk_retur
     drop(opened);
     fs::rename(root.join("unmounted"), &custom).unwrap();
     let reopened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(reopened.selection.data_dir, local);
+    assert_eq!(
+        reopened.selection.data_dir,
+        fs::canonicalize(&local).unwrap()
+    );
     assert_eq!(
         reopened.store.list_connections().unwrap()[0].name,
         connection.name
@@ -641,7 +652,10 @@ fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
             );
         }
         let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-        assert_eq!(restored.selection.data_dir, local);
+        assert_eq!(
+            restored.selection.data_dir,
+            fs::canonicalize(&local).unwrap()
+        );
         assert_eq!(
             restored.store.list_connections().unwrap()[0].name,
             "current data"
@@ -713,7 +727,10 @@ fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_cu
                 b"unexpected"
             );
         } else {
-            assert_eq!(result.unwrap().selection.data_dir, local);
+            assert_eq!(
+                result.unwrap().selection.data_dir,
+                fs::canonicalize(&local).unwrap()
+            );
             assert!(!local.join("plugins").exists());
             assert!(!local.join("recordings").exists());
         }
@@ -744,7 +761,7 @@ fn cancelling_an_interrupted_migration_persists_source_selection() {
     assert!(location.pending.is_none());
     assert!(target.join(JOURNAL_NAME).exists());
     let source = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(source.selection.data_dir, local);
+    assert_eq!(source.selection.data_dir, fs::canonicalize(&local).unwrap());
     assert!(!target.join(DATABASE_FILE_NAME).exists());
 }
 
