@@ -17,6 +17,11 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(305);
 
+/// Bound for the bridge negotiation that `tools/list` awaits. The loopback
+/// handshake completes in milliseconds; the bound only keeps a frozen host
+/// from stalling the initial listing for the full RPC timeout.
+const FIRST_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 pub struct BridgeEndpoint {
     host: String,
@@ -85,6 +90,24 @@ impl BridgeClient {
 
     pub fn supports_lifecycle(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire)
+    }
+
+    /// Ensure the bridge connection exists so negotiated features are reflected
+    /// in the advertised tool surface. The atomic fast path keeps a listing
+    /// from queueing behind a long-running call. Errors are swallowed: an
+    /// unreachable or late-starting host keeps serving the degraded tool set
+    /// and a later listing retries the negotiation.
+    pub async fn ensure_connected(&self) {
+        if self.lifecycle.load(Ordering::Acquire) || self.connection_targets.load(Ordering::Acquire)
+        {
+            return;
+        }
+        let mut guard = self.connection.lock().await;
+        let _ = tokio::time::timeout(
+            FIRST_NEGOTIATION_TIMEOUT,
+            self.ensure_connection(&mut guard, false),
+        )
+        .await;
     }
 
     pub async fn identify(&self, name: String, version: Option<String>) {
