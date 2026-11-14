@@ -2977,6 +2977,11 @@ fn terminal_keyword_highlight_visible_rows(
     viewport_rows: usize,
     scrollback_len: usize,
 ) -> Range<usize> {
+    if let Some(rows) =
+        terminal_projected_highlight_rows(snapshot, display_offset, viewport_rows, 0)
+    {
+        return rows;
+    }
     if let Some(rows) = terminal_logical_highlight_rows(snapshot, display_offset, viewport_rows, 0)
     {
         return rows;
@@ -2996,6 +3001,34 @@ fn terminal_keyword_highlight_visible_rows(
     start..end
 }
 
+/// Highlight rows for a folded viewport. Painting walks the fold projection,
+/// so the scheduled window must cover the source rows it actually paints; the
+/// unfolded index misses the rows a collapse pulls into the viewport (#1259).
+fn terminal_projected_highlight_rows(
+    snapshot: &TerminalSnapshot,
+    display_offset: usize,
+    viewport_rows: usize,
+    prefetch_viewports: usize,
+) -> Option<Range<usize>> {
+    let projection = snapshot.display_rows.as_ref()?;
+    let viewport_rows = viewport_rows.max(1);
+    let extra_rows = viewport_rows.saturating_mul(prefetch_viewports);
+    let top = projection.top(display_offset, viewport_rows);
+    let start_display = top.saturating_sub(extra_rows);
+    let end_display = (top + viewport_rows + extra_rows).min(projection.rows());
+    let (source_start, _) = terminal_snapshot_absolute_window(snapshot)?;
+    let start = projection
+        .source_row(start_display)
+        .saturating_sub(source_start)
+        .min(snapshot.row_count());
+    let end = projection
+        .source_row(end_display)
+        .saturating_sub(source_start)
+        .min(snapshot.row_count())
+        .max(start);
+    Some(start..end)
+}
+
 fn terminal_keyword_highlight_prefetch_rows(
     snapshot: &TerminalSnapshot,
     display_offset: usize,
@@ -3003,6 +3036,14 @@ fn terminal_keyword_highlight_prefetch_rows(
     scrollback_len: usize,
     prefetch_viewports: usize,
 ) -> Range<usize> {
+    if let Some(rows) = terminal_projected_highlight_rows(
+        snapshot,
+        display_offset,
+        viewport_rows,
+        prefetch_viewports,
+    ) {
+        return rows;
+    }
     if let Some(rows) =
         terminal_logical_highlight_rows(snapshot, display_offset, viewport_rows, prefetch_viewports)
     {

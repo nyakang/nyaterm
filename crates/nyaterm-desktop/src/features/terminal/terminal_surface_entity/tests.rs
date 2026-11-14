@@ -1398,6 +1398,50 @@ fn keyword_highlight_visible_rows_bound_retained_scroll_work() {
 }
 
 #[test]
+fn keyword_highlight_window_covers_rows_revealed_by_collapsed_command_blocks() {
+    // Painting walks the fold projection, so the scheduled highlight window
+    // must cover exactly the source rows that remain visible after a block is
+    // collapsed. Computing it from the unfolded index misses the rows pulled
+    // into the viewport when a block folds inside it (#1259).
+    let mut screen = TerminalScreen::new(80, 4);
+    screen.set_logical_line_snapshots(true);
+    for _ in 0..8 {
+        screen.advance(
+            b"\x1b]133;A\x07$ \x1b]133;B\x07run\r\n\x1b]133;C\x07o1\r\no2\r\no3\r\no4\r\n\x1b]133;D;0\x07",
+        );
+    }
+    screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+    let last_block = screen.snapshot().command_blocks[7].id;
+    screen.set_collapsed_commands([last_block].into());
+    let snapshot = screen.viewport_snapshot_with_window(0, 24, 8);
+    let projection = snapshot
+        .display_rows
+        .clone()
+        .expect("collapsed command blocks produce a fold projection");
+    let viewport_rows = snapshot.viewport_rows;
+    let window = terminal_keyword_highlight_visible_rows(
+        &snapshot,
+        0,
+        viewport_rows,
+        snapshot.scrollback_len,
+    );
+    let (absolute_start, _) = terminal_snapshot_absolute_window(&snapshot).unwrap();
+    let visible = projection.source_window(0, viewport_rows);
+    let visible = visible
+        .start
+        .saturating_sub(absolute_start)
+        .min(snapshot.row_count())
+        ..visible
+            .end
+            .saturating_sub(absolute_start)
+            .min(snapshot.row_count());
+    assert!(
+        window.start <= visible.start && window.end >= visible.end,
+        "highlight window {window:?} must cover the folded viewport source rows {visible:?}"
+    );
+}
+
+#[test]
 fn keyword_highlight_prefetch_covers_two_viewports_of_local_scroll() {
     let mut screen = TerminalScreen::new(80, 24);
     screen.advance_decoded_text(&terminal_test_output_lines(240));

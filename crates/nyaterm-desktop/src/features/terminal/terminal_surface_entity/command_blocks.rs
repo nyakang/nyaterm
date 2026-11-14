@@ -348,4 +348,69 @@ mod tests {
             assert!(!app.terminal.view.views["s1"].command_blocks.collapsed.contains(&id));
         }));
     }
+
+    #[gpui::test]
+    fn collapsed_command_blocks_keep_popup_anchor_on_the_prompt(cx: &mut TestAppContext) {
+        // The suggestion and credential popups anchor on the cursor cell, which
+        // must be reported in folded display rows: collapsing a block above the
+        // prompt hides its output rows and moves the prompt up on screen (#1259).
+        let dir = TestConfigDir::new("nyaterm-fold-popup-anchor");
+        let _cleanup = TestAppCleanup::new(cx);
+        cx.update(nyaterm_ui::init_components);
+        let app = app_with_visible_local_session(cx, dir.path(), "s1");
+        let id = app.update(cx, |app, _| {
+            let text = "$ \x1b]133;B\x07echo one\r\n\x1b]133;C\x07out1a\r\nout1b\r\n\x1b]133;D;0\x07\
+                \x1b]133;A\x07$ \x1b]133;B\x07echo two\r\n\x1b]133;C\x07out2a\r\nout2b\r\n\x1b]133;D;0\x07\
+                \x1b]133;A\x07$ \x1b]133;B\x07";
+            app.terminal.seed_session_view("s1".into(), text.into(), "UTF-8");
+            let pipeline = &app.terminal.view.frame_pipeline;
+            pipeline.seed_session("s1", text, "UTF-8", 1000);
+            pipeline.request_snapshot("s1", 0, false, Default::default());
+            pipeline.flush_for_test();
+            let mut events = VecDeque::new();
+            pipeline.drain_events_into(&mut events, usize::MAX);
+            let snapshot = events
+                .into_iter()
+                .filter_map(|event| match event {
+                    TerminalFrameEvent::Snapshot(frame) => Some(frame.snapshot),
+                    _ => None,
+                })
+                .next_back()
+                .unwrap();
+            let id = snapshot.command_blocks[0].id;
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.frame_snapshot = Some(snapshot);
+            id
+        });
+        app.update(cx, |app, cx| {
+            app.terminal_command_block_action(
+                "s1",
+                crate::models::terminal::command_blocks::CommandBlockAction::Toggle(id),
+                cx,
+            );
+        });
+        app.update(cx, |app, _| {
+            let pipeline = &app.terminal.view.frame_pipeline;
+            pipeline.flush_for_test();
+            let mut events = VecDeque::new();
+            pipeline.drain_events_into(&mut events, usize::MAX);
+            let snapshot = events
+                .into_iter()
+                .filter_map(|event| match event {
+                    TerminalFrameEvent::Snapshot(frame) => Some(frame.snapshot),
+                    _ => None,
+                })
+                .next_back()
+                .expect("folded snapshot after toggle");
+            assert!(snapshot.display_rows.is_some());
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.frame_snapshot = Some(snapshot);
+        });
+        app.update(cx, |app, _| {
+            // Seven source rows seed the prompt at source row 6; collapsing the
+            // first block folds its two output rows into one summary row, so the
+            // prompt sits on folded display row 5 with the viewport at the top.
+            assert_eq!(app.active_terminal_cursor_cell(), (5, 2));
+        });
+    }
 }
