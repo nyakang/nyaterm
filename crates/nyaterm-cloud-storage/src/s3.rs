@@ -147,12 +147,17 @@ impl NativeS3Remote {
         mut response: zed_reqwest::blocking::Response,
     ) -> Result<Vec<u8>, CloudSyncError> {
         use std::io::Read;
+        let expected_length = response.content_length();
         let mut bytes = Vec::new();
         let mut buffer = [0; 8_192];
         loop {
             let count = response.read(&mut buffer).map_err(|error| {
                 CloudSyncError::Io(std::io::Error::new(
-                    error.kind(),
+                    if expected_length.is_some_and(|len| (bytes.len() as u64) < len) {
+                        std::io::ErrorKind::UnexpectedEof
+                    } else {
+                        error.kind()
+                    },
                     "S3 response body could not be read",
                 ))
             })?;
@@ -281,6 +286,18 @@ impl CloudSyncRemote for NativeS3Remote {
                 .and_then(|h| h.to_str().ok())
                 .filter(|s| !s.is_empty() && s.len() <= 1_024)
                 .map(ToOwned::to_owned);
+            if !status.is_success()
+                && status != StatusCode::NOT_MODIFIED
+                && status != StatusCode::NOT_FOUND
+            {
+                let _ = self.response_bytes(response);
+                return Err(super::helpers::http_failure(
+                    "S3",
+                    "read",
+                    status.as_u16(),
+                    retry,
+                ));
+            }
             let bytes = self.response_bytes(response)?;
             Ok((status, retry, etag, bytes))
         })?;
@@ -323,19 +340,23 @@ impl CloudSyncRemote for NativeS3Remote {
     }
 
     fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
-        let response = retry_transient(|| self.send(S3HttpMethod::Delete, path, None))?;
-        let status = response.status();
-        let retry = super::helpers::retry_after_seconds(response.headers());
-        let _ = self.response_bytes(response);
-        if status.is_success() || status == StatusCode::NOT_FOUND {
-            return Ok(());
-        }
-        Err(super::helpers::http_failure(
-            "S3",
-            "delete",
-            status.as_u16(),
-            retry,
-        ))
+        retry_transient(|| {
+            let response = self.send(S3HttpMethod::Delete, path, None)?;
+            let status = response.status();
+            let retry = super::helpers::retry_after_seconds(response.headers());
+            if status.is_success() || status == StatusCode::NOT_FOUND {
+                self.response_bytes(response)?;
+                Ok(())
+            } else {
+                let _ = self.response_bytes(response);
+                Err(super::helpers::http_failure(
+                    "S3",
+                    "delete",
+                    status.as_u16(),
+                    retry,
+                ))
+            }
+        })
     }
 
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
@@ -360,6 +381,15 @@ impl CloudSyncRemote for NativeS3Remote {
                 let response = self.send_list(&prefix, continuation.as_deref())?;
                 let status = response.status();
                 let retry_after = super::helpers::retry_after_seconds(response.headers());
+                if !status.is_success() {
+                    let _ = self.response_bytes(response);
+                    return Err(super::helpers::http_failure(
+                        "S3",
+                        "list",
+                        status.as_u16(),
+                        retry_after,
+                    ));
+                }
                 let body = self.response_bytes(response)?;
                 Ok((status, retry_after, body))
             })?;
