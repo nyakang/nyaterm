@@ -159,7 +159,11 @@ fn a_v4_publication_records_history_once_and_a_noop_pass_does_not() {
             kept: Vec::new(),
             verified,
             published,
-            publication_error: verified.then(|| None).unwrap_or(Some("transport".into())),
+            publication_error: if verified {
+                None
+            } else {
+                Some("transport".into())
+            },
         }))
     };
     let entry = sync

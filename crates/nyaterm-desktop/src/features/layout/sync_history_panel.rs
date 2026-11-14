@@ -674,7 +674,7 @@ mod tests {
         assert!(
             !test_dir
                 .path()
-                .join("config/cloud-sync-local/nyaterm")
+                .join("cloud-sync-local/nyaterm")
                 .join(SYNC_CURRENT_FILE)
                 .exists()
         );
@@ -806,7 +806,7 @@ mod tests {
             assert!(
                 test_dir
                     .path()
-                    .join("config/cloud-sync-local/nyaterm")
+                    .join("cloud-sync-local/nyaterm")
                     .join(SYNC_CURRENT_FILE)
                     .is_file(),
                 "push must produce an encrypted remote snapshot"
@@ -992,7 +992,7 @@ mod tests {
         );
         let pointer_path = dir
             .path()
-            .join("config/cloud-sync-local/nyaterm")
+            .join("cloud-sync-local/nyaterm")
             .join(SYNC_CURRENT_FILE);
         let pointer = std::fs::read(&pointer_path).unwrap();
         let before = cx.update(|_, cx| {
@@ -1061,7 +1061,7 @@ mod tests {
                 device_name: None,
                 config_dir: dir.join("config"),
                 portable_key_path: None,
-                remote_dir: dir.join("config/cloud-sync-local"),
+                remote_dir: dir.join("cloud-sync-local"),
                 remote_root: "nyaterm".into(),
                 device_id: state.device_id.clone(),
                 app_version: env!("CARGO_PKG_VERSION").into(),

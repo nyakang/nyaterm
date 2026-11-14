@@ -16,8 +16,7 @@ use crate::widgets::small_button;
 /// element width decides where the ellipsis lands. Hovering a preview reveals
 /// the complete value.
 const CANDIDATE_CHARS: usize = 120;
-/// Hover tooltips wrap at this width: a sync value is capped at 160 characters,
-/// which would otherwise stretch into one very wide, unreadable line.
+/// Full values wrap within a fixed width while row labels stay truncated.
 const TOOLTIP_MAX_WIDTH: f32 = 420.;
 /// Group headers name this many member fields in their hover tooltip before
 /// switching to a count.
@@ -30,7 +29,8 @@ fn conflict_signature(conflicts: &[ConflictSummary]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for conflict in conflicts {
         conflict.field.hash(&mut hasher);
-        conflict.choices.hash(&mut hasher);
+        conflict.candidate_ids.hash(&mut hasher);
+        conflict.operation_ids.hash(&mut hasher);
         conflict.local_candidate.hash(&mut hasher);
     }
     hasher.finish()
@@ -38,21 +38,26 @@ fn conflict_signature(conflicts: &[ConflictSummary]) -> u64 {
 
 pub(in crate::features::pages::settings) struct ConflictGroup {
     pub choices: Vec<String>,
+    pub candidate_ids: Vec<String>,
     pub conflicts: Vec<ConflictSummary>,
 }
 
 /// Conflicts whose candidate sets are identical collapse into one group. In a
 /// large sync this routinely reduces hundreds of fields to a few cards.
+fn candidate_set(ids: &[String]) -> std::collections::BTreeSet<&str> {
+    ids.iter().map(String::as_str).collect()
+}
+
 fn group_conflicts(conflicts: &[ConflictSummary]) -> Vec<ConflictGroup> {
     let mut groups: Vec<ConflictGroup> = Vec::new();
     for conflict in conflicts {
-        match groups
-            .iter_mut()
-            .find(|group| group.choices == conflict.choices)
-        {
+        match groups.iter_mut().find(|group| {
+            candidate_set(&group.candidate_ids) == candidate_set(&conflict.candidate_ids)
+        }) {
             Some(group) => group.conflicts.push(conflict.clone()),
             None => groups.push(ConflictGroup {
                 choices: conflict.choices.clone(),
+                candidate_ids: conflict.candidate_ids.clone(),
                 conflicts: vec![conflict.clone()],
             }),
         }
@@ -130,25 +135,7 @@ fn group_apply_button(
     label: impl Into<SharedString>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    div()
-        .id(SharedString::from(id))
-        .flex_none()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.input))
-        .px_2()
-        .py_0p5()
-        .text_xs()
-        .text_color(rgb(palette.text))
-        .cursor_pointer()
-        .hover(move |style| {
-            style
-                .bg(rgb(palette.hover))
-                .border_color(rgb(palette.accent))
-        })
-        .on_click(on_click)
-        .child(label.into())
+    small_button(palette, id, label, on_click)
 }
 
 impl SettingsPanel {
@@ -369,7 +356,18 @@ impl SettingsPanel {
                             ),
                     );
                 for (candidate_index, label) in group.choices.iter().enumerate() {
-                    let members = member_indices.clone();
+                    let selected_id = &group.candidate_ids[candidate_index];
+                    let members = group
+                        .conflicts
+                        .iter()
+                        .filter_map(|conflict| {
+                            conflict
+                                .candidate_ids
+                                .iter()
+                                .position(|id| id == selected_id)
+                                .map(|candidate| (conflict.index, candidate))
+                        })
+                        .collect::<Vec<_>>();
                     card = card.child(
                         div()
                             .id(SharedString::from(format!(
@@ -403,10 +401,9 @@ impl SettingsPanel {
                                 format!("sync-conflict-group-{group_index}-{candidate_index}"),
                                 t!("settings.syncConflictApplyGroupChoice"),
                                 cx.listener(move |this, _, _, cx| {
-                                    for index in &members {
+                                    for (index, candidate) in &members {
                                         this.cloud_sync_conflict_selection.insert(*index);
-                                        this.cloud_sync_conflict_choices
-                                            .insert(*index, candidate_index);
+                                        this.cloud_sync_conflict_choices.insert(*index, *candidate);
                                     }
                                     cx.notify();
                                 }),
@@ -548,8 +545,37 @@ mod tests {
             index,
             field: field.to_string(),
             choices: choices.iter().map(|c| (*c).to_string()).collect(),
+            candidate_ids: choices.iter().map(|c| (*c).to_string()).collect(),
+            operation_ids: choices.iter().map(|c| (*c).to_string()).collect(),
             local_candidate: None,
         }
+    }
+
+    #[test]
+    fn equal_display_labels_do_not_merge_distinct_values() {
+        let label = "x".repeat(160);
+        let first = conflict(0, "first", &[&label, "other"]);
+        let mut second = conflict(1, "second", &[&label, "other"]);
+        second.candidate_ids[0].push_str("-different");
+        assert_eq!(group_conflicts(&[first, second]).len(), 2);
+    }
+
+    #[test]
+    fn reordered_candidates_group_by_value_and_stale_operations_reset_selection() {
+        let first = conflict(0, "first", &["one", "two"]);
+        let mut second = conflict(1, "second", &["two", "one"]);
+        let groups = group_conflicts(&[first.clone(), second.clone()]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].conflicts[1]
+                .candidate_ids
+                .iter()
+                .position(|id| id == &groups[0].candidate_ids[0]),
+            Some(1)
+        );
+        let signature = conflict_signature(&[first.clone(), second.clone()]);
+        second.operation_ids[0] = "new operation for the same value".into();
+        assert_ne!(signature, conflict_signature(&[first, second]));
     }
 
     #[test]

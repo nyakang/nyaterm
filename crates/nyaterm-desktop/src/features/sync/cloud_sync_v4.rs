@@ -47,6 +47,8 @@ pub(in crate::features) struct ConflictSummary {
     pub index: usize,
     pub field: String,
     pub choices: Vec<String>,
+    pub candidate_ids: Vec<String>,
+    pub operation_ids: Vec<String>,
     /// Candidate position matching the local baseline, if one can be proven.
     /// Candidates are unordered, so "keep local" must be computed, not guessed.
     pub local_candidate: Option<usize>,
@@ -111,6 +113,16 @@ impl Preview {
                             conflict.field.resource.id,
                             conflict.field.field
                         ),
+                        candidate_ids: conflict
+                            .candidates
+                            .iter()
+                            .map(|candidate| candidate.value.clone())
+                            .collect(),
+                        operation_ids: conflict
+                            .candidates
+                            .iter()
+                            .map(|candidate| candidate.operation.clone())
+                            .collect(),
                         choices: conflict
                             .candidates
                             .iter()
@@ -129,7 +141,7 @@ impl Preview {
                                     .ok()
                                     .and_then(|replica| replica.candidate_value(candidate).ok())
                                     .and_then(|value| value.decode().ok())
-                                    .map(|value| value.to_string().chars().take(160).collect())
+                                    .map(|value| value.to_string())
                                     .unwrap_or_else(|| "?".into())
                             })
                             .collect(),
@@ -819,15 +831,12 @@ pub(super) fn apply_and_publish(
         // Field identities only: no values ever reach the log.
         tracing::warn!(
             count = deferred.len(),
-            fields = summarize_fields(&deferred, 20),
             "Cloud sync kept local values for fields that cannot be applied"
         );
     }
     if !kept.is_empty() {
-        // Record names only: the retained credential is never logged.
         tracing::warn!(
             count = kept.len(),
-            records = summarize_fields(&kept, 20),
             "Cloud sync kept this device's address because a saved password is bound to it"
         );
     }
