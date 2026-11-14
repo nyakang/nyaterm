@@ -11,8 +11,6 @@ use crate::models::{
     QuickCommandCategoryRenameState, QuickCommandDetailsState, QuickCommandEditorState,
 };
 
-use super::helpers::quick_command_category_label;
-
 impl NyaTermApp {
     pub(in crate::features) fn open_new_quick_command_editor(
         &mut self,
@@ -124,15 +122,7 @@ impl NyaTermApp {
             return;
         };
         self.commands
-            .request_quick_details(QuickCommandDetailsState {
-                category: quick_command_category_label(
-                    self.commands.quick_command_categories(),
-                    &command,
-                ),
-                command,
-                x,
-                y,
-            });
+            .request_quick_details(QuickCommandDetailsState { command, x, y });
         self.shell
             .set_status("quick command details opened".to_string());
         window.focus(self.commands.quick_details_focus(), cx);

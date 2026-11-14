@@ -7,17 +7,16 @@ use gpui::{
     SharedString, div, prelude::*, px, relative, rgb, rgba,
 };
 use nyaterm_core::QuickCommand;
-use nyaterm_ui::NyaMenuItem;
+use nyaterm_ui::{NyaHoverCard, NyaMenuItem, NyaPopoverPlacement};
 
 use super::super::super::{
     quick_command_icon_mark, quick_command_pin_mark, quick_command_single_line,
 };
-use super::super::detail_card::{QuickCommandCardExecutionMode, QuickCommandTooltip};
+use super::super::detail_card::{QuickCommandCardExecutionMode, quick_command_hover_card};
 use super::super::helpers::{
     QuickCommandRowHandlers, QuickCommandRowPresentation, quick_command_row_actions,
 };
 use crate::features::NyaTermApp;
-use crate::features::commands::quick_command_category_label;
 use crate::models::QuickCommandViewMode;
 
 use super::{QuickCommandDragKind, QuickCommandDragPayload, QuickCommandDragPreview};
@@ -46,8 +45,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let view_mode = self.commands.quick_view_mode();
-        // Tile hover cards render outside the app entity, so they need the resolved
-        // wallpaper-aware surface rather than the raw palette token.
+        // Hover cards use the same wallpaper-aware surface as the detail popover.
         let card_surface = self.shell_surface_color(palette.surface);
         let mut items = Vec::with_capacity(commands.len());
         for command in commands.iter().cloned() {
@@ -74,14 +72,9 @@ impl NyaTermApp {
             // Flattened once per row: the preview lines are `.truncate()`d, and GPUI
             // still splits on newlines when wrapping is off.
             let command_preview = quick_command_single_line(&command.command);
-            let tile_tooltip_control = self.commands.quick_tooltip_control();
             let command_item = match view_mode {
                 QuickCommandViewMode::Tile => {
-                    let tooltip_control_for_right_click = tile_tooltip_control.clone();
-                    let tooltip_command_id_for_right_click = command_id.clone();
-                    let tooltip_control_for_hover = tile_tooltip_control.clone();
-                    let tooltip_command_id_for_hover = command_id.clone();
-                    div()
+                    let trigger = div()
                         .id(SharedString::from(format!(
                             "quick-command-tile-{command_id}"
                         )))
@@ -105,16 +98,6 @@ impl NyaTermApp {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.run_quick_command_by_id(run_command_id.clone(), cx);
                         }))
-                        .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-                            tooltip_control_for_right_click
-                                .dismiss(&tooltip_command_id_for_right_click, cx);
-                        })
-                        .on_hover(move |hovered, _, _| {
-                            if *hovered {
-                                tooltip_control_for_hover
-                                    .begin_hover(&tooltip_command_id_for_hover);
-                            }
-                        })
                         .child(quick_command_icon_slot(
                             14.,
                             quick_command_icon_mark(
@@ -135,46 +118,23 @@ impl NyaTermApp {
                                 .text_color(rgb(palette.text))
                                 .truncate()
                                 .child(command.label.clone()),
-                        )
-                        // Tauri's tile hover is the full command card, not a text
-                        // blurb: in tile mode it is the only way to read the command.
-                        // Hoverable so the pointer can enter the card and copy, as
-                        // it can in Tauri's non-`disableHoverableContent` tooltip.
-                        .hoverable_tooltip({
-                            let tooltip_command = command.clone();
-                            let tooltip_category = quick_command_category_label(
-                                self.commands.quick_command_categories(),
-                                &command,
-                            );
-                            let tooltip_app = cx.entity().downgrade();
-                            let tooltip_badge = badge_mode.clone();
-                            let tile_tooltip_control = tile_tooltip_control.clone();
-                            let tooltip_command_id = command_id.clone();
-                            move |_, cx| {
-                                let tooltip = cx.new(|_| {
-                                    QuickCommandTooltip::new(
-                                        palette,
-                                        card_surface,
-                                        tooltip_command.clone(),
-                                        tooltip_category.clone(),
-                                        tooltip_badge.clone(),
-                                        tooltip_app.clone(),
-                                        tile_tooltip_control.is_suppressed(&tooltip_command_id),
-                                    )
-                                });
-                                let tooltip_to_dismiss = tooltip.downgrade();
-                                tile_tooltip_control.register(
-                                    tooltip_command_id.clone(),
-                                    Rc::new(move |cx| {
-                                        if let Some(tooltip) = tooltip_to_dismiss.upgrade() {
-                                            tooltip.update(cx, |tooltip, cx| tooltip.dismiss(cx));
-                                        }
-                                    }),
-                                );
-                                tooltip.into()
-                            }
-                        })
-                        .into_any_element()
+                        );
+                    // GPUI tooltips use a passive native overlay; interactive copy and scroll
+                    // controls must live in the hover card popup instead.
+                    NyaHoverCard::new(
+                        format!("quick-command-hover-{command_id}"),
+                        trigger,
+                        quick_command_hover_card(
+                            palette,
+                            card_surface,
+                            &command,
+                            badge_mode.clone(),
+                            cx.entity().downgrade(),
+                        ),
+                    )
+                    .placement(NyaPopoverPlacement::Top)
+                    .appearance(false)
+                    .into_any_element()
                 }
                 QuickCommandViewMode::Compact => {
                     // Compact: send + details + more.

@@ -3,7 +3,9 @@ use rust_i18n::t;
 use gpui::{Context, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb, rgba, svg};
 use nyaterm_ui::NyaTooltip;
 
-use super::quick_commands_panel::{QuickCommandCardContent, quick_command_detail_card};
+use super::quick_commands_panel::{
+    QuickCommandCardContent, QuickCommandCardExecutionMode, quick_command_detail_card,
+};
 use crate::features::NyaTermApp;
 
 impl NyaTermApp {
@@ -20,7 +22,6 @@ impl NyaTermApp {
         let anchor_x = details.x;
         let anchor_y = details.y;
         let command = details.command;
-        let category = details.category.trim().to_string();
         let has_description = command
             .description
             .as_deref()
@@ -65,6 +66,12 @@ impl NyaTermApp {
 
         div()
             .id(SharedString::from("quick-command-details-overlay"))
+            .occlude()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(gpui::MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(gpui::MouseButton::Middle, |_, _, cx| cx.stop_propagation())
+            .on_scroll(|_, _, cx| cx.stop_propagation())
             .absolute()
             .top_0()
             .bottom_0()
@@ -102,10 +109,14 @@ impl NyaTermApp {
                         palette,
                         QuickCommandCardContent {
                             command: &command,
-                            category: &category,
-                            // Tauri's eye popover omits the execution-mode line: the row
-                            // already carries that badge right beside this button.
-                            execution_mode: None,
+                            execution_mode: Some(QuickCommandCardExecutionMode {
+                                append: command.execution_mode.as_deref() == Some("append"),
+                                label: if command.execution_mode.as_deref() == Some("append") {
+                                    t!("quickCommands.appendOnlyBadge")
+                                } else {
+                                    t!("quickCommands.executeImmediately")
+                                },
+                            }),
                             copy_button: Some(copy_button),
                         },
                     )),
