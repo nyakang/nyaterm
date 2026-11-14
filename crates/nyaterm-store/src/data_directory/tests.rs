@@ -544,3 +544,29 @@ fn migration_loads_a_supported_legacy_database_with_only_text_documents() {
     );
     assert!(local.join(DATABASE_FILE_NAME).is_file());
 }
+
+#[test]
+fn switching_after_startup_fallback_migrates_the_root_actually_in_use() {
+    let root = TestTempDir::new("nyaterm-data-directory-fallback-switch");
+    let local = root.join("local");
+    fixture(&local);
+    let missing = root.join("missing");
+    set_active_data_dir(&local, Some(&missing)).unwrap();
+    let fallback = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    let choice = queue_switch(
+        &local,
+        &fallback.selection.data_dir,
+        &root.join("target"),
+        AppFlavor::Stable,
+    )
+    .unwrap();
+    assert_eq!(
+        read_location(&local).unwrap().unwrap().data_dir,
+        Some(missing.to_string_lossy().into_owned())
+    );
+    drop(fallback);
+    let migrated = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert_eq!(migrated.selection.data_dir, choice.target);
+    assert_eq!(migrated.store.list_connections().unwrap().len(), 1);
+    assert!(!missing.exists());
+}

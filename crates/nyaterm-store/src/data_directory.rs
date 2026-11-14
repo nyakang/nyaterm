@@ -111,6 +111,11 @@ fn queue_switch_checked(
         target: path_for_storage(&prepared.target)
             .to_string_lossy()
             .into_owned(),
+        source: Some(
+            path_for_storage(current_data_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
         mode: prepared.mode,
         migration_id: Some(uuid::Uuid::new_v4()),
         extra: Default::default(),
@@ -199,7 +204,20 @@ pub fn open_startup(
     if override_dir.is_none()
         && let Some(pending) = location.pending.clone()
     {
-        match apply_pending(local, &configured, flavor, &pending) {
+        let source = pending
+            .source
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| configured.clone());
+        // Keep a fallback source lease through publication and the pointer commit.
+        let mut source_lease = None;
+        let applied = (|| {
+            if normalize_existing_prefix(&source) != normalize_existing_prefix(&configured) {
+                source_lease = Some(DataRootLease::acquire(&source)?);
+            }
+            apply_pending(local, &source, flavor, &pending)
+        })();
+        match applied {
             Ok(applied) => {
                 let mut committed = location.clone();
                 committed.data_dir = Some(pending.target.clone());
@@ -572,6 +590,7 @@ fn apply_pending(
             _source: None,
         });
     }
+    validate_usable_directory(source, flavor)?;
     let source_path = source.join(DATABASE_FILE_NAME);
     if !fs::symlink_metadata(&source_path).is_ok_and(|m| m.is_file() && m.len() > 0) {
         return Err(DataDirectoryError::InvalidDatabase(source.into()));

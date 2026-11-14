@@ -97,6 +97,9 @@ pub enum SwitchMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingSwitch {
     pub target: String,
+    /// Actual active root, which can be a validated startup fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub mode: SwitchMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migration_id: Option<uuid::Uuid>,
