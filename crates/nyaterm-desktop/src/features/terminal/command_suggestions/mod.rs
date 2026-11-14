@@ -32,9 +32,10 @@ mod fill_tests;
 mod helpers;
 pub(super) mod paste;
 
-use self::fill::{SuggestionFill, SuggestionSubmitResult, plan_suggestion_fill};
+use self::fill::{SuggestionSubmitResult, suggestion_fill_rejection_message};
 use self::helpers::command_suggestion_highlight_parts;
 use self::paste::SuggestionPasteContext;
+use nyaterm_core::completion::fill::{SuggestionFill, plan_suggestion_fill};
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
 const COMMAND_SUGGESTION_REFRESH_SLOW_THRESHOLD: Duration = Duration::from_millis(8);
@@ -1280,8 +1281,9 @@ impl NyaTermApp {
             .state()
             .expect("validated editing state");
         match plan_suggestion_fill(&state.model.input, &item.command) {
-            SuggestionFill::Rejected(message) => {
-                return self.reject_command_suggestion(message, cx);
+            SuggestionFill::Rejected(reason) => {
+                return self
+                    .reject_command_suggestion(suggestion_fill_rejection_message(reason), cx);
             }
             SuggestionFill::PasteReview(command) => {
                 self.terminal

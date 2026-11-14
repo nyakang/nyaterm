@@ -17,7 +17,8 @@ must include explicit conversion logic and tests.
   and root-window creation.
 * `crates/nyaterm-core`: UI-independent domain models, parsing, policies, AI
   settings/risk/provider logic, schema-neutral serialization and encryption
-  contracts, and shared pure logic. Do not add GPUI dependencies here.
+  contracts, command-completion fill planning, and shared pure logic. Do not add GPUI
+  dependencies here. Desktop authorizes and executes completion plans.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
   coordination, service adapters, and GPUI Entity stores.
