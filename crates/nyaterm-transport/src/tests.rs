@@ -4185,14 +4185,15 @@ fn zsh_injection_never_echoes_past_the_ready_marker() {
         }
         std::thread::sleep(Duration::from_millis(400));
 
-        writer.write_all(head.as_bytes()).expect("write probe head");
-        writer.flush().expect("flush probe head");
+        // Darwin drops excess PTY input instead of applying back-pressure to
+        // a multi-KiB write. Keep echo enabled, but pace the physical lines just
+        // like the history probes so this test receives the complete script.
+        write_pty_paced(&mut writer, head);
         if !tail.is_empty() {
             // Deliver whatever trails the marker's line in a later arrival
             // window, the way SSH channel packetization does on real links.
             std::thread::sleep(Duration::from_millis(250));
-            writer.write_all(tail.as_bytes()).expect("write probe tail");
-            writer.flush().expect("flush probe tail");
+            write_pty_paced(&mut writer, tail);
         }
         std::thread::sleep(Duration::from_millis(500));
         writer

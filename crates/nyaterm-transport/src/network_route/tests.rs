@@ -482,7 +482,7 @@ async fn cancellation_interrupts_pending_proxy_handshake_and_closes_the_socket()
         .unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn stalled_proxy_handshake_has_a_network_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -499,12 +499,23 @@ async fn stalled_proxy_handshake_has_a_network_timeout() {
         }),
         jump: None,
     }));
-    let (mut stream, _) = listener.accept().await.unwrap();
-    let mut buf = [0; 1024];
-    assert!(stream.read(&mut buf).await.unwrap() > 0);
+    // Real socket readiness is outside Tokio's virtual clock. Starting paused
+    // can advance the connection timeout before the greeting reaches the peer.
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut greeting = [0; 3];
+        stream.read_exact(&mut greeting).await.unwrap();
+        assert_eq!(greeting, [5, 1, 0]);
+        stream
+    })
+    .await
+    .expect("proxy receives the SOCKS5 greeting");
+    assert!(!pending.is_finished());
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(31)).await;
     let error = pending.await.unwrap().err().unwrap();
     assert!(error.to_string().contains("timed out"));
+    let mut buf = [0; 1];
     assert_eq!(stream.read(&mut buf).await.unwrap(), 0);
 }
 
