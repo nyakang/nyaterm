@@ -574,6 +574,10 @@ mod tests {
                         "authenticated": true,
                         "features": ["client_resume", "mcp_lifecycle", "connection_targets"]
                     }),
+                    "client.attach" => {
+                        assert!(request.params["resumeToken"].is_null());
+                        json!({ "ownerId": "test-owner", "resumeToken": "a".repeat(64) })
+                    }
                     "client.identify" => json!({ "identified": true }),
                     other => panic!("unexpected bridge method: {other}"),
                 };
@@ -667,8 +671,14 @@ mod tests {
 
         drop(client_writer);
         drop(client_lines);
-        server_task.abort();
-        bridge_task.abort();
+        tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+            .await
+            .expect("MCP service shuts down")
+            .expect("MCP service did not panic");
+        tokio::time::timeout(std::time::Duration::from_secs(5), bridge_task)
+            .await
+            .expect("mock host shuts down")
+            .expect("mock host did not panic");
     }
 
     #[tokio::test]
@@ -688,8 +698,12 @@ mod tests {
                 let result = match request.method.as_str() {
                     "auth" => json!({
                         "authenticated": true,
-                        "features": ["mcp_lifecycle", "connection_targets"]
+                        "features": ["client_resume", "mcp_lifecycle", "connection_targets"]
                     }),
+                    "client.attach" => {
+                        assert!(request.params["resumeToken"].is_null());
+                        json!({ "ownerId": "test-owner", "resumeToken": "a".repeat(64) })
+                    }
                     "client.identify" => json!({ "identified": true }),
                     "capability.execute" => {
                         let tool = request.params["tool"].as_str().unwrap();
@@ -768,7 +782,13 @@ mod tests {
 
         drop(client_writer);
         drop(client_lines);
-        server_task.abort();
-        bridge_task.abort();
+        tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+            .await
+            .expect("MCP service shuts down")
+            .expect("MCP service did not panic");
+        tokio::time::timeout(std::time::Duration::from_secs(5), bridge_task)
+            .await
+            .expect("mock host shuts down")
+            .expect("mock host did not panic");
     }
 }
