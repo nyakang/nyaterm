@@ -2,25 +2,25 @@ use gpui::{Pixels, px};
 use nyaterm_core::models::settings::FileManagerPaneUiSettings;
 
 use super::pane::{BrowserPaneState, PaneEndpoint};
-use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
+use nyaterm_files::file_browser::listing::{FileBrowserSortColumn, FileBrowserSortDirection};
 
-pub(super) const COLUMNS: [TransferBrowserSortColumn; 6] = [
-    TransferBrowserSortColumn::Name,
-    TransferBrowserSortColumn::Size,
-    TransferBrowserSortColumn::Modified,
-    TransferBrowserSortColumn::Permissions,
-    TransferBrowserSortColumn::Owner,
-    TransferBrowserSortColumn::Group,
+pub(super) const COLUMNS: [FileBrowserSortColumn; 6] = [
+    FileBrowserSortColumn::Name,
+    FileBrowserSortColumn::Size,
+    FileBrowserSortColumn::Modified,
+    FileBrowserSortColumn::Permissions,
+    FileBrowserSortColumn::Owner,
+    FileBrowserSortColumn::Group,
 ];
 
-pub(super) fn column_key(column: TransferBrowserSortColumn) -> &'static str {
+pub(super) fn column_key(column: FileBrowserSortColumn) -> &'static str {
     match column {
-        TransferBrowserSortColumn::Name => "name",
-        TransferBrowserSortColumn::Size => "size",
-        TransferBrowserSortColumn::Modified => "modified",
-        TransferBrowserSortColumn::Permissions => "permissions",
-        TransferBrowserSortColumn::Owner => "owner",
-        TransferBrowserSortColumn::Group => "group",
+        FileBrowserSortColumn::Name => "name",
+        FileBrowserSortColumn::Size => "size",
+        FileBrowserSortColumn::Modified => "modified",
+        FileBrowserSortColumn::Permissions => "permissions",
+        FileBrowserSortColumn::Owner => "owner",
+        FileBrowserSortColumn::Group => "group",
     }
 }
 
@@ -39,11 +39,11 @@ impl BrowserPaneState {
         self.sort_column = COLUMNS
             .into_iter()
             .find(|column| column_key(*column) == settings.sort_column)
-            .unwrap_or(TransferBrowserSortColumn::Name);
+            .unwrap_or(FileBrowserSortColumn::Name);
         self.sort_direction = if settings.descending {
-            TransferBrowserSortDirection::Descending
+            FileBrowserSortDirection::Descending
         } else {
-            TransferBrowserSortDirection::Ascending
+            FileBrowserSortDirection::Ascending
         };
         self.row_height = if settings.row_height == 28 { 28 } else { 30 };
         self.remembered_directories = settings.directories.clone();
@@ -62,29 +62,29 @@ impl BrowserPaneState {
                 .collect(),
             visible_columns: self.visible_columns.clone(),
             sort_column: column_key(self.sort_column).into(),
-            descending: self.sort_direction == TransferBrowserSortDirection::Descending,
+            descending: self.sort_direction == FileBrowserSortDirection::Descending,
             row_height: self.row_height,
             directories: self.remembered_directories.clone(),
         }
     }
 
-    pub(super) fn table_columns(&self, viewport: f32) -> Vec<(TransferBrowserSortColumn, Pixels)> {
+    pub(super) fn table_columns(&self, viewport: f32) -> Vec<(FileBrowserSortColumn, Pixels)> {
         let mut columns: Vec<_> = COLUMNS
             .into_iter()
             .filter(|column| {
-                (*column == TransferBrowserSortColumn::Name
+                (*column == FileBrowserSortColumn::Name
                     || self
                         .visible_columns
                         .iter()
                         .any(|key| key == column_key(*column)))
                     && !(self.endpoint == PaneEndpoint::Local
-                        && *column == TransferBrowserSortColumn::Permissions)
+                        && *column == FileBrowserSortColumn::Permissions)
             })
             .map(|column| (column, self.column_widths.get(column)))
             .collect();
         let other: f32 = columns
             .iter()
-            .filter(|(column, _)| *column != TransferBrowserSortColumn::Name)
+            .filter(|(column, _)| *column != FileBrowserSortColumn::Name)
             .map(|(_, width)| f32::from(*width))
             .sum();
         if let Some((_, name_width)) = columns.first_mut() {

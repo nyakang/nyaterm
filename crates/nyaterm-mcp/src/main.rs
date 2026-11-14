@@ -47,6 +47,11 @@ impl ServerHandler for NyaTermMcp {
         if !self.tools.iter().any(|item| item.name == request.name) {
             return Err(McpError::invalid_params("Unknown NyaTerm tool", None));
         }
+        // The feature guards below read connection-negotiated state and must
+        // not race the first bridge connection (the same race tools/list had);
+        // await the bounded negotiation first. Inside bridge.call this is a
+        // no-op once connected.
+        self.bridge.ensure_connected().await;
         if matches!(
             request.name.as_ref(),
             tool::TERMINAL_START | tool::TERMINAL_POLL | tool::TERMINAL_STOP
@@ -84,6 +89,10 @@ impl ServerHandler for NyaTermMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        // The bridge connects lazily, so the initial tools/list would race
+        // on_initialized's identify() and report the degraded tool set. Await the
+        // bounded negotiation; an unreachable host keeps serving it as before.
+        self.bridge.ensure_connected().await;
         // MCP 2026-07-28 requires `ttlMs` and `cacheScope` on list results, and strict
         // clients reject `tools/list` without them. The tool set is per bridge session,
         // so the result is private and not cached.
@@ -542,5 +551,244 @@ mod tests {
         drop(client_lines);
         server_task.abort();
         bridge_task.abort();
+    }
+
+    #[tokio::test]
+    async fn initial_tools_list_awaits_feature_negotiation() {
+        // Regression test: the bridge connects lazily, so the initial tools/list
+        // used to race on_initialized's identify() and hand clients that list
+        // tools at startup (and are never notified, since the server does not
+        // advertise tools/list_changed) a permanently degraded tool set. A
+        // feature-advertising host must therefore be reflected in the FIRST
+        // tools/list response, before any tool call.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bridge_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: RpcRequest = serde_json::from_str(&line).unwrap();
+                let result = match request.method.as_str() {
+                    "auth" => json!({
+                        "authenticated": true,
+                        "features": ["client_resume", "mcp_lifecycle", "connection_targets"]
+                    }),
+                    "client.attach" => {
+                        assert!(request.params["resumeToken"].is_null());
+                        json!({ "ownerId": "test-owner", "resumeToken": "a".repeat(64) })
+                    }
+                    "client.identify" => json!({ "identified": true }),
+                    other => panic!("unexpected bridge method: {other}"),
+                };
+                let response = RpcResponse {
+                    id: request.id,
+                    result: Some(result),
+                    error: None,
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                writer.write_all(&bytes).await.unwrap();
+            }
+        });
+
+        let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            let service = NyaTermMcp::new(BridgeEndpoint::for_test(port))
+                .serve(server_transport)
+                .await
+                .unwrap();
+            service.waiting().await.unwrap();
+        });
+        let (client_reader, mut client_writer) = tokio::io::split(client_transport);
+        let mut client_lines = BufReader::new(client_reader).lines();
+
+        send_client_message(
+            &mut client_writer,
+            r#"{
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": { "name": "startup-tools-list", "version": "1.0.0" }
+                    }
+                }"#,
+        )
+        .await;
+        let initialized = receive_response(&mut client_lines, 1).await;
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "nyaterm-mcp");
+
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "method": "notifications/initialized" }"#,
+        )
+        .await;
+        // Deliberately no tool call before listing: the very first tools/list
+        // must already reflect the negotiated connection targets.
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }"#,
+        )
+        .await;
+        let listed = receive_response(&mut client_lines, 2).await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), MCP_TOOL_REGISTRY.len());
+        let terminal_start = tools
+            .iter()
+            .find(|item| item["name"] == tool::TERMINAL_START)
+            .expect("terminal_start advertised on the initial tools/list");
+        assert!(
+            terminal_start["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("target")
+        );
+        let sftp_list = tools
+            .iter()
+            .find(|item| item["name"] == tool::SFTP_LIST)
+            .expect("sftp_list advertised on the initial tools/list");
+        assert!(
+            sftp_list["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("target")
+        );
+
+        // A second listing takes the already-negotiated fast path and must
+        // keep advertising the full surface.
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }"#,
+        )
+        .await;
+        let listed_again = receive_response(&mut client_lines, 3).await;
+        assert_eq!(
+            listed_again["result"]["tools"].as_array().unwrap().len(),
+            MCP_TOOL_REGISTRY.len()
+        );
+
+        drop(client_writer);
+        drop(client_lines);
+        tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+            .await
+            .expect("MCP service shuts down")
+            .expect("MCP service did not panic");
+        tokio::time::timeout(std::time::Duration::from_secs(5), bridge_task)
+            .await
+            .expect("mock host shuts down")
+            .expect("mock host did not panic");
+    }
+
+    #[tokio::test]
+    async fn first_tool_call_awaits_feature_negotiation() {
+        // The feature guards in call_tool read connection-negotiated state;
+        // the very first tool call (before any tools/list) must not be
+        // rejected with unsupported_capability while on_initialized's
+        // identify() is still connecting.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bridge_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: RpcRequest = serde_json::from_str(&line).unwrap();
+                let result = match request.method.as_str() {
+                    "auth" => json!({
+                        "authenticated": true,
+                        "features": ["client_resume", "mcp_lifecycle", "connection_targets"]
+                    }),
+                    "client.attach" => {
+                        assert!(request.params["resumeToken"].is_null());
+                        json!({ "ownerId": "test-owner", "resumeToken": "a".repeat(64) })
+                    }
+                    "client.identify" => json!({ "identified": true }),
+                    "capability.execute" => {
+                        let tool = request.params["tool"].as_str().unwrap();
+                        assert_eq!(tool, tool::TERMINAL_START);
+                        json!({
+                            "backend": "ssh_exec",
+                            "jobId": "job-1",
+                            "status": "starting",
+                            "target": { "type": "connection", "connectionId": "c1" }
+                        })
+                    }
+                    other => panic!("unexpected bridge method: {other}"),
+                };
+                let response = RpcResponse {
+                    id: request.id,
+                    result: Some(result),
+                    error: None,
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                writer.write_all(&bytes).await.unwrap();
+            }
+        });
+
+        let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            let service = NyaTermMcp::new(BridgeEndpoint::for_test(port))
+                .serve(server_transport)
+                .await
+                .unwrap();
+            service.waiting().await.unwrap();
+        });
+        let (client_reader, mut client_writer) = tokio::io::split(client_transport);
+        let mut client_lines = BufReader::new(client_reader).lines();
+
+        send_client_message(
+            &mut client_writer,
+            r#"{
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": { "name": "first-call-test", "version": "1.0.0" }
+                    }
+                }"#,
+        )
+        .await;
+        receive_response(&mut client_lines, 1).await;
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "method": "notifications/initialized" }"#,
+        )
+        .await;
+        // Deliberately no tools/list first: the very first request is a
+        // feature-gated tool call.
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": { "name": "terminal_start", "arguments": {
+                        "command": "echo hi",
+                        "backend": "ssh_exec",
+                        "target": { "type": "connection", "connectionId": "c1" }
+                    } } }"#,
+        )
+        .await;
+        let called = receive_response(&mut client_lines, 2).await;
+        let structured = &called["result"]["structuredContent"];
+        assert_ne!(
+            structured.get("code").and_then(Value::as_str),
+            Some("unsupported_capability"),
+            "the first call must not race the negotiation: {called}"
+        );
+        assert_eq!(structured["status"], "starting");
+
+        drop(client_writer);
+        drop(client_lines);
+        tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+            .await
+            .expect("MCP service shuts down")
+            .expect("MCP service did not panic");
+        tokio::time::timeout(std::time::Duration::from_secs(5), bridge_task)
+            .await
+            .expect("mock host shuts down")
+            .expect("mock host did not panic");
     }
 }

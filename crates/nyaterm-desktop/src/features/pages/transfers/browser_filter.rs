@@ -1,7 +1,7 @@
 use super::helpers::transfer_browser_search_status;
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
-use crate::models::TransferBrowserSortColumn;
 use gpui::{Context, KeyDownEvent, Window};
+use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
 use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 use rust_i18n::t;
 use std::collections::HashSet;
@@ -22,7 +22,7 @@ impl NyaTermApp {
 
     pub(in crate::features::pages::transfers) fn toggle_transfer_browser_sort(
         &mut self,
-        column: TransferBrowserSortColumn,
+        column: FileBrowserSortColumn,
         cx: &mut Context<Self>,
     ) {
         self.transfer.toggle_browser_sort(column);
@@ -165,8 +165,8 @@ pub(super) fn transfer_browser_footer_stats(
 #[cfg(test)]
 mod tests {
     use super::{transfer_browser_footer_stats, transfer_browser_search_text_for_key};
-    use crate::features::transfers::transfer_browser_entry_is_visible;
     use gpui::{KeyDownEvent, Keystroke, Modifiers};
+    use nyaterm_files::file_browser::listing::entry_is_visible;
     use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
     use std::collections::HashSet;
 
@@ -193,19 +193,17 @@ mod tests {
     fn hidden_entries_follow_visibility_setting_before_search() {
         let hidden = entry(".env");
 
-        assert!(!transfer_browser_entry_is_visible(&hidden, "", false));
-        assert!(!transfer_browser_entry_is_visible(&hidden, "env", false));
-        assert!(transfer_browser_entry_is_visible(&hidden, "env", true));
+        assert!(!entry_is_visible(&hidden, "", false));
+        assert!(!entry_is_visible(&hidden, "env", false));
+        assert!(entry_is_visible(&hidden, "env", true));
     }
 
     #[test]
     fn visible_entries_still_follow_case_insensitive_search() {
         let visible = entry("ReleaseNotes.txt");
 
-        assert!(transfer_browser_entry_is_visible(&visible, "notes", false));
-        assert!(!transfer_browser_entry_is_visible(
-            &visible, "archive", true
-        ));
+        assert!(entry_is_visible(&visible, "notes", false));
+        assert!(!entry_is_visible(&visible, "archive", true));
     }
 
     fn key_event(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> KeyDownEvent {

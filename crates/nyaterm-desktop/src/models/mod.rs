@@ -15,7 +15,7 @@ pub(crate) mod session;
 mod session_event_bridge;
 pub(crate) mod terminal;
 mod transfer_preview;
-mod transfer_ui;
+pub(crate) mod transfer_ui;
 mod transfers;
 mod workspace_pane;
 mod workspace_tabs;

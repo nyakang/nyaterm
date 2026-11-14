@@ -1,5 +1,6 @@
 //! SFTP browser navigation, selection, menu and column-layout transitions.
 
+use crate::models::transfer_ui::{browser_sort_column_label, browser_sort_direction_marker};
 use gpui::{Pixels, ScrollHandle, ScrollStrategy};
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::{HashSet, VecDeque};
@@ -7,16 +8,17 @@ use std::sync::Arc;
 
 use super::browser_logic::BrowserFilterKey;
 use super::{TransferBrowserState, TransferBrowserView, TransferFeatureState};
-use crate::features::transfers::browser_paths::{
-    remote_ancestor_selection, transfer_browser_path_is_root,
-};
 #[cfg(test)]
 use crate::models::TransferBrowserPendingRenameState;
 use crate::models::{
     TransferBrowserColumnResizeState, TransferBrowserContextTarget,
     TransferBrowserDragSelectionState, TransferBrowserFavoritesMenuState,
     TransferBrowserNavigationSnapshot, TransferBrowserPathMenuState,
-    TransferBrowserSessionCacheState, TransferBrowserSortColumn, TransferBrowserUploadMenuState,
+    TransferBrowserSessionCacheState, TransferBrowserUploadMenuState,
+};
+use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
+use nyaterm_files::file_browser::navigation::{
+    browser_path_is_root as transfer_browser_path_is_root, remote_ancestor_selection,
 };
 
 pub(in crate::features) struct TransferSessionTransferBundle {
@@ -314,7 +316,7 @@ impl TransferFeatureState {
 
     pub(in crate::features) fn start_browser_column_resize(
         &mut self,
-        column: TransferBrowserSortColumn,
+        column: FileBrowserSortColumn,
         position_x: Pixels,
     ) {
         self.browser.start_column_resize(column, position_x);
@@ -362,7 +364,7 @@ impl TransferFeatureState {
 
     pub(in crate::features) fn toggle_browser_sort(
         &mut self,
-        column: TransferBrowserSortColumn,
+        column: FileBrowserSortColumn,
     ) -> String {
         if self.browser.sort_column == column {
             self.browser.sort_direction = self.browser.sort_direction.toggled();
@@ -378,8 +380,8 @@ impl TransferFeatureState {
             .set_offset(Default::default());
         let status = format!(
             "sorted by {} {}",
-            self.browser.sort_column.label().to_lowercase(),
-            self.browser.sort_direction.marker()
+            browser_sort_column_label(self.browser.sort_column).to_lowercase(),
+            browser_sort_direction_marker(self.browser.sort_direction)
         );
         self.browser.status = status.clone();
         status
@@ -917,13 +919,16 @@ impl TransferBrowserState {
         self.status = "remote directory path edit cancelled".to_string();
     }
 
-    fn start_column_resize(&mut self, column: TransferBrowserSortColumn, position_x: Pixels) {
+    fn start_column_resize(&mut self, column: FileBrowserSortColumn, position_x: Pixels) {
         self.column_resize = Some(TransferBrowserColumnResizeState {
             column,
             start_x: position_x,
             start_width: self.column_widths.get(column),
         });
-        self.status = format!("resizing {} column", column.label().to_lowercase());
+        self.status = format!(
+            "resizing {} column",
+            browser_sort_column_label(column).to_lowercase()
+        );
     }
 
     /// Returns false when no resize is in flight, so the caller can skip the redraw.
@@ -934,7 +939,10 @@ impl TransferBrowserState {
         let next_width = state.start_width + (position_x - state.start_x);
         self.column_widths.set(state.column, next_width);
         let width = f32::from(self.column_widths.get(state.column)).round();
-        self.status = format!("{} column: {width}px", state.column.label().to_lowercase());
+        self.status = format!(
+            "{} column: {width}px",
+            browser_sort_column_label(state.column).to_lowercase()
+        );
         true
     }
 

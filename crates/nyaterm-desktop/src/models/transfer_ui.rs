@@ -1,13 +1,31 @@
-use super::TransferBrowserSortColumn;
 use gpui::Pixels;
+use nyaterm_files::file_browser::listing::{FileBrowserSortColumn, FileBrowserSortDirection};
 use nyaterm_files::remote_file::{RemoteTextGeneration, RemoteTextRevision};
 use nyaterm_files::sftp::{SftpFileEntry, SftpFileProperties};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+pub(crate) fn browser_sort_column_label(column: FileBrowserSortColumn) -> &'static str {
+    match column {
+        FileBrowserSortColumn::Name => "Name",
+        FileBrowserSortColumn::Modified => "Modified",
+        FileBrowserSortColumn::Size => "Size",
+        FileBrowserSortColumn::Permissions => "Perms",
+        FileBrowserSortColumn::Owner => "Owner",
+        FileBrowserSortColumn::Group => "Group",
+    }
+}
+
+pub(crate) fn browser_sort_direction_marker(direction: FileBrowserSortDirection) -> &'static str {
+    match direction {
+        FileBrowserSortDirection::Ascending => "up",
+        FileBrowserSortDirection::Descending => "down",
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TransferBrowserColumnResizeState {
-    pub(crate) column: TransferBrowserSortColumn,
+    pub(crate) column: FileBrowserSortColumn,
     pub(crate) start_x: Pixels,
     pub(crate) start_width: Pixels,
 }

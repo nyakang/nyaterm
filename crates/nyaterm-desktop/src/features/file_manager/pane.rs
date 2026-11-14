@@ -1,11 +1,10 @@
 //! Independent file-manager pane state. Not shared with the sidebar browser.
 
 use crate::features::transfers::{BrowserFilterCache, BrowserFilterKey};
-use crate::models::{
-    TransferBrowserColumnWidths, TransferBrowserSortColumn, TransferBrowserSortDirection,
-};
+use crate::models::TransferBrowserColumnWidths;
 use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
 use nyaterm_files::file_browser::FileBrowserBackendKind;
+use nyaterm_files::file_browser::listing::{FileBrowserSortColumn, FileBrowserSortDirection};
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -59,8 +58,8 @@ pub(in crate::features) struct BrowserPaneState {
     pub status: String,
     pub disconnected: bool,
     pub search: String,
-    pub sort_column: TransferBrowserSortColumn,
-    pub sort_direction: TransferBrowserSortDirection,
+    pub sort_column: FileBrowserSortColumn,
+    pub sort_direction: FileBrowserSortDirection,
     pub column_widths: TransferBrowserColumnWidths,
     pub history: VecDeque<RemoteFilePath>,
     pub history_index: usize,
@@ -96,8 +95,8 @@ impl BrowserPaneState {
             status: String::new(),
             disconnected: false,
             search: String::new(),
-            sort_column: TransferBrowserSortColumn::Name,
-            sort_direction: TransferBrowserSortDirection::Ascending,
+            sort_column: FileBrowserSortColumn::Name,
+            sort_direction: FileBrowserSortDirection::Ascending,
             column_widths: TransferBrowserColumnWidths {
                 name: gpui::px(140.),
                 size: gpui::px(88.),
@@ -613,9 +612,9 @@ mod tests {
                 let generation = pane.begin_load(parent.clone());
                 pane.search = " ITEM ".into();
                 pane.sort_direction = if descending {
-                    crate::models::TransferBrowserSortDirection::Descending
+                    nyaterm_files::file_browser::listing::FileBrowserSortDirection::Descending
                 } else {
-                    crate::models::TransferBrowserSortDirection::Ascending
+                    nyaterm_files::file_browser::listing::FileBrowserSortDirection::Ascending
                 };
                 let mut entries = (0..2000)
                     .rev()

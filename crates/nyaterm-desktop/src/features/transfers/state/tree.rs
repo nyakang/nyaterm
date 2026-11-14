@@ -672,9 +672,9 @@ impl TreeSession {
                 })
                 .collect();
             sorted.sort_by(|a, b| {
-                b.is_directory()
-                    .cmp(&a.is_directory())
-                    .then_with(|| super::browser_logic::natural_compare_ascii(&a.name, &b.name))
+                b.is_directory().cmp(&a.is_directory()).then_with(|| {
+                    nyaterm_files::file_browser::listing::natural_compare(&a.name, &b.name)
+                })
             });
             for entry in sorted {
                 self.append_rows(&entry.remote_path(), Some(entry), depth + 1, visited, rows);

@@ -1,5 +1,6 @@
 use gpui::{Pixels, ScrollHandle, UniformListScrollHandle, px};
 use nyaterm_core::transfer_speed::TransferSpeed;
+use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
 use nyaterm_files::remote_file::{RemoteTextDocument, RemoteTextGeneration, RemoteTextWriteResult};
 use nyaterm_files::sftp::{
     SftpFileEntry, SftpFileProperties, SftpRemoteTextFile, SftpTransferControl,
@@ -702,60 +703,6 @@ pub(crate) struct TransferBrowserNavigationSnapshot {
     pub(crate) horizontal_scroll: ScrollHandle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TransferBrowserSortColumn {
-    Name,
-    Modified,
-    Size,
-    Permissions,
-    Owner,
-    Group,
-}
-
-impl TransferBrowserSortColumn {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Name => "Name",
-            Self::Modified => "Modified",
-            Self::Size => "Size",
-            Self::Permissions => "Perms",
-            Self::Owner => "Owner",
-            Self::Group => "Group",
-        }
-    }
-
-    pub(crate) fn default_direction(self) -> TransferBrowserSortDirection {
-        match self {
-            Self::Name | Self::Permissions | Self::Owner | Self::Group => {
-                TransferBrowserSortDirection::Ascending
-            }
-            Self::Size | Self::Modified => TransferBrowserSortDirection::Descending,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TransferBrowserSortDirection {
-    Ascending,
-    Descending,
-}
-
-impl TransferBrowserSortDirection {
-    pub(crate) fn marker(self) -> &'static str {
-        match self {
-            Self::Ascending => "up",
-            Self::Descending => "down",
-        }
-    }
-
-    pub(crate) fn toggled(self) -> Self {
-        match self {
-            Self::Ascending => Self::Descending,
-            Self::Descending => Self::Ascending,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct TransferBrowserColumnWidths {
     pub(crate) name: Pixels,
@@ -780,41 +727,41 @@ impl Default for TransferBrowserColumnWidths {
 }
 
 impl TransferBrowserColumnWidths {
-    pub(crate) fn get(self, column: TransferBrowserSortColumn) -> Pixels {
+    pub(crate) fn get(self, column: FileBrowserSortColumn) -> Pixels {
         match column {
-            TransferBrowserSortColumn::Name => self.name,
-            TransferBrowserSortColumn::Modified => self.modified,
-            TransferBrowserSortColumn::Size => self.size,
-            TransferBrowserSortColumn::Permissions => self.permissions,
-            TransferBrowserSortColumn::Owner => self.owner,
-            TransferBrowserSortColumn::Group => self.group,
+            FileBrowserSortColumn::Name => self.name,
+            FileBrowserSortColumn::Modified => self.modified,
+            FileBrowserSortColumn::Size => self.size,
+            FileBrowserSortColumn::Permissions => self.permissions,
+            FileBrowserSortColumn::Owner => self.owner,
+            FileBrowserSortColumn::Group => self.group,
         }
     }
 
-    pub(crate) fn set(&mut self, column: TransferBrowserSortColumn, width: Pixels) {
+    pub(crate) fn set(&mut self, column: FileBrowserSortColumn, width: Pixels) {
         let width = if width < Self::min_width(column) {
             Self::min_width(column)
         } else {
             width
         };
         match column {
-            TransferBrowserSortColumn::Name => self.name = width,
-            TransferBrowserSortColumn::Modified => self.modified = width,
-            TransferBrowserSortColumn::Size => self.size = width,
-            TransferBrowserSortColumn::Permissions => self.permissions = width,
-            TransferBrowserSortColumn::Owner => self.owner = width,
-            TransferBrowserSortColumn::Group => self.group = width,
+            FileBrowserSortColumn::Name => self.name = width,
+            FileBrowserSortColumn::Modified => self.modified = width,
+            FileBrowserSortColumn::Size => self.size = width,
+            FileBrowserSortColumn::Permissions => self.permissions = width,
+            FileBrowserSortColumn::Owner => self.owner = width,
+            FileBrowserSortColumn::Group => self.group = width,
         }
     }
 
-    pub(crate) fn min_width(column: TransferBrowserSortColumn) -> Pixels {
+    pub(crate) fn min_width(column: FileBrowserSortColumn) -> Pixels {
         match column {
-            TransferBrowserSortColumn::Name => px(140.),
-            TransferBrowserSortColumn::Modified => px(112.),
-            TransferBrowserSortColumn::Size => px(72.),
-            TransferBrowserSortColumn::Permissions => px(92.),
-            TransferBrowserSortColumn::Owner => px(76.),
-            TransferBrowserSortColumn::Group => px(76.),
+            FileBrowserSortColumn::Name => px(140.),
+            FileBrowserSortColumn::Modified => px(112.),
+            FileBrowserSortColumn::Size => px(72.),
+            FileBrowserSortColumn::Permissions => px(92.),
+            FileBrowserSortColumn::Owner => px(76.),
+            FileBrowserSortColumn::Group => px(76.),
         }
     }
 }

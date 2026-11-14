@@ -17,7 +17,8 @@ must include explicit conversion logic and tests.
   and root-window creation.
 * `crates/nyaterm-core`: UI-independent domain models, parsing, policies, AI
   settings/risk/provider logic, schema-neutral serialization and encryption
-  contracts, and shared pure logic. Do not add GPUI dependencies here.
+  contracts, command-completion fill planning, and shared pure logic. Do not add GPUI
+  dependencies here. Desktop authorizes and executes completion plans.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
   coordination, service adapters, and GPUI Entity stores.
@@ -35,7 +36,7 @@ must include explicit conversion logic and tests.
   request and streaming-response adapters, model discovery, and proxy handling.
   Runtime/task ownership and AI feature orchestration remain in desktop.
 * `crates/nyaterm-preview`: UI-independent image/PDF decoding, text preview
-  parsing, pixel transformations and decoded-content contracts. Desktop owns
+  parsing, delimited table ordering, pixel transformations and decoded-content contracts. Desktop owns
   fetching, job lifecycle, GPUI image conversion and preview caches. Its `icons`,
   `wallpaper` and `qr` modules own decoding; OTP URI interpretation stays in desktop.
 * `crates/nyaterm-translation-client`: UI-independent native translation HTTP
@@ -69,7 +70,8 @@ must include explicit conversion logic and tests.
   exposes file-session probe injection and must not depend on the file,
   recording, or remote-operations crates.
 * `crates/nyaterm-files`: local and remote file services, SFTP and shell file
-  backends, file revisions, path safety, and file-transfer policies. Its
+  backends, file revisions, path safety, listing/sort and navigation policies, and
+  file-transfer policies. Desktop owns listing caches and navigation state. Its
   `external_edit` module owns private workspaces and blocking file watching;
   desktop injects platform permissions and owns editor/upload orchestration.
 * `crates/nyaterm-remote-ops`: system metrics, process management, Docker, and

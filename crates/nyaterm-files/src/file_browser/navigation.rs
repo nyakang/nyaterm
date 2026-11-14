@@ -1,9 +1,9 @@
 //! Path policies shared by browser navigation, state transitions and presentation.
 
-use nyaterm_files::sftp::RemoteFilePath;
+use crate::sftp::RemoteFilePath;
 use std::path::Path;
 
-pub(in crate::features) fn normalized_transfer_browser_path(path: &str) -> String {
+pub fn normalize_browser_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         ".".to_string()
@@ -24,8 +24,8 @@ fn looks_like_native_path(path: &str) -> bool {
         || (path.starts_with("//") && !path.starts_with("///"))
 }
 
-pub(in crate::features) fn transfer_browser_path_is_root(path: &str) -> bool {
-    let path = normalized_transfer_browser_path(path);
+pub fn browser_path_is_root(path: &str) -> bool {
+    let path = normalize_browser_path(path);
     path == "."
         || path == "/"
         || (looks_like_native_path(&path) && Path::new(&path).parent().is_none())
@@ -33,18 +33,18 @@ pub(in crate::features) fn transfer_browser_path_is_root(path: &str) -> bool {
 
 /// Return the direct child to reveal when navigating to a remote ancestor.
 /// Walking both display and raw parents preserves identities for undecodable names.
-pub(in crate::features) fn remote_ancestor_selection(
+pub fn remote_ancestor_selection(
     source: RemoteFilePath,
     destination: &mut RemoteFilePath,
 ) -> Option<String> {
-    let target = normalized_transfer_browser_path(&destination.display_path);
+    let target = normalize_browser_path(&destination.display_path);
     let mut child = source;
-    while !transfer_browser_path_is_root(&child.display_path) {
+    while !browser_path_is_root(&child.display_path) {
         let parent = child.parent().ok()?;
         if parent == child {
             return None;
         }
-        if normalized_transfer_browser_path(&parent.display_path) == target {
+        if normalize_browser_path(&parent.display_path) == target {
             // A supplied token must agree; display strings can alias distinct raw paths.
             if destination.raw_path_token.is_some()
                 && destination.raw_path_token != parent.raw_path_token
@@ -64,7 +64,7 @@ pub(in crate::features) fn remote_ancestor_selection(
 #[cfg(test)]
 mod tests {
     use super::remote_ancestor_selection;
-    use nyaterm_files::sftp::RemoteFilePath;
+    use crate::sftp::RemoteFilePath;
 
     #[test]
     fn ancestor_navigation_preserves_raw_child_and_destination_paths() {
@@ -134,5 +134,31 @@ mod tests {
             raw_path_token: Some("!invalid".into()),
         };
         assert_eq!(remote_ancestor_selection(source, &mut target), None);
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::{browser_path_is_root, normalize_browser_path};
+
+    #[test]
+    fn browser_paths_preserve_empty_posix_root_and_trailing_separator_rules() {
+        for (source, normalized, root) in [
+            (" ", ".", true),
+            ("/", "/", true),
+            (" /a// ", "/a", false),
+            ("relative/", "relative", false),
+        ] {
+            assert_eq!(normalize_browser_path(source), normalized);
+            assert_eq!(browser_path_is_root(source), root);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_drive_and_unc_roots_are_terminal() {
+        assert!(browser_path_is_root(r"C:\"));
+        assert!(browser_path_is_root(r"\\server\share\"));
+        assert!(!browser_path_is_root(r"C:\tmp"));
     }
 }

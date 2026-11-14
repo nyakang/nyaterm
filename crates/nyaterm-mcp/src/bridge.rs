@@ -17,6 +17,11 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(305);
 
+/// Bound for the bridge negotiation that `tools/list` awaits. The loopback
+/// handshake completes in milliseconds; the bound only keeps a frozen host
+/// from stalling the initial listing for the full RPC timeout.
+const FIRST_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 pub struct BridgeEndpoint {
     host: String,
@@ -63,6 +68,7 @@ pub struct BridgeClient {
     connection: Arc<Mutex<Option<Connection>>>,
     identity: Arc<Mutex<Option<ClientIdentifyParams>>>,
     resume_token: Arc<Mutex<Option<nyaterm_core::SecretString>>>,
+    negotiated: Arc<AtomicBool>,
     lifecycle: Arc<AtomicBool>,
     connection_targets: Arc<AtomicBool>,
 }
@@ -74,6 +80,7 @@ impl BridgeClient {
             connection: Arc::new(Mutex::new(None)),
             identity: Arc::new(Mutex::new(None)),
             resume_token: Arc::new(Mutex::new(None)),
+            negotiated: Arc::new(AtomicBool::new(false)),
             lifecycle: Arc::new(AtomicBool::new(false)),
             connection_targets: Arc::new(AtomicBool::new(false)),
         }
@@ -85,6 +92,22 @@ impl BridgeClient {
 
     pub fn supports_lifecycle(&self) -> bool {
         self.lifecycle.load(Ordering::Acquire)
+    }
+
+    /// Ensure the bridge connection exists so negotiated features are reflected
+    /// in the advertised tool surface. The atomic fast path keeps a listing
+    /// from queueing behind a long-running call. Errors are swallowed: an
+    /// unreachable or late-starting host keeps serving the degraded tool set
+    /// and a later listing retries the negotiation.
+    pub async fn ensure_connected(&self) {
+        if self.negotiated.load(Ordering::Acquire) {
+            return;
+        }
+        let _ = tokio::time::timeout(FIRST_NEGOTIATION_TIMEOUT, async {
+            let mut guard = self.connection.lock().await;
+            self.ensure_connection(&mut guard, true).await
+        })
+        .await;
     }
 
     pub async fn identify(&self, name: String, version: Option<String>) {
@@ -127,12 +150,13 @@ impl BridgeClient {
                 let endpoint = self.endpoint.clone();
                 let resume = self.resume_token.lock().await.clone();
                 tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id, resume.as_ref()).await; });
+                self.negotiated.store(false, Ordering::Release);
                 *guard = None;
                 return Err(bridge_error("cancelled", "The MCP tool call was cancelled."));
             }
             result = connection_rpc(connection, "capability.execute", params) => result,
         };
-        finish_rpc(&mut guard, result)
+        self.finish_rpc(&mut guard, result)
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, RpcError> {
@@ -141,7 +165,24 @@ impl BridgeClient {
             .await?;
         let connection = guard.as_mut().unwrap();
         let result = connection_rpc(connection, method, params).await;
-        finish_rpc(&mut guard, result)
+        self.finish_rpc(&mut guard, result)
+    }
+
+    fn finish_rpc(
+        &self,
+        guard: &mut Option<Connection>,
+        result: Result<Value, ConnectionRpcError>,
+    ) -> Result<Value, RpcError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(ConnectionRpcError::Remote(error)) => Err(error),
+            Err(ConnectionRpcError::Disconnected(error)) => {
+                // Retain the last successful feature set, but require renegotiation.
+                self.negotiated.store(false, Ordering::Release);
+                *guard = None;
+                Err(error)
+            }
+        }
     }
 
     async fn ensure_connection(
@@ -153,10 +194,6 @@ impl BridgeClient {
             return Ok(());
         }
         let mut connection = connect(&self.endpoint).await.map_err(io_error)?;
-        self.lifecycle
-            .store(connection.lifecycle, Ordering::Release);
-        self.connection_targets
-            .store(connection.connection_targets, Ordering::Release);
         if connection.client_resume {
             let resume = self.resume_token.lock().await.clone();
             let token = attach_owner(&mut connection, resume.as_ref()).await?;
@@ -172,7 +209,13 @@ impl BridgeClient {
                 Err(ConnectionRpcError::Disconnected(error)) => return Err(error),
             }
         }
+        // Publish features only after attach and identity replay have succeeded.
+        self.lifecycle
+            .store(connection.lifecycle, Ordering::Release);
+        self.connection_targets
+            .store(connection.connection_targets, Ordering::Release);
         *guard = Some(connection);
+        self.negotiated.store(true, Ordering::Release);
         Ok(())
     }
 }
@@ -180,20 +223,6 @@ impl BridgeClient {
 enum ConnectionRpcError {
     Remote(RpcError),
     Disconnected(RpcError),
-}
-
-fn finish_rpc(
-    guard: &mut Option<Connection>,
-    result: Result<Value, ConnectionRpcError>,
-) -> Result<Value, RpcError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(ConnectionRpcError::Remote(error)) => Err(error),
-        Err(ConnectionRpcError::Disconnected(error)) => {
-            *guard = None;
-            Err(error)
-        }
-    }
 }
 
 async fn connection_rpc(
@@ -550,6 +579,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn negotiation_deadline_includes_waiting_for_the_connection_lock() {
+        let client = BridgeClient::new(BridgeEndpoint::for_test(1));
+        let _guard = client.connection.lock().await;
+        tokio::time::timeout(
+            super::FIRST_NEGOTIATION_TIMEOUT + std::time::Duration::from_secs(2),
+            client.ensure_connected(),
+        )
+        .await
+        .expect("negotiation must time out even while the connection lock is held");
+        assert!(!client.negotiated.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn legacy_host_negotiation_does_not_queue_behind_an_active_rpc() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = BridgeClient::new(BridgeEndpoint::for_test(
+            listener.local_addr().unwrap().port(),
+        ));
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (_lines, _writer) = authenticate(stream, &AtomicUsize::new(0)).await;
+            released.await.unwrap();
+        });
+        client.ensure_connected().await;
+        assert!(client.negotiated.load(Ordering::Acquire));
+        assert!(!client.supports_lifecycle());
+        assert!(!client.supports_connection_targets());
+        let _guard = client.connection.lock().await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), client.ensure_connected())
+            .await
+            .expect("a negotiated legacy host must use the lock-free path");
+        release.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_attach_does_not_publish_features_and_next_negotiation_retries() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = BridgeClient::new(BridgeEndpoint::for_test(
+            listener.local_addr().unwrap().port(),
+        ));
+        let server = tokio::spawn(async move {
+            for token in ["invalid".to_string(), "a".repeat(64)] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (reader, mut writer) = stream.into_split();
+                let mut lines = BufReader::new(reader).lines();
+                let auth = request(&mut lines).await;
+                assert_eq!(auth.method, "auth");
+                respond(
+                    &mut writer,
+                    auth.id,
+                    json!({
+                        "authenticated": true,
+                        "features": ["client_resume", "mcp_lifecycle", "connection_targets"]
+                    }),
+                )
+                .await;
+                let attach = request(&mut lines).await;
+                assert_eq!(attach.method, "client.attach");
+                assert!(attach.params["resumeToken"].is_null());
+                respond(&mut writer, attach.id, json!({"resumeToken": token})).await;
+            }
+        });
+        client.ensure_connected().await;
+        assert!(!client.negotiated.load(Ordering::Acquire));
+        assert!(!client.supports_lifecycle());
+        assert!(!client.supports_connection_targets());
+        assert!(client.connection.lock().await.is_none());
+        client.ensure_connected().await;
+        assert!(client.negotiated.load(Ordering::Acquire));
+        assert!(client.supports_lifecycle());
+        assert!(client.supports_connection_targets());
+        assert!(client.connection.lock().await.is_some());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn disconnect_invalidates_and_next_call_reauthenticates_and_identifies() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -590,12 +697,14 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(disconnected.code, "bridge_disconnected");
+        assert!(!client.negotiated.load(Ordering::Acquire));
 
         let recovered = client
             .call("get_environment", json!({}), CancellationToken::new())
             .await
             .unwrap();
         assert_eq!(recovered["value"], "recovered");
+        assert!(client.negotiated.load(Ordering::Acquire));
         server.await.unwrap();
         assert_eq!(auth_count.load(Ordering::SeqCst), 2);
     }

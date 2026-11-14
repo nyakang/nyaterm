@@ -34,7 +34,7 @@ pub(in crate::features) struct FileManagerWorkspace {
     pub(super) pane_bounds: [Option<gpui::Bounds<gpui::Pixels>>; 2],
     pub(super) column_resize: Option<(
         PaneId,
-        crate::models::TransferBrowserSortColumn,
+        nyaterm_files::file_browser::listing::FileBrowserSortColumn,
         f32,
         gpui::Pixels,
     )>,

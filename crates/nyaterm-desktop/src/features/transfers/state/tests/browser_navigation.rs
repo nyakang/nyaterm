@@ -1,7 +1,7 @@
 use super::{file_entry, transfer_state};
-use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
 use crate::test_support::TestAppCleanup;
 use gpui::{ScrollStrategy, TestAppContext};
+use nyaterm_files::file_browser::listing::{FileBrowserSortColumn, FileBrowserSortDirection};
 use nyaterm_files::sftp::RemoteFilePath;
 use std::collections::HashSet;
 
@@ -11,14 +11,14 @@ fn navigation_selection_uses_visible_sorted_rows_and_the_actual_parent_offset() 
     let _cleanup = TestAppCleanup::new(&cx);
     for (path, parent_count) in [("/srv", 1), ("/", 0)] {
         for direction in [
-            TransferBrowserSortDirection::Ascending,
-            TransferBrowserSortDirection::Descending,
+            FileBrowserSortDirection::Ascending,
+            FileBrowserSortDirection::Descending,
         ] {
             for with_token in [false, true] {
                 let mut state = transfer_state(&cx);
                 state.begin_browser_directory_load(path.into());
                 state.browser.search = "item".into();
-                state.browser.sort_column = TransferBrowserSortColumn::Size;
+                state.browser.sort_column = FileBrowserSortColumn::Size;
                 state.browser.sort_direction = direction;
                 let mut entries = (0..2000)
                     .map(|i| {
@@ -58,7 +58,7 @@ fn navigation_selection_uses_visible_sorted_rows_and_the_actual_parent_offset() 
                         .borrow()
                         .deferred_scroll_to_item
                         .unwrap();
-                    let index = if direction == TransferBrowserSortDirection::Ascending {
+                    let index = if direction == FileBrowserSortDirection::Ascending {
                         1500
                     } else {
                         499
