@@ -25,6 +25,7 @@ use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
 use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
 use crate::models::{CommandSuggestionItem, CommandSuggestionState};
 use crate::terminal::terminal_byte_index_for_cell_col;
+use nyaterm_terminal::snapshot_window::terminal_snapshot_absolute_window;
 
 mod fill;
 #[cfg(test)]
@@ -1093,17 +1094,28 @@ impl NyaTermApp {
         let session_id = self.session.active_id();
         let offset = self.active_terminal_display_offset();
         let snapshot = self.terminal_snapshot_for_session(session_id, offset);
-        let anchor = terminal_snapshot_anchor_row_for_display_offset(
-            &snapshot,
-            offset,
-            self.terminal_viewport_rows_for_session(session_id),
-            self.terminal_scrollback_len_for_session(session_id),
-        );
+        let viewport_rows = self.terminal_viewport_rows_for_session(session_id);
         let row = if snapshot.cursor.row == usize::MAX {
             snapshot.row_count().saturating_sub(1)
         } else {
             snapshot.cursor.row
         };
+        // Collapsed command blocks hide output rows, so the anchor must be
+        // reported in folded display rows just like painting (#1259).
+        if let Some(projection) = snapshot.display_rows.as_ref() {
+            let top = projection.top(offset, viewport_rows.max(1));
+            let cursor_absolute = terminal_snapshot_absolute_window(&snapshot)
+                .map(|(start, _)| start + row)
+                .unwrap_or(row);
+            let cursor_display = projection.display_row(cursor_absolute);
+            return (cursor_display.saturating_sub(top), snapshot.cursor.col);
+        }
+        let anchor = terminal_snapshot_anchor_row_for_display_offset(
+            &snapshot,
+            offset,
+            viewport_rows,
+            self.terminal_scrollback_len_for_session(session_id),
+        );
         (
             row.saturating_sub(anchor + snapshot.leading_cleared_rows(anchor)),
             snapshot.cursor.col,
