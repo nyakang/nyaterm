@@ -1077,7 +1077,13 @@ mod notice_tests {
                     },
                 },
             ]);
-            app.drain_session_events(cx);
+            // Each drain has a wall-time budget and can yield even with only
+            // four notices when a CI worker is descheduled between events.
+            while !app.session.pending_events_are_empty() {
+                let pending = app.session.pending_event_count();
+                app.drain_session_events(cx);
+                assert!(app.session.pending_event_count() < pending);
+            }
             (app.terminal.recording_output_fence())().unwrap();
             app.drain_terminal_frame_events(cx);
             assert_eq!(app.terminal.session_output("active").unwrap(), output);
