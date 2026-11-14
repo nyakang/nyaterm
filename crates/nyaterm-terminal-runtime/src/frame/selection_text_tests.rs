@@ -3,7 +3,7 @@ use nyaterm_terminal::TerminalScreen;
 use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelection};
 
 use super::{TerminalFramePipeline, TerminalSelectionTextError};
-use crate::models::recording::RecordingWritePipeline;
+use nyaterm_recording::pipeline::RecordingWritePipeline;
 
 #[test]
 fn worker_extracts_a_range_larger_than_any_paint_snapshot() {
@@ -186,7 +186,7 @@ fn worker_scroll_request_anchors_its_source_offset_after_history_rotation() {
     let frame = events
         .into_iter()
         .find_map(|event| match event {
-            crate::models::TerminalFrameEvent::Snapshot(frame) if frame.offset > 0 => Some(frame),
+            crate::frame::TerminalFrameEvent::Snapshot(frame) if frame.offset > 0 => Some(frame),
             _ => None,
         })
         .unwrap();

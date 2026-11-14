@@ -16,7 +16,7 @@ class PluginDependencyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             crates = (
-                "nyaterm-terminal-gpui",
+                "nyaterm-terminal-gpui", "nyaterm-terminal-runtime",
                 "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
                 "nyaterm-core", "nyaterm-android", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
                 "nyaterm-remote-desktop", "nyaterm-desktop", "nyaterm-plugin-api", "nyaterm-plugin-host",
@@ -31,6 +31,23 @@ class PluginDependencyTests(unittest.TestCase):
                 (directory / "Cargo.toml").write_text(document, encoding="utf-8")
             with patch.object(check_architecture, "ROOT", root):
                 return check_architecture.dependency_errors()
+
+    def test_terminal_runtime_accepts_only_its_four_workspace_dependencies(self):
+        allowed = {"nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording"}
+        for package in sorted(allowed | {"nyaterm-desktop", "nyaterm-terminal-gpui", "nyaterm-ui", "nyaterm-store", "nyaterm-files", "gpui-platform"}):
+            for section in ["dependencies", "dev-dependencies", "build-dependencies", "target.'cfg(windows)'.dev-dependencies"]:
+                with self.subTest(package=package, section=section):
+                    errors = self.check_dependencies("", "", {"nyaterm-terminal-runtime":
+                        f'[{section}]\nhidden = {{ package = "{package}", version = "1" }}\n'})
+                    self.assertEqual(errors, [] if package in allowed else [
+                        f"crate_boundary: nyaterm-terminal-runtime must not depend on {package}"])
+
+    def test_terminal_runtime_never_becomes_a_lower_level_dependency(self):
+        for crate in ["nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording", "nyaterm-files", "nyaterm-remote-ops"]:
+            with self.subTest(crate=crate):
+                errors = self.check_dependencies("", "", {crate:
+                    '[dev-dependencies]\nhidden = { package = "nyaterm-terminal-runtime", version = "1" }\n'})
+                self.assertEqual(errors, [f"crate_boundary: {crate} must not depend on nyaterm-terminal-runtime"])
 
     def test_guest_and_host_keep_their_allowed_dependencies(self):
         self.assertEqual(self.check_dependencies(

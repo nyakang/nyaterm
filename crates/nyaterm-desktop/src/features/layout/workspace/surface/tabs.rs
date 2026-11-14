@@ -12,11 +12,11 @@ use nyaterm_core::truncate_preview;
 use nyaterm_ui::{NyaCheckbox, NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement};
 
 use crate::features::NyaTermApp;
-use crate::features::icons::resolve_connection_icon;
 use crate::features::shell::{
     NewSessionMenuAnchor, SessionTabDragPreview, SessionTabTooltip, WorkspaceTabDragPayload,
 };
 use crate::features::view_widgets::{connection_spinner, themed_icon};
+use nyaterm_ui::icons::resolve_connection_icon;
 
 use super::super::super::view_helpers::session_kind_icon_path;
 

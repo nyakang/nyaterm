@@ -1,7 +1,7 @@
 //! Icon lookup tables.
 //!
-//! This is the data half of the icon system; the element half lives in
-//! [`crate::features::view_widgets::icons`]. Keeping them apart is what stops a
+//! The catalogs resolve assets; [`mono_icon`] and [`color_icon`] construct
+//! their GPUI elements. Keeping them apart is what stops a
 //! ~1000-line brand table from being rebuilt inside a render closure.
 //!
 //! The tables are a port of the pre-GPUI `src/components/icons.tsx`. Their keys
@@ -17,15 +17,11 @@ mod quick;
 mod remote_system;
 mod search;
 
-pub(in crate::features) use connection::{
-    CONNECTION_ICON_OPTIONS, DEFAULT_CONNECTION_ICON, resolve_connection_icon,
-};
-pub(in crate::features) use file_kind::file_entry_icon;
-pub(in crate::features) use quick::{QUICK_COMMAND_ICON_OPTIONS, quick_command_icon};
-pub(in crate::features) use remote_system::infer_connection_icon_key_from_remote_system;
-pub(in crate::features) use search::{
-    SEARCH_ENGINE_ICON_IDS, known_search_engine_icon, search_engine_icon,
-};
+pub use connection::{CONNECTION_ICON_OPTIONS, DEFAULT_CONNECTION_ICON, resolve_connection_icon};
+pub use file_kind::file_entry_icon;
+pub use quick::{QUICK_COMMAND_ICON_OPTIONS, quick_command_icon};
+pub use remote_system::infer_connection_icon_key_from_remote_system;
+pub use search::{SEARCH_ENGINE_ICON_IDS, known_search_engine_icon, search_engine_icon};
 
 use crate::theme::ThemePalette;
 
@@ -36,7 +32,7 @@ use crate::theme::ThemePalette;
 /// while `img()` keeps the pixels (so a distro logo survives, but nothing can
 /// tint it). The path prefix encodes the same split — `icons/**` vs `color/**`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::features) enum IconPaint {
+pub enum IconPaint {
     /// Monochrome mask, tinted with this vendor brand color.
     Mono(u32),
     /// Full-color raster, painted as authored. The old UI rendered these through
@@ -46,20 +42,20 @@ pub(in crate::features) enum IconPaint {
 
 /// A resolved icon: which asset, and how to paint it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::features) struct IconDef {
+pub struct IconDef {
     pub path: &'static str,
     pub paint: IconPaint,
 }
 
 impl IconDef {
-    pub(in crate::features) const fn mono(path: &'static str, color: u32) -> Self {
+    pub const fn mono(path: &'static str, color: u32) -> Self {
         Self {
             path,
             paint: IconPaint::Mono(color),
         }
     }
 
-    pub(in crate::features) const fn full_color(path: &'static str) -> Self {
+    pub const fn full_color(path: &'static str) -> Self {
         Self {
             path,
             paint: IconPaint::FullColor,
@@ -74,7 +70,7 @@ impl IconDef {
     /// UI shipped that bug; rather than corrupting the vendor values in the table,
     /// the correction happens here so light themes still get the true color and
     /// any brand added later is covered automatically.
-    pub(in crate::features) fn tint(self, palette: ThemePalette) -> Option<u32> {
+    pub fn tint(self, palette: ThemePalette) -> Option<u32> {
         match self.paint {
             IconPaint::Mono(color) => Some(legible_on(color, palette)),
             IconPaint::FullColor => None,
@@ -197,3 +193,9 @@ mod tests {
         );
     }
 }
+
+mod render;
+pub use render::{
+    activity_icon, color_icon, connection_spinner, connection_type_icon, mono_icon,
+    nyaterm_app_icon, nyaterm_logo_mark, themed_icon, transfer_entry_icon,
+};

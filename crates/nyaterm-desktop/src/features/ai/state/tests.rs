@@ -1398,7 +1398,7 @@ fn chat_start_stream_and_finish_are_reduced_by_the_owner() {
         Some("reason")
     );
 
-    state.set_chat_prompt_draft("next task".into());
+    state.set_chat_prompt_draft("next request".to_string());
     let effect = state
         .finish_chat_job(
             launch.job_id,
@@ -1417,7 +1417,7 @@ fn chat_start_stream_and_finish_are_reduced_by_the_owner() {
         .unwrap();
     assert!(effect.succeeded);
     assert!(!effect.clear_prompt_input);
-    assert_eq!(state.chat_prompt_draft(), "next task");
+    assert_eq!(state.chat_prompt_draft(), "next request");
     assert!(!state.chat_is_pending());
     assert_eq!(state.chat_response_preview(), "done");
     assert_eq!(state.agent_steps()[0].title, "Final Answer");

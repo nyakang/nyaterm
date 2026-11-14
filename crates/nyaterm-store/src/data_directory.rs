@@ -210,10 +210,10 @@ pub fn open_startup(
             .map(PathBuf::from)
             .unwrap_or_else(|| configured.clone());
         // Keep a fallback source lease through publication and the pointer commit.
-        let mut source_lease = None;
+        let mut _source_lease = None;
         let applied = (|| {
             if normalize_existing_prefix(&source) != normalize_existing_prefix(&configured) {
-                source_lease = Some(DataRootLease::acquire(&source)?);
+                _source_lease = Some(DataRootLease::acquire(&source)?);
             }
             apply_pending(local, &source, flavor, &pending)
         })();

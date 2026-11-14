@@ -1,5 +1,4 @@
 use gpui::{KeyDownEvent, KeyUpEvent};
-use nyaterm_terminal::TerminalScreen;
 use nyaterm_terminal::navigation::{NavigationKey, navigation_key_bytes};
 
 /// Terminal keyboard mode flags that affect encoding of plain navigation keys.
@@ -509,12 +508,4 @@ pub fn trim_terminal_output(output: &mut String) {
     output.drain(..drain_to);
 }
 
-pub fn initial_terminal_screen(banner: &str) -> TerminalScreen {
-    terminal_screen_from_output(banner)
-}
-
-pub fn terminal_screen_from_output(output: &str) -> TerminalScreen {
-    let mut screen = TerminalScreen::default();
-    screen.advance(output.as_bytes());
-    screen
-}
+pub use nyaterm_terminal::output::{initial_terminal_screen, terminal_screen_from_output};

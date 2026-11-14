@@ -1,8 +1,8 @@
 use std::{cell::RefCell, rc::Rc, time::Instant};
 
 use gpui::{
-    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
-    LayoutId, Pixels, ScrollHandle, Window, point, px,
+    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, LayoutId,
+    Pixels, ScrollHandle, Window, point, px,
 };
 
 use crate::features::shell::tab_reorder::TabReorderMotion;
@@ -14,13 +14,6 @@ pub(super) struct TabMotionElement {
     pub id: String,
     pub motion: Rc<RefCell<TabReorderMotion>>,
     pub scroll: ScrollHandle,
-}
-
-impl IntoElement for TabMotionElement {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
 }
 
 impl Element for TabMotionElement {
@@ -92,13 +85,6 @@ pub(super) struct TabStripViewportElement {
     pub child: AnyElement,
     pub motion: Rc<RefCell<TabReorderMotion>>,
     pub scroll: ScrollHandle,
-}
-
-impl IntoElement for TabStripViewportElement {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
 }
 
 impl Element for TabStripViewportElement {

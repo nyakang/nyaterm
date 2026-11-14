@@ -4,9 +4,9 @@ use super::frame_events::TerminalFrameSnapshotPurpose;
 use super::frame_search::{TerminalFrameSearchKey, TerminalFrameSearchPurpose};
 use super::frame_worker::TerminalFrameSession;
 use super::{TerminalSelection, TerminalSelectionTextError};
-use crate::models::recording::ExecutionRecordingEvent;
 use futures::channel::oneshot;
 use nyaterm_core::ActionLinksMatcherSettings;
+use nyaterm_recording::pipeline::ExecutionRecordingEvent;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -135,10 +135,10 @@ pub(super) enum TerminalFrameCommand {
     },
 }
 
-pub(crate) struct TerminalSelectionTextResult {
-    pub(crate) text: Option<String>,
-    pub(crate) selection: TerminalSelection,
-    pub(crate) history: nyaterm_terminal::TerminalHistoryState,
+pub struct TerminalSelectionTextResult {
+    pub text: Option<String>,
+    pub selection: TerminalSelection,
+    pub history: nyaterm_terminal::TerminalHistoryState,
 }
 
 #[derive(Debug)]

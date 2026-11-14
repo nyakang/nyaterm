@@ -1310,3 +1310,114 @@ fn command_drag_to_all_keeps_category_but_uncategorized_removes_it() {
         });
     }
 }
+
+struct QuickCommandHoverFixture {
+    app: Entity<NyaTermApp>,
+    lower_events: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl Render for QuickCommandHoverFixture {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let items = self.app.update(cx, |app, cx| {
+            app.quick_command_items(
+                &app.commands.quick_commands_snapshot(),
+                app.theme_palette(),
+                &std::rc::Rc::new(std::cell::RefCell::new(None)),
+                cx,
+            )
+        });
+        let down = self.lower_events.clone();
+        let click = self.lower_events.clone();
+        let scroll = self.lower_events.clone();
+        div()
+            .size_full()
+            .relative()
+            .child(
+                div()
+                    .id("lower-layer")
+                    .absolute()
+                    .inset_0()
+                    .on_any_mouse_down(move |_, _, _| down.set(down.get() + 1))
+                    .on_click(move |_, _, _| click.set(click.get() + 1))
+                    .on_scroll(move |_, _, _| scroll.set(scroll.get() + 1)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(300.))
+                    .left(px(200.))
+                    .children(items),
+            )
+    }
+}
+
+#[test]
+fn tile_preview_copies_verbatim_and_blocks_pointer_input_to_lower_layers() {
+    let root = TestTempDir::new("nyaterm-quick-command-hover");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app(&mut cx, &root);
+    let text = "  printf 'hello'\npwd\n";
+    app.update(&mut cx, |app, _| {
+        app.commands
+            .replace_quick_command_catalog(vec![command("preview", text)], Vec::new());
+        app.commands.set_quick_view_mode(QuickCommandViewMode::Tile);
+    });
+    let lower_events = std::rc::Rc::new(std::cell::Cell::new(0));
+    let events = lower_events.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        cx.observe(&app, |_, _, cx| cx.notify()).detach();
+        let fixture = cx.new(|_| QuickCommandHoverFixture {
+            app,
+            lower_events: events,
+        });
+        nya_root(fixture, window, cx)
+    });
+    cx.update(|window, _| window.activate_window());
+    draw(cx);
+    let trigger = cx.debug_bounds("quick-command-row-preview").unwrap();
+    cx.simulate_mouse_move(trigger.center(), None, Modifiers::default());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(750));
+    draw(cx);
+    let surface = cx.debug_bounds("quick-command-hover-surface").unwrap();
+    let copy = cx.debug_bounds("quick-command-tile-copy").unwrap();
+    cx.simulate_mouse_move(copy.center(), None, Modifiers::default());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    draw(cx);
+    assert!(
+        cx.debug_bounds("quick-command-hover-surface").is_some(),
+        "entering the card must cancel the delayed close"
+    );
+    cx.simulate_click(copy.center(), Modifiers::default());
+    draw(cx);
+    cx.update(|_, cx| {
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some(text)
+        )
+    });
+    cx.simulate_click(surface.origin + point(px(8.), px(8.)), Modifiers::default());
+    cx.simulate_event(gpui::ScrollEvent {
+        position: surface.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-48.))),
+        ..Default::default()
+    });
+    draw(cx);
+    assert_eq!(lower_events.get(), 0);
+    assert!(cx.debug_bounds("quick-command-hover-surface").is_some());
+    // Right-click dismisses; a fresh physical hover must reopen a usable card.
+    cx.simulate_mouse_down(trigger.center(), MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(trigger.center(), MouseButton::Right, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("quick-command-hover-surface").is_none());
+    cx.simulate_mouse_move(point(px(700.), px(450.)), None, Modifiers::default());
+    cx.simulate_mouse_move(trigger.center(), None, Modifiers::default());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(750));
+    draw(cx);
+    assert!(cx.debug_bounds("quick-command-tile-copy").is_some());
+}

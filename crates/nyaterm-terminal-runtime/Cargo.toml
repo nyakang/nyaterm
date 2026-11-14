@@ -1,0 +1,24 @@
+[package]
+name = "nyaterm-terminal-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+nyaterm-core.workspace = true
+nyaterm-terminal.workspace = true
+nyaterm-transport.workspace = true
+nyaterm-recording.workspace = true
+futures.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+nyaterm-core = { workspace = true, features = ["test-support"] }
+nyaterm-recording = { workspace = true, features = ["test-support"] }
+time.workspace = true

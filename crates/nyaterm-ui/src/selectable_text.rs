@@ -38,19 +38,6 @@ impl NyaSelectableText {
 
 impl RenderOnce for NyaSelectableText {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        if self.state.is_none() && self.style.is_none() {
-            let escaped = self
-                .text
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;");
-            return gpui_kit::component::text::TextView::html(
-                self.id,
-                format!("<pre>{escaped}</pre>"),
-            )
-            .selectable(true)
-            .into_any_element();
-        }
         let escaped = self
             .text
             .replace('&', "&amp;")

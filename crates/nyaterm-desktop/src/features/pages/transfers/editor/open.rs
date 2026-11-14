@@ -576,11 +576,11 @@ fn run_external_open<T>(
     if control.is_cancelled() {
         return Err(SFTP_TRANSFER_CANCELLED.to_string());
     }
-    download(&workspace.local_path)?;
+    download(workspace.local_path())?;
     if control.is_cancelled() {
         return Err(SFTP_TRANSFER_CANCELLED.to_string());
     }
-    launch(&workspace.local_path)
+    launch(workspace.local_path())
 }
 
 #[cfg(test)]
@@ -617,7 +617,7 @@ mod tests {
             let control = SftpTransferControl::new();
             let workspace = prepare_external_edit_workspace("example.txt", || false)?;
             let _cleanup = ExternalEditTestCleanup::new(&workspace);
-            let expected = workspace.local_path.clone();
+            let expected = workspace.local_path().to_path_buf();
             let attempts = Cell::new(0);
             let result: Result<(), String> = run_external_open(
                 &control,
@@ -653,7 +653,7 @@ mod tests {
     fn launch_failure_keeps_the_downloaded_file_and_never_prepares_again() -> anyhow::Result<()> {
         let workspace = prepare_external_edit_workspace("example.txt", || false)?;
         let _cleanup = ExternalEditTestCleanup::new(&workspace);
-        let expected = workspace.local_path.clone();
+        let expected = workspace.local_path().to_path_buf();
         let attempts = Cell::new(0);
         let result: Result<(), String> = run_external_open(
             &SftpTransferControl::new(),

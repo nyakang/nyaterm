@@ -43,7 +43,7 @@ fn shell_external_edit_downloads_into_private_workspace_and_preserves_remote_met
 
     let result = (|| -> anyhow::Result<()> {
         let workspace = prepare_external_edit_workspace("file.txt", || false)?;
-        let local_path = &workspace.local_path;
+        let local_path = workspace.local_path();
         local_root = Some(ExternalEditTestCleanup::new(&workspace));
         anyhow::ensure!(
             backend != RemoteFileBackendKind::Sftp,

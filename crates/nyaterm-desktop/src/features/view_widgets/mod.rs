@@ -28,8 +28,7 @@ pub(in crate::features) use stats::stats_progress_bar;
 mod rows;
 pub(in crate::features) use rows::cloud_sync_history_row;
 
-mod icons;
-pub(in crate::features) use icons::{
+pub(in crate::features) use nyaterm_ui::icons::{
     activity_icon, color_icon, connection_spinner, connection_type_icon, mono_icon,
     nyaterm_app_icon, nyaterm_logo_mark, themed_icon, transfer_entry_icon,
 };

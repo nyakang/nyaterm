@@ -1,6 +1,5 @@
 use super::basis::batch_kind_value;
 use super::draft::AssetBatchEditDraft;
-use crate::features::icons::{CONNECTION_ICON_OPTIONS, DEFAULT_CONNECTION_ICON};
 use crate::features::pages::connections::editor::connection::options;
 use crate::features::pages::connections::list::ConnectionEditorChoice;
 use gpui::SharedString;
@@ -9,6 +8,7 @@ use nyaterm_core::{
     SavedPassword, SshAgentEndpoint, SshAgentForwardingPolicy, SshKey,
 };
 use nyaterm_ui::NyaSelectOption;
+use nyaterm_ui::icons::{CONNECTION_ICON_OPTIONS, DEFAULT_CONNECTION_ICON};
 use rust_i18n::t;
 fn choice_options(choices: Vec<ConnectionEditorChoice>) -> Vec<NyaSelectOption> {
     choices

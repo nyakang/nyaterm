@@ -11,7 +11,7 @@ use super::IconDef;
 use super::aliases::{normalize_connection_icon_key, resolve_alias};
 
 /// Blue server key retained for existing explicit selections and batch editing.
-pub(in crate::features) const DEFAULT_CONNECTION_ICON: &str = "server";
+pub const DEFAULT_CONNECTION_ICON: &str = "server";
 
 /// The default glyph in seven theme-friendly hues. One asset, seven tints — this
 /// is exactly what a monochrome alpha mask is for.
@@ -187,7 +187,7 @@ const LEGACY_ICONS: &[(&str, IconDef)] = &[
 
 /// Picker contents, in the old app's display order: the seven server hues, the
 /// seven Linux hues, then every OS logo, followed by protocol defaults.
-pub(in crate::features) fn connection_icon_options() -> impl Iterator<Item = &'static str> {
+pub fn connection_icon_options() -> impl Iterator<Item = &'static str> {
     SERVER_ICONS
         .iter()
         .chain(LINUX_ICONS)
@@ -197,7 +197,7 @@ pub(in crate::features) fn connection_icon_options() -> impl Iterator<Item = &'s
 }
 
 /// Materialized picker list, so grid code can index and count without collecting.
-pub(in crate::features) static CONNECTION_ICON_OPTIONS: std::sync::LazyLock<Vec<&'static str>> =
+pub static CONNECTION_ICON_OPTIONS: std::sync::LazyLock<Vec<&'static str>> =
     std::sync::LazyLock::new(|| connection_icon_options().collect());
 
 fn lookup(key: &str) -> Option<IconDef> {
@@ -223,7 +223,7 @@ fn lookup(key: &str) -> Option<IconDef> {
 /// the normalized-and-aliased form, then the default. Step one is byte-exact on
 /// purpose — normalizing up front would let `Ubuntu` and `ubuntu` diverge if a
 /// case-sensitive key is ever added.
-pub(in crate::features) fn resolve_connection_icon(icon_key: Option<&str>, kind: &str) -> IconDef {
+pub fn resolve_connection_icon(icon_key: Option<&str>, kind: &str) -> IconDef {
     if let Some(key) = icon_key.filter(|key| !key.is_empty()) {
         if let Some(def) = lookup(key) {
             return def;
@@ -239,7 +239,7 @@ pub(in crate::features) fn resolve_connection_icon(icon_key: Option<&str>, kind:
 /// Kind-specific default. The old app always fell back to the blue server glyph;
 /// giving each non-SSH kind its own mark also distinguishes saved connections
 /// and session tabs when no custom icon is selected.
-pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconDef {
+pub fn default_connection_icon_for_kind(kind: &str) -> IconDef {
     let key = match kind {
         "Local" => "local",
         "Telnet" => "telnet",
@@ -254,7 +254,6 @@ pub(in crate::features) fn default_connection_icon_for_kind(kind: &str) -> IconD
 
 #[cfg(test)]
 mod tests {
-    use crate::models::ConnectionKindTab;
     use nyaterm_core::models::sessions::SavedConnection;
 
     use super::super::IconPaint;
@@ -432,11 +431,7 @@ mod tests {
         }))
         .expect("saved Android connection must load without an explicit icon");
         let android = lookup("android").expect("Android logo must be registered");
-        for kind in [
-            connection.kind_label(),
-            ConnectionKindTab::Adb.label(),
-            "Android",
-        ] {
+        for kind in [connection.kind_label(), "Android (ADB)", "ADB", "Android"] {
             assert_eq!(
                 resolve_connection_icon(connection.icon.as_deref(), kind),
                 android

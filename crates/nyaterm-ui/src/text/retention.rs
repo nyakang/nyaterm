@@ -64,13 +64,6 @@ impl SelectionRetention {
     }
 }
 
-impl IntoElement for SelectionRetention {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 pub(super) struct RetainedEndpoints {
     before: Vec<AnyElement>,
     after: Vec<AnyElement>,

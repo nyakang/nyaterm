@@ -13,11 +13,11 @@ use super::frame_events::{
 use super::frame_search::{TerminalFrameSearchKey, TerminalFrameSearchPurpose};
 use super::frame_worker::{TerminalFrameSession, run_terminal_frame_processor};
 use super::{TerminalSelection, TerminalSelectionTextError};
-use crate::models::recording::{ExecutionRecordingEvent, RecordingWriteHandle};
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use nyaterm_core::ActionLinksMatcherSettings;
 use nyaterm_core::keyword_highlight_presets::ResolvedKeywordHighlightRule;
+use nyaterm_recording::pipeline::{ExecutionRecordingEvent, RecordingWriteHandle};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ use std::thread;
 use std::time::Duration;
 
 #[derive(Debug)]
-pub(crate) struct TerminalFramePipeline {
+pub struct TerminalFramePipeline {
     pub(super) keyword_rules: Arc<Mutex<Arc<Vec<ResolvedKeywordHighlightRule>>>>,
     pub(super) logical_line_snapshots: Arc<AtomicBool>,
     pub(super) recording_writer: RecordingWriteHandle,
@@ -36,20 +36,20 @@ pub(crate) struct TerminalFramePipeline {
     pub(super) worker: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
 }
 
-pub(crate) struct TerminalFrameOutputSubmission {
+pub struct TerminalFrameOutputSubmission {
     /// Set by ingress capture before charset decoding or UI output processing.
-    pub(crate) raw_already_captured: bool,
-    pub(crate) session_id: String,
-    pub(crate) data: Vec<u8>,
-    pub(crate) encoding: String,
-    pub(crate) scrollback_limit: usize,
+    pub raw_already_captured: bool,
+    pub session_id: String,
+    pub data: Vec<u8>,
+    pub encoding: String,
+    pub scrollback_limit: usize,
 }
 
 /// Hand a submission to the frame processor as one command.
 ///
 /// Splitting it here would only be undone downstream — `push_terminal_frame_command`
 /// re-merges adjacent same-session output on enqueue, and the worker coalesces
-/// again up to [`TERMINAL_FRAME_OUTPUT_BURST_BYTE_LIMIT`] — while costing a copy
+/// again up to [`super::frame_worker::TERMINAL_FRAME_OUTPUT_BURST_BYTE_LIMIT`] — while costing a copy
 /// of the payload plus two `String` clones per slice.
 pub(super) fn terminal_frame_output_commands(
     output: TerminalFrameOutputSubmission,
@@ -66,7 +66,7 @@ pub(super) fn terminal_frame_output_commands(
 }
 
 impl TerminalFramePipeline {
-    pub(crate) fn set_collapsed_commands(
+    pub fn set_collapsed_commands(
         &self,
         session_id: String,
         ids: std::collections::BTreeSet<nyaterm_terminal::command_blocks::CommandBlockId>,
@@ -77,7 +77,7 @@ impl TerminalFramePipeline {
             .send(TerminalFrameCommand::SetCollapsedCommands { session_id, ids });
     }
 
-    pub(crate) fn set_keyword_rules(&self, rules: Arc<Vec<ResolvedKeywordHighlightRule>>) {
+    pub fn set_keyword_rules(&self, rules: Arc<Vec<ResolvedKeywordHighlightRule>>) {
         let Ok(mut current) = self.keyword_rules.lock() else {
             return;
         };
@@ -87,14 +87,11 @@ impl TerminalFramePipeline {
         *current = rules;
     }
 
-    pub(crate) fn take_events_for_transfer(
-        &self,
-        session_ids: &[String],
-    ) -> VecDeque<TerminalFrameEvent> {
+    pub fn take_events_for_transfer(&self, session_ids: &[String]) -> VecDeque<TerminalFrameEvent> {
         self.event_queue.take_sessions(session_ids)
     }
 
-    pub(crate) fn spawn(recording_writer: RecordingWriteHandle) -> Self {
+    pub fn spawn(recording_writer: RecordingWriteHandle) -> Self {
         let (command_tx, command_rx) = terminal_frame_command_channel();
         let (event_queue, event_wake_rx) =
             TerminalFrameEventQueue::new_with_wake(TERMINAL_FRAME_EVENT_QUEUE_CAP);
@@ -122,7 +119,7 @@ impl TerminalFramePipeline {
         }
     }
 
-    pub(crate) fn set_logical_line_snapshots(&self, enabled: bool) {
+    pub fn set_logical_line_snapshots(&self, enabled: bool) {
         if self.logical_line_snapshots.swap(enabled, Ordering::Relaxed) != enabled {
             self.arm_event_wakes();
             let _ = self
@@ -131,7 +128,7 @@ impl TerminalFramePipeline {
         }
     }
 
-    pub(crate) fn arm_output_event_wake(&self) {
+    pub fn arm_output_event_wake(&self) {
         self.event_queue.arm_wake(TERMINAL_FRAME_EVENT_WAKE_OUTPUT);
     }
 
@@ -141,19 +138,19 @@ impl TerminalFramePipeline {
     /// cannot be missed by a consumer that only armed for output. The individual
     /// arms at the request sites and the input-echo accelerator stay: `arm_wake`
     /// is a `fetch_or`, so they compose.
-    pub(crate) fn arm_event_wakes(&self) {
+    pub fn arm_event_wakes(&self) {
         self.event_queue.arm_wake(TERMINAL_FRAME_EVENT_WAKE_ALL);
     }
 
-    pub(crate) fn take_event_wake_receiver(&self) -> Option<UnboundedReceiver<()>> {
+    pub fn take_event_wake_receiver(&self) -> Option<UnboundedReceiver<()>> {
         self.event_wake_rx.lock().ok()?.take()
     }
 
-    pub(crate) fn event_wake_count(&self) -> u64 {
+    pub fn event_wake_count(&self) -> u64 {
         self.event_queue.wake_count()
     }
 
-    pub(crate) fn ensure_session(
+    pub fn ensure_session(
         &self,
         session_id: impl Into<String>,
         encoding: impl Into<String>,
@@ -166,7 +163,7 @@ impl TerminalFramePipeline {
         });
     }
 
-    pub(crate) fn seed_session(
+    pub fn seed_session(
         &self,
         session_id: impl Into<String>,
         output: impl Into<String>,
@@ -181,28 +178,28 @@ impl TerminalFramePipeline {
         });
     }
 
-    pub(crate) fn remove_session(&self, session_id: impl Into<String>) {
+    pub fn remove_session(&self, session_id: impl Into<String>) {
         let _ = self.command_tx.send(TerminalFrameCommand::RemoveSession {
             session_id: session_id.into(),
         });
     }
 
     /// Preserve diagnostic recording order without advancing either decoder or grid.
-    pub(crate) fn submit_system_recording(&self, session_id: &str, text: String) {
+    pub fn submit_system_recording(&self, session_id: &str, text: String) {
         let _ = self.command_tx.send(TerminalFrameCommand::SystemRecording {
             session_id: session_id.to_string(),
             text,
         });
     }
 
-    pub(crate) fn append_local_text(&self, session_id: impl Into<String>, text: impl Into<String>) {
+    pub fn append_local_text(&self, session_id: impl Into<String>, text: impl Into<String>) {
         let _ = self.command_tx.send(TerminalFrameCommand::AppendLocalText {
             session_id: session_id.into(),
             text: text.into(),
         });
     }
 
-    pub(crate) fn rekey_session(
+    pub fn rekey_session(
         &self,
         old_id: impl Into<String>,
         new_id: impl Into<String>,
@@ -217,7 +214,7 @@ impl TerminalFramePipeline {
         })
     }
 
-    pub(crate) fn navigate_command(
+    pub fn navigate_command(
         &self,
         session_id: String,
         action: nyaterm_terminal::command_navigation::CommandNavigationAction,
@@ -232,7 +229,7 @@ impl TerminalFramePipeline {
         });
     }
 
-    pub(crate) fn note_command_input(
+    pub fn note_command_input(
         &self,
         session_id: String,
         fallback: Option<nyaterm_terminal::TerminalLineId>,
@@ -243,7 +240,7 @@ impl TerminalFramePipeline {
         });
     }
 
-    pub(crate) fn clear_session_except_input(&self, session_id: impl Into<String>) {
+    pub fn clear_session_except_input(&self, session_id: impl Into<String>) {
         let _ = self
             .command_tx
             .send(TerminalFrameCommand::ClearExceptInput {
@@ -251,7 +248,7 @@ impl TerminalFramePipeline {
             });
     }
 
-    pub(crate) fn take_session_for_transfer(
+    pub fn take_session_for_transfer(
         &self,
         session_id: impl Into<String>,
     ) -> Result<Option<TerminalFrameSession>, &'static str> {
@@ -267,7 +264,7 @@ impl TerminalFramePipeline {
             .map_err(|_| "the source terminal pipeline did not respond")
     }
 
-    pub(crate) fn insert_sessions_from_transfer(
+    pub fn insert_sessions_from_transfer(
         &self,
         sessions: Vec<(String, TerminalFrameSession)>,
     ) -> Result<(), Vec<(String, TerminalFrameSession)>> {
@@ -282,7 +279,7 @@ impl TerminalFramePipeline {
             })
     }
 
-    pub(crate) fn resize_session(&self, session_id: impl Into<String>, cols: u16, rows: u16) {
+    pub fn resize_session(&self, session_id: impl Into<String>, cols: u16, rows: u16) {
         let _ = self.command_tx.send(TerminalFrameCommand::ResizeSession {
             session_id: session_id.into(),
             cols,
@@ -292,11 +289,7 @@ impl TerminalFramePipeline {
 
     /// Recording-only events share the frame queue with ordinary decoded output,
     /// so they cannot overtake output still being processed by this worker.
-    pub(crate) fn submit_execution_recording(
-        &self,
-        session_id: &str,
-        event: ExecutionRecordingEvent,
-    ) {
+    pub fn submit_execution_recording(&self, session_id: &str, event: ExecutionRecordingEvent) {
         if let ExecutionRecordingEvent::Output(text) = event {
             let mut remaining = text.as_str();
             while !remaining.is_empty() {
@@ -322,7 +315,7 @@ impl TerminalFramePipeline {
         }
     }
 
-    pub(crate) fn submit_synthetic_output(&self, session_id: String, text: String) {
+    pub fn submit_synthetic_output(&self, session_id: String, text: String) {
         if !text.is_empty() {
             let _ = self
                 .command_tx
@@ -330,7 +323,7 @@ impl TerminalFramePipeline {
         }
     }
 
-    pub(crate) fn submit_decoded_output(&self, session_id: String, text: String) {
+    pub fn submit_decoded_output(&self, session_id: String, text: String) {
         if !text.is_empty() {
             let _ = self
                 .command_tx
@@ -338,8 +331,8 @@ impl TerminalFramePipeline {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn submit_output(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn submit_output(
         &self,
         session_id: impl Into<String>,
         data: Vec<u8>,
@@ -355,7 +348,7 @@ impl TerminalFramePipeline {
         }]);
     }
 
-    pub(crate) fn submit_captured_output(
+    pub fn submit_captured_output(
         &self,
         session_id: impl Into<String>,
         data: Vec<u8>,
@@ -371,7 +364,7 @@ impl TerminalFramePipeline {
         }]);
     }
 
-    pub(crate) fn submit_outputs(&self, outputs: Vec<TerminalFrameOutputSubmission>) {
+    pub fn submit_outputs(&self, outputs: Vec<TerminalFrameOutputSubmission>) {
         for output in &outputs {
             if !output.raw_already_captured {
                 self.recording_writer
@@ -382,8 +375,8 @@ impl TerminalFramePipeline {
         let _ = self.command_tx.send_many(commands);
     }
 
-    #[cfg(test)]
-    pub(crate) fn request_snapshot(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn request_snapshot(
         &self,
         session_id: impl Into<String>,
         offset: usize,
@@ -403,7 +396,7 @@ impl TerminalFramePipeline {
         );
     }
 
-    pub(crate) fn request_action_link_enrichment(
+    pub fn request_action_link_enrichment(
         &self,
         session_id: impl Into<String>,
         action_link_matchers: ActionLinksMatcherSettings,
@@ -421,8 +414,8 @@ impl TerminalFramePipeline {
         );
     }
 
-    #[cfg(test)]
-    pub(crate) fn request_priority_snapshot(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn request_priority_snapshot(
         &self,
         session_id: impl Into<String>,
         offset: usize,
@@ -444,7 +437,7 @@ impl TerminalFramePipeline {
         );
     }
 
-    pub(crate) fn request_anchored_snapshot(
+    pub fn request_anchored_snapshot(
         &self,
         session_id: String,
         offset: usize,
@@ -494,7 +487,7 @@ impl TerminalFramePipeline {
         });
     }
 
-    pub(crate) fn request_all_text(&self, session_id: String) -> oneshot::Receiver<Option<String>> {
+    pub fn request_all_text(&self, session_id: String) -> oneshot::Receiver<Option<String>> {
         let (response_tx, response_rx) = oneshot::channel();
         let _ = self.command_tx.send(TerminalFrameCommand::RequestAllText {
             session_id,
@@ -503,8 +496,8 @@ impl TerminalFramePipeline {
         response_rx
     }
 
-    #[cfg(test)]
-    pub(crate) async fn request_selection_text(
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn request_selection_text(
         &self,
         session_id: String,
         selection: TerminalSelection,
@@ -515,7 +508,7 @@ impl TerminalFramePipeline {
             .map(|result| result.map(|frame| frame.text))
     }
 
-    pub(crate) fn request_selection_text_frame(
+    pub fn request_selection_text_frame(
         &self,
         session_id: String,
         selection: TerminalSelection,
@@ -532,7 +525,7 @@ impl TerminalFramePipeline {
         response_rx
     }
 
-    pub(crate) fn request_search(
+    pub fn request_search(
         &self,
         session_id: impl Into<String>,
         purpose: TerminalFrameSearchPurpose,
@@ -549,13 +542,13 @@ impl TerminalFramePipeline {
         });
     }
 
-    pub(crate) fn cancel_find_search(&self, session_id: String) {
+    pub fn cancel_find_search(&self, session_id: String) {
         let _ = self
             .command_tx
             .send(TerminalFrameCommand::CancelFindSearch { session_id });
     }
 
-    pub(crate) fn set_snapshot_priority(&self, session_ids: Vec<String>) {
+    pub fn set_snapshot_priority(&self, session_ids: Vec<String>) {
         let _ = self
             .command_tx
             .send(TerminalFrameCommand::SetSnapshotPriority { session_ids });
@@ -565,14 +558,14 @@ impl TerminalFramePipeline {
     ///
     /// This is intentionally test-only: production consumers synchronize through
     /// event wakes, while tests need deterministic completion without sleeps.
-    #[cfg(test)]
-    pub(crate) fn flush_for_test(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn flush_for_test(&self) {
         self.finish_pending_output()
             .expect("terminal frame worker did not reach fence");
     }
 
     /// Called only from background jobs so stop/export include already submitted output.
-    pub(crate) fn finish_pending_output(&self) -> Result<(), String> {
+    pub fn finish_pending_output(&self) -> Result<(), String> {
         let (complete_tx, complete_rx) = std::sync::mpsc::sync_channel(0);
         if !self
             .command_tx
@@ -585,7 +578,7 @@ impl TerminalFramePipeline {
             .map_err(|_| "terminal frame worker did not reach recording fence".into())
     }
 
-    pub(crate) fn drain_events_into(
+    pub fn drain_events_into(
         &self,
         events: &mut VecDeque<TerminalFrameEvent>,
         limit: usize,
@@ -593,19 +586,19 @@ impl TerminalFramePipeline {
         self.event_queue.drain_into(events, limit)
     }
 
-    pub(crate) fn queued_event_count(&self) -> usize {
+    pub fn queued_event_count(&self) -> usize {
         self.event_queue.len()
     }
 
-    pub(crate) fn queued_command_count(&self) -> usize {
+    pub fn queued_command_count(&self) -> usize {
         self.command_tx.len()
     }
 
-    pub(crate) fn queued_output_bytes(&self) -> usize {
+    pub fn queued_output_bytes(&self) -> usize {
         self.command_tx.queued_output_bytes()
     }
 
-    pub(crate) fn take_shutdown(&mut self) -> Option<impl FnOnce() + Send + 'static> {
+    pub fn take_shutdown(&mut self) -> Option<impl FnOnce() + Send + 'static> {
         let worker = self
             .worker
             .lock()
@@ -622,7 +615,7 @@ impl TerminalFramePipeline {
         })
     }
 
-    pub(crate) fn shutdown(&mut self) {
+    pub fn shutdown(&mut self) {
         if let Some(shutdown) = self.take_shutdown() {
             shutdown();
         }
@@ -655,7 +648,7 @@ impl Drop for TerminalFramePipeline {
 
 impl Default for TerminalFramePipeline {
     fn default() -> Self {
-        let recording_writer = crate::models::recording::RecordingWritePipeline::spawn(
+        let recording_writer = nyaterm_recording::pipeline::RecordingWritePipeline::spawn(
             nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES,
         )
         .writer();

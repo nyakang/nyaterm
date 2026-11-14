@@ -1156,3 +1156,69 @@ fn skip_reasons_distinguish_protocol_from_global_recording_dependencies() {
     );
     assert!(connection.recording.is_none());
 }
+
+#[test]
+fn rdp_basis_counts_skipped_members_after_values_become_mixed() {
+    use super::ConnectionBatchKind;
+    use super::basis::{BatchValueBasis, rdp_field_basis};
+    let mut first = rdp_connection();
+    first.id = "first".into();
+    let mut second = first.clone();
+    second.id = "second".into();
+    let mut external = first.clone();
+    external.id = "external".into();
+    if let ConnectionType::Rdp { backend, .. } = &mut external.config {
+        *backend = "mstsc".into();
+    }
+    let connections = [first, second, external];
+    let targets =
+        ["first", "second", "external", "removed"].map(|id| (id.into(), ConnectionBatchKind::Rdp));
+    let (basis, counts) = rdp_field_basis(
+        &connections,
+        &targets,
+        RdpBatchFieldGroup::SecurityAndDisplay,
+        &ConnectionBatchEdit::default(),
+        |entry| entry.id.clone(),
+    );
+    assert_eq!(basis, BatchValueBasis::Mixed);
+    assert_eq!(counts.total, 4);
+    assert_eq!(counts.applicable, 2);
+    assert_eq!(
+        counts
+            .skipped_reasons
+            .count(ConnectionBatchSkipReason::UnsupportedProtocol),
+        1
+    );
+    let edit = ConnectionBatchEdit {
+        rdp_backend: BatchField::Set("builtin".into()),
+        ..Default::default()
+    };
+    let (_, counts) = rdp_field_basis(
+        &connections,
+        &targets,
+        RdpBatchFieldGroup::SecurityAndDisplay,
+        &edit,
+        |entry| entry.id.clone(),
+    );
+    assert_eq!(counts.applicable, 3);
+}
+
+#[test]
+fn batch_kind_counts_keep_supported_order_and_ignore_missing_or_android_targets() {
+    use super::ConnectionBatchKind;
+    use super::basis::connection_kind_counts;
+    let mut ssh = ssh_connection();
+    ssh.id = "ssh".into();
+    let mut rdp = rdp_connection();
+    rdp.id = "rdp".into();
+    let android: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id": "android", "name": "fixture", "type": "adb",
+        "device": { "kind": "usb", "serial": "fixture" }
+    }))
+    .unwrap();
+    let ids = ["rdp", "android", "missing", "ssh", "ssh"].map(str::to_string);
+    assert_eq!(
+        connection_kind_counts(&[rdp, android, ssh], &ids),
+        vec![(ConnectionBatchKind::Ssh, 2), (ConnectionBatchKind::Rdp, 1)]
+    );
+}

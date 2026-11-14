@@ -54,6 +54,12 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-terminal`: terminal state machine, snapshots,
   control-sequence handling, encoding, and graphics protocols. It must remain
   independent of UI frameworks.
+* `crates/nyaterm-terminal-runtime`: UI-independent frame commands, parsing worker,
+  coalesced events, chunked search and transport session event bridge. Only core,
+  terminal, transport and recording are allowed as workspace dependencies,
+  including tests. Desktop owns visibility, event application, session/window
+  ownership and shutdown scheduling. Transferred frame sessions are opaque;
+  its default-off `test-support` feature exposes only integration fixtures.
 * `crates/nyaterm-terminal-gpui`: GPUI-specific terminal layout, input,
   highlighting, images, and painting. Its `scrollbar`, `decorations` and `ime`
   modules own reusable presentation; desktop retains drag/session routing,
@@ -63,7 +69,9 @@ must include explicit conversion logic and tests.
   exposes file-session probe injection and must not depend on the file,
   recording, or remote-operations crates.
 * `crates/nyaterm-files`: local and remote file services, SFTP and shell file
-  backends, file revisions, path safety, and file-transfer policies.
+  backends, file revisions, path safety, and file-transfer policies. Its
+  `external_edit` module owns private workspaces and blocking file watching;
+  desktop injects platform permissions and owns editor/upload orchestration.
 * `crates/nyaterm-remote-ops`: system metrics, process management, Docker, and
   GPU/NPU operations over transport execution APIs. Docker state is shared by
   the desktop SSH connection lease, not owned by transport.
@@ -75,15 +83,16 @@ must include explicit conversion logic and tests.
 * These four crates remain independent of GPUI and desktop presentation types;
   the three business crates must not depend on each other.
 * `crates/nyaterm-ui`: shared GPUI theme tokens, the `gpui-kit`
-  integration boundary, and reusable NyaTerm presentation and interaction
-  widgets. `markdown::lightweight` retains the lightweight Markdown renderer
+  integration boundary, static icon catalogs/resolvers/rendering, and reusable
+  NyaTerm presentation and interaction widgets. `markdown::lightweight` retains the lightweight Markdown renderer
   separately from `NyaMarkdown`; `presentation` owns stateless menu rows.
 * `crates/nyaterm-sync`: UI-independent sync protocol and policies. Its
   `auto_sync` schedule receives time from callers; desktop owns operations,
   task cancellation, safe-window checks, result mapping and history persistence.
 * `crates/nyaterm-store`: persistence implementation, transactions, redb
   schema, encryption adapters, and database compatibility readers. Keep pure
-  data models and serialization policies in `nyaterm-core`.
+  data models and serialization policies in `nyaterm-core`. The blocking store
+  client exports and verifies migration safety backups off the UI thread.
 * `crates/nyaterm-remote-desktop`: UI-independent RDP/VNC session management,
   framebuffer and input models, certificate policy, clipboard state, and the
   RDP/VNC helper IPC contracts. It owns no protocol decoder; both live in the
@@ -115,6 +124,7 @@ must include explicit conversion logic and tests.
   `nyaterm`, consumed from a revision pinned in the root `Cargo.toml`:
   `alacritty` (`alacritty_terminal`), `gpui-kit`, `IronRDP`
   (`ironrdp-client`, `ironrdp-connector`), `russh`, `russh-sftp`, `sspi-rs`,
+  `picky-rs` (Picky and its ASN.1 crates),
   `vnc-rs`, `zed` (`gpui`, `gpui_platform`), and `zmodem2`. Each branch carries
   a `NYATERM.md` recording its base revision, its patches, and how they were
   validated.
@@ -342,6 +352,8 @@ type-only splits that leave coupling behind.
 
 Add tests beside the behavior being changed.
 
+* Frame queue, search worker, ingress routing, recording order and shutdown tests
+  belong in `nyaterm-terminal-runtime`; GPUI event-application tests stay in desktop.
 * Terminal parsing, snapshots, graphics, selection, input, and rendering tests
   belong in `nyaterm-terminal` or `nyaterm-terminal-gpui`.
 * SSH, Telnet, Serial, tunnel, protocol transfer, and terminal-session lifecycle

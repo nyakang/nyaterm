@@ -12,6 +12,7 @@ pub mod document_snapshot;
 pub mod document_syntax;
 pub mod hex_editor;
 mod hover_card;
+pub mod icons;
 mod input;
 mod input_focus;
 pub mod markdown;

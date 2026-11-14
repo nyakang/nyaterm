@@ -17,7 +17,7 @@ pub(in crate::features) fn logo_mark(palette: ThemePalette) -> impl IntoElement 
         .flex()
         .items_center()
         .justify_center()
-        .child(super::icons::nyaterm_app_icon(palette, 22.))
+        .child(nyaterm_ui::icons::nyaterm_app_icon(palette, 22.))
 }
 
 pub(in crate::features) use nyaterm_ui::resize_handle::{

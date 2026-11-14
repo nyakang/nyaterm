@@ -131,7 +131,6 @@ pub(crate) struct QuickCommandEditorState {
 #[derive(Debug, Clone)]
 pub(crate) struct QuickCommandDetailsState {
     pub(crate) command: QuickCommand,
-    pub(crate) category: String,
     pub(crate) x: Pixels,
     pub(crate) y: Pixels,
 }

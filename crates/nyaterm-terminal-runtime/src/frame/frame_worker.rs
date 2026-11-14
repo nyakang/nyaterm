@@ -22,9 +22,8 @@ use super::{
     prepare_terminal_frame_action_links_reusing, protect_terminal_output_burst,
     terminal_frame_live_snapshot_with_stats, terminal_frame_snapshot_with_scroll_window_and_stats,
 };
-use crate::models::recording::RecordingWriteHandle;
-use crate::terminal::{TerminalBufferMatch, terminal_screen_from_output};
 use nyaterm_core::ActionLinksMatcherSettings;
+use nyaterm_recording::pipeline::RecordingWriteHandle;
 use nyaterm_terminal::action_links::{
     TerminalActionLinkBuildStats, prepare_terminal_frame_action_links,
 };
@@ -32,10 +31,11 @@ use nyaterm_terminal::{
     TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSearchDirection,
     TerminalSearchQuery, TerminalSearchRangeMode, TerminalSnapshotBuildStats,
 };
+use nyaterm_terminal::{output::terminal_screen_from_output, search::TerminalBufferMatch};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-pub(crate) struct TerminalFrameSession {
+pub struct TerminalFrameSession {
     pub(super) screen: TerminalScreen,
     pub(super) output_decoder: TerminalOutputDecoder,
     pub(super) recording_decoder: TerminalOutputDecoder,

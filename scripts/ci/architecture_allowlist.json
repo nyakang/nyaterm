@@ -3,13 +3,15 @@
   "desktop_feature_thread_spawn": [
     {"path": "crates/nyaterm-desktop/src/features/app_state/store_runtime.rs", "max_count": 1, "reason": "The GPUI shutdown responsiveness test uses a watchdog thread and joins it before returning."}
   ],
+  "terminal_runtime_thread_builder": [
+    {"path": "crates/nyaterm-terminal-runtime/src/session_event_bridge.rs", "max_count": 1, "reason": "SessionEventBridge owns, signals, and joins its bridge worker."},
+    {"path": "crates/nyaterm-terminal-runtime/src/frame/frame_pipeline.rs", "max_count": 1, "reason": "TerminalFramePipeline owns, closes, and joins its frame worker."}
+  ],
   "desktop_thread_builder": [
     {"path": "crates/nyaterm-desktop/src/blocking_jobs.rs", "max_count": 1, "reason": "BlockingJobScheduler owns and joins its bounded worker pool."},
     {"path": "crates/nyaterm-desktop/src/lib.rs", "max_count": 1, "reason": "The one-shot i18n preload worker is joined before preload_i18n returns."},
     {"path": "crates/nyaterm-desktop/src/thread_owner.rs", "max_count": 1, "reason": "The central named-thread factory returns join handles to explicit lifecycle owners."},
     {"path": "crates/nyaterm-desktop/src/models/connections.rs", "max_count": 1, "reason": "CredentialAutofillMatchPipeline owns, stops, and joins its matcher worker."},
-    {"path": "crates/nyaterm-desktop/src/models/session_event_bridge.rs", "max_count": 1, "reason": "SessionEventBridge owns, signals, and joins its bridge worker."},
-    {"path": "crates/nyaterm-desktop/src/models/terminal/frame_pipeline.rs", "max_count": 1, "reason": "TerminalFramePipeline owns, closes, and joins its frame worker."},
     {"path": "crates/nyaterm-desktop/src/features/remote_desktop/keyboard_capture.rs", "max_count": 1, "reason": "Windows keyboard capture owns the hook thread, posts WM_QUIT, unhooks, and joins it."},
     {"path": "crates/nyaterm-desktop/src/features/root.rs", "max_count": 1, "reason": "The ignored root-render benchmark joins its large-stack test thread."},
     {"path": "crates/nyaterm-desktop/src/features/pages/workspace/group_tests.rs", "max_count": 1, "reason": "The workspace stack-regression test uses a named one-MiB-stack thread and joins it before returning."},

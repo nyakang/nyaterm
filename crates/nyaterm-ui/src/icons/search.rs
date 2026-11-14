@@ -5,7 +5,7 @@ use crate::theme::ThemePalette;
 
 /// Engines offered by the settings picker, in display order. `default` is the
 /// catch-all for a custom engine with no icon chosen.
-pub(in crate::features) const SEARCH_ENGINE_ICON_IDS: &[&str] = &[
+pub const SEARCH_ENGINE_ICON_IDS: &[&str] = &[
     "google",
     "bing",
     "duckduckgo",
@@ -42,10 +42,7 @@ const SEARCH_ICONS: &[(&str, &str, u32)] = &[
 
 /// Resolve an engine's icon. Unknown and missing ids get the neutral magnifier,
 /// themed rather than branded.
-pub(in crate::features) fn search_engine_icon(
-    icon: Option<&str>,
-    palette: ThemePalette,
-) -> IconDef {
+pub fn search_engine_icon(icon: Option<&str>, palette: ThemePalette) -> IconDef {
     known_search_engine_icon(icon)
         .map(|(path, color)| IconDef::mono(path, color.unwrap_or(palette.text_muted)))
         .unwrap_or_else(|| IconDef::mono("icons/fe/search.svg", palette.text_muted))
@@ -53,9 +50,7 @@ pub(in crate::features) fn search_engine_icon(
 
 /// Resolve only configured Tauri search icons. The terminal context menu omits
 /// the icon slot when the old UI would not have found a matching component.
-pub(in crate::features) fn known_search_engine_icon(
-    icon: Option<&str>,
-) -> Option<(&'static str, Option<u32>)> {
+pub fn known_search_engine_icon(icon: Option<&str>) -> Option<(&'static str, Option<u32>)> {
     let key = icon?;
     if key == "default" {
         return Some(("icons/fe/search.svg", None));

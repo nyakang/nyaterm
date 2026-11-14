@@ -46,6 +46,7 @@ gpui-kit = { workspace = true, features = [
 url.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 # Tests assert the Base scrollbar projection, which is the global the
 # `Scrollbar` element reads. Production UI integration goes through the
 # nyaterm-ui facade.

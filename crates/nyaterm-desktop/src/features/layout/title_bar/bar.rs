@@ -1,3 +1,4 @@
+use nyaterm_ui::icons::{IconDef, resolve_connection_icon};
 use rust_i18n::t;
 
 use crate::window_chrome::WindowChrome;
@@ -11,8 +12,8 @@ use time::{OffsetDateTime, UtcOffset, Weekday, macros::format_description};
 
 use crate::features::{
     NyaTermApp, formatting::format_rate, formatting::format_uptime, formatting::short_id,
-    icons::IconDef, icons::resolve_connection_icon, view_widgets::connection_type_icon,
-    view_widgets::logo_mark, view_widgets::window_control_button,
+    view_widgets::connection_type_icon, view_widgets::logo_mark,
+    view_widgets::window_control_button,
 };
 use crate::models::HeaderStatusMode;
 

@@ -10,10 +10,10 @@ use gpui::{
 use nyaterm_core::{ConnectionType, Group, SavedConnection, build_group_path, truncate_preview};
 
 use crate::features::NyaTermApp;
-use crate::features::icons::resolve_connection_icon;
 use crate::features::shell::SessionTabTooltip;
 use crate::features::view_widgets::themed_icon;
 use crate::theme::ThemePalette;
+use nyaterm_ui::icons::resolve_connection_icon;
 
 const NEW_SESSION_MENU_WIDTH: f32 = 300.;
 const NEW_SESSION_SUBMENU_WIDTH: f32 = 260.;
