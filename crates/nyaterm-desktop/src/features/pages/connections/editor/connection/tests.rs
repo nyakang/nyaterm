@@ -2105,16 +2105,16 @@ fn android_numeric_fields_accept_integer_bounds_and_apply_their_steps(cx: &mut T
         });
     });
     for (field, seed, min, max, step) in [
-        (ConnectionEditorField::Port, 5555, 1, 65_535, 1),
-        (ConnectionEditorField::AndroidMaxSize, 1280, 128, 2560, 1),
-        (ConnectionEditorField::AndroidFps, 30, 1, 120, 1),
+        (ConnectionEditorField::Port, 5555., 1., 65_535., 1.),
         (
-            ConnectionEditorField::AndroidBitRate,
-            8_000_000,
-            100_000,
-            100_000_000,
-            100_000,
+            ConnectionEditorField::AndroidMaxSize,
+            1280.,
+            128.,
+            2560.,
+            1.,
         ),
+        (ConnectionEditorField::AndroidFps, 30., 1., 120., 1.),
+        (ConnectionEditorField::AndroidBitRate, 8., 0.1, 100., 0.1),
     ] {
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2142,7 +2142,14 @@ fn android_numeric_fields_accept_integer_bounds_and_apply_their_steps(cx: &mut T
             );
         }
         let expected = (seed + step).to_string();
-        for invalid in [(max + 1).to_string(), format!("{seed}.5")] {
+        for invalid in [
+            (max + 1.).to_string(),
+            if field == ConnectionEditorField::AndroidBitRate {
+                "not-a-number".into()
+            } else {
+                format!("{seed}.5")
+            },
+        ] {
             vcx.update(|_, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(invalid));
             });

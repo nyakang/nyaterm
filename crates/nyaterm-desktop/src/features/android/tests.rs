@@ -765,3 +765,56 @@ fn android_files_handoff_consumes_preparation_when_reusing_a_valid_device() {
         assert_eq!(app.session.active_id(), Some(id.as_str()));
     });
 }
+
+#[test]
+fn android_screen_session_settings_survive_stop_without_changing_device_defaults() {
+    use crate::features::android::ScreenState;
+    use crate::features::test_support::app_with_visible_android_session;
+    let root = TestConfigDir::new("nyaterm-screen-settings-ownership");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_android_session(&mut cx, root.path(), "fixture", "/sdcard/");
+    app.update(&mut cx, |app, cx| {
+        let original = app.android_config_for_session("fixture").unwrap().screen;
+        let mut state = ScreenState::new(cx.focus_handle(), 1, Default::default());
+        state.settings = AndroidScreenSettings {
+            max_fps: 60,
+            power_on: true,
+            ..original
+        };
+        app.android.screens.insert("fixture".into(), state);
+        assert_eq!(
+            app.android_config_for_session("fixture")
+                .unwrap()
+                .screen
+                .max_fps,
+            60
+        );
+        assert_eq!(
+            app.android.devices["android-device"].config.screen,
+            original
+        );
+        app.android.stop_screen("fixture");
+        assert_eq!(app.android.screens["fixture"].settings.max_fps, 60);
+        assert!(app.android.screens["fixture"].settings.power_on);
+        assert!(
+            app.android
+                .file_service("android-device")
+                .unwrap()
+                .runtime
+                .is_valid()
+        );
+        app.android.close_view("fixture");
+        assert_eq!(
+            app.android.devices["android-device"].config.screen,
+            original
+        );
+        assert!(
+            app.android
+                .file_service("android-device")
+                .unwrap()
+                .runtime
+                .is_valid()
+        );
+    });
+}

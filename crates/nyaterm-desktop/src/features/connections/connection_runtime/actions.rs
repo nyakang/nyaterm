@@ -10,7 +10,7 @@ use crate::features::NyaTermApp;
 enum SelectedConnectionsDeleteTarget {
     None,
     Single(String),
-    Multiple(Vec<SavedConnection>),
+    Multiple(Vec<String>),
 }
 
 fn selected_connections_delete_target(
@@ -19,7 +19,12 @@ fn selected_connections_delete_target(
     match selected.len() {
         0 => SelectedConnectionsDeleteTarget::None,
         1 => SelectedConnectionsDeleteTarget::Single(selected[0].id.clone()),
-        _ => SelectedConnectionsDeleteTarget::Multiple(selected),
+        _ => SelectedConnectionsDeleteTarget::Multiple(
+            selected
+                .into_iter()
+                .map(|connection| connection.id)
+                .collect(),
+        ),
     }
 }
 
@@ -114,7 +119,7 @@ impl NyaTermApp {
 
     fn open_selected_connections_delete_confirm(
         &mut self,
-        selected: Vec<nyaterm_core::SavedConnection>,
+        selected: Vec<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -449,8 +454,8 @@ impl NyaTermApp {
             SelectedConnectionsDeleteTarget::Single(id) => {
                 self.open_connection_delete_confirm(id, window, cx);
             }
-            SelectedConnectionsDeleteTarget::Multiple(connections) => {
-                self.open_selected_connections_delete_confirm(connections, window, cx);
+            SelectedConnectionsDeleteTarget::Multiple(ids) => {
+                self.open_selected_connections_delete_confirm(ids, window, cx);
             }
             SelectedConnectionsDeleteTarget::None => {}
         }
@@ -458,23 +463,21 @@ impl NyaTermApp {
 
     fn confirm_selected_connections_delete(
         &mut self,
-        selected: Vec<nyaterm_core::SavedConnection>,
+        selected: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        let persisted = selected.clone();
+        let persisted_ids = selected.clone();
         self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
-                for connection in &persisted {
-                    store.delete_connection(&connection.id)?;
-                }
+                store.delete_connections(&persisted_ids)?;
                 store.load_sessions()
             }),
             move |this, event, cx| match event.outcome {
                 Ok(sessions) => {
-                    for connection in &selected {
+                    for connection_id in &selected {
                         this.connection_state
-                            .remove_list_connection_references(&connection.id);
+                            .remove_list_connection_references(connection_id);
                     }
                     this.apply_loaded_sessions(sessions, cx);
                     this.shell
@@ -561,12 +564,6 @@ mod tests {
         let SelectedConnectionsDeleteTarget::Multiple(selected) = target else {
             panic!("multi-selection must use the multi-delete confirmation path");
         };
-        assert_eq!(
-            selected
-                .iter()
-                .map(|connection| connection.id.as_str())
-                .collect::<Vec<_>>(),
-            ["one", "two"]
-        );
+        assert_eq!(selected, ["one", "two"]);
     }
 }

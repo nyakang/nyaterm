@@ -24,6 +24,71 @@ pub(super) fn section(
             .flex()
             .flex_col()
             .gap_3()
+            .child(
+                nyaterm_ui::NyaDropdownMenu::new("android-quality")
+                    .label(
+                        nyaterm_core::models::android::ScreenQualityPreset::ALL
+                            .into_iter()
+                            .find(|preset| preset.matches(editor.android_screen))
+                            .map(|preset| t!(preset.label_key()).into_owned())
+                            .unwrap_or_else(|| t!("android.qualityCustom").into_owned()),
+                    )
+                    .items(
+                        nyaterm_core::models::android::ScreenQualityPreset::ALL
+                            .into_iter()
+                            .map(|preset| {
+                                let mut settings = editor.android_screen;
+                                preset.apply(&mut settings);
+                                nyaterm_ui::NyaMenuItem::action(t!(preset.label_key())).on_click(
+                                    cx.listener(move |app, _, _, cx| {
+                                        app.connection_state.set_android_screen_settings(settings);
+                                        app.connection_state.sync_editor_fields_from_draft(cx);
+                                        cx.notify();
+                                    }),
+                                )
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(t!("android.powerOn"))
+                    .child(
+                        NyaSwitch::new("android-power-on")
+                            .checked(editor.android_screen.power_on)
+                            .on_click(cx.listener({
+                                let settings = editor.android_screen;
+                                move |app, value: &bool, _, cx| {
+                                    let mut settings = settings;
+                                    settings.power_on = *value;
+                                    app.connection_state.set_android_screen_settings(settings);
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+            )
+            .child(
+                nyaterm_ui::NyaDropdownMenu::new("android-orientation")
+                    .label(t!(editor.android_screen.capture_orientation.label_key()))
+                    .items(
+                        nyaterm_core::models::android::CaptureOrientation::ALL
+                            .into_iter()
+                            .map(|orientation| {
+                                let mut settings = editor.android_screen;
+                                settings.capture_orientation = orientation;
+                                nyaterm_ui::NyaMenuItem::action(t!(orientation.label_key()))
+                                    .checked(
+                                        editor.android_screen.capture_orientation == orientation,
+                                    )
+                                    .on_click(cx.listener(move |app, _, _, cx| {
+                                        app.connection_state.set_android_screen_settings(settings);
+                                        cx.notify();
+                                    }))
+                            }),
+                    ),
+            )
             .child(editor_stepper_field(
                 palette,
                 t!("android.maxSize"),

@@ -324,13 +324,29 @@ fn asset_context_targets_follow_rows_fixed_actions_sort_and_search_and_reset_on_
 }
 
 #[test]
-fn asset_copy_move_and_delete_ignore_connection_panel_multi_selection() {
+fn asset_menu_on_an_unselected_asset_connects_copies_moves_and_deletes_only_that_asset() {
     for mode in [AssetViewMode::List, AssetViewMode::Cards] {
         let root = TestTempDir::new("nyaterm-assets-single-target");
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app(&mut cx, &root, mode);
         let cx = host(&mut cx, &app);
+        app.update(cx, |app, cx| {
+            app.toggle_asset_selection("first", cx);
+            app.toggle_asset_selection("second", cx);
+        });
+        draw(cx);
+        let position = item_position(cx, mode, "third");
+        click(cx, position, MouseButton::Right, 1);
+        cx.simulate_keystrokes("down enter");
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(
+                app.shell.status(),
+                rust_i18n::t!("dialog.shellArgsUnclosedQuote")
+            );
+            assert_eq!(app.session.session_order_len(), 0);
+        });
         let position = item_position(cx, mode, "third");
         click(cx, position, MouseButton::Right, 1);
         cx.simulate_keystrokes("down down down down enter");
@@ -339,6 +355,10 @@ fn asset_copy_move_and_delete_ignore_connection_panel_multi_selection() {
         });
         app.read_with(cx, |app, _| {
             assert_eq!(app.connection_state.selected_connections().len(), 2);
+            assert_eq!(
+                app.start_workspace.selected_asset_ids(),
+                ["first", "second"]
+            );
             let copied = app
                 .connection_state
                 .connections()
@@ -398,6 +418,240 @@ fn asset_copy_move_and_delete_ignore_connection_panel_multi_selection() {
         app.read_with(cx, |app, _| {
             assert!(app.connection_state.connection_by_id("first").is_some());
             assert!(app.connection_state.connection_by_id("second").is_some());
+        });
+    }
+}
+
+#[test]
+fn asset_menu_connect_copy_and_move_use_the_whole_asset_selection() {
+    for mode in [AssetViewMode::List, AssetViewMode::Cards] {
+        let root = TestTempDir::new("nyaterm-assets-batch-menu");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, &root, mode);
+        let cx = host(&mut cx, &app);
+        app.update(cx, |app, cx| {
+            app.toggle_asset_selection("first", cx);
+            app.toggle_asset_selection("second", cx);
+            // The sidebar has a different selection; only the asset selection
+            // may determine this menu's batch targets.
+            app.connection_state.select_list_connection(
+                "third".into(),
+                &["first".into(), "second".into(), "third".into()],
+                false,
+                false,
+            );
+        });
+        draw(cx);
+        let position = item_position(cx, mode, "second");
+        click(cx, position, MouseButton::Right, 1);
+        app.update(cx, |app, cx| {
+            let ids = app.start_workspace.asset_menu_target_ids("second");
+            let targets = app.resolve_saved_connection_targets(&ids, cx).unwrap();
+            assert_eq!(
+                targets
+                    .iter()
+                    .map(|item| item.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["first", "second"]
+            );
+        });
+        cx.simulate_keystrokes("down enter");
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.shell.status(), "starting 2 connection(s)");
+            assert_eq!(app.session.session_order_len(), 0);
+        });
+
+        let position = item_position(cx, mode, "second");
+        click(cx, position, MouseButton::Right, 1);
+        cx.simulate_keystrokes("down down down down enter");
+        wait_for(cx, &app, |app| {
+            app.connection_state.connections().len() == 5
+        });
+        app.read_with(cx, |app, _| {
+            let copies = app
+                .connection_state
+                .connections()
+                .iter()
+                .filter(|item| !["first", "second", "third"].contains(&item.id.as_str()))
+                .collect::<Vec<_>>();
+            assert_eq!(copies.len(), 2);
+            assert_eq!(
+                copies
+                    .iter()
+                    .filter(|item| item.name.starts_with("first"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                copies
+                    .iter()
+                    .filter(|item| item.name.starts_with("second"))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                app.start_workspace.selected_asset_ids(),
+                ["first", "second"]
+            );
+            assert_eq!(app.connection_state.selected_connections()[0].id, "third");
+        });
+
+        let position = item_position(cx, mode, "second");
+        click(cx, position, MouseButton::Right, 1);
+        cx.simulate_keystrokes("down down down down down right down enter");
+        wait_for(cx, &app, |app| {
+            ["first", "second"].iter().all(|id| {
+                app.connection_state
+                    .connection_by_id(id)
+                    .unwrap()
+                    .group_id
+                    .as_deref()
+                    == Some("destination")
+            })
+        });
+        app.read_with(cx, |app, _| {
+            assert!(
+                app.connection_state
+                    .connections()
+                    .iter()
+                    .filter(|item| !["first", "second"].contains(&item.id.as_str()))
+                    .all(|item| item.group_id.is_none())
+            );
+        });
+    }
+}
+
+#[test]
+fn large_asset_connect_selection_requires_confirmation_and_rechecks_targets() {
+    for mode in [AssetViewMode::List, AssetViewMode::Cards] {
+        let root = TestTempDir::new("nyaterm-assets-connect-confirm");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, &root, mode);
+        let connections = (0..21)
+            .map(|i| connection(&format!("host-{i:02}")))
+            .collect::<Vec<_>>();
+        app.update(&mut cx, |app, cx| {
+            app.connection_state
+                .replace_loaded(connections.clone(), Vec::new());
+            app.shell.set_status("untouched");
+            cx.notify();
+        });
+        let cx = host(&mut cx, &app);
+        app.update(cx, |app, cx| app.toggle_asset_select_all(cx));
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.start_workspace.selected_asset_count(), 21)
+        });
+        let open_connect_menu = |cx: &mut VisualTestContext| {
+            let position = item_position(cx, mode, "host-00");
+            click(cx, position, MouseButton::Right, 1);
+            cx.simulate_keystrokes("down enter");
+            draw(cx);
+        };
+        open_connect_menu(cx);
+        cx.update(|window, cx| assert!(window.has_active_nya_dialog(cx)));
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.shell.status(), "untouched");
+            assert_eq!(app.session.session_order_len(), 0);
+        });
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.start_workspace.selected_asset_count(), 21)
+        });
+
+        open_connect_menu(cx);
+        app.update(cx, |app, _| {
+            app.connection_state
+                .replace_loaded(connections[..20].to_vec(), Vec::new());
+        });
+        draw(cx);
+        let confirm = cx.debug_bounds("nya-dialog-action-button").unwrap();
+        cx.simulate_click(confirm.center(), Modifiers::default());
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.shell.status(), "connection is no longer available");
+            assert_eq!(app.session.session_order_len(), 0);
+        });
+
+        app.update(cx, |app, cx| {
+            app.connection_state
+                .replace_loaded(connections.clone(), Vec::new());
+            app.start_workspace.clear_asset_selection();
+            cx.notify();
+        });
+        draw(cx);
+        app.update(cx, |app, cx| app.toggle_asset_select_all(cx));
+        draw(cx);
+        open_connect_menu(cx);
+        draw(cx);
+        let confirm = cx.debug_bounds("nya-dialog-action-button").unwrap();
+        cx.simulate_click(confirm.center(), Modifiers::default());
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.shell.status(), "starting 21 connection(s)");
+            assert_eq!(app.session.session_order_len(), 0);
+        });
+        app.update(cx, |app, cx| app.toggle_asset_selection("host-20", cx));
+        draw(cx);
+        open_connect_menu(cx);
+        cx.update(|window, cx| assert!(!window.has_active_nya_dialog(cx)));
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.shell.status(), "starting 20 connection(s)")
+        });
+    }
+}
+
+#[test]
+fn asset_menu_delete_includes_selection_hidden_by_search_and_cancel_preserves_it() {
+    for mode in [AssetViewMode::List, AssetViewMode::Cards] {
+        let root = TestTempDir::new("nyaterm-assets-delete-hidden");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, &root, mode);
+        let cx = host(&mut cx, &app);
+        app.update(cx, |app, cx| {
+            app.toggle_asset_selection("first", cx);
+            app.toggle_asset_selection("second", cx);
+            app.start_workspace.search_field().update(cx, |_, cx| {
+                cx.emit(NyaInputEvent::Changed("second".into()));
+            });
+            cx.notify();
+        });
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            let records = app.start_workspace.visible_records();
+            assert_eq!(app.start_workspace.visible_selected_count(records), 1);
+            assert_eq!(app.start_workspace.hidden_selected_count(records), 1);
+            assert_eq!(
+                app.start_workspace.asset_menu_target_ids("second"),
+                ["first", "second"]
+            );
+        });
+        let position = item_position(cx, mode, "second");
+        click(cx, position, MouseButton::Right, 1);
+        cx.simulate_keystrokes("down down down down down down enter");
+        draw(cx);
+        cx.update(|window, cx| assert!(window.has_active_nya_dialog(cx)));
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.connection_state.connections().len(), 3);
+            assert_eq!(
+                app.start_workspace.selected_asset_ids(),
+                ["first", "second"]
+            );
+        });
+        delete_from_asset_menu(cx, mode, "second");
+        wait_for(cx, &app, |app| {
+            app.connection_state.connections().len() == 1
+        });
+        app.read_with(cx, |app, _| {
+            assert!(app.connection_state.connection_by_id("third").is_some());
+            assert_eq!(app.start_workspace.selected_asset_count(), 0);
         });
     }
 }

@@ -678,14 +678,17 @@ impl ConnectionStore {
         }
 
         let txn = self.db.begin_write()?;
-        for connection in connections.iter().filter(|connection| {
-            connection
-                .group_id
-                .as_ref()
-                .is_some_and(|id| group_ids.contains(id))
-        }) {
-            delete_connection_in_txn(&txn, &connection.id)?;
-        }
+        let connection_ids = connections
+            .iter()
+            .filter(|connection| {
+                connection
+                    .group_id
+                    .as_ref()
+                    .is_some_and(|id| group_ids.contains(id))
+            })
+            .map(|connection| connection.id.as_str())
+            .collect();
+        delete_connections_in_txn(&txn, &connection_ids)?;
         for id in group_ids {
             cloud_sync_v4::record_remove(&txn, GROUPS_TABLE, &entity_key(GROUP_PREFIX, &id))?;
             txn.open_table(GROUPS_TABLE)?
@@ -908,7 +911,20 @@ impl ConnectionStore {
 
     pub fn delete_connection(&self, connection_id: &str) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
-        delete_connection_in_txn(&txn, connection_id)?;
+        delete_connections_in_txn(&txn, &std::collections::BTreeSet::from([connection_id]))?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    /// Delete records, their passwords, indexes and sync edits in one transaction.
+    /// Missing IDs are harmless; duplicate IDs are processed once.
+    pub fn delete_connections(&self, connection_ids: &[String]) -> Result<(), StorageError> {
+        if connection_ids.is_empty() {
+            return Ok(());
+        }
+        let ids = connection_ids.iter().map(String::as_str).collect();
+        let txn = self.db.begin_write()?;
+        delete_connections_in_txn(&txn, &ids)?;
         txn.commit()?;
         Ok(())
     }
@@ -2052,19 +2068,18 @@ fn existing_connection_created_at(
     Ok(connection.created_at_ms)
 }
 
-fn delete_connection_in_txn(
+fn delete_connections_in_txn(
     txn: &redb::WriteTransaction,
-    connection_id: &str,
+    connection_ids: &std::collections::BTreeSet<&str>,
 ) -> Result<(), StorageError> {
-    cloud_sync_v4::record_remove(
-        txn,
-        CONNECTIONS_TABLE,
-        &entity_key(CONNECTION_PREFIX, connection_id),
-    )?;
-    txn.open_table(CONNECTIONS_TABLE)?
-        .remove(entity_key(CONNECTION_PREFIX, connection_id).as_str())?;
-    delete_connection_password_in_txn(txn, connection_id)?;
-    remove_connection_index_entries(txn, connection_id)
+    for connection_id in connection_ids {
+        let key = entity_key(CONNECTION_PREFIX, connection_id);
+        cloud_sync_v4::record_remove(txn, CONNECTIONS_TABLE, &key)?;
+        txn.open_table(CONNECTIONS_TABLE)?.remove(key.as_str())?;
+        delete_connection_password_in_txn(txn, connection_id)?;
+    }
+    // Scan each index once for the entire batch, including stale legacy rows.
+    remove_connection_indexes_for_ids(txn, connection_ids)
 }
 
 fn delete_connection_password_in_txn(
@@ -2472,5 +2487,7 @@ fn current_time_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+#[cfg(test)]
+mod connection_delete_tests;
 #[cfg(test)]
 mod tests;

@@ -41,6 +41,8 @@ pub struct AndroidScreenSettings {
     pub max_size: u32,
     pub max_fps: u32,
     pub bit_rate: u32,
+    pub power_on: bool,
+    pub capture_orientation: CaptureOrientation,
 }
 
 impl Default for AndroidScreenSettings {
@@ -49,7 +51,84 @@ impl Default for AndroidScreenSettings {
             max_size: 1280,
             max_fps: 30,
             bit_rate: 8_000_000,
+            power_on: false,
+            capture_orientation: CaptureOrientation::FollowDevice,
         }
+    }
+}
+
+/// Capture transforms are applied by the server, before input geometry is reported.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureOrientation {
+    #[default]
+    FollowDevice,
+    LockInitial,
+    Degrees0,
+    Degrees90,
+    Degrees180,
+    Degrees270,
+}
+impl CaptureOrientation {
+    pub const ALL: [Self; 6] = [
+        Self::FollowDevice,
+        Self::LockInitial,
+        Self::Degrees0,
+        Self::Degrees90,
+        Self::Degrees180,
+        Self::Degrees270,
+    ];
+    pub const fn server_value(self) -> &'static str {
+        match self {
+            Self::FollowDevice => "0",
+            Self::LockInitial => "@",
+            Self::Degrees0 => "@0",
+            Self::Degrees90 => "@90",
+            Self::Degrees180 => "@180",
+            Self::Degrees270 => "@270",
+        }
+    }
+    pub const fn label_key(self) -> &'static str {
+        match self {
+            Self::FollowDevice => "android.orientationFollow",
+            Self::LockInitial => "android.orientationInitial",
+            Self::Degrees0 => "android.orientation0",
+            Self::Degrees90 => "android.orientation90",
+            Self::Degrees180 => "android.orientation180",
+            Self::Degrees270 => "android.orientation270",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenQualityPreset {
+    Smooth,
+    Balanced,
+    Sharp,
+}
+impl ScreenQualityPreset {
+    pub const ALL: [Self; 3] = [Self::Smooth, Self::Balanced, Self::Sharp];
+    pub const fn label_key(self) -> &'static str {
+        match self {
+            Self::Smooth => "android.qualitySmooth",
+            Self::Balanced => "android.qualityBalanced",
+            Self::Sharp => "android.qualitySharp",
+        }
+    }
+    pub fn apply(self, settings: &mut AndroidScreenSettings) {
+        let (size, fps, rate) = match self {
+            Self::Smooth => (1280, 60, 8_000_000),
+            Self::Balanced => (1280, 30, 8_000_000),
+            Self::Sharp => (1920, 30, 12_000_000),
+        };
+        settings.max_size = size;
+        settings.max_fps = fps;
+        settings.bit_rate = rate;
+    }
+    pub fn matches(self, settings: AndroidScreenSettings) -> bool {
+        let mut preset = settings;
+        self.apply(&mut preset);
+        preset == settings
     }
 }
 
@@ -336,11 +415,13 @@ mod screen_settings_tests {
                 max_size: 128,
                 max_fps: 1,
                 bit_rate: 100_000,
+                ..Default::default()
             },
             AndroidScreenSettings {
                 max_size: 2560,
                 max_fps: 120,
                 bit_rate: 100_000_000,
+                ..Default::default()
             },
         ] {
             assert_eq!(settings.validate(), Ok(()));
@@ -449,5 +530,52 @@ mod viewport_tests {
         assert_eq!(transform.pan, (0., 0.));
         assert!(transform.layout((f32::NAN, 100.), (100, 100)).is_none());
         assert!(transform.layout((100., 100.), (0, 100)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod screen_configuration_tests {
+    use crate::models::android::{AndroidScreenSettings, CaptureOrientation, ScreenQualityPreset};
+    #[test]
+    fn old_screen_settings_keep_orientation_and_power_behavior() {
+        let settings: AndroidScreenSettings =
+            serde_json::from_str(r#"{"max_size":1280,"max_fps":30,"bit_rate":8000000}"#).unwrap();
+        assert!(!settings.power_on);
+        assert_eq!(
+            settings.capture_orientation,
+            CaptureOrientation::FollowDevice
+        );
+        for orientation in CaptureOrientation::ALL {
+            let settings = AndroidScreenSettings {
+                capture_orientation: orientation,
+                power_on: true,
+                ..settings
+            };
+            assert_eq!(
+                serde_json::from_value::<AndroidScreenSettings>(
+                    serde_json::to_value(settings).unwrap()
+                )
+                .unwrap(),
+                settings
+            );
+        }
+    }
+    #[test]
+    fn presets_preserve_device_options_and_validate() {
+        let mut settings = AndroidScreenSettings {
+            power_on: true,
+            capture_orientation: CaptureOrientation::LockInitial,
+            ..Default::default()
+        };
+        for preset in ScreenQualityPreset::ALL {
+            preset.apply(&mut settings);
+            assert!(preset.matches(settings));
+            assert!(settings.validate().is_ok());
+            assert!(settings.power_on);
+            assert_eq!(
+                settings.capture_orientation,
+                CaptureOrientation::LockInitial
+            );
+        }
     }
 }

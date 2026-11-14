@@ -24,7 +24,8 @@ Only `nyaterm-android-helper` links FFmpeg and parses scrcpy video/control bytes
 
 The connection editor keeps the TCP host and numeric port on one row when space
 allows. Screen settings have their own category: maximum edge (128–2560 pixels),
-maximum FPS (1–120), and bit rate (100000–100000000 bits/s). Defaults are
+maximum FPS (1–120), and bit rate (0.1–100 Mbps in the UI, still stored as
+100000–100000000 bits/s). Defaults are
 1280 pixels, 30 FPS and 8000000 bits/s. Screen sessions always enable the scrcpy
 control channel; there is no read-only mode. Desktop localizes Android labels,
 status codes and typed backend errors in all six supported languages.
@@ -61,13 +62,14 @@ verifies the transport ID on the same channel; older servers use serial selectio
 with mapping checks. Closed views leave submitted transfers alive; weak runtime
 registration releases device resources after the last owner disappears.
 
-Screen startup is cancellable with a 30-second deadline. Helper IPC version 3 adds
-capture geometry and explicit cached-frame refresh, retaining visibility and
-recoverable input rejection. Older helpers are rejected during the handshake with
+Screen startup is cancellable with a 30-second deadline. Helper IPC version 4 adds
+bounded I420/BGRA frame formats, matrix/range metadata and presentation-format
+selection. Capture geometry, cached-frame refresh, visibility and recoverable
+input rejection remain supported. Older helpers are rejected during the handshake with
 a specific version mismatch error. Text must fit UTF-8 and serialized IPC limits and contain no NUL. Input overflow releases held input and
 shows a rate-limited notice. Screen events wake GPUI and schedule presentation on
 the next frame. Hidden screens continue H.264 decoding, retain the latest decoded
-frame and skip BGRA conversion/frame IPC/GPU uploads. A separate presentation
+frame and skip pixel conversion/frame IPC/GPU uploads. A separate presentation
 worker wakes directly on frames, credit, visibility or refresh; restoring a static
 screen or moving it to another window does not require new media. Decoded frames
 are shared immutably without deep copies. Both sides retain at most two idle pixel
@@ -170,3 +172,39 @@ Headless protocol acceptance does not verify real GPUI rendering, focus,
 drag/drop, IME or GPU upload latency. Windows/macOS/ARM64 loading and signing,
 actual Windows portable update round trips and animated-screen performance
 require platform acceptance.
+
+## Screen controls and planar presentation
+
+The screen toolbar uses tintable icons, localized tooltips and a compact overflow
+menu. It includes Android navigation, rotation, fit/zoom, paste and session
+settings. The overflow menu also sends volume, power-key and notification-panel
+controls. A power key is not a screen-off-mirroring mode. Existing touch, middle
+button pan and Ctrl/Cmd-wheel local zoom gestures are retained.
+
+Connection settings persist defaults. Smooth (1280/60/8 Mbps), balanced
+(1280/30/8 Mbps) and sharp (1920/30/12 Mbps) presets fill the three numeric values;
+custom combinations remain supported. New `power_on` defaults to false and
+`capture_orientation` defaults to `follow_device`; other values lock the initial
+orientation or 0/90/180/270 degrees. Old connection documents retain their behavior
+and unknown fields. No database, encryption or backup migration is needed.
+
+The toolbar settings dialog edits a separate draft. Apply restarts only that
+screen channel; cancel leaves it unchanged. Session overrides survive manual
+reconnect and window transfer, but disappear when the screen session closes.
+Neither saved connection defaults nor sibling shell/files channels are modified.
+
+On supported GPUI backends the helper packs decoded 8-bit I420 planes directly,
+without CPU BGRA conversion. Scaling remains in the helper when required by the
+existing presentation size limit. IPC carries tight Y/U/V planes with ceil-divided
+chroma sizes, and BT.601/709/2020-NCL matrix plus full/limited range. Unspecified
+source metadata defaults to BT.601 limited; YUVJ420 is full range. No HDR tone
+mapping or hardware decoder is introduced. Other decoded pixel formats use the
+BGRA path. The GPUI fork samples three independently clamped R8 plane regions in
+one atlas allocation, preserving clipping, opacity and scene order on DirectX,
+Metal and wgpu. Unsupported backends or failed YUV uploads fall back to BGRA and
+request the cached static frame. A window transfer recreates GPU resources and
+renegotiates the format. Both formats retain bounded frame credit and recycling.
+
+See VALIDATION.md for actual platform coverage; implementing a backend is not
+native platform acceptance. `screen_probe ... visibility yuv` exercises I420
+visibility/restore without retaining device frames.
