@@ -544,52 +544,6 @@ impl NyaTermApp {
                                 }),
                             ))
                             .child(tab_menu_separator(palette))
-                            .child(tab_actions_submenu_host(
-                                "tab-actions-move-window-submenu",
-                                tab_actions_submenu_item(
-                                    palette,
-                                    TabActionsSubmenuItem {
-                                        id: "tab-ctx-move-window",
-                                        icon_path: "icons/net/move.svg",
-                                        label: t!("tabCtx.moveToWindow"),
-                                        enabled: true,
-                                        active: active_submenu
-                                            == Some(TabActionsSubmenu::MoveWindow),
-                                    },
-                                    TabActionsSubmenuHandlers {
-                                        on_hover: cx.listener(|this, hovered: &bool, _, cx| {
-                                            if *hovered {
-                                                this.open_tab_actions_submenu(
-                                                    TabActionsSubmenu::MoveWindow,
-                                                    cx,
-                                                );
-                                            }
-                                        }),
-                                        on_click: cx.listener(|this, _, _, cx| {
-                                            this.open_tab_actions_submenu(
-                                                TabActionsSubmenu::MoveWindow,
-                                                cx,
-                                            );
-                                        }),
-                                    },
-                                ),
-                                move_window_submenu,
-                            ))
-                            .when(support.copy_ssh_host, |this| {
-                                this.child(tab_menu_item(
-                                    palette,
-                                    "tab-ctx-copy-ip",
-                                    t!("tabCtx.copyIp"),
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.select_session(copy_host_session_id.clone(), cx);
-                                        this.close_tab_actions(cx);
-                                        this.copy_active_session_ssh_host(cx);
-                                    }),
-                                ))
-                            })
-                            .when(show_session_group, |this| {
-                                this.child(tab_menu_separator(palette))
-                            })
                             .when(support.session_spawn, |this| {
                                 this.child(tab_menu_item_enabled(
                                     palette,
@@ -787,6 +741,52 @@ impl NyaTermApp {
                                             this.mark_user_activity();
                                         }
                                         cx.notify();
+                                    }),
+                                ))
+                            })
+                            .when(show_session_group, |this| {
+                                this.child(tab_menu_separator(palette))
+                            })
+                            .child(tab_actions_submenu_host(
+                                "tab-actions-move-window-submenu",
+                                tab_actions_submenu_item(
+                                    palette,
+                                    TabActionsSubmenuItem {
+                                        id: "tab-ctx-move-window",
+                                        icon_path: "icons/net/move.svg",
+                                        label: t!("tabCtx.moveToWindow"),
+                                        enabled: true,
+                                        active: active_submenu
+                                            == Some(TabActionsSubmenu::MoveWindow),
+                                    },
+                                    TabActionsSubmenuHandlers {
+                                        on_hover: cx.listener(|this, hovered: &bool, _, cx| {
+                                            if *hovered {
+                                                this.open_tab_actions_submenu(
+                                                    TabActionsSubmenu::MoveWindow,
+                                                    cx,
+                                                );
+                                            }
+                                        }),
+                                        on_click: cx.listener(|this, _, _, cx| {
+                                            this.open_tab_actions_submenu(
+                                                TabActionsSubmenu::MoveWindow,
+                                                cx,
+                                            );
+                                        }),
+                                    },
+                                ),
+                                move_window_submenu,
+                            ))
+                            .when(support.copy_ssh_host, |this| {
+                                this.child(tab_menu_item(
+                                    palette,
+                                    "tab-ctx-copy-ip",
+                                    t!("tabCtx.copyIp"),
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.select_session(copy_host_session_id.clone(), cx);
+                                        this.close_tab_actions(cx);
+                                        this.copy_active_session_ssh_host(cx);
                                     }),
                                 ))
                             })
