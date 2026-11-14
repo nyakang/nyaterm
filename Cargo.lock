@@ -6955,6 +6955,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
  "zip",
 ]
@@ -7219,7 +7220,9 @@ dependencies = [
  "base64 0.22.1",
  "dirs",
  "futures",
+ "hex",
  "hmac 0.13.0",
+ "libc",
  "nyaterm-core",
  "nyaterm-sync",
  "rand 0.10.3",
@@ -7232,6 +7235,7 @@ dependencies = [
  "ssh-key",
  "thiserror 2.0.20",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

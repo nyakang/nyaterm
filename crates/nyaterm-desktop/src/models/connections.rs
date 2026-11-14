@@ -11,7 +11,7 @@ use crate::action_links::{ActionLinkAction, ActionLinkTarget};
 
 use super::event_wake::{ANY_INTEREST, EventWake};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionKindTab {
     Ssh,
     Local,
@@ -68,7 +68,19 @@ pub(crate) enum ConnectionEditorSection {
 }
 
 impl ConnectionEditorSection {
-    pub(crate) fn for_kind(kind: ConnectionKindTab) -> &'static [Self] {
+    /// Sections offered by the editor. "Default session settings" reuses the
+    /// same surface without the basic-info tab, because identity fields never
+    /// carry over between connections.
+    pub(crate) fn for_kind(kind: ConnectionKindTab, defaults_mode: bool) -> &'static [Self] {
+        let sections = Self::for_kind_all_tabs(kind);
+        if defaults_mode {
+            &sections[1..]
+        } else {
+            sections
+        }
+    }
+
+    fn for_kind_all_tabs(kind: ConnectionKindTab) -> &'static [Self] {
         match kind {
             ConnectionKindTab::Adb => &[Self::Basic, Self::AndroidScreen],
             ConnectionKindTab::Ssh => &[
@@ -301,6 +313,9 @@ impl ConnectionEditorField {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConnectionEditorState {
+    /// "Default session settings" mode: the same editor surface minus the
+    /// basic-info tab, saving reusable parameters instead of a connection.
+    pub(crate) defaults_mode: bool,
     pub(crate) android_usb: bool,
     pub(crate) android_screen: nyaterm_core::models::android::AndroidScreenSettings,
     pub(crate) id: Option<String>,
@@ -419,6 +434,11 @@ pub(crate) struct ConnectionEditorState {
 }
 
 impl ConnectionEditorState {
+    /// Tabs the editor navigation offers for this draft.
+    pub(crate) fn sections(&self) -> &'static [ConnectionEditorSection] {
+        ConnectionEditorSection::for_kind(self.kind, self.defaults_mode)
+    }
+
     pub(crate) fn uses_mstsc_rdp(&self) -> bool {
         self.kind == ConnectionKindTab::Rdp && self.rdp_backend == "mstsc"
     }
@@ -436,7 +456,7 @@ impl ConnectionEditorState {
     }
 
     pub(crate) fn select_section(&mut self, section: ConnectionEditorSection) -> bool {
-        if !ConnectionEditorSection::for_kind(self.kind).contains(&section) {
+        if !self.sections().contains(&section) {
             return false;
         }
         self.section = section;

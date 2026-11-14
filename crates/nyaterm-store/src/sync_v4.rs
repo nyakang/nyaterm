@@ -27,6 +27,20 @@ pub struct LocalReplica {
     pub conflicts: Vec<SyncConflict>,
     #[serde(default)]
     pub deferred: Vec<SyncFieldId>,
+    /// Records whose remote address change was not adopted because a credential
+    /// of this device is bound to the old one. Display labels only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<String>,
+    /// An earlier build wrote this name when it adopted a remote address and
+    /// dropped the local password. The name is accepted and discarded so a
+    /// replica written by that build still loads.
+    #[serde(
+        default,
+        rename = "cleared",
+        skip_serializing,
+        deserialize_with = "ignore"
+    )]
+    pub legacy_cleared: (),
     pub legacy_fingerprint: Option<String>,
     pub migration_approved: bool,
 }
@@ -48,6 +62,8 @@ impl Default for LocalReplica {
             observed: BTreeMap::new(),
             conflicts: Vec::new(),
             deferred: Vec::new(),
+            kept: Vec::new(),
+            legacy_cleared: (),
             legacy_fingerprint: None,
             migration_approved: false,
         }
@@ -76,4 +92,12 @@ pub struct PasswordRotationPublication {
     pub ticket: String,
     pub remote_root: String,
     pub pending: PendingPublication,
+}
+
+/// Accepts a retired field on a record and drops its value.
+fn ignore<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| ())
 }

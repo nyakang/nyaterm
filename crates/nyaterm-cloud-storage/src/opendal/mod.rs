@@ -34,6 +34,16 @@ enum DirectoryAdapter {
 
 pub use drive::OpenDalDriveRemote;
 
+/// A sync publication is one encrypted replica, routinely a few megabytes, and
+/// it is read as a single object. A 30 second ceiling only survived on fast
+/// links: on a slow WebDAV the body was cut mid-transfer, the job failed with
+/// `timeout`, and every retry re-downloaded the same bytes. Stalled transfers
+/// are still caught by the per-read deadlines below, so this only bounds
+/// genuinely progressing requests. Three attempts (OpenDAL's retry budget) still
+/// fit inside the 300 second job budget.
+const OBJECT_OPERATION_TIMEOUT: Duration = Duration::from_secs(90);
+const OBJECT_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct OpenDalRemote {
     operator: Operator,
     transport: Transport,
@@ -170,8 +180,8 @@ impl OpenDalRemote {
             )
             .layer(
                 TimeoutLayer::new()
-                    .with_timeout(Duration::from_secs(30))
-                    .with_io_timeout(Duration::from_secs(30)),
+                    .with_timeout(OBJECT_OPERATION_TIMEOUT)
+                    .with_io_timeout(OBJECT_IO_TIMEOUT),
             );
         Ok(Self {
             operator,

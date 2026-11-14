@@ -41,7 +41,7 @@ impl Transport {
         stats: Arc<Mutex<CloudSyncIoStats>>,
         webdav: Option<&WebdavSyncSettings>,
     ) -> opendal::Result<Self> {
-        Self::with_timeout(stats, webdav, Duration::from_secs(30))
+        Self::with_timeout(stats, webdav, super::OBJECT_OPERATION_TIMEOUT)
     }
 
     pub(super) fn with_timeout(
@@ -51,8 +51,16 @@ impl Transport {
     ) -> opendal::Result<Self> {
         Ok(Self {
             client: zed_reqwest::Client::builder()
+                // Total deadline plus a per-read stall detector: a slow body
+                // that keeps delivering bytes may take longer than the connect
+                // budget, while a silent connection still fails promptly.
                 .timeout(timeout)
+                .read_timeout(timeout)
                 .connect_timeout(timeout.min(Duration::from_secs(10)))
+                // Gateways and NAS S3 servers close idle keep-alive sockets
+                // without notice; reusing one surfaces as an instant
+                // connection reset on the next object request.
+                .pool_idle_timeout(Duration::from_secs(15))
                 .redirect_policy(zed_reqwest::redirect::Policy::none())
                 .user_agent("NyaTerm")
                 .build()

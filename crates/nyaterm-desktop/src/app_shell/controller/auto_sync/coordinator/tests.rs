@@ -123,3 +123,81 @@ fn skipped_preflight_does_not_clear_error_history() {
     );
     assert!(sync.had_error);
 }
+
+#[test]
+fn a_local_write_racing_the_sync_is_not_a_history_failure() {
+    let mut sync = AutoSyncCoordinator::new(0);
+    sync.started_at = Some(Instant::now());
+    assert!(
+        sync.history_entry(
+            AutoSyncTrigger::Change,
+            &Err(CloudSyncError::LocalChangedDuringSync),
+        )
+        .is_none()
+    );
+    assert!(
+        !sync.had_error,
+        "a lost race must not make the next success look like a recovery"
+    );
+    let success = Ok(AutoSyncResult::UpToDate(Box::default()));
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Change, &success)
+            .is_none(),
+        "an ordinary success after a lost race stays quiet"
+    );
+}
+
+#[test]
+fn a_v4_publication_records_history_once_and_a_noop_pass_does_not() {
+    use crate::features::sync::V4SyncReport as SyncReport;
+    let mut sync = AutoSyncCoordinator::new(0);
+    sync.started_at = Some(Instant::now());
+    let report = |verified, published| {
+        Ok(AutoSyncResult::V4(SyncReport {
+            conflicts: 0,
+            deferred: Vec::new(),
+            kept: Vec::new(),
+            verified,
+            published,
+            publication_error: if verified {
+                None
+            } else {
+                Some("transport".into())
+            },
+        }))
+    };
+    let entry = sync
+        .history_entry(AutoSyncTrigger::Retry, &report(true, true))
+        .unwrap();
+    assert_eq!(entry.status, "success");
+    assert_eq!(entry.message, "Cloud synchronization applied and verified");
+    // Every real publication is a sync the user can trace in the history.
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Retry, &report(true, true))
+            .is_some()
+    );
+
+    // A verified no-op pass is only news after a failure.
+    sync.started_at = Some(Instant::now());
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Retry, &report(true, false))
+            .is_none()
+    );
+    sync.had_error = true;
+    let entry = sync
+        .history_entry(AutoSyncTrigger::Retry, &report(true, false))
+        .unwrap();
+    assert_eq!(entry.status, "success");
+    assert_eq!(entry.message, "Cloud synchronization recovered");
+
+    // A publication that never verified is one failure per quarter hour.
+    sync.started_at = Some(Instant::now());
+    let entry = sync
+        .history_entry(AutoSyncTrigger::Retry, &report(false, false))
+        .unwrap();
+    assert_eq!(entry.status, "failed");
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Retry, &report(false, false))
+            .is_none()
+    );
+}

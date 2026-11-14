@@ -187,6 +187,7 @@ struct ConnectionListState {
 }
 
 struct ConnectionEditorFeatureState {
+    kind_drafts: HashMap<ConnectionKindTab, ConnectionEditorState>,
     draft: Option<ConnectionEditorState>,
     password: EditorPasswordState,
     /// One editable field per text input, built when the editor opens.
@@ -291,6 +292,7 @@ impl ConnectionFeatureState {
             list_model: ConnectionListModelCache::default(),
             import: ConnectionImportState::default(),
             editor: ConnectionEditorFeatureState {
+                kind_drafts: HashMap::new(),
                 draft: None,
                 password: EditorPasswordState::default(),
                 fields: HashMap::new(),
@@ -1461,6 +1463,30 @@ impl ConnectionFeatureState {
             .toggle_editor_agent_allowlist_fingerprint(fingerprint)
     }
 
+    pub fn prepare_editor_kind(
+        draft: ConnectionEditorState,
+        kind: ConnectionKindTab,
+    ) -> ConnectionEditorState {
+        let mut draft = Some(draft);
+        set_connection_editor_kind(&mut draft, kind);
+        draft.expect("supplied draft")
+    }
+
+    pub fn remember_editor_kind(&mut self) {
+        if let Some(draft) = self.editor.draft.clone() {
+            self.editor.kind_drafts.insert(draft.kind, draft);
+        }
+    }
+
+    pub fn take_editor_kind(&mut self, kind: ConnectionKindTab) -> Option<ConnectionEditorState> {
+        self.editor.kind_drafts.remove(&kind)
+    }
+
+    pub fn replace_editor_kind(&mut self, draft: ConnectionEditorState) {
+        self.invalidate_editor_password_request();
+        self.editor.draft = Some(draft);
+    }
+
     pub fn set_editor_kind(&mut self, kind: ConnectionKindTab) -> bool {
         self.invalidate_editor_password_request();
         self.editor.set_kind(kind)
@@ -2124,10 +2150,15 @@ fn duration_ms(duration: Duration) -> f64 {
 
 impl ConnectionEditorFeatureState {
     pub fn begin_edit(&mut self, mut draft: ConnectionEditorState) {
+        self.kind_drafts.clear();
         self.password = EditorPasswordState::new(
             draft.existing_password.is_some() || draft.existing_password_locked,
         );
-        draft.section = crate::models::ConnectionEditorSection::Basic;
+        draft.section =
+            crate::models::ConnectionEditorSection::for_kind(draft.kind, draft.defaults_mode)
+                .first()
+                .copied()
+                .unwrap_or(crate::models::ConnectionEditorSection::Basic);
         self.scroll = gpui::ScrollHandle::new();
         self.anchors.clear();
         self.save_generation = self.save_generation.wrapping_add(1);
@@ -2405,6 +2436,7 @@ impl ConnectionEditorFeatureState {
     }
 
     pub fn close(&mut self) {
+        self.kind_drafts.clear();
         self.password = EditorPasswordState::default();
         self.save_generation = self.save_generation.wrapping_add(1);
         self.agent_identity_picker_open = false;

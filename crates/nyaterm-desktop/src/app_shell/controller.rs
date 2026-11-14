@@ -31,6 +31,7 @@ mod auto_sync;
 mod bootstrap;
 mod configuration_replacement;
 pub(crate) mod native_menu;
+mod restart;
 mod shutdown;
 #[cfg(test)]
 mod shutdown_tests;
@@ -113,6 +114,7 @@ pub struct DesktopController {
     recent_connections: nyaterm_core::activation::RecentConnectionRequests,
     closing_workspaces: HashSet<WorkspaceId>,
     process_quitting: bool,
+    restart: restart::DataDirectoryRestartState,
     pending_bootstrap: Option<StoreTask<BootstrapSnapshot>>,
     bootstrap_in_flight: bool,
     process_state: Option<gpui::Entity<ProcessStateStore>>,
@@ -154,6 +156,7 @@ impl DesktopController {
             recent_connections: Default::default(),
             closing_workspaces: HashSet::new(),
             process_quitting: false,
+            restart: restart::DataDirectoryRestartState::default(),
             pending_bootstrap,
             bootstrap_in_flight: false,
             process_state: None,

@@ -17,10 +17,10 @@ use nyaterm_core::{
     encode_activation_request,
 };
 
-const INSTANCE_DIR_NAME: &str = ".instance";
 const OWNER_LOCK_NAME: &str = "owner.lock";
 const ENDPOINT_NAME: &str = "activation.endpoint";
 const CONNECT_DEADLINE: Duration = Duration::from_secs(3);
+pub(crate) const RESTART_HANDOFF_DEADLINE: Duration = Duration::from_secs(60);
 const IO_TIMEOUT: Duration = Duration::from_secs(1);
 const RETRY_DELAY: Duration = Duration::from_millis(40);
 
@@ -62,17 +62,24 @@ impl Drop for SingleInstanceOwner {
 }
 
 pub(crate) fn acquire(
-    config_dir: &Path,
+    instance_dir: &Path,
     initial_request: ActivationRequest,
 ) -> anyhow::Result<SingleInstanceOutcome> {
-    let instance_dir = config_dir.join(INSTANCE_DIR_NAME);
-    std::fs::create_dir_all(&instance_dir).with_context(|| {
+    acquire_linked(instance_dir, initial_request, None)
+}
+
+pub(crate) fn acquire_linked(
+    instance_dir: &Path,
+    initial_request: ActivationRequest,
+    linked_sender: Option<ActivationSender>,
+) -> anyhow::Result<SingleInstanceOutcome> {
+    std::fs::create_dir_all(instance_dir).with_context(|| {
         format!(
             "create single-instance directory '{}'",
             instance_dir.display()
         )
     })?;
-    restrict_instance_directory(&instance_dir)?;
+    restrict_instance_directory(instance_dir)?;
     let lock_path = instance_dir.join(OWNER_LOCK_NAME);
     let endpoint_path = instance_dir.join(ENDPOINT_NAME);
     let started = Instant::now();
@@ -81,7 +88,8 @@ pub(crate) fn acquire(
         let lock_file = open_private_file(&lock_path)?;
         match lock_file.try_lock() {
             Ok(()) => {
-                return start_owner(lock_file, endpoint_path).map(SingleInstanceOutcome::Owner);
+                return start_owner(lock_file, endpoint_path, linked_sender)
+                    .map(SingleInstanceOutcome::Owner);
             }
             Err(std::fs::TryLockError::WouldBlock) => {}
             Err(std::fs::TryLockError::Error(error)) => {
@@ -103,7 +111,45 @@ pub(crate) fn acquire(
     }
 }
 
-fn start_owner(lock_file: File, endpoint_path: PathBuf) -> anyhow::Result<SingleInstanceOwner> {
+/// Waits until the process that owned `instance_dir` has exited.
+///
+/// A restart spawns its successor while the old process is still shutting down.
+/// Blocking on the old owner lock keeps the successor from applying a pending
+/// data-directory migration while the database is still open, and keeps it from
+/// forwarding its activation to the dying process and exiting.
+pub(crate) fn wait_for_previous_instance(
+    instance_dir: &Path,
+    deadline: Duration,
+) -> anyhow::Result<()> {
+    let lock_path = instance_dir.join(OWNER_LOCK_NAME);
+    let started = Instant::now();
+    loop {
+        if !lock_path.exists() {
+            return Ok(());
+        }
+        let lock_file = open_private_file(&lock_path)?;
+        match lock_file.try_lock() {
+            Ok(()) => {
+                let _ = lock_file.unlock();
+                return Ok(());
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(error).context("wait for the previous NyaTerm instance");
+            }
+        }
+        if started.elapsed() >= deadline {
+            bail!("the previous NyaTerm instance did not exit in time");
+        }
+        thread::sleep(RETRY_DELAY);
+    }
+}
+
+fn start_owner(
+    lock_file: File,
+    endpoint_path: PathBuf,
+    linked_sender: Option<ActivationSender>,
+) -> anyhow::Result<SingleInstanceOwner> {
     let _ = std::fs::remove_file(&endpoint_path);
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .context("bind NyaTerm activation listener")?;
@@ -115,6 +161,7 @@ fn start_owner(lock_file: File, endpoint_path: PathBuf) -> anyhow::Result<Single
     write_endpoint(&endpoint_path, address, auth_token)?;
 
     let (activation_tx, activation_rx) = activation_channel(ACTIVATION_QUEUE_CAPACITY);
+    let activation_tx = linked_sender.unwrap_or(activation_tx);
     let stop = Arc::new(AtomicBool::new(false));
     let listener_stop = Arc::clone(&stop);
     let listener_activation_tx = activation_tx.clone();
@@ -325,7 +372,7 @@ mod tests {
 
     use super::{
         ActivationEndpoint, SingleInstanceOutcome, acquire, forward_activation, handle_connection,
-        read_endpoint,
+        read_endpoint, wait_for_previous_instance,
     };
 
     fn request(id: u8) -> ActivationRequest {
@@ -471,5 +518,20 @@ mod tests {
 
         drop(receiver);
         drop(owner);
+    }
+
+    #[test]
+    fn successor_waits_for_the_previous_instance_to_release_its_lock() {
+        let root = temporary_root("restart-handoff");
+        let SingleInstanceOutcome::Owner(owner) = acquire(&root, request(1)).unwrap() else {
+            panic!("first process must own the instance");
+        };
+        assert!(
+            wait_for_previous_instance(&root, Duration::from_millis(150)).is_err(),
+            "a live owner must not be mistaken for a finished shutdown"
+        );
+        drop(owner);
+        wait_for_previous_instance(&root, Duration::from_secs(2))
+            .expect("a released instance lock must let the successor continue");
     }
 }

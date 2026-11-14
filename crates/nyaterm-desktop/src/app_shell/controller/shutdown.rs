@@ -517,6 +517,7 @@ impl DesktopController {
     }
 
     pub fn cancel_editor_quit_gates(&mut self, cx: &mut Context<Self>) {
+        self.restart.cancel();
         let shells = self
             .windows
             .values()
@@ -668,8 +669,12 @@ impl DesktopController {
             stage = "process_jobs",
             "shutdown stage started"
         );
+        let store_runtime = self.startup.shared_store_runtime();
         let cleanup = cx.background_spawn(async move {
             cleanup();
+            if let Some(store) = store_runtime {
+                let _ = store.close_blocking();
+            }
         });
         cx.spawn(async move |this, cx| {
             cleanup.await;

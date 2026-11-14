@@ -34,6 +34,7 @@ impl NyaTermApp {
         let backup_prompt = self.settings.snapshot_password_prompt();
         let draft_dirty = self.settings_draft_dirty() || self.settings.theme_designer().dirty();
         let palette = self.theme_palette();
+        let data_directory_notice = self.runtime.data_dir_notice().map(str::to_string);
         SettingsSnapshot {
             chrome: SettingsChrome {
                 palette,
@@ -72,6 +73,15 @@ impl NyaTermApp {
                 config_path_prompt_active: self.settings.config_path_prompt_active(),
                 terminal_theme_is_dark: self.terminal_theme_is_dark(),
                 terminal_ansi: self.terminal_theme_palette().terminal_ansi,
+                data_directory: self.runtime.data_dir().display().to_string().into(),
+                data_directory_custom: self.runtime.data_dir_custom(),
+                data_directory_editable: self.runtime.mode() != nyaterm_core::RuntimeMode::Portable,
+                data_directory_restart_pending: self.runtime.data_directory_pending(),
+                data_directory_notice: data_directory_notice.map(Into::into),
+                data_directory_sync_client: self
+                    .runtime
+                    .data_directory_sync_client()
+                    .map(Into::into),
             },
             ai: AiSettingsPresentation {
                 providers: self.ai.provider_view().clone(),

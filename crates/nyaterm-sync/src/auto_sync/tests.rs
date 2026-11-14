@@ -1,9 +1,37 @@
 use super::{
-    AutoSyncCompletion, AutoSyncSchedule, AutoSyncTrigger, auto_sync_backoff,
-    permanent_auto_sync_error,
+    AutoSyncCompletion, AutoSyncSchedule, AutoSyncTrigger, LOCAL_CHANGED_RETRY_DELAY,
+    auto_sync_backoff, permanent_auto_sync_error,
 };
 use nyaterm_core::CloudSyncError;
 use std::time::{Duration, Instant};
+
+#[test]
+fn a_local_write_racing_the_sync_retries_in_seconds_without_counting_a_failure() {
+    let now = Instant::now();
+    let mut sync = AutoSyncSchedule::new(now, 0);
+    sync.running = true;
+    let completion = AutoSyncCompletion::from_error(&CloudSyncError::LocalChangedDuringSync);
+    assert_eq!(completion, AutoSyncCompletion::LocalChanged);
+    sync.complete(now, AutoSyncTrigger::Change, &completion, None);
+    assert!(!sync.running());
+    assert!(!sync.paused);
+    assert_eq!(sync.failures, 0, "a lost race is not a failure");
+    assert_eq!(sync.pending, Some(AutoSyncTrigger::Retry));
+    assert_eq!(sync.next_due, now + LOCAL_CHANGED_RETRY_DELAY);
+    assert!(
+        sync.next_job(
+            now + LOCAL_CHANGED_RETRY_DELAY - Duration::from_millis(1),
+            0,
+            || false
+        )
+        .is_none(),
+        "the retry waits for the short delay, not the failure backoff"
+    );
+    assert!(
+        sync.next_job(now + LOCAL_CHANGED_RETRY_DELAY, 0, || true)
+            .is_some()
+    );
+}
 
 #[test]
 fn oversized_local_replica_pauses_auto_sync_until_settings_change() {

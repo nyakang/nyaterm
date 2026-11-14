@@ -167,6 +167,18 @@ impl AppShell {
             self._subscriptions.push(subscription);
         }
         self.start_main_window_state_persistence(window, cx);
+        // A pending data-directory switch that could not be applied falls back
+        // to the previous directory. Surface that once per window instead of
+        // retrying the switch on every launch.
+        if let Some(notice) = self.runtime.data_dir_notice().map(str::to_string)
+            && let Some(app) = self.app.clone()
+        {
+            cx.defer(move |cx| {
+                app.update(cx, |app, cx| {
+                    app.notify_data_directory_startup_notice(notice, cx);
+                });
+            });
+        }
     }
 
     fn start_main_window_state_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -561,10 +573,14 @@ impl AppShell {
         self.quit_requested = true;
         if let Some(app) = &self.app {
             // This shell is already being updated; only visit other shells through the controller.
-            let count = app.read(cx).live_session_count()
-                + self.controller.update(cx, |controller, cx| {
-                    controller.live_session_count_excluding(self.workspace_id, cx)
-                });
+            let count = if self.controller.read(cx).data_directory_restart_requested() {
+                0
+            } else {
+                app.read(cx).live_session_count()
+                    + self.controller.update(cx, |controller, cx| {
+                        controller.live_session_count_excluding(self.workspace_id, cx)
+                    })
+            };
             app.update(cx, |app, cx| {
                 app.handle_window_close_request_with_count(count, window, cx)
             });
@@ -648,10 +664,33 @@ impl AppShell {
     fn stop_workspace_workers(&mut self, launch_update: bool, cx: &mut Context<Self>) {
         // The installer helper waits for process exit. Validate its launch before
         // destroying workspace workers so a failed launch can return to a usable app.
+        if launch_update && self.controller.read(cx).data_directory_restart_requested() {
+            let task = self.controller.update(cx, |controller, cx| {
+                controller.launch_data_directory_restart(cx)
+            });
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                let _ = this.update(cx, |shell, cx| match result {
+                    Ok(()) => shell.stop_workspace_workers(false, cx),
+                    Err(error) => {
+                        shell.return_to_app_after_flush_failure(cx);
+                        shell.controller.update(cx, |controller, cx| {
+                            controller.cancel_editor_quit_gates(cx);
+                        });
+                        if let Some(app) = &shell.app {
+                            app.update(cx, |app, cx| app.report_close_save_failed(error, cx));
+                        }
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
         if launch_update && let Some(app) = &self.app {
-            let update_result =
+            let launch_result =
                 app.update(cx, |app, cx| app.launch_pending_update_after_shutdown(cx));
-            if let Err(error) = update_result {
+            if let Err(error) = launch_result {
                 if let Some(store_runtime) = &self.store_runtime {
                     store_runtime.resume_after_failed_shutdown();
                 }
@@ -1040,6 +1079,10 @@ impl AppShell {
                     .app
                     .as_ref()
                     .is_some_and(|app| app.read(cx).native_update_install_requested(cx));
+                let restarting = self
+                    .app
+                    .as_ref()
+                    .is_some_and(|app| app.read(cx).data_directory_restart_requested(cx));
                 div()
                     .size_full()
                     .flex()
@@ -1070,6 +1113,8 @@ impl AppShell {
                             )
                             .child(if updating {
                                 t!("appShell.preparingUpdate")
+                            } else if restarting {
+                                t!("appShell.restartingForDataDirectory")
                             } else {
                                 t!("appShell.savingBeforeClose")
                             }),

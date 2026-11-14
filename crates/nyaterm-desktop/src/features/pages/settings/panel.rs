@@ -30,7 +30,7 @@ use nyaterm_ui::{
     NyaSliderValue,
 };
 use rust_i18n::t;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Background colours are resolved by the app because the panel is cached: it
@@ -151,6 +151,13 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) terminal_theme_is_dark: bool,
     /// Read-only palette projection from the settings owner, matching terminal paint.
     pub(in crate::features) terminal_ansi: [u32; 16],
+    /// Active data directory and its bootstrap state, sourced from `AppRuntime`.
+    pub(in crate::features) data_directory: SharedString,
+    pub(in crate::features) data_directory_custom: bool,
+    pub(in crate::features) data_directory_editable: bool,
+    pub(in crate::features) data_directory_restart_pending: bool,
+    pub(in crate::features) data_directory_notice: Option<SharedString>,
+    pub(in crate::features) data_directory_sync_client: Option<SharedString>,
 }
 
 impl SettingsPresentation {
@@ -185,6 +192,12 @@ impl SettingsPresentation {
             config_path_prompt_active: false,
             terminal_theme_is_dark: true,
             terminal_ansi: nyaterm_ui::theme_palette("github-dark").terminal_ansi,
+            data_directory: SharedString::default(),
+            data_directory_custom: false,
+            data_directory_editable: false,
+            data_directory_restart_pending: false,
+            data_directory_notice: None,
+            data_directory_sync_client: None,
         }
     }
 }
@@ -478,7 +491,17 @@ pub(in crate::features) struct SettingsPanel {
     focus: FocusHandle,
     content_scroll_handles: HashMap<String, gpui::ScrollHandle>,
     pub(in crate::features::pages::settings) pane_width: f32,
+    pub(in crate::features::pages::settings) pane_height: f32,
     pub(in crate::features::pages::settings) content_width: f32,
+    /// Staged V4 conflict selections and candidate choices. They survive
+    /// presentation refreshes and are reset whenever the conflict summary
+    /// changes (a new preview or an applied batch).
+    pub(in crate::features::pages::settings) cloud_sync_conflict_selection: BTreeSet<usize>,
+    pub(in crate::features::pages::settings) cloud_sync_conflict_choices: BTreeMap<usize, usize>,
+    pub(in crate::features::pages::settings) cloud_sync_conflict_signature: u64,
+    /// Whether the per-field conflict rows are expanded below the group cards.
+    /// Off by default: the grouped cards are the primary surface.
+    pub(in crate::features::pages::settings) cloud_sync_conflict_rows_visible: bool,
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<SettingsSnapshot>,
     pub(in crate::features) settings: SettingsPresentation,
@@ -491,6 +514,11 @@ pub(in crate::features) struct SettingsPanel {
     pub(in crate::features::pages::settings) image_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) content_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) window_opacity_slider: Entity<NyaSliderState>,
+    pub(in crate::features::pages::settings) data_directory_generation: u64,
+    pub(in crate::features::pages::settings) data_directory_checking: bool,
+    /// Validated but not yet queued data-directory change shown inline.
+    pub(in crate::features::pages::settings) data_directory_choice:
+        Option<nyaterm_core::data_directory::PreparedSwitch>,
     pub(in crate::features::pages::settings) image_opacity_focus: gpui::FocusHandle,
     pub(in crate::features::pages::settings) content_opacity_focus: gpui::FocusHandle,
     pub(in crate::features::pages::settings) window_opacity_focus: gpui::FocusHandle,
@@ -548,7 +576,12 @@ impl SettingsPanel {
         Self {
             content_scroll_handles: HashMap::new(),
             pane_width: 0.,
+            pane_height: 0.,
             content_width: 0.,
+            cloud_sync_conflict_selection: BTreeSet::new(),
+            cloud_sync_conflict_choices: BTreeMap::new(),
+            cloud_sync_conflict_signature: 0,
+            cloud_sync_conflict_rows_visible: false,
             app,
             focus: cx.focus_handle(),
             snapshot: None,
@@ -562,6 +595,9 @@ impl SettingsPanel {
             image_opacity_slider,
             content_opacity_slider,
             window_opacity_slider,
+            data_directory_generation: 0,
+            data_directory_checking: false,
+            data_directory_choice: None,
             image_opacity_focus: cx.focus_handle(),
             content_opacity_focus: cx.focus_handle(),
             window_opacity_focus: cx.focus_handle(),
@@ -694,6 +730,13 @@ impl SettingsPanel {
             app.request_settings_panel_refresh(cx);
             result
         })
+    }
+
+    pub(in crate::features::pages::settings) fn app_runtime(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<nyaterm_core::runtime::AppRuntime> {
+        self.app.upgrade().map(|app| app.read(cx).runtime.clone())
     }
 
     pub(in crate::features::pages::settings) fn mcp_host_status(
@@ -1078,11 +1121,12 @@ impl Focusable for SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         {
             self.paint_count += 1;
         }
+        self.pane_height = f32::from(window.viewport_size().height);
 
         let Some(snapshot) = self.snapshot.clone() else {
             return div()

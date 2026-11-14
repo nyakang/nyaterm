@@ -546,3 +546,144 @@ fn ssh_compatibility_mode_survives_editor_save_reload_and_profile_changes() {
         }
     }
 }
+
+#[test]
+fn default_editor_loads_each_protocol_and_keeps_its_unsaved_draft() {
+    use super::default_session_settings_kind_id;
+    use crate::app_shell::{GlobalStateMutation, SharedStateDomain};
+    use crate::features::connections::connection_runtime::helpers::build_default_session_settings;
+    use crate::features::connections::state::ConnectionFeatureState;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::ConnectionKindTab;
+    use crate::test_support::TestAppCleanup;
+    use gpui::TestAppContext;
+
+    let root = TestTempDir::new("nyaterm-default-editor-protocols");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let kinds = [
+            ConnectionKindTab::Ssh,
+            ConnectionKindTab::Local,
+            ConnectionKindTab::Telnet,
+            ConnectionKindTab::Serial,
+            ConnectionKindTab::Rdp,
+            ConnectionKindTab::Vnc,
+            ConnectionKindTab::Adb,
+        ];
+        let mut catalog = serde_json::Map::new();
+        for kind in kinds {
+            let mut draft = ConnectionFeatureState::prepare_editor_kind(
+                app.new_connection_editor_state(None, false),
+                kind,
+            );
+            draft.defaults_mode = true;
+            draft.recording = Some(nyaterm_core::ConnectionRecordingSettings {
+                auto_start: Some(true),
+                ..Default::default()
+            });
+            let built = build_default_session_settings(&draft).unwrap();
+            catalog.insert(
+                default_session_settings_kind_id(kind).into(),
+                serde_json::to_value(built).unwrap(),
+            );
+        }
+        app.process_state.update(cx, |state, cx| {
+            let mut snapshot = state.snapshot().clone();
+            snapshot.default_session_settings = Some(catalog.into());
+            state.mutate(
+                GlobalStateMutation::ReplaceSnapshot {
+                    snapshot: Box::new(snapshot),
+                    domain: SharedStateDomain::Settings,
+                },
+                cx,
+            );
+        });
+        let mut initial = app.new_connection_editor_state(None, false);
+        initial.defaults_mode = true;
+        app.apply_default_session_settings(&mut initial, cx);
+        app.connection_state.begin_editor(initial);
+        for kind in kinds {
+            app.set_connection_editor_kind(kind, cx);
+            let mut draft = app.connection_state.active_editor_draft().unwrap();
+            assert_eq!(draft.kind, kind);
+            assert_eq!(
+                draft.recording.as_ref().unwrap().auto_start,
+                Some(true),
+                "{kind:?}"
+            );
+            draft.recording.as_mut().unwrap().auto_start = Some(false);
+            app.connection_state.replace_editor_kind(draft);
+        }
+        for kind in kinds {
+            app.set_connection_editor_kind(kind, cx);
+            assert_eq!(
+                app.connection_state
+                    .active_editor_draft()
+                    .unwrap()
+                    .recording
+                    .unwrap()
+                    .auto_start,
+                Some(false)
+            );
+        }
+        app.connection_state.close_editor();
+    });
+}
+
+#[test]
+fn inherited_agent_all_policy_requires_fresh_consent_for_defaults_and_connections() {
+    use crate::features::connections::connection_runtime::helpers::apply_session_defaults;
+    use nyaterm_core::SshAgentForwardingPolicy;
+    let mut defaults = connection_editor_from_saved(connection("defaults", None, 0), false);
+    defaults.agent_forwarding_config.enabled = true;
+    defaults.agent_forwarding_config.policy = SshAgentForwardingPolicy::All;
+    defaults.agent_allow_all_confirmed = true;
+    for defaults_mode in [false, true] {
+        let mut draft = connection_editor_from_saved(connection("new", None, 0), false);
+        draft.defaults_mode = defaults_mode;
+        apply_session_defaults(&defaults, &mut draft);
+        assert!(draft.agent_forwarding_config.enabled);
+        assert!(matches!(
+            draft.agent_forwarding_config.policy,
+            SshAgentForwardingPolicy::All
+        ));
+        assert!(!draft.agent_allow_all_confirmed);
+    }
+}
+
+#[test]
+fn saving_defaults_with_agent_all_opens_confirmation_before_submitting() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestAppCleanup;
+    use gpui::TestAppContext;
+    use nyaterm_ui::NyaDialogWindowExt as _;
+    let root = TestTempDir::new("nyaterm-default-agent-confirmation");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, _| {
+        let mut draft = app.new_connection_editor_state(None, false);
+        draft.defaults_mode = true;
+        draft.agent_forwarding_config.enabled = true;
+        draft.agent_forwarding_config.policy = nyaterm_core::SshAgentForwardingPolicy::All;
+        app.connection_state.begin_editor(draft);
+    });
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let host = gpui::AppContext::new(&mut cx, |_| gpui::EmptyView);
+    let (_, cx) = cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(host, window, cx));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.save_connection_editor(window, cx));
+        assert!(window.has_active_nya_dialog(cx));
+        assert!(!app.read(cx).connection_state.editor_save_in_flight());
+        assert!(
+            app.read(cx)
+                .process_state
+                .read(cx)
+                .snapshot()
+                .default_session_settings
+                .is_none()
+        );
+    });
+}

@@ -7,6 +7,18 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::app_identity::AppFlavor;
+use crate::data_directory;
+
+/// Handoff marker for the process that a restart is replacing.
+///
+/// A successor process is spawned before the old process exits. The variable
+/// carries a marker file inside the old instance directory and exists only in
+/// the successor's environment. It must wait for that instance lock to be
+/// released before `AppRuntime::resolve` applies a pending data-directory
+/// switch: the migration copies the redb file, which has to be closed first,
+/// and acquiring the new instance lock early would make the successor forward
+/// its activation to the old process and exit.
+pub const RELAUNCH_HANDOFF_ENV: &str = "NYATERM_RELAUNCH_INSTANCE_DIR";
 
 // Fixed at build time so direct launches and MCP agree with the application.
 // Ordinary builds retain their existing directories and portable mode wins.
@@ -34,11 +46,19 @@ pub enum RuntimeMode {
 #[derive(Debug, Clone)]
 pub struct AppRuntime {
     mode: RuntimeMode,
+    /// Fixed installation directory. Logs, crash reports, instance locks and
+    /// other machine-local state always stay here, even when `data_dir` points
+    /// at a user-selected or synchronization-managed directory.
+    local_dir: PathBuf,
     data_dir: PathBuf,
     config_dir: PathBuf,
     log_dir: PathBuf,
     cache_dir: PathBuf,
     portable_key_path: Option<PathBuf>,
+    data_dir_custom: bool,
+    data_dir_notice: Option<String>,
+    data_dir_pending: bool,
+    data_dir_sync_client: Option<&'static str>,
 }
 
 impl AppRuntime {
@@ -60,7 +80,7 @@ impl AppRuntime {
     }
 
     fn installed_from(home: &Path, cache: Option<&Path>, flavor: AppFlavor) -> Self {
-        Self::installed_for_package(home, cache, flavor, linux_compatibility_build())
+        Self::installed_resolved(home, cache, flavor, linux_compatibility_build())
     }
 
     fn installed_directory_names(
@@ -74,6 +94,9 @@ impl AppRuntime {
         }
     }
 
+    /// Builds the fixed installation layout without consulting the bootstrap
+    /// pointer. Used by tests and by callers that must remain pointer-agnostic.
+    #[cfg(test)]
     fn installed_for_package(
         home: &Path,
         cache: Option<&Path>,
@@ -81,31 +104,89 @@ impl AppRuntime {
         compatibility: bool,
     ) -> Self {
         let (config_name, cache_name) = Self::installed_directory_names(flavor, compatibility);
-        let config_dir = home.join(config_name);
-        let data_dir = config_dir.clone();
-        let log_dir = data_dir.join("logs");
-        let cache_dir = cache
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| data_dir.join("cache"))
-            .join(cache_name);
-
+        let local_dir = home.join(config_name);
+        let data_dir = local_dir.clone();
         Self {
             mode: RuntimeMode::Installed,
-            data_dir,
-            config_dir,
-            log_dir,
-            cache_dir,
+            log_dir: local_dir.join("logs"),
+            cache_dir: cache
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| local_dir.join("cache"))
+                .join(cache_name),
+            local_dir: local_dir.clone(),
+            data_dir: data_dir.clone(),
+            config_dir: data_dir,
             portable_key_path: None,
+            data_dir_custom: false,
+            data_dir_notice: None,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         }
     }
 
+    fn installed_resolved(
+        home: &Path,
+        cache: Option<&Path>,
+        flavor: AppFlavor,
+        compatibility: bool,
+    ) -> Self {
+        let (config_name, cache_name) = Self::installed_directory_names(flavor, compatibility);
+        let local_dir = home.join(config_name);
+        let default_dir = local_dir.clone();
+
+        // Resolution is pointer-agnostic. The executable applies the bootstrap
+        // selection only after acquiring the installation owner lock.
+        let data_dir = default_dir;
+        let data_dir_custom = false;
+        let data_dir_notice = None;
+
+        Self {
+            mode: RuntimeMode::Installed,
+            log_dir: local_dir.join("logs"),
+            cache_dir: cache
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| local_dir.join("cache"))
+                .join(cache_name),
+            local_dir,
+            config_dir: data_dir.clone(),
+            data_dir,
+            portable_key_path: None,
+            data_dir_custom,
+            data_dir_notice,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
+        }
+    }
+
+    /// Applies a selection validated by the executable's store boundary.
+    pub fn with_data_directory(mut self, data_dir: PathBuf, notice: Option<String>) -> Self {
+        self.data_dir_custom = data_dir != self.local_dir;
+        self.config_dir = data_dir.clone();
+        self.data_dir = data_dir;
+        self.data_dir_notice = notice;
+        self
+    }
+
+    pub fn with_pending_data_directory(mut self, pending: bool) -> Self {
+        self.data_dir_pending = pending;
+        self
+    }
+
+    pub fn data_directory_pending(&self) -> bool {
+        self.data_dir_pending
+    }
+
+    pub fn with_data_directory_sync_client(mut self, client: Option<&'static str>) -> Self {
+        self.data_dir_sync_client = client;
+        self
+    }
+
+    pub fn data_directory_sync_client(&self) -> Option<&'static str> {
+        self.data_dir_sync_client
+    }
+
     pub fn ensure_directories(&self) -> Result<(), RuntimeError> {
-        for path in [
-            self.data_dir(),
-            self.config_dir(),
-            self.log_dir(),
-            self.cache_dir(),
-        ] {
+        for path in [self.local_dir(), self.log_dir(), self.cache_dir()] {
             std::fs::create_dir_all(path).map_err(|source| RuntimeError::CreateDir {
                 path: path.to_path_buf(),
                 source,
@@ -118,8 +199,23 @@ impl AppRuntime {
         self.mode
     }
 
+    /// Fixed installation directory used for machine-local runtime state.
+    pub fn local_dir(&self) -> &Path {
+        &self.local_dir
+    }
+
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Whether `data_dir` was explicitly selected instead of the default.
+    pub fn data_dir_custom(&self) -> bool {
+        self.data_dir_custom
+    }
+
+    /// Non-fatal problem detected while resolving the selected data directory.
+    pub fn data_dir_notice(&self) -> Option<&str> {
+        self.data_dir_notice.as_deref()
     }
 
     pub fn config_dir(&self) -> &Path {
@@ -131,7 +227,11 @@ impl AppRuntime {
     }
 
     pub fn crash_dir(&self) -> PathBuf {
-        self.data_dir.join("crashes")
+        self.local_dir.join("crashes")
+    }
+
+    pub fn instance_dir(&self) -> PathBuf {
+        self.local_dir.join(data_directory::INSTANCE_DIR_NAME)
     }
 
     pub fn cache_dir(&self) -> &Path {
@@ -160,7 +260,12 @@ impl AppRuntime {
             log_dir: data_dir.join("logs"),
             cache_dir: data_dir.join("cache"),
             portable_key_path: Some(data_dir.join("config").join("portable.key")),
+            local_dir: data_dir.clone(),
             data_dir,
+            data_dir_custom: false,
+            data_dir_notice: None,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         })
     }
 
@@ -175,11 +280,16 @@ impl AppRuntime {
     ) -> Self {
         Self {
             mode,
+            local_dir: data_dir.clone(),
             data_dir,
             config_dir,
             log_dir,
             cache_dir,
             portable_key_path,
+            data_dir_custom: false,
+            data_dir_notice: None,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         }
     }
 }
@@ -300,6 +410,36 @@ mod tests {
             Some(directory.join("data/config/portable.key").as_path())
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_selected_data_directory_keeps_local_state_in_the_installation_directory() {
+        let directory = crate::test_support::TestTempDir::new("nyaterm-custom-data");
+        let home = directory.path().join("home");
+        let custom = directory.path().join("synced");
+        std::fs::create_dir_all(&custom).unwrap();
+
+        let runtime = AppRuntime::installed_resolved(&home, None, AppFlavor::Stable, false)
+            .with_data_directory(custom.clone(), None);
+        assert_eq!(runtime.data_dir(), custom);
+        assert!(runtime.data_dir_custom());
+        assert_eq!(runtime.config_dir(), custom);
+        assert_eq!(runtime.log_dir(), home.join(".nyaterm/logs"));
+        assert_eq!(runtime.crash_dir(), home.join(".nyaterm/crashes"));
+        assert_eq!(runtime.instance_dir(), home.join(".nyaterm/.instance"));
+        assert!(!runtime.instance_dir().starts_with(&custom));
+    }
+
+    #[test]
+    fn the_default_directory_keeps_the_existing_instance_layout() {
+        let runtime =
+            AppRuntime::installed_for_package(Path::new("home"), None, AppFlavor::Stable, false);
+        assert!(!runtime.data_dir_custom());
+        assert_eq!(
+            runtime.instance_dir(),
+            Path::new("home/.nyaterm").join(".instance")
+        );
+        assert_eq!(runtime.log_dir(), Path::new("home/.nyaterm/logs"));
     }
 
     #[test]

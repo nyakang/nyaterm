@@ -111,6 +111,53 @@ impl AutoSyncCoordinator {
                     },
                 )
             }
+            Ok(AutoSyncResult::V4(report)) if report.verified && report.published => {
+                self.had_error = false;
+                CloudSyncHistoryEntry::sync(
+                    "success",
+                    trigger.history_name(),
+                    None,
+                    None,
+                    "Cloud synchronization applied and verified",
+                )
+            }
+            // A publication that did not verify repeats on every pass until the
+            // transport recovers; one entry per quarter hour keeps the list
+            // readable without hiding that publishing is broken.
+            Ok(AutoSyncResult::V4(report)) if !report.verified => {
+                self.had_error = true;
+                self.history_errors
+                    .retain(|_, at| now.duration_since(*at) < Duration::from_secs(900));
+                if self
+                    .history_errors
+                    .contains_key(&format!("{}:v4-publish", trigger.history_name()))
+                {
+                    return None;
+                }
+                self.history_errors
+                    .insert(format!("{}:v4-publish", trigger.history_name()), now);
+                CloudSyncHistoryEntry::sync(
+                    "failed",
+                    trigger.history_name(),
+                    None,
+                    None,
+                    "Cloud synchronization could not be verified",
+                )
+            }
+            // A verified no-op V4 pass is "both sides match": worth a recovery
+            // note after failures, not an entry on every check.
+            Ok(AutoSyncResult::V4(report))
+                if report.verified && !report.published && self.had_error =>
+            {
+                self.had_error = false;
+                CloudSyncHistoryEntry::sync(
+                    "success",
+                    trigger.history_name(),
+                    None,
+                    None,
+                    "Cloud synchronization recovered",
+                )
+            }
             Ok(AutoSyncResult::UpToDate(_))
             | Ok(AutoSyncResult::Synced(_))
             | Ok(AutoSyncResult::RemoteAvailable { .. })
@@ -134,6 +181,9 @@ impl AutoSyncCoordinator {
                     "Cloud synchronization recovered",
                 )
             }
+            // A local edit that raced the job is retried in seconds and is not
+            // worth a failure entry (nor a later "recovered" entry).
+            Err(nyaterm_core::CloudSyncError::LocalChangedDuringSync) => return None,
             Err(error) => {
                 self.had_error = true;
                 let revision = match error {

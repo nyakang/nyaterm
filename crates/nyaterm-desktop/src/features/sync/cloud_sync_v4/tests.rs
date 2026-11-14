@@ -35,6 +35,16 @@ fn local_replica_size_errors_keep_their_typed_limit_instead_of_becoming_stale_pr
         store_error(nyaterm_store::StoreClientError::Operation(operation)),
         CloudSyncError::LocalChangedDuringSync
     ));
+    // Anything that is not a lost compare-and-swap keeps its own category, so a
+    // permanently unreadable store is diagnosable instead of being retried as a
+    // fresh race forever.
+    let operation = nyaterm_store::StoreOperationError::from(
+        nyaterm_store::StorageError::InvalidData("unreadable".into()),
+    );
+    assert!(matches!(
+        store_error(nyaterm_store::StoreClientError::Operation(operation)),
+        CloudSyncError::LocalStore(category) if category == "invalid_data"
+    ));
 }
 
 fn setup(
@@ -1031,7 +1041,9 @@ fn resolving_a_persisted_conflict_is_not_skipped_as_an_unchanged_check() {
         .iter()
         .position(|choice| choice.contains("From A"))
         .unwrap();
-    resolution.resolve(&sb, "password", 0, choice).unwrap();
+    resolution
+        .resolve_batch(&sb, "password", &[(0, choice)])
+        .unwrap();
     let applied = apply_and_publish(&sb, &settings, &ob, resolution, &control).unwrap();
     assert_eq!(applied.conflicts, 0);
     assert_eq!(
@@ -1040,6 +1052,124 @@ fn resolving_a_persisted_conflict_is_not_skipped_as_an_unchanged_check() {
             .name,
         "From A"
     );
+}
+
+#[test]
+fn resolve_batch_settles_every_staged_conflict_in_one_pass() {
+    let a = TestConfigDir::new("nyaterm-v4-batch-a");
+    let b = TestConfigDir::new("nyaterm-v4-batch-b");
+    let remote = TestConfigDir::new("nyaterm-v4-batch-remote");
+    let (sa, settings, oa) = setup(&a, &remote);
+    let (sb, _, ob) = setup(&b, &remote);
+    let control = CloudSyncOperationControl::default();
+    save(&sa, "shared", "Initial");
+    let initial = preview(&sa, &settings, &oa, &control).unwrap();
+    apply_and_publish(&sa, &settings, &oa, initial, &control).unwrap();
+    let joined = preview(&sb, &settings, &ob, &control).unwrap();
+    apply_and_publish(&sb, &settings, &ob, joined, &control).unwrap();
+    // Two independent edits on each side produce two conflicting fields.
+    save(&sa, "shared", "Name from A");
+    sa.request_fn(StoreDomain::CloudSync, |store| {
+        let mut connection = store.get_connection("shared")?.unwrap();
+        connection.description = Some("Description from A".into());
+        store.save_connection(&connection)
+    })
+    .unwrap();
+    save(&sb, "shared", "Name from B");
+    sb.request_fn(StoreDomain::CloudSync, |store| {
+        let mut connection = store.get_connection("shared")?.unwrap();
+        connection.description = Some("Description from B".into());
+        store.save_connection(&connection)
+    })
+    .unwrap();
+    let changed = preview(&sa, &settings, &oa, &control).unwrap();
+    apply_and_publish(&sa, &settings, &oa, changed, &control).unwrap();
+    let mut concurrent = preview(&sb, &settings, &ob, &control).unwrap();
+    assert_eq!(concurrent.apply.plan.conflicts.len(), 2);
+    let summary = concurrent.summary().conflicts;
+    for conflict in &summary {
+        let local = conflict.local_candidate.unwrap();
+        assert!(
+            conflict.choices[local].contains("from B"),
+            "the local baseline must be identifiable: {:?}",
+            conflict.choices
+        );
+    }
+    let decisions: Vec<(usize, usize)> = summary
+        .iter()
+        .map(|conflict| {
+            (
+                conflict.index,
+                conflict
+                    .choices
+                    .iter()
+                    .position(|choice| choice.contains("from A"))
+                    .unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(decisions.len(), 2);
+    let resolved = concurrent
+        .resolve_batch(&sb, "password", &decisions)
+        .unwrap();
+    assert_eq!(resolved, 2);
+    assert!(concurrent.apply.plan.conflicts.is_empty());
+    assert!(concurrent.summary().conflicts.is_empty());
+    let applied = apply_and_publish(&sb, &settings, &ob, concurrent, &control).unwrap();
+    assert_eq!(applied.conflicts, 0);
+    let saved = sb
+        .request_fn(StoreDomain::CloudSync, |store| {
+            Ok(store.get_connection("shared")?.unwrap())
+        })
+        .unwrap();
+    assert_eq!(saved.name, "Name from A");
+    assert_eq!(saved.description.as_deref(), Some("Description from A"));
+}
+
+#[test]
+fn a_staged_conflict_decision_is_invalidated_by_a_later_local_write() {
+    let a = TestConfigDir::new("nyaterm-v4-staged-race-a");
+    let b = TestConfigDir::new("nyaterm-v4-staged-race-b");
+    let remote = TestConfigDir::new("nyaterm-v4-staged-race-remote");
+    let (sa, settings, oa) = setup(&a, &remote);
+    let (sb, _, ob) = setup(&b, &remote);
+    let control = CloudSyncOperationControl::default();
+    save(&sa, "shared", "Initial");
+    let initial = preview(&sa, &settings, &oa, &control).unwrap();
+    apply_and_publish(&sa, &settings, &oa, initial, &control).unwrap();
+    let joined = preview(&sb, &settings, &ob, &control).unwrap();
+    apply_and_publish(&sb, &settings, &ob, joined, &control).unwrap();
+    save(&sa, "shared", "Name from A");
+    let changed = preview(&sa, &settings, &oa, &control).unwrap();
+    apply_and_publish(&sa, &settings, &oa, changed, &control).unwrap();
+    save(&sb, "shared", "Name from B");
+
+    let mut concurrent = preview(&sb, &settings, &ob, &control).unwrap();
+    let summary = concurrent.summary().conflicts;
+    assert_eq!(summary.len(), 1);
+    let decisions: Vec<(usize, usize)> = summary
+        .iter()
+        .map(|conflict| {
+            (
+                conflict.index,
+                conflict
+                    .choices
+                    .iter()
+                    .position(|choice| choice.contains("from A"))
+                    .unwrap(),
+            )
+        })
+        .collect();
+    concurrent
+        .resolve_batch(&sb, "password", &decisions)
+        .unwrap();
+    assert!(concurrent.resolved);
+    // A save that lands after the review makes those positions meaningless.
+    save(&sb, "unrelated", "Typed elsewhere");
+    assert!(matches!(
+        apply_and_publish(&sb, &settings, &ob, concurrent, &control),
+        Err(CloudSyncError::LocalChangedDuringSync)
+    ));
 }
 
 struct LostResponse {
@@ -1562,4 +1692,123 @@ fn opendal_drives_import_native_v3_and_preserve_multi_device_conflicts_and_pendi
             );
         });
     }
+}
+
+#[test]
+fn a_local_write_that_races_the_confirmation_rebases_instead_of_failing() {
+    let dir = TestConfigDir::new("nyaterm-v4-local-race-apply");
+    let remote = TestConfigDir::new("nyaterm-v4-local-race-remote");
+    let (store, settings, options) = setup(&dir, &remote);
+    let control = CloudSyncOperationControl::default();
+    let initial = preview(&store, &settings, &options, &control).unwrap();
+    apply_and_publish(&store, &settings, &options, initial, &control).unwrap();
+    save(&store, "server", "Saved before the preview");
+    let previewed = preview(&store, &settings, &options, &control).unwrap();
+    // A debounced save that belongs to the same user action lands after the
+    // preview was built but before the user confirms it.
+    save(&store, "server", "Saved while confirming");
+    let report = apply_and_publish(&store, &settings, &options, previewed, &control).unwrap();
+    assert!(
+        report.verified,
+        "the newer local snapshot is applied, not an error"
+    );
+    let saved = store
+        .request_fn(StoreDomain::CloudSync, |store| {
+            store.get_connection("server")
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        saved.name, "Saved while confirming",
+        "re-basing must not resurrect the older local value"
+    );
+}
+
+#[test]
+fn deferred_field_summaries_name_records_without_flooding_the_status_line() {
+    use crate::features::sync::cloud_sync_v4::summarize_fields;
+    assert_eq!(summarize_fields(&[], 3), "");
+    assert_eq!(
+        summarize_fields(&["connection / a / endpoint".into()], 3),
+        "connection / a / endpoint"
+    );
+    assert_eq!(
+        summarize_fields(
+            &[
+                "connection / a / endpoint".into(),
+                "connection / b / endpoint".into(),
+                "connection / c / endpoint".into(),
+                "connection / d / endpoint".into(),
+            ],
+            3
+        ),
+        "connection / a / endpoint, connection / b / endpoint, connection / c / endpoint … (+1)"
+    );
+}
+
+#[test]
+fn the_status_line_names_records_kept_on_their_local_address() {
+    use crate::features::sync::cloud_sync_v4::SyncReport;
+    let report = SyncReport {
+        conflicts: 0,
+        deferred: Vec::new(),
+        kept: vec!["UBT-22.04".into()],
+        verified: true,
+        published: true,
+        publication_error: None,
+    };
+    let message = report.status_message();
+    assert!(message.contains("UBT-22.04"), "{message}");
+    assert!(!message.contains("暂缓"), "{message}");
+    assert!(
+        !message.to_lowercase().contains("re-enter"),
+        "the local password is never dropped: {message}"
+    );
+    let clean = SyncReport {
+        conflicts: 0,
+        deferred: Vec::new(),
+        kept: Vec::new(),
+        verified: true,
+        published: true,
+        publication_error: None,
+    };
+    assert!(
+        !clean.status_message().contains("UBT-22.04"),
+        "a pass without an address move says nothing about addresses"
+    );
+    assert!(report.status_message().len() > clean.status_message().len());
+}
+
+/// Every manual apply the user finishes must be traceable in the history list,
+/// including the verified no-op pass whose only visible trace was the status
+/// bar. The entry distinguishes "published", "already up to date" and "not
+/// verified" so the list never claims a success the transport did not confirm.
+#[test]
+fn a_finished_manual_apply_is_traceable_in_the_history_list() {
+    use crate::features::sync::cloud_sync_v4::SyncReport;
+    let report = |verified, published| SyncReport {
+        conflicts: 0,
+        deferred: Vec::new(),
+        kept: Vec::new(),
+        verified,
+        published,
+        publication_error: (!verified).then(|| "connection reset".into()),
+    };
+
+    let published = report(true, true).history_entry("manual_push", None, Some(12));
+    assert_eq!(published.status, "success");
+    assert_eq!(published.trigger, "manual_push");
+    assert_eq!(
+        published.message,
+        "Cloud synchronization applied and verified"
+    );
+    assert_eq!(published.duration_ms, Some(12));
+
+    let noop = report(true, false).history_entry("manual_push", None, None);
+    assert_eq!(noop.status, "success");
+    assert_eq!(noop.message, "Cloud synchronization is already up to date");
+
+    let failed = report(false, false).history_entry("manual_push", None, None);
+    assert_eq!(failed.status, "failed");
+    assert!(failed.message.contains("connection reset"));
 }

@@ -462,6 +462,20 @@ impl SyncReplica {
         self.document.commit();
         Ok(())
     }
+
+    /// Re-publishes a value this device refuses to take from the replica. The
+    /// write is causally after every merged remote operation, so it supersedes
+    /// their candidates instead of opening another conflict on the next pass.
+    pub fn reassert(&mut self, field: &SyncFieldId, value: SyncValue) -> Result<(), SyncError> {
+        if (self.fixed && !fixed_cloud_sync_field(field))
+            || !supports_field(&field.resource.kind, &field.field)
+        {
+            return Err(SyncError::Excluded);
+        }
+        self.write(field, value)?;
+        self.document.commit();
+        Ok(())
+    }
 }
 
 pub fn prepare(
