@@ -897,6 +897,7 @@ fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState 
     let focus = cx.update(|cx| cx.focus_handle());
     let mut owner = ConnectionEditorFeatureState {
         kind_drafts: Default::default(),
+        kind_baselines: Default::default(),
         draft: None,
         password: Default::default(),
         fields: HashMap::new(),

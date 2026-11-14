@@ -145,6 +145,10 @@ impl SettingsPanel {
                 t!("settings.dataDirectoryMigrateTitle"),
                 t!("settings.dataDirectoryMigrateDesc", path = target.clone()),
             ),
+            SwitchMode::ReplaceWithBackup => (
+                t!("settings.dataDirectoryRestoreTitle"),
+                t!("settings.dataDirectoryRestoreDesc", path = target.clone()),
+            ),
             SwitchMode::Adopt => (
                 t!("settings.dataDirectoryAdoptTitle"),
                 t!("settings.dataDirectoryAdoptDesc", path = target.clone()),
@@ -199,6 +203,19 @@ impl SettingsPanel {
                             cx.notify();
                         }),
                     ))
+                    .when(choice.mode == SwitchMode::ReplaceWithBackup, |row| {
+                        row.child(small_button(
+                            palette,
+                            "data-directory-use-history",
+                            t!("settings.dataDirectoryUseHistory"),
+                            cx.listener(|this, _, _, cx| {
+                                if let Some(choice) = &mut this.data_directory_choice {
+                                    choice.mode = SwitchMode::Adopt;
+                                }
+                                cx.notify();
+                            }),
+                        ))
+                    })
                     .child(small_button(
                         palette,
                         "data-directory-confirm-apply",
@@ -230,7 +247,7 @@ impl SettingsPanel {
                 return;
             };
             let _ = this.update(cx, |panel, cx| {
-                panel.prepare_data_directory_choice(target, cx)
+                panel.prepare_data_directory_choice(target, false, cx)
             });
         })
         .detach();
@@ -239,6 +256,7 @@ impl SettingsPanel {
     fn prepare_data_directory_choice(
         &mut self,
         target: std::path::PathBuf,
+        migrate_current: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(runtime) = self.app_runtime(cx) else {
@@ -250,7 +268,12 @@ impl SettingsPanel {
         self.data_directory_checking = true;
         cx.notify();
         let prepared = cx.background_spawn(async move {
-            data_directory::prepare_switch(
+            let prepare = if migrate_current {
+                data_directory::prepare_migration
+            } else {
+                data_directory::prepare_switch
+            };
+            prepare(
                 runtime.data_dir(),
                 runtime.local_dir(),
                 &target,
@@ -290,7 +313,7 @@ impl SettingsPanel {
         let Some(runtime) = self.app_runtime(cx) else {
             return;
         };
-        self.prepare_data_directory_choice(runtime.local_dir().to_path_buf(), cx);
+        self.prepare_data_directory_choice(runtime.local_dir().to_path_buf(), true, cx);
     }
 
     fn report_data_directory_error(&mut self, error: DataDirectoryError, cx: &mut Context<Self>) {

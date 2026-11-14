@@ -157,6 +157,16 @@ impl NyaTermApp {
         viewport: (f32, f32),
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if editor.defaults_mode && self.connection_state.editor_save_in_flight() {
+            return div()
+                .w_full()
+                .h(px(viewport.1.min(680.)))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(t!("common.loading"))
+                .into_any_element();
+        }
         self.connection_state
             .ensure_editor_forwarding_endpoint_fields(cx);
         self.connection_state.sync_editor_password_input(cx);

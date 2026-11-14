@@ -8,7 +8,7 @@
 use nyaterm_core::models::settings::TerminalWrapMode;
 use nyaterm_core::models::window_decoration::WindowDecoration;
 use nyaterm_core::models::window_material::{WindowMaterial, default_window_background_opacity};
-use redb::ReadableTableMetadata;
+use redb::{ReadableTable, ReadableTableMetadata};
 use std::collections::HashMap;
 
 use super::{
@@ -2060,12 +2060,26 @@ impl ConnectionStore {
         kind: &str,
         settings: &serde_json::Value,
     ) -> Result<(), StorageError> {
-        if !settings.is_object() {
-            return Err(StorageError::InvalidData(
-                "default session settings must be a JSON object".into(),
-            ));
+        self.save_default_session_settings_batch(&[(kind.to_string(), settings.clone())])
+    }
+
+    /// Validate and merge every modified protocol under one write transaction.
+    /// A bad entry cannot leave the other protocols partially committed.
+    pub fn save_default_session_settings_batch(
+        &self,
+        settings: &[(String, serde_json::Value)],
+    ) -> Result<(), StorageError> {
+        if settings.is_empty() {
+            return Ok(());
         }
-        let mut value = self.load_settings_value()?;
+        let txn = self.db.begin_write()?;
+        let mut value = {
+            let table = txn.open_table(SETTINGS_TABLE)?;
+            match table.get(SETTINGS_DEFAULT)? {
+                Some(raw) => super::deserialize_json(raw.value())?,
+                None => super::default_settings_value(),
+            }
+        };
         let mut entry = match json_path(&value, &["default_session"]) {
             None => serde_json::Map::new(),
             Some(serde_json::Value::Object(entry)) => entry.clone(),
@@ -2075,25 +2089,35 @@ impl ConnectionStore {
                 ));
             }
         };
-        if settings.get("type").and_then(serde_json::Value::as_str) != Some(kind) {
-            return Err(StorageError::InvalidData(
-                "default session protocol does not match its catalog key".into(),
-            ));
+        let mut seen = std::collections::HashSet::new();
+        for (kind, settings) in settings {
+            if !seen.insert(kind)
+                || !settings.is_object()
+                || settings.get("type").and_then(serde_json::Value::as_str) != Some(kind.as_str())
+            {
+                return Err(StorageError::InvalidData(
+                    "invalid or duplicate default session protocol".into(),
+                ));
+            }
+            let mut updated: nyaterm_core::SavedConnection =
+                serde_json::from_value(settings.clone())?;
+            if let Some(previous) = entry.get(kind) {
+                let previous: nyaterm_core::SavedConnection =
+                    serde_json::from_value(previous.clone())?;
+                updated
+                    .retain_extensions_from(&previous)
+                    .map_err(|message| StorageError::InvalidData(message.into()))?;
+            }
+            entry.insert(kind.clone(), serde_json::to_value(updated)?);
         }
-        let mut updated: nyaterm_core::SavedConnection = serde_json::from_value(settings.clone())?;
-        if let Some(previous) = entry.get(kind) {
-            let previous: nyaterm_core::SavedConnection = serde_json::from_value(previous.clone())?;
-            updated
-                .retain_extensions_from(&previous)
-                .map_err(|message| StorageError::InvalidData(message.into()))?;
-        }
-        entry.insert(kind.to_string(), serde_json::to_value(updated)?);
         set_nested_json_value(
             &mut value,
             &["default_session"],
             serde_json::Value::Object(entry),
         );
-        self.save_settings_value(&value)
+        write_json_in_txn(&txn, SETTINGS_TABLE, SETTINGS_DEFAULT, &value)?;
+        txn.commit()?;
+        Ok(())
     }
 }
 

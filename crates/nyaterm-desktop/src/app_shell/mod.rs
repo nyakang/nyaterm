@@ -6,6 +6,7 @@ pub(crate) mod configuration_replacement;
 mod controller;
 pub(crate) use controller::native_menu;
 mod process_state;
+mod recovery;
 pub(crate) mod session_hub;
 pub(crate) mod tab_drag;
 mod window_state;
@@ -98,6 +99,7 @@ enum AppShellLifecycle {
 }
 
 struct RecoveryState {
+    data_directory: Option<Box<recovery::DirectoryRecoveryState>>,
     category: String,
     message: String,
     diagnostics_status: Option<String>,
@@ -125,6 +127,9 @@ impl AppShell {
             .recovery
             .map(|recovery| {
                 AppShellLifecycle::Recovery(RecoveryState {
+                    data_directory: recovery
+                        .data_directory
+                        .map(|context| Box::new(recovery::DirectoryRecoveryState::new(context))),
                     category: recovery.category,
                     message: recovery.message,
                     diagnostics_status: None,
@@ -291,6 +296,7 @@ impl AppShell {
         }
         let Some(store_runtime) = &self.store_runtime else {
             self.lifecycle = AppShellLifecycle::Recovery(RecoveryState {
+                data_directory: None,
                 category: "runtime_missing".to_string(),
                 message: "storage runtime disappeared during bootstrap".to_string(),
                 diagnostics_status: None,
@@ -444,6 +450,7 @@ impl AppShell {
 
     pub(super) fn enter_recovery(&mut self, error: StoreOperationError, cx: &mut Context<Self>) {
         self.lifecycle = AppShellLifecycle::Recovery(RecoveryState {
+            data_directory: None,
             category: error.category().to_string(),
             message: error.user_message().to_string(),
             diagnostics_status: None,
@@ -952,6 +959,7 @@ impl AppShell {
             AppShellLifecycle::Ready
         } else {
             AppShellLifecycle::Recovery(RecoveryState {
+                data_directory: None,
                 category: "close_failed".to_string(),
                 message: "The window was not closed; retry loading or closing it.".to_string(),
                 diagnostics_status: None,
@@ -1000,6 +1008,9 @@ impl AppShell {
                 .child("Loading NyaTerm data...")
                 .into_any_element(),
             AppShellLifecycle::Recovery(state) => {
+                if state.data_directory.is_some() {
+                    return self.directory_recovery_view(cx);
+                }
                 let status = state.diagnostics_status.clone();
                 div()
                     .size_full()

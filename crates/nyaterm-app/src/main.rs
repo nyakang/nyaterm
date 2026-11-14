@@ -93,12 +93,24 @@ fn main() -> anyhow::Result<()> {
                     nyaterm_store::data_directory::instance_lock_dir(runtime.local_dir(), &path);
                 match acquire(&instance_dir, initial_activation.clone())? {
                     SingleInstanceOutcome::Forwarded => return Ok(()),
-                    SingleInstanceOutcome::Owner(_) => anyhow::bail!(
-                        "the data directory is busy; retry after the other process exits"
-                    ),
+                    SingleInstanceOutcome::Owner(_) => {
+                        AppShellStartup::prepare_data_directory_failed(
+                            nyaterm_store::data_directory::startup_recovery(
+                                runtime.local_dir(),
+                                runtime.local_dir(),
+                                &nyaterm_core::data_directory::DataDirectoryError::InUse(path),
+                            ),
+                        )
+                    }
                 }
             }
-            Err(error) => AppShellStartup::prepare_failed(error.to_string()),
+            Err(error) => AppShellStartup::prepare_data_directory_failed(
+                nyaterm_store::data_directory::startup_recovery(
+                    runtime.local_dir(),
+                    runtime.local_dir(),
+                    &error,
+                ),
+            ),
         }
     } else {
         AppShellStartup::prepare(&runtime)

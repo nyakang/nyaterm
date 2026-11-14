@@ -434,6 +434,53 @@ pub(crate) struct ConnectionEditorState {
 }
 
 impl ConnectionEditorState {
+    /// Compare raw settings, including invalid input, without counting navigation,
+    /// validation feedback or per-draft consent as edits.
+    pub(crate) fn default_settings_snapshot(&self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.id = None;
+        snapshot.section = ConnectionEditorSection::Basic;
+        snapshot.focused_field = ConnectionEditorField::Name;
+        snapshot.error = None;
+        snapshot.field_errors.clear();
+        snapshot.agent_allow_all_confirmed = false;
+        snapshot.agent_forwarding_endpoint_index = 0;
+        snapshot.agent_preview = None;
+        snapshot.agent_preview_loading = false;
+        snapshot.ssh_algorithm_tab = ConnectionEditorSshAlgorithmTab::KeyExchange;
+        snapshot.forwarding_tab = ConnectionEditorForwardingTab::Agent;
+        snapshot
+    }
+
+    pub(crate) fn inherit_new_connection_identity(&mut self, source: &Self) {
+        self.name = source.name.clone();
+        self.description = source.description.clone();
+        self.tags = source.tags.clone();
+        self.new_tag = source.new_tag.clone();
+        self.icon = source.icon.clone();
+        self.icon_auto_detect = source.icon_auto_detect;
+        self.group_id = source.group_id.clone();
+        self.new_group_name = source.new_group_name.clone();
+        self.pending_group_name = source.pending_group_name.clone();
+        self.pending_group_parent_id = source.pending_group_parent_id.clone();
+        self.host = source.host.clone();
+        self.username = source.username.clone();
+        let standard_port = match source.kind {
+            ConnectionKindTab::Ssh => "22",
+            ConnectionKindTab::Telnet => "23",
+            ConnectionKindTab::Rdp => "3389",
+            ConnectionKindTab::Vnc => "5900",
+            ConnectionKindTab::Adb => "5555",
+            _ => "",
+        };
+        if !standard_port.is_empty()
+            && !source.port.trim().is_empty()
+            && source.port != standard_port
+        {
+            self.port = source.port.clone();
+        }
+    }
+
     /// Tabs the editor navigation offers for this draft.
     pub(crate) fn sections(&self) -> &'static [ConnectionEditorSection] {
         ConnectionEditorSection::for_kind(self.kind, self.defaults_mode)

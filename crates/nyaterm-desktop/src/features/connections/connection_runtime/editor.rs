@@ -415,6 +415,9 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn close_connection_editor(&mut self, cx: &mut Context<Self>) {
+        if self.connection_state.editor_save_in_flight() {
+            return;
+        }
         self.connection_state.close_editor();
         self.connection_state.clear_editor_fields();
         self.shell
@@ -487,30 +490,53 @@ impl NyaTermApp {
     }
 
     fn save_default_session_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = self.connection_state.active_editor_draft() else {
+        if self.connection_state.editor_save_in_flight() {
             return;
-        };
-        let built = match build_default_session_settings(&editor).and_then(|built| {
-            validate_editor_account(&editor, self.security.passwords()).map(|()| built)
-        }) {
-            Ok(built) => built,
-            Err(error) => {
-                let message = self.connection_editor_validation_message(&error);
-                let location = error.location(&editor);
-                self.reveal_connection_editor_validation(location, message, window, cx);
-                cx.notify();
+        }
+        let drafts = self.connection_state.modified_default_drafts();
+        if drafts.is_empty() {
+            self.close_connection_editor(cx);
+            return;
+        }
+        let mut values = Vec::with_capacity(drafts.len());
+        for editor in drafts {
+            let built = match build_default_session_settings(&editor).and_then(|built| {
+                validate_editor_account(&editor, self.security.passwords()).map(|()| built)
+            }) {
+                Ok(built) => built,
+                Err(error) => {
+                    self.set_connection_editor_kind(editor.kind, cx);
+                    let message = self.connection_editor_validation_message(&error);
+                    let location = error.location(&editor);
+                    self.reveal_connection_editor_validation(location, message, window, cx);
+                    return;
+                }
+            };
+            if editor.agent_forwarding_config.enabled
+                && matches!(
+                    editor.agent_forwarding_config.policy,
+                    nyaterm_core::SshAgentForwardingPolicy::All
+                )
+                && !editor.agent_allow_all_confirmed
+            {
+                self.set_connection_editor_kind(editor.kind, cx);
+                self.ensure_editor_agent_consent(&editor, window, cx);
                 return;
             }
-        };
-        let value = match serde_json::to_value(&built) {
-            Ok(value) => value,
-            Err(error) => {
-                let message = t!("dialog.connectionSaveFailed", error = error).to_string();
-                self.set_connection_editor_error(message, cx);
-                return;
+            match serde_json::to_value(built) {
+                Ok(value) => values.push((
+                    default_session_settings_kind_id(editor.kind).to_string(),
+                    value,
+                )),
+                Err(error) => {
+                    self.set_connection_editor_error(
+                        t!("dialog.connectionSaveFailed", error = error).to_string(),
+                        cx,
+                    );
+                    return;
+                }
             }
-        };
-        let kind = default_session_settings_kind_id(editor.kind);
+        }
         let Some(save_generation) = self.connection_state.begin_editor_save() else {
             return;
         };
@@ -520,7 +546,7 @@ impl NyaTermApp {
         let submitted = self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Settings, move |store| {
-                store.save_default_session_settings(kind, &value)
+                store.save_default_session_settings_batch(&values)
             }),
             move |this, event, cx| match event.outcome {
                 Ok(()) => {
@@ -1012,6 +1038,9 @@ impl NyaTermApp {
         kind: ConnectionKindTab,
         cx: &mut Context<Self>,
     ) {
+        if self.connection_state.editor_save_in_flight() {
+            return;
+        }
         let draft = self.connection_state.active_editor_draft();
         if let Some(current) = draft
             .as_ref()
@@ -1027,6 +1056,10 @@ impl NyaTermApp {
                 next.defaults_mode = current.defaults_mode;
                 next = crate::features::connections::state::ConnectionFeatureState::prepare_editor_kind(next, kind);
                 self.apply_default_session_settings(&mut next, cx);
+                if !current.defaults_mode {
+                    next.inherit_new_connection_identity(current);
+                }
+                self.connection_state.register_default_kind_baseline(&next);
                 next
             });
             next.section =
@@ -1035,6 +1068,8 @@ impl NyaTermApp {
                     .copied()
                     .unwrap_or(crate::models::ConnectionEditorSection::Basic);
             self.connection_state.replace_editor_kind(next);
+            self.connection_state.hide_editor_secrets(cx);
+            self.dismiss_connection_editor_menus(cx);
             self.connection_state.sync_editor_fields_from_draft(cx);
         }
         if draft
@@ -1366,14 +1401,12 @@ impl NyaTermApp {
         });
     }
 
-    pub(in crate::features) fn save_connection_editor(
+    fn ensure_editor_agent_consent(
         &mut self,
+        editor: &ConnectionEditorState,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(mut editor) = self.connection_state.active_editor_draft() else {
-            return;
-        };
+    ) -> bool {
         if editor.agent_forwarding_config.enabled
             && matches!(
                 editor.agent_forwarding_config.policy,
@@ -1396,11 +1429,27 @@ impl NyaTermApp {
                 window,
                 cx,
             );
+            return false;
+        }
+        true
+    }
+
+    pub(in crate::features) fn save_connection_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut editor) = self.connection_state.active_editor_draft() else {
+            return;
+        };
+        if self.connection_state.editor_save_in_flight() {
             return;
         }
-
         if editor.defaults_mode {
             self.save_default_session_settings(window, cx);
+            return;
+        }
+        if !self.ensure_editor_agent_consent(&editor, window, cx) {
             return;
         }
         let pending_group = editor.pending_group_name.as_ref().map(|name| Group {

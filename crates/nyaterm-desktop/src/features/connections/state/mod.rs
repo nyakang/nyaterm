@@ -188,6 +188,7 @@ struct ConnectionListState {
 
 struct ConnectionEditorFeatureState {
     kind_drafts: HashMap<ConnectionKindTab, ConnectionEditorState>,
+    kind_baselines: HashMap<ConnectionKindTab, ConnectionEditorState>,
     draft: Option<ConnectionEditorState>,
     password: EditorPasswordState,
     /// One editable field per text input, built when the editor opens.
@@ -293,6 +294,7 @@ impl ConnectionFeatureState {
             import: ConnectionImportState::default(),
             editor: ConnectionEditorFeatureState {
                 kind_drafts: HashMap::new(),
+                kind_baselines: HashMap::new(),
                 draft: None,
                 password: EditorPasswordState::default(),
                 fields: HashMap::new(),
@@ -935,6 +937,9 @@ impl ConnectionFeatureState {
     }
 
     pub fn set_editor_field_text(&mut self, field: ConnectionEditorField, text: String) {
+        if self.editor_save_in_flight() {
+            return;
+        }
         if field == ConnectionEditorField::Password {
             self.invalidate_editor_password_request();
         }
@@ -949,6 +954,9 @@ impl ConnectionFeatureState {
         field: ConnectionEditorField,
         text: String,
     ) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         set_connection_editor_forwarding_endpoint_field(&mut self.editor.draft, index, field, text)
     }
 
@@ -964,6 +972,9 @@ impl ConnectionFeatureState {
         self.editor.active_draft()
     }
     pub(in crate::features) fn set_android_editor_usb(&mut self, value: bool) {
+        if self.editor_save_in_flight() {
+            return;
+        }
         if let Some(draft) = self.editor.draft.as_mut() {
             draft.android_usb = value;
         }
@@ -1407,6 +1418,9 @@ impl ConnectionFeatureState {
         select: ConnectionEditorSelect,
         value: Option<String>,
     ) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.invalidate_editor_password_request();
         self.editor.set_select_value(select, value)
     }
@@ -1426,6 +1440,9 @@ impl ConnectionFeatureState {
         id: &str,
         enabled: bool,
     ) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.set_ssh_algorithm_enabled(tab, id, enabled)
     }
 
@@ -1435,14 +1452,23 @@ impl ConnectionFeatureState {
         id: &str,
         direction: i8,
     ) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.move_ssh_algorithm(tab, id, direction)
     }
 
     pub fn add_editor_agent_endpoint(&mut self) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.add_editor_agent_endpoint()
     }
 
     pub fn remove_editor_agent_endpoint(&mut self, index: usize) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.remove_editor_agent_endpoint(index)
     }
 
@@ -1451,14 +1477,23 @@ impl ConnectionFeatureState {
     }
 
     pub fn set_editor_agent_endpoint_type(&mut self, index: usize, value: &str) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.set_editor_agent_endpoint_type(index, value)
     }
 
     pub fn move_editor_agent_endpoint(&mut self, index: usize, direction: i8) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.move_editor_agent_endpoint(index, direction)
     }
 
     pub fn toggle_editor_agent_allowlist_fingerprint(&mut self, fingerprint: &str) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor
             .toggle_editor_agent_allowlist_fingerprint(fingerprint)
     }
@@ -1470,6 +1505,44 @@ impl ConnectionFeatureState {
         let mut draft = Some(draft);
         set_connection_editor_kind(&mut draft, kind);
         draft.expect("supplied draft")
+    }
+
+    pub fn register_default_kind_baseline(&mut self, draft: &ConnectionEditorState) {
+        if draft.defaults_mode {
+            self.editor
+                .kind_baselines
+                .entry(draft.kind)
+                .or_insert_with(|| draft.default_settings_snapshot());
+        }
+    }
+
+    pub fn modified_default_drafts(&self) -> Vec<ConnectionEditorState> {
+        [
+            ConnectionKindTab::Ssh,
+            ConnectionKindTab::Local,
+            ConnectionKindTab::Telnet,
+            ConnectionKindTab::Serial,
+            ConnectionKindTab::Rdp,
+            ConnectionKindTab::Vnc,
+            ConnectionKindTab::Adb,
+        ]
+        .into_iter()
+        .filter_map(|kind| {
+            let draft = self
+                .editor
+                .draft
+                .as_ref()
+                .filter(|draft| draft.kind == kind)
+                .or_else(|| self.editor.kind_drafts.get(&kind))?;
+            (draft.defaults_mode
+                && self
+                    .editor
+                    .kind_baselines
+                    .get(&kind)
+                    .is_none_or(|baseline| *baseline != draft.default_settings_snapshot()))
+            .then(|| draft.clone())
+        })
+        .collect()
     }
 
     pub fn remember_editor_kind(&mut self) {
@@ -1497,6 +1570,9 @@ impl ConnectionFeatureState {
     }
 
     pub fn toggle_editor_flag(&mut self, flag: ConnectionEditorToggle) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
         self.editor.toggle_flag(flag)
     }
 
@@ -2151,6 +2227,7 @@ fn duration_ms(duration: Duration) -> f64 {
 impl ConnectionEditorFeatureState {
     pub fn begin_edit(&mut self, mut draft: ConnectionEditorState) {
         self.kind_drafts.clear();
+        self.kind_baselines.clear();
         self.password = EditorPasswordState::new(
             draft.existing_password.is_some() || draft.existing_password_locked,
         );
@@ -2170,6 +2247,10 @@ impl ConnectionEditorFeatureState {
         self.agent_preview_generation = self.agent_preview_generation.wrapping_add(1);
         self.group_select_trigger_bounds = None;
         self.save_in_flight = None;
+        if draft.defaults_mode {
+            self.kind_baselines
+                .insert(draft.kind, draft.default_settings_snapshot());
+        }
         self.draft = Some(draft);
     }
 
@@ -2437,6 +2518,7 @@ impl ConnectionEditorFeatureState {
 
     pub fn close(&mut self) {
         self.kind_drafts.clear();
+        self.kind_baselines.clear();
         self.password = EditorPasswordState::default();
         self.save_generation = self.save_generation.wrapping_add(1);
         self.agent_identity_picker_open = false;

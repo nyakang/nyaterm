@@ -92,6 +92,8 @@ pub enum SwitchMode {
     Migrate,
     /// Use an existing NyaTerm data directory without overwriting anything.
     Adopt,
+    /// Archive the target's data before publishing the current data there.
+    ReplaceWithBackup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +105,8 @@ pub struct PendingSwitch {
     pub mode: SwitchMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migration_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_fingerprint: Option<String>,
     #[serde(flatten)]
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
@@ -144,6 +148,18 @@ pub struct PreparedSwitch {
     pub mode: SwitchMode,
     /// Third-party sync client detected on the target, for the warning text.
     pub sync_client: Option<&'static str>,
+    /// Binds confirmation to the existing target's managed contents.
+    pub target_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DataDirectoryRecovery {
+    pub configured: PathBuf,
+    pub default_dir: PathBuf,
+    pub pending: Option<PendingSwitch>,
+    pub can_select: bool,
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone)]

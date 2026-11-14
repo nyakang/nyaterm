@@ -1812,3 +1812,57 @@ fn a_finished_manual_apply_is_traceable_in_the_history_list() {
     assert_eq!(failed.status, "failed");
     assert!(failed.message.contains("connection reset"));
 }
+
+#[test]
+fn two_devices_keep_local_password_bindings_without_repeated_endpoint_writes() {
+    let a = TestConfigDir::new("nyaterm-v4-bound-a");
+    let b = TestConfigDir::new("nyaterm-v4-bound-b");
+    let remote = TestConfigDir::new("nyaterm-v4-bound-remote");
+    let (sa, settings, oa) = setup(&a, &remote);
+    let (sb, _, ob) = setup(&b, &remote);
+    let control = CloudSyncOperationControl::default();
+    save(&sa, "shared", "Shared");
+    let initial = preview(&sa, &settings, &oa, &control).unwrap();
+    apply_and_publish(&sa, &settings, &oa, initial, &control).unwrap();
+    let initial = preview(&sb, &settings, &ob, &control).unwrap();
+    apply_and_publish(&sb, &settings, &ob, initial, &control).unwrap();
+    // A keeps the original address; B explicitly edits its own address. Each
+    // owns a local password, excluded from this synchronization scope.
+    for (store, host) in [(&sa, "a.example"), (&sb, "b.example")] {
+        let host = host.to_string();
+        store.request_fn(StoreDomain::Connections, move |store| {
+            let connection: SavedConnection = serde_json::from_value(json!({
+                "id":"shared", "type":"ssh", "name":"Shared", "host":host, "port":22, "username":"u",
+                "auth":{"mode":"password","password_source":"connection","password":"synthetic-bound-password"}
+            }))?;
+            store.save_connection(&connection)
+        }).unwrap();
+    }
+    let mut previous = None;
+    for pass in 0..4 {
+        let mut documents = Vec::new();
+        for (store, options, host) in [(&sa, &oa, "a.example"), (&sb, &ob, "b.example")] {
+            let prepared = preview(store, &settings, options, &control).unwrap();
+            let report = apply_and_publish(store, &settings, options, prepared, &control).unwrap();
+            assert!(report.verified);
+            if !report.deferred.is_empty() || report.conflicts > 0 {
+                assert_eq!(
+                    report.history_entry("manual", None, None).status,
+                    "conflict"
+                );
+            }
+            let saved = store
+                .request_fn(StoreDomain::Connections, |store| {
+                    Ok(store.get_connection("shared")?.unwrap())
+                })
+                .unwrap();
+            assert_eq!(serde_json::to_value(saved).unwrap()["host"], host);
+            let current = preview(store, &settings, options, &control).unwrap();
+            documents.push(current.apply.plan.replica.document.clone());
+        }
+        if pass >= 2 {
+            assert_eq!(previous.as_ref().unwrap(), &documents);
+        }
+        previous = Some(documents);
+    }
+}

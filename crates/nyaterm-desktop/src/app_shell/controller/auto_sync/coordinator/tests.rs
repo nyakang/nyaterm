@@ -201,3 +201,27 @@ fn a_v4_publication_records_history_once_and_a_noop_pass_does_not() {
             .is_none()
     );
 }
+
+#[test]
+fn verified_deferred_fields_are_attention_not_success_and_repeated_notices_are_deduplicated() {
+    let mut sync = AutoSyncCoordinator::new(0);
+    let report = crate::features::sync::V4SyncReport {
+        conflicts: 0,
+        deferred: vec!["connection / fixture / endpoint".into()],
+        kept: Vec::new(),
+        verified: true,
+        published: true,
+        publication_error: None,
+    };
+    let result = Ok(AutoSyncResult::V4(report));
+    assert_eq!(
+        sync.history_entry(AutoSyncTrigger::Periodic, &result)
+            .unwrap()
+            .status,
+        "conflict"
+    );
+    assert!(
+        sync.history_entry(AutoSyncTrigger::Periodic, &result)
+            .is_none()
+    );
+}
