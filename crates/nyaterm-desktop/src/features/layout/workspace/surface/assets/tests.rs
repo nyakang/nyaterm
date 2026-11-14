@@ -402,6 +402,67 @@ fn asset_copy_move_and_delete_ignore_connection_panel_multi_selection() {
     }
 }
 
+/// Open the context menu of ID and confirm its Delete entry.
+fn delete_from_asset_menu(cx: &mut VisualTestContext, mode: AssetViewMode, id: &str) {
+    let position = item_position(cx, mode, id);
+    click(cx, position, MouseButton::Right, 1);
+    cx.simulate_keystrokes("down down down down down down enter");
+    draw(cx);
+    // Mount the dialog, then paint its final layout before reading bounds.
+    draw(cx);
+    let confirm = cx.debug_bounds("nya-dialog-action-button").unwrap();
+    cx.simulate_click(confirm.center(), Modifiers::default());
+    draw(cx);
+}
+
+#[test]
+fn asset_menu_on_a_selected_asset_deletes_the_whole_asset_selection() {
+    for mode in [AssetViewMode::List, AssetViewMode::Cards] {
+        let root = TestTempDir::new("nyaterm-assets-delete-selection");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, &root, mode);
+        let cx = host(&mut cx, &app);
+        app.update(cx, |app, cx| app.toggle_asset_select_all(cx));
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.start_workspace.selected_asset_count(), 3)
+        });
+
+        delete_from_asset_menu(cx, mode, "third");
+
+        wait_for(cx, &app, |app| {
+            app.connection_state.connections().is_empty()
+        });
+    }
+}
+
+#[test]
+fn asset_menu_on_an_unselected_asset_deletes_only_that_asset() {
+    for mode in [AssetViewMode::List, AssetViewMode::Cards] {
+        let root = TestTempDir::new("nyaterm-assets-delete-unselected");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, &root, mode);
+        let cx = host(&mut cx, &app);
+        app.update(cx, |app, cx| {
+            app.toggle_asset_selection("first", cx);
+            app.toggle_asset_selection("second", cx);
+        });
+        draw(cx);
+
+        delete_from_asset_menu(cx, mode, "third");
+
+        wait_for(cx, &app, |app| {
+            app.connection_state.connection_by_id("third").is_none()
+        });
+        app.read_with(cx, |app, _| {
+            assert!(app.connection_state.connection_by_id("first").is_some());
+            assert!(app.connection_state.connection_by_id("second").is_some());
+        });
+    }
+}
+
 #[test]
 fn asset_virtual_list_context_uses_the_current_scrolled_connection() {
     for mode in [AssetViewMode::List, AssetViewMode::Cards] {

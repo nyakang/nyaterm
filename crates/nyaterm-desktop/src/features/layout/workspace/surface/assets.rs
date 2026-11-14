@@ -544,7 +544,8 @@ impl NyaTermApp {
                     else {
                         return Vec::new();
                     };
-                    this.connection_target_menu_items(id.clone(), vec![id], cx)
+                    let target_ids = this.start_workspace.asset_menu_target_ids(&id);
+                    this.connection_target_menu_items(id, target_ids, cx)
                 })
             },
         )
