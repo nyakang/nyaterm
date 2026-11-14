@@ -10,6 +10,7 @@ pub(in crate::app_shell::controller) struct AutoSyncCoordinator {
     started_at: Option<Instant>,
     history_errors: std::collections::HashMap<String, Instant>,
     had_error: bool,
+    last_attention: Option<(usize, Vec<String>)>,
 }
 
 impl AutoSyncCoordinator {
@@ -20,6 +21,7 @@ impl AutoSyncCoordinator {
             started_at: None,
             history_errors: Default::default(),
             had_error: false,
+            last_attention: None,
         }
     }
 
@@ -96,6 +98,20 @@ impl AutoSyncCoordinator {
             .started_at
             .take()
             .map(|start| now.duration_since(start).as_millis() as u64);
+        if let Ok(AutoSyncResult::V4(report)) = result {
+            if report.verified && (report.conflicts > 0 || !report.deferred.is_empty()) {
+                let attention = (report.conflicts, report.deferred.clone());
+                self.had_error = false;
+                if self.last_attention.as_ref() == Some(&attention) {
+                    return None;
+                }
+                self.last_attention = Some(attention);
+                return Some(report.history_entry(trigger.history_name(), None, duration));
+            }
+            if report.verified {
+                self.last_attention = None;
+            }
+        }
         let mut entry = match result {
             Ok(AutoSyncResult::Synced(sync)) if sync.outcome != CloudSyncOutcome::UpToDate => {
                 self.had_error = false;

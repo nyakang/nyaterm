@@ -25,6 +25,7 @@ pub struct AppShellStartup {
 
 #[derive(Clone)]
 pub(super) struct StartupRecovery {
+    pub data_directory: Option<nyaterm_core::data_directory::DataDirectoryRecovery>,
     pub category: String,
     pub message: String,
 }
@@ -57,6 +58,7 @@ impl AppShellStartup {
             store_runtime: None,
             pending_bootstrap: None,
             recovery: Some(StartupRecovery {
+                data_directory: None,
                 category: "data_directory".into(),
                 message,
             }),
@@ -69,6 +71,18 @@ impl AppShellStartup {
             device_windows: DeviceWindowManifest::empty(),
             workspace_seed: None,
         }
+    }
+
+    pub fn prepare_data_directory_failed(
+        context: nyaterm_core::data_directory::DataDirectoryRecovery,
+    ) -> Self {
+        let mut startup = Self::prepare_failed(context.message.clone());
+        startup
+            .recovery
+            .as_mut()
+            .expect("failed startup")
+            .data_directory = Some(context);
+        startup
     }
 
     fn prepare_input(runtime: &AppRuntime, store: Option<nyaterm_store::ConnectionStore>) -> Self {
@@ -87,6 +101,7 @@ impl AppShellStartup {
                     store_runtime: None,
                     pending_bootstrap: None,
                     recovery: Some(StartupRecovery {
+                        data_directory: None,
                         category: "worker_start".to_string(),
                         message: error.to_string(),
                     }),
@@ -183,6 +198,7 @@ impl AppShellStartup {
                 store_runtime: None,
                 pending_bootstrap: None,
                 recovery: Some(StartupRecovery {
+                    data_directory: None,
                     category: "request_submit".to_string(),
                     message: error.to_string(),
                 }),
@@ -202,6 +218,7 @@ impl AppShellStartup {
             store_runtime: Some(store_runtime),
             pending_bootstrap: None,
             recovery: Some(StartupRecovery {
+                data_directory: None,
                 category: category.to_string(),
                 message: message.to_string(),
             }),
@@ -255,9 +272,12 @@ impl AppShellStartup {
             return Self {
                 store_runtime: None,
                 pending_bootstrap: None,
-                recovery: Some(StartupRecovery {
-                    category: "runtime_missing".to_string(),
-                    message: "storage runtime is unavailable".to_string(),
+                recovery: self.recovery.clone().or_else(|| {
+                    Some(StartupRecovery {
+                        data_directory: None,
+                        category: "runtime_missing".to_string(),
+                        message: "storage runtime is unavailable".to_string(),
+                    })
                 }),
                 main_window_state,
                 workspace_id,
@@ -777,5 +797,25 @@ mod tests {
         assert!(maximized.maximized);
         assert_eq!(fullscreen.restore_bounds.x, 40);
         assert_eq!(fullscreen.restore_bounds.height, 800);
+    }
+    #[test]
+    fn directory_recovery_context_survives_window_creation_without_a_store() {
+        let context = nyaterm_core::data_directory::DataDirectoryRecovery {
+            configured: std::path::PathBuf::from("/missing"),
+            default_dir: std::path::PathBuf::from("/default"),
+            pending: None,
+            can_select: true,
+            code: "recovery_required".into(),
+            message: "unavailable".into(),
+        };
+        let startup = super::AppShellStartup::prepare_data_directory_failed(context);
+        let window = startup.for_workspace(startup.workspace_id());
+        assert!(window.shared_store_runtime().is_none());
+        let recovery = window.recovery.unwrap();
+        assert_eq!(recovery.category, "data_directory");
+        assert_eq!(
+            recovery.data_directory.unwrap().configured,
+            std::path::PathBuf::from("/missing")
+        );
     }
 }

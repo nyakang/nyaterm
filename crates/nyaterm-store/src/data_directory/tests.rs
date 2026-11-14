@@ -38,9 +38,7 @@ fn missing_active_directory_never_initializes_an_empty_replacement() {
     fixture(&custom);
     set_active_data_dir(&local, Some(&custom)).unwrap();
     fs::rename(&custom, root.join("moved")).unwrap();
-    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, local);
-    assert!(opened.selection.notice.is_some());
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     assert!(!custom.exists());
     assert_eq!(
         read_location(&local).unwrap().unwrap().data_dir,
@@ -137,8 +135,7 @@ fn failure_before_publication_leaves_no_adoptable_database() {
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     TEST_FAILURE.with(|point| point.set(Some("copied")));
-    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, local);
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     assert!(!target.join(DATABASE_FILE_NAME).exists());
 }
 
@@ -156,8 +153,7 @@ fn partial_publication_cannot_be_adopted_and_retains_its_migration_identity() {
         .unwrap()
         .migration_id;
     TEST_FAILURE.with(|point| point.set(Some("published_plugin")));
-    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, local);
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     assert!(!target.join(DATABASE_FILE_NAME).exists());
     assert!(target.join(JOURNAL_NAME).exists());
     assert!(matches!(
@@ -183,8 +179,7 @@ fn pointer_commit_failure_keeps_the_original_pointer_and_source() {
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     TEST_FAILURE.with(|point| point.set(Some("pointer")));
-    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, local);
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     let location = read_location(&local).unwrap().unwrap();
     assert!(location.data_dir.is_none());
     assert!(location.pending.is_some());
@@ -238,6 +233,17 @@ fn linux_mount_detection_uses_mountpoint_and_filesystem_columns_and_longest_matc
     ));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_mount_detection_accepts_local_directories_that_do_not_exist_yet() {
+    let root = TestTempDir::new("nyaterm-macos-local-mount");
+    fs::create_dir_all(root.path()).unwrap();
+    let existing = root.path();
+    let missing = root.path().join("not").join("created");
+    assert!(!crate::data_directory::is_network_location(existing).unwrap());
+    assert!(!crate::data_directory::is_network_location(&missing).unwrap());
+}
+
 #[cfg(unix)]
 #[test]
 fn special_plugin_entries_fail_without_publishing_the_database() {
@@ -247,8 +253,7 @@ fn special_plugin_entries_fail_without_publishing_the_database() {
     let _socket = std::os::unix::net::UnixListener::bind(local.join("plugins/socket")).unwrap();
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
-    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, local);
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     assert!(!target.join(DATABASE_FILE_NAME).exists());
 }
 
@@ -282,7 +287,7 @@ fn interrupted_publication_retries_the_same_transaction_without_adopting_partial
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     TEST_FAILURE.with(|point| point.set(Some("published_plugin")));
-    drop(open_startup(&local, &local, AppFlavor::Stable).unwrap());
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
     assert_eq!(
         fs::canonicalize(opened.selection.data_dir).unwrap(),
@@ -313,14 +318,15 @@ fn every_publication_boundary_retries_without_losing_source_data() {
         let target = root.join("target/.nyaterm");
         queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
         TEST_FAILURE.with(|failure| failure.set(Some(point)));
-        let failed = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+        let failed = open_startup(&local, &local, AppFlavor::Stable)
+            .err()
+            .expect("recovery required");
         assert!(
             TEST_FAILURE.with(|failure| failure.get().is_none()),
             "migration did not reach {point}: {:?}",
-            failed.selection.notice
+            failed
         );
-        assert_eq!(failed.selection.data_dir, local, "{point}");
-        assert!(failed.selection.notice.is_some(), "{point}");
+
         assert!(
             read_location(&local).unwrap().unwrap().data_dir.is_none(),
             "{point}"
@@ -356,7 +362,7 @@ fn retry_rejects_changed_source_or_published_inventory() {
         let target = root.join("target/.nyaterm");
         queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
         TEST_FAILURE.with(|failure| failure.set(Some("published_plugin")));
-        drop(open_startup(&local, &local, AppFlavor::Stable).unwrap());
+        assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
         match change {
             "database" => {
                 let store = ConnectionStore::open(&local).unwrap();
@@ -374,9 +380,10 @@ fn retry_rejects_changed_source_or_published_inventory() {
             "target_added" => fs::write(target.join("plugins/added"), b"added").unwrap(),
             _ => unreachable!(),
         }
-        let retried = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-        assert_eq!(retried.selection.data_dir, local, "{change}");
-        assert!(retried.selection.notice.is_some(), "{change}");
+        assert!(
+            open_startup(&local, &local, AppFlavor::Stable).is_err(),
+            "{change}"
+        );
         assert!(!target.join(DATABASE_FILE_NAME).exists(), "{change}");
     }
 }
@@ -469,8 +476,7 @@ fn prepared_adoption_is_revalidated_before_pointer_commit() {
         b"corrupted since selection",
     )
     .unwrap();
-    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, local);
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
     assert!(read_location(&local).unwrap().unwrap().data_dir.is_none());
 }
 
@@ -551,27 +557,214 @@ fn migration_loads_a_supported_legacy_database_with_only_text_documents() {
 }
 
 #[test]
-fn switching_after_startup_fallback_migrates_the_root_actually_in_use() {
-    let root = TestTempDir::new("nyaterm-data-directory-fallback-switch");
+fn explicit_recovery_selection_persists_and_does_not_switch_back_when_disk_returns() {
+    use crate::data_directory::{commit_recovery_selection, prepare_recovery_selection};
+    let root = TestTempDir::new("nyaterm-data-directory-explicit-recovery");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fixture(&local);
+    fixture(&custom);
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::rename(&custom, root.join("unmounted")).unwrap();
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    let choice = prepare_recovery_selection(&local, &local, AppFlavor::Stable).unwrap();
+    commit_recovery_selection(&local, &choice, AppFlavor::Stable).unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    let mut connection = opened.store.list_connections().unwrap().remove(0);
+    connection.name = "edited after explicit recovery".into();
+    opened.store.save_connection(&connection).unwrap();
+    drop(opened);
+    fs::rename(root.join("unmounted"), &custom).unwrap();
+    let reopened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert_eq!(reopened.selection.data_dir, local);
+    assert_eq!(
+        reopened.store.list_connections().unwrap()[0].name,
+        connection.name
+    );
+}
+
+#[test]
+fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
+    use crate::data_directory::{ensure_data_marker, prepare_migration, queue_prepared_switch};
+    for failure in [
+        None,
+        Some("staged"),
+        Some("journaled"),
+        Some("archived_plugins"),
+        Some("archived_recordings"),
+        Some("archived_marker"),
+        Some("archived_database"),
+        Some("published_plugin"),
+        Some("published_recording"),
+        Some("published_database"),
+        Some("ready"),
+        Some("pointer"),
+    ] {
+        let root = TestTempDir::new("nyaterm-data-directory-return");
+        let local = root.join("local");
+        fixture(&local);
+        ensure_data_marker(&local, AppFlavor::Stable).unwrap();
+        let destination =
+            queue_switch(&local, &local, &root.join("custom"), AppFlavor::Stable).unwrap();
+        let active = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+        let mut connection = active.store.list_connections().unwrap().remove(0);
+        connection.name = "current data".into();
+        active.store.save_connection(&connection).unwrap();
+        fs::write(
+            destination.target.join("recordings/new.cast"),
+            b"new recording",
+        )
+        .unwrap();
+        fs::write(local.join("unrelated.txt"), b"leave alone").unwrap();
+        let choice =
+            prepare_migration(&destination.target, &local, &local, AppFlavor::Stable).unwrap();
+        assert_eq!(
+            choice.mode,
+            crate::data_directory::SwitchMode::ReplaceWithBackup
+        );
+        queue_prepared_switch(&local, &destination.target, &choice, AppFlavor::Stable).unwrap();
+        let id = read_location(&local)
+            .unwrap()
+            .unwrap()
+            .pending
+            .unwrap()
+            .migration_id
+            .unwrap();
+        drop(active);
+        if let Some(failure) = failure {
+            TEST_FAILURE.with(|point| point.set(Some(failure)));
+            let result = open_startup(&local, &local, AppFlavor::Stable);
+            assert!(result.is_err(), "{failure}");
+            assert!(
+                TEST_FAILURE.with(|point| point.get().is_none()),
+                "{failure}"
+            );
+        }
+        let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+        assert_eq!(restored.selection.data_dir, local);
+        assert_eq!(
+            restored.store.list_connections().unwrap()[0].name,
+            "current data"
+        );
+        assert_eq!(
+            fs::read(local.join("recordings/new.cast")).unwrap(),
+            b"new recording"
+        );
+        assert_eq!(
+            fs::read(local.join("unrelated.txt")).unwrap(),
+            b"leave alone"
+        );
+        let backup = local.join("data-directory-backups").join(id.to_string());
+        let history = ConnectionStore::open_existing(&backup).unwrap();
+        assert_eq!(history.list_connections().unwrap()[0].name, "fixture");
+        assert!(!backup.join("recordings/new.cast").exists());
+        assert!(destination.target.join(DATABASE_FILE_NAME).exists());
+    }
+}
+
+#[test]
+fn a_changed_existing_target_invalidates_confirmation_without_overwriting_it() {
+    use crate::data_directory::{prepare_migration, queue_prepared_switch};
+    let root = TestTempDir::new("nyaterm-data-directory-changed-history");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fixture(&local);
+    fixture(&custom);
+    let choice = prepare_migration(&custom, &local, &local, AppFlavor::Stable).unwrap();
+    fs::write(local.join("plugins/added"), b"changed after confirmation").unwrap();
+    assert!(queue_prepared_switch(&local, &custom, &choice, AppFlavor::Stable).is_err());
+    assert!(!local.join("data-directory-backups").exists());
+    assert!(!local.join(LOCATION_FILE_NAME).exists());
+}
+
+#[test]
+fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_current_data() {
+    use crate::data_directory::{prepare_migration, queue_prepared_switch};
+    for unexpected in [false, true] {
+        let root = TestTempDir::new("nyaterm-data-directory-absent-tree");
+        let local = root.join("local");
+        let custom = root.join("custom");
+        fixture(&local);
+        fixture(&custom);
+        fs::remove_dir_all(custom.join("plugins")).unwrap();
+        fs::remove_dir_all(custom.join("recordings")).unwrap();
+        set_active_data_dir(&local, Some(&custom)).unwrap();
+        let choice = prepare_migration(&custom, &local, &local, AppFlavor::Stable).unwrap();
+        queue_prepared_switch(&local, &custom, &choice, AppFlavor::Stable).unwrap();
+        let id = read_location(&local)
+            .unwrap()
+            .unwrap()
+            .pending
+            .unwrap()
+            .migration_id
+            .unwrap();
+        TEST_FAILURE.with(|point| point.set(Some("archived_database")));
+        assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+        if unexpected {
+            fs::create_dir(local.join("recordings")).unwrap();
+            fs::write(local.join("recordings/unexpected.cast"), b"unexpected").unwrap();
+        }
+        let result = open_startup(&local, &local, AppFlavor::Stable);
+        if unexpected {
+            assert!(result.is_err());
+            assert!(read_location(&local).unwrap().unwrap().pending.is_some());
+            assert_eq!(
+                fs::read(local.join("recordings/unexpected.cast")).unwrap(),
+                b"unexpected"
+            );
+        } else {
+            assert_eq!(result.unwrap().selection.data_dir, local);
+            assert!(!local.join("plugins").exists());
+            assert!(!local.join("recordings").exists());
+        }
+        let backup = local.join("data-directory-backups").join(id.to_string());
+        assert_eq!(
+            fs::read(backup.join("recordings/session.cast")).unwrap(),
+            b"fixture recording"
+        );
+        assert!(backup.join("plugins/nested/plugin.json").is_file());
+        assert!(custom.join(DATABASE_FILE_NAME).is_file());
+    }
+}
+
+#[test]
+fn cancelling_an_interrupted_migration_persists_source_selection() {
+    use crate::data_directory::{commit_recovery_selection, prepare_recovery_selection};
+    let root = TestTempDir::new("nyaterm-cancel-migration");
     let local = root.join("local");
     fixture(&local);
-    let missing = root.join("missing");
-    set_active_data_dir(&local, Some(&missing)).unwrap();
-    let fallback = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    let choice = queue_switch(
-        &local,
-        &fallback.selection.data_dir,
-        &root.join("target"),
-        AppFlavor::Stable,
-    )
-    .unwrap();
-    assert_eq!(
-        read_location(&local).unwrap().unwrap().data_dir,
-        Some(missing.to_string_lossy().into_owned())
-    );
-    drop(fallback);
-    let migrated = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(migrated.selection.data_dir, choice.target);
-    assert_eq!(migrated.store.list_connections().unwrap().len(), 1);
-    assert!(!missing.exists());
+    let target = queue_switch(&local, &local, &root.join("target"), AppFlavor::Stable)
+        .unwrap()
+        .target;
+    TEST_FAILURE.with(|point| point.set(Some("published_plugin")));
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    let choice = prepare_recovery_selection(&local, &local, AppFlavor::Stable).unwrap();
+    commit_recovery_selection(&local, &choice, AppFlavor::Stable).unwrap();
+    let location = read_location(&local).unwrap().unwrap();
+    assert!(location.pending.is_none());
+    assert!(target.join(JOURNAL_NAME).exists());
+    let source = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert_eq!(source.selection.data_dir, local);
+    assert!(!target.join(DATABASE_FILE_NAME).exists());
+}
+
+#[test]
+fn future_migration_journal_never_publishes_or_archives_data() {
+    let root = TestTempDir::new("nyaterm-future-migration-journal");
+    let local = root.join("local");
+    fixture(&local);
+    let target = queue_switch(&local, &local, &root.join("target"), AppFlavor::Stable)
+        .unwrap()
+        .target;
+    TEST_FAILURE.with(|point| point.set(Some("journaled")));
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    let path = target.join(JOURNAL_NAME);
+    let mut journal: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    journal["version"] = serde_json::json!(99);
+    let bytes = serde_json::to_vec(&journal).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert!(local.join(DATABASE_FILE_NAME).exists());
+    assert!(!target.join(DATABASE_FILE_NAME).exists());
 }

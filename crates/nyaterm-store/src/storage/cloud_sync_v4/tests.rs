@@ -821,11 +821,9 @@ fn a_saved_edit_during_password_rotation_prevents_switching_and_keeps_the_old_sp
     );
 }
 
-/// Reported in the field: one connection kept `endpoint` deferred on every pass.
-/// The record's password lives only in this device's vault, so the old guard
-/// rejected the remote host change and no later pass could ever settle it.
+/// Local credentials cannot authorize a causal overwrite of another device's address.
 #[test]
-fn a_vault_backed_connection_password_keeps_its_endpoint_without_deferring() {
+fn a_vault_backed_connection_password_defers_endpoint_without_reasserting() {
     use nyaterm_core::sync_schema::{SyncFieldId, SyncResourceId, SyncValue};
     let dir = TestTempDir::new("nyaterm-v4-vault-password-redirect");
     let store = ConnectionStore::open(dir.path()).unwrap();
@@ -861,11 +859,8 @@ fn a_vault_backed_connection_password_keeps_its_endpoint_without_deferring() {
     replace_projection(&mut proposal, next);
 
     let applied = store.apply_v4_plan(proposal, "password").unwrap();
-    assert!(
-        applied.deferred.is_empty(),
-        "an address change must settle instead of deferring on every pass"
-    );
-    assert_eq!(applied.kept, vec!["Server".to_string()]);
+    assert!(applied.deferred.contains(&endpoint));
+    assert!(applied.kept.is_empty());
     assert_eq!(
         serde_json::to_value(store.get_connection("server").unwrap().unwrap()).unwrap()["host"],
         "server.example",
@@ -880,18 +875,21 @@ fn a_vault_backed_connection_password_keeps_its_endpoint_without_deferring() {
             "the device-local password is never destroyed by a remote address move"
         );
     }
-    // The apply re-published the local address, so the field has exactly one
-    // candidate again: the next pass has nothing left to settle or to keep.
+    // Refusing a local binding change must not rewrite the remote candidate.
     let replica = SyncReplica::load(applied.replica.as_ref().unwrap(), Uuid::nil()).unwrap();
     let candidates = replica.candidates(&endpoint).unwrap();
     assert_eq!(candidates.len(), 1);
-    assert_eq!(
+    assert_ne!(
         *replica.candidate_value(&candidates[0]).unwrap(),
         local_endpoint
     );
     let again = store.apply_v4_plan(prepared(&store), "password").unwrap();
-    assert!(again.deferred.is_empty());
+    assert!(again.deferred.contains(&endpoint));
     assert!(again.kept.is_empty());
+    assert_eq!(
+        again.replica.as_ref().unwrap().document,
+        applied.replica.as_ref().unwrap().document
+    );
 }
 
 /// The build that shipped before this change wrote `cleared` into the local
@@ -948,8 +946,8 @@ fn an_inline_connection_password_keeps_its_endpoint() {
     );
     replace_projection(&mut proposal, next);
     let applied = store.apply_v4_plan(proposal, "password").unwrap();
-    assert!(applied.deferred.is_empty());
-    assert_eq!(applied.kept, vec!["Server".to_string()]);
+    assert!(applied.deferred.contains(&endpoint));
+    assert!(applied.kept.is_empty());
     let stored = store.get_connection("server").unwrap().unwrap();
     assert_eq!(stored.name, "Renamed");
     assert_eq!(
@@ -2160,4 +2158,36 @@ fn unreadable_legacy_replica_aborts_migration_without_marker() {
         .unwrap()
         .unwrap();
     assert_eq!(serde_json::to_vec(&loaded).unwrap(), expected);
+}
+
+#[test]
+fn local_password_binding_defers_authentication_changes_but_applies_other_fields() {
+    use nyaterm_core::sync_schema::{SyncFieldId, SyncResourceId, SyncValue};
+    let dir = TestTempDir::new("nyaterm-v4-authentication-binding");
+    let store = ConnectionStore::open(dir.path()).unwrap();
+    enable(&store);
+    let mut server = connection();
+    server.auth = Some(serde_json::from_value(json!({"mode":"password", "password_source":"connection", "password":"synthetic-test-password"})).unwrap());
+    store.save_connection(&server).unwrap();
+    let before = store
+        .load_v4_view("destination", "password", &Default::default())
+        .unwrap();
+    let mut proposal = prepared(&store);
+    let mut next = before.projection.clone();
+    let resource = SyncResourceId::new("connection", "server");
+    let authentication = SyncFieldId::new(resource.clone(), "authentication");
+    let mut changed = next.values[&authentication.key()].decode().unwrap();
+    changed["mode"] = json!("none");
+    next.values
+        .insert(authentication.key(), SyncValue::new(&changed));
+    next.values.insert(
+        SyncFieldId::new(resource, "name").key(),
+        SyncValue::new(&json!("Renamed")),
+    );
+    replace_projection(&mut proposal, next);
+    let applied = store.apply_v4_plan(proposal, "password").unwrap();
+    assert!(applied.deferred.contains(&authentication));
+    let saved = store.get_connection("server").unwrap().unwrap();
+    assert_eq!(saved.name, "Renamed");
+    assert_eq!(saved.auth.unwrap().mode, "password");
 }

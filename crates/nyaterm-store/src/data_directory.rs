@@ -1,14 +1,15 @@
 //! Filesystem transaction executor for data-directory selection.
 
+mod backup;
 mod locked_database;
 use self::locked_database::LockedDatabase;
 
 use nyaterm_core::app_identity::AppFlavor;
 pub use nyaterm_core::data_directory::{
     CLOUD_SYNC_LOCAL_DIR_NAME, DATA_DIR_ENV, DATA_MARKER_FILE_NAME, DATABASE_FILE_NAME,
-    DataDirectoryError, DataLocation, DataMarker, INSTANCE_DIR_NAME, LOCATION_FILE_NAME,
-    LOCATION_VERSION, MARKER_VERSION, MIGRATION_SUFFIX, PLUGINS_DIR_NAME, PendingSwitch,
-    PreparedSwitch, RECORDINGS_DIR_NAME, StartupDataDirectory, SwitchMode,
+    DataDirectoryError, DataDirectoryRecovery, DataLocation, DataMarker, INSTANCE_DIR_NAME,
+    LOCATION_FILE_NAME, LOCATION_VERSION, MARKER_VERSION, MIGRATION_SUFFIX, PLUGINS_DIR_NAME,
+    PendingSwitch, PreparedSwitch, RECORDINGS_DIR_NAME, StartupDataDirectory, SwitchMode,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -91,7 +92,7 @@ pub fn queue_prepared_switch(
         current_data_dir,
         &choice.target,
         flavor,
-        Some(choice.mode),
+        Some(choice),
     )
 }
 
@@ -100,10 +101,16 @@ fn queue_switch_checked(
     current_data_dir: &Path,
     target: &Path,
     flavor: AppFlavor,
-    expected: Option<SwitchMode>,
+    expected: Option<&PreparedSwitch>,
 ) -> Result<PreparedSwitch, DataDirectoryError> {
-    let prepared = prepare_switch(current_data_dir, local_dir, target, flavor)?;
-    if expected.is_some_and(|mode| mode != prepared.mode) {
+    let prepared = if expected.is_some_and(|choice| choice.mode == SwitchMode::ReplaceWithBackup) {
+        prepare_migration(current_data_dir, local_dir, target, flavor)?
+    } else {
+        prepare_switch(current_data_dir, local_dir, target, flavor)?
+    };
+    if expected.is_some_and(|choice| {
+        choice.mode != prepared.mode || choice.target_fingerprint != prepared.target_fingerprint
+    }) {
         return Err(DataDirectoryError::RecoveryRequired(prepared.target));
     }
     let mut location = read_location(local_dir)?.unwrap_or_default();
@@ -118,6 +125,7 @@ fn queue_switch_checked(
         ),
         mode: prepared.mode,
         migration_id: Some(uuid::Uuid::new_v4()),
+        target_fingerprint: prepared.target_fingerprint.clone(),
         extra: Default::default(),
     });
     location.last_error = None;
@@ -185,7 +193,7 @@ pub fn open_startup(
     let existing = read_location(local)?;
     let mut location = existing.clone().unwrap_or_default();
     if let Some(pending) = location.pending.as_mut()
-        && pending.mode == SwitchMode::Migrate
+        && pending.mode != SwitchMode::Adopt
         && pending.migration_id.is_none()
     {
         pending.migration_id = Some(uuid::Uuid::new_v4());
@@ -200,7 +208,7 @@ pub fn open_startup(
         return Err(DataDirectoryError::RelativePath(configured));
     }
     let lease = DataRootLease::acquire(&configured)?;
-    let mut notice = location.last_error.clone();
+    let notice = location.last_error.clone();
     if override_dir.is_none()
         && let Some(pending) = location.pending.clone()
     {
@@ -257,19 +265,19 @@ pub fn open_startup(
                                 .insert(DATABASE_FILE_NAME.into(), hex::encode(digest));
                             let _ = write_atomic_json(&target.join(JOURNAL_NAME), &manifest);
                         }
-                        notice = Some(e.code().into());
                         drop(target_lease);
                         drop(source_guard);
+                        return Err(e);
                     }
                 }
             }
             Err(e) => {
-                notice = Some(e.code().into());
+                location.last_error = Some(e.code().into());
+                let _ = write_location(local, &location);
+                // An unresolved transaction must not coexist with a writable source.
+                return Err(e);
             }
         }
-        location.last_error = notice.clone();
-        // A failed commit never changes the active pointer, including in memory.
-        let _ = write_location(local, &location);
     }
     let committed_journal = location.pending.is_none()
         && location.data_dir.is_some()
@@ -277,7 +285,7 @@ pub fn open_startup(
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Manifest>(&bytes).ok())
             .is_some_and(|manifest| {
-                manifest.version == 1
+                matches!(manifest.version, 1 | 2)
                     && manifest.ready
                     && manifest.target == normalize_existing_prefix(&configured)
             });
@@ -306,23 +314,6 @@ pub fn open_startup(
                     custom: configured != default_dir,
                     data_dir: configured,
                     notice,
-                },
-                store,
-                lease,
-            })
-        }
-        Err(DataDirectoryError::InUse(path)) => Err(DataDirectoryError::InUse(path)),
-        Err(e) if configured != default_dir && default_dir.join(DATABASE_FILE_NAME).is_file() => {
-            drop(lease);
-            let lease = DataRootLease::acquire(default_dir)?;
-            validate_usable_directory(default_dir, flavor)?;
-            let store = open_existing(default_dir)?;
-            Ok(StartupStore {
-                selection: StartupDataDirectory {
-                    pending: location.pending.is_some(),
-                    custom: false,
-                    data_dir: default_dir.into(),
-                    notice: Some(e.code().into()),
                 },
                 store,
                 lease,
@@ -427,16 +418,131 @@ pub fn prepare_switch(
         }
     };
 
-    if mode == SwitchMode::Adopt {
+    let target_fingerprint = if mode == SwitchMode::Adopt {
         validate_usable_directory(&target, flavor)?;
-        // Validation is performed on a copy so preview does not repair user data.
-        validate_copy(&target.join(DATABASE_FILE_NAME))?;
-    }
+        Some(directory_fingerprint(&target)?)
+    } else {
+        None
+    };
     Ok(PreparedSwitch {
+        target_fingerprint,
         sync_client: detect_sync_client(&target),
         target,
         mode,
     })
+}
+
+/// Returning to the installation directory preserves today's data and archives
+/// any historical data already there. Other occupied roots are adopted explicitly.
+pub fn prepare_migration(
+    current: &Path,
+    local: &Path,
+    target: &Path,
+    flavor: AppFlavor,
+) -> Result<PreparedSwitch, DataDirectoryError> {
+    let mut choice = prepare_switch(current, local, target, flavor)?;
+    if choice.mode == SwitchMode::Adopt {
+        if choice.target != normalize_existing_prefix(local) {
+            return Err(DataDirectoryError::NotEmpty(choice.target));
+        }
+        choice.mode = SwitchMode::ReplaceWithBackup;
+    }
+    Ok(choice)
+}
+
+pub fn startup_recovery(
+    local: &Path,
+    default_dir: &Path,
+    error: &DataDirectoryError,
+) -> DataDirectoryRecovery {
+    let location = read_location(local);
+    let override_dir = std::env::var_os(DATA_DIR_ENV).map(PathBuf::from);
+    let can_select = override_dir.is_none() && location.is_ok();
+    let location = location.ok().flatten().unwrap_or_default();
+    DataDirectoryRecovery {
+        configured: override_dir
+            .or_else(|| location.data_dir.map(PathBuf::from))
+            .unwrap_or_else(|| default_dir.to_path_buf()),
+        default_dir: default_dir.to_path_buf(),
+        pending: location.pending,
+        can_select,
+        code: error.code().into(),
+        message: error.to_string(),
+    }
+}
+
+/// Recovery selection never creates a database, nor needs the unavailable source.
+pub fn prepare_recovery_selection(
+    local: &Path,
+    picked: &Path,
+    flavor: AppFlavor,
+) -> Result<PreparedSwitch, DataDirectoryError> {
+    if std::env::var_os(DATA_DIR_ENV).is_some() {
+        return Err(DataDirectoryError::RecoveryRequired(local.into()));
+    }
+    read_location(local)?;
+    if !picked.is_absolute()
+        || picked.to_str().is_none()
+        || picked.components().any(|part| part.as_os_str() == "..")
+    {
+        return Err(DataDirectoryError::RelativePath(picked.into()));
+    }
+    let target = normalize_existing_prefix(&resolve_picked_data_dir(picked, flavor));
+    let _lease = DataRootLease::acquire(&target)?;
+    validate_usable_directory(&target, flavor)?;
+    Ok(PreparedSwitch {
+        target_fingerprint: Some(directory_fingerprint(&target)?),
+        sync_client: detect_sync_client(&target),
+        target,
+        mode: SwitchMode::Adopt,
+    })
+}
+
+/// Commit an explicit recovery choice before any ordinary store is opened.
+pub fn commit_recovery_selection(
+    local: &Path,
+    choice: &PreparedSwitch,
+    flavor: AppFlavor,
+) -> Result<(), DataDirectoryError> {
+    if std::env::var_os(DATA_DIR_ENV).is_some() || choice.mode != SwitchMode::Adopt {
+        return Err(DataDirectoryError::RecoveryRequired(local.into()));
+    }
+    let _lease = DataRootLease::acquire(&choice.target)?;
+    validate_usable_directory(&choice.target, flavor)?;
+    check_target_fingerprint(&choice.target, choice.target_fingerprint.as_deref())?;
+    set_active_data_dir(local, Some(&choice.target))
+}
+
+fn directory_fingerprint(path: &Path) -> Result<String, DataDirectoryError> {
+    let file = LockedDatabase::open(&path.join(DATABASE_FILE_NAME))?;
+    directory_fingerprint_locked(path, &file)
+}
+
+fn directory_fingerprint_locked(
+    path: &Path,
+    file: &LockedDatabase,
+) -> Result<String, DataDirectoryError> {
+    let mut inventory = source_tree_digests(path)?;
+    inventory.insert(
+        DATABASE_FILE_NAME.into(),
+        source_fingerprint(file, &path.join(DATABASE_FILE_NAME))?,
+    );
+    if path.join(DATA_MARKER_FILE_NAME).exists() {
+        inventory.insert(
+            DATA_MARKER_FILE_NAME.into(),
+            hex::encode(file_digest(&path.join(DATA_MARKER_FILE_NAME))?),
+        );
+    }
+    let bytes = serde_json::to_vec(&inventory).expect("string map");
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+fn check_target_fingerprint(path: &Path, expected: Option<&str>) -> Result<(), DataDirectoryError> {
+    let actual = directory_fingerprint(path)?;
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(DataDirectoryError::RecoveryRequired(path.into()));
+    }
+    Ok(())
 }
 
 pub fn validate_usable_directory(
@@ -557,6 +663,10 @@ struct Manifest {
     target: PathBuf,
     files: std::collections::BTreeMap<String, String>,
     entries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backup: Option<backup::BackupManifest>,
+    #[serde(flatten)]
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 struct AppliedSwitch {
@@ -582,6 +692,7 @@ fn apply_pending(
     let lease = DataRootLease::acquire(&target)?;
     if pending.mode == SwitchMode::Adopt {
         validate_usable_directory(&target, flavor)?;
+        check_target_fingerprint(&target, pending.target_fingerprint.as_deref())?;
         let store = open_existing(&target)?;
         ensure_data_marker(&target, flavor)?;
         return Ok(AppliedSwitch {
@@ -601,12 +712,16 @@ fn apply_pending(
         .migration_id
         .ok_or_else(|| DataDirectoryError::RecoveryRequired(target.clone()))?;
     let stage = staging_path(&target, migration_id);
+    let replacing = pending.mode == SwitchMode::ReplaceWithBackup;
+    let mut target_database = None;
     let mut manifest = if journal.exists() {
         let bytes =
             fs::read(&journal).map_err(|e| io_error("read migration journal", &journal, e))?;
         let manifest: Manifest = serde_json::from_slice(&bytes)
             .map_err(|_| DataDirectoryError::RecoveryRequired(target.clone()))?;
-        if manifest.version != 1
+        if !matches!(manifest.version, 1 | 2)
+            || replacing != manifest.backup.is_some()
+            || (manifest.backup.is_some() && manifest.version != 2)
             || Some(manifest.id) != pending.migration_id
             || manifest.source != source_normalized
             || manifest.target != target
@@ -631,9 +746,10 @@ fn apply_pending(
         // No entries are published before the journal. A private staging directory
         // named by this pending request can therefore be discarded after a crash.
         if stage.exists() {
-            if [DATABASE_FILE_NAME, PLUGINS_DIR_NAME, RECORDINGS_DIR_NAME]
-                .iter()
-                .any(|name| target.join(name).exists())
+            if (!replacing
+                && [DATABASE_FILE_NAME, PLUGINS_DIR_NAME, RECORDINGS_DIR_NAME]
+                    .iter()
+                    .any(|name| target.join(name).exists()))
                 || !fs::symlink_metadata(&stage).is_ok_and(|m| m.is_dir())
             {
                 return Err(DataDirectoryError::RecoveryRequired(target));
@@ -642,12 +758,26 @@ fn apply_pending(
                 .map_err(|e| io_error("remove interrupted staging", &stage, e))?;
         }
         // Classification is repeated under the retained target lease.
-        if target.join(DATABASE_FILE_NAME).exists()
-            || (target.exists()
-                && !directory_is_effectively_empty(
-                    &target,
-                    target == normalize_existing_prefix(local),
-                )?)
+        let backup = if replacing {
+            validate_usable_directory(&target, flavor)?;
+            let file = LockedDatabase::open(&target.join(DATABASE_FILE_NAME))?;
+            let fingerprint = directory_fingerprint_locked(&target, &file)?;
+            if pending.target_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                return Err(DataDirectoryError::RecoveryRequired(target));
+            }
+            let backup = backup::prepare(local, &target, migration_id, &file)?;
+            target_database = Some(file);
+            Some(backup)
+        } else {
+            None
+        };
+        if !replacing
+            && (target.join(DATABASE_FILE_NAME).exists()
+                || (target.exists()
+                    && !directory_is_effectively_empty(
+                        &target,
+                        target == normalize_existing_prefix(local),
+                    )?))
         {
             return Err(DataDirectoryError::NotEmpty(target));
         }
@@ -705,7 +835,9 @@ fn apply_pending(
             }
             sync_directory(&stage)?;
             Ok(Manifest {
-                version: 1,
+                version: if replacing { 2 } else { 1 },
+                backup,
+                extra: Default::default(),
                 id: migration_id,
                 source: source_normalized.clone(),
                 database_hash: source_hash.clone(),
@@ -728,6 +860,11 @@ fn apply_pending(
         failpoint("journaled", &target)?;
         manifest
     };
+    if let Some(backup) = &manifest.backup {
+        backup::archive(local, &target, migration_id, backup, &mut target_database)?;
+    }
+    // The old database lock belongs to the archived file, not the new database.
+    drop(target_database);
     // Only recorded relative entries can be published; a changed target is never overwritten.
     for (relative, expected) in &manifest.files {
         let relative_path = Path::new(relative);
@@ -812,6 +949,12 @@ fn apply_pending(
             )?;
         }
     }
+    // Entries absent from the source must also be absent after publication.
+    // Otherwise a newly introduced plugins/recordings tree could bypass the
+    // per-entry checks simply because this migration never planned to copy it.
+    if source_tree_digests(&target)? != expected {
+        return Err(DataDirectoryError::RecoveryRequired(target));
+    }
     ensure_data_marker(&target, flavor)?;
     let store = open_existing(&target)?;
     manifest.database_hash = store
@@ -842,11 +985,6 @@ fn source_fingerprint(source: &LockedDatabase, path: &Path) -> Result<String, Da
     })();
     let _ = fs::remove_file(temp);
     result
-}
-
-fn validate_copy(path: &Path) -> Result<(), DataDirectoryError> {
-    let source = LockedDatabase::open(path)?;
-    source_fingerprint(&source, path).map(|_| ())
 }
 
 fn copy_directory_tree(source: &Path, dest: &Path) -> Result<(), DataDirectoryError> {
@@ -1078,6 +1216,7 @@ const INSTALL_DIR_LOCAL_ENTRIES: &[&str] = &[
     INSTANCE_DIR_NAME,
     LOCATION_FILE_NAME,
     DATA_MARKER_FILE_NAME,
+    backup::BACKUPS_DIR,
 ];
 
 fn directory_is_effectively_empty(
@@ -1298,7 +1437,13 @@ fn is_network_location(path: &Path) -> Result<bool, DataDirectoryError> {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt as _;
         let canonical = normalize_existing_prefix(path);
-        let path_c = CString::new(canonical.as_os_str().as_bytes())
+        // statfs needs an existing path. A directory that is not created yet
+        // will live on the mount of its closest existing ancestor.
+        let existing = canonical
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .unwrap_or(&canonical);
+        let path_c = CString::new(existing.as_os_str().as_bytes())
             .map_err(|_| DataDirectoryError::RelativePath(path.into()))?;
         let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
         // SAFETY: path is NUL-terminated; stat points to writable storage.
@@ -1310,7 +1455,8 @@ fn is_network_location(path: &Path) -> Result<bool, DataDirectoryError> {
             ));
         }
         // SAFETY: statfs initialized the structure on success.
-        Ok(unsafe { stat.assume_init() }.f_flags & libc::MNT_LOCAL == 0)
+        // `f_flags` is a `u32` while libc declares `MNT_LOCAL` as a `c_int`.
+        Ok(unsafe { stat.assume_init() }.f_flags & libc::MNT_LOCAL as u32 == 0)
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {

@@ -251,7 +251,14 @@ impl SyncReport {
     /// nothing to repair, which is how a permanently deferred field looks
     /// indistinguishable from a healthy sync.
     pub(crate) fn status_message(&self) -> String {
-        let mut message = if self.verified {
+        let mut message = if self.verified && (self.conflicts > 0 || !self.deferred.is_empty()) {
+            t!(
+                "settings.syncV4NeedsAttention",
+                conflicts = self.conflicts,
+                deferred = self.deferred.len()
+            )
+            .to_string()
+        } else if self.verified {
             t!("settings.syncV3Verified", count = self.conflicts).to_string()
         } else {
             t!(
@@ -294,24 +301,34 @@ impl SyncReport {
         provider: Option<String>,
         duration_ms: Option<u64>,
     ) -> nyaterm_core::CloudSyncHistoryEntry {
-        let (status, message) = if self.verified {
-            (
-                "success",
-                if self.published {
-                    "Cloud synchronization applied and verified".to_string()
-                } else {
-                    "Cloud synchronization is already up to date".to_string()
-                },
-            )
-        } else {
-            (
-                "failed",
-                format!(
-                    "Cloud synchronization could not be verified: {}",
-                    self.publication_error.as_deref().unwrap_or("unknown")
-                ),
-            )
-        };
+        let (status, message) =
+            if self.verified && (self.conflicts > 0 || !self.deferred.is_empty()) {
+                (
+                    "conflict",
+                    format!(
+                        "Cloud synchronization verified with {} conflicts and {} unapplied fields",
+                        self.conflicts,
+                        self.deferred.len()
+                    ),
+                )
+            } else if self.verified {
+                (
+                    "success",
+                    if self.published {
+                        "Cloud synchronization applied and verified".to_string()
+                    } else {
+                        "Cloud synchronization is already up to date".to_string()
+                    },
+                )
+            } else {
+                (
+                    "failed",
+                    format!(
+                        "Cloud synchronization could not be verified: {}",
+                        self.publication_error.as_deref().unwrap_or("unknown")
+                    ),
+                )
+            };
         let mut entry =
             nyaterm_core::CloudSyncHistoryEntry::sync(status, trigger, provider, None, message);
         entry.duration_ms = duration_ms;

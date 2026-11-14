@@ -150,6 +150,7 @@ mod tests {
                     target: root.join("target"),
                     mode: SwitchMode::Migrate,
                     sync_client: None,
+                    target_fingerprint: None,
                 },
                 cx,
             )

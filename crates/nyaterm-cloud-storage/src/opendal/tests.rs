@@ -983,3 +983,43 @@ fn native_s3_retries_an_interrupted_successful_response_body() {
     );
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn progressing_response_can_exceed_read_deadline_but_stalled_response_times_out() {
+    use opendal::{Buffer, HttpTransport};
+    use std::time::Duration;
+    for stalled in [false, true] {
+        let server = Server::new(move |_| {
+            let mut reply = Reply::new(200, "abcdef");
+            reply.chunk_delay = Some(Duration::from_millis(if stalled { 400 } else { 40 }));
+            reply
+        });
+        let transport = super::transport::Transport::with_deadlines(
+            Default::default(),
+            None,
+            Duration::from_secs(3),
+            Duration::from_millis(150),
+        )
+        .unwrap();
+        let endpoint = format!("{}/object", server.endpoint);
+        let worker = super::worker::Worker::new().unwrap();
+        let result = worker.run(async move {
+            transport
+                .fetch(http::Request::get(endpoint).body(Buffer::new()).unwrap())
+                .await
+                .map(|_| ())
+                .map_err(|error| super::error::map_error("webdav", "read", error))
+        });
+        if stalled {
+            assert!(matches!(
+                result,
+                Err(nyaterm_core::CloudSyncError::Storage {
+                    kind: nyaterm_core::cloud_sync::error::CloudStorageErrorKind::Timeout,
+                    ..
+                })
+            ));
+        } else {
+            result.unwrap();
+        }
+    }
+}

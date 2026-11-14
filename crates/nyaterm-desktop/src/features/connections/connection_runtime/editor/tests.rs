@@ -654,7 +654,7 @@ fn inherited_agent_all_policy_requires_fresh_consent_for_defaults_and_connection
 }
 
 #[test]
-fn saving_defaults_with_agent_all_opens_confirmation_before_submitting() {
+fn saving_defaults_with_inactive_agent_all_opens_confirmation_before_submitting() {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::TestAppCleanup;
     use gpui::TestAppContext;
@@ -663,12 +663,14 @@ fn saving_defaults_with_agent_all_opens_confirmation_before_submitting() {
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "local");
-    app.update(&mut cx, |app, _| {
+    app.update(&mut cx, |app, cx| {
         let mut draft = app.new_connection_editor_state(None, false);
         draft.defaults_mode = true;
+        app.connection_state.begin_editor(draft.clone());
         draft.agent_forwarding_config.enabled = true;
         draft.agent_forwarding_config.policy = nyaterm_core::SshAgentForwardingPolicy::All;
-        app.connection_state.begin_editor(draft);
+        app.connection_state.replace_editor_kind(draft);
+        app.set_connection_editor_kind(crate::models::ConnectionKindTab::Telnet, cx);
     });
     app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
     let host = gpui::AppContext::new(&mut cx, |_| gpui::EmptyView);
@@ -677,6 +679,14 @@ fn saving_defaults_with_agent_all_opens_confirmation_before_submitting() {
         app.update(cx, |app, cx| app.save_connection_editor(window, cx));
         assert!(window.has_active_nya_dialog(cx));
         assert!(!app.read(cx).connection_state.editor_save_in_flight());
+        assert_eq!(
+            app.read(cx)
+                .connection_state
+                .active_editor_draft()
+                .unwrap()
+                .kind,
+            crate::models::ConnectionKindTab::Ssh
+        );
         assert!(
             app.read(cx)
                 .process_state
@@ -686,4 +696,177 @@ fn saving_defaults_with_agent_all_opens_confirmation_before_submitting() {
                 .is_none()
         );
     });
+}
+
+#[test]
+fn new_protocol_inherits_identity_once_and_preserves_each_protocol_draft() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{ConnectionEditorField, ConnectionKindTab};
+    use crate::test_support::TestAppCleanup;
+    let root = TestTempDir::new("nyaterm-new-protocol-identity");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let mut initial = app.new_connection_editor_state(Some("group".into()), false);
+        initial.name = "Shared identity".into();
+        initial.host = "server.example".into();
+        initial.username = "operator".into();
+        initial.description = "description".into();
+        initial.tags = vec!["tag".into()];
+        initial.pending_group_name = Some("New group".into());
+        initial.password = "synthetic-test-password".into();
+        app.connection_state.begin_editor(initial);
+        app.set_connection_editor_kind(ConnectionKindTab::Telnet, cx);
+        let telnet = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(telnet.name, "Shared identity");
+        assert_eq!(telnet.host, "server.example");
+        assert_eq!(telnet.username, "operator");
+        assert_eq!(telnet.pending_group_name.as_deref(), Some("New group"));
+        assert_eq!(telnet.port, "23");
+        assert!(telnet.password.is_empty());
+        app.connection_state
+            .set_editor_field_text(ConnectionEditorField::Name, "Telnet name".into());
+        app.set_connection_editor_kind(ConnectionKindTab::Ssh, cx);
+        assert_eq!(
+            app.connection_state.active_editor_draft().unwrap().name,
+            "Shared identity"
+        );
+        app.connection_state
+            .set_editor_field_text(ConnectionEditorField::Port, "2022".into());
+        app.set_connection_editor_kind(ConnectionKindTab::Rdp, cx);
+        assert_eq!(
+            app.connection_state.active_editor_draft().unwrap().port,
+            "2022"
+        );
+        app.set_connection_editor_kind(ConnectionKindTab::Telnet, cx);
+        assert_eq!(
+            app.connection_state.active_editor_draft().unwrap().name,
+            "Telnet name"
+        );
+        app.connection_state.close_editor();
+    });
+}
+
+#[test]
+fn default_session_changes_ignore_navigation_and_freeze_while_saving() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{ConnectionEditorSection, ConnectionKindTab};
+    use crate::test_support::TestAppCleanup;
+    let root = TestTempDir::new("nyaterm-default-session-dirty");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let mut draft = app.new_connection_editor_state(None, false);
+        draft.defaults_mode = true;
+        app.connection_state.begin_editor(draft);
+        app.connection_state
+            .select_editor_section(ConnectionEditorSection::Terminal);
+        app.set_connection_editor_kind(ConnectionKindTab::Telnet, cx);
+        assert!(app.connection_state.modified_default_drafts().is_empty());
+        app.connection_state.set_editor_select_value(
+            crate::models::ConnectionEditorSelect::Encoding,
+            Some("GBK".into()),
+        );
+        app.set_connection_editor_kind(ConnectionKindTab::Ssh, cx);
+        app.connection_state.set_editor_select_value(
+            crate::models::ConnectionEditorSelect::Encoding,
+            Some("UTF-8".into()),
+        );
+        let changed = app.connection_state.modified_default_drafts();
+        assert_eq!(changed.len(), 2);
+        assert_eq!(changed[0].kind, ConnectionKindTab::Ssh);
+        assert_eq!(changed[1].kind, ConnectionKindTab::Telnet);
+        let generation = app.connection_state.begin_editor_save().unwrap();
+        app.set_connection_editor_kind(ConnectionKindTab::Rdp, cx);
+        app.connection_state.set_editor_select_value(
+            crate::models::ConnectionEditorSelect::Encoding,
+            Some("late edit".into()),
+        );
+        let active = app.connection_state.active_editor_draft().unwrap();
+        assert_eq!(active.kind, ConnectionKindTab::Ssh);
+        assert_eq!(active.encoding, "UTF-8");
+        app.connection_state.finish_editor_save_request(generation);
+        assert_eq!(app.connection_state.modified_default_drafts().len(), 2);
+        app.connection_state.close_editor();
+    });
+}
+
+#[test]
+fn saving_defaults_reveals_an_invalid_inactive_protocol_without_submitting() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{ConnectionEditorField, ConnectionKindTab};
+    use crate::test_support::TestAppCleanup;
+    let root = TestTempDir::new("nyaterm-default-hidden-invalid");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let mut draft = app.new_connection_editor_state(None, false);
+        draft.defaults_mode = true;
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        app.connection_state.set_editor_field_text(
+            ConnectionEditorField::SftpShellDetectionTimeout,
+            "invalid".into(),
+        );
+        app.set_connection_editor_kind(ConnectionKindTab::Telnet, cx);
+        app.connection_state.set_editor_select_value(
+            crate::models::ConnectionEditorSelect::Encoding,
+            Some("GBK".into()),
+        );
+    });
+    let host = gpui::AppContext::new(&mut cx, |_| gpui::EmptyView);
+    let (_, cx) = cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(host, window, cx));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.save_connection_editor(window, cx);
+            assert_eq!(
+                app.connection_state.active_editor_draft().unwrap().kind,
+                ConnectionKindTab::Ssh
+            );
+            assert!(!app.connection_state.editor_save_in_flight());
+            assert_eq!(app.connection_state.modified_default_drafts().len(), 2);
+            app.connection_state.close_editor();
+        });
+    });
+}
+
+#[test]
+fn saving_default_sessions_persists_all_modified_protocols_before_closing() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{ConnectionEditorSelect, ConnectionKindTab};
+    use crate::test_support::TestAppCleanup;
+    let root = TestTempDir::new("nyaterm-default-save-all");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    let store = app.update(&mut cx, |app, cx| {
+        let mut draft = app.new_connection_editor_state(None, false);
+        draft.defaults_mode = true;
+        app.connection_state.begin_editor(draft);
+        app.connection_state
+            .set_editor_select_value(ConnectionEditorSelect::Encoding, Some("UTF-8".into()));
+        app.set_connection_editor_kind(ConnectionKindTab::Telnet, cx);
+        app.connection_state
+            .set_editor_select_value(ConnectionEditorSelect::Encoding, Some("GBK".into()));
+        app.store_blocking_client()
+    });
+    let host = gpui::AppContext::new(&mut cx, |_| gpui::EmptyView);
+    let (_, cx) = cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(host, window, cx));
+    cx.update(|window, cx| app.update(cx, |app, cx| app.save_connection_editor(window, cx)));
+    // The worker barrier makes the persistence result available before pumping GPUI.
+    let saved = store
+        .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+            store.load_default_session_settings()
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved["ssh"]["encoding"], "UTF-8");
+    assert_eq!(saved["telnet"]["encoding"], "GBK");
+    cx.run_until_parked();
+    assert!(app.read_with(cx, |app, _| {
+        app.connection_state.active_editor_draft().is_none()
+    }));
 }
