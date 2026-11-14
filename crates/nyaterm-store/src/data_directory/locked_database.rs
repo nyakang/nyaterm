@@ -1,5 +1,5 @@
 use crate::data_directory::io_error;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 use crate::data_directory::lock_file;
 use nyaterm_core::data_directory::DataDirectoryError;
 use sha2::{Digest as _, Sha256};
@@ -25,7 +25,11 @@ impl LockedDatabase {
             .write(true)
             .open(path)
             .map_err(|e| io_error("open database", path, e))?;
-        #[cfg(unix)]
+        // On the Apple platforms, flock and the open file description range
+        // lock below share one lock table: the range lock then fails against
+        // our own flock, and every migration reports the directory as in use.
+        // The range lock alone still conflicts with another process's flock.
+        #[cfg(all(unix, not(target_vendor = "apple")))]
         lock_file(&file, path.parent().unwrap_or(path))?;
         let backend = redb::backends::FileBackend::new(file)
             .map_err(|_| DataDirectoryError::InvalidDatabase(path.into()))?;
