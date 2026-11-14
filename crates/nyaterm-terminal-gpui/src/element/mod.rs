@@ -50,13 +50,7 @@ fn terminal_geometry_diagnostics_enabled() -> bool {
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct TerminalBufferMatch {
-    pub line_index: usize,
-    /// Half-open character column range on the matched line.
-    pub start_col: usize,
-    pub end_col: usize,
-}
+pub use nyaterm_terminal::search::TerminalBufferMatch;
 
 #[derive(Debug, Clone)]
 pub struct TerminalSearchFlags {

@@ -4,6 +4,7 @@ pub mod history;
 pub mod matching;
 pub mod parser;
 pub mod privacy;
+pub mod query;
 pub mod types;
 pub mod whole_history;
 

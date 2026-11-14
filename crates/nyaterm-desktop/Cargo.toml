@@ -32,6 +32,7 @@ nyaterm-store.workspace = true
 nyaterm-sync.workspace = true
 nyaterm-terminal.workspace = true
 nyaterm-terminal-gpui.workspace = true
+nyaterm-terminal-runtime.workspace = true
 nyaterm-transport.workspace = true
 nyaterm-recording.workspace = true
 nyaterm-remote-ops.workspace = true
@@ -56,6 +57,7 @@ zip.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+nyaterm-terminal-runtime = { workspace = true, features = ["test-support"] }
 russh.workspace = true
 nyaterm-recording = { workspace = true, features = ["test-support"] }
 nyaterm-cloud-storage = { workspace = true, features = ["test-support"] }

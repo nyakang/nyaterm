@@ -1,3 +1,5 @@
+pub mod basis;
+
 use crate::SecretString;
 
 use super::{

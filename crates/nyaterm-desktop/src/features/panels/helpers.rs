@@ -1,3 +1,4 @@
+use nyaterm_ui::icons::quick_command_icon;
 use std::borrow::Cow;
 
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
@@ -6,8 +7,7 @@ use nyaterm_ui::NyaSwitch;
 use rust_i18n::t;
 
 use crate::features::{
-    NyaTermApp, commands::quick_command_category_label, icons::quick_command_icon,
-    text_inputs::TextInputSetup,
+    NyaTermApp, commands::quick_command_category_label, text_inputs::TextInputSetup,
 };
 use crate::models::{QuickCommandEditorField, QuickCommandSortMode};
 

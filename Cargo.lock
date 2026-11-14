@@ -6991,6 +6991,7 @@ dependencies = [
  "nyaterm-sync",
  "nyaterm-terminal",
  "nyaterm-terminal-gpui",
+ "nyaterm-terminal-runtime",
  "nyaterm-translation-client",
  "nyaterm-transport",
  "nyaterm-ui",
@@ -7284,6 +7285,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-terminal-runtime"
+version = "2.0.5"
+dependencies = [
+ "futures",
+ "nyaterm-core",
+ "nyaterm-recording",
+ "nyaterm-terminal",
+ "nyaterm-transport",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "nyaterm-translation-client"
 version = "2.0.5"
 dependencies = [
@@ -7340,6 +7354,7 @@ dependencies = [
  "nyaterm-core",
  "ropey",
  "rust-i18n",
+ "serde_json",
  "url",
 ]
 

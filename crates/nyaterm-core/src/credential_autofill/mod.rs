@@ -1,5 +1,7 @@
 //! Terminal-output credential autofill helpers (Tauri `credentialAutofill.ts` parity).
 
+pub mod matching;
+
 use crate::SavedCredential;
 use regex::Regex;
 use std::sync::OnceLock;

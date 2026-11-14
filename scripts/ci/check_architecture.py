@@ -90,6 +90,7 @@ def dependency_errors() -> list[str]:
         "nyaterm-recording",
         "nyaterm-remote-ops",
         "nyaterm-terminal",
+        "nyaterm-terminal-runtime",
         "nyaterm-store",
         "nyaterm-sync",
         "nyaterm-remote-desktop",
@@ -116,11 +117,13 @@ def dependency_errors() -> list[str]:
         ("nyaterm-updater", set()),
         ("nyaterm-preview", set()),
         ("nyaterm-translation-client", set()),
-        ("nyaterm-core", {"nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
-        ("nyaterm-transport", {"nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
-        ("nyaterm-files", {"nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
-        ("nyaterm-remote-ops", {"nyaterm-files", "nyaterm-recording", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
-        ("nyaterm-recording", {"nyaterm-files", "nyaterm-remote-ops", "nyaterm-transport", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-terminal-runtime", set()),
+        ("nyaterm-terminal", {"nyaterm-terminal-runtime"}),
+        ("nyaterm-core", {"nyaterm-terminal-runtime", "nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
+        ("nyaterm-transport", {"nyaterm-terminal-runtime", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-files", {"nyaterm-terminal-runtime", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-remote-ops", {"nyaterm-terminal-runtime", "nyaterm-files", "nyaterm-recording", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
+        ("nyaterm-recording", {"nyaterm-terminal-runtime", "nyaterm-files", "nyaterm-remote-ops", "nyaterm-transport", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
         ("nyaterm-sync", {
             "nyaterm-store", "nyaterm-desktop", "nyaterm-transport", "nyaterm-ui",
             "reqwest", "zed-reqwest", "hyper", "ureq", "isahc", "surf",
@@ -150,7 +153,12 @@ def dependency_errors() -> list[str]:
                 and package.startswith("nyaterm-")
                 and package not in {"nyaterm-core", "nyaterm-mcp-protocol"}
             )
-            if wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
+            wrong_terminal_runtime_direction = (
+                crate == "nyaterm-terminal-runtime"
+                and package.startswith("nyaterm-")
+                and package not in {"nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording"}
+            )
+            if wrong_terminal_runtime_direction or wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
     terminal_presentation = tomllib.loads(
         (ROOT / "crates/nyaterm-terminal-gpui/Cargo.toml").read_text(encoding="utf-8")
@@ -246,6 +254,15 @@ def main() -> int:
         re.compile(r"\b(?:std::)?thread::Builder::new\s*\(\s*\)"), desktop_files
     )
     errors.extend(check_budget("desktop_thread_builder", thread_builders, allowlist))
+
+    runtime_files = tuple(
+        path for path in RUST_FILES
+        if relative(path).startswith("crates/nyaterm-terminal-runtime/src/")
+    )
+    runtime_thread_builders = matching_counts(
+        re.compile(r"\b(?:std::)?thread::Builder::new\s*\(\s*\)"), runtime_files
+    )
+    errors.extend(check_budget("terminal_runtime_thread_builder", runtime_thread_builders, allowlist))
 
     raw_scrolls = matching_counts(
         re.compile(r"\.overflow_(?:x_|y_)?scroll\s*\(\s*\)"), RUST_FILES

@@ -1,3 +1,4 @@
+use nyaterm_ui::icons::{CONNECTION_ICON_OPTIONS, resolve_connection_icon};
 mod credentials;
 mod groups;
 mod selectors;
@@ -56,10 +57,9 @@ use self::vnc::connection_editor_vnc_section;
 use super::super::list::{ConnectionEditorChoice, ConnectionEditorFields, editor_field};
 use crate::features::selects::NO_SELECTION_VALUE;
 use crate::features::{
-    NyaTermApp, icons::CONNECTION_ICON_OPTIONS, icons::resolve_connection_icon,
-    text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::ordinary_input_focus_ring,
-    text_inputs::ordinary_input_shell_border_color, view_widgets::modal_dialog_shell,
-    view_widgets::themed_icon,
+    NyaTermApp, text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX,
+    text_inputs::ordinary_input_focus_ring, text_inputs::ordinary_input_shell_border_color,
+    view_widgets::modal_dialog_shell, view_widgets::themed_icon,
 };
 use crate::models::{
     ConnectionEditorField, ConnectionEditorSection, ConnectionEditorSelect, ConnectionEditorState,

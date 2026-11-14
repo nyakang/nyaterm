@@ -1,4 +1,5 @@
 pub mod reaper;
+pub mod wake;
 pub mod worker;
 
 use std::path::{Path, PathBuf};

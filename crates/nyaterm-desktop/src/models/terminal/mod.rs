@@ -3,52 +3,41 @@ pub(crate) mod command_blocks;
 
 use crate::terminal::terminal_screen_from_output;
 use nyaterm_core::{TerminalBackendResize, terminal_backend_resize_changed};
-use nyaterm_terminal::{
-    TerminalEffects, TerminalLineId, TerminalOutputDecoder, TerminalScreen, TerminalSnapshot,
-};
+use nyaterm_terminal::{TerminalLineId, TerminalOutputDecoder, TerminalScreen, TerminalSnapshot};
 use nyaterm_terminal_gpui::render_cache::TerminalRenderCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-mod frame_commands;
-mod frame_events;
-mod frame_pipeline;
-mod frame_search;
-mod frame_worker;
-
-pub(crate) use frame_commands::TerminalSelectionTextResult;
-pub(crate) use frame_events::{
+pub(crate) use nyaterm_terminal_runtime::frame::TerminalFrameSession;
+pub(crate) use nyaterm_terminal_runtime::frame::TerminalSelectionTextResult;
+pub(crate) use nyaterm_terminal_runtime::frame::{
     TerminalFrameEvent, TerminalFrameOutputEvent, TerminalFrameSearchEvent,
     TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose,
 };
-pub(crate) use frame_pipeline::{TerminalFrameOutputSubmission, TerminalFramePipeline};
-pub(crate) use frame_search::{
+pub(crate) use nyaterm_terminal_runtime::frame::{
+    TerminalFrameOutputSubmission, TerminalFramePipeline,
+};
+pub(crate) use nyaterm_terminal_runtime::frame::{
     TerminalFrameSearchKey, TerminalFrameSearchPurpose, TerminalFrameSearchResult,
     terminal_frame_search_result_is_current,
 };
-pub(crate) use frame_worker::TerminalFrameSession;
 
 pub(crate) use nyaterm_terminal::action_links::{
-    TerminalFrameActionLinks, prepare_terminal_frame_action_links_reusing,
-    terminal_action_link_matcher_key,
+    TerminalFrameActionLinks, terminal_action_link_matcher_key,
 };
 
 mod selection;
-#[cfg(test)]
-mod selection_text_tests;
 pub(crate) use selection::{
     TerminalBufferCellPos, TerminalCellPos, TerminalSelection, TerminalSelectionTextError,
 };
 mod presentation;
 pub(crate) use presentation::{
-    TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP, TERMINAL_OUTPUT_VISIBLE_BURST_OVERLOAD,
-    TERMINAL_PERFORMANCE_RECOVERY_NOTICE, TERMINAL_RENDER_DEGRADATION_RECOVERY_CALM,
-    TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalPerformanceMode, TerminalPerformanceOverlay,
-    TerminalPresentation, TerminalWorkPolicy,
+    TERMINAL_OUTPUT_VISIBLE_BURST_OVERLOAD, TERMINAL_PERFORMANCE_RECOVERY_NOTICE,
+    TERMINAL_RENDER_DEGRADATION_RECOVERY_CALM, TERMINAL_UI_OUTPUT_TAIL_CAP,
+    TerminalPerformanceMode, TerminalPerformanceOverlay, TerminalPresentation, TerminalWorkPolicy,
 };
 
-const TERMINAL_FRAME_VISIBLE_TEXT_TAIL_CAP: usize = 16 * 1024;
 const TERMINAL_SCROLLBACK_SNAPSHOT_CACHE_LIMIT: usize = 16;
 
 pub(crate) fn terminal_geometry_diagnostics_enabled() -> bool {
@@ -110,35 +99,9 @@ impl EffectiveTerminalPaintPolicy {
 
 pub(crate) use nyaterm_terminal::protocol::TerminalProtocolState;
 
-pub(crate) fn protect_terminal_output_burst<'a>(
-    screen: &mut TerminalScreen,
-    output_decoder: &mut TerminalOutputDecoder,
-    data: &'a [u8],
-) -> (&'a [u8], usize) {
-    if data.len() <= TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP {
-        return (data, 0);
-    }
-    let skip = data.len() - TERMINAL_OUTPUT_VISIBLE_BACKLOG_CAP;
-    screen.reset_stream_state();
-    output_decoder.reset_decoder();
-    (&data[skip..], skip)
-}
-
-fn trim_string_to_tail(output: &mut String, max_bytes: usize) {
-    if max_bytes == 0 {
-        output.clear();
-        return;
-    }
-    if output.len() <= max_bytes {
-        return;
-    }
-    let min_start = output.len() - max_bytes;
-    let drain_to = output
-        .char_indices()
-        .find_map(|(index, _)| (index >= min_start).then_some(index))
-        .unwrap_or(output.len());
-    output.drain(..drain_to);
-}
+#[cfg(test)]
+use nyaterm_terminal::output::protect_terminal_output_burst;
+use nyaterm_terminal::output::trim_string_to_tail;
 
 pub(crate) fn append_terminal_ui_output_tail(output: &mut String, text: &str) {
     if text.is_empty() {
@@ -146,32 +109,6 @@ pub(crate) fn append_terminal_ui_output_tail(output: &mut String, text: &str) {
     }
     output.push_str(text);
     trim_string_to_tail(output, TERMINAL_UI_OUTPUT_TAIL_CAP);
-}
-
-fn append_terminal_frame_visible_tail(output: &mut String, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    output.push_str(text);
-    trim_string_to_tail(output, TERMINAL_FRAME_VISIBLE_TEXT_TAIL_CAP);
-}
-
-fn merge_terminal_effects(target: &mut TerminalEffects, mut incoming: TerminalEffects) {
-    if incoming.title.is_some() {
-        target.title = incoming.title.take();
-    }
-    target.reset_title |= incoming.reset_title;
-    target.bell |= incoming.bell;
-    if incoming.cwd.is_some() {
-        target.cwd = incoming.cwd.take();
-    }
-    target.shell_command_started |= incoming.shell_command_started;
-    target.shell_command_finished |= incoming.shell_command_finished;
-    target.pty_write.append(&mut incoming.pty_write);
-    if incoming.clipboard_store.is_some() {
-        target.clipboard_store = incoming.clipboard_store.take();
-    }
-    target.clipboard_loads.append(&mut incoming.clipboard_loads);
 }
 
 pub(crate) struct TerminalViewState {
@@ -920,7 +857,6 @@ impl KeywordHighlightEditorField {
 mod tests;
 
 pub(crate) use nyaterm_terminal::snapshot_window::{
-    terminal_frame_live_snapshot_with_stats, terminal_frame_scroll_window_extra_rows,
-    terminal_frame_snapshot_with_scroll_window,
-    terminal_frame_snapshot_with_scroll_window_and_stats, terminal_snapshot_matches_grid_geometry,
+    terminal_frame_scroll_window_extra_rows, terminal_frame_snapshot_with_scroll_window,
+    terminal_snapshot_matches_grid_geometry,
 };

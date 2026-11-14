@@ -357,6 +357,7 @@ cargo run -p nyaterm-app --bin nyaterm
 │   ├── nyaterm-desktop/         # GPUI application composition and feature state
 │   ├── nyaterm-core/            # UI-independent domain models and policies
 │   ├── nyaterm-terminal/        # Terminal state machine and parsing
+│   ├── nyaterm-terminal-runtime/ # Frame worker, search, and session event routing
 │   ├── nyaterm-terminal-gpui/   # GPUI terminal layout, input, and painting
 │   ├── nyaterm-transport/       # SSH, PTY, SFTP, Telnet, Serial, and transfers
 │   ├── nyaterm-store/           # Persistence and database compatibility

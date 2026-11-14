@@ -3,6 +3,7 @@ use super::command_suggestions::{
     suggestion_overlay_desired_height,
 };
 use crate::features::NyaTermApp;
+use crate::models::credential_autofill_target_display_name;
 use crate::models::{
     ConnectionPasswordTarget, CredentialAutofillAction, CredentialAutofillMatchEvent,
     CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey, CredentialAutofillTarget,
@@ -13,6 +14,7 @@ use gpui::{
     Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb, rgba,
     svg,
 };
+use nyaterm_core::credential_autofill::matching::detect_live_prompt_kind as credential_autofill_detect_prompt_kind;
 use nyaterm_core::{
     ConnectionAuth, CredentialPromptKind, SavedConnection, SecretString, TerminalInputState,
     credential_password_prompt_targets_user, credential_prompt_requests_password, truncate_preview,
@@ -628,7 +630,7 @@ impl NyaTermApp {
             self.activate_session_id_with_surface_sync(session_id, cx);
         }
         let generation = self.terminal.assist.credential_autofill_generation;
-        let credential_name = target.display_name();
+        let credential_name = credential_autofill_target_display_name(target);
         match (kind, target) {
             (CredentialPromptKind::Username, CredentialAutofillTarget::Vault(credential)) => {
                 let mut payload = credential.username.clone();
@@ -1021,7 +1023,10 @@ impl NyaTermApp {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(rgb(palette.text))
-                                    .child(truncate_preview(&credential.display_name(), 36)),
+                                    .child(truncate_preview(
+                                        &credential_autofill_target_display_name(credential),
+                                        36,
+                                    )),
                             )
                             .child(
                                 div()
@@ -1322,52 +1327,6 @@ fn credential_autofill_prompt_text_from_visible(output: &str) -> String {
     }
 }
 
-fn credential_autofill_detect_prompt_kind(prompt: &str) -> Option<CredentialPromptKind> {
-    let trimmed = prompt.trim();
-    if trimmed.is_empty()
-        || !trimmed
-            .chars()
-            .last()
-            .is_some_and(|ch| ch == ':' || ch == '：')
-    {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("password")
-        || lower.contains("passphrase")
-        || lower.contains("passcode")
-        || lower.contains("pin")
-        || lower.contains("otp")
-        || lower.contains("verification code")
-        || lower.contains("authentication code")
-        || lower.contains("auth code")
-        || lower.contains("2fa")
-        || lower.contains("mfa")
-        || trimmed.contains("密码")
-        || trimmed.contains("口令")
-        || trimmed.contains("验证码")
-        || trimmed.contains("动态码")
-        || trimmed.contains("动态口令")
-    {
-        return Some(CredentialPromptKind::Password);
-    }
-    if lower.contains("username")
-        || lower.contains("user name")
-        || lower.contains("login as")
-        || lower.contains("login")
-        || lower.contains("account")
-        || lower.contains("user")
-        || trimmed.contains("用户名")
-        || trimmed.contains("用户")
-        || trimmed.contains("账号")
-        || trimmed.contains("账户")
-        || trimmed.contains("登录名")
-    {
-        return Some(CredentialPromptKind::Username);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1383,6 +1342,7 @@ mod tests {
     };
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::credential_autofill_target_display_name;
     use crate::models::{ConnectionPasswordTarget, CredentialAutofillTarget, SessionLaunchConfig};
     use crate::test_support::TestConfigDir;
     use gpui::{AppContext as _, TestAppContext};
@@ -2415,9 +2375,10 @@ mod tests {
     #[test]
     fn disabled_autofill_rejects_pending_detection_and_late_match_events() {
         use crate::models::{
-            CredentialAutofillMatchEvent, CredentialAutofillMatchOutcome,
-            CredentialAutofillMatchRequestKey, PendingCredentialAutofill,
+            CredentialAutofillMatchEvent, CredentialAutofillMatchRequestKey,
+            PendingCredentialAutofill,
         };
+        use nyaterm_core::credential_autofill::matching::CredentialAutofillMatchOutcome;
         let root = TestConfigDir::new("nyaterm-credential-disabled");
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -2602,7 +2563,7 @@ mod tests {
                 } else {
                     "password"
                 },
-                target.display_name()
+                credential_autofill_target_display_name(target)
             );
             cx.update_entity(&app, |app, cx| {
                 assert_eq!(app.sync_peer_session_ids(&ids[0]), vec![ids[1].clone()]);

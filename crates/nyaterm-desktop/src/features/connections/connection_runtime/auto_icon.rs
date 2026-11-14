@@ -4,11 +4,12 @@
 //! consumes them. Only ever fills in a blank or refreshes a previous
 //! auto-detection — a hand-picked icon clears the flag and is never touched.
 
-use crate::features::{NyaTermApp, icons::infer_connection_icon_key_from_remote_system};
+use crate::features::NyaTermApp;
 use gpui::Context;
 use nyaterm_core::ConnectionType;
 use nyaterm_remote_ops::stats::SystemInfo;
 use nyaterm_store::StoreDomain;
+use nyaterm_ui::icons::infer_connection_icon_key_from_remote_system;
 
 impl NyaTermApp {
     pub(in crate::features) fn connection_icon_probe_needed(&self) -> bool {

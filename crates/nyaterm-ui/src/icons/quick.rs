@@ -21,8 +21,7 @@ const GENERIC_ICONS: &[(&str, IconDef)] = &[
 ];
 
 /// Picker contents: `None` clears the icon and falls back to the color dot.
-pub(in crate::features) fn quick_command_icon_options() -> impl Iterator<Item = Option<&'static str>>
-{
+pub fn quick_command_icon_options() -> impl Iterator<Item = Option<&'static str>> {
     std::iter::once(None).chain(
         BRAND_ICONS
             .iter()
@@ -31,14 +30,13 @@ pub(in crate::features) fn quick_command_icon_options() -> impl Iterator<Item = 
     )
 }
 
-pub(in crate::features) static QUICK_COMMAND_ICON_OPTIONS: std::sync::LazyLock<
-    Vec<Option<&'static str>>,
-> = std::sync::LazyLock::new(|| quick_command_icon_options().collect());
+pub static QUICK_COMMAND_ICON_OPTIONS: std::sync::LazyLock<Vec<Option<&'static str>>> =
+    std::sync::LazyLock::new(|| quick_command_icon_options().collect());
 
 /// Resolve a stored `icon_tag`. Unlike connection icons these are always
 /// monochrome — the old app rendered them as a react-icons glyph plus a CSS
 /// color, which is exactly what an alpha mask reproduces.
-pub(in crate::features) fn quick_command_icon(icon_tag: &str) -> Option<IconDef> {
+pub fn quick_command_icon(icon_tag: &str) -> Option<IconDef> {
     let key = icon_tag.trim().to_ascii_lowercase();
     BRAND_ICONS
         .iter()

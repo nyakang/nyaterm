@@ -11,13 +11,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TerminalFrameSnapshotPurpose {
+pub enum TerminalFrameSnapshotPurpose {
     Paint,
     ActionLinkEnrichment,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TerminalFrameEvent {
+pub enum TerminalFrameEvent {
     CommandNavigation {
         session_id: String,
         result: nyaterm_terminal::command_navigation::CommandNavigationResult,
@@ -35,7 +35,7 @@ pub(crate) enum TerminalFrameEvent {
 }
 
 impl TerminalFrameEvent {
-    pub(crate) fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         match self {
             Self::Output(event) => &event.session_id,
             Self::Snapshot(event) | Self::ClearExceptInput(event) => &event.session_id,
@@ -292,45 +292,45 @@ pub(super) fn push_terminal_frame_worker_event(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TerminalFrameOutputEvent {
-    pub(crate) session_id: String,
-    pub(crate) visible_text: String,
-    pub(crate) recording_text_bytes: usize,
+pub struct TerminalFrameOutputEvent {
+    pub session_id: String,
+    pub visible_text: String,
+    pub recording_text_bytes: usize,
     /// Full viewport grid for paint. Worker omits this for low-priority
     /// (hidden) sessions to avoid per-frame snapshot CPU/memory.
-    pub(crate) snapshot: Option<Arc<TerminalSnapshot>>,
-    pub(crate) action_links: Option<TerminalFrameActionLinks>,
-    pub(crate) protocol_state: TerminalProtocolState,
-    pub(crate) effects: TerminalEffects,
-    pub(crate) command_running: bool,
-    pub(crate) accepted_bytes: usize,
-    pub(crate) skipped_output_bytes: usize,
-    pub(crate) revision: u64,
-    pub(crate) snapshot_duration: Duration,
-    pub(crate) snapshot_stats: TerminalSnapshotBuildStats,
-    pub(crate) process_duration: Duration,
+    pub snapshot: Option<Arc<TerminalSnapshot>>,
+    pub action_links: Option<TerminalFrameActionLinks>,
+    pub protocol_state: TerminalProtocolState,
+    pub effects: TerminalEffects,
+    pub command_running: bool,
+    pub accepted_bytes: usize,
+    pub skipped_output_bytes: usize,
+    pub revision: u64,
+    pub snapshot_duration: Duration,
+    pub snapshot_stats: TerminalSnapshotBuildStats,
+    pub process_duration: Duration,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TerminalFrameSnapshotEvent {
-    pub(crate) session_id: String,
-    pub(crate) offset: usize,
-    pub(crate) snapshot: Arc<TerminalSnapshot>,
-    pub(crate) action_links: Option<TerminalFrameActionLinks>,
-    pub(crate) revision: u64,
-    pub(crate) purpose: TerminalFrameSnapshotPurpose,
-    pub(crate) snapshot_duration: Duration,
-    pub(crate) snapshot_stats: TerminalSnapshotBuildStats,
-    pub(crate) action_link_stats: TerminalActionLinkBuildStats,
-    pub(crate) process_duration: Duration,
+pub struct TerminalFrameSnapshotEvent {
+    pub session_id: String,
+    pub offset: usize,
+    pub snapshot: Arc<TerminalSnapshot>,
+    pub action_links: Option<TerminalFrameActionLinks>,
+    pub revision: u64,
+    pub purpose: TerminalFrameSnapshotPurpose,
+    pub snapshot_duration: Duration,
+    pub snapshot_stats: TerminalSnapshotBuildStats,
+    pub action_link_stats: TerminalActionLinkBuildStats,
+    pub process_duration: Duration,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TerminalFrameSearchEvent {
-    pub(crate) session_id: String,
-    pub(crate) purpose: TerminalFrameSearchPurpose,
-    pub(crate) result: TerminalFrameSearchResult,
-    pub(crate) process_duration: Duration,
+pub struct TerminalFrameSearchEvent {
+    pub session_id: String,
+    pub purpose: TerminalFrameSearchPurpose,
+    pub result: TerminalFrameSearchResult,
+    pub process_duration: Duration,
 }
 
 pub(super) fn compact_terminal_frame_event_queue(

@@ -90,10 +90,7 @@ fn matches_needle(text: &str, needle: &str) -> bool {
 }
 
 /// Map a remote host's reported OS/arch to a connection icon key.
-pub(in crate::features) fn infer_connection_icon_key_from_remote_system(
-    os: &str,
-    arch: &str,
-) -> Option<&'static str> {
+pub fn infer_connection_icon_key_from_remote_system(os: &str, arch: &str) -> Option<&'static str> {
     let text = normalize(os, arch);
     if text.is_empty() {
         return None;

@@ -565,24 +565,18 @@ pub(super) fn apply_and_publish(
         let file = options
             .config_dir
             .join(format!("cloud-sync-v3-safety-{}.nya", Uuid::new_v4()));
-        let output = file.clone();
-        let password = options.master_password.clone();
         store
-            .request_fn(StoreDomain::CloudSync, move |store| {
-                store.export_v4_safety_backup(&output, password.expose_secret())
-            })
-            .map_err(store_error)?;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&file)
-            .and_then(|file| file.sync_all())
-            .map_err(|_| invalid())?;
-        let bytes = std::fs::read(&file).map_err(|_| invalid())?;
-        nyaterm_store::decode_encrypted_raw_portable_snapshot(
-            &bytes,
-            options.master_password.expose_secret(),
-        )?;
+            .export_verified_v4_safety_backup(file, options.master_password.clone())
+            .map_err(|error| match error {
+                nyaterm_store::safety_backup::VerifiedBackupError::Export(error) => {
+                    store_error(error)
+                }
+                nyaterm_store::safety_backup::VerifiedBackupError::Decode(error) => {
+                    CloudSyncError::PortableSnapshot(error)
+                }
+                nyaterm_store::safety_backup::VerifiedBackupError::Sync(_)
+                | nyaterm_store::safety_backup::VerifiedBackupError::Read(_) => invalid(),
+            })?;
     }
     control.begin_commit()?;
     let destination = preview.apply.destination.clone();

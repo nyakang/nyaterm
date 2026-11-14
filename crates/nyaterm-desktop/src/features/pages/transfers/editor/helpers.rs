@@ -5,23 +5,6 @@ use nyaterm_files::sftp_transfer_types::SftpTransferOptions;
 use std::path::Path;
 use std::process::Command;
 
-pub(super) fn sanitize_local_open_segment(input: &str) -> String {
-    let sanitized: String = input
-        .chars()
-        .map(|ch| match ch {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            ch if ch.is_control() => '_',
-            ch => ch,
-        })
-        .collect();
-    let sanitized = sanitized.trim_matches(['.', ' ']).trim();
-    if sanitized.is_empty() {
-        "remote-file".to_string()
-    } else {
-        sanitized.to_string()
-    }
-}
-
 pub(super) fn open_local_path_with_editor(path: &Path, editor_command: &str) -> Result<(), String> {
     let command = editor_command.trim();
     if command.is_empty() {

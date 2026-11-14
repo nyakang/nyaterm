@@ -126,7 +126,7 @@ impl NyaTermApp {
                     palette,
                     format!("action-link-menu-{}", action.id),
                     label,
-                    Some(crate::features::icons::IconDef::mono(
+                    Some(nyaterm_ui::icons::IconDef::mono(
                         if matches!(target, ActionLinkTarget::OpenUrl(_)) {
                             "icons/conn/connect.svg"
                         } else {

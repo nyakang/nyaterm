@@ -11,6 +11,7 @@ nyaterm-app
             ├─ AppShell / NyaTermApp / feature state / views
             ├─ nyaterm-ui                shared GPUI controls and theme
             ├─ nyaterm-terminal-gpui     terminal layout, input, and painting
+            ├─ nyaterm-terminal-runtime  frame worker, search, and ingress routing
             ├─ nyaterm-terminal          terminal state machine and snapshots
             ├─ nyaterm-transport         PTY, SSH, SFTP, and other protocols
             ├─ nyaterm-recording         recording, history search, and writer pipeline
@@ -32,6 +33,7 @@ The main responsibilities are:
 | `nyaterm-desktop` | GPUI composition, state, views, platform adapters, and background coordination |
 | `nyaterm-ui` | Shared controls, theme tokens, and the `gpui-kit` integration boundary |
 | `nyaterm-terminal` | UI-independent terminal state, control sequences, encodings, and graphics protocols |
+| `nyaterm-terminal-runtime` | UI-independent frame worker, coalesced events, searches, ordered recording and transport event routing; desktop retains visibility, UI application and shutdown scheduling |
 | `nyaterm-terminal-gpui` | GPUI terminal input, layout, selection, highlighting, images, and painting |
 | `nyaterm-transport` | PTY, SSH, Telnet, Serial, SFTP, tunnels, remote operations, and transfer protocols |
 | `nyaterm-recording` | UI-independent recording, transcripts, rotation, and history search; `pipeline` owns the writer thread, bounded queues, and coalesced events |
@@ -85,10 +87,10 @@ PTY / SSH / Telnet / Serial
 nyaterm-transport typed events
         │
         ▼
-nyaterm-desktop event drain and session state
-        │
+nyaterm-terminal-runtime ingress bridge and ordered frame worker
+        │ uses nyaterm-terminal for parsing and snapshots
         ▼
-nyaterm-terminal state machine and snapshots
+nyaterm-desktop event application and presentation state
         │
         ▼
 nyaterm-terminal-gpui layout, input, and painting
@@ -115,8 +117,23 @@ What that boundary means:
 
 Both helper crates carry a `tests/lifecycle.rs` covering the handshake, an ordinary disconnect, and crash/hang reaping. Keep both in step when the IPC contract changes.
 
+The runtime transfers `TerminalFrameSession` as an opaque ownership value. Desktop
+pauses ingress, drains ordered work and pending events, and coordinates insertion
+into the destination pipeline. Runtime shutdown closures execute on a blocking
+worker. Queue and search tests live with the runtime; GPUI state-application tests
+stay in desktop, using its default-off `test-support` feature.
+
+Static icon catalogs and rendering belong to `nyaterm-ui::icons`. Completion
+queries, credential metadata matching and connection validation belong to core.
+`nyaterm-files::external_edit` owns private editor workspaces and blocking file
+watching; desktop injects platform permissions and owns editor/upload jobs.
+`StoreBlockingClient::export_verified_v4_safety_backup` exports in the database
+actor and verifies the durable file on the caller's blocking worker, using the
+existing backup format and reader.
+
 ## Dependency rules
 
+- `nyaterm-terminal-runtime` may depend only on core, terminal, transport and recording among workspace crates, including tests. None of these lower-level crates may depend back on the runtime.
 - `nyaterm-core`, `nyaterm-terminal`, `nyaterm-transport`, and `nyaterm-remote-desktop` stay independent of GPUI.
 - `nyaterm-updater` may depend only on `nyaterm-core` within the project; ordinary, development, build, and platform dependencies must not introduce GPUI, desktop, store, or other business crates. `nyaterm-recording` also remains independent of GPUI, desktop, transport, and other business crates.
 - Protocol decoders that parse server-controlled bytes live only in the helper crates, never in a crate the application links.

@@ -1,8 +1,10 @@
 use super::draft::{AssetBatchEditDraft, BatchEditMode};
 use super::fields::{BatchFieldId, DISPLAY_FIELDS, EDITABLE_FIELDS, FieldBasis};
+pub(in crate::features) use nyaterm_core::models::connection_batch::basis::BatchFieldApplicability;
+pub(super) use nyaterm_core::models::connection_batch::basis::connection_kind_counts as asset_batch_kind_counts;
+use nyaterm_core::models::connection_batch::basis::{self as domain_basis, BatchValueBasis};
 use nyaterm_core::models::connection_batch::{
     ConnectionBatchEdit, ConnectionBatchKind, ConnectionBatchSkipCounts, ConnectionBatchSkipReason,
-    rdp_batch_field_skip_reason,
 };
 use nyaterm_core::models::{
     ConnectionType, SavedConnection, SftpCwdFollowMode, SshAlgorithmMode, SshProfile,
@@ -10,47 +12,6 @@ use nyaterm_core::models::{
 };
 use rust_i18n::t;
 use std::collections::HashMap;
-/// Counts for the protocol scopes; empty protocols never appear.
-pub(super) fn asset_batch_kind_counts(
-    connections: &[SavedConnection],
-    ids: &[String],
-) -> Vec<(ConnectionBatchKind, usize)> {
-    let by_id: HashMap<&str, &SavedConnection> = connections
-        .iter()
-        .map(|connection| (connection.id.as_str(), connection))
-        .collect();
-    let mut counts = [0usize; 6];
-    for id in ids {
-        if let Some(connection) = by_id.get(id.as_str()) {
-            counts[asset_batch_kind_slot(ConnectionBatchKind::from_config(&connection.config))] +=
-                1;
-        }
-    }
-    [
-        ConnectionBatchKind::Ssh,
-        ConnectionBatchKind::LocalTerminal,
-        ConnectionBatchKind::Telnet,
-        ConnectionBatchKind::Serial,
-        ConnectionBatchKind::Rdp,
-        ConnectionBatchKind::Vnc,
-    ]
-    .into_iter()
-    .zip(counts)
-    .filter_map(|(kind, count)| (count > 0).then_some((kind, count)))
-    .collect()
-}
-
-fn asset_batch_kind_slot(kind: ConnectionBatchKind) -> usize {
-    match kind {
-        ConnectionBatchKind::Ssh => 0,
-        ConnectionBatchKind::LocalTerminal => 1,
-        ConnectionBatchKind::Telnet => 2,
-        ConnectionBatchKind::Serial => 3,
-        ConnectionBatchKind::Rdp => 4,
-        ConnectionBatchKind::Vnc => 5,
-        ConnectionBatchKind::Adb => 6,
-    }
-}
 
 /// Renders the counts with the editor's own protocol labels, never raw
 /// identifiers, and joins them with the locale's list separator.
@@ -882,58 +843,25 @@ type BatchBasis = (
     HashMap<BatchFieldId, bool>,
 );
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::features) struct BatchFieldApplicability {
-    pub total: usize,
-    pub applicable: usize,
-    pub skipped_reasons: ConnectionBatchSkipCounts,
-}
-
 pub(super) fn compute_rdp_field_basis(
     connections: &[SavedConnection],
     targets: &[(String, ConnectionBatchKind)],
     field: BatchFieldId,
     edit: &ConnectionBatchEdit,
 ) -> (FieldBasis, Option<String>, BatchFieldApplicability) {
-    let group = field.rdp_group().expect("RDP field");
-    let by_id: HashMap<&str, &SavedConnection> = connections
-        .iter()
-        .map(|connection| (connection.id.as_str(), connection))
-        .collect();
-    let mut applicability = BatchFieldApplicability::default();
-    let mut first = None;
-    let mut mixed = false;
-    for (id, kind) in targets {
-        if *kind != ConnectionBatchKind::Rdp {
-            continue;
-        }
-        applicability.total += 1;
-        let connection = by_id.get(id.as_str()).copied();
-        let reason = connection.map_or(
-            Some(ConnectionBatchSkipReason::UnsupportedProtocol),
-            |connection| rdp_batch_field_skip_reason(&connection.config, edit, group),
-        );
-        if let Some(reason) = reason {
-            applicability.skipped_reasons.add(reason, 1);
-            continue;
-        }
-        applicability.applicable += 1;
-        let value = field_display_value(connection.expect("applicable connection"), field)
-            .expect("RDP field value");
-        match &first {
-            None => first = Some(value),
-            Some(existing) if *existing != value => mixed = true,
-            _ => {}
-        }
-    }
-    let basis = if applicability.applicable == 0 {
-        FieldBasis::Inapplicable
-    } else if mixed {
-        FieldBasis::Mixed
-    } else {
-        FieldBasis::Uniform
+    let (basis, applicability) = domain_basis::rdp_field_basis(
+        connections,
+        targets,
+        field.rdp_group().expect("RDP field"),
+        edit,
+        |connection| field_display_value(connection, field).expect("RDP field value"),
+    );
+    let (basis, value) = match basis {
+        BatchValueBasis::Inapplicable => (FieldBasis::Inapplicable, None),
+        BatchValueBasis::Mixed => (FieldBasis::Mixed, None),
+        BatchValueBasis::Uniform(value) => (FieldBasis::Uniform, Some(value)),
     };
-    (basis, (!mixed).then_some(first).flatten(), applicability)
+    (basis, value, applicability)
 }
 
 pub(super) fn batch_skip_reasons_label(counts: ConnectionBatchSkipCounts) -> String {
@@ -980,38 +908,24 @@ pub(super) fn compute_batch_basis(
             basis.insert(field, FieldBasis::Inapplicable);
             continue;
         }
-        let mut seen: Option<String> = None;
-        let mut mixed = false;
-        for id in ids {
-            let Some(connection) = by_id.get(id.as_str()) else {
-                continue;
-            };
+        let summary = domain_basis::common_value(ids.iter().filter_map(|id| {
+            let connection = by_id.get(id.as_str())?;
             if target
                 .is_some_and(|kind| ConnectionBatchKind::from_config(&connection.config) != kind)
             {
-                continue;
+                return None;
             }
-            let Some(value) = field_display_value(connection, field) else {
-                continue;
-            };
-            match &seen {
-                None => seen = Some(value),
-                Some(existing) if *existing != value => {
-                    mixed = true;
-                    break;
-                }
-                _ => {}
-            }
-        }
+            Some(field_display_value(connection, field))
+        }));
 
-        match (seen, mixed) {
-            (None, _) => {
+        match summary {
+            BatchValueBasis::Inapplicable => {
                 basis.insert(field, FieldBasis::Inapplicable);
             }
-            (Some(_), true) => {
+            BatchValueBasis::Mixed => {
                 basis.insert(field, FieldBasis::Mixed);
             }
-            (Some(value), false) => {
+            BatchValueBasis::Uniform(value) => {
                 basis.insert(field, FieldBasis::Uniform);
                 if field.is_bool() {
                     bool_values.insert(field, value == "true");

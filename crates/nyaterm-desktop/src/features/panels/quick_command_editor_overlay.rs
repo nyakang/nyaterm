@@ -1,3 +1,4 @@
+use nyaterm_ui::icons::QUICK_COMMAND_ICON_OPTIONS;
 use rust_i18n::t;
 
 use gpui::{
@@ -16,7 +17,7 @@ use super::{
 };
 use crate::features::{
     NyaTermApp, commands::QUICK_COMMAND_COLOR_OPTIONS, commands::state::QuickCommandCategoryChoice,
-    icons::QUICK_COMMAND_ICON_OPTIONS, text_inputs::TextInputSetup,
+    text_inputs::TextInputSetup,
 };
 use crate::models::{QuickCommandEditorField, QuickCommandEditorState};
 

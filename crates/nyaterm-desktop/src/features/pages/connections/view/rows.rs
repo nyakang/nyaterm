@@ -1,3 +1,4 @@
+use nyaterm_ui::icons::resolve_connection_icon;
 use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use std::{sync::Arc, time::Duration};
 
@@ -16,10 +17,9 @@ use rust_i18n::t;
 use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDragPayload,
     connections::ConnectionDragPreview, connections::ConnectionDropPosition,
-    connections::ConnectionDropTarget, icons::resolve_connection_icon,
-    text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::ordinary_input_focus_ring,
-    text_inputs::ordinary_input_shell_border_color, view_widgets::connection_type_icon,
-    view_widgets::mono_icon,
+    connections::ConnectionDropTarget, text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX,
+    text_inputs::ordinary_input_focus_ring, text_inputs::ordinary_input_shell_border_color,
+    view_widgets::connection_type_icon, view_widgets::mono_icon,
 };
 
 use super::super::list::{

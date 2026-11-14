@@ -1,3 +1,5 @@
+pub mod validation;
+
 use crate::models::android::{AdbDeviceSelector, AndroidScreenSettings, default_android_directory};
 use serde::{Deserialize, Serialize};
 

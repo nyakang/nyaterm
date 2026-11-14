@@ -78,7 +78,7 @@ fn muted_extension_icon(extension: &str, palette: ThemePalette) -> Option<IconDe
 }
 
 /// Icon for one file-browser row.
-pub(in crate::features) fn file_entry_icon(
+pub fn file_entry_icon(
     name: &str,
     is_directory: bool,
     is_symlink: bool,

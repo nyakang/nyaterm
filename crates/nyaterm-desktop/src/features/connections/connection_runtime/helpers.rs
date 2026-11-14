@@ -1,4 +1,7 @@
 use gpui::Context;
+use nyaterm_core::models::connection::validation::{
+    self, AccountSelection, ConnectionValidationError,
+};
 use nyaterm_core::{
     AiExecutionProfile, ConnectionAuth, ConnectionNetwork, ConnectionPostLogin, ConnectionType,
     RdpClipboardSettings, RdpDisplaySettings, RdpReconnectSettings, RdpSecuritySettings,
@@ -50,6 +53,36 @@ pub(super) enum ConnectionEditorValidationError {
     SshAlgorithms(nyaterm_transport::SshAlgorithmValidationError),
 }
 
+impl From<ConnectionValidationError> for ConnectionEditorValidationError {
+    fn from(error: ConnectionValidationError) -> Self {
+        match error {
+            ConnectionValidationError::PortInvalid => Self::PortInvalid,
+            ConnectionValidationError::MissingAccount => Self::MissingAccount,
+            ConnectionValidationError::UsernameRequired => Self::UsernameRequired,
+            ConnectionValidationError::BaudRateInvalid => Self::BaudRateInvalid,
+            ConnectionValidationError::RdpDisplayWidthInvalid => Self::RdpDisplayWidthInvalid,
+            ConnectionValidationError::RdpDisplayHeightInvalid => Self::RdpDisplayHeightInvalid,
+            ConnectionValidationError::RdpReconnectAttemptsInvalid => {
+                Self::RdpReconnectAttemptsInvalid
+            }
+            ConnectionValidationError::RdpRelayUnsupported => Self::RdpRelayUnsupported,
+            ConnectionValidationError::RdpWindowsAuthenticationRequired => {
+                Self::RdpWindowsAuthenticationRequired
+            }
+            ConnectionValidationError::VncUsernameTooLong => Self::VncUsernameTooLong,
+            ConnectionValidationError::VncReconnectAttemptsInvalid => {
+                Self::VncReconnectAttemptsInvalid
+            }
+            ConnectionValidationError::VncPasswordTooLong => Self::VncPasswordTooLong,
+            ConnectionValidationError::PostLoginCommandRequired => Self::PostLoginCommandRequired,
+            ConnectionValidationError::PostLoginDelayInvalid => Self::PostLoginDelayInvalid,
+            ConnectionValidationError::SftpShellDetectionTimeoutInvalid => {
+                Self::SftpShellDetectionTimeoutInvalid
+            }
+        }
+    }
+}
+
 pub(super) fn validate_editor_account(
     editor: &ConnectionEditorState,
     accounts: &[nyaterm_core::SavedPassword],
@@ -70,26 +103,19 @@ pub(super) fn validate_editor_account(
     } else {
         None
     };
-    let account = id.and_then(|id| accounts.iter().find(|entry| entry.id == id));
-    if (id.is_some()
-        || password_active && editor.password_source == ConnectionEditorPasswordSource::Saved)
-        && account.is_none()
-    {
-        return Err(ConnectionEditorValidationError::MissingAccount);
-    }
-    let account_username = account
-        .map(|entry| entry.username.trim())
-        .filter(|username| !username.is_empty());
-    let effective_username =
-        if identity && editor.username_source == nyaterm_core::ConnectionUsernameSource::Account {
-            account_username.unwrap_or(editor.username.trim())
-        } else {
-            editor.username.trim()
-        };
-    if editor.kind == ConnectionKindTab::Ssh && effective_username.is_empty() {
-        return Err(ConnectionEditorValidationError::UsernameRequired);
-    }
-    Ok(())
+    validation::validate_account_selection(
+        AccountSelection {
+            reference: id,
+            require_saved_password: password_active
+                && editor.password_source == ConnectionEditorPasswordSource::Saved,
+            username: &editor.username,
+            username_source: editor.username_source,
+            uses_account_identity: identity,
+            ssh: editor.kind == ConnectionKindTab::Ssh,
+        },
+        accounts,
+    )
+    .map_err(Into::into)
 }
 
 pub(super) fn connection_editor_from_saved(
@@ -611,9 +637,7 @@ pub(super) fn build_saved_connection_from_editor(
                 .trim()
                 .parse::<u32>()
                 .map_err(|_| ConnectionEditorValidationError::BaudRateInvalid)?;
-            if !(1..=4_000_000).contains(&baud_rate) {
-                return Err(ConnectionEditorValidationError::BaudRateInvalid);
-            }
+            validation::validate_baud_rate(baud_rate)?;
             let data_bits = editor
                 .data_bits
                 .trim()
@@ -645,14 +669,9 @@ pub(super) fn build_saved_connection_from_editor(
             if !editor.uses_mstsc_rdp() && editor.username.trim().is_empty() {
                 return Err(ConnectionEditorValidationError::UsernameRequired);
             }
-            if !editor.uses_mstsc_rdp() && !(640..=7680).contains(&editor.rdp_display.width) {
-                return Err(ConnectionEditorValidationError::RdpDisplayWidthInvalid);
-            }
-            if !editor.uses_mstsc_rdp() && !(480..=4320).contains(&editor.rdp_display.height) {
-                return Err(ConnectionEditorValidationError::RdpDisplayHeightInvalid);
-            }
-            if !editor.uses_mstsc_rdp() && editor.rdp_reconnect.max_attempts > 20 {
-                return Err(ConnectionEditorValidationError::RdpReconnectAttemptsInvalid);
+            if !editor.uses_mstsc_rdp() {
+                validation::validate_rdp_display(&editor.rdp_display)?;
+                validation::validate_rdp_reconnect(editor.rdp_reconnect.max_attempts)?;
             }
             if editor.uses_mstsc_rdp() {
                 if editor.proxy_id.is_some() || editor.proxy_jump_id.is_some() {
@@ -662,12 +681,10 @@ pub(super) fn build_saved_connection_from_editor(
                     .map_err(|_| ConnectionEditorValidationError::RdpMstscHostInvalid)?;
             }
             if matches!(editor.rdp_backend.as_str(), "windows" | "active-x") {
-                if editor.proxy_id.is_some() || editor.proxy_jump_id.is_some() {
-                    return Err(ConnectionEditorValidationError::RdpRelayUnsupported);
-                }
-                if editor.rdp_security.windows_authentication.as_deref() != Some("system") {
-                    return Err(ConnectionEditorValidationError::RdpWindowsAuthenticationRequired);
-                }
+                validation::validate_native_rdp(
+                    editor.proxy_id.is_some() || editor.proxy_jump_id.is_some(),
+                    editor.rdp_security.windows_authentication.as_deref(),
+                )?;
             }
             ConnectionType::Rdp {
                 host,
@@ -729,24 +746,17 @@ pub(super) fn build_saved_connection_from_editor(
                 return Err(ConnectionEditorValidationError::HostRequired);
             }
             let port = parse_port(&editor.port)?;
-            if editor.username.trim().len() > 255 {
-                return Err(ConnectionEditorValidationError::VncUsernameTooLong);
-            }
-            if editor.vnc_reconnect.max_attempts > 20 {
-                return Err(ConnectionEditorValidationError::VncReconnectAttemptsInvalid);
-            }
+            validation::validate_vnc_username(&editor.username)?;
+            validation::validate_vnc_reconnect(editor.vnc_reconnect.max_attempts)?;
             if editor.auth_mode == "password"
                 && editor.vnc_security.mode != "none"
                 && editor.password_source == ConnectionEditorPasswordSource::Direct
                 && editor.password_edit == crate::models::ConnectionPasswordEdit::Replace
-                && editor.password.len()
-                    > if editor.vnc_security.mode == "vnc_auth" {
-                        8
-                    } else {
-                        255
-                    }
             {
-                return Err(ConnectionEditorValidationError::VncPasswordTooLong);
+                validation::validate_vnc_password_length(
+                    &editor.vnc_security.mode,
+                    editor.password.len(),
+                )?;
             }
             ConnectionType::Vnc {
                 username: editor.username.trim().to_owned(),
@@ -791,25 +801,22 @@ pub(super) fn build_saved_connection_from_editor(
                 endpoint_index,
             }
         })?;
-        if editor.post_login_enabled && editor.post_login_command.trim().is_empty() {
-            return Err(ConnectionEditorValidationError::PostLoginCommandRequired);
-        }
+        validation::validate_post_login_command(
+            editor.post_login_enabled,
+            &editor.post_login_command,
+        )?;
         let delay = editor
             .post_login_delay_ms
             .trim()
             .parse::<u64>()
             .map_err(|_| ConnectionEditorValidationError::PostLoginDelayInvalid)?;
-        if delay > 60_000 {
-            return Err(ConnectionEditorValidationError::PostLoginDelayInvalid);
-        }
+        validation::validate_post_login_delay(delay)?;
         let sftp_timeout = editor
             .sftp_shell_detection_timeout_ms
             .trim()
             .parse::<u64>()
             .map_err(|_| ConnectionEditorValidationError::SftpShellDetectionTimeoutInvalid)?;
-        if !(100..=60_000).contains(&sftp_timeout) {
-            return Err(ConnectionEditorValidationError::SftpShellDetectionTimeoutInvalid);
-        }
+        validation::validate_sftp_detection_timeout(sftp_timeout)?;
     }
 
     let name = if editor.name.trim().is_empty() {
@@ -1078,14 +1085,7 @@ pub(super) fn build_saved_connection_from_editor(
 }
 
 pub(super) fn parse_port(value: &str) -> Result<u16, ConnectionEditorValidationError> {
-    let port = value
-        .trim()
-        .parse::<u16>()
-        .map_err(|_| ConnectionEditorValidationError::PortInvalid)?;
-    if port == 0 {
-        return Err(ConnectionEditorValidationError::PortInvalid);
-    }
-    Ok(port)
+    validation::parse_port(value).map_err(Into::into)
 }
 
 pub(super) fn non_empty_or(value: String, fallback: &str) -> String {

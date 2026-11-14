@@ -1,6 +1,7 @@
 pub mod adb;
 pub mod download_path;
 pub mod drag_export;
+pub mod external_edit;
 pub mod file_browser;
 pub mod local_fs;
 pub mod local_revision;

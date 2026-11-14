@@ -32,6 +32,7 @@ members = [
     "crates/nyaterm-sync",
     "crates/nyaterm-terminal",
     "crates/nyaterm-terminal-gpui",
+    "crates/nyaterm-terminal-runtime",
     "crates/nyaterm-recording",
     "crates/nyaterm-remote-ops",
     "crates/nyaterm-files",
@@ -124,6 +125,7 @@ nyaterm-windows-rdp = { path = "crates/nyaterm-windows-rdp" }
 nyaterm-store = { path = "crates/nyaterm-store" }
 nyaterm-sync = { path = "crates/nyaterm-sync" }
 nyaterm-terminal = { path = "crates/nyaterm-terminal" }
+nyaterm-terminal-runtime = { path = "crates/nyaterm-terminal-runtime" }
 nyaterm-terminal-gpui = { path = "crates/nyaterm-terminal-gpui" }
 nyaterm-recording = { path = "crates/nyaterm-recording" }
 nyaterm-remote-ops = { path = "crates/nyaterm-remote-ops" }

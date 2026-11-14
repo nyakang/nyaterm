@@ -1,11 +1,12 @@
 use super::helpers::{available_translation_providers, search_engine_url};
-use crate::features::{NyaTermApp, icons::known_search_engine_icon, session::SerialUploadProtocol};
+use crate::features::{NyaTermApp, session::SerialUploadProtocol};
 use crate::models::{AiPreparedRequest, NavItem, SettingsTab, TerminalSearchMode};
 use gpui::Context;
 use nyaterm_core::{AiAction, AiContext};
 use nyaterm_recording::recording::{RecordingMode, RecordingStatus};
 use nyaterm_transport::SessionKind;
 use nyaterm_ui::NyaMenuItem;
+use nyaterm_ui::icons::known_search_engine_icon;
 use rust_i18n::t;
 
 impl NyaTermApp {

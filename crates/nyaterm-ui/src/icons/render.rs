@@ -5,7 +5,7 @@ use gpui::{
     linear_color_stop, linear_gradient, prelude::*, px, rgb, svg,
 };
 
-use crate::features::{icons::IconDef, icons::file_entry_icon};
+use super::{IconDef, file_entry_icon};
 use crate::theme::ThemePalette;
 
 /// Paint a monochrome asset from `icons/**`.
@@ -14,7 +14,7 @@ use crate::theme::ThemePalette;
 /// channel, so whatever paints the file declares are discarded and `color` is the
 /// only thing that reaches the screen. That is what makes one glyph usable in
 /// seven tints, and it is also why a full-color logo cannot go through here.
-pub(in crate::features) fn mono_icon(path: &'static str, color: Hsla, size_px: f32) -> Svg {
+pub fn mono_icon(path: &'static str, color: Hsla, size_px: f32) -> Svg {
     debug_assert!(
         path.starts_with("icons/"),
         "monochrome icons live under icons/: {path}"
@@ -27,7 +27,7 @@ pub(in crate::features) fn mono_icon(path: &'static str, color: Hsla, size_px: f
 }
 
 /// Tauri-compatible connection spinner: a dim ring with a rotating bright arc.
-pub(in crate::features) fn connection_spinner(
+pub fn connection_spinner(
     animation_id: SharedString,
     color: Hsla,
     size_px: f32,
@@ -70,7 +70,7 @@ pub(in crate::features) fn connection_spinner(
 /// be tinted** — callers must express selection or hover with surrounding chrome
 /// instead. Decoding happens off the render thread, so the first frame after a
 /// cold start paints nothing; give the icon a reserved size to avoid a reflow.
-pub(in crate::features) fn color_icon(path: &'static str, size_px: f32) -> Img {
+pub fn color_icon(path: &'static str, size_px: f32) -> Img {
     debug_assert!(
         path.starts_with("color/"),
         "full-color icons live under color/: {path}"
@@ -79,10 +79,7 @@ pub(in crate::features) fn color_icon(path: &'static str, size_px: f32) -> Img {
 }
 
 /// Theme-colored NyaTerm application icon, matching the Tauri logo composition.
-pub(in crate::features) fn nyaterm_app_icon(
-    palette: ThemePalette,
-    size_px: f32,
-) -> impl IntoElement {
+pub fn nyaterm_app_icon(palette: ThemePalette, size_px: f32) -> impl IntoElement {
     div()
         .size(px(size_px))
         .flex_none()
@@ -106,20 +103,12 @@ pub(in crate::features) fn nyaterm_app_icon(
 }
 
 /// Activity-bar icon.
-pub(in crate::features) fn activity_icon(
-    path: &'static str,
-    color: Hsla,
-    size_px: f32,
-) -> AnyElement {
+pub fn activity_icon(path: &'static str, color: Hsla, size_px: f32) -> AnyElement {
     mono_icon(path, color, size_px).into_any_element()
 }
 
 /// Faded NyaTerm logo used by empty workspace (Tauri EmptyWorkspaceState).
-pub(in crate::features) fn nyaterm_logo_mark(
-    palette: ThemePalette,
-    size_px: f32,
-    opacity: f32,
-) -> impl IntoElement {
+pub fn nyaterm_logo_mark(palette: ThemePalette, size_px: f32, opacity: f32) -> impl IntoElement {
     div()
         .size(px(size_px))
         .flex_none()
@@ -139,7 +128,7 @@ pub(in crate::features) fn nyaterm_logo_mark(
 /// `selected` only reaches monochrome icons: a full-color logo cannot be tinted,
 /// so selection has to be carried by the row's own background. That matches the
 /// pre-GPUI UI, where these were `<img>` tags and the configured color was inert.
-pub(in crate::features) fn themed_icon(
+pub fn themed_icon(
     palette: ThemePalette,
     def: IconDef,
     selected: bool,
@@ -155,7 +144,7 @@ pub(in crate::features) fn themed_icon(
 }
 
 /// Connection / OS icon for saved connection rows, tabs and the session header.
-pub(in crate::features) fn connection_type_icon(
+pub fn connection_type_icon(
     palette: ThemePalette,
     def: IconDef,
     selected: bool,
@@ -165,7 +154,7 @@ pub(in crate::features) fn connection_type_icon(
 }
 
 /// File explorer entry icon, colored by kind and extension.
-pub(in crate::features) fn transfer_entry_icon(
+pub fn transfer_entry_icon(
     palette: ThemePalette,
     name: &str,
     is_directory: bool,

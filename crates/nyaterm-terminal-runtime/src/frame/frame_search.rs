@@ -2,7 +2,7 @@
 
 use super::frame_events::TerminalFrameSearchEvent;
 use super::frame_worker::TerminalFrameSession;
-use crate::terminal::TerminalBufferMatch;
+use nyaterm_terminal::search::TerminalBufferMatch;
 use nyaterm_terminal::{
     TerminalGridOccurrence, TerminalSearchDirection, TerminalSearchQuery, TerminalSearchRangeMode,
     terminal_cell_count,
@@ -14,17 +14,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct TerminalFrameSearchKey {
-    pub(crate) query: String,
-    pub(crate) case_sensitive: bool,
-    pub(crate) regex: bool,
-    pub(crate) whole_word: bool,
-    pub(crate) limit: usize,
-    pub(crate) request_generation: u64,
+pub struct TerminalFrameSearchKey {
+    pub query: String,
+    pub case_sensitive: bool,
+    pub regex: bool,
+    pub whole_word: bool,
+    pub limit: usize,
+    pub request_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TerminalFrameSearchPurpose {
+pub enum TerminalFrameSearchPurpose {
     Find,
     FindVisible {
         absolute_start: usize,
@@ -38,17 +38,17 @@ pub(crate) enum TerminalFrameSearchPurpose {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TerminalFrameSearchResult {
-    pub(crate) key: TerminalFrameSearchKey,
-    pub(crate) revision: u64,
-    pub(crate) matches: Result<Arc<[TerminalBufferMatch]>, String>,
-    pub(crate) occurrences: Arc<[Range<usize>]>,
-    pub(crate) truncated: bool,
-    pub(crate) position_fingerprint: u64,
+pub struct TerminalFrameSearchResult {
+    pub key: TerminalFrameSearchKey,
+    pub revision: u64,
+    pub matches: Result<Arc<[TerminalBufferMatch]>, String>,
+    pub occurrences: Arc<[Range<usize>]>,
+    pub truncated: bool,
+    pub position_fingerprint: u64,
 }
 
 impl TerminalFrameSearchResult {
-    pub(crate) fn new(
+    pub fn new(
         key: TerminalFrameSearchKey,
         revision: u64,
         matches: Result<Vec<TerminalBufferMatch>, String>,
@@ -67,7 +67,7 @@ impl TerminalFrameSearchResult {
         }
     }
 
-    pub(crate) fn new_find(
+    pub fn new_find(
         key: TerminalFrameSearchKey,
         revision: u64,
         occurrences: Result<Vec<TerminalGridOccurrence>, String>,
@@ -103,7 +103,7 @@ impl TerminalFrameSearchResult {
     }
 }
 
-pub(crate) fn terminal_buffer_matches_position_fingerprint(matches: &[TerminalBufferMatch]) -> u64 {
+pub fn terminal_buffer_matches_position_fingerprint(matches: &[TerminalBufferMatch]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     matches.len().hash(&mut hasher);
     for search_match in matches {
@@ -114,7 +114,7 @@ pub(crate) fn terminal_buffer_matches_position_fingerprint(matches: &[TerminalBu
     hasher.finish()
 }
 
-pub(crate) fn terminal_frame_search_result_is_current(
+pub fn terminal_frame_search_result_is_current(
     result: &TerminalFrameSearchResult,
     key: &TerminalFrameSearchKey,
     revision: u64,
