@@ -980,6 +980,7 @@
     "connectionRecordingDesc": "この保存接続に対してグローバルなログ設定を上書きします。",
     "connectionSaved": "接続を保存しました。",
     "defaultSessionSettingsSaved": "デフォルトセッション設定を保存しました",
+    "defaultSessionSettingsUnsupported": "この既定のセッション設定は未対応の形式です。元の設定は保持されています。",
     "customBaudRate": "カスタム",
     "customBaudRatePlaceholder": "例: 74880",
     "dataBits": "データビット",

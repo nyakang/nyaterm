@@ -65,6 +65,14 @@ pub(crate) fn acquire(
     instance_dir: &Path,
     initial_request: ActivationRequest,
 ) -> anyhow::Result<SingleInstanceOutcome> {
+    acquire_linked(instance_dir, initial_request, None)
+}
+
+pub(crate) fn acquire_linked(
+    instance_dir: &Path,
+    initial_request: ActivationRequest,
+    linked_sender: Option<ActivationSender>,
+) -> anyhow::Result<SingleInstanceOutcome> {
     std::fs::create_dir_all(instance_dir).with_context(|| {
         format!(
             "create single-instance directory '{}'",
@@ -80,7 +88,8 @@ pub(crate) fn acquire(
         let lock_file = open_private_file(&lock_path)?;
         match lock_file.try_lock() {
             Ok(()) => {
-                return start_owner(lock_file, endpoint_path).map(SingleInstanceOutcome::Owner);
+                return start_owner(lock_file, endpoint_path, linked_sender)
+                    .map(SingleInstanceOutcome::Owner);
             }
             Err(std::fs::TryLockError::WouldBlock) => {}
             Err(std::fs::TryLockError::Error(error)) => {
@@ -136,7 +145,11 @@ pub(crate) fn wait_for_previous_instance(
     }
 }
 
-fn start_owner(lock_file: File, endpoint_path: PathBuf) -> anyhow::Result<SingleInstanceOwner> {
+fn start_owner(
+    lock_file: File,
+    endpoint_path: PathBuf,
+    linked_sender: Option<ActivationSender>,
+) -> anyhow::Result<SingleInstanceOwner> {
     let _ = std::fs::remove_file(&endpoint_path);
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .context("bind NyaTerm activation listener")?;
@@ -148,6 +161,7 @@ fn start_owner(lock_file: File, endpoint_path: PathBuf) -> anyhow::Result<Single
     write_endpoint(&endpoint_path, address, auth_token)?;
 
     let (activation_tx, activation_rx) = activation_channel(ACTIVATION_QUEUE_CAPACITY);
+    let activation_tx = linked_sender.unwrap_or(activation_tx);
     let stop = Arc::new(AtomicBool::new(false));
     let listener_stop = Arc::clone(&stop);
     let listener_activation_tx = activation_tx.clone();

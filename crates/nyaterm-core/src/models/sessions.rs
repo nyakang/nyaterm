@@ -267,6 +267,35 @@ impl std::fmt::Debug for ConnectionExtensions {
     }
 }
 
+impl SavedConnection {
+    /// Preserve opaque properties when applying edits from an older editor.
+    /// Clearing a container with unknown fields is rejected instead of losing them.
+    pub fn retain_extensions_from(&mut self, previous: &Self) -> Result<(), &'static str> {
+        merge_extensions(&mut self.extensions.0, &previous.extensions.0);
+        for (key, value) in &previous.sftp.extra {
+            self.sftp
+                .extra
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+        let output = serde_json::to_value(&*self).map_err(|_| "invalid connection settings")?;
+        if !contains_extension_keys(&output, &previous.extensions.0) {
+            return Err("cannot clear a settings container containing unsupported fields");
+        }
+        Ok(())
+    }
+}
+
+fn contains_extension_keys(output: &serde_json::Value, extensions: &serde_json::Value) -> bool {
+    extensions.as_object().is_none_or(|fields| {
+        fields.iter().all(|(key, value)| {
+            output
+                .get(key)
+                .is_some_and(|output| contains_extension_keys(output, value))
+        })
+    })
+}
+
 impl Serialize for SavedConnection {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut known = SavedConnectionKnown::serialize(self, serde_json::value::Serializer)

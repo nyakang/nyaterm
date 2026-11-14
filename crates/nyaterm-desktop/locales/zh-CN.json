@@ -980,6 +980,7 @@
     "connectionRecordingDesc": "为此保存连接覆盖全局日志设置。",
     "connectionSaved": "连接保存成功！",
     "defaultSessionSettingsSaved": "默认会话设置已保存",
+    "defaultSessionSettingsUnsupported": "这些默认会话设置使用不支持的格式，原始设置已保留。",
     "customBaudRate": "自定义",
     "customBaudRatePlaceholder": "例如 74880",
     "dataBits": "数据位",

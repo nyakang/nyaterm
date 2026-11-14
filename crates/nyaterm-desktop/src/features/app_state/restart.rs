@@ -1,40 +1,17 @@
-use std::process::{Command, Stdio};
-
-use gpui::{Context, Window};
+use gpui::Context;
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 
-/// Handoff token written into the current instance directory before spawning
-/// the successor. See `nyaterm_core::RELAUNCH_HANDOFF_ENV`.
-const RELAUNCH_HANDOFF_MARKER: &str = "restart.handoff";
-
 impl NyaTermApp {
-    pub(crate) fn data_directory_restart_requested(&self) -> bool {
-        self.restart_requested
+    pub(crate) fn data_directory_restart_requested(&self, cx: &gpui::App) -> bool {
+        self.desktop_controller
+            .as_ref()
+            .and_then(|controller| controller.upgrade())
+            .is_some_and(|controller| controller.read(cx).data_directory_restart_requested())
     }
 
-    /// Changes that the ordinary close flow would turn into a dialog instead of
-    /// completing the restart. The switch is refused rather than forcing the
-    /// process down through unsaved work.
-    pub(in crate::features) fn data_directory_restart_blocked(&self) -> bool {
-        // These are exactly the gates in `handle_window_close_request_with_count`
-        // that would return early, leaving the app running with a queued switch.
-        self.settings.theme_designer().submitting
-            || self.settings.theme_designer().dirty()
-            || self.has_unconfirmed_settings_changes()
-            || self.has_unconfirmed_editor_changes()
-            || self.notes.has_open_editor_windows()
-            || self
-                .transfer
-                .editor_workspace()
-                .is_some_and(|workspace| workspace.tabs.iter().any(|tab| tab.dirty || tab.saving))
-    }
-
-    pub(in crate::features) fn notify_data_directory_restart_blocked(
-        &self,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn notify_data_directory_restart_blocked(&self, cx: &mut Context<Self>) {
         self.notify_operation(
             "data-directory-restart-blocked",
             nyaterm_ui::notification::NyaNotificationKind::Warning,
@@ -60,82 +37,144 @@ impl NyaTermApp {
 
     pub(in crate::features) fn request_data_directory_restart(
         &mut self,
-        window: &mut Window,
+        choice: nyaterm_core::data_directory::PreparedSwitch,
         cx: &mut Context<Self>,
     ) {
-        self.restart_requested = true;
-        // Switching data directories is an explicit quit-and-relaunch action,
-        // like installing an update: bypass close-to-tray and the session close
-        // confirmation, but keep the settings and editor gates.
-        self.handle_window_close_request_with_count(0, window, cx);
+        if let Some(controller) = self.desktop_controller.clone() {
+            cx.defer(move |cx| {
+                let _ = controller.update(cx, |controller, cx| {
+                    controller.request_data_directory_restart(choice, cx)
+                });
+            });
+        }
     }
 
-    /// Spawns the successor before the workspace workers and store are torn
-    /// down, matching the update installer handoff. The child waits for this
-    /// process to release its instance lock before it migrates the database.
-    pub(crate) fn launch_pending_restart_after_shutdown(
-        &mut self,
-        _cx: &mut Context<Self>,
-    ) -> Result<(), String> {
-        if !self.restart_requested {
-            return Ok(());
-        }
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("could not resolve the NyaTerm executable: {error}"))?;
-        // The marker is the handoff token: the successor waits for the lock in
-        // this directory and then removes it, so a stale variable inherited by
-        // a later launch cannot make it wait on an unrelated instance.
-        let marker = self.runtime.instance_dir().join(RELAUNCH_HANDOFF_MARKER);
-        std::fs::write(&marker, [])
-            .map_err(|error| format!("could not prepare the NyaTerm restart: {error}"))?;
-        Command::new(executable)
-            .env(nyaterm_core::RELAUNCH_HANDOFF_ENV, &marker)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                let _ = std::fs::remove_file(&marker);
-                format!("could not restart NyaTerm: {error}")
-            })?;
-        self.restart_requested = false;
-        Ok(())
+    pub(crate) fn has_external_editors_blocking_restart(&self) -> bool {
+        self.connection_state.active_editor_draft().is_some()
+            || self.notes.has_open_editor_windows()
+            || self
+                .transfer
+                .editor_documents()
+                .iter()
+                .any(|document| document.saving)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use gpui::TestAppContext;
-    use nyaterm_core::test_support::TestTempDir;
-
-    use crate::features::settings::theme_designer::ThemeIntent;
+    use crate::app_shell::{AppShellStartup, DesktopController};
+    use crate::features::AppLifecycleEvent;
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::TestAppCleanup;
+    use gpui::{AppContext as _, EmptyView, TestAppContext, px, size};
+    use nyaterm_core::data_directory::{PreparedSwitch, SwitchMode};
+    use nyaterm_core::{
+        AppRuntime, MainWindowBounds, MainWindowState, RuntimeMode, WorkspaceId,
+        test_support::TestTempDir,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
-    fn restart_is_refused_while_settings_or_theme_changes_are_unconfirmed() {
+    fn restart_uses_process_quit_with_two_windows_and_cancellation_clears_every_gate() {
+        let root = TestTempDir::new("nyaterm-restart-process");
+        let roots = [
+            TestTempDir::new("nyaterm-restart-first"),
+            TestTempDir::new("nyaterm-restart-second"),
+        ];
         let mut cx = TestAppContext::single();
         let _cleanup = TestAppCleanup::new(&cx);
-        let root = TestTempDir::new("nyaterm-data-directory-restart");
-        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
-        app.update(&mut cx, |app, cx| {
-            assert!(!app.data_directory_restart_blocked());
-            assert!(!app.data_directory_restart_requested());
-            app.begin_settings_draft(cx);
-            app.set_terminal_scrollback_lines(
-                app.settings
-                    .summary()
-                    .terminal_scrollback_lines
-                    .saturating_add(100),
-                cx,
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Installed,
+            root.join("local"),
+            root.join("local"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let startup = AppShellStartup::prepare(&runtime);
+        let controller = cx.new(|cx| DesktopController::new(runtime.clone(), startup, cx));
+        let requests = Rc::new(Cell::new(0));
+        let mut shells = Vec::new();
+        let mut apps = Vec::new();
+        let mut subscriptions = Vec::new();
+        for (index, app_root) in roots.iter().enumerate() {
+            let app = app_with_visible_local_session(
+                &mut cx,
+                app_root.path(),
+                &format!("session-{index}"),
             );
-            assert!(app.data_directory_restart_blocked());
-            app.cancel_settings(cx);
-            assert!(!app.data_directory_restart_blocked());
-            app.theme_designer_action(ThemeIntent::Copy("github-dark".into()), cx);
-            assert!(app.data_directory_restart_blocked());
-            app.discard_theme_designer(cx);
-            assert!(!app.data_directory_restart_blocked());
+            let id = WorkspaceId::new();
+            app.update(&mut cx, |app, _| {
+                app.set_desktop_controller(controller.downgrade());
+                app.set_workspace_identity(id, 0);
+            });
+            let handle = cx.open_window(size(px(800.), px(600.)), |_, _| EmptyView);
+            let shell = controller.update(&mut cx, |controller, cx| {
+                let shell =
+                    controller.register_tab_drag_test_workspace(id, app.clone(), handle.into(), cx);
+                drop(
+                    controller
+                        .submit_window_state(
+                            id,
+                            MainWindowState::new(
+                                None,
+                                MainWindowBounds {
+                                    x: 0,
+                                    y: 0,
+                                    width: 800,
+                                    height: 600,
+                                },
+                                false,
+                            ),
+                            0,
+                        )
+                        .unwrap(),
+                );
+                shell
+            });
+            let observed = requests.clone();
+            subscriptions.push(cx.update(|cx| {
+                cx.subscribe(&app, move |_, event, _| {
+                    if matches!(event, AppLifecycleEvent::ShutdownRequested) {
+                        observed.set(observed.get() + 1);
+                    }
+                })
+            }));
+            shells.push(shell);
+            apps.push(app);
+        }
+        controller.update(&mut cx, |controller, cx| {
+            controller.request_data_directory_restart(
+                PreparedSwitch {
+                    target: root.join("target"),
+                    mode: SwitchMode::Migrate,
+                    sync_client: None,
+                },
+                cx,
+            )
         });
+        cx.run_until_parked();
+        assert_eq!(requests.get(), 1);
+        cx.read(|cx| {
+            assert!(controller.read(cx).data_directory_restart_requested());
+            assert_eq!(controller.read(cx).workspace_count(), 2);
+            assert!(apps.iter().all(|app| app.read(cx).has_live_sessions()));
+        });
+        assert!(
+            nyaterm_store::data_directory::read_location(runtime.local_dir())
+                .unwrap()
+                .is_none()
+        );
+        controller.update(&mut cx, |controller, cx| {
+            controller.cancel_editor_quit_gates(cx)
+        });
+        cx.run_until_parked();
+        cx.read(|cx| assert!(!controller.read(cx).data_directory_restart_requested()));
+        assert!(
+            nyaterm_store::data_directory::read_location(runtime.local_dir())
+                .unwrap()
+                .is_none()
+        );
     }
 }

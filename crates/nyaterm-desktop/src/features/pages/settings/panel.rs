@@ -514,6 +514,8 @@ pub(in crate::features) struct SettingsPanel {
     pub(in crate::features::pages::settings) image_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) content_opacity_slider: Entity<NyaSliderState>,
     pub(in crate::features::pages::settings) window_opacity_slider: Entity<NyaSliderState>,
+    pub(in crate::features::pages::settings) data_directory_generation: u64,
+    pub(in crate::features::pages::settings) data_directory_checking: bool,
     /// Validated but not yet queued data-directory change shown inline.
     pub(in crate::features::pages::settings) data_directory_choice:
         Option<nyaterm_core::data_directory::PreparedSwitch>,
@@ -593,6 +595,8 @@ impl SettingsPanel {
             image_opacity_slider,
             content_opacity_slider,
             window_opacity_slider,
+            data_directory_generation: 0,
+            data_directory_checking: false,
             data_directory_choice: None,
             image_opacity_focus: cx.focus_handle(),
             content_opacity_focus: cx.focus_handle(),

@@ -980,6 +980,7 @@
     "connectionRecordingDesc": "Remplacer la journalisation globale pour cette connexion enregistrée.",
     "connectionSaved": "Connexion enregistrée.",
     "defaultSessionSettingsSaved": "Paramètres de session par défaut enregistrés",
+    "defaultSessionSettingsUnsupported": "Le format de ces paramètres de session par défaut n’est pas pris en charge. Ils ont été conservés.",
     "customBaudRate": "Personnalisé",
     "customBaudRatePlaceholder": "ex. 74880",
     "dataBits": "Bits de données",

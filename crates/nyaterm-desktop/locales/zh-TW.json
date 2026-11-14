@@ -980,6 +980,7 @@
     "connectionRecordingDesc": "為此儲存連線覆寫全域日誌設定。",
     "connectionSaved": "連線儲存成功！",
     "defaultSessionSettingsSaved": "預設會話設定已儲存",
+    "defaultSessionSettingsUnsupported": "這些預設工作階段設定使用不支援的格式，原始設定已保留。",
     "customBaudRate": "自訂",
     "customBaudRatePlaceholder": "例如 74880",
     "dataBits": "資料位",

@@ -76,7 +76,6 @@ pub struct NyaTermApp {
     /// Set once a data-directory switch is queued and the ordinary shutdown is
     /// allowed to finish. The successor process is spawned before the workers
     /// and store shut down, using the instance lock handoff.
-    pub(in crate::features) restart_requested: bool,
     pub(in crate::features) desktop_controller:
         Option<gpui::WeakEntity<crate::app_shell::DesktopController>>,
     pub(in crate::features) process_state: gpui::Entity<crate::app_shell::ProcessStateStore>,

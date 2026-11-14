@@ -1138,11 +1138,8 @@ pub(super) fn apply_session_defaults(
     editor.proxy_jump_id = defaults.proxy_jump_id.clone();
     editor.agent_endpoint = defaults.agent_endpoint.clone();
     editor.agent_forwarding_config = defaults.agent_forwarding_config.clone();
-    editor.agent_allow_all_confirmed = defaults.agent_forwarding_config.enabled
-        && matches!(
-            defaults.agent_forwarding_config.policy,
-            nyaterm_core::SshAgentForwardingPolicy::All
-        );
+    // A persisted policy never substitutes for consent in this draft.
+    editor.agent_allow_all_confirmed = false;
     editor.agent_forwarding_endpoint_index = 0;
     editor.backspace_mode = defaults.backspace_mode.clone();
     editor.encoding = defaults.encoding.clone();
@@ -1186,7 +1183,9 @@ pub(super) fn apply_session_defaults(
     editor.telnet_auto_login_failure_prompt_regex =
         defaults.telnet_auto_login_failure_prompt_regex.clone();
     editor.telnet_auto_login_max_retries = defaults.telnet_auto_login_max_retries.clone();
-    editor.serial_port = defaults.serial_port.clone();
+    if editor.defaults_mode {
+        editor.port = defaults.port.clone();
+    }
     editor.baud_rate = defaults.baud_rate.clone();
     editor.data_bits = defaults.data_bits.clone();
     editor.parity = defaults.parity.clone();
@@ -1202,7 +1201,7 @@ pub(super) fn apply_session_defaults(
     editor.vnc_reconnect = defaults.vnc_reconnect.clone();
     editor.vnc_shared = defaults.vnc_shared;
     editor.vnc_view_only = defaults.vnc_view_only;
-    editor.android_screen = defaults.android_screen.clone();
+    editor.android_screen = defaults.android_screen;
     editor.recording = defaults.recording.clone();
 }
 
@@ -1261,8 +1260,8 @@ mod tests {
         // later version can seed new drafts from it.
         let value = serde_json::to_value(&built).unwrap();
         let reopened: SavedConnection = serde_json::from_value(value).unwrap();
-        assert_eq!(reopened.sftp.enabled, false);
-        assert_eq!(reopened.sftp.compatibility_mode, true);
+        assert!(!reopened.sftp.enabled);
+        assert!(reopened.sftp.compatibility_mode);
     }
 
     #[test]

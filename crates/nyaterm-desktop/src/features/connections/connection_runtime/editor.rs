@@ -377,7 +377,7 @@ impl NyaTermApp {
             connection_editor_from_saved(connection, connect_after_save)
         } else {
             let mut editor = self.new_connection_editor_state(parent_group_id, connect_after_save);
-            self.apply_default_session_settings(&mut editor);
+            self.apply_default_session_settings(&mut editor, cx);
             editor
         };
 
@@ -432,11 +432,7 @@ impl NyaTermApp {
         self.refresh_connection_auth_catalog(cx);
         let mut editor = self.new_connection_editor_state(None, false);
         editor.defaults_mode = true;
-        // Re-open onto the stored parameters so editing is cumulative.
-        if let Some(stored) = self.stored_default_session_settings(editor.kind) {
-            let defaults = connection_editor_from_saved(stored, false);
-            apply_session_defaults(&defaults, &mut editor);
-        }
+        self.apply_default_session_settings(&mut editor, cx);
         editor.section = crate::models::ConnectionEditorSection::for_kind(editor.kind, true)
             .first()
             .copied()
@@ -456,21 +452,34 @@ impl NyaTermApp {
     }
 
     /// The stored default session settings for a connection kind, if any.
-    fn stored_default_session_settings(&self, kind: ConnectionKindTab) -> Option<SavedConnection> {
-        let stored = self
-            .store_blocking_client()
-            .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
-                store.load_default_session_settings()
-            })
-            .ok()??;
+    fn stored_default_session_settings(
+        &self,
+        kind: ConnectionKindTab,
+        cx: &gpui::App,
+    ) -> Option<SavedConnection> {
+        let state = self.process_state.read(cx);
+        let stored = state.snapshot().default_session_settings.as_ref()?;
         let entry = stored.get(default_session_settings_kind_id(kind))?;
         serde_json::from_value(entry.clone()).ok()
     }
 
     /// Seed a fresh new-connection draft with the stored defaults. Basic info
     /// (identity, addressing, credentials) is intentionally untouched.
-    fn apply_default_session_settings(&mut self, editor: &mut ConnectionEditorState) {
-        let Some(stored) = self.stored_default_session_settings(editor.kind) else {
+    fn apply_default_session_settings(
+        &mut self,
+        editor: &mut ConnectionEditorState,
+        cx: &gpui::App,
+    ) {
+        let Some(stored) = self.stored_default_session_settings(editor.kind, cx) else {
+            let state = self.process_state.read(cx);
+            if let Some(catalog) = &state.snapshot().default_session_settings
+                && (!catalog.is_object()
+                    || catalog
+                        .get(default_session_settings_kind_id(editor.kind))
+                        .is_some())
+            {
+                editor.error = Some(t!("dialog.defaultSessionSettingsUnsupported").to_string());
+            }
             return;
         };
         let defaults = connection_editor_from_saved(stored, false);
@@ -1003,7 +1012,36 @@ impl NyaTermApp {
         kind: ConnectionKindTab,
         cx: &mut Context<Self>,
     ) {
-        if self.connection_state.set_editor_kind(kind) {
+        let draft = self.connection_state.active_editor_draft();
+        if let Some(current) = draft
+            .as_ref()
+            .filter(|draft| draft.defaults_mode || draft.id.is_none())
+        {
+            if current.kind == kind {
+                return;
+            }
+            self.connection_state.remember_editor_kind();
+            let restored = self.connection_state.take_editor_kind(kind);
+            let mut next = restored.unwrap_or_else(|| {
+                let mut next = self.new_connection_editor_state(current.group_id.clone(), current.connect_after_save);
+                next.defaults_mode = current.defaults_mode;
+                next = crate::features::connections::state::ConnectionFeatureState::prepare_editor_kind(next, kind);
+                self.apply_default_session_settings(&mut next, cx);
+                next
+            });
+            next.section =
+                crate::models::ConnectionEditorSection::for_kind(kind, next.defaults_mode)
+                    .first()
+                    .copied()
+                    .unwrap_or(crate::models::ConnectionEditorSection::Basic);
+            self.connection_state.replace_editor_kind(next);
+            self.connection_state.sync_editor_fields_from_draft(cx);
+        }
+        if draft
+            .as_ref()
+            .is_none_or(|draft| !draft.defaults_mode && draft.id.is_some())
+            && self.connection_state.set_editor_kind(kind)
+        {
             self.connection_state.hide_editor_secrets(cx);
             self.connection_state
                 .select_editor_section(crate::models::ConnectionEditorSection::Basic);
@@ -1336,10 +1374,6 @@ impl NyaTermApp {
         let Some(mut editor) = self.connection_state.active_editor_draft() else {
             return;
         };
-        if editor.defaults_mode {
-            self.save_default_session_settings(window, cx);
-            return;
-        }
         if editor.agent_forwarding_config.enabled
             && matches!(
                 editor.agent_forwarding_config.policy,
@@ -1365,6 +1399,10 @@ impl NyaTermApp {
             return;
         }
 
+        if editor.defaults_mode {
+            self.save_default_session_settings(window, cx);
+            return;
+        }
         let pending_group = editor.pending_group_name.as_ref().map(|name| Group {
             id: uuid(),
             name: name.clone(),

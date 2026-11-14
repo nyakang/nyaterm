@@ -896,6 +896,7 @@ fn connection_editor_inline_panel_draft_requires_draft_without_window() {
 fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState {
     let focus = cx.update(|cx| cx.focus_handle());
     let mut owner = ConnectionEditorFeatureState {
+        kind_drafts: Default::default(),
         draft: None,
         password: Default::default(),
         fields: HashMap::new(),

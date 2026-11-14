@@ -355,3 +355,24 @@ fn android_projection_includes_portable_device_and_screen_but_no_runtime_fields(
     assert_eq!(applied["device"]["host"], "example.test");
     assert_eq!(applied["screen"]["future_local"], 1);
 }
+
+#[test]
+fn default_session_settings_remain_local_in_the_existing_v4_projection() {
+    let settings = json!({"ui":{"language":"en"}});
+    let base = BTreeMap::from([("settings".into(), settings.to_string())]);
+    let mut changed = settings;
+    changed["default_session"] = json!({"ssh":{"type":"ssh","host":"", "future_field":1}});
+    let changed = BTreeMap::from([("settings".into(), changed.to_string())]);
+    for scope in [
+        SyncScope::default(),
+        SyncScope {
+            preferences: true,
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            project_entities(&base, &scope).unwrap(),
+            project_entities(&changed, &scope).unwrap()
+        );
+    }
+}

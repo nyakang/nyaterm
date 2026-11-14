@@ -980,6 +980,7 @@
     "connectionRecordingDesc": "Override global logging for this saved connection.",
     "connectionSaved": "Connection saved.",
     "defaultSessionSettingsSaved": "Default session settings saved",
+    "defaultSessionSettingsUnsupported": "These default session settings use an unsupported format. They have been preserved.",
     "customBaudRate": "Custom",
     "customBaudRatePlaceholder": "e.g. 74880",
     "dataBits": "Data Bits",

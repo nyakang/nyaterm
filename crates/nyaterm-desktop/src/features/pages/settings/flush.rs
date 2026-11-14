@@ -34,18 +34,7 @@ impl NyaTermApp {
         let backup_prompt = self.settings.snapshot_password_prompt();
         let draft_dirty = self.settings_draft_dirty() || self.settings.theme_designer().dirty();
         let palette = self.theme_palette();
-        let data_location = nyaterm_core::data_directory::read_location(self.runtime.local_dir())
-            .ok()
-            .flatten();
-        let data_directory_notice =
-            self.runtime
-                .data_dir_notice()
-                .map(str::to_string)
-                .or_else(|| {
-                    data_location
-                        .as_ref()
-                        .and_then(|location| location.last_error.clone())
-                });
+        let data_directory_notice = self.runtime.data_dir_notice().map(str::to_string);
         SettingsSnapshot {
             chrome: SettingsChrome {
                 palette,
@@ -87,14 +76,12 @@ impl NyaTermApp {
                 data_directory: self.runtime.data_dir().display().to_string().into(),
                 data_directory_custom: self.runtime.data_dir_custom(),
                 data_directory_editable: self.runtime.mode() != nyaterm_core::RuntimeMode::Portable,
-                data_directory_restart_pending: data_location
-                    .as_ref()
-                    .is_some_and(|location| location.pending.is_some()),
+                data_directory_restart_pending: self.runtime.data_directory_pending(),
                 data_directory_notice: data_directory_notice.map(Into::into),
-                data_directory_sync_client: nyaterm_core::data_directory::detect_sync_client(
-                    self.runtime.data_dir(),
-                )
-                .map(Into::into),
+                data_directory_sync_client: self
+                    .runtime
+                    .data_directory_sync_client()
+                    .map(Into::into),
             },
             ai: AiSettingsPresentation {
                 providers: self.ai.provider_view().clone(),

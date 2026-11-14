@@ -15,7 +15,7 @@ use super::event_wake::{ANY_INTEREST, EventWake};
 
 const CREDENTIAL_AUTOFILL_MATCH_REGEX_CACHE_LIMIT: usize = 512;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionKindTab {
     Ssh,
     Local,

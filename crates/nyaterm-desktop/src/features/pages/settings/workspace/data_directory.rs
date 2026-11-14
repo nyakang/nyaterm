@@ -2,7 +2,7 @@ use gpui::{
     Context, IntoElement, PathPromptOptions, SharedString, Window, div, prelude::*, px, rgb,
 };
 use nyaterm_core::app_identity::AppFlavor;
-use nyaterm_core::data_directory::{self, DataDirectoryError, PreparedSwitch, SwitchMode};
+use nyaterm_store::data_directory::{self, DataDirectoryError, PreparedSwitch, SwitchMode};
 use rust_i18n::t;
 
 use crate::features::pages::settings::panel::SettingsPanel;
@@ -18,7 +18,7 @@ impl SettingsPanel {
         let palette = self.theme_palette();
         let path = self.settings.data_directory.clone();
         let custom = self.settings.data_directory_custom;
-        let editable = self.settings.data_directory_editable;
+        let editable = self.settings.data_directory_editable && !self.data_directory_checking;
         let restart_pending = self.settings.data_directory_restart_pending;
         let notice = self.settings.data_directory_notice.clone();
         let sync_client = self.settings.data_directory_sync_client.clone();
@@ -123,6 +123,9 @@ impl SettingsPanel {
                         .children(reset_button),
                 )
                 .child(auto_hint)
+                .when(self.data_directory_checking, |content| {
+                    content.child(t!("common.loading").to_string())
+                })
                 .children(confirm_block)
                 .children(pending_line)
                 .children(notice_line)
@@ -226,99 +229,68 @@ impl SettingsPanel {
             let Some(target) = paths.into_iter().next() else {
                 return;
             };
-            let prepared = this.update(cx, |panel, cx| {
-                let runtime = panel.app_runtime(cx)?;
-                Some(data_directory::prepare_switch(
-                    runtime.data_dir(),
-                    runtime.local_dir(),
-                    &target,
-                    AppFlavor::current(),
-                ))
-            });
-            let Ok(Some(prepared)) = prepared else {
-                return;
-            };
-            let _ = this.update(cx, |panel, cx| match prepared {
-                Ok(prepared) => {
-                    panel.data_directory_choice = Some(prepared);
-                    cx.notify();
-                }
-                Err(error) => panel.report_data_directory_error(error, cx),
+            let _ = this.update(cx, |panel, cx| {
+                panel.prepare_data_directory_choice(target, cx)
             });
         })
         .detach();
     }
 
-    fn apply_data_directory_choice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn prepare_data_directory_choice(
+        &mut self,
+        target: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(runtime) = self.app_runtime(cx) else {
+            return;
+        };
+        self.data_directory_generation = self.data_directory_generation.wrapping_add(1);
+        let generation = self.data_directory_generation;
+        self.data_directory_choice = None;
+        self.data_directory_checking = true;
+        cx.notify();
+        let prepared = cx.background_spawn(async move {
+            data_directory::prepare_switch(
+                runtime.data_dir(),
+                runtime.local_dir(),
+                &target,
+                AppFlavor::current(),
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let prepared = prepared.await;
+            let _ = this.update(cx, |panel, cx| {
+                if panel.data_directory_generation != generation {
+                    return;
+                }
+                panel.data_directory_checking = false;
+                cx.notify();
+                match prepared {
+                    Ok(prepared) => {
+                        panel.data_directory_choice = Some(prepared);
+                        cx.notify();
+                    }
+                    Err(error) => panel.report_data_directory_error(error, cx),
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn apply_data_directory_choice(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(choice) = self.data_directory_choice.clone() else {
             return;
         };
-        // Unsaved settings, themes, or editors would turn the ordinary shutdown
-        // into a dialog. Refuse the switch instead of forcing the restart.
-        let blocked = self.with_app(cx, |app, cx| {
-            if !app.data_directory_restart_blocked() {
-                return false;
-            }
-            app.notify_data_directory_restart_blocked(cx);
-            true
-        });
-        if blocked {
-            return;
-        }
-        let target = choice.target.clone();
-        let mode = choice.mode;
-        let error = self.with_app(cx, |app, cx| {
-            let resetting = data_directory::short_path_hash(&target)
-                == data_directory::short_path_hash(app.runtime.local_dir());
-            match data_directory::queue_switch(
-                app.runtime.local_dir(),
-                app.runtime.data_dir(),
-                &target,
-                AppFlavor::current(),
-            ) {
-                Ok(_) => {
-                    let message = if resetting {
-                        t!("settings.dataDirectoryQueuedReset")
-                    } else {
-                        match mode {
-                            SwitchMode::Migrate => t!("settings.dataDirectoryQueuedMigrate"),
-                            SwitchMode::Adopt => t!("settings.dataDirectoryQueuedAdopt"),
-                        }
-                    };
-                    app.shell.set_status(message.to_string());
-                    app.request_data_directory_restart(window, cx);
-                    None
-                }
-                Err(error) => Some(error),
-            }
-        });
-        if let Some(error) = error {
-            self.report_data_directory_error(error, cx);
-        } else {
-            self.data_directory_choice = None;
-            cx.notify();
-        }
+        self.with_app(cx, |app, cx| app.request_data_directory_restart(choice, cx));
+        self.data_directory_choice = None;
+        cx.notify();
     }
 
     fn reset_data_directory(&mut self, cx: &mut Context<Self>) {
         let Some(runtime) = self.app_runtime(cx) else {
             return;
         };
-        // Resetting goes through the same validated switch path as picking a
-        // directory, so the default directory is either migrated into or adopted,
-        // never silently reopened with whatever stale database it still holds.
-        match data_directory::prepare_switch(
-            runtime.data_dir(),
-            runtime.local_dir(),
-            runtime.local_dir(),
-            AppFlavor::current(),
-        ) {
-            Ok(prepared) => {
-                self.data_directory_choice = Some(prepared);
-                cx.notify();
-            }
-            Err(error) => self.report_data_directory_error(error, cx),
-        }
+        self.prepare_data_directory_choice(runtime.local_dir().to_path_buf(), cx);
     }
 
     fn report_data_directory_error(&mut self, error: DataDirectoryError, cx: &mut Context<Self>) {

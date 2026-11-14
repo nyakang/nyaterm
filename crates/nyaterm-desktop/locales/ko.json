@@ -980,6 +980,7 @@
     "connectionRecordingDesc": "이 저장된 연결의 전역 로깅 설정을 재정의합니다.",
     "connectionSaved": "연결이 저장되었습니다.",
     "defaultSessionSettingsSaved": "기본 세션 설정이 저장되었습니다",
+    "defaultSessionSettingsUnsupported": "이 기본 세션 설정은 지원되지 않는 형식입니다. 원래 설정은 보존되었습니다.",
     "customBaudRate": "사용자 지정",
     "customBaudRatePlaceholder": "예: 74880",
     "dataBits": "데이터 비트",

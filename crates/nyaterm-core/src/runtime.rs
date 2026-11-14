@@ -56,6 +56,8 @@ pub struct AppRuntime {
     portable_key_path: Option<PathBuf>,
     data_dir_custom: bool,
     data_dir_notice: Option<String>,
+    data_dir_pending: bool,
+    data_dir_sync_client: Option<&'static str>,
 }
 
 impl AppRuntime {
@@ -116,6 +118,8 @@ impl AppRuntime {
             portable_key_path: None,
             data_dir_custom: false,
             data_dir_notice: None,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         }
     }
 
@@ -129,20 +133,11 @@ impl AppRuntime {
         let local_dir = home.join(config_name);
         let default_dir = local_dir.clone();
 
-        let override_dir = std::env::var_os(data_directory::DATA_DIR_ENV)
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute());
-        let (data_dir, data_dir_custom, data_dir_notice) = match override_dir {
-            Some(dir) => match data_directory::validate_usable_directory(&dir, flavor) {
-                Ok(()) => (dir, true, None),
-                Err(error) => (default_dir.clone(), false, Some(error.to_string())),
-            },
-            None => {
-                let startup =
-                    data_directory::resolve_startup_data_dir(&local_dir, &default_dir, flavor);
-                (startup.data_dir, startup.custom, startup.notice)
-            }
-        };
+        // Resolution is pointer-agnostic. The executable applies the bootstrap
+        // selection only after acquiring the installation owner lock.
+        let data_dir = default_dir;
+        let data_dir_custom = false;
+        let data_dir_notice = None;
 
         Self {
             mode: RuntimeMode::Installed,
@@ -157,17 +152,40 @@ impl AppRuntime {
             portable_key_path: None,
             data_dir_custom,
             data_dir_notice,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         }
     }
 
+    /// Applies a selection validated by the executable's store boundary.
+    pub fn with_data_directory(mut self, data_dir: PathBuf, notice: Option<String>) -> Self {
+        self.data_dir_custom = data_dir != self.local_dir;
+        self.config_dir = data_dir.clone();
+        self.data_dir = data_dir;
+        self.data_dir_notice = notice;
+        self
+    }
+
+    pub fn with_pending_data_directory(mut self, pending: bool) -> Self {
+        self.data_dir_pending = pending;
+        self
+    }
+
+    pub fn data_directory_pending(&self) -> bool {
+        self.data_dir_pending
+    }
+
+    pub fn with_data_directory_sync_client(mut self, client: Option<&'static str>) -> Self {
+        self.data_dir_sync_client = client;
+        self
+    }
+
+    pub fn data_directory_sync_client(&self) -> Option<&'static str> {
+        self.data_dir_sync_client
+    }
+
     pub fn ensure_directories(&self) -> Result<(), RuntimeError> {
-        for path in [
-            self.local_dir(),
-            self.data_dir(),
-            self.config_dir(),
-            self.log_dir(),
-            self.cache_dir(),
-        ] {
+        for path in [self.local_dir(), self.log_dir(), self.cache_dir()] {
             std::fs::create_dir_all(path).map_err(|source| RuntimeError::CreateDir {
                 path: path.to_path_buf(),
                 source,
@@ -212,11 +230,7 @@ impl AppRuntime {
     }
 
     pub fn instance_dir(&self) -> PathBuf {
-        if self.data_dir_custom {
-            data_directory::instance_lock_dir(&self.local_dir, &self.data_dir)
-        } else {
-            self.data_dir.join(data_directory::INSTANCE_DIR_NAME)
-        }
+        self.local_dir.join(data_directory::INSTANCE_DIR_NAME)
     }
 
     pub fn cache_dir(&self) -> &Path {
@@ -249,6 +263,8 @@ impl AppRuntime {
             data_dir,
             data_dir_custom: false,
             data_dir_notice: None,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         })
     }
 
@@ -271,6 +287,8 @@ impl AppRuntime {
             portable_key_path,
             data_dir_custom: false,
             data_dir_notice: None,
+            data_dir_pending: false,
+            data_dir_sync_client: None,
         }
     }
 }
@@ -399,18 +417,15 @@ mod tests {
         let home = directory.path().join("home");
         let custom = directory.path().join("synced");
         std::fs::create_dir_all(&custom).unwrap();
-        crate::data_directory::set_active_data_dir(&home.join(".nyaterm"), Some(&custom)).unwrap();
 
-        let runtime = AppRuntime::installed_resolved(&home, None, AppFlavor::Stable, false);
+        let runtime = AppRuntime::installed_resolved(&home, None, AppFlavor::Stable, false)
+            .with_data_directory(custom.clone(), None);
         assert_eq!(runtime.data_dir(), custom);
         assert!(runtime.data_dir_custom());
         assert_eq!(runtime.config_dir(), custom);
         assert_eq!(runtime.log_dir(), home.join(".nyaterm/logs"));
         assert_eq!(runtime.crash_dir(), home.join(".nyaterm/crashes"));
-        assert_eq!(
-            runtime.instance_dir(),
-            crate::data_directory::instance_lock_dir(&home.join(".nyaterm"), &custom)
-        );
+        assert_eq!(runtime.instance_dir(), home.join(".nyaterm/.instance"));
         assert!(!runtime.instance_dir().starts_with(&custom));
     }
 
