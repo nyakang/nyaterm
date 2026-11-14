@@ -239,6 +239,17 @@ fn linux_mount_detection_uses_mountpoint_and_filesystem_columns_and_longest_matc
 }
 
 #[cfg(unix)]
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_mount_detection_accepts_local_directories_that_do_not_exist_yet() {
+    let root = TestTempDir::new("nyaterm-macos-local-mount");
+    fs::create_dir_all(root.path()).unwrap();
+    let existing = root.path();
+    let missing = root.path().join("not").join("created");
+    assert!(!crate::data_directory::is_network_location(existing).unwrap());
+    assert!(!crate::data_directory::is_network_location(&missing).unwrap());
+}
+
 #[test]
 fn special_plugin_entries_fail_without_publishing_the_database() {
     let root = TestTempDir::new("nyaterm-data-directory-special");
