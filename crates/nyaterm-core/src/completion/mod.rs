@@ -1,5 +1,6 @@
 //! UI-independent, declaration-only command completion.
 pub mod catalog;
+pub mod fill;
 pub mod history;
 pub mod matching;
 pub mod parser;
