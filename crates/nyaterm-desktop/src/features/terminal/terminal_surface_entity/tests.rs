@@ -4647,3 +4647,49 @@ fn full_history_no_wrap_wait_keeps_long_line_frame_and_source_index() {
     assert!(!surface.has_snapshot_covering_display_offset(51, 3, 128));
     assert!(surface.unwrapped_layout(&old).is_some());
 }
+
+#[test]
+fn highlight_requests_distinguish_fold_gaps_with_the_same_outer_window() {
+    let mut screen = TerminalScreen::new(80, 24);
+    for _ in 0..3 {
+        screen.advance(
+            b"\x1b]133;A\x07$ \x1b]133;B\x07run\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07",
+        );
+    }
+    screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+    let snapshot = screen.snapshot();
+    let mut keys = Vec::new();
+    for block in snapshot.command_blocks.iter().take(2) {
+        let mut folded = snapshot.clone();
+        let projection = Arc::new(nyaterm_terminal::display_rows::TerminalDisplayRows::new(
+            snapshot.history.scrollback_len + snapshot.viewport_rows,
+            snapshot.logical_lines.clone(),
+            &snapshot.command_blocks,
+            &[block.id].into(),
+            snapshot.cursor.row,
+        ));
+        folded.display_rows = Some(projection.clone());
+        let ranges = nyaterm_terminal_gpui::keywords::terminal_keyword_highlight_expanded_ranges(
+            &folded,
+            std::slice::from_ref(&(0..folded.row_count())),
+        );
+        assert_eq!(
+            ranges,
+            projection
+                .source_ranges(0..projection.rows())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            ranges
+                .iter()
+                .flat_map(|range| range.clone())
+                .all(|row| !projection.hidden(row))
+        );
+        keys.push(terminal_keyword_highlight_request_key(
+            &folded,
+            7,
+            0..folded.row_count(),
+        ));
+    }
+    assert_ne!(keys[0], keys[1]);
+}

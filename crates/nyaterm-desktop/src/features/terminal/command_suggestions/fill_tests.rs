@@ -37,10 +37,7 @@ fn typing_keeps_popup_painted_while_each_result_moves_it_with_the_cursor() {
     let mut f = Fixture::new();
     f.suggest_in_shell("git", "git status");
     f.update(|app, _, _| {
-        let (row, col) = app.active_terminal_cursor_cell();
         let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
-        popup.cursor_row = row;
-        popup.cursor_col = col;
         popup.selected_index = None;
     });
     let app = f.app.clone();
@@ -144,8 +141,8 @@ fn typing_keeps_popup_painted_while_each_result_moves_it_with_the_cursor() {
             assert!(!popup.refreshing);
             assert_eq!(popup.draft, line);
             assert_eq!(
-                (popup.cursor_row, popup.cursor_col),
-                app.active_terminal_cursor_cell()
+                app.suggestion_cursor_cell_for_session(&id, cx),
+                Some(app.active_terminal_cursor_cell())
             );
         });
         draw_popup(&app, cx);
@@ -892,10 +889,17 @@ fn echo(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>, id: &str, value: &st
         format!("<device>{value}")
     };
     app.terminal.seed_session_view(id.into(), output, "UTF-8");
+    publish_fixture_frame(app, id);
     app.reconcile_shell_editing(id, cx);
 }
 
+fn publish_fixture_frame(app: &mut NyaTermApp, id: &str) {
+    let view = app.terminal.view.views.get_mut(id).unwrap();
+    view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+}
+
 fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
+    publish_fixture_frame(app, id);
     // These tests install exact rows; snapshot-triggered searches must not replace them.
     app.terminal.assist.command_suggestion_refresh_task = None;
     app.terminal.assist.command_suggestion_search_gen = app
@@ -923,8 +927,6 @@ fn popup(app: &mut NyaTermApp, id: &str, target: &str) {
             indices: Vec::new(),
         }],
         selected_index: Some(0),
-        cursor_row: 0,
-        cursor_col: 0,
     });
 }
 
@@ -938,13 +940,7 @@ fn set_popup_space(app: &mut NyaTermApp, id: &str, width: f32, space_below: f32)
         .session_surface_bounds
         .insert(id.into(), bounds);
     let insets = app.terminal_content_insets_for_bounds(Some(id), bounds);
-    let row = app
-        .terminal
-        .assist
-        .command_suggestions
-        .as_ref()
-        .unwrap()
-        .cursor_row;
+    let row = app.active_terminal_cursor_cell().0;
     let cursor_bottom = insets.top + (row + 1) as f32 * app.terminal_cell_size().1;
     app.shell
         .set_viewport_size_for_test((width, cursor_bottom + 4. + space_below + 8.));
@@ -969,7 +965,10 @@ fn shortened_popup_keeps_keyboard_selection_visible_after_resize() {
         let popup = app.terminal.assist.command_suggestions.as_mut().unwrap();
         popup.items = vec![popup.items[0].clone(); 12];
         popup.selected_index = None;
-        popup.cursor_row = 20;
+        let view = app.terminal.view.views.get_mut(id).unwrap();
+        Arc::make_mut(view.frame_snapshot.as_mut().unwrap())
+            .cursor
+            .row = 20;
         set_popup_space(app, id, 800., 250.);
     });
     let app = f.app.clone();
@@ -1043,12 +1042,10 @@ fn long_command_preview_stays_beyond_popup_and_inside_narrow_window() {
     let mut f = Fixture::new();
     f.suggest("mv", &"mv source destination ".repeat(80));
     f.update(|app, _, id| {
-        app.terminal
-            .assist
-            .command_suggestions
-            .as_mut()
-            .unwrap()
-            .cursor_row = 20;
+        let view = app.terminal.view.views.get_mut(id).unwrap();
+        Arc::make_mut(view.frame_snapshot.as_mut().unwrap())
+            .cursor
+            .row = 20;
         set_popup_space(app, id, 300., 300.);
     });
     let app = f.app.clone();
@@ -1927,8 +1924,9 @@ fn clicking_a_token_description_accepts_that_candidate_without_execution() {
         popup.selected_index = None;
         popup.items[0].display = "docker".into();
         popup.items[0].description = "A self-sufficient runtime for containers".into();
+        let (row, col) = app.active_terminal_cursor_cell();
         let placement = app
-            .suggestion_overlay_position_for_session(Some(id), 0, 0, 380., 76.)
+            .suggestion_overlay_position_for_session(Some(id), row, col, 380., 76.)
             .unwrap();
         gpui::point(
             gpui::px(placement.x + 350.),
@@ -2259,8 +2257,9 @@ fn clicking_a_multiline_candidate_opens_review_even_without_shell_editing_capabi
     let mut f = Fixture::new();
     f.suggest("脚本", "echo first\necho second");
     let position = f.update(|app, _, id| {
+        let (row, col) = app.active_terminal_cursor_cell();
         let placement = app
-            .suggestion_overlay_position_for_session(Some(id), 0, 0, 380., 76.)
+            .suggestion_overlay_position_for_session(Some(id), row, col, 380., 76.)
             .unwrap();
         gpui::point(
             gpui::px(placement.x + 150.),
@@ -2699,4 +2698,56 @@ fn cmd_replacement_confirmation_timeout_cancels_the_fill_before_late_echo() {
         );
     });
     f.assert_quiet();
+}
+
+#[test]
+fn open_popup_tracks_new_folded_frames_without_replacing_suggestions() {
+    let mut f = Fixture::new();
+    f.suggest_in_shell("git", "git status");
+    f.update(|app, cx, id| {
+        let output =
+            "$ \x1b]133;B\x07run\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07".repeat(3);
+        app.terminal.seed_session_view(
+            id.into(),
+            format!("{output}\x1b]133;A\x07$ \x1b]133;B\x07git"),
+            "UTF-8",
+        );
+        app.reconcile_shell_editing(id, cx);
+        popup(app, id, "git status");
+        app.shell.set_viewport_size_for_test((1000., 1000.));
+    });
+    let app = f.app.clone();
+    let id = f.id.clone();
+    let (_, cx) = f.cx.add_window_view(|_, _| PopupView(app.clone()));
+    draw_popup(&app, cx);
+    let before = cx.debug_bounds("command-suggestions-overlay").unwrap();
+    let original = app.read_with(cx, |app, _| app.terminal.assist.command_suggestions.clone());
+    for collapsed in [true, false] {
+        app.update(cx, |app, cx| {
+            let view = app.terminal.view.views.get_mut(&id).unwrap();
+            let ids = if collapsed {
+                view.screen
+                    .snapshot()
+                    .command_blocks
+                    .iter()
+                    .map(|block| block.id)
+                    .collect()
+            } else {
+                Default::default()
+            };
+            view.screen.set_collapsed_commands(ids);
+            view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+            app.sync_terminal_surface_paint(&id, cx);
+        });
+        draw_popup(&app, cx);
+        let after = cx.debug_bounds("command-suggestions-overlay").unwrap();
+        if collapsed {
+            assert!(after.origin.y < before.origin.y);
+        } else {
+            assert_eq!(after, before);
+        }
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.terminal.assist.command_suggestions, original)
+        });
+    }
 }

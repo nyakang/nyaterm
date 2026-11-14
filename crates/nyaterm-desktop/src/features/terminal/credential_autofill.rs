@@ -107,7 +107,6 @@ impl NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };
-        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell();
         self.dismiss_command_suggestions(cx);
         let selected_index = (precise && matches.len() == 1).then_some(0);
         self.terminal.assist.credential_suggestions = Some(CredentialSuggestionState {
@@ -116,8 +115,6 @@ impl NyaTermApp {
             matches,
             prompt_text,
             selected_index,
-            cursor_row,
-            cursor_col,
         });
         cx.notify();
     }
@@ -933,12 +930,17 @@ impl NyaTermApp {
             return div().into_any_element();
         }
 
+        let Some((cursor_row, cursor_col)) =
+            self.suggestion_cursor_cell_for_session(&state.session_id, cx)
+        else {
+            return div().into_any_element();
+        };
         let menu_w = 340.0_f32;
         let menu_h = suggestion_overlay_desired_height(state.matches.len(), 36.0);
         let Some(placement) = self.suggestion_overlay_position_for_session(
             Some(&state.session_id),
-            state.cursor_row,
-            state.cursor_col,
+            cursor_row,
+            cursor_col,
             menu_w,
             menu_h,
         ) else {
@@ -2628,5 +2630,35 @@ mod tests {
         for id in ids {
             manager.close(&id).unwrap();
         }
+    }
+
+    #[test]
+    fn open_credential_popup_anchor_tracks_folded_frames_without_resetting_selection() {
+        let dir = TestConfigDir::new("nyaterm-credential-fold-anchor");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            let view = app.terminal.view.views.get_mut("s1").unwrap();
+            view.screen.resize(80, 24);
+            view.screen.advance(b"$ \x1b]133;B\x07run\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07\x1b]133;A\x07Password: ");
+            view.frame_snapshot = Some(std::sync::Arc::new(view.screen.snapshot()));
+            let id = view.screen.snapshot().command_blocks[0].id;
+            app.terminal.assist.credential_suggestions = Some(crate::models::CredentialSuggestionState {
+                session_id: "s1".into(), kind: CredentialPromptKind::Password,
+                matches: vec![test_credential_target("fold")], prompt_text: "Password: ".into(), selected_index: Some(0),
+            });
+            let original = app.terminal.assist.credential_suggestions.clone();
+            let before = app.suggestion_cursor_cell_for_session("s1", cx).unwrap();
+            for collapsed in [true, false] {
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.screen.set_collapsed_commands(if collapsed { [id].into() } else { Default::default() });
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.snapshot()));
+                let after = app.suggestion_cursor_cell_for_session("s1", cx).unwrap();
+                assert_eq!(after, (before.0 - usize::from(collapsed), before.1));
+                assert_eq!(app.terminal.assist.credential_suggestions, original);
+            }
+            assert!(app.suggestion_cursor_cell_for_session("other", cx).is_none());
+        });
     }
 }

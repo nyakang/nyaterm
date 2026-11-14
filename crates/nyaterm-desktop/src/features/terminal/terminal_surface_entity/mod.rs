@@ -7,6 +7,10 @@ pub(in crate::features) use nyaterm_terminal_gpui::geometry::{
     TerminalVisualScrollGeometry, terminal_effective_visual_scroll_offset_px,
     terminal_snapshot_anchor_row_for_display_offset, terminal_snapshot_covers_display_offset,
 };
+use nyaterm_terminal_gpui::keywords::{
+    precompute_terminal_keyword_highlights_for_ranges_with_stats_and_cancel,
+    terminal_keyword_highlight_expanded_ranges,
+};
 use nyaterm_terminal_gpui::stripes::{TerminalStripeMode, terminal_row_stripe_color};
 
 use crate::features::NyaTermApp;
@@ -37,9 +41,8 @@ use crate::models::{
 use crate::terminal::{
     NyaTerminalElement, NyaTerminalLayoutCache, TerminalGridSelection,
     TerminalKeywordHighlightConfig, TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter,
-    TerminalLineDecorations, compile_terminal_keyword_highlighter,
-    precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel, terminal_font_features,
-    terminal_keyword_highlight_config_key, terminal_keyword_highlight_expanded_rows,
+    TerminalLineDecorations, compile_terminal_keyword_highlighter, terminal_font_features,
+    terminal_keyword_highlight_config_key,
 };
 use crate::theme::ThemePalette;
 use std::collections::hash_map::DefaultHasher;
@@ -109,10 +112,13 @@ fn terminal_keyword_highlight_request_key(
     rules_key: u64,
     rows: Range<usize>,
 ) -> TerminalKeywordHighlightRequestKey {
-    let rows = terminal_keyword_highlight_expanded_rows(snapshot, rows);
+    let ranges = terminal_keyword_highlight_expanded_ranges(snapshot, &[rows]);
+    let rows =
+        ranges.first().map_or(0, |range| range.start)..ranges.last().map_or(0, |range| range.end);
     let row_start = rows.start.min(snapshot.row_count());
     let row_end = rows.end.min(snapshot.row_count()).max(row_start);
     let mut hasher = DefaultHasher::new();
+    ranges.hash(&mut hasher);
     snapshot.history.alternate_screen.hash(&mut hasher);
     if rows.contains(&snapshot.cursor.row) {
         snapshot.cursor.row.hash(&mut hasher);
@@ -124,9 +130,10 @@ fn terminal_keyword_highlight_request_key(
             .cast::<()>()
             .hash(&mut hasher);
     } else {
-        let rows = snapshot.rows().get(row_start..row_end).unwrap_or_default();
-        rows.len().hash(&mut hasher);
-        for row in rows {
+        for row in ranges
+            .iter()
+            .flat_map(|range| &snapshot.rows()[range.clone()])
+        {
             (
                 row.signature,
                 row.wrapped,
@@ -2013,18 +2020,20 @@ impl TerminalSurface {
             self.viewport_rows,
             self.scrollback_len,
         );
-        let visible_rows =
-            terminal_keyword_highlight_expanded_rows(snapshot.as_ref(), visible_rows);
+        let visible_ranges = terminal_keyword_highlight_expanded_ranges(
+            snapshot.as_ref(),
+            std::slice::from_ref(&visible_rows),
+        );
 
         let rules = self.keyword_rules.clone();
         let config = self.keyword_highlight_config();
         let rules_key = terminal_keyword_highlight_config_key(rules.as_slice(), config);
         let visible_ready = self.keyword_highlights.as_ref().is_some_and(|highlights| {
             highlights.rules_key() == rules_key
-                && highlights.matches_snapshot_rows(
+                && highlights.matches_snapshot_ranges(
                     snapshot.as_ref(),
                     self.palette,
-                    visible_rows.clone(),
+                    &visible_ranges,
                 )
         });
         if visible_ready && output_pressure {
@@ -2046,12 +2055,16 @@ impl TerminalSurface {
         } else {
             visible_rows
         };
+        let requested_ranges = terminal_keyword_highlight_expanded_ranges(
+            snapshot.as_ref(),
+            std::slice::from_ref(&requested_rows),
+        );
         if visible_ready
             && self.keyword_highlights.as_ref().is_some_and(|highlights| {
-                highlights.matches_snapshot_rows(
+                highlights.matches_snapshot_ranges(
                     snapshot.as_ref(),
                     self.palette,
-                    requested_rows.clone(),
+                    &requested_ranges,
                 )
             })
         {
@@ -2059,9 +2072,7 @@ impl TerminalSurface {
             return;
         }
         let requested_row_count = requested_rows.len();
-        let requested_rows =
-            terminal_keyword_highlight_expanded_rows(snapshot.as_ref(), requested_rows);
-        let expanded_requested_row_count = requested_rows.len();
+        let expanded_requested_row_count: usize = requested_ranges.iter().map(Range::len).sum();
         let request_key = terminal_keyword_highlight_request_key(
             snapshot.as_ref(),
             rules_key,
@@ -2097,7 +2108,6 @@ impl TerminalSurface {
         // Keep the last published snapshot drawable while the replacement is parsed in the
         // background, matching the editor's stale-until-reparsed behavior.
         let highlighter = self.cached_keyword_highlighter_for_rules(&rules);
-        let palette = self.palette;
         let previous_highlights = self.keyword_highlights.clone();
         self.keyword_highlight_task = Some(cx.spawn(async move |this, cx| {
             let (rules, highlighter, result, highlight_duration) = cx
@@ -2107,12 +2117,11 @@ impl TerminalSurface {
                     });
                     let highlight_started_at = Instant::now();
                     let result =
-                        precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel(
+                        precompute_terminal_keyword_highlights_for_ranges_with_stats_and_cancel(
                             snapshot.as_ref(),
                             highlighter.as_ref(),
-                            palette,
                             previous_highlights.as_deref(),
-                            requested_rows,
+                            &requested_ranges,
                             || cancel_epoch.load(Ordering::Acquire) != request_cancel_epoch,
                         );
                     let highlight_duration = highlight_started_at.elapsed();

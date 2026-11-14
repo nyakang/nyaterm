@@ -18,7 +18,7 @@ pub mod geometry;
 mod glyphs;
 mod images;
 mod input;
-mod keywords;
+pub mod keywords;
 mod paint;
 mod paint_mask;
 pub mod render_cache;

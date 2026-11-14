@@ -6,10 +6,8 @@ pub(crate) use nyaterm_terminal_gpui::{
     NyaTerminalElement, NyaTerminalLayoutCache, TerminalBufferMatch, TerminalGridSelection,
     TerminalKeyMode, TerminalKeywordHighlightConfig, TerminalKeywordHighlightSnapshot,
     TerminalKeywordHighlighter, TerminalLineDecorations, compile_terminal_keyword_highlighter,
-    precompute_terminal_keyword_highlights_for_rows_with_stats_and_cancel, terminal_font_features,
-    terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
-    terminal_keyword_highlight_config_key, terminal_keyword_highlight_expanded_rows,
-    terminal_screen_from_output,
+    terminal_font_features, terminal_key_bytes_with_mode, terminal_key_release_bytes_with_mode,
+    terminal_keyword_highlight_config_key, terminal_screen_from_output,
 };
 
 pub(crate) const INITIAL_TERMINAL_BANNER: &str = "";

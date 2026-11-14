@@ -587,9 +587,6 @@ pub(crate) struct CommandSuggestionState {
     pub(crate) draft: String,
     pub(crate) items: Vec<CommandSuggestionItem>,
     pub(crate) selected_index: Option<usize>,
-    /// Visible viewport row, including the presentation shift for cleared rows.
-    pub(crate) cursor_row: usize,
-    pub(crate) cursor_col: usize,
 }
 
 impl CommandSuggestionState {
@@ -615,9 +612,6 @@ pub(crate) struct CredentialSuggestionState {
     /// Only a unique precise match is preselected. Ambiguous matches and the
     /// unfiltered fallback require an explicit choice before Enter can fill.
     pub(crate) selected_index: Option<usize>,
-    /// Visible viewport row, including the presentation shift for cleared rows.
-    pub(crate) cursor_row: usize,
-    pub(crate) cursor_col: usize,
 }
 
 use nyaterm_core::credential_autofill::matching::CredentialAutofillMatcher;

@@ -11,6 +11,19 @@ use nyaterm_ui::NyaHorizontalScrollbar;
 use super::{TerminalSurface, terminal_surface_visible_rows_for_viewport};
 
 impl TerminalSurface {
+    pub(in crate::features) fn suggestion_cursor_cell(&self) -> Option<(usize, usize)> {
+        let snapshot = self.snapshot.as_ref()?;
+        if !self.snapshot_has_current_coordinates(snapshot) {
+            return None;
+        }
+        nyaterm_terminal_gpui::geometry::terminal_cursor_display_cell(
+            snapshot,
+            self.display_offset,
+            self.viewport_rows,
+            -f32::from(self.horizontal_scroll.offset().x) / self.cell_width.max(1.0),
+        )
+    }
+
     pub(in crate::features) fn painted_unwrapped_layout(
         &self,
     ) -> Option<Arc<TerminalUnwrappedLayout>> {

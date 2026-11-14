@@ -22,10 +22,8 @@ use crate::features::NyaTermApp;
 use crate::features::terminal::editing_payload::shell_edit_payload_with_backend;
 use crate::features::terminal::editing_state::{SnapshotEvidence, SuggestionFillRequest};
 use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
-use crate::features::terminal::terminal_surface_entity::terminal_snapshot_anchor_row_for_display_offset;
 use crate::models::{CommandSuggestionItem, CommandSuggestionState};
 use crate::terminal::terminal_byte_index_for_cell_col;
-use nyaterm_terminal::snapshot_window::terminal_snapshot_absolute_window;
 
 mod fill;
 #[cfg(test)]
@@ -93,7 +91,6 @@ impl CommandSuggestionInputTiming {
 struct CommandSuggestionRefreshTiming {
     pattern: Duration,
     search: Duration,
-    cursor: Duration,
     update_state: Duration,
     hide_popup: Duration,
 }
@@ -122,7 +119,6 @@ impl CommandSuggestionRefreshTiming {
         [
             self.pattern,
             self.search,
-            self.cursor,
             self.update_state,
             self.hide_popup,
         ]
@@ -938,9 +934,6 @@ impl NyaTermApp {
             );
             return;
         }
-        let cursor_started_at = Instant::now();
-        let (cursor_row, cursor_col) = self.active_terminal_cursor_cell();
-        timing.cursor = cursor_started_at.elapsed();
         let update_started_at = Instant::now();
         let next_state = CommandSuggestionState {
             refreshing: false,
@@ -956,8 +949,6 @@ impl NyaTermApp {
                 .map(|item| completion_suggestion_item(item, &pattern))
                 .collect(),
             selected_index: None,
-            cursor_row,
-            cursor_col,
         };
         if !command_suggestion_state_changed(
             self.terminal.assist.command_suggestions.as_ref(),
@@ -1075,7 +1066,6 @@ impl NyaTermApp {
             total_us = total_duration.as_micros(),
             pattern_us = timing.pattern.as_micros(),
             search_us = timing.search.as_micros(),
-            cursor_us = timing.cursor.as_micros(),
             update_state_us = timing.update_state.as_micros(),
             hide_popup_us = timing.hide_popup.as_micros(),
             "slow terminal suggestion refresh"
@@ -1088,38 +1078,42 @@ impl NyaTermApp {
         }
     }
 
-    /// Capture a viewport-relative anchor using one snapshot. History padding can
-    /// change between frames even when the shell cursor has not moved.
+    pub(in crate::features) fn suggestion_cursor_cell_for_session(
+        &self,
+        session_id: &str,
+        cx: &gpui::App,
+    ) -> Option<(usize, usize)> {
+        if self.session.active_id() != Some(session_id) {
+            return None;
+        }
+        if let Some(surface) = self.terminal.view.surfaces.get(session_id)
+            && surface.read(cx).has_snapshot()
+        {
+            return surface.read(cx).suggestion_cursor_cell();
+        }
+        // Only read a committed frame: rendering must not synthesize history.
+        let view = self.terminal.view.views.get(session_id)?;
+        let snapshot = view.frame_snapshot.as_ref()?;
+        nyaterm_terminal_gpui::geometry::terminal_cursor_display_cell(
+            snapshot,
+            self.active_terminal_display_offset(),
+            view.viewport_rows_for_ui(),
+            0.0,
+        )
+    }
+
+    #[cfg(test)]
     pub(in crate::features) fn active_terminal_cursor_cell(&self) -> (usize, usize) {
         let session_id = self.session.active_id();
         let offset = self.active_terminal_display_offset();
         let snapshot = self.terminal_snapshot_for_session(session_id, offset);
-        let viewport_rows = self.terminal_viewport_rows_for_session(session_id);
-        let row = if snapshot.cursor.row == usize::MAX {
-            snapshot.row_count().saturating_sub(1)
-        } else {
-            snapshot.cursor.row
-        };
-        // Collapsed command blocks hide output rows, so the anchor must be
-        // reported in folded display rows just like painting (#1259).
-        if let Some(projection) = snapshot.display_rows.as_ref() {
-            let top = projection.top(offset, viewport_rows.max(1));
-            let cursor_absolute = terminal_snapshot_absolute_window(&snapshot)
-                .map(|(start, _)| start + row)
-                .unwrap_or(row);
-            let cursor_display = projection.display_row(cursor_absolute);
-            return (cursor_display.saturating_sub(top), snapshot.cursor.col);
-        }
-        let anchor = terminal_snapshot_anchor_row_for_display_offset(
+        nyaterm_terminal_gpui::geometry::terminal_cursor_display_cell(
             &snapshot,
             offset,
-            viewport_rows,
-            self.terminal_scrollback_len_for_session(session_id),
-        );
-        (
-            row.saturating_sub(anchor + snapshot.leading_cleared_rows(anchor)),
-            snapshot.cursor.col,
+            self.terminal_viewport_rows_for_session(session_id),
+            0.0,
         )
+        .unwrap_or((usize::MAX, snapshot.cursor.col))
     }
 
     /// Handle suggestion popup keys. Returns true when the key was consumed.
@@ -1465,6 +1459,9 @@ impl NyaTermApp {
         {
             return div().into_any_element();
         }
+        let Some(cursor) = self.suggestion_cursor_cell_for_session(&state.session_id, cx) else {
+            return div().into_any_element();
+        };
         let menu_w = 380.0_f32;
         let menu_h = command_suggestion_desired_height(state.items.len());
         let title = t!("suggestions.title");
@@ -1487,7 +1484,7 @@ impl NyaTermApp {
         let Some(placement) = self.suggestion_overlay_position_for_session_with_policy(
             Some(&state.session_id),
             SuggestionOverlayTarget {
-                cursor: (state.cursor_row, state.cursor_col),
+                cursor,
                 menu_size: (menu_w, menu_h),
             },
             SuggestionOverlayPolicy::BelowFirst {
@@ -3146,8 +3143,6 @@ mod tests {
                 indices: vec![0, 1, 2],
             }],
             selected_index: None,
-            cursor_row: 3,
-            cursor_col: 4,
         };
         let mut selected = state.clone();
         selected.selected_index = Some(0);
@@ -3256,8 +3251,6 @@ mod tests {
                 indices: Vec::new(),
             }],
             selected_index: Some(0),
-            cursor_row: 0,
-            cursor_col: 0,
         }
     }
 
@@ -3282,8 +3275,6 @@ mod tests {
             let (cursor_row, cursor_col) = app.active_terminal_cursor_cell();
             let mut state = open_suggestions_popup("s1");
             state.selected_index = None;
-            state.cursor_row = cursor_row;
-            state.cursor_col = cursor_col;
             app.terminal.assist.command_suggestions = Some(state);
             let before = app
                 .suggestion_overlay_position_for_session(
@@ -3310,8 +3301,8 @@ mod tests {
                 let after = app
                     .suggestion_overlay_position_for_session(
                         Some("s1"),
-                        state.cursor_row,
-                        state.cursor_col,
+                        app.suggestion_cursor_cell_for_session("s1", cx).unwrap().0,
+                        app.suggestion_cursor_cell_for_session("s1", cx).unwrap().1,
                         380.0,
                         272.0,
                     )

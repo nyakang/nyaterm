@@ -159,6 +159,44 @@ impl TerminalDisplayRows {
         self.source_row(top)..self.source_row((top + viewport).min(self.rows))
     }
 
+    /// Ordinary text covered by a display interval. Summary rows have no text.
+    pub fn source_ranges(&self, display: Range<usize>) -> impl Iterator<Item = Range<usize>> + '_ {
+        let start = self.source_row(display.start.min(self.rows));
+        let end = self.source_row(display.end.min(self.rows)).max(start);
+        self.visible_source_ranges(start..end)
+    }
+
+    /// Skip hidden output without visiting its rows. Coordinates remain absolute.
+    pub fn visible_source_ranges(
+        &self,
+        source: Range<usize>,
+    ) -> impl Iterator<Item = Range<usize>> + '_ {
+        let mut start = source.start.min(self.physical_rows);
+        let end = source.end.min(self.physical_rows);
+        let mut fold_index = self.folds.partition_point(|fold| fold.source.end <= start);
+        std::iter::from_fn(move || {
+            while start < end {
+                let Some(fold) = self
+                    .folds
+                    .get(fold_index)
+                    .filter(|fold| fold.source.start < end)
+                else {
+                    let range = start..end;
+                    start = end;
+                    return Some(range);
+                };
+                let visible_end = fold.source.start.min(end);
+                let visible_start = start;
+                start = fold.source.end.min(end);
+                fold_index += 1;
+                if visible_start < visible_end {
+                    return Some(visible_start..visible_end);
+                }
+            }
+            None
+        })
+    }
+
     pub fn scroll_metrics(&self, offset: usize, viewport: usize) -> (usize, usize) {
         let max = self.rows.saturating_sub(viewport);
         (max.saturating_sub(self.top(offset, viewport)), max)
@@ -248,5 +286,45 @@ mod tests {
         assert!(snapshot.command_blocks.iter().all(|block| block.id != id));
         let index = snapshot.display_rows.as_ref().unwrap();
         assert!((0..index.rows()).all(|row| index.summary(row).is_none()));
+    }
+
+    #[test]
+    fn visible_intervals_match_display_rows_at_every_fold_boundary() {
+        for logical in [false, true] {
+            let mut screen = TerminalScreen::new(8, 4);
+            screen.set_logical_line_snapshots(logical);
+            for _ in 0..4 {
+                screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07run\r\n\x1b]133;C\x07abcdefghijk\r\nsecond\r\n\x1b]133;D;0\x07");
+            }
+            screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+            let snapshot = screen.snapshot();
+            screen.set_collapsed_commands(
+                snapshot
+                    .command_blocks
+                    .iter()
+                    .map(|block| block.id)
+                    .collect(),
+            );
+            let snapshot = screen.snapshot();
+            let projection = snapshot.display_rows.as_ref().unwrap();
+            for start in 0..=projection.rows() {
+                for end in start..=projection.rows() {
+                    let actual: Vec<_> = projection.source_ranges(start..end).flatten().collect();
+                    let expected: Vec<_> = (0..projection.physical_rows)
+                        .filter(|source| {
+                            !projection.hidden(*source)
+                                && (start..end).contains(&projection.display_row(*source))
+                        })
+                        .collect();
+                    assert_eq!(actual, expected, "logical={logical} display={start}..{end}");
+                }
+            }
+            for offset in 0..=projection.physical_rows {
+                let top = projection.top(offset, 4);
+                for range in projection.source_ranges(top..top + 4) {
+                    assert!(range.clone().all(|row| !projection.hidden(row)));
+                }
+            }
+        }
     }
 }

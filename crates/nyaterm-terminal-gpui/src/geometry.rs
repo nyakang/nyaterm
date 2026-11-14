@@ -5,6 +5,48 @@ use nyaterm_terminal::selection::TerminalCellPos;
 use nyaterm_terminal::snapshot_window::terminal_snapshot_absolute_window;
 use std::sync::Arc;
 
+/// Resolve popup anchors from the same projection as terminal painting.
+pub fn terminal_cursor_display_cell(
+    snapshot: &TerminalSnapshot,
+    display_offset: usize,
+    viewport_rows: usize,
+    horizontal_offset: f32,
+) -> Option<(usize, usize)> {
+    if snapshot.cursor.row >= snapshot.row_count() || !snapshot.cursor.visible {
+        return None;
+    }
+    if snapshot.display_rows.is_some() || snapshot.logical_lines.is_some() {
+        let layout = crate::unwrapped::TerminalUnwrappedLayout::new(
+            snapshot,
+            display_offset,
+            viewport_rows,
+            horizontal_offset,
+        )?;
+        let (row, col) = layout.display_position(snapshot.cursor.row, snapshot.cursor.col)?;
+        return (col >= 0.0 && col < snapshot.cols as f32).then_some((row, col.floor() as usize));
+    }
+    if !terminal_snapshot_covers_display_offset(
+        snapshot,
+        display_offset,
+        viewport_rows,
+        snapshot.history.scrollback_len,
+    ) {
+        return None;
+    }
+    let anchor = terminal_snapshot_anchor_row_for_display_offset(
+        snapshot,
+        display_offset,
+        viewport_rows,
+        snapshot.history.scrollback_len,
+    );
+    let row = snapshot
+        .cursor
+        .row
+        .checked_sub(anchor + snapshot.leading_cleared_rows(anchor))?;
+    (row < viewport_rows && snapshot.cursor.col < snapshot.cols)
+        .then_some((row, snapshot.cursor.col))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalHitTestGeometry {
     pub bounds: Bounds<Pixels>,
@@ -391,5 +433,58 @@ mod tests {
         assert_eq!(terminal_line_number_digits_for_end(10), 2);
         assert_eq!(terminal_line_number_digits_for_end(99_999), 5);
         assert_eq!(terminal_line_number_digits_for_end(100_000), 6);
+    }
+
+    #[test]
+    fn cursor_anchor_tracks_folds_scroll_and_horizontal_projection() {
+        for logical in [false, true] {
+            let mut screen = TerminalScreen::new(8, 20);
+            screen.set_logical_line_snapshots(logical);
+            for _ in 0..3 {
+                screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07run\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07");
+            }
+            screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+            let original = screen.snapshot();
+            let before = super::terminal_cursor_display_cell(&original, 0, 20, 0.0).unwrap();
+            let ids = original
+                .command_blocks
+                .iter()
+                .map(|block| block.id)
+                .collect();
+            screen.set_collapsed_commands(ids);
+            let folded = screen.snapshot();
+            let after = super::terminal_cursor_display_cell(&folded, 0, 20, 0.0).unwrap();
+            assert_eq!(before.0 - after.0, 3);
+            assert_eq!(before.1, after.1);
+            screen.set_collapsed_commands(Default::default());
+            assert_eq!(
+                super::terminal_cursor_display_cell(&screen.snapshot(), 0, 20, 0.0),
+                Some(before)
+            );
+            let mut invisible = folded.clone();
+            invisible.cursor.row = usize::MAX;
+            assert_eq!(
+                super::terminal_cursor_display_cell(&invisible, 0, 20, 0.0),
+                None
+            );
+        }
+        let mut screen = TerminalScreen::new(8, 4);
+        screen.set_logical_line_snapshots(true);
+        screen.advance(b"0123456789abc");
+        let snapshot = screen.snapshot();
+        assert_eq!(
+            super::terminal_cursor_display_cell(&snapshot, 0, 4, 0.0),
+            None
+        );
+        assert_eq!(
+            super::terminal_cursor_display_cell(&snapshot, 0, 4, 8.0),
+            Some((0, 5))
+        );
+        screen.advance(b"\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6");
+        let snapshot = screen.viewport_snapshot_with_window(screen.scrollback_len(), 0, 0);
+        assert_eq!(
+            super::terminal_cursor_display_cell(&snapshot, screen.scrollback_len(), 4, 0.0),
+            None
+        );
     }
 }
