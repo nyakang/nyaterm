@@ -1,8 +1,8 @@
 use super::{normalized_transfer_browser_path, remote_file_name, remote_parent_path};
 use crate::features::NyaTermApp;
-use crate::features::transfers::browser_paths::remote_ancestor_selection;
 use crate::models::{TransferBrowserNavigationSnapshot, TransferBrowserSessionCacheState};
 use gpui::{Context, Window};
+use nyaterm_files::file_browser::navigation::remote_ancestor_selection;
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::VecDeque;
 

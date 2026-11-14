@@ -1,12 +1,12 @@
 use gpui::{Context, MouseDownEvent, MouseMoveEvent};
 
 use crate::features::NyaTermApp;
-use crate::models::TransferBrowserSortColumn;
+use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
 
 impl NyaTermApp {
     pub(in crate::features::pages::transfers) fn start_transfer_browser_column_resize(
         &mut self,
-        column: TransferBrowserSortColumn,
+        column: FileBrowserSortColumn,
         event: &MouseDownEvent,
         cx: &mut Context<Self>,
     ) {

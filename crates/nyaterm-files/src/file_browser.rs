@@ -1,3 +1,6 @@
+pub mod listing;
+pub mod navigation;
+
 use crate::local_fs::LocalFileService;
 use crate::remote_file::{
     FileCopyRequest, FileTransferEndpoint, RemoteFileService, RemoteTextDocument,

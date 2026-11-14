@@ -54,7 +54,7 @@ pub(in crate::features::pages::transfers) fn remote_child_path(
 pub(in crate::features::pages::transfers) fn normalized_transfer_browser_path(
     path: &str,
 ) -> String {
-    crate::features::transfers::browser_paths::normalized_transfer_browser_path(path)
+    nyaterm_files::file_browser::navigation::normalize_browser_path(path)
 }
 
 pub(in crate::features::pages::transfers) fn valid_remote_child_name(name: &str) -> bool {
@@ -68,7 +68,7 @@ fn looks_like_native_path(path: &str) -> bool {
 }
 
 pub(in crate::features::pages::transfers) fn transfer_browser_path_is_root(path: &str) -> bool {
-    crate::features::transfers::browser_paths::transfer_browser_path_is_root(path)
+    nyaterm_files::file_browser::navigation::browser_path_is_root(path)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -123,8 +123,6 @@ pub(in crate::features) fn format_sftp_modified(value: Option<u32>) -> String {
 #[cfg(test)]
 mod tests {
     use super::remote_child_path;
-    #[cfg(windows)]
-    use super::transfer_browser_path_is_root;
 
     #[test]
     fn remote_child_path_preserves_filesystem_root() {
@@ -132,13 +130,5 @@ mod tests {
         assert_eq!(remote_child_path("///", "var"), "/var");
         assert_eq!(remote_child_path("/var/", "log"), "/var/log");
         assert_eq!(remote_child_path(".", "relative"), "relative");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_drive_and_unc_roots_are_terminal() {
-        assert!(transfer_browser_path_is_root(r"C:\"));
-        assert!(transfer_browser_path_is_root(r"\\server\share\"));
-        assert!(!transfer_browser_path_is_root(r"C:\tmp"));
     }
 }

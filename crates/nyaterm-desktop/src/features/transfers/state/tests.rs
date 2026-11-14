@@ -5,13 +5,14 @@ use super::{
 };
 use crate::models::{
     TransferBrowserContextTarget, TransferBrowserNavigationSnapshot,
-    TransferBrowserSessionCacheState, TransferBrowserSortColumn, TransferEditorField,
-    TransferEditorState, TransferExternalSyncPromptState, TransferJobEvent, TransferJobKind,
-    TransferJobResult, TransferJobState, TransferJobStatus, TransferNewFolderState,
-    TransferPathPromptKind, TransferPropertiesState, TransferRenameState,
+    TransferBrowserSessionCacheState, TransferEditorField, TransferEditorState,
+    TransferExternalSyncPromptState, TransferJobEvent, TransferJobKind, TransferJobResult,
+    TransferJobState, TransferJobStatus, TransferNewFolderState, TransferPathPromptKind,
+    TransferPropertiesState, TransferRenameState,
 };
 use futures::channel::mpsc::unbounded;
 use gpui::{ScrollHandle, ScrollStrategy, TestAppContext, UniformListScrollHandle, point, px};
+use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
 use nyaterm_files::remote_file::{
     RemoteTextDocument, RemoteTextGeneration, RemoteTextMetadata, RemoteTextRevision,
     RemoteTextWriteResult,
@@ -232,10 +233,10 @@ fn each_browser_filter_input_invalidates_the_memo_and_nothing_else_does() {
 
     // 3. sort column, and 4. direction -- toggling the same column flips direction,
     // so this covers both key fields.
-    state.toggle_browser_sort(TransferBrowserSortColumn::Size);
+    state.toggle_browser_sort(FileBrowserSortColumn::Size);
     state.visible_browser_entries(true);
     assert_eq!(state.browser_filter_recomputes(), 5);
-    state.toggle_browser_sort(TransferBrowserSortColumn::Size);
+    state.toggle_browser_sort(FileBrowserSortColumn::Size);
     state.visible_browser_entries(true);
     assert_eq!(
         state.browser_filter_recomputes(),
@@ -740,7 +741,8 @@ fn browser_navigation_and_filters_reset_horizontal_scroll() {
         .browser
         .horizontal_scroll
         .set_offset(point(px(-24.), px(0.)));
-    transfer.toggle_browser_sort(crate::models::TransferBrowserSortColumn::Modified);
+    transfer
+        .toggle_browser_sort(nyaterm_files::file_browser::listing::FileBrowserSortColumn::Modified);
     assert_eq!(transfer.browser.horizontal_scroll.offset().x, px(0.));
 
     transfer

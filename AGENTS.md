@@ -69,7 +69,8 @@ must include explicit conversion logic and tests.
   exposes file-session probe injection and must not depend on the file,
   recording, or remote-operations crates.
 * `crates/nyaterm-files`: local and remote file services, SFTP and shell file
-  backends, file revisions, path safety, and file-transfer policies. Its
+  backends, file revisions, path safety, listing/sort and navigation policies, and
+  file-transfer policies. Desktop owns listing caches and navigation state. Its
   `external_edit` module owns private workspaces and blocking file watching;
   desktop injects platform permissions and owns editor/upload orchestration.
 * `crates/nyaterm-remote-ops`: system metrics, process management, Docker, and

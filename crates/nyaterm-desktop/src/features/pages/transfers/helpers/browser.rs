@@ -1,3 +1,4 @@
+use crate::models::transfer_ui::browser_sort_column_label;
 use gpui::{
     ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, ParentElement as _, Pixels, Rgba, SharedString,
@@ -5,8 +6,8 @@ use gpui::{
 };
 
 use crate::features::pages::transfers::panel::TransferPanel;
-use crate::models::{TransferBrowserSortColumn, TransferBrowserSortDirection};
 use crate::theme::ThemePalette;
+use nyaterm_files::file_browser::listing::{FileBrowserSortColumn, FileBrowserSortDirection};
 
 /// Height of the sort-header row.
 ///
@@ -28,7 +29,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_search_status(
 
 pub(in crate::features::pages::transfers) fn sort_header_cell(
     palette: ThemePalette,
-    column: TransferBrowserSortColumn,
+    column: FileBrowserSortColumn,
     localized_label: impl Into<SharedString>,
     width: Pixels,
     state: TransferBrowserSortHeaderState,
@@ -38,14 +39,14 @@ pub(in crate::features::pages::transfers) fn sort_header_cell(
     let is_active = column == state.active_column;
     let is_resizing = state.resizing_column == Some(column);
     let direction_icon = match state.direction {
-        TransferBrowserSortDirection::Ascending => "icons/fe/sort-ascending.svg",
-        TransferBrowserSortDirection::Descending => "icons/fe/sort-descending.svg",
+        FileBrowserSortDirection::Ascending => "icons/fe/sort-ascending.svg",
+        FileBrowserSortDirection::Descending => "icons/fe/sort-descending.svg",
     };
 
     div()
         .id(SharedString::from(format!(
             "transfer-browser-sort-{}",
-            column.label().to_lowercase()
+            browser_sort_column_label(column).to_lowercase()
         )))
         .h(px(FILE_BROWSER_HEADER_HEIGHT_PX))
         .w(width)
@@ -98,7 +99,7 @@ pub(in crate::features::pages::transfers) fn sort_header_cell(
             div()
                 .id(SharedString::from(format!(
                     "transfer-browser-resize-{}",
-                    column.label().to_lowercase()
+                    browser_sort_column_label(column).to_lowercase()
                 )))
                 .absolute()
                 .right(px(-3.))
@@ -131,7 +132,7 @@ pub(in crate::features::pages::transfers) fn sort_header_cell(
 #[derive(Clone, Copy)]
 pub(in crate::features::pages::transfers) struct TransferBrowserSortHeaderState {
     pub header_bg: Rgba,
-    pub active_column: TransferBrowserSortColumn,
-    pub direction: TransferBrowserSortDirection,
-    pub resizing_column: Option<TransferBrowserSortColumn>,
+    pub active_column: FileBrowserSortColumn,
+    pub direction: FileBrowserSortDirection,
+    pub resizing_column: Option<FileBrowserSortColumn>,
 }

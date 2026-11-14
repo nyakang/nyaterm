@@ -1,6 +1,5 @@
 //! Transfer jobs, transfer options, path prompts and transfer widgets.
 
-pub(in crate::features) mod browser_paths;
 pub(in crate::features) mod clipboard_copy;
 mod cwd_sync;
 mod delete_runtime;
@@ -244,9 +243,6 @@ impl NyaTermApp {
 }
 
 pub(in crate::features) use remote_text_editor::RemoteTextEditor;
-pub(in crate::features) use state::natural_compare_ascii;
-#[cfg(test)]
-pub(in crate::features) use state::transfer_browser_entry_is_visible;
 pub(in crate::features) use state::{
     PdfPageRequest, TransferFeatureFocus, TransferFeatureState, TransferFileClipboard,
     TransferPreviewCloseOutcome,
