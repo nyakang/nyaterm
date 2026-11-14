@@ -314,6 +314,11 @@ fn every_publication_boundary_retries_without_losing_source_data() {
         queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
         TEST_FAILURE.with(|failure| failure.set(Some(point)));
         let failed = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+        assert!(
+            TEST_FAILURE.with(|failure| failure.get().is_none()),
+            "migration did not reach {point}: {:?}",
+            failed.selection.notice
+        );
         assert_eq!(failed.selection.data_dir, local, "{point}");
         assert!(failed.selection.notice.is_some(), "{point}");
         assert!(
@@ -522,7 +527,7 @@ fn migration_preserves_master_password_wrapping_and_rejects_invalid_passwords() 
 fn migration_loads_a_supported_legacy_database_with_only_text_documents() {
     let root = TestTempDir::new("nyaterm-data-directory-legacy-text");
     let local = root.join("local");
-    fs::create_dir(&local).unwrap();
+    fs::create_dir_all(&local).unwrap();
     {
         let db = redb::Database::create(local.join(DATABASE_FILE_NAME)).unwrap();
         let txn = db.begin_write().unwrap();

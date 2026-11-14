@@ -17,17 +17,6 @@ enum PreviewDecision {
     Conflicts(Vec<(usize, usize)>),
 }
 
-/// The worker persists `last_checked_at_ms` / `last_synced_at_ms` when it
-/// finishes; the in-memory copy predates that write and would keep showing
-/// "上次同步: 从未" after a verified publication.
-fn reload_cloud_sync_state(app: &mut NyaTermApp) -> nyaterm_core::CloudSyncState {
-    app.store_blocking_client()
-        .request_fn(StoreDomain::CloudSync, |store| {
-            store.load_cloud_sync_state()
-        })
-        .unwrap_or_else(|_| app.cloud_sync.state().clone())
-}
-
 impl NyaTermApp {
     pub(in crate::features) fn submit_store_request_with_password_rotation<R>(
         &mut self,
@@ -193,18 +182,17 @@ impl NyaTermApp {
                 .map_err(|_| CloudSyncError::LocalChangedDuringSync)?;
             let options =
                 super::jobs::load_cloud_sync_options(&store, &runtime, &settings, &state)?;
-            if apply {
+            let result = if apply {
                 let preview = previous.ok_or(CloudSyncError::LocalChangedDuringSync)?;
-                return cloud_sync_v4::apply_and_publish(
+                cloud_sync_v4::apply_and_publish(
                     &store,
                     &settings,
                     &options,
                     preview,
                     &worker_control,
                 )
-                .map(JobResult::Applied);
-            }
-            if let Some(decision) = resolution {
+                .map(JobResult::Applied)?
+            } else if let Some(decision) = resolution {
                 let mut preview = previous.ok_or(CloudSyncError::LocalChangedDuringSync)?;
                 match decision {
                     PreviewDecision::Conflicts(decisions) => {
@@ -215,10 +203,19 @@ impl NyaTermApp {
                         )?;
                     }
                 }
-                return Ok(JobResult::Preview(Box::new(preview)));
-            }
-            cloud_sync_v4::preview_manual(&store, &settings, &options, &worker_control)
-                .map(|preview| JobResult::Preview(Box::new(preview)))
+                JobResult::Preview(Box::new(preview))
+            } else {
+                cloud_sync_v4::preview_manual(&store, &settings, &options, &worker_control)
+                    .map(|preview| JobResult::Preview(Box::new(preview)))?
+            };
+            // Publication updates the timestamps in storage. Read them on this
+            // worker so applying the result never blocks the GPUI thread.
+            let state = store
+                .request_fn(StoreDomain::CloudSync, |store| {
+                    store.load_cloud_sync_state()
+                })
+                .unwrap_or(state);
+            Ok((result, state))
         });
         cx.spawn(async move |this, cx| {
             let result = await_cloud_sync_job(
@@ -236,14 +233,12 @@ impl NyaTermApp {
                     return;
                 }
                 match result {
-                    Ok(JobResult::Preview(preview)) => {
+                    Ok((JobResult::Preview(preview), state)) => {
                         this.cloud_sync.set_v4_preview(*preview);
-                        let state = reload_cloud_sync_state(this);
                         this.cloud_sync
                             .complete_job(state, t!("settings.syncV3PreviewReady").to_string());
                     }
-                    Ok(JobResult::Applied(report)) => {
-                        let state = reload_cloud_sync_state(this);
+                    Ok((JobResult::Applied(report), state)) => {
                         this.cloud_sync.complete_job(state, report.status_message());
                         // A finished manual sync must land in the history list;
                         // otherwise the panel tells the user "no conflicts and
