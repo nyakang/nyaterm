@@ -991,14 +991,16 @@ fn progressing_response_can_exceed_read_deadline_but_stalled_response_times_out(
     for stalled in [false, true] {
         let server = Server::new(move |_| {
             let mut reply = Reply::new(200, "abcdef");
-            reply.chunk_delay = Some(Duration::from_millis(if stalled { 400 } else { 40 }));
+            // Keep the total response longer than the idle deadline while
+            // allowing enough scheduling margin between progressing chunks.
+            reply.chunk_delay = Some(Duration::from_millis(if stalled { 2000 } else { 250 }));
             reply
         });
         let transport = super::transport::Transport::with_deadlines(
             Default::default(),
             None,
-            Duration::from_secs(3),
-            Duration::from_millis(150),
+            Duration::from_secs(10),
+            Duration::from_secs(1),
         )
         .unwrap();
         let endpoint = format!("{}/object", server.endpoint);
