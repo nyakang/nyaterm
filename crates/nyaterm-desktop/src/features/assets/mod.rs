@@ -369,6 +369,17 @@ impl StartWorkspaceFeatureState {
                 .all(|record| self.asset_selection.contains(&record.connection.id))
     }
 
+    /// The assets that the context menu of CONNECTION_ID acts on: the whole
+    /// selection when the clicked asset belongs to it, as in the connection
+    /// panel, otherwise the clicked asset alone.
+    pub fn asset_menu_target_ids(&self, connection_id: &str) -> Vec<String> {
+        if self.asset_selection.len() > 1 && self.asset_selection.contains(connection_id) {
+            self.selected_asset_ids()
+        } else {
+            vec![connection_id.to_string()]
+        }
+    }
+
     pub fn selected_asset_ids(&self) -> Vec<String> {
         let mut ids: Vec<_> = self.asset_selection.iter().cloned().collect();
         ids.sort();
