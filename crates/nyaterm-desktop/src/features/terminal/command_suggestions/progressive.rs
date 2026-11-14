@@ -81,15 +81,17 @@ mod tests {
     fn ordinary_results_publish_before_a_blocked_path_provider_and_paths_publish_without_typing() {
         let (paths, waiting) = futures::channel::oneshot::channel();
         let (events, received) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            futures::executor::block_on(publish_progressively(
-                std::future::ready(CompletionResult::default()),
-                async { waiting.await.unwrap_or_default() },
-                move |_, paths| {
-                    events.send(paths.is_some()).unwrap();
-                },
-            ))
-        });
+        let worker =
+            nyaterm_core::runtime::worker::spawn("progressive-completion-test".into(), move || {
+                futures::executor::block_on(publish_progressively(
+                    std::future::ready(CompletionResult::default()),
+                    async { waiting.await.unwrap_or_default() },
+                    move |_, paths| {
+                        events.send(paths.is_some()).unwrap();
+                    },
+                ))
+            })
+            .unwrap();
         let first = received.recv_timeout(Duration::from_secs(2));
         // Always release the provider before asserting, including a regression.
         let _ = paths.send(vec![CompletionCandidate {

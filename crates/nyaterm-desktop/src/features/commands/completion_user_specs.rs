@@ -346,10 +346,12 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap();
         let (queried, result) = std::sync::mpsc::channel();
-        let query = std::thread::spawn(move || {
-            loader.request();
-            queried.send(loader.take().is_none()).unwrap();
-        });
+        let query =
+            nyaterm_core::runtime::worker::spawn("completion-spec-query-test".into(), move || {
+                loader.request();
+                queried.send(loader.take().is_none()).unwrap();
+            })
+            .unwrap();
         let answer = result.recv_timeout(std::time::Duration::from_secs(2));
         drop(release);
         query.join().unwrap();
