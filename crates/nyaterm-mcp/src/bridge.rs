@@ -87,6 +87,14 @@ impl BridgeClient {
         self.lifecycle.load(Ordering::Acquire)
     }
 
+    /// Ensure the bridge connection exists so negotiated features are reflected
+    /// in the advertised tool surface. Errors are swallowed deliberately: when
+    /// NyaTerm is unreachable, the degraded tool set is still served.
+    pub async fn ensure_connected(&self) {
+        let mut guard = self.connection.lock().await;
+        let _ = self.ensure_connection(&mut guard, false).await;
+    }
+
     pub async fn identify(&self, name: String, version: Option<String>) {
         let identity = ClientIdentifyParams { name, version };
         *self.identity.lock().await = Some(identity.clone());
