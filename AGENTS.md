@@ -35,7 +35,7 @@ must include explicit conversion logic and tests.
   request and streaming-response adapters, model discovery, and proxy handling.
   Runtime/task ownership and AI feature orchestration remain in desktop.
 * `crates/nyaterm-preview`: UI-independent image/PDF decoding, text preview
-  parsing, pixel transformations and decoded-content contracts. Desktop owns
+  parsing, delimited table ordering, pixel transformations and decoded-content contracts. Desktop owns
   fetching, job lifecycle, GPUI image conversion and preview caches. Its `icons`,
   `wallpaper` and `qr` modules own decoding; OTP URI interpretation stays in desktop.
 * `crates/nyaterm-translation-client`: UI-independent native translation HTTP

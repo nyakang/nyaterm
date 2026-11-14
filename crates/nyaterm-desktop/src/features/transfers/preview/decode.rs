@@ -3,13 +3,12 @@
 //! These adapters are called by background loaders. Window state and PDF page
 //! caches stay in desktop; parsing and rasterization live in nyaterm-preview.
 use crate::image_presentation::render_image_from_bgra;
-use crate::models::{
-    PreviewContent, PreviewDelimited, PreviewImage, PreviewPdfDocument, PreviewPdfPage,
-};
+use crate::models::{PreviewContent, PreviewImage, PreviewPdfDocument, PreviewPdfPage};
 use gpui::RenderImage;
 use nyaterm_core::PreviewCategory;
 use nyaterm_preview::content::{DecodedContent, RasterImage};
 use nyaterm_preview::decode;
+use nyaterm_preview::delimited::PreviewDelimited;
 use std::sync::Arc;
 
 pub(in crate::features) fn decode_binary_content(

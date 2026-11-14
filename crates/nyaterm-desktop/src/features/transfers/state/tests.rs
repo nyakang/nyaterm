@@ -1900,6 +1900,39 @@ fn preview_tab(session_id: &str, remote_path: &str) -> crate::models::TransferPr
 }
 
 #[test]
+fn delimited_preview_actions_update_only_the_active_decoded_table() {
+    use crate::features::transfers::preview::decode::decode_text_content;
+    use crate::models::PreviewContent;
+    use nyaterm_core::PreviewCategory;
+    use nyaterm_preview::delimited::DelimitedSort;
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut transfer = transfer_state(&cx);
+    let mut table = preview_tab("session", "/table.csv");
+    let id = table.id.clone();
+    table.category = PreviewCategory::Delimited { tab: false };
+    table.content = decode_text_content(table.category, "name,value\nb,2\na,1".into());
+    transfer.open_preview_tab(table);
+    transfer.open_preview_tab(preview_tab("session", "/other.txt"));
+    assert!(!transfer.preview_cycle_delimited_sort(0));
+    assert!(!transfer.preview_toggle_delimited_header());
+    assert!(transfer.activate_preview_tab(&id));
+    assert!(transfer.preview_cycle_delimited_sort(0));
+    let PreviewContent::Delimited(data) = &transfer.active_preview_tab().unwrap().content else {
+        panic!("decoded table");
+    };
+    assert_eq!(data.sort(), Some(DelimitedSort::Ascending(0)));
+    assert_eq!(data.row(0).unwrap(), &["a", "1"]);
+    assert!(transfer.preview_toggle_delimited_header());
+    let PreviewContent::Delimited(data) = &transfer.active_preview_tab().unwrap().content else {
+        panic!("decoded table");
+    };
+    assert!(!data.first_row_is_header());
+    assert_eq!(data.row_count(), 3);
+}
+
+#[test]
 fn preview_workspace_opens_activates_and_closes_tabs() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
