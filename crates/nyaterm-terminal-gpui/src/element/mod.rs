@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, Font, FontFallbacks, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style,
-    TextRun, Window, fill, font, outline, point, px, relative, rgb, rgba, size,
+    InspectorElementId, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style, TextRun,
+    Window, fill, font, outline, point, px, relative, rgb, rgba, size,
 };
 use nyaterm_core::ResolvedKeywordHighlightRule;
 use nyaterm_terminal::selection::{
@@ -1600,14 +1600,6 @@ fn push_terminal_image_placeholder(
     } else {
         plan.placeholders_under.push(fill(rect, wash));
         plan.placeholders_under.push(fill(bar, bar_color));
-    }
-}
-
-impl IntoElement for NyaTerminalElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
     }
 }
 
