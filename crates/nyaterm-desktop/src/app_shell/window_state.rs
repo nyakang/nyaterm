@@ -44,10 +44,42 @@ struct DisplayGeometry {
 
 impl AppShellStartup {
     pub fn prepare(runtime: &AppRuntime) -> Self {
-        let store_runtime = match StoreRuntime::spawn(StoreConfig {
-            config_dir: runtime.config_dir().to_path_buf(),
-            portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
-        }) {
+        Self::prepare_input(runtime, None)
+    }
+
+    pub fn prepare_opened(runtime: &AppRuntime, store: nyaterm_store::ConnectionStore) -> Self {
+        Self::prepare_input(runtime, Some(store))
+    }
+
+    pub fn prepare_failed(message: String) -> Self {
+        let workspace_id = WorkspaceId::new();
+        Self {
+            store_runtime: None,
+            pending_bootstrap: None,
+            recovery: Some(StartupRecovery {
+                category: "data_directory".into(),
+                message,
+            }),
+            main_window_state: None,
+            workspace_id,
+            workspace_restore: WorkspaceRestoreManifest::single(WorkspaceRestoreState::empty(
+                workspace_id,
+            )),
+            is_default_workspace: true,
+            device_windows: DeviceWindowManifest::empty(),
+            workspace_seed: None,
+        }
+    }
+
+    fn prepare_input(runtime: &AppRuntime, store: Option<nyaterm_store::ConnectionStore>) -> Self {
+        let spawned = match store {
+            Some(store) => StoreRuntime::spawn_opened(store),
+            None => StoreRuntime::spawn(StoreConfig {
+                config_dir: runtime.config_dir().to_path_buf(),
+                portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
+            }),
+        };
+        let store_runtime = match spawned {
             Ok(runtime) => runtime,
             Err(error) => {
                 let workspace_id = WorkspaceId::new();

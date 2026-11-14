@@ -392,7 +392,7 @@ mod tests {
             .unwrap();
             let mut draft = connection_editor_from_saved(saved, false);
             let before = build_saved_connection_from_editor(&draft).unwrap();
-            for section in ConnectionEditorSection::for_kind(draft.kind) {
+            for section in ConnectionEditorSection::for_kind(draft.kind, draft.defaults_mode) {
                 assert!(draft.select_section(*section));
                 let after = build_saved_connection_from_editor(&draft).unwrap();
                 assert_eq!(before, after, "{kind}/{section:?}");

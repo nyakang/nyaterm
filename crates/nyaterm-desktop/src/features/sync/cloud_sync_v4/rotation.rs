@@ -38,7 +38,9 @@ pub(in crate::features) fn rotate_master_password(
     let options = LocalCloudSyncOptions {
         config_dir: runtime.config_dir().into(),
         portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
-        remote_dir: runtime.config_dir().join("cloud-sync-local"),
+        remote_dir: runtime
+            .local_dir()
+            .join(nyaterm_core::data_directory::CLOUD_SYNC_LOCAL_DIR_NAME),
         remote_root: settings.remote_root.clone(),
         device_id: state.device_id,
         device_name: Some(settings.device_name.clone()),

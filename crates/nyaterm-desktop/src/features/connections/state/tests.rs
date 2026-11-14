@@ -896,6 +896,7 @@ fn connection_editor_inline_panel_draft_requires_draft_without_window() {
 fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState {
     let focus = cx.update(|cx| cx.focus_handle());
     let mut owner = ConnectionEditorFeatureState {
+        kind_drafts: Default::default(),
         draft: None,
         password: Default::default(),
         fields: HashMap::new(),
@@ -2408,6 +2409,7 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
     ConnectionEditorState {
+        defaults_mode: false,
         android_usb: false,
         android_screen: Default::default(),
         id: Some("conn".to_string()),
@@ -2868,7 +2870,7 @@ fn connection_editor_navigation_preserves_every_draft_field_and_rejects_unavaila
         .field_errors
         .insert(ConnectionEditorField::Host, "host error".into());
     editor.forwarding_tab = ConnectionEditorForwardingTab::X11;
-    for section in ConnectionEditorSection::for_kind(editor.kind) {
+    for section in ConnectionEditorSection::for_kind(editor.kind, editor.defaults_mode) {
         let mut expected = editor.clone();
         expected.section = *section;
         assert!(editor.select_section(*section));

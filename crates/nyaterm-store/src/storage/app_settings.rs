@@ -2044,6 +2044,57 @@ impl ConnectionStore {
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()
     }
+
+    /// Per-connection-kind "default session settings" drafts, keyed by a
+    /// stable connection-kind id. Stored as schema-neutral JSON so older
+    /// versions ignore the key and newer versions diagnose malformed entries.
+    pub fn load_default_session_settings(&self) -> Result<Option<serde_json::Value>, StorageError> {
+        let value = self.load_settings_value()?;
+        Ok(json_path(&value, &["default_session"])
+            .filter(|entry| !entry.as_object().is_some_and(serde_json::Map::is_empty))
+            .cloned())
+    }
+
+    pub fn save_default_session_settings(
+        &self,
+        kind: &str,
+        settings: &serde_json::Value,
+    ) -> Result<(), StorageError> {
+        if !settings.is_object() {
+            return Err(StorageError::InvalidData(
+                "default session settings must be a JSON object".into(),
+            ));
+        }
+        let mut value = self.load_settings_value()?;
+        let mut entry = match json_path(&value, &["default_session"]) {
+            None => serde_json::Map::new(),
+            Some(serde_json::Value::Object(entry)) => entry.clone(),
+            Some(_) => {
+                return Err(StorageError::InvalidData(
+                    "unsupported default session catalog".into(),
+                ));
+            }
+        };
+        if settings.get("type").and_then(serde_json::Value::as_str) != Some(kind) {
+            return Err(StorageError::InvalidData(
+                "default session protocol does not match its catalog key".into(),
+            ));
+        }
+        let mut updated: nyaterm_core::SavedConnection = serde_json::from_value(settings.clone())?;
+        if let Some(previous) = entry.get(kind) {
+            let previous: nyaterm_core::SavedConnection = serde_json::from_value(previous.clone())?;
+            updated
+                .retain_extensions_from(&previous)
+                .map_err(|message| StorageError::InvalidData(message.into()))?;
+        }
+        entry.insert(kind.to_string(), serde_json::to_value(updated)?);
+        set_nested_json_value(
+            &mut value,
+            &["default_session"],
+            serde_json::Value::Object(entry),
+        );
+        self.save_settings_value(&value)
+    }
 }
 
 fn default_activity_left_bottom() -> Vec<String> {

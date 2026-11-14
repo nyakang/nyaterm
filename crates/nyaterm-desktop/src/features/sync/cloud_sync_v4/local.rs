@@ -52,10 +52,15 @@ pub(super) fn needs_remote(view: &LocalView, scope: &SyncScope) -> Result<bool, 
     let Some(replica) = &local.replica else {
         return Ok(true);
     };
+    // Deferred fields are already merged into the local replica; applying them
+    // again is pure local work. Requiring the remote for them made every
+    // unrelated edit download the whole replicated state, which times out on
+    // slow providers and never settles while the deferral persists. A local
+    // edit that could unblock them shows up in `edited`, and new remote work is
+    // covered by the periodic check.
     if !local.migration_approved
         || local.scope != *scope
         || local.pending.is_some()
-        || !local.deferred.is_empty()
         || local.published_document.as_deref() != Some(digest(&replica.document).as_str())
         || !view.projection.edited.is_empty()
     {

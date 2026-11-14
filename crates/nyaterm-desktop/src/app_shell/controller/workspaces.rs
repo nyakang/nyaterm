@@ -388,6 +388,7 @@ impl DesktopController {
     }
 
     pub fn cancel_process_quit(&mut self) {
+        self.restart.cancel();
         self.process_quitting = false;
         self.auto_sync.operations.resume();
     }

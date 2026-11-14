@@ -29,6 +29,7 @@ use super::translation::TranslationFeatureState;
 use super::tunnels::TunnelFeatureState;
 
 mod construct;
+mod restart;
 mod store_runtime;
 pub(crate) use store_runtime::WorkspaceCloseSnapshot;
 mod types;
@@ -72,6 +73,9 @@ impl NyaTermStoreClients {
 pub struct NyaTermApp {
     pub(in crate::features) workspace_id: nyaterm_core::WorkspaceId,
     pub(in crate::features) workspace_revision: u64,
+    /// Set once a data-directory switch is queued and the ordinary shutdown is
+    /// allowed to finish. The successor process is spawned before the workers
+    /// and store shut down, using the instance lock handoff.
     pub(in crate::features) desktop_controller:
         Option<gpui::WeakEntity<crate::app_shell::DesktopController>>,
     pub(in crate::features) process_state: gpui::Entity<crate::app_shell::ProcessStateStore>,

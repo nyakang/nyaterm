@@ -1,4 +1,5 @@
 mod appearance;
+mod data_directory;
 mod general;
 mod interaction;
 mod keybindings;

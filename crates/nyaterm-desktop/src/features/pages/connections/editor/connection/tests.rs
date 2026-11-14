@@ -331,6 +331,7 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
 
 fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> ConnectionEditorState {
     ConnectionEditorState {
+        defaults_mode: false,
         android_usb: false,
         android_screen: Default::default(),
         id: None,
@@ -1723,7 +1724,7 @@ fn connection_editor_categories_fit_wide_and_compact_viewports() {
                         app.connection_state.build_editor_fields(cx);
                     })
                 });
-                for section in ConnectionEditorSection::for_kind(kind) {
+                for section in ConnectionEditorSection::for_kind(kind, false) {
                     vcx.update(|_, cx| {
                         app.update(cx, |app, cx| {
                             app.set_connection_editor_section(*section, cx)

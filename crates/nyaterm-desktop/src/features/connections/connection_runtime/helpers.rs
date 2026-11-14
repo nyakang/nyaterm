@@ -163,6 +163,7 @@ pub(super) fn connection_editor_from_saved(
     };
     let icon_auto_detect = connection.icon_auto_detect_enabled();
     let mut editor = ConnectionEditorState {
+        defaults_mode: false,
         android_usb: false,
         android_screen: Default::default(),
         id: Some(connection.id),
@@ -1084,6 +1085,133 @@ pub(super) fn build_saved_connection_from_editor(
     })
 }
 
+/// Stable storage key for a connection kind's default session settings.
+pub(super) fn default_session_settings_kind_id(kind: ConnectionKindTab) -> &'static str {
+    match kind {
+        ConnectionKindTab::Ssh => "ssh",
+        ConnectionKindTab::Local => "local",
+        ConnectionKindTab::Telnet => "telnet",
+        ConnectionKindTab::Serial => "serial",
+        ConnectionKindTab::Rdp => "rdp",
+        ConnectionKindTab::Vnc => "vnc",
+        ConnectionKindTab::Adb => "adb",
+    }
+}
+
+/// Build the persisted payload of a "default session settings" draft.
+///
+/// The shared builder validates identity fields the defaults editor never
+/// shows, so placeholder identity values satisfy it and are stripped from the
+/// result. Everything the user configured on the non-basic tabs survives.
+pub(super) fn build_default_session_settings(
+    editor: &ConnectionEditorState,
+) -> Result<SavedConnection, ConnectionEditorValidationError> {
+    let mut draft = editor.clone();
+    if draft.host.trim().is_empty() {
+        draft.host = "127.0.0.1".to_string();
+    }
+    if draft.kind == ConnectionKindTab::Local && draft.shell_path.trim().is_empty() {
+        draft.shell_path = "default".to_string();
+    }
+    if draft.kind == ConnectionKindTab::Serial && draft.serial_port.trim().is_empty() {
+        draft.serial_port = "default".to_string();
+    }
+    let mut built = build_saved_connection_from_editor(&draft)?;
+    built.id = editor.id.clone().unwrap_or_else(uuid);
+    built.name = String::new();
+    built.group_id = None;
+    built.description = None;
+    built.tags = Vec::new();
+    built.icon = None;
+    built.icon_auto_detect = None;
+    built.asset = None;
+    built.last_used_at_ms = None;
+    Ok(built)
+}
+
+/// Copy saved default session settings onto a fresh new-connection draft.
+///
+/// Basic info never carries over: identity, addressing, and credentials live
+/// on the basic tab, which defaults mode hides on purpose, so every new
+/// connection still starts with empty identity fields.
+pub(super) fn apply_session_defaults(
+    defaults: &ConnectionEditorState,
+    editor: &mut ConnectionEditorState,
+) {
+    if defaults.kind != editor.kind {
+        return;
+    }
+    editor.proxy_id = defaults.proxy_id.clone();
+    editor.proxy_jump_id = defaults.proxy_jump_id.clone();
+    editor.agent_endpoint = defaults.agent_endpoint.clone();
+    editor.agent_forwarding_config = defaults.agent_forwarding_config.clone();
+    // A persisted policy never substitutes for consent in this draft.
+    editor.agent_allow_all_confirmed = false;
+    editor.agent_forwarding_endpoint_index = 0;
+    editor.backspace_mode = defaults.backspace_mode.clone();
+    editor.encoding = defaults.encoding.clone();
+    editor.x11_forwarding = defaults.x11_forwarding;
+    editor.dynamic_tab_title = defaults.dynamic_tab_title;
+    editor.terminal_type = defaults.terminal_type;
+    editor.ssh_compatibility_mode = defaults.ssh_compatibility_mode;
+    editor.ssh_profile = defaults.ssh_profile;
+    editor.sftp_enabled = defaults.sftp_enabled;
+    editor.sftp_compatibility_mode = defaults.sftp_compatibility_mode;
+    editor.sftp_cwd_follow_mode = defaults.sftp_cwd_follow_mode.clone();
+    editor.sftp_shell_detection_timeout_ms = defaults.sftp_shell_detection_timeout_ms.clone();
+    editor.sftp_pipeline_depth = defaults.sftp_pipeline_depth;
+    editor.sftp_extra = defaults.sftp_extra.clone();
+    editor.sftp_filename_encoding = defaults.sftp_filename_encoding.clone();
+    editor.ssh_algorithm_mode = defaults.ssh_algorithm_mode.clone();
+    editor.ssh_algorithm_kex = defaults.ssh_algorithm_kex.clone();
+    editor.ssh_algorithm_ciphers = defaults.ssh_algorithm_ciphers.clone();
+    editor.ssh_algorithm_macs = defaults.ssh_algorithm_macs.clone();
+    editor.ssh_algorithm_host_keys = defaults.ssh_algorithm_host_keys.clone();
+    editor.post_login_enabled = defaults.post_login_enabled;
+    editor.post_login_command = defaults.post_login_command.clone();
+    editor.post_login_delay_ms = defaults.post_login_delay_ms.clone();
+    editor.raw_tcp_cli = defaults.raw_tcp_cli;
+    editor.telnet_enter_mode = defaults.telnet_enter_mode.clone();
+    editor.local_echo = defaults.local_echo;
+    editor.local_line_edit = defaults.local_line_edit;
+    editor.force_character_at_a_time = defaults.force_character_at_a_time;
+    editor.send_naws = defaults.send_naws;
+    editor.send_sga = defaults.send_sga;
+    editor.telnet_keep_alive_interval_secs = defaults.telnet_keep_alive_interval_secs.clone();
+    editor.telnet_auto_login_enabled = defaults.telnet_auto_login_enabled;
+    editor.telnet_auto_login_send_wake_enter = defaults.telnet_auto_login_send_wake_enter;
+    editor.telnet_auto_login_timeout_ms = defaults.telnet_auto_login_timeout_ms.clone();
+    editor.telnet_auto_login_username_prompt_regex =
+        defaults.telnet_auto_login_username_prompt_regex.clone();
+    editor.telnet_auto_login_password_prompt_regex =
+        defaults.telnet_auto_login_password_prompt_regex.clone();
+    editor.telnet_auto_login_success_prompt_regex =
+        defaults.telnet_auto_login_success_prompt_regex.clone();
+    editor.telnet_auto_login_failure_prompt_regex =
+        defaults.telnet_auto_login_failure_prompt_regex.clone();
+    editor.telnet_auto_login_max_retries = defaults.telnet_auto_login_max_retries.clone();
+    if editor.defaults_mode {
+        editor.port = defaults.port.clone();
+    }
+    editor.baud_rate = defaults.baud_rate.clone();
+    editor.data_bits = defaults.data_bits.clone();
+    editor.parity = defaults.parity.clone();
+    editor.flow_control = defaults.flow_control;
+    editor.stop_bits = defaults.stop_bits.clone();
+    editor.rdp_security = defaults.rdp_security.clone();
+    editor.rdp_display = defaults.rdp_display.clone();
+    editor.rdp_clipboard = defaults.rdp_clipboard.clone();
+    editor.rdp_reconnect = defaults.rdp_reconnect.clone();
+    editor.vnc_security = defaults.vnc_security.clone();
+    editor.vnc_display = defaults.vnc_display.clone();
+    editor.vnc_clipboard = defaults.vnc_clipboard.clone();
+    editor.vnc_reconnect = defaults.vnc_reconnect.clone();
+    editor.vnc_shared = defaults.vnc_shared;
+    editor.vnc_view_only = defaults.vnc_view_only;
+    editor.android_screen = defaults.android_screen;
+    editor.recording = defaults.recording.clone();
+}
+
 pub(super) fn parse_port(value: &str) -> Result<u16, ConnectionEditorValidationError> {
     validation::parse_port(value).map_err(Into::into)
 }
@@ -1110,9 +1238,91 @@ mod tests {
     use crate::models::{ConnectionEditorPasswordSource, ConnectionKindTab};
 
     use super::{
-        ConnectionEditorValidationError, build_saved_connection_from_editor,
-        connection_editor_from_saved, validate_editor_account,
+        ConnectionEditorValidationError, apply_session_defaults, build_default_session_settings,
+        build_saved_connection_from_editor, connection_editor_from_saved, validate_editor_account,
     };
+
+    #[test]
+    fn default_session_settings_builder_strips_identity_and_survives_a_round_trip() {
+        let editor = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"defaults", "name":"", "type":"ssh",
+                "host":"", "port":22, "username":"root",
+                "encoding":"UTF-8",
+                "sftp":{"enabled":false,"compatibility_mode":true}
+            }))
+            .unwrap(),
+            false,
+        );
+        let built = build_default_session_settings(&editor).unwrap();
+        assert_eq!(built.name, "");
+        // The stored payload must deserialize back into a connection so a
+        // later version can seed new drafts from it.
+        let value = serde_json::to_value(&built).unwrap();
+        let reopened: SavedConnection = serde_json::from_value(value).unwrap();
+        assert!(!reopened.sftp.enabled);
+        assert!(reopened.sftp.compatibility_mode);
+    }
+
+    #[test]
+    fn session_defaults_apply_everything_except_basic_info() {
+        let defaults = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"defaults", "name":"prod", "type":"ssh",
+                "host":"10.0.0.9", "port":2022, "username":"deploy",
+                "encoding":"UTF-8",
+                "network":{"proxy_id":"proxy-1"},
+                "sftp":{"enabled":false,"compatibility_mode":true}
+            }))
+            .unwrap(),
+            false,
+        );
+        // A fresh new-connection draft: empty identity, stock parameters.
+        let mut draft = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"fresh", "name":"", "type":"ssh",
+                "host":"", "port":22, "username":"root"
+            }))
+            .unwrap(),
+            false,
+        );
+        draft.id = None;
+        draft.name = String::new();
+        apply_session_defaults(&defaults, &mut draft);
+        assert_eq!(draft.encoding, "UTF-8");
+        assert!(!draft.sftp_enabled);
+        assert!(draft.sftp_compatibility_mode);
+        assert_eq!(draft.proxy_id.as_deref(), Some("proxy-1"));
+        // Basic info stays untouched.
+        assert_eq!(draft.host, "");
+        assert_eq!(draft.port, "22");
+        assert_eq!(draft.username, "root");
+        assert_eq!(draft.name, "");
+        assert!(draft.id.is_none());
+    }
+
+    #[test]
+    fn session_defaults_skip_a_draft_of_another_kind() {
+        let defaults = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"defaults", "name":"", "type":"ssh",
+                "host":"", "port":22, "username":"root",
+                "encoding":"UTF-8"
+            }))
+            .unwrap(),
+            false,
+        );
+        let mut draft = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"fresh", "name":"", "type":"telnet",
+                "host":"", "port":23, "username":""
+            }))
+            .unwrap(),
+            false,
+        );
+        apply_session_defaults(&defaults, &mut draft);
+        assert_ne!(draft.encoding, "UTF-8");
+    }
 
     #[test]
     fn android_editor_round_trips_usb_tcp_and_screen_settings() {

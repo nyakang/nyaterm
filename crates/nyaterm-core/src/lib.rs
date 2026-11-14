@@ -16,6 +16,7 @@ pub mod connection_route;
 pub mod connection_search;
 pub mod credential_autofill;
 pub mod credentials_crypto;
+pub mod data_directory;
 pub mod diagnostics;
 pub mod document_edit;
 pub mod document_language;
@@ -198,7 +199,7 @@ pub use remote_preview::{
     PREVIEW_CSV_MAX_BYTES, PREVIEW_IMAGE_MAX_BYTES, PREVIEW_PDF_MAX_BYTES, PREVIEW_TEXT_MAX_BYTES,
     PreviewCategory, classify_preview, is_known_text_file, preview_within_limit,
 };
-pub use runtime::{AppRuntime, RuntimeMode};
+pub use runtime::{AppRuntime, RELAUNCH_HANDOFF_ENV, RuntimeMode};
 pub use secret::{SecretBytes, SecretString};
 pub use session_import::{
     PreparedSessionConnection, PreparedSessionImport, SessionImportError, WindtermAccountAction,

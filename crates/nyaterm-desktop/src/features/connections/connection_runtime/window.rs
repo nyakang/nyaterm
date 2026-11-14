@@ -64,13 +64,23 @@ impl Render for ConnectionEditorWindow {
         window.set_window_title(&title);
         if !self.focused_initial_field {
             self.focused_initial_field = true;
-            let field = self
+            // Defaults mode has no basic tab, so there is no name to preselect.
+            let defaults_mode = self
                 .app
                 .read(cx)
                 .connection_state
-                .editor_fields()
-                .get(&ConnectionEditorField::Name)
-                .cloned();
+                .active_editor_draft()
+                .is_some_and(|editor| editor.defaults_mode);
+            let field = (!defaults_mode)
+                .then(|| {
+                    self.app
+                        .read(cx)
+                        .connection_state
+                        .editor_fields()
+                        .get(&ConnectionEditorField::Name)
+                        .cloned()
+                })
+                .flatten();
             if let Some(field) = field {
                 window.focus(&field.read(cx).focus_handle(), cx);
                 field.update(cx, |field, cx| field.select_all(window, cx));
@@ -116,7 +126,13 @@ impl Render for ConnectionEditorWindow {
 
 impl NyaTermApp {
     pub(in crate::features) fn connection_editor_title(&self) -> Cow<'static, str> {
-        if self.connection_state.editor_is_editing_saved_connection() {
+        if self
+            .connection_state
+            .active_editor_draft()
+            .is_some_and(|editor| editor.defaults_mode)
+        {
+            t!("menu.defaultSessionSettings")
+        } else if self.connection_state.editor_is_editing_saved_connection() {
             t!("dialog.editConnection")
         } else {
             t!("dialog.newConnection")

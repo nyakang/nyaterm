@@ -41,6 +41,13 @@ impl NativeS3Remote {
             // configured endpoint, including the retained listing adapter.
             .redirect(zed_reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
+            // Gateways and NAS S3 servers commonly close idle keep-alive
+            // connections without notice. Reusing one surfaces as an instant
+            // "connection reset" on the next request; retiring pooled sockets
+            // earlier keeps that from hitting the first sync request after a
+            // pause. Transient failures are retried as well, so a reset that
+            // still slips through does not fail the whole job.
+            .pool_idle_timeout(Duration::from_secs(15))
             .user_agent("NyaTerm")
             .build()
             .map_err(map_s3_http_error)?;
@@ -140,12 +147,17 @@ impl NativeS3Remote {
         mut response: zed_reqwest::blocking::Response,
     ) -> Result<Vec<u8>, CloudSyncError> {
         use std::io::Read;
+        let expected_length = response.content_length();
         let mut bytes = Vec::new();
         let mut buffer = [0; 8_192];
         loop {
             let count = response.read(&mut buffer).map_err(|error| {
                 CloudSyncError::Io(std::io::Error::new(
-                    error.kind(),
+                    if expected_length.is_some_and(|len| (bytes.len() as u64) < len) {
+                        std::io::ErrorKind::UnexpectedEof
+                    } else {
+                        error.kind()
+                    },
                     "S3 response body could not be read",
                 ))
             })?;
@@ -159,6 +171,61 @@ impl NativeS3Remote {
             bytes.extend_from_slice(&buffer[..count]);
         }
         Ok(bytes)
+    }
+}
+
+/// Signed S3 requests were sent exactly once, so a gateway retiring an idle
+/// keep-alive socket failed the whole sync job with
+/// `S3 request failed (connection reset)`. Reads, listings and deletions are
+/// idempotent and are replayed a couple of times on transient transport
+/// failures; writes keep their single attempt because their outcome is
+/// ambiguous and the publication journal owns that recovery.
+const REQUEST_ATTEMPTS: u32 = 3;
+
+fn retry_transient<T>(
+    mut attempt: impl FnMut() -> Result<T, CloudSyncError>,
+) -> Result<T, CloudSyncError> {
+    let mut delay = Duration::from_millis(200);
+    let mut remaining = REQUEST_ATTEMPTS;
+    loop {
+        remaining -= 1;
+        match attempt() {
+            Err(error) if remaining > 0 && transient(&error) => {
+                tracing::debug!(remaining, "retrying a transient S3 request");
+                std::thread::sleep(delay);
+                delay = delay.saturating_mul(2);
+            }
+            result => return result,
+        }
+    }
+}
+
+fn transient(error: &CloudSyncError) -> bool {
+    match error {
+        CloudSyncError::Storage { kind, .. } => matches!(
+            kind,
+            nyaterm_core::cloud_sync::error::CloudStorageErrorKind::ConnectionReset
+                | nyaterm_core::cloud_sync::error::CloudStorageErrorKind::Timeout
+                | nyaterm_core::cloud_sync::error::CloudStorageErrorKind::Connect
+                | nyaterm_core::cloud_sync::error::CloudStorageErrorKind::Dns
+        ),
+        // A rate limit with an explicit deadline is scheduled by the caller;
+        // replaying it here would ignore the server's instruction.
+        CloudSyncError::Http {
+            status,
+            retry_after_seconds: None,
+            ..
+        } => matches!(status, 408 | 500..=599),
+        // A body that ended early is the same dead socket, discovered while
+        // streaming instead of while waiting for the head.
+        CloudSyncError::Io(source) => matches!(
+            source.kind(),
+            std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::BrokenPipe
+        ),
+        _ => false,
     }
 }
 
@@ -203,20 +270,38 @@ impl CloudSyncRemote for NativeS3Remote {
         path: &str,
         etag: Option<&str>,
     ) -> Result<CloudObjectRead, CloudSyncError> {
-        let mut response = self.send_conditional(S3HttpMethod::Get, path, None, etag)?;
-        if etag.is_some() && matches!(response.status().as_u16(), 400 | 405 | 501) {
-            let _ = self.response_bytes(response);
-            response = self.send_conditional(S3HttpMethod::Get, path, None, None)?;
-        }
-        let status = response.status();
-        let retry = super::helpers::retry_after_seconds(response.headers());
-        let etag = response
-            .headers()
-            .get(zed_reqwest::header::ETAG)
-            .and_then(|h| h.to_str().ok())
-            .filter(|s| !s.is_empty() && s.len() <= 1_024)
-            .map(ToOwned::to_owned);
-        let bytes = self.response_bytes(response);
+        // A replay re-sends the same conditional GET; 304 and 404 stay
+        // observable outcomes, not errors.
+        let fetched = retry_transient(|| {
+            let mut response = self.send_conditional(S3HttpMethod::Get, path, None, etag)?;
+            if etag.is_some() && matches!(response.status().as_u16(), 400 | 405 | 501) {
+                let _ = self.response_bytes(response);
+                response = self.send_conditional(S3HttpMethod::Get, path, None, None)?;
+            }
+            let status = response.status();
+            let retry = super::helpers::retry_after_seconds(response.headers());
+            let etag = response
+                .headers()
+                .get(zed_reqwest::header::ETAG)
+                .and_then(|h| h.to_str().ok())
+                .filter(|s| !s.is_empty() && s.len() <= 1_024)
+                .map(ToOwned::to_owned);
+            if !status.is_success()
+                && status != StatusCode::NOT_MODIFIED
+                && status != StatusCode::NOT_FOUND
+            {
+                let _ = self.response_bytes(response);
+                return Err(super::helpers::http_failure(
+                    "S3",
+                    "read",
+                    status.as_u16(),
+                    retry,
+                ));
+            }
+            let bytes = self.response_bytes(response)?;
+            Ok((status, retry, etag, bytes))
+        })?;
+        let (status, retry, etag, bytes) = fetched;
         if status == StatusCode::NOT_MODIFIED {
             self.stats
                 .lock()
@@ -228,10 +313,7 @@ impl CloudSyncRemote for NativeS3Remote {
             return Ok(CloudObjectRead::Missing);
         }
         if status.is_success() {
-            return Ok(CloudObjectRead::Modified {
-                bytes: bytes?,
-                etag,
-            });
+            return Ok(CloudObjectRead::Modified { bytes, etag });
         }
         Err(super::helpers::http_failure(
             "S3",
@@ -258,19 +340,23 @@ impl CloudSyncRemote for NativeS3Remote {
     }
 
     fn delete(&self, path: &str) -> Result<(), CloudSyncError> {
-        let response = self.send(S3HttpMethod::Delete, path, None)?;
-        let status = response.status();
-        let retry = super::helpers::retry_after_seconds(response.headers());
-        let _ = self.response_bytes(response);
-        if status.is_success() || status == StatusCode::NOT_FOUND {
-            return Ok(());
-        }
-        Err(super::helpers::http_failure(
-            "S3",
-            "delete",
-            status.as_u16(),
-            retry,
-        ))
+        retry_transient(|| {
+            let response = self.send(S3HttpMethod::Delete, path, None)?;
+            let status = response.status();
+            let retry = super::helpers::retry_after_seconds(response.headers());
+            if status.is_success() || status == StatusCode::NOT_FOUND {
+                self.response_bytes(response)?;
+                Ok(())
+            } else {
+                let _ = self.response_bytes(response);
+                Err(super::helpers::http_failure(
+                    "S3",
+                    "delete",
+                    status.as_u16(),
+                    retry,
+                ))
+            }
+        })
     }
 
     fn list_files(&self, path: &str) -> Result<Vec<String>, CloudSyncError> {
@@ -289,19 +375,33 @@ impl CloudSyncRemote for NativeS3Remote {
         let mut visited_paths = BTreeSet::new();
         let mut files = Vec::new();
         loop {
-            let response = self.send_list(&prefix, continuation.as_deref())?;
-            let status = response.status();
-            let _retry_after_seconds = super::helpers::retry_after_seconds(response.headers());
-            let body = self.response_bytes(response);
+            // A page is read whole before it is retried, so a reset while
+            // streaming the body cannot leave a half-parsed listing behind.
+            let (status, retry_after, body) = retry_transient(|| {
+                let response = self.send_list(&prefix, continuation.as_deref())?;
+                let status = response.status();
+                let retry_after = super::helpers::retry_after_seconds(response.headers());
+                if !status.is_success() {
+                    let _ = self.response_bytes(response);
+                    return Err(super::helpers::http_failure(
+                        "S3",
+                        "list",
+                        status.as_u16(),
+                        retry_after,
+                    ));
+                }
+                let body = self.response_bytes(response)?;
+                Ok((status, retry_after, body))
+            })?;
             if !status.is_success() {
                 return Err(super::helpers::http_failure(
                     "S3",
                     "request",
                     status.as_u16(),
-                    _retry_after_seconds,
+                    retry_after,
                 ));
             }
-            let body = String::from_utf8(body?)
+            let body = String::from_utf8(body)
                 .map_err(|_| CloudSyncError::Remote("invalid S3 LIST response".into()))?;
             let page = parse_s3_list_page(&body)?;
             if page.objects.iter().any(|entry| {

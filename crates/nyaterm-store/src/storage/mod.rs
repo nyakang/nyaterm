@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use rand::RngExt;
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, TableHandle as _};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -234,6 +234,14 @@ impl ConnectionStore {
             path: db_path.clone(),
             source,
         })?;
+        Self::from_database(db, db_path, portable_key_path)
+    }
+
+    pub(crate) fn from_database(
+        db: Database,
+        db_path: PathBuf,
+        portable_key_path: Option<PathBuf>,
+    ) -> Result<Self, StorageError> {
         let store = Self {
             db,
             db_path,
@@ -247,6 +255,138 @@ impl ConnectionStore {
         store.migrate_legacy_rdp_known_hosts()?;
         store.import_legacy_known_hosts_if_needed()?;
         Ok(store)
+    }
+
+    /// Opens only existing user data. Never initializes a missing/empty file.
+    pub fn open_existing(config_dir: &Path) -> Result<Self, StorageError> {
+        let path = config_dir.join(DATABASE_FILE);
+        let db = Self::validate_existing_file(&path)?;
+        Self::from_database(db, path, None)
+    }
+
+    pub(crate) fn validate_existing_file(path: &Path) -> Result<Database, StorageError> {
+        if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0) {
+            return Err(StorageError::InvalidData(
+                "existing database is missing or not a regular file".into(),
+            ));
+        }
+        let mut db = Database::open(path).map_err(|source| StorageError::Open {
+            path: path.into(),
+            source,
+        })?;
+        if !db.check_integrity().map_err(|source| StorageError::Open {
+            path: path.into(),
+            source,
+        })? {
+            return Err(StorageError::InvalidData(
+                "database integrity check required repair".into(),
+            ));
+        }
+        let txn = db.begin_read()?;
+        let tables = txn
+            .list_tables()?
+            .map(|table| table.name().to_string())
+            .collect::<Vec<_>>();
+        if !tables
+            .iter()
+            .any(|name| matches!(name.as_str(), "settings" | "connections" | "text_docs"))
+        {
+            return Err(StorageError::InvalidData(
+                "unsupported NyaTerm database layout".into(),
+            ));
+        }
+        for definition in [
+            GROUPS_TABLE,
+            CONNECTIONS_TABLE,
+            SETTINGS_TABLE,
+            CREDENTIALS_TABLE,
+            TUNNELS_TABLE,
+            PROXIES_TABLE,
+            OTP_ACCOUNTS_TABLE,
+            KNOWN_HOSTS_TABLE,
+            VNC_KNOWN_HOSTS_TABLE,
+            RDP_KNOWN_HOSTS_TABLE,
+            COMMAND_HISTORY_TABLE,
+            NOTE_FOLDERS_TABLE,
+            NOTES_TABLE,
+            NOTE_SUMMARIES_TABLE,
+        ] {
+            if tables.iter().any(|name| name == definition.name()) {
+                let table = txn.open_table(definition)?;
+                for entry in table.iter()? {
+                    let (key, bytes) = entry?;
+                    let value: serde_json::Value = serde_json::from_slice(bytes.value())?;
+                    if definition.name() == "connections"
+                        && key.value().starts_with(CONNECTION_PREFIX)
+                    {
+                        serde_json::from_value::<SavedConnection>(value)?;
+                    }
+                }
+            }
+        }
+        drop(txn);
+        Ok(db)
+    }
+
+    /// Content identity excludes redb's mutable allocator/header bookkeeping.
+    pub(crate) fn database_fingerprint(db: &Database) -> Result<String, StorageError> {
+        let txn = db.begin_read()?;
+        if txn.list_multimap_tables()?.next().is_some() {
+            return Err(StorageError::InvalidData(
+                "unsupported multimap database layout".into(),
+            ));
+        }
+        let mut names = txn
+            .list_tables()?
+            .map(|table| table.name().to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+        let mut hash = Sha256::new();
+        fn add(hash: &mut Sha256, value: &[u8]) {
+            hash.update((value.len() as u64).to_le_bytes());
+            hash.update(value);
+        }
+        for name in names {
+            add(&mut hash, name.as_bytes());
+            match txn.open_table(TableDefinition::<&str, &str>::new(&name)) {
+                Ok(table) => {
+                    add(&mut hash, b"str");
+                    for row in table.iter()? {
+                        let (key, value) = row?;
+                        add(&mut hash, key.value().as_bytes());
+                        add(&mut hash, value.value().as_bytes());
+                    }
+                    continue;
+                }
+                Err(redb::TableError::TableTypeMismatch { .. }) => {}
+                Err(e) => return Err(e.into()),
+            }
+            match txn.open_table(TableDefinition::<&str, &[u8]>::new(&name)) {
+                Ok(table) => {
+                    add(&mut hash, b"bytes");
+                    for row in table.iter()? {
+                        let (key, value) = row?;
+                        add(&mut hash, key.value().as_bytes());
+                        add(&mut hash, value.value());
+                    }
+                    continue;
+                }
+                Err(redb::TableError::TableTypeMismatch { .. }) => {}
+                Err(e) => return Err(e.into()),
+            }
+            let table = txn.open_table(TableDefinition::<&str, u64>::new(&name))?;
+            add(&mut hash, b"u64");
+            for row in table.iter()? {
+                let (key, value) = row?;
+                add(&mut hash, key.value().as_bytes());
+                add(&mut hash, &value.value().to_le_bytes());
+            }
+        }
+        Ok(hex::encode(hash.finalize()))
+    }
+
+    pub(crate) fn content_fingerprint(&self) -> Result<String, StorageError> {
+        Self::database_fingerprint(&self.db)
     }
 
     pub fn db_path(&self) -> &Path {
@@ -1093,6 +1233,38 @@ impl ConnectionStore {
     }
 
     fn ensure_tables(&self) -> Result<(), StorageError> {
+        let read = self.db.begin_read()?;
+        let existing = read
+            .list_tables()?
+            .map(|table| table.name().to_string())
+            .collect::<std::collections::HashSet<_>>();
+        let expected = [
+            META_TABLE.name(),
+            TEXT_DOCS_TABLE.name(),
+            GROUPS_TABLE.name(),
+            CONNECTIONS_TABLE.name(),
+            TUNNELS_TABLE.name(),
+            PROXIES_TABLE.name(),
+            CREDENTIALS_TABLE.name(),
+            OTP_ACCOUNTS_TABLE.name(),
+            KNOWN_HOSTS_TABLE.name(),
+            RDP_KNOWN_HOSTS_TABLE.name(),
+            VNC_KNOWN_HOSTS_TABLE.name(),
+            PORTABLE_OPAQUE_ENTITIES_TABLE.name(),
+            COMMAND_HISTORY_TABLE.name(),
+            completion_history::COMPLETION_HISTORY_TABLE.name(),
+            NOTE_FOLDERS_TABLE.name(),
+            NOTES_TABLE.name(),
+            NOTE_SUMMARIES_TABLE.name(),
+            SETTINGS_TABLE.name(),
+            IDX_CONNECTIONS_BY_GROUP_TABLE.name(),
+            IDX_CONNECTIONS_BY_LAST_USED_TABLE.name(),
+            IDX_CONNECTIONS_BY_PROTOCOL_TABLE.name(),
+        ];
+        if expected.iter().all(|name| existing.contains(*name)) {
+            return Ok(());
+        }
+        drop(read);
         let txn = self.db.begin_write()?;
         txn.open_table(META_TABLE)?;
         txn.open_table(TEXT_DOCS_TABLE)?;

@@ -824,3 +824,162 @@ fn s3_listing_never_forwards_session_credentials_across_redirects() {
     ));
     assert!(target.requests.lock().unwrap().is_empty());
 }
+
+/// Reported in the field: `S3 request failed (connection reset)`. A gateway
+/// retired an idle keep-alive socket and the listing — the first request of the
+/// sync — failed outright. Idempotent requests are now replayed.
+#[test]
+fn a_reset_on_the_first_listing_is_retried_instead_of_failing_the_sync() {
+    use crate::test_support::http::{Reply, Server};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = attempts.clone();
+    let server = Server::new(move |request| {
+        if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Reply::disconnect();
+        }
+        let url = url::Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+        let query: std::collections::BTreeMap<_, _> = url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        let mut prefix = query.get("prefix").cloned().unwrap_or_default();
+        if !prefix.ends_with('/') {
+            prefix.push('/');
+        }
+        Reply::new(
+            200,
+            format!(
+                "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+                 <IsTruncated>false</IsTruncated>\
+                 <Contents><Key>{prefix}a.nya</Key><Size>3</Size><ETag>etag</ETag>\
+                 <LastModified>2026-11-04T00:00:00Z</LastModified></Contents>\
+                 </ListBucketResult>"
+            ),
+        )
+    });
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    let files = remote.list_files("sync/v5/registry").unwrap();
+    assert_eq!(files, vec!["sync/v5/registry/a.nya".to_string()]);
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        2,
+        "the reset attempt is replayed once and succeeds"
+    );
+}
+
+#[test]
+fn a_rejected_listing_is_not_retried() {
+    use crate::test_support::http::{Reply, Server};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = attempts.clone();
+    let server = Server::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Reply::new(403, "")
+    });
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    assert!(remote.list_files("sync/v5/registry").is_err());
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a permission failure is permanent and must not be replayed"
+    );
+}
+
+#[test]
+fn native_s3_retries_http_503_listing_before_returning_success() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counter = requests.clone();
+    let server = Server::new(move |_| {
+        if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            Reply::new(503, "temporary")
+        } else {
+            Reply::new(
+                200,
+                "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>",
+            )
+        }
+    });
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    assert!(remote.list_files("sync/v5/registry").is_ok());
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn native_s3_retries_get_and_delete_http_failures_but_never_replays_put() {
+    for method in ["GET", "DELETE", "PUT"] {
+        for status in [408, 500, 503] {
+            let server = Server::new(move |request| {
+                assert_eq!(request.method, method);
+                Reply::new(status, "transient fixture")
+            });
+            let remote = NativeS3Remote::new(&server.s3()).unwrap();
+            let result = match method {
+                "GET" => remote.read_if_exists("sync/object").map(|_| ()),
+                "DELETE" => remote.delete("sync/object"),
+                "PUT" => remote.write("sync/object", b"fixture"),
+                _ => unreachable!(),
+            };
+            assert!(result.is_err());
+            assert_eq!(
+                server.requests.lock().unwrap().len(),
+                if method == "PUT" { 1 } else { 3 },
+                "{method}: {status}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_s3_preserves_scheduler_retry_after_and_conditional_responses() {
+    for status in [429, 503] {
+        let server =
+            Server::new(move |_| Reply::new(status, "retry later").header("Retry-After", "7"));
+        let remote = NativeS3Remote::new(&server.s3()).unwrap();
+        assert_eq!(
+            remote
+                .read_if_exists("sync/object")
+                .unwrap_err()
+                .retry_after(),
+            Some(std::time::Duration::from_secs(7))
+        );
+        assert_eq!(server.requests.lock().unwrap().len(), 1);
+    }
+    let server = Server::new(|_| Reply::new(304, ""));
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    assert!(matches!(
+        remote
+            .read_conditional("sync/object", Some("etag"))
+            .unwrap(),
+        CloudObjectRead::NotModified
+    ));
+    let server = Server::new(|_| Reply::new(404, ""));
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    assert!(remote.read_if_exists("sync/object").unwrap().is_none());
+    remote.delete("sync/object").unwrap();
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn native_s3_retries_an_interrupted_successful_response_body() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = attempts.clone();
+    let server = Server::new(move |_| {
+        let mut reply = Reply::new(200, "complete");
+        if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            reply.advertised_length = Some(1000);
+        }
+        reply
+    });
+    let remote = NativeS3Remote::new(&server.s3()).unwrap();
+    assert_eq!(
+        remote.read_if_exists("sync/object").unwrap().unwrap(),
+        b"complete"
+    );
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}

@@ -6,7 +6,7 @@ pub(in crate::features) use rotation::rotate_master_password;
 use std::collections::{BTreeMap, BTreeSet};
 
 use nyaterm_core::cloud_sync::{CloudSyncRemote, control::CloudSyncOperationControl};
-use nyaterm_core::sync_schema::{FIXED_CLOUD_SYNC_SCOPE, encryption};
+use nyaterm_core::sync_schema::{FIXED_CLOUD_SYNC_SCOPE, SyncFieldId, encryption};
 use nyaterm_core::{CloudSyncError, CloudSyncSettings, LocalCloudSyncOptions};
 use nyaterm_store::sync_v4::{LocalReplica, PreparedApply};
 use nyaterm_store::{StoreBlockingClient, StoreClientError, StoreDomain};
@@ -15,6 +15,7 @@ use nyaterm_sync::protocol::{
     MAX_PUBLICATION_BYTES, PendingPublication, ProviderCapabilities, PublicationId,
     PublishedReplica,
 };
+use rust_i18n::t;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -25,6 +26,10 @@ pub(super) struct Preview {
     pub apply: PreparedApply,
     pub migration: bool,
     pub resource_count: usize,
+    /// Set once the user staged a field decision. Such a preview cannot be
+    /// re-based onto a newer local snapshot, because the decisions name
+    /// positions in the conflict list the user reviewed.
+    resolved: bool,
     presentation: PreviewSummary,
     metadata_changed: bool,
 }
@@ -42,6 +47,11 @@ pub(in crate::features) struct ConflictSummary {
     pub index: usize,
     pub field: String,
     pub choices: Vec<String>,
+    pub candidate_ids: Vec<String>,
+    pub operation_ids: Vec<String>,
+    /// Candidate position matching the local baseline, if one can be proven.
+    /// Candidates are unordered, so "keep local" must be computed, not guessed.
+    pub local_candidate: Option<usize>,
 }
 
 impl Preview {
@@ -71,63 +81,109 @@ impl Preview {
                             &conflict.field.field,
                         )
                 })
-                .map(|(index, conflict)| ConflictSummary {
-                    index,
-                    field: format!(
-                        "{} / {} / {}",
-                        conflict.field.resource.kind,
-                        conflict.field.resource.id,
-                        conflict.field.field
-                    ),
-                    choices: conflict
-                        .candidates
-                        .iter()
-                        .enumerate()
-                        .map(|(index, candidate)| {
-                            if candidate.value == "deleted" {
-                                return "∅".into();
-                            }
-                            if nyaterm_core::sync_schema::SECRET_KINDS
-                                .contains(&conflict.field.resource.kind.as_str())
-                            {
-                                return format!("•••• ({})", index + 1);
-                            }
-                            replica
-                                .as_ref()
-                                .ok()
-                                .and_then(|replica| replica.candidate_value(candidate).ok())
-                                .and_then(|value| value.decode().ok())
-                                .map(|value| value.to_string().chars().take(160).collect())
-                                .unwrap_or_else(|| "?".into())
-                        })
-                        .collect(),
+                .map(|(index, conflict)| {
+                    let expected = self
+                        .apply
+                        .plan
+                        .expected_local
+                        .values
+                        .get(&conflict.field.key());
+                    let local_candidate = conflict.candidates.iter().position(|candidate| {
+                        if candidate.value == "deleted" {
+                            return expected.is_none();
+                        }
+                        let Some(expected) = expected else {
+                            return false;
+                        };
+                        let Ok(expected) = expected.decode() else {
+                            return false;
+                        };
+                        replica
+                            .as_ref()
+                            .ok()
+                            .and_then(|replica| replica.candidate_value(candidate).ok())
+                            .and_then(|value| value.decode().ok())
+                            .is_some_and(|value| value == expected)
+                    });
+                    ConflictSummary {
+                        index,
+                        field: format!(
+                            "{} / {} / {}",
+                            conflict.field.resource.kind,
+                            conflict.field.resource.id,
+                            conflict.field.field
+                        ),
+                        candidate_ids: conflict
+                            .candidates
+                            .iter()
+                            .map(|candidate| candidate.value.clone())
+                            .collect(),
+                        operation_ids: conflict
+                            .candidates
+                            .iter()
+                            .map(|candidate| candidate.operation.clone())
+                            .collect(),
+                        choices: conflict
+                            .candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(index, candidate)| {
+                                if candidate.value == "deleted" {
+                                    return "∅".into();
+                                }
+                                if nyaterm_core::sync_schema::SECRET_KINDS
+                                    .contains(&conflict.field.resource.kind.as_str())
+                                {
+                                    return format!("•••• ({})", index + 1);
+                                }
+                                replica
+                                    .as_ref()
+                                    .ok()
+                                    .and_then(|replica| replica.candidate_value(candidate).ok())
+                                    .and_then(|value| value.decode().ok())
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "?".into())
+                            })
+                            .collect(),
+                        local_candidate,
+                    }
                 })
                 .collect(),
         }
     }
 
-    pub fn resolve(
+    /// Resolve several conflicts against the pre-batch conflict list in one
+    /// pass, then materialize and refresh the summary exactly once. Decisions
+    /// reference the current `plan.conflicts` indices; duplicates of the same
+    /// conflict are dropped because the first write settles that field.
+    pub fn resolve_batch(
         &mut self,
         store: &StoreBlockingClient,
         password: &str,
-        conflict_index: usize,
-        candidate_index: usize,
-    ) -> Result<(), CloudSyncError> {
-        let conflict = self
-            .apply
-            .plan
-            .conflicts
-            .get(conflict_index)
-            .ok_or_else(invalid)?;
-        let candidate = conflict
-            .candidates
-            .get(candidate_index)
-            .ok_or_else(invalid)?;
+        decisions: &[(usize, usize)],
+    ) -> Result<usize, CloudSyncError> {
+        let conflicts = self.apply.plan.conflicts.clone();
         let mut replica = SyncReplica::load(&self.apply.plan.replica, self.apply.local.writer)
             .map_err(|_| invalid())?;
-        replica
-            .resolve(conflict, candidate, &self.apply.plan.scope)
-            .map_err(|_| invalid())?;
+        let mut seen = BTreeSet::new();
+        let mut resolved = 0usize;
+        for (conflict_index, candidate_index) in decisions {
+            if !seen.insert(*conflict_index) {
+                continue;
+            }
+            let conflict = conflicts.get(*conflict_index).ok_or_else(invalid)?;
+            let candidate = conflict
+                .candidates
+                .get(*candidate_index)
+                .ok_or_else(invalid)?;
+            replica
+                .resolve(conflict, candidate, &self.apply.plan.scope)
+                .map_err(|_| invalid())?;
+            resolved += 1;
+        }
+        if resolved == 0 {
+            return Ok(0);
+        }
         self.apply.plan.effective = replica
             .materialize(
                 &self.apply.plan.expected_local.values,
@@ -137,7 +193,8 @@ impl Preview {
         self.apply.plan.conflicts = replica.conflicts().map_err(|_| invalid())?;
         self.apply.plan.replica = replica.snapshot();
         self.refresh_summary(store, password)?;
-        Ok(())
+        self.resolved = true;
+        Ok(resolved)
     }
 
     fn refresh_summary(
@@ -177,9 +234,118 @@ impl Preview {
 #[derive(Debug, Clone)]
 pub(crate) struct SyncReport {
     pub conflicts: usize,
-    pub deferred: usize,
+    pub deferred: Vec<String>,
+    /// Records whose remote address change was not adopted because a password
+    /// of this device is bound to the local address.
+    pub kept: Vec<String>,
     pub verified: bool,
+    /// A publication actually reached the remote in this pass. False for the
+    /// verified no-op fast path, whose only news is that both sides match.
+    pub published: bool,
     pub publication_error: Option<String>,
+}
+
+impl SyncReport {
+    /// The single user-visible sentence for a finished apply. Deferred fields
+    /// are named instead of only counted: the count alone leaves the user with
+    /// nothing to repair, which is how a permanently deferred field looks
+    /// indistinguishable from a healthy sync.
+    pub(crate) fn status_message(&self) -> String {
+        let mut message = if self.verified {
+            t!("settings.syncV3Verified", count = self.conflicts).to_string()
+        } else {
+            t!(
+                "settings.syncV3Pending",
+                detail = self.publication_error.clone().unwrap_or_default()
+            )
+            .to_string()
+        };
+        if !self.deferred.is_empty() {
+            message.push_str(&format!(
+                " · {}",
+                t!("settings.syncV3Deferred", count = self.deferred.len())
+            ));
+            message.push_str(&format!(
+                " {}",
+                t!(
+                    "settings.syncV3DeferredFields",
+                    fields = summarize_fields(&self.deferred, STATUS_FIELD_LIMIT)
+                )
+            ));
+        }
+        if !self.kept.is_empty() {
+            message.push_str(&format!(
+                " · {}",
+                t!(
+                    "settings.syncV3KeptEndpoints",
+                    entries = summarize_fields(&self.kept, STATUS_FIELD_LIMIT)
+                )
+            ));
+        }
+        message
+    }
+
+    /// The history-list counterpart of `status_message`. Every manual apply the
+    /// user finishes must appear here: a finished sync whose only trace is the
+    /// status bar looks, from the panel, like "no conflicts and no success".
+    pub(crate) fn history_entry(
+        &self,
+        trigger: &str,
+        provider: Option<String>,
+        duration_ms: Option<u64>,
+    ) -> nyaterm_core::CloudSyncHistoryEntry {
+        let (status, message) = if self.verified {
+            (
+                "success",
+                if self.published {
+                    "Cloud synchronization applied and verified".to_string()
+                } else {
+                    "Cloud synchronization is already up to date".to_string()
+                },
+            )
+        } else {
+            (
+                "failed",
+                format!(
+                    "Cloud synchronization could not be verified: {}",
+                    self.publication_error.as_deref().unwrap_or("unknown")
+                ),
+            )
+        };
+        let mut entry =
+            nyaterm_core::CloudSyncHistoryEntry::sync(status, trigger, provider, None, message);
+        entry.duration_ms = duration_ms;
+        entry
+    }
+}
+
+/// Enough identities to find the record, without turning the status bar into a
+/// wall of text when a whole catalog is deferred.
+const STATUS_FIELD_LIMIT: usize = 3;
+
+fn summarize_fields(fields: &[String], limit: usize) -> String {
+    let mut shown = fields
+        .iter()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if fields.len() > limit {
+        shown.push_str(&format!(" … (+{})", fields.len() - limit));
+    }
+    shown
+}
+
+fn deferred_fields(fields: &[SyncFieldId]) -> Vec<String> {
+    fields
+        .iter()
+        .map(|field| {
+            format!(
+                "{} / {} / {}",
+                field.resource.kind, field.resource.id, field.field
+            )
+        })
+        .collect()
 }
 
 fn invalid() -> CloudSyncError {
@@ -188,14 +354,22 @@ fn invalid() -> CloudSyncError {
     )
 }
 fn store_error(error: StoreClientError) -> CloudSyncError {
-    if let StoreClientError::Operation(error) = &error
-        && let Some(limit_bytes) = error.local_replica_payload_limit()
-    {
+    let StoreClientError::Operation(error) = &error else {
+        return CloudSyncError::LocalChangedDuringSync;
+    };
+    if let Some(limit_bytes) = error.local_replica_payload_limit() {
         return CloudSyncError::PortableSnapshot(
             nyaterm_core::PortableSnapshotError::LocalReplicaPayloadTooLarge { limit_bytes },
         );
     }
-    CloudSyncError::LocalChangedDuringSync
+    // Only a real compare-and-swap loss is "the preview went stale". Anything
+    // else (unreadable or unsupported local data, a missing key, a transient
+    // storage failure) used to be reported as `local_changed`, which hid the
+    // actual cause and made an unrecoverable condition look like a retry race.
+    if error.category() == "sync_local_changed" {
+        return CloudSyncError::LocalChangedDuringSync;
+    }
+    CloudSyncError::LocalStore(error.category().to_string())
 }
 
 fn destination(settings: &CloudSyncSettings, options: &LocalCloudSyncOptions) -> String {
@@ -276,7 +450,10 @@ pub(super) fn preview_on_change(
         let remote = control.remote(remote);
         prepare_remote_with_view(store, settings, options, &remote, false, view)
     })
-    .map(Some)
+    .map(|preview| {
+        record_check(store);
+        Some(preview)
+    })
 }
 
 pub(super) fn preview_manual(
@@ -300,6 +477,7 @@ fn preview_with_import(
         let remote = control.remote(remote);
         prepare_remote(store, settings, options, &remote, allow_legacy_import)
     })
+    .inspect(|_| record_check(store))
 }
 
 fn validate_provider(settings: &CloudSyncSettings) -> Result<(), CloudSyncError> {
@@ -311,6 +489,39 @@ fn validate_provider(settings: &CloudSyncSettings) -> Result<(), CloudSyncError>
         ));
     }
     Ok(())
+}
+
+/// Persists that this device has just talked to the remote replica. The V3
+/// flows update these timestamps inside the engine; the V4 flows own Apply
+/// themselves, so the settings panel would otherwise show "上次同步: 从未"
+/// forever even after verified publications.
+fn record_check(store: &StoreBlockingClient) {
+    touch_state(store, false);
+}
+
+/// A publication reached the remote and was verified: counts as a sync, not
+/// just a check.
+fn record_sync(store: &StoreBlockingClient) {
+    touch_state(store, true);
+}
+
+fn touch_state(store: &StoreBlockingClient, synced: bool) {
+    let _ = store.request_fn(StoreDomain::CloudSync, move |store| {
+        let mut state = store.load_cloud_sync_state()?;
+        let now = current_time_ms();
+        state.last_checked_at_ms = Some(now);
+        if synced {
+            state.last_synced_at_ms = Some(now);
+        }
+        store.save_cloud_sync_state(&state)
+    });
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn prepare_remote(
@@ -496,6 +707,7 @@ fn prepare_remote_with_view(
     let mut preview = Preview {
         migration,
         resource_count,
+        resolved: false,
         presentation: PreviewSummary::default(),
         metadata_changed: previous_observations != local.observed,
         apply: PreparedApply {
@@ -515,7 +727,7 @@ pub(super) fn apply_and_publish(
     store: &StoreBlockingClient,
     settings: &CloudSyncSettings,
     options: &LocalCloudSyncOptions,
-    preview: Preview,
+    mut preview: Preview,
     control: &CloudSyncOperationControl,
 ) -> Result<SyncReport, CloudSyncError> {
     if preview.apply.destination != destination(settings, options) {
@@ -525,38 +737,58 @@ pub(super) fn apply_and_publish(
     // Confirmation never applies a preview that already missed a publication
     // or a legacy write observed since Prepare. Later concurrent publications
     // remain concurrent and will be merged on the next pass.
-    let fresh = preview_with_import(store, settings, options, control, preview.migration)?;
-    if fresh.apply.local.observed != preview.apply.local.observed
-        || fresh.apply.local.legacy_fingerprint != preview.apply.local.legacy_fingerprint
-        || fresh.apply.expected_record != preview.apply.expected_record
-        || fresh.apply.generation != preview.apply.generation
+    let verification = preview_with_import(store, settings, options, control, preview.migration)?;
+    if verification.apply.local.observed != preview.apply.local.observed
+        || verification.apply.local.legacy_fingerprint != preview.apply.local.legacy_fingerprint
     {
         return Err(CloudSyncError::LocalChangedDuringSync);
     }
+    if verification.apply.expected_record != preview.apply.expected_record
+        || verification.apply.generation != preview.apply.generation
+    {
+        if preview.resolved {
+            // The staged decisions name positions in the conflict list the user
+            // reviewed; that list belongs to the older snapshot.
+            return Err(CloudSyncError::LocalChangedDuringSync);
+        }
+        // Only the local side moved, and no user decision depends on the old
+        // snapshot. Re-base onto the newer merge instead of failing: a routine
+        // edit that races the sync used to surface as a failure that backed off
+        // for minutes and re-downloaded the whole replica on every attempt.
+        preview = verification;
+    }
     let unchanged = !preview.migration
-        && !fresh.metadata_changed
-        && fresh.apply.local.pending.is_none()
-        && fresh.apply.local.scope == fresh.apply.plan.scope
-        && fresh.apply.local.effective == fresh.apply.plan.expected_local.values
-        && fresh.apply.plan.expected_local.edited.is_empty()
-        && fresh.apply.plan.effective == fresh.apply.plan.expected_local.values
-        && preview.apply.plan.replica.document == fresh.apply.plan.replica.document
-        && preview.apply.plan.replica.values == fresh.apply.plan.replica.values
-        && fresh.apply.local.conflicts == fresh.apply.plan.conflicts
-        && fresh.apply.local.deferred.is_empty()
-        && fresh.apply.local.replica.as_ref().is_some_and(|replica| {
-            replica.document == fresh.apply.plan.replica.document
-                && replica.values == fresh.apply.plan.replica.values
-                && fresh.apply.local.published_document.as_ref() == Some(&digest(&replica.document))
+        && !preview.metadata_changed
+        && !preview.resolved
+        && preview.apply.local.pending.is_none()
+        && preview.apply.local.scope == preview.apply.plan.scope
+        && preview.apply.local.effective == preview.apply.plan.expected_local.values
+        && preview.apply.plan.expected_local.edited.is_empty()
+        && preview.apply.plan.effective == preview.apply.plan.expected_local.values
+        && preview.apply.local.conflicts == preview.apply.plan.conflicts
+        && preview.apply.local.deferred.is_empty()
+        && preview.apply.local.replica.as_ref().is_some_and(|replica| {
+            replica.document == preview.apply.plan.replica.document
+                && replica.values == preview.apply.plan.replica.values
+                && preview.apply.local.published_document.as_ref()
+                    == Some(&digest(&replica.document))
         });
     if unchanged {
         // Both sides have been checked again. No business or causal operation
         // needs committing, so retain the verified encrypted record verbatim.
         control.checkpoint()?;
+        // This pass read the remote replica and proved both sides identical:
+        // from the settings panel's point of view that is a completed sync,
+        // not merely a check, so "上次同步" must move off "从未".
+        record_sync(store);
         return Ok(SyncReport {
-            conflicts: fresh.apply.local.conflicts.len(),
-            deferred: 0,
+            conflicts: preview.apply.local.conflicts.len(),
+            deferred: deferred_fields(&preview.apply.local.deferred),
+            // A retained address was already re-published by the apply that
+            // recorded it: replaying the note here would make it permanent.
+            kept: Vec::new(),
             verified: true,
+            published: false,
             publication_error: None,
         });
     }
@@ -587,7 +819,21 @@ pub(super) fn apply_and_publish(
         })
         .map_err(store_error)?;
     let conflicts = record.conflicts.len();
-    let deferred = record.deferred.len();
+    let deferred = deferred_fields(&record.deferred);
+    let kept = record.kept.clone();
+    if !deferred.is_empty() {
+        // Field identities only: no values ever reach the log.
+        tracing::warn!(
+            count = deferred.len(),
+            "Cloud sync kept local values for fields that cannot be applied"
+        );
+    }
+    if !kept.is_empty() {
+        tracing::warn!(
+            count = kept.len(),
+            "Cloud sync kept this device's address because a saved password is bound to it"
+        );
+    }
     match super::cloud_sync_provider::with_remote(
         store,
         settings,
@@ -595,11 +841,18 @@ pub(super) fn apply_and_publish(
         "v4_publish",
         |remote, _| publish(store, options, &destination, record, remote),
     ) {
-        Ok(report) => Ok(report),
+        Ok(report) => {
+            // The verification above already recorded the check; a successful
+            // publication also counts as a sync.
+            record_sync(store);
+            Ok(report)
+        }
         Err(error) => Ok(SyncReport {
             conflicts,
             deferred,
+            kept,
             verified: false,
+            published: false,
             publication_error: Some(error.to_string()),
         }),
     }
@@ -710,8 +963,10 @@ fn publish(
     )?;
     Ok(SyncReport {
         conflicts: record.conflicts.len(),
-        deferred: record.deferred.len(),
+        deferred: deferred_fields(&record.deferred),
+        kept: record.kept.clone(),
         verified: true,
+        published: true,
         publication_error: None,
     })
 }

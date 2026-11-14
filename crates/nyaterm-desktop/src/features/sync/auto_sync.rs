@@ -103,7 +103,9 @@ fn run_auto_sync_inner(
         device_name: Some(settings.device_name.clone()),
         config_dir: runtime.config_dir().to_path_buf(),
         portable_key_path: runtime.portable_key_path().map(ToOwned::to_owned),
-        remote_dir: runtime.config_dir().join("cloud-sync-local"),
+        remote_dir: runtime
+            .local_dir()
+            .join(nyaterm_core::data_directory::CLOUD_SYNC_LOCAL_DIR_NAME),
         remote_root: settings.remote_root.clone(),
         device_id: state.device_id.clone(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -318,23 +320,16 @@ impl NyaTermApp {
         }
         match result {
             Ok(AutoSyncResult::V4(report)) => {
-                let mut message = if report.verified {
-                    t!("settings.syncV3Verified", count = report.conflicts).to_string()
-                } else {
-                    t!(
-                        "settings.syncV3Pending",
-                        detail = report.publication_error.clone().unwrap_or_default()
-                    )
-                    .to_string()
-                };
-                if report.deferred > 0 {
-                    message.push_str(&format!(
-                        " · {}",
-                        t!("settings.syncV3Deferred", count = report.deferred)
-                    ));
-                }
-                self.cloud_sync
-                    .complete_job(self.cloud_sync.state().clone(), message.clone());
+                let message = report.status_message();
+                // The V4 worker persisted the check/sync timestamps just now;
+                // the in-memory copy predates that write.
+                let state = self
+                    .store_blocking_client()
+                    .request_fn(StoreDomain::CloudSync, |store| {
+                        store.load_cloud_sync_state()
+                    })
+                    .unwrap_or_else(|_| self.cloud_sync.state().clone());
+                self.cloud_sync.complete_job(state, message.clone());
                 self.shell.set_status(message);
                 self.refresh_store_from_runtime_and_sync_theme(cx);
             }
@@ -361,6 +356,15 @@ impl NyaTermApp {
                 if sync.outcome == nyaterm_core::CloudSyncOutcome::Downloaded {
                     self.refresh_store_from_runtime_and_sync_theme(cx);
                 }
+            }
+            Err(CloudSyncError::LocalChangedDuringSync) => {
+                // The save that raced this job is already in the store; the
+                // scheduler retries in seconds. Report it as progress, not as a
+                // failure the user has to act on.
+                let message = t!("settings.syncLocalChangeRetry").to_string();
+                self.cloud_sync
+                    .complete_job(self.cloud_sync.state().clone(), message.clone());
+                self.shell.set_status(message);
             }
             Err(error) => {
                 let message = match error {

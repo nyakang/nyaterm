@@ -129,7 +129,9 @@ impl ProcessStateStore {
                     let local = &self.snapshot.settings;
                     preserve_workspace_local_settings(local, &mut normalized);
                     changed = normalized != self.snapshot.settings
-                        || snapshot.keyword_highlights != self.snapshot.keyword_highlights;
+                        || snapshot.keyword_highlights != self.snapshot.keyword_highlights
+                        || snapshot.default_session_settings
+                            != self.snapshot.default_session_settings;
                     snapshot.settings = normalized;
                 }
                 self.snapshot = *snapshot;

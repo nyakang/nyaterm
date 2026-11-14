@@ -170,6 +170,7 @@ impl SettingsPanel {
                         ),
                     )),
             ))
+            .child(self.data_directory_section(cx))
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.diagnostics")),

@@ -52,5 +52,10 @@ uuid.workspace = true
 zeroize.workspace = true
 zip.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+] }
+
 [build-dependencies]
 flate2.workspace = true
