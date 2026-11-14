@@ -121,11 +121,9 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn links_are_not_followed_and_non_utf8_names_are_not_inserted() {
-        use std::os::unix::{ffi::OsStrExt, fs::symlink};
+    fn links_are_not_followed() {
         let dir = tempfile::tempdir().unwrap();
-        symlink("missing", dir.path().join("link")).unwrap();
-        std::fs::write(dir.path().join(std::ffi::OsStr::from_bytes(b"bad\xff")), []).unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
         let listing = list_local(
             dir.path().to_str().unwrap(),
             DirectoryLimits {
@@ -139,5 +137,28 @@ mod tests {
         assert!(listing.complete);
         assert_eq!(listing.entries.len(), 1);
         assert_eq!(listing.entries[0].file_type, SftpFileType::Symlink);
+    }
+
+    // APFS rejects these filenames before enumeration can inspect them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_names_are_not_inserted() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(std::ffi::OsStr::from_bytes(b"bad\xff")), []).unwrap();
+        std::fs::write(dir.path().join("valid"), []).unwrap();
+        let listing = list_local(
+            dir.path().to_str().unwrap(),
+            DirectoryLimits {
+                entries: 100,
+                name_bytes: 1000,
+            },
+            &SftpTransferControl::default(),
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(listing.complete);
+        assert_eq!(listing.entries.len(), 1);
+        assert_eq!(listing.entries[0].name, "valid");
     }
 }
