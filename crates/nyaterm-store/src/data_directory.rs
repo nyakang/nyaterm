@@ -1298,7 +1298,13 @@ fn is_network_location(path: &Path) -> Result<bool, DataDirectoryError> {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt as _;
         let canonical = normalize_existing_prefix(path);
-        let path_c = CString::new(canonical.as_os_str().as_bytes())
+        // statfs needs an existing path. A directory that is not created yet
+        // will live on the mount of its closest existing ancestor.
+        let existing = canonical
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .unwrap_or(&canonical);
+        let path_c = CString::new(existing.as_os_str().as_bytes())
             .map_err(|_| DataDirectoryError::RelativePath(path.into()))?;
         let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
         // SAFETY: path is NUL-terminated; stat points to writable storage.
@@ -1310,7 +1316,8 @@ fn is_network_location(path: &Path) -> Result<bool, DataDirectoryError> {
             ));
         }
         // SAFETY: statfs initialized the structure on success.
-        Ok(unsafe { stat.assume_init() }.f_flags & libc::MNT_LOCAL == 0)
+        // `f_flags` is a `u32` while libc declares `MNT_LOCAL` as a `c_int`.
+        Ok(unsafe { stat.assume_init() }.f_flags & libc::MNT_LOCAL as u32 == 0)
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
