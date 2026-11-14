@@ -1623,6 +1623,8 @@ mod tests {
 
     fn root_render_benchmark_session(name: String) -> SessionRuntimeMetadata {
         SessionRuntimeMetadata {
+            confirmed_ssh_runtime_mode: None,
+            pending_ssh_startup_command: None,
             ssh_config: None,
             ssh_multiplex_key: None,
             source_connection_id: None,

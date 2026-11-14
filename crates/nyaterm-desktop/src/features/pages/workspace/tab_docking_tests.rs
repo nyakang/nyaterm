@@ -40,6 +40,8 @@ fn setup(cx: &mut TestAppContext, root: &TestTempDir, edge: TabDockEdge) -> Enti
             app.session.register_session_metadata(
                 id,
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: None,
                     ssh_multiplex_key: None,
                     source_connection_id: None,

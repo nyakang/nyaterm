@@ -339,16 +339,9 @@ impl SshSessionConfig {
         }
     }
 
+    /// Requested policy only. Established sessions report their mode through SessionEvent.
     pub fn effective_runtime_mode(&self) -> nyaterm_core::models::ssh_runtime::SshRuntimeMode {
-        use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
-        if self.runtime_mode == SshRuntimeMode::Standard
-            && self.attempt.shell_availability()
-                == crate::connection_attempt::ShellAvailability::Unavailable
-        {
-            SshRuntimeMode::Sftp
-        } else {
-            self.runtime_mode
-        }
+        self.runtime_mode
     }
 
     pub(crate) fn ensure_shell_available(
@@ -905,14 +898,13 @@ mod tests {
     }
 
     #[test]
-    fn standard_shell_denial_changes_effective_capabilities_without_changing_saved_mode() {
+    fn shell_denial_does_not_confirm_sftp_mode() {
         let config = SshSessionConfig::default();
         config.attempt.record_shell_reply(false);
-        assert_eq!(config.effective_runtime_mode(), SshRuntimeMode::Sftp);
+        assert_eq!(config.effective_runtime_mode(), SshRuntimeMode::Standard);
         assert_eq!(config.runtime_mode, SshRuntimeMode::Standard);
         assert!(config.remote_file_browser_enabled());
-        assert!(!config.remote_stats_enabled());
-        assert_eq!(config.effective_cwd_follow_mode(), SftpCwdFollowMode::Off);
+        assert!(config.remote_stats_enabled());
     }
 
     #[test]

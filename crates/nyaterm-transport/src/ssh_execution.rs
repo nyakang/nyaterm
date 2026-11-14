@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+#[derive(Debug, thiserror::Error)]
+#[error("SSH exec request was rejected")]
+pub struct ExecRequestDenied;
+
 /// Common command execution for services that do not own SSH connections.
 #[derive(Clone, Debug)]
 pub struct SshExecService {
@@ -124,7 +128,7 @@ pub async fn exec_ssh_command(
         config.ensure_shell_available()?;
         let (handle, jump_handles) = open_authenticated_ssh_handle(&config).await?;
         let channel = open_exec_channel_on_handle(&handle, command).await?;
-        let output = collect_exec_channel(channel, &config.attempt).await?;
+        let output = collect_exec_channel(channel).await?;
         let _ = handle
             .disconnect(Disconnect::ByApplication, "ssh exec completed", "en")
             .await;
@@ -199,7 +203,7 @@ pub fn run_ssh_command_with_input(
                     channel.data(&bytes[..]).await?;
                 }
                 channel.eof().await?;
-                let output = collect_exec_channel(channel, &attempt).await;
+                let output = collect_exec_channel(channel).await;
                 if let Some((handle, jumps)) = owned {
                     let _ = handle
                         .disconnect(Disconnect::ByApplication, "command completed", "en")
@@ -237,7 +241,7 @@ pub async fn exec_ssh_command_with_multiplex(
             let handle = handle.lock().await;
             open_exec_channel_on_handle(&handle, command).await?
         };
-        collect_exec_channel(channel, &multiplex.inner.attempt).await
+        collect_exec_channel(channel).await
     })
     .await
     .map_err(|_| anyhow::anyhow!("remote command timed out"))?
@@ -260,7 +264,6 @@ async fn open_exec_channel_on_handle(
 
 async fn collect_exec_channel(
     mut channel: russh::Channel<client::Msg>,
-    attempt: &crate::connection_attempt::ConnectionAttempt,
 ) -> anyhow::Result<RemoteCommandOutput> {
     let mut stdout = String::new();
     let mut stderr = String::new();
@@ -268,11 +271,10 @@ async fn collect_exec_channel(
     let mut eof_seen = false;
     loop {
         match channel.wait().await {
-            Some(ChannelMsg::Success) => attempt.record_shell_reply(true),
+            Some(ChannelMsg::Success) => {}
             Some(ChannelMsg::Failure) => {
-                attempt.record_shell_reply(false);
                 let _ = channel.close().await;
-                return Err(crate::connection_attempt::ShellUnavailable.into());
+                return Err(ExecRequestDenied.into());
             }
             Some(ChannelMsg::Data { data }) => {
                 stdout.push_str(&String::from_utf8_lossy(&data));

@@ -648,6 +648,7 @@ impl SessionEventQueueInner {
                 | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::TmuxState { .. }
                 | SessionEvent::Notice { .. }
+                | SessionEvent::SshRuntimeModeConfirmed { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -720,6 +721,7 @@ impl SessionEventQueueInner {
                 | SessionEvent::OutputBoundary { .. }
                 | SessionEvent::TmuxState { .. }
                 | SessionEvent::Notice { .. }
+                | SessionEvent::SshRuntimeModeConfirmed { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -754,6 +756,7 @@ fn event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::CleanupFailed { session_id, .. }
         | SessionEvent::TmuxState { session_id, .. }
         | SessionEvent::Notice { session_id, .. }
+        | SessionEvent::SshRuntimeModeConfirmed { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
     }
 }

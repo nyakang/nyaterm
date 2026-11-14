@@ -173,6 +173,8 @@ fn app_with_visible_session(
         app.session.register_session_metadata(
             session_id,
             SessionRuntimeMetadata {
+                confirmed_ssh_runtime_mode: None,
+                pending_ssh_startup_command: None,
                 ssh_config,
                 ssh_multiplex_key: None,
                 source_connection_id: None,

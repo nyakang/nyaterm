@@ -947,6 +947,8 @@ fn session_metadata(name: &str, multiplex_key: Option<&str>) -> SessionRuntimeMe
         ..LocalSessionConfig::default()
     };
     SessionRuntimeMetadata {
+        confirmed_ssh_runtime_mode: None,
+        pending_ssh_startup_command: None,
         ssh_config: None,
         ssh_multiplex_key: multiplex_key.map(ToOwned::to_owned),
         source_connection_id: None,
@@ -978,6 +980,8 @@ fn rdp_session_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
 
 fn remote_desktop_metadata(connection_id: &str) -> SessionRuntimeMetadata {
     SessionRuntimeMetadata {
+        confirmed_ssh_runtime_mode: None,
+        pending_ssh_startup_command: None,
         ssh_config: None,
         ssh_multiplex_key: None,
         source_connection_id: Some(connection_id.to_string()),
@@ -995,6 +999,8 @@ fn ssh_metadata(name: &str) -> SessionRuntimeMetadata {
         ..SshSessionConfig::default()
     };
     SessionRuntimeMetadata {
+        confirmed_ssh_runtime_mode: None,
+        pending_ssh_startup_command: None,
         ssh_config: Some(config.clone()),
         ssh_multiplex_key: None,
         source_connection_id: None,

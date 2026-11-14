@@ -32,6 +32,11 @@ pub enum SessionKind {
 // `Eq` is impossible: `TmuxState` carries `f64` layout ratios.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
+    /// Established mode of this session, independent of other SSH channels.
+    SshRuntimeModeConfirmed {
+        session_id: String,
+        mode: nyaterm_core::models::ssh_runtime::SshRuntimeMode,
+    },
     /// Application notice; does not contribute terminal output bytes.
     Notice {
         session_id: String,

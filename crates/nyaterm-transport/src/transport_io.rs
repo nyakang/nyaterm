@@ -64,7 +64,6 @@ pub struct TelnetTransport {
 pub struct SshChannelTransport {
     pub(crate) info: SessionInfo,
     pub(crate) shell_enabled: bool,
-    pub(crate) attempt: connection_attempt::ConnectionAttempt,
     pub(crate) command_tx: ssh_mailbox::Sender,
     /// Ordered tmux control-channel commands; buffered until the channel
     /// enters control mode so early UI calls cannot reach the user's shell.
@@ -533,7 +532,6 @@ impl TerminalTransport for SshChannelTransport {
         if !self.shell_enabled {
             return Err(connection_attempt::ShellUnavailable.into());
         }
-        self.attempt.ensure_shell_available()?;
         let data = if self.backspace_as_bs {
             remap_del_to_bs(data)
         } else {
@@ -550,7 +548,6 @@ impl TerminalTransport for SshChannelTransport {
         if !self.shell_enabled {
             return Err(connection_attempt::ShellUnavailable.into());
         }
-        self.attempt.ensure_shell_available()?;
         self.command_tx
             .write(data.to_vec())
             .map_err(anyhow::Error::from)

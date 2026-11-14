@@ -342,6 +342,8 @@ impl NyaTermApp {
             AndroidViewKind::Shell => unreachable!(),
         };
         let metadata = SessionRuntimeMetadata {
+            confirmed_ssh_runtime_mode: None,
+            pending_ssh_startup_command: None,
             ssh_config: None,
             ssh_multiplex_key: None,
             source_connection_id: Some(config.device_key.clone()),

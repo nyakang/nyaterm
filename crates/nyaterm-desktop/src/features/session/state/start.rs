@@ -52,7 +52,7 @@ impl PendingSessionStart {
     ) -> Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode> {
         self.requested_ssh_runtime_mode.or_else(|| {
             self.launch_config.as_ref().and_then(|config| match config {
-                SessionLaunchConfig::Ssh(config) => Some(config.effective_runtime_mode()),
+                SessionLaunchConfig::Ssh(config) => Some(config.runtime_mode),
                 _ => None,
             })
         })

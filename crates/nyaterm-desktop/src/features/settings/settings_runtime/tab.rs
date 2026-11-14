@@ -303,6 +303,8 @@ mod tests {
             app.session.register_session_metadata(
                 "second",
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: None,
                     ssh_multiplex_key: None,
                     source_connection_id: None,

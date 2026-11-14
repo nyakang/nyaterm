@@ -6,6 +6,11 @@ use nyaterm_transport::{
 
 #[derive(Clone)]
 pub(crate) struct SessionRuntimeMetadata {
+    /// Set once by the worker confirmation event; never inferred from shared capabilities.
+    pub(crate) confirmed_ssh_runtime_mode:
+        Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
+    /// Delayed PTY registration precedes shell readiness.
+    pub(crate) pending_ssh_startup_command: Option<StartupCommandRequest>,
     pub(crate) ssh_config: Option<SshSessionConfig>,
     pub(crate) ssh_multiplex_key: Option<String>,
     pub(crate) source_connection_id: Option<String>,
@@ -13,6 +18,44 @@ pub(crate) struct SessionRuntimeMetadata {
     pub(crate) launch_config: SessionLaunchConfig,
     /// Backend closed while the tab is kept for reconnect (Tauri disconnected pane).
     pub(crate) disconnected: bool,
+}
+
+impl SessionRuntimeMetadata {
+    pub(crate) fn ssh_runtime_mode(
+        &self,
+    ) -> Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode> {
+        self.confirmed_ssh_runtime_mode
+            .or_else(|| self.ssh_config.as_ref().map(|config| config.runtime_mode))
+    }
+
+    /// A launch snapshot; the stored launch policy remains unchanged.
+    pub(crate) fn launch_config_for_restart(&self) -> SessionLaunchConfig {
+        let mut config = self.launch_config.clone();
+        if let SessionLaunchConfig::Ssh(ssh) = &mut config
+            && let Some(mode) = self.ssh_runtime_mode()
+        {
+            ssh.runtime_mode = mode;
+        }
+        config
+    }
+
+    pub(crate) fn confirm_ssh_runtime_mode(
+        &mut self,
+        mode: nyaterm_core::models::ssh_runtime::SshRuntimeMode,
+    ) -> bool {
+        if self.disconnected
+            || self.ssh_config.is_none()
+            || self.confirmed_ssh_runtime_mode.is_some()
+        {
+            return false;
+        }
+        self.confirmed_ssh_runtime_mode = Some(mode);
+        if mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
+            self.ai_execution_profile = AiExecutionProfile::Disabled;
+            self.pending_ssh_startup_command = None;
+        }
+        true
+    }
 }
 
 #[derive(Clone)]

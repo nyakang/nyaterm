@@ -79,6 +79,8 @@ fn session_lists_scroll_to_last_row_without_moving_search_or_footer(cx: &mut Tes
             app.session.register_session_metadata(
                 &format!("session-{index}"),
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: None,
                     ssh_multiplex_key: None,
                     source_connection_id: None,

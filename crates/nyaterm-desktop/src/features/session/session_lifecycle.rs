@@ -69,7 +69,7 @@ impl NyaTermApp {
         let custom_color = self.session.tab_color(&source_session_id);
         let workspace_split = self.session.start_take_pending_workspace_split();
 
-        match metadata.launch_config.clone() {
+        match metadata.launch_config_for_restart() {
             SessionLaunchConfig::AdbShell(config) => {
                 self.open_android_view(
                     config,
@@ -220,7 +220,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
-        let SessionLaunchConfig::Ssh(config) = metadata.launch_config.clone() else {
+        let SessionLaunchConfig::Ssh(config) = metadata.launch_config_for_restart() else {
             self.shell
                 .set_status("active session is not SSH".to_string());
             cx.notify();
@@ -521,10 +521,7 @@ impl NyaTermApp {
         self.session.mark_session_disconnected(&old_id);
         self.close_terminal_executions_for_session(&old_id, cx);
         if let Some(connection) = saved {
-            let ssh_runtime_mode = match &metadata.launch_config {
-                SessionLaunchConfig::Ssh(config) => Some(config.effective_runtime_mode()),
-                _ => None,
-            };
+            let ssh_runtime_mode = metadata.ssh_runtime_mode();
             self.continue_saved_connection_start(
                 connection,
                 SavedConnectionStartOptions {
@@ -568,7 +565,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        let launch_config = metadata.launch_config;
+        let launch_config = metadata.launch_config_for_restart();
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
         match launch_config {

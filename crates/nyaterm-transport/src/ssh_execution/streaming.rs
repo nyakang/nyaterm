@@ -112,11 +112,9 @@ pub async fn stream_ssh_command(
         };
         match message {
             Some(ChannelMsg::Success) => {
-                config.attempt.record_shell_reply(true);
                 let _ = send_event(&events, SshExecEvent::Started).await;
             }
             Some(ChannelMsg::Failure) => {
-                config.attempt.record_shell_reply(false);
                 let _ = send_event(&events, SshExecEvent::Failed).await;
                 break;
             }

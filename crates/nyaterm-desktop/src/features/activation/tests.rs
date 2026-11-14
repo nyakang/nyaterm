@@ -244,6 +244,8 @@ fn one_time_password_bypasses_saved_credentials_and_never_enters_restore_documen
         app.session.register_session_metadata(
             "temporary",
             SessionRuntimeMetadata {
+                confirmed_ssh_runtime_mode: None,
+                pending_ssh_startup_command: None,
                 ssh_config: Some(config.clone()),
                 ssh_multiplex_key: None,
                 source_connection_id: None,
@@ -291,6 +293,8 @@ fn split_restore_serialization_preserves_each_sessions_runtime_mode() {
             app.session.register_session_metadata(
                 id,
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: Some(config.clone()),
                     ssh_multiplex_key: None,
                     source_connection_id: Some(format!("saved-{id}")),

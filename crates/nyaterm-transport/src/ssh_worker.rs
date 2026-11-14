@@ -20,6 +20,7 @@ use crate::{
     SessionEvent, SftpCwdFollowMode, ShellEnvironmentCache, SshMultiplexHandle, SshSessionConfig,
     connection_attempt, prepare_x11_forwarding, ssh_mailbox, ssh_shell_integration, tmux,
 };
+use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
 use russh::{ChannelMsg, Disconnect, client};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -28,6 +29,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
+
+#[derive(Debug, thiserror::Error)]
+#[error("SSH shell request was rejected")]
+struct ShellRequestDenied;
+
+fn allows_sftp_fallback(config: &SshSessionConfig, error: &anyhow::Error) -> bool {
+    error.is::<ShellRequestDenied>()
+        && config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard
+        && config.remote_file_browser_enabled()
+}
 
 pub(crate) enum SshCommand {
     Write(ssh_mailbox::PendingWrite),
@@ -122,10 +133,11 @@ pub(crate) struct PendingSshIntegrationUpload {
 
 /// Worker readiness must not let tmux publish projections before its host is registered.
 async fn confirm_ssh_registration(
-    ready: &mpsc::Sender<Result<(), String>>,
+    ready: &mpsc::Sender<Result<Option<SshRuntimeMode>, String>>,
     registered: tokio::sync::oneshot::Receiver<()>,
+    mode: Option<SshRuntimeMode>,
 ) -> bool {
-    ready.send(Ok(())).is_ok() && registered.await.is_ok()
+    ready.send(Ok(mode)).is_ok() && registered.await.is_ok()
 }
 
 async fn discard_open_ssh_shell(session_id: &str, session: OpenSshShellSession) {
@@ -149,7 +161,7 @@ pub(crate) fn run_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
     command_rx: ssh_mailbox::Receiver,
-    ready_tx: mpsc::Sender<Result<(), String>>,
+    ready_tx: mpsc::Sender<Result<Option<SshRuntimeMode>, String>>,
     registered_rx: tokio::sync::oneshot::Receiver<()>,
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
@@ -184,7 +196,13 @@ pub(crate) fn run_ssh_worker(
             .await;
             match result {
                 Ok(()) => {
-                    if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                    if !confirm_ssh_registration(
+                        &ready_tx,
+                        registered_rx,
+                        Some(SshRuntimeMode::Sftp),
+                    )
+                    .await
+                    {
                         return;
                     }
                     run_sftp_only_session(
@@ -192,6 +210,7 @@ pub(crate) fn run_ssh_worker(
                         command_rx,
                         &event_queue,
                         multiplex.as_ref(),
+                        &sessions,
                     )
                     .await;
                 }
@@ -225,21 +244,25 @@ pub(crate) fn run_ssh_worker(
             match open_ssh_shell(&session_id, &config, multiplex.as_ref(), shell_environment).await
             {
                 Ok(session) => {
-                    if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                    if !confirm_ssh_registration(
+                        &ready_tx,
+                        registered_rx,
+                        Some(config.runtime_mode),
+                    )
+                    .await
+                    {
                         discard_open_ssh_shell(&session_id, session).await;
                         return;
                     }
+                    event_queue
+                        .push_async(SessionEvent::SshRuntimeModeConfirmed {
+                            session_id: session_id.clone(),
+                            mode: config.runtime_mode,
+                        })
+                        .await;
                     session
                 }
-                Err(_)
-                    if config.runtime_mode
-                        == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard
-                        && config.remote_file_browser_enabled()
-                        && multiplex.as_ref().is_some_and(|handle| {
-                            handle.shell_availability()
-                                == connection_attempt::ShellAvailability::Unavailable
-                        }) =>
-                {
+                Err(ref error) if allows_sftp_fallback(&config, error) && multiplex.is_some() => {
                     if let Err(error) = ssh_services
                         .probe_files(
                             &config,
@@ -250,8 +273,13 @@ pub(crate) fn run_ssh_worker(
                         let _ = ready_tx.send(Err(error.to_string()));
                         return;
                     }
-                    config.attempt.record_shell_reply(false);
-                    if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                    if !confirm_ssh_registration(
+                        &ready_tx,
+                        registered_rx,
+                        Some(SshRuntimeMode::Sftp),
+                    )
+                    .await
+                    {
                         return;
                     }
                     run_sftp_only_session(
@@ -259,6 +287,7 @@ pub(crate) fn run_ssh_worker(
                         command_rx,
                         &event_queue,
                         multiplex.as_ref(),
+                        &sessions,
                     )
                     .await;
                     return;
@@ -288,7 +317,7 @@ pub(crate) async fn run_deferred_ssh_worker(
     session_id: String,
     config: SshSessionConfig,
     mut command_rx: ssh_mailbox::Receiver,
-    ready_tx: mpsc::Sender<Result<(), String>>,
+    ready_tx: mpsc::Sender<Result<Option<SshRuntimeMode>, String>>,
     registered_rx: tokio::sync::oneshot::Receiver<()>,
     event_queue: SessionEventQueue,
     multiplex: Option<SshMultiplexHandle>,
@@ -302,7 +331,7 @@ pub(crate) async fn run_deferred_ssh_worker(
     let pending_session =
         match open_pending_ssh_shell(&config, multiplex.as_ref(), shell_environment).await {
             Ok(session) => {
-                if !confirm_ssh_registration(&ready_tx, registered_rx).await {
+                if !confirm_ssh_registration(&ready_tx, registered_rx, None).await {
                     disconnect_pending_ssh_shell(session).await;
                     return;
                 }
@@ -364,6 +393,12 @@ pub(crate) async fn run_deferred_ssh_worker(
     }
     match open_ssh_shell_from_pending(&session_id, &config, pending_session, dimensions).await {
         Ok(open_session) => {
+            event_queue
+                .push_async(SessionEvent::SshRuntimeModeConfirmed {
+                    session_id: session_id.clone(),
+                    mode: config.runtime_mode,
+                })
+                .await;
             run_open_ssh_shell_session(
                 session_id,
                 open_session,
@@ -377,15 +412,7 @@ pub(crate) async fn run_deferred_ssh_worker(
             )
             .await;
         }
-        Err(_)
-            if config.runtime_mode
-                == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Standard
-                && config.remote_file_browser_enabled()
-                && multiplex.as_ref().is_some_and(|handle| {
-                    handle.shell_availability()
-                        == connection_attempt::ShellAvailability::Unavailable
-                }) =>
-        {
+        Err(ref error) if allows_sftp_fallback(&config, error) && multiplex.is_some() => {
             if let Err(error) = ssh_services
                 .probe_files(
                     &config,
@@ -396,8 +423,14 @@ pub(crate) async fn run_deferred_ssh_worker(
                 send_session_error(&event_queue, &session_id, error);
                 return;
             }
-            config.attempt.record_shell_reply(false);
-            run_sftp_only_session(&session_id, command_rx, &event_queue, multiplex.as_ref()).await;
+            run_sftp_only_session(
+                &session_id,
+                command_rx,
+                &event_queue,
+                multiplex.as_ref(),
+                &sessions,
+            )
+            .await;
         }
         Err(error) => {
             send_session_error(&event_queue, &session_id, error);
@@ -410,7 +443,20 @@ pub(crate) async fn run_sftp_only_session(
     mut commands: ssh_mailbox::Receiver,
     events: &SessionEventQueue,
     multiplex: Option<&SshMultiplexHandle>,
+    sessions: &Mutex<HashMap<String, ManagedSession>>,
 ) {
+    // Input authorization belongs to this session, never to the shared connection.
+    if let Ok(mut sessions) = sessions.lock()
+        && let Some(ManagedSession::Ssh(session)) = sessions.get_mut(session_id)
+    {
+        session.shell_enabled = false;
+    }
+    events
+        .push_async(SessionEvent::SshRuntimeModeConfirmed {
+            session_id: session_id.to_string(),
+            mode: nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp,
+        })
+        .await;
     // The caller retains the multiplexed SSH connection. Writes queued before
     // capability detection are discarded, never replayed as shell commands.
     loop {
@@ -1088,7 +1134,7 @@ pub(crate) async fn open_ssh_shell_from_pending(
         .as_ref()
         .map(|m| &m.inner.attempt)
         .unwrap_or(&config.attempt);
-    attempt.ensure_shell_available()?;
+    // Every shell channel needs its own reply, including multiplexed sessions.
     let mut early_output = Vec::new();
     let mut channel = match &mut handle {
         SshShellHandle::Dedicated(handle) => handle.channel_open_session().await?,
@@ -1186,7 +1232,11 @@ pub(crate) async fn open_ssh_shell_from_pending(
             multiplex.unregister_x11_sender(session_id).await;
         }
         let _ = channel.close().await;
-        return Err(error.into());
+        return Err(if matches!(error, russh::Error::RequestDenied) {
+            ShellRequestDenied.into()
+        } else {
+            error.into()
+        });
     }
     attempt.record_shell_reply(true);
     config.attempt.record_shell_reply(true);
@@ -1386,7 +1436,51 @@ mod notice_tests {
         let queue = SessionEventQueue::new();
         let (sender, receiver) = ssh_mailbox::channel();
         drop(sender);
-        run_sftp_only_session("sftp", receiver, &queue, None).await;
-        assert!(queue.drain(10).events.is_empty());
+        run_sftp_only_session(
+            "sftp",
+            receiver,
+            &queue,
+            None,
+            &std::sync::Mutex::new(std::collections::HashMap::new()),
+        )
+        .await;
+        let events = queue.drain(10).events;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            SessionEvent::SshRuntimeModeConfirmed {
+                mode: nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp,
+                ..
+            }
+        ));
+    }
+}
+
+#[cfg(test)]
+mod fallback_policy_tests {
+    use super::{ShellRequestDenied, allows_sftp_fallback};
+    use crate::{SshSessionConfig, SshSessionProfile};
+    use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+
+    #[test]
+    fn fallback_requires_this_shell_rejection_and_an_enabled_file_policy() {
+        let mut config = SshSessionConfig::default();
+        config.attempt.record_shell_reply(false);
+        for error in [
+            anyhow::anyhow!("channel open failed"),
+            russh::Error::ConnectionTimeout.into(),
+            crate::ssh_execution::ExecRequestDenied.into(),
+        ] {
+            assert!(!allows_sftp_fallback(&config, &error));
+        }
+        assert!(allows_sftp_fallback(&config, &ShellRequestDenied.into()));
+        config.runtime_mode = SshRuntimeMode::Terminal;
+        assert!(!allows_sftp_fallback(&config, &ShellRequestDenied.into()));
+        config.runtime_mode = SshRuntimeMode::Standard;
+        config.profile = SshSessionProfile::NetworkDevice;
+        assert!(!allows_sftp_fallback(&config, &ShellRequestDenied.into()));
+        config.profile = SshSessionProfile::default();
+        config.sftp.enabled = false;
+        assert!(!allows_sftp_fallback(&config, &ShellRequestDenied.into()));
     }
 }

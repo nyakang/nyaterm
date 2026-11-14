@@ -525,6 +525,7 @@ fn bridge_event_session_id(event: &SessionEvent) -> &str {
         | SessionEvent::CleanupFailed { session_id, .. }
         | SessionEvent::TmuxState { session_id, .. }
         | SessionEvent::Notice { session_id, .. }
+        | SessionEvent::SshRuntimeModeConfirmed { session_id, .. }
         | SessionEvent::Error { session_id, .. } => session_id,
     }
 }
@@ -552,6 +553,7 @@ impl SessionEventBridgeQueue {
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
                 | SessionEvent::Notice { session_id, .. }
+                | SessionEvent::SshRuntimeModeConfirmed { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id.as_str()) {
@@ -661,6 +663,7 @@ impl SessionEventBridgeQueueInner {
             | SessionEvent::CleanupFailed { .. }
             | SessionEvent::TmuxState { .. }
             | SessionEvent::Notice { .. }
+            | SessionEvent::SshRuntimeModeConfirmed { .. }
             | SessionEvent::Error { .. } => {}
         }
         self.events.push_back(event);
@@ -721,6 +724,7 @@ impl SessionEventBridgeQueueInner {
                 | SessionEvent::CleanupFailed { .. }
                 | SessionEvent::TmuxState { .. }
                 | SessionEvent::Notice { .. }
+                | SessionEvent::SshRuntimeModeConfirmed { .. }
                 | SessionEvent::Error { .. } => {}
             }
             events.push(event);
@@ -919,7 +923,7 @@ fn bridge_route_event(
             sideband_probe_sessions.remove(&session_id);
             state.push_ui_event(&mut control, SessionEvent::Exited { session_id, reason });
         }
-        event @ SessionEvent::Notice { .. } => {
+        event @ (SessionEvent::Notice { .. } | SessionEvent::SshRuntimeModeConfirmed { .. }) => {
             flush_bridge_direct_outputs(frame_pipeline, pending_direct_outputs);
             state.push_ui_event(&mut control, event);
         }
@@ -1779,5 +1783,42 @@ mod notice_tests {
         let drain = queue.drain_with_output_budget(1, 0);
         assert!(matches!(drain.events[0], SessionEvent::Notice { .. }));
         assert_eq!(drain.stats.drained_ui_output_bytes, 0);
+    }
+}
+
+#[cfg(test)]
+mod ssh_mode_tests {
+    use super::SessionEventBridgeQueue;
+    use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+    use nyaterm_transport::SessionEvent;
+
+    #[test]
+    fn confirmation_survives_transfer_before_output_and_drains_without_output_budget() {
+        let queue = SessionEventBridgeQueue::new();
+        queue.push(SessionEvent::SshRuntimeModeConfirmed {
+            session_id: "ssh".into(),
+            mode: SshRuntimeMode::Standard,
+        });
+        queue.push(SessionEvent::Output {
+            session_id: "ssh".into(),
+            data: b"banner".to_vec(),
+        });
+        let moved = queue.take_sessions(&["ssh".into()]);
+        assert!(matches!(
+            moved[0],
+            SessionEvent::SshRuntimeModeConfirmed { .. }
+        ));
+        assert!(matches!(moved[1], SessionEvent::Output { .. }));
+        assert_eq!(queue.queued_output_bytes(), 0);
+        for event in moved {
+            queue.push(event);
+        }
+        let drain = queue.drain_with_output_budget(1, 0);
+        assert!(matches!(
+            drain.events[0],
+            SessionEvent::SshRuntimeModeConfirmed { .. }
+        ));
+        assert_eq!(drain.stats.drained_ui_output_bytes, 0);
+        assert_eq!(queue.queued_output_bytes(), 6);
     }
 }

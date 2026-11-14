@@ -89,7 +89,6 @@ fn tmux_host_close_releases_full_pane_output_without_cancelling_other_hosts() {
             crate::ManagedSession::Ssh(crate::SshChannelTransport {
                 info,
                 shell_enabled: true,
-                attempt: SshSessionConfig::default().attempt,
                 command_tx,
                 tmux_tx,
                 tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -4037,7 +4036,6 @@ fn manager_drop_wakes_pane_output_and_unlocks_registry_before_joining_ssh() {
         crate::ManagedSession::Ssh(crate::SshChannelTransport {
             info,
             shell_enabled: true,
-            attempt: SshSessionConfig::default().attempt,
             command_tx,
             tmux_tx,
             tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),

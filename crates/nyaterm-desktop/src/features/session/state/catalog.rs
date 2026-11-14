@@ -248,6 +248,7 @@ impl SessionFeatureState {
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
                 | SessionEvent::Notice { session_id, .. }
+                | SessionEvent::SshRuntimeModeConfirmed { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if selected.contains(session_id) {
@@ -451,8 +452,16 @@ impl SessionFeatureState {
     pub(in crate::features) fn active_remote_probes_enabled(&self) -> bool {
         self.active_is_local_pty()
             || self
-                .active_ssh_config()
-                .is_some_and(|config| config.remote_stats_enabled())
+                .active_id()
+                .and_then(|id| self.metadata(id))
+                .is_some_and(|metadata| {
+                    metadata.ssh_runtime_mode()
+                        != Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+                        && metadata
+                            .ssh_config
+                            .as_ref()
+                            .is_some_and(|config| config.remote_stats_enabled())
+                })
     }
     pub(in crate::features) fn active_is_local_pty(&self) -> bool {
         self.active

@@ -578,11 +578,8 @@ impl NyaTermApp {
     pub(in crate::features) fn session_is_sftp_only(&self, id: &str) -> bool {
         self.session
             .metadata(id)
-            .and_then(|metadata| metadata.ssh_config.as_ref())
-            .is_some_and(|config| {
-                config.effective_runtime_mode()
-                    == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp
-            })
+            .and_then(|metadata| metadata.ssh_runtime_mode())
+            == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
     }
 
     pub(in crate::features) fn ensure_sftp_session_view(

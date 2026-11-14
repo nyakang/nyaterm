@@ -666,6 +666,8 @@ mod restore_activation_tests {
         app.session.register_session_metadata(
             session_id,
             SessionRuntimeMetadata {
+                confirmed_ssh_runtime_mode: None,
+                pending_ssh_startup_command: None,
                 ssh_config: Some(SshSessionConfig::default()),
                 ssh_multiplex_key: None,
                 source_connection_id: None,

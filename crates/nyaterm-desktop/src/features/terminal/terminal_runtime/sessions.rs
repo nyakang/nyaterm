@@ -17,6 +17,20 @@ impl NyaTermApp {
         startup_command: StartupCommandRequest,
         cx: &mut Context<Self>,
     ) {
+        if let Some(metadata) = self.session.metadata_mut(&session_id) {
+            if metadata.disconnected
+                || metadata.ssh_runtime_mode()
+                    == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+            {
+                return;
+            }
+            if metadata.ssh_config.is_some() && metadata.confirmed_ssh_runtime_mode.is_none() {
+                metadata.pending_ssh_startup_command = Some(startup_command);
+                return;
+            }
+        } else {
+            return;
+        }
         let command = normalize_startup_command(&startup_command.command);
         if command.trim().is_empty() {
             return;
@@ -33,6 +47,14 @@ impl NyaTermApp {
                     .await;
             }
             let _ = this.update(cx, |this, cx| {
+                if this
+                    .session
+                    .metadata(&session_id)
+                    .is_none_or(|metadata| metadata.disconnected)
+                    || this.session_is_sftp_only(&session_id)
+                {
+                    return;
+                }
                 if this.send_terminal_input_to_session(session_id, command.into_bytes(), cx) {
                     this.shell.set_status("startup command sent".to_string());
                     cx.notify();

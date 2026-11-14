@@ -25,6 +25,15 @@ impl server::Handler for Peer {
         Ok(server::Auth::Accept)
     }
 
+    async fn shell_request(
+        &mut self,
+        channel: russh::ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_failure(channel)?;
+        Ok(())
+    }
+
     async fn channel_open_session(
         &mut self,
         channel: russh::Channel<server::Msg>,
@@ -255,3 +264,96 @@ async fn file_session_without_an_injected_probe_returns_a_configuration_error() 
 }
 
 mod concurrent_start;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_denial_confirms_sftp_only_after_successful_probe() {
+    use crate::SessionEvent;
+    use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+    for deferred in [false, true] {
+        for fail in [false, true] {
+            let (mut config, server) = start_server().await;
+            config.deferred_pty = deferred;
+            let entered = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let services = SshSessionServices {
+                file_session_probe: Some(Arc::new(Probe {
+                    entered: entered.clone(),
+                    release: release.clone(),
+                    fail,
+                })),
+            };
+            let (manager, multiplex, config) = tokio::task::spawn_blocking(move || {
+                let multiplex = open_ssh_multiplex_handle(config.clone()).unwrap();
+                (
+                    SessionManager::with_ssh_services(services),
+                    multiplex,
+                    config,
+                )
+            })
+            .await
+            .unwrap();
+            let manager = Arc::new(manager);
+            let start_manager = manager.clone();
+            let start_multiplex = multiplex.clone();
+            let job = tokio::task::spawn_blocking(move || {
+                start_manager.create_ssh_session_with_multiplex(config, start_multiplex)
+            });
+            tokio::time::timeout(Duration::from_secs(10), entered.notified())
+                .await
+                .unwrap();
+            assert!(
+                manager
+                    .drain_events(64)
+                    .unwrap()
+                    .events
+                    .iter()
+                    .all(|event| !matches!(event, SessionEvent::SshRuntimeModeConfirmed { .. }))
+            );
+            release.notify_one();
+            let result = tokio::time::timeout(Duration::from_secs(10), job)
+                .await
+                .unwrap()
+                .unwrap();
+            if !deferred && fail {
+                assert!(result.is_err());
+            } else {
+                let session = result.unwrap();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let events = manager.drain_events(64).unwrap().events;
+                        if fail {
+                            assert!(events.iter().all(|event| !matches!(
+                                event,
+                                SessionEvent::SshRuntimeModeConfirmed { .. }
+                            )));
+                            if events
+                                .iter()
+                                .any(|event| matches!(event, SessionEvent::Error { .. }))
+                            {
+                                break;
+                            }
+                        } else if events.iter().any(|event| {
+                            matches!(
+                                event,
+                                SessionEvent::SshRuntimeModeConfirmed {
+                                    mode: SshRuntimeMode::Sftp,
+                                    ..
+                                }
+                            )
+                        }) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                manager.close(&session.id).unwrap();
+            }
+            tokio::task::spawn_blocking(move || multiplex.disconnect().unwrap())
+                .await
+                .unwrap();
+            server.abort();
+        }
+    }
+}

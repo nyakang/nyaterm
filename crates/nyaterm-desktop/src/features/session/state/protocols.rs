@@ -40,6 +40,7 @@ impl SessionFeatureState {
                 | SessionEvent::CleanupFailed { session_id, .. }
                 | SessionEvent::TmuxState { session_id, .. }
                 | SessionEvent::Notice { session_id, .. }
+                | SessionEvent::SshRuntimeModeConfirmed { session_id, .. }
                 | SessionEvent::Error { session_id, .. } => session_id,
             };
             if id == session_id {

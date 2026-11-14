@@ -1214,6 +1214,8 @@ mod tests {
             app.session.register_session_metadata(
                 "remote-panel-test",
                 crate::models::SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: Some(nyaterm_transport::SshSessionConfig::default()),
                     ssh_multiplex_key: None,
                     source_connection_id: None,
@@ -1708,6 +1710,8 @@ mod isolation_tests {
             app.session.register_session_metadata(
                 "ssh-a",
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: Some(SshSessionConfig::default()),
                     ssh_multiplex_key: None,
                     source_connection_id: None,
@@ -1992,6 +1996,8 @@ mod isolation_tests {
             app.session.register_session_metadata(
                 "ssh-a",
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: Some(SshSessionConfig::default()),
                     ssh_multiplex_key: None,
                     source_connection_id: None,
@@ -2406,6 +2412,8 @@ mod isolation_tests {
             app.session.register_session_metadata(
                 "ssh-a",
                 SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
                     ssh_config: Some(SshSessionConfig::default()),
                     ssh_multiplex_key: None,
                     source_connection_id: None,

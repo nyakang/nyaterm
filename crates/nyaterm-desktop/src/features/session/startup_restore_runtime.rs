@@ -230,8 +230,8 @@ impl NyaTermApp {
             tab_color,
         );
         tab.ssh_runtime_mode = metadata
-            .and_then(|meta| meta.ssh_config.as_ref())
-            .map(|config| config.effective_runtime_mode().as_str().to_string());
+            .and_then(|meta| meta.ssh_runtime_mode())
+            .map(|mode| mode.as_str().to_string());
         if let Some(RestorablePaneNode::Leaf {
             ssh_runtime_mode, ..
         }) = tab.root.as_mut()
@@ -644,6 +644,8 @@ impl NyaTermApp {
                 self.register_session(
                     &session_id,
                     crate::models::SessionRuntimeMetadata {
+                        confirmed_ssh_runtime_mode: None,
+                        pending_ssh_startup_command: None,
                         ssh_config: None,
                         ssh_multiplex_key: None,
                         source_connection_id: Some(connection.id.clone()),
@@ -709,6 +711,8 @@ impl NyaTermApp {
                 self.register_session(
                     &session_id,
                     crate::models::SessionRuntimeMetadata {
+                        confirmed_ssh_runtime_mode: None,
+                        pending_ssh_startup_command: None,
                         ssh_config: None,
                         ssh_multiplex_key: None,
                         source_connection_id: Some(connection.id.clone()),
@@ -856,6 +860,8 @@ mod tests {
         app.register_session(
             id,
             SessionRuntimeMetadata {
+                confirmed_ssh_runtime_mode: None,
+                pending_ssh_startup_command: None,
                 ssh_config: Some(config.clone()),
                 ssh_multiplex_key: None,
                 source_connection_id: Some(connection_id.to_string()),
@@ -864,6 +870,81 @@ mod tests {
                 disconnected: true,
             },
         );
+    }
+
+    #[test]
+    fn confirmed_ssh_mode_drives_view_and_restore_despite_auxiliary_errors() {
+        use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+        use nyaterm_transport::SessionEvent;
+        for mode in [
+            SshRuntimeMode::Standard,
+            SshRuntimeMode::Terminal,
+            SshRuntimeMode::Sftp,
+        ] {
+            let root = TestConfigDir::new("nyaterm-confirmed-ssh-mode");
+            let mut cx = TestAppContext::single();
+            let _cleanup = TestAppCleanup::new(&cx);
+            let app = app_with_visible_ssh_session(&mut cx, root.path(), "ssh-mode");
+            app.update(&mut cx, |app, cx| {
+                let metadata = app.session.metadata_mut("ssh-mode").unwrap();
+                metadata.disconnected = false;
+                metadata.ai_execution_profile = AiExecutionProfile::Posix;
+                metadata.pending_ssh_startup_command = Some(crate::models::StartupCommandRequest {
+                    command: "echo test".into(),
+                    delay_ms: 60_000,
+                });
+                app.session.extend_pending_events([
+                    SessionEvent::SshRuntimeModeConfirmed {
+                        session_id: "ssh-mode".into(),
+                        mode,
+                    },
+                    SessionEvent::Error {
+                        session_id: "ssh-mode".into(),
+                        message: "exec request rejected".into(),
+                    },
+                    SessionEvent::Error {
+                        session_id: "ssh-mode".into(),
+                        message: "resource probe timed out".into(),
+                    },
+                    // A stale/duplicate confirmation cannot flip an established mode.
+                    SessionEvent::SshRuntimeModeConfirmed {
+                        session_id: "ssh-mode".into(),
+                        mode: SshRuntimeMode::Sftp,
+                    },
+                ]);
+                app.drain_session_events(cx);
+                assert_eq!(
+                    app.session_is_sftp_only("ssh-mode"),
+                    mode == SshRuntimeMode::Sftp
+                );
+                let metadata = app.session.metadata("ssh-mode").unwrap();
+                assert_eq!(metadata.confirmed_ssh_runtime_mode, Some(mode));
+                assert!(metadata.pending_ssh_startup_command.is_none());
+                assert_eq!(
+                    metadata.ai_execution_profile,
+                    if mode == SshRuntimeMode::Sftp {
+                        AiExecutionProfile::Disabled
+                    } else {
+                        AiExecutionProfile::Posix
+                    }
+                );
+                let SessionLaunchConfig::Ssh(restart) = metadata.launch_config_for_restart() else {
+                    panic!("SSH launch expected")
+                };
+                assert_eq!(restart.runtime_mode, mode);
+                let info = app.session.session_info("ssh-mode").unwrap();
+                let tab = app.serialize_open_tab_for_session(&info);
+                assert_eq!(
+                    tab.ssh_runtime_mode
+                        .as_deref()
+                        .and_then(SshRuntimeMode::parse),
+                    Some(mode)
+                );
+                let encoded = serde_json::to_string(&tab).unwrap();
+                let decoded: RestorableOpenTab = serde_json::from_str(&encoded).unwrap();
+                assert_eq!(decoded.ssh_runtime_mode, tab.ssh_runtime_mode);
+            });
+        }
     }
 
     #[test]

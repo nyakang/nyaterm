@@ -702,10 +702,6 @@ impl SessionManager {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (registered_tx, registered_rx) = tokio::sync::oneshot::channel();
         let event_queue = self.event_queue.clone();
-        let attempt = multiplex
-            .as_ref()
-            .map(|handle| handle.inner.attempt.clone())
-            .unwrap_or_else(|| config.attempt.clone());
         let worker_config = config.clone();
         let worker_session_id = session_id.clone();
         let shell_environment = self.shell_environment();
@@ -731,8 +727,8 @@ impl SessionManager {
             })
             .map_err(SessionError::Worker)?;
 
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
+        let established_mode = match ready_rx.recv() {
+            Ok(Ok(mode)) => mode,
             Ok(Err(message)) => {
                 drop(registered_tx);
                 let _ = worker_thread.join();
@@ -749,7 +745,7 @@ impl SessionManager {
                     source: anyhow::anyhow!("SSH worker exited before readiness: {error}"),
                 });
             }
-        }
+        };
 
         let info = SessionInfo {
             id: session_id.clone(),
@@ -762,9 +758,8 @@ impl SessionManager {
         let request_attempt = config.attempt.clone();
         let mut session = SshChannelTransport {
             info: info.clone(),
-            shell_enabled: config.runtime_mode
-                != nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp,
-            attempt,
+            shell_enabled: established_mode
+                != Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp),
             command_tx,
             tmux_tx,
             tmux_active,

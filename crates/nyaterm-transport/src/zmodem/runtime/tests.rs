@@ -8,7 +8,7 @@ use crate::zmodem::{
 };
 use crate::{
     ManagedSession, SessionEvent, SessionInfo, SessionKind, SessionManager, SshChannelTransport,
-    SshCommand, SshSessionConfig, ssh_mailbox,
+    SshCommand, ssh_mailbox,
 };
 
 fn output(data: &[u8]) -> SessionEvent {
@@ -59,7 +59,6 @@ fn mock_session() -> (Arc<SessionManager>, ssh_mailbox::Receiver) {
                 cols: 80,
                 rows: 24,
             },
-            attempt: SshSessionConfig::default().attempt,
             command_tx,
             tmux_tx: crate::tmux::mailbox::channel().0,
             tmux_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),

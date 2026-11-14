@@ -397,7 +397,7 @@ async fn runtime_modes_send_only_the_expected_server_requests_and_release_sessio
                     let handle =
                         nyaterm_transport::open_ssh_multiplex_handle(config.clone()).unwrap();
                     // A multiplexed copy has its own cancellation attempt while
-                    // observing shell capability discovered on the shared connection.
+                    // receiving its own established-mode confirmation.
                     config.bind_attempt(Default::default());
                     let observed_config = config.clone();
                     let manager = nyaterm_transport::SessionManager::with_ssh_services(
@@ -418,10 +418,17 @@ async fn runtime_modes_send_only_the_expected_server_requests_and_release_sessio
                             );
                         }
                         if mode == SshRuntimeMode::Standard {
-                            assert_eq!(
-                                observed_config.effective_runtime_mode(),
-                                SshRuntimeMode::Sftp
-                            );
+                            assert_eq!(observed_config.runtime_mode, SshRuntimeMode::Standard);
+                            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                            loop {
+                                if manager.drain_events(64).unwrap().events.iter().any(|event| matches!(event,
+                                    nyaterm_transport::SessionEvent::SshRuntimeModeConfirmed { mode: SshRuntimeMode::Sftp, .. })) {
+                                    break;
+                                }
+                                assert!(std::time::Instant::now() < deadline, "SFTP mode was not confirmed");
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                            assert!(manager.write(&session.id, b"never execute\r").is_err());
                         }
                         manager.close(&session.id).unwrap();
                     }

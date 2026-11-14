@@ -73,6 +73,8 @@ mod tests {
         app.session.register_session_metadata(
             session_id,
             crate::models::SessionRuntimeMetadata {
+                confirmed_ssh_runtime_mode: None,
+                pending_ssh_startup_command: None,
                 ssh_config: ssh.then(nyaterm_transport::SshSessionConfig::default),
                 ssh_multiplex_key: None,
                 source_connection_id: None,

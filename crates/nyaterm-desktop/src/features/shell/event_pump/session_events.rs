@@ -323,6 +323,24 @@ impl NyaTermApp {
                         root_chrome_dirty |=
                             self.handle_session_tmux_state_event(session_id, *state, cx);
                     }
+                    SessionEvent::SshRuntimeModeConfirmed { session_id, mode } => {
+                        self.flush_pending_session_frame_outputs(
+                            &mut pending_frame_outputs,
+                            &mut drain_timings,
+                        );
+                        if !self.terminal.session_id_is_retired(&session_id)
+                            && let Some(metadata) = self.session.metadata_mut(&session_id)
+                            && metadata.confirm_ssh_runtime_mode(mode)
+                        {
+                            let startup = metadata.pending_ssh_startup_command.take();
+                            if mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
+                                self.ensure_sftp_session_view(&session_id, cx);
+                            } else if let Some(startup) = startup {
+                                self.schedule_startup_command(session_id, startup, cx);
+                            }
+                            root_chrome_dirty = true;
+                        }
+                    }
                     SessionEvent::Exited { session_id, reason } => {
                         self.flush_pending_session_frame_outputs(
                             &mut pending_frame_outputs,
