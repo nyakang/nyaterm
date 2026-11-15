@@ -117,7 +117,20 @@ impl NyaTermApp {
                 CommandSuggestionSuppression::None;
         }
         if !was_suppressed && text.contains(['\r', '\n']) {
-            let submitted = get_tracked_submission_command(self.terminal.editing.predicted_input());
+            let mut submitted =
+                get_tracked_submission_command(self.terminal.editing.predicted_input());
+            if submitted.is_empty() {
+                // A tab completion desyncs the tracker, so a tab-completed
+                // command line is invisible to it. On hosts without shell
+                // integration nothing reports the executed line either, and
+                // the raw keystroke bytes only carry the typed prefix. The
+                // navigation evidence already recovered the submitted command
+                // from the prompt line the terminal echoed (#1246).
+                submitted = candidate
+                    .as_ref()
+                    .map(|evidence| evidence.command.clone())
+                    .unwrap_or_default();
+            }
             if !submitted.is_empty() {
                 if command_starts_suggestion_suppressing_program(&submitted) {
                     self.terminal.assist.command_suggestion_suppression =
@@ -527,6 +540,34 @@ mod tests {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{TerminalBufferCellPos, TerminalSelection};
     use crate::test_support::TestConfigDir;
+
+    #[test]
+    fn tab_completed_submission_is_learned_from_the_visible_prompt_line() {
+        // Hosts without shell integration cannot report the executed command,
+        // so a tab-completed line must be learned from the prompt line the
+        // terminal already echoed. The tracker alone stops at the tab desync
+        // and the raw keystroke bytes only carry the typed prefix (#1246).
+        let dir = TestConfigDir::new("nyaterm-tab-completion-history");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            // Busybox-style unmarked prompt; the completion echo is on screen.
+            app.terminal.seed_session_view(
+                "s1".into(),
+                "root@embedded:~# git checkout".into(),
+                "UTF-8",
+            );
+            app.note_shell_editing_input(b"git ch", cx);
+            app.note_shell_editing_input(b"\t", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            assert_eq!(
+                app.terminal.assist.pending_command_history_entry.as_deref(),
+                Some("git checkout"),
+                "tab-completed submission must be learned from the echoed prompt line"
+            );
+        });
+    }
 
     #[test]
     fn a_background_disconnect_allows_a_fresh_binding_on_reconnect() {
