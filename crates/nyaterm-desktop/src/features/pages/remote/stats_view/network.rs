@@ -1,14 +1,13 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Context, Entity, FontWeight, Hsla, IntoElement, UniformListScrollHandle, div, prelude::*, px,
-    rgb, uniform_list,
+    Context, Entity, FontWeight, Hsla, IntoElement, ScrollHandle, div, prelude::*, px, rgb,
 };
 use nyaterm_remote_ops::stats::{NetworkInfo, NetworkRateStatus};
 use nyaterm_ui::plot::{NyaLinePlot, NyaLineSeries};
 use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaButton, NyaButtonVariant, NyaScrollable, NyaSelect,
-    NyaSelectState, NyaTooltip,
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaButton, NyaButtonVariant, NyaCollapsible, NyaScrollable,
+    NyaSelect, NyaSelectState, NyaTooltip,
 };
 use rust_i18n::t;
 
@@ -19,10 +18,14 @@ use crate::features::shell::gpui_code_font_family;
 use crate::features::view_widgets::mono_icon;
 use crate::theme::ThemePalette;
 
+const NETWORK_AXIS_WIDTH_PX: f32 = 28.;
+const NETWORK_INTERFACE_ROW_HEIGHT_PX: f32 = 24.;
+const NETWORK_INTERFACE_VISIBLE_ROWS: usize = 5;
+
 pub(in crate::features::pages::remote) struct NetworkCardPresentation {
     pub now: Instant,
     pub interval: Duration,
-    pub scroll: UniformListScrollHandle,
+    pub scroll: ScrollHandle,
 }
 
 pub(super) fn resource_network_card(
@@ -53,6 +56,7 @@ pub(super) fn resource_network_card(
         .gap_2()
         .child(
             div()
+                .debug_selector(|| "stats-network-metrics".to_string())
                 .grid()
                 .grid_cols(2)
                 .gap_2()
@@ -85,17 +89,7 @@ pub(super) fn resource_network_card(
             rx_color,
             tx_color,
             cx,
-        ))
-        .child(
-            div()
-                .text_size(px(10.))
-                .text_color(rgb(palette.text_dimmed))
-                .child(network_updated_text(
-                    state,
-                    presentation.now,
-                    presentation.interval,
-                )),
-        );
+        ));
     resource_section_card_with_action(
         palette,
         "icons/network.svg",
@@ -171,7 +165,7 @@ fn network_history_chart(
     .x_range(scale.x_range)
     .y_max(scale.maximum);
     let y_axis = div()
-        .w(px(36.))
+        .w(px(NETWORK_AXIS_WIDTH_PX))
         .flex_none()
         .h_full()
         .py(px(4.))
@@ -203,8 +197,8 @@ fn network_history_chart(
                     div()
                         .flex()
                         .gap_2()
-                        .child(network_legend("RX", rx_color))
-                        .child(network_legend("TX", tx_color))
+                        .child(network_legend("RX", "icons/arrow-down.svg", rx_color))
+                        .child(network_legend("TX", "icons/fe/up.svg", tx_color))
                         .child(scale.unit),
                 )
                 .child(
@@ -222,21 +216,23 @@ fn network_history_chart(
         )
         .child(
             div()
+                .debug_selector(|| "stats-network-chart-frame".to_string())
                 .h(px(84.))
                 .w_full()
                 .flex()
-                .gap_1()
+                .gap(px(4.))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface))
                 .child(y_axis)
                 .child(
                     div()
+                        .debug_selector(|| "stats-network-chart-plot".to_string())
                         .relative()
                         .flex_1()
                         .min_w_0()
                         .h_full()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(rgb(palette.border))
-                        .bg(rgb(palette.surface))
                         .child(plot)
                         .when(scale.available_points < 2, |chart| {
                             chart.child(
@@ -257,15 +253,39 @@ fn network_history_chart(
         )
         .child(
             div()
-                .ml(px(44.))
-                .mr(px(4.))
+                .w_full()
+                // Match the frame's border and axis column; the inner padding
+                // matches NyaLinePlot's four-pixel paint inset.
+                .px(px(1.))
                 .flex()
-                .justify_between()
+                .gap(px(4.))
                 .text_size(px(9.))
                 .text_color(rgb(palette.text_dimmed))
-                .child(t!("resourceMonitor.networkSecondsAgo", count = 60).to_string())
-                .child(t!("resourceMonitor.networkSecondsAgo", count = 30).to_string())
-                .child(t!("resourceMonitor.networkNow").to_string()),
+                .child(div().w(px(NETWORK_AXIS_WIDTH_PX)).flex_none())
+                .child(
+                    div()
+                        .debug_selector(|| "stats-network-chart-ticks".to_string())
+                        .flex_1()
+                        .min_w_0()
+                        .px(px(4.))
+                        .grid()
+                        .grid_cols(3)
+                        .child(
+                            div().child(
+                                t!("resourceMonitor.networkSecondsAgo", count = 60).to_string(),
+                            ),
+                        )
+                        .child(
+                            div().text_center().child(
+                                t!("resourceMonitor.networkSecondsAgo", count = 30).to_string(),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_right()
+                                .child(t!("resourceMonitor.networkNow").to_string()),
+                        ),
+                ),
         )
         .child(
             div()
@@ -287,55 +307,72 @@ fn axis_number(value: f64) -> String {
 fn network_interfaces(
     palette: ThemePalette,
     state: &StatsPresentationState,
-    scroll: &UniformListScrollHandle,
+    scroll: &ScrollHandle,
     rx_color: Hsla,
     tx_color: Hsla,
     cx: &mut Context<RemoteMonitorPanel>,
-) -> gpui::Div {
+) -> NyaCollapsible {
     let count = state.data.as_ref().map_or(0, |stats| stats.networks.len());
-    let mut body = div().flex().flex_col().gap_1().child(
-        NyaButton::new(
-            "stats-network-interfaces-toggle",
-            t!("resourceMonitor.interfaceRates", count = count).to_string(),
+    NyaCollapsible::new()
+        .open(state.network_interfaces_expanded)
+        .w_full()
+        .gap_1()
+        .child(
+            div()
+                .debug_selector(|| "stats-network-interfaces-trigger".to_string())
+                .child(
+                    NyaButton::new(
+                        "stats-network-interfaces-toggle",
+                        t!("resourceMonitor.interfaceRates", count = count).to_string(),
+                    )
+                    .variant(NyaButtonVariant::Ghost)
+                    .small()
+                    .compact()
+                    .height(px(24.))
+                    .full_width()
+                    .label_left()
+                    .text_size(px(11.))
+                    .icon(if state.network_interfaces_expanded {
+                        "icons/chevron-down.svg"
+                    } else {
+                        "icons/menu/chevron-right.svg"
+                    })
+                    .on_click(cx.listener(|panel, _, _, cx| {
+                        panel.with_app(cx, |app, _cx| {
+                            if let Some(id) = app.session.active_id().map(str::to_string) {
+                                app.remote_ops.toggle_stats_network_interfaces(&id);
+                            }
+                        });
+                    })),
+                ),
         )
-        .variant(NyaButtonVariant::Ghost)
-        .small()
-        .compact()
-        .height(px(24.))
-        .full_width()
-        .label_left()
-        .text_size(px(11.))
-        .icon(if state.network_interfaces_expanded {
-            "icons/chevron-down.svg"
-        } else {
-            "icons/menu/chevron-right.svg"
+        .when(state.network_interfaces_expanded, |collapsible| {
+            collapsible.content(network_interface_rates(
+                palette, state, scroll, rx_color, tx_color,
+            ))
         })
-        .on_click(cx.listener(|panel, _, _, cx| {
-            panel.with_app(cx, |app, _cx| {
-                if let Some(id) = app.session.active_id().map(str::to_string) {
-                    app.remote_ops.toggle_stats_network_interfaces(&id);
-                }
-            });
-        })),
-    );
-    if !state.network_interfaces_expanded {
-        return body;
-    }
+}
+
+fn network_interface_rates(
+    palette: ThemePalette,
+    state: &StatsPresentationState,
+    scroll: &ScrollHandle,
+    rx_color: Hsla,
+    tx_color: Hsla,
+) -> gpui::Div {
     let Some(stats) = state
         .data
-        .clone()
+        .as_ref()
         .filter(|stats| !stats.networks.is_empty())
     else {
-        return body.child(
-            div()
-                .debug_selector(|| "stats-network-empty".to_string())
-                .py_1()
-                .text_size(px(11.))
-                .text_color(rgb(palette.text_dimmed))
-                .child(t!("resourceMonitor.noNetworkInterfaces").to_string()),
-        );
+        return div()
+            .debug_selector(|| "stats-network-empty".to_string())
+            .py_1()
+            .text_size(px(11.))
+            .text_color(rgb(palette.text_dimmed))
+            .child(t!("resourceMonitor.noNetworkInterfaces").to_string());
     };
-    body = body.child(
+    let body = div().flex().flex_col().gap_1().child(
         div()
             .flex()
             .gap_1()
@@ -350,6 +387,7 @@ fn network_interfaces(
             .child(
                 div()
                     .w(px(72.))
+                    .flex_none()
                     .text_right()
                     .text_color(rx_color)
                     .child("↓ RX"),
@@ -357,39 +395,47 @@ fn network_interfaces(
             .child(
                 div()
                     .w(px(72.))
+                    .flex_none()
                     .text_right()
                     .text_color(tx_color)
                     .child("↑ TX"),
             ),
     );
-    let selected = state.selected_network_interface.clone();
-    let rows = uniform_list(
-        "stats-network-interface-rows",
-        count,
-        cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
-            range
-                .map(|index| {
-                    network_interface_row(
-                        palette,
-                        &stats.networks[index],
-                        selected.as_deref(),
-                        rx_color,
-                        tx_color,
-                    )
-                    .into_any_element()
-                })
-                .collect()
-        }),
-    )
-    .size_full()
-    .track_scroll(scroll);
+    let rows = div()
+        .id("stats-network-interface-rows")
+        .w_full()
+        .flex()
+        .flex_col()
+        .children(stats.networks.iter().map(|network| {
+            network_interface_row(
+                palette,
+                network,
+                state.selected_network_interface.as_deref(),
+                rx_color,
+                tx_color,
+            )
+        }));
     body.child(
         div()
             .debug_selector(|| "stats-network-interface-list".to_string())
-            .h(px(count.min(5) as f32 * 24.))
             .w_full()
-            .child(rows)
-            .vertical_scrollbar(scroll),
+            .map(|viewport| {
+                if stats.networks.len() > NETWORK_INTERFACE_VISIBLE_ROWS {
+                    viewport
+                        .h(px(
+                            NETWORK_INTERFACE_VISIBLE_ROWS as f32 * NETWORK_INTERFACE_ROW_HEIGHT_PX
+                        ))
+                        .child(
+                            rows.debug_selector(|| "stats-network-interface-scroll".to_string())
+                                .h_full()
+                                .overflow_y_scroll()
+                                .track_scroll(scroll),
+                        )
+                        .vertical_scrollbar(scroll)
+                } else {
+                    viewport.child(rows)
+                }
+            }),
     )
 }
 
@@ -416,7 +462,12 @@ fn network_interface_row(
         }
     };
     div()
-        .h(px(24.))
+        .debug_selector({
+            let name = name.clone();
+            move || format!("stats-network-row-{name}")
+        })
+        .h(px(NETWORK_INTERFACE_ROW_HEIGHT_PX))
+        .flex_none()
         .w_full()
         .flex()
         .items_center()
@@ -489,11 +540,11 @@ pub(super) fn network_updated_text(
     }
 }
 
-fn network_legend(label: &'static str, color: Hsla) -> gpui::Div {
+fn network_legend(label: &'static str, arrow: &'static str, color: Hsla) -> gpui::Div {
     div()
         .flex()
         .items_center()
         .gap_1()
-        .child(div().size(px(6.)).rounded_full().bg(color))
+        .child(mono_icon(arrow, color, 11.))
         .child(label)
 }

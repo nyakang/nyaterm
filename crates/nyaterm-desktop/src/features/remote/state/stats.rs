@@ -402,7 +402,7 @@ impl StatsPaneState {
         let failures = network.map_or(0, |state| state.failures);
         StatsPresentationState {
             network_chart: network.map(|state| state.chart.clone()).unwrap_or_default(),
-            network_interfaces_expanded: network.is_none_or(|state| state.expanded),
+            network_interfaces_expanded: network.is_some_and(|state| state.expanded),
             last_success_at: network.and_then(|state| state.last_success_at),
             data: self
                 .active_session_id
@@ -919,15 +919,16 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
         let mut state = StatsPaneState::new();
+        assert!(!state.stats_presentation().network_interfaces_expanded);
         let now = Instant::now();
         let mut sample = stats(&[("eth0", 0., 10.)]);
         sample.network_sample_time.sampled_at = Some(now);
         state.apply_data("a", sample.clone());
-        assert!(state.stats_presentation().network_interfaces_expanded);
+        assert!(!state.stats_presentation().network_interfaces_expanded);
         assert!(state.toggle_network_interfaces("a"));
         state.apply_data("a", sample.clone());
         let snapshot = state.stats_presentation();
-        assert!(!snapshot.network_interfaces_expanded);
+        assert!(snapshot.network_interfaces_expanded);
         assert!(!snapshot.stale(now + Duration::from_secs(9), Duration::from_secs(3)));
         assert!(snapshot.stale(now + Duration::from_secs(10), Duration::from_secs(3)));
         assert!(!snapshot.stale(now + Duration::from_secs(10), Duration::from_secs(10)));
@@ -947,13 +948,13 @@ mod tests {
         );
         assert_eq!(state.stats_presentation().last_success_at, Some(now));
         state.apply_data("b", sample);
-        assert!(state.stats_presentation().network_interfaces_expanded);
+        assert!(!state.stats_presentation().network_interfaces_expanded);
         assert!(!state.stats_presentation().error);
         state.activate_session("a");
-        assert!(!state.stats_presentation().network_interfaces_expanded);
+        assert!(state.stats_presentation().network_interfaces_expanded);
         assert!(state.stats_presentation().error);
         state.clear_stats_sample("a");
-        assert!(state.stats_presentation().network_interfaces_expanded);
+        assert!(!state.stats_presentation().network_interfaces_expanded);
         assert!(state.stats_presentation().last_success_at.is_none());
     }
 }

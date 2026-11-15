@@ -148,7 +148,7 @@ impl Default for NetworkSessionState {
         Self {
             history: Arc::from([]),
             chart: Arc::default(),
-            expanded: true,
+            expanded: false,
             last_success_at: None,
             failures: 0,
             interval: Duration::from_secs(3),

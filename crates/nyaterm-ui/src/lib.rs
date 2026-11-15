@@ -50,6 +50,7 @@ pub use dialog::{
     NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogHandle, NyaDialogWindowExt,
 };
 pub use document_editor::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
+pub use gpui_kit::component::collapsible::Collapsible as NyaCollapsible;
 pub use gpui_kit::component::color_picker::{
     ColorPicker as NyaColorPicker, ColorPickerEvent as NyaColorPickerEvent,
     ColorPickerState as NyaColorPickerState,

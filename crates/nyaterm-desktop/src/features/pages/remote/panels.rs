@@ -40,7 +40,7 @@ use crate::features::text_inputs::TextInputSetup;
 use crate::models::{DockerTab, NavItem};
 use crate::theme::ThemePalette;
 use gpui::{
-    Context, Entity, IntoElement, ListAlignment, ListOffset, ListState, Render, Rgba,
+    Context, Entity, IntoElement, ListAlignment, ListOffset, ListState, Render, Rgba, ScrollHandle,
     ScrollStrategy, Task, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px,
 };
 use nyaterm_remote_ops::ascend_npu::RemoteNpuProcess;
@@ -212,7 +212,7 @@ pub(in crate::features) struct RemoteMonitorPanel {
     snapshot: Option<RemoteMonitorSnapshot>,
     /// Display time advanced by the existing polling task, without rebuilding data.
     network_clock: Instant,
-    network_scroll: UniformListScrollHandle,
+    network_scroll: ScrollHandle,
     /// Variable-height process rows live here because expanding a process changes only
     /// that row's measured height. The panel entity is the authoritative UI owner.
     process_list: ListState,
@@ -274,7 +274,7 @@ impl RemoteMonitorPanel {
             .as_ref()
             .is_some_and(|old| old.key.host_identity != snapshot.key.host_identity)
         {
-            self.network_scroll = UniformListScrollHandle::new();
+            self.network_scroll = ScrollHandle::new();
         }
         self.network_clock = Instant::now();
         self.reconcile_scroll_state(&snapshot);
@@ -290,7 +290,7 @@ impl RemoteMonitorPanel {
             clock: None,
             snapshot: None,
             network_clock: Instant::now(),
-            network_scroll: UniformListScrollHandle::new(),
+            network_scroll: ScrollHandle::new(),
             process_list: ListState::new(0, ListAlignment::Top, px(256.)),
             docker_container_scroll: UniformListScrollHandle::new(),
             docker_resource_scroll: UniformListScrollHandle::new(),
@@ -1212,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    fn network_rows_scroll_and_folding_survives_snapshot_refresh() {
+    fn network_chart_fits_and_rows_start_collapsed_then_preserve_folding_on_refresh() {
         use crate::features::runtime_jobs::StatsJobResult;
         use nyaterm_remote_ops::stats::{NetworkInfo, NetworkRateStatus, RemoteStats};
         use std::sync::Arc;
@@ -1259,6 +1259,57 @@ mod tests {
             panels: vec![host_panel],
         });
         let vcx: &mut VisualTestContext = vcx;
+        for theme in ["dark", "light"] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.settings.set_appearance_theme(theme.to_string());
+                    app.sync_component_theme(cx);
+                    app.flush_remote_panel_snapshots(cx);
+                });
+            });
+            for width in [280., 320., 400.] {
+                vcx.simulate_resize(gpui::size(gpui::px(width), gpui::px(1600.)));
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    _ = window.draw(cx);
+                });
+                let metrics = vcx.debug_bounds("stats-network-metrics").unwrap();
+                let frame = vcx.debug_bounds("stats-network-chart-frame").unwrap();
+                let plot = vcx.debug_bounds("stats-network-chart-plot").unwrap();
+                let ticks = vcx.debug_bounds("stats-network-chart-ticks").unwrap();
+                assert_eq!(frame.left(), metrics.left(), "{theme} at {width}px");
+                assert_eq!(frame.right(), metrics.right(), "{theme} at {width}px");
+                assert!(frame.right() <= gpui::px(width));
+                assert!(plot.size.width > frame.size.width * 0.8);
+                assert_eq!(plot.left(), ticks.left());
+                assert_eq!(plot.right(), ticks.right());
+                assert!(vcx.debug_bounds("stats-network-interface-list").is_none());
+                assert!(vcx.debug_bounds("stats-network-empty").is_none());
+            }
+        }
+        let toggle = |vcx: &mut VisualTestContext| {
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+            let trigger = vcx
+                .debug_bounds("stats-network-interfaces-trigger")
+                .unwrap();
+            vcx.simulate_click(trigger.center(), gpui::Modifiers::default());
+            vcx.run_until_parked();
+        };
+        toggle(vcx);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                apply(app, 40);
+                app.flush_remote_panel_snapshots(cx);
+                assert!(
+                    app.remote_ops
+                        .stats_presentation()
+                        .network_interfaces_expanded
+                );
+            });
+        });
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             _ = window.draw(cx);
@@ -1270,12 +1321,30 @@ mod tests {
                 .height,
             gpui::px(120.)
         );
+        let viewport = vcx.debug_bounds("stats-network-interface-list").unwrap();
+        assert!(
+            vcx.debug_bounds("stats-network-row-eth039")
+                .unwrap()
+                .bottom()
+                > viewport.bottom()
+        );
+        vcx.simulate_event(gpui::ScrollEvent {
+            position: viewport.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-2_000.))),
+            ..Default::default()
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert!(
+            vcx.debug_bounds("stats-network-row-eth039")
+                .unwrap()
+                .bottom()
+                <= viewport.bottom()
+        );
         vcx.update(|_, cx| {
-            assert!(panel.read(cx).network_scroll.is_scrollable());
             panel.update(cx, |panel, cx| {
-                panel
-                    .network_scroll
-                    .scroll_to_item_strict(20, gpui::ScrollStrategy::Top);
                 let RemoteMonitorData::Stats { state, .. } = &panel.snapshot.as_ref().unwrap().data
                 else {
                     panic!("stats")
@@ -1294,12 +1363,9 @@ mod tests {
                     "a clock tick must not rebuild the data snapshot"
                 );
                 assert!(state.stale(panel.network_clock, Duration::from_secs(3)));
-                panel.with_app(cx, |app, _| {
-                    app.remote_ops
-                        .toggle_stats_network_interfaces("remote-panel-test")
-                });
             });
         });
+        toggle(vcx);
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             _ = window.draw(cx);
@@ -1315,13 +1381,8 @@ mod tests {
                         .network_interfaces_expanded
                 );
             });
-            panel.update(cx, |panel, cx| {
-                panel.with_app(cx, |app, _| {
-                    app.remote_ops
-                        .toggle_stats_network_interfaces("remote-panel-test")
-                });
-            });
         });
+        toggle(vcx);
         vcx.run_until_parked();
         vcx.update(|window, cx| {
             _ = window.draw(cx);
@@ -1333,20 +1394,30 @@ mod tests {
                 .height,
             gpui::px(24.)
         );
-        vcx.update(|_, cx| {
-            assert!(!panel.read(cx).network_scroll.is_scrollable());
+        assert!(vcx.debug_bounds("stats-network-interface-scroll").is_none());
+        for count in [5, 6] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    apply(app, count);
+                    app.flush_remote_panel_snapshots(cx);
+                });
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
             assert_eq!(
-                panel
-                    .read(cx)
-                    .network_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .offset()
-                    .y,
-                gpui::px(0.)
+                vcx.debug_bounds("stats-network-interface-list")
+                    .unwrap()
+                    .size
+                    .height,
+                gpui::px(120.)
             );
-        });
+            assert_eq!(
+                vcx.debug_bounds("stats-network-interface-scroll").is_some(),
+                count > 5
+            );
+        }
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 apply(app, 0);
