@@ -4,9 +4,14 @@ use futures::channel::mpsc::UnboundedReceiver;
 use nyaterm_remote_ops::stats::{
     CpuUsageSource, NetworkSummaryInfo, RemoteStats, RemoteStatsSampler,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+mod network;
+#[cfg(test)]
+use network::NetworkHistorySample;
+use network::{NetworkChart, NetworkSessionState};
 
 pub(in crate::features) enum StatsApplyOutcome {
     Ignored,
@@ -38,9 +43,9 @@ pub(super) struct StatsPaneState {
     users_revision: u64,
     users_refresh_pending: bool,
     active_session_id: Option<String>,
-    network_history: HashMap<String, VecDeque<NetworkHistorySample>>,
+    network_sessions: HashMap<String, NetworkSessionState>,
     selected_network_interfaces: HashMap<String, String>,
-    snapshots: HashMap<String, RemoteStats>,
+    snapshots: HashMap<String, Arc<RemoteStats>>,
     icon_probes: HashMap<String, IconProbe>,
 }
 
@@ -52,16 +57,13 @@ struct IconProbe {
     finished: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(in crate::features) struct NetworkHistorySample {
-    pub sampled_at: Instant,
-    pub rx_bytes_per_sec: f64,
-    pub tx_bytes_per_sec: f64,
-    pub interfaces: HashMap<String, (f64, f64)>,
-}
 #[derive(Clone)]
 pub(in crate::features) struct StatsPresentationState {
-    pub data: Option<RemoteStats>,
+    pub data: Option<Arc<RemoteStats>>,
+    pub network_chart: Arc<NetworkChart>,
+    pub network_interfaces_expanded: bool,
+    pub last_success_at: Option<Instant>,
+    #[cfg(test)]
     pub network_history: Arc<[NetworkHistorySample]>,
     pub selected_network_interface: Option<String>,
     pub cpu_expanded: bool,
@@ -70,23 +72,15 @@ pub(in crate::features) struct StatsPresentationState {
     pub consecutive_refresh_failures: u8,
 }
 
-impl NetworkHistorySample {
-    pub(in crate::features) fn traffic(
-        &self,
-        interface: Option<&str>,
-    ) -> Option<NetworkSummaryInfo> {
-        let (rx_bytes_per_sec, tx_bytes_per_sec) = match interface {
-            Some(nic) => *self.interfaces.get(nic)?,
-            None => (self.rx_bytes_per_sec, self.tx_bytes_per_sec),
-        };
-        Some(NetworkSummaryInfo {
-            rx_bytes_per_sec,
-            tx_bytes_per_sec,
-        })
-    }
-}
-
 impl StatsPresentationState {
+    pub(in crate::features) fn stale(&self, now: Instant, interval: Duration) -> bool {
+        self.error
+            || self.last_success_at.is_some_and(|at| {
+                now.saturating_duration_since(at)
+                    > nyaterm_remote_ops::stats::network_stale_after(interval)
+            })
+    }
+
     pub(in crate::features) fn network_traffic(&self) -> Option<NetworkSummaryInfo> {
         let stats = self.data.as_ref()?;
         match self.selected_network_interface.as_deref() {
@@ -94,11 +88,8 @@ impl StatsPresentationState {
                 .networks
                 .iter()
                 .find(|network| network.nic == nic)
-                .map(|network| NetworkSummaryInfo {
-                    rx_bytes_per_sec: network.rx_bytes_per_sec,
-                    tx_bytes_per_sec: network.tx_bytes_per_sec,
-                }),
-            None => Some(stats.network_summary.clone()),
+                .and_then(|network| network.traffic()),
+            None => stats.network_traffic(),
         }
     }
 }
@@ -117,6 +108,7 @@ impl StatsPaneState {
         self.users_revision = self.users_revision.wrapping_add(1);
         self.users_refresh_pending = enabled;
         for stats in self.snapshots.values_mut() {
+            let stats = Arc::make_mut(stats);
             stats.users.clear();
             stats.login_sessions.clear();
             stats.users_status = nyaterm_remote_ops::stats::LoggedInUsersStatus::NotCollected;
@@ -145,7 +137,8 @@ impl StatsPaneState {
         }
         self.activate_session(session_id);
         self.record_network_sample(session_id, &stats);
-        self.snapshots.insert(session_id.to_string(), stats);
+        self.snapshots
+            .insert(session_id.to_string(), Arc::new(stats));
         self.touch();
     }
 
@@ -158,42 +151,57 @@ impl StatsPaneState {
         {
             self.selected_network_interfaces.remove(session_id);
         }
-        let sample = NetworkHistorySample {
-            sampled_at: Instant::now(),
-            rx_bytes_per_sec: stats.network_summary.rx_bytes_per_sec,
-            tx_bytes_per_sec: stats.network_summary.tx_bytes_per_sec,
-            interfaces: stats
-                .networks
-                .iter()
-                .map(|network| {
-                    (
-                        network.nic.clone(),
-                        (network.rx_bytes_per_sec, network.tx_bytes_per_sec),
-                    )
-                })
-                .collect(),
-        };
-        let history = self
-            .network_history
+        self.network_sessions
+            .entry(session_id.to_string())
+            .or_default()
+            .record(
+                stats,
+                self.selected_network_interfaces
+                    .get(session_id)
+                    .map(String::as_str),
+            );
+        self.touch();
+    }
+
+    fn record_network_failure(&mut self, session_id: &str) {
+        self.network_sessions
+            .entry(session_id.to_string())
+            .or_default()
+            .fail(
+                Instant::now(),
+                self.selected_network_interfaces
+                    .get(session_id)
+                    .map(String::as_str),
+            );
+        self.touch();
+    }
+
+    pub(super) fn toggle_network_interfaces(&mut self, session_id: &str) -> bool {
+        if self.active_session_id.as_deref() != Some(session_id) {
+            return false;
+        }
+        let state = self
+            .network_sessions
             .entry(session_id.to_string())
             .or_default();
-        history.push_back(sample);
-        while history.len() > 60 {
-            history.pop_front();
-        }
+        state.expanded = !state.expanded;
         self.touch();
+        true
     }
 
     pub(super) fn activate_session(&mut self, session_id: &str) {
-        self.active_session_id = Some(session_id.to_string());
-        self.touch();
+        if self.active_session_id.as_deref() != Some(session_id) {
+            self.active_session_id = Some(session_id.to_string());
+            self.touch();
+        }
     }
 
+    #[cfg(test)]
     fn active_network_history(&self) -> Arc<[NetworkHistorySample]> {
         self.active_session_id
             .as_deref()
-            .and_then(|session_id| self.network_history.get(session_id))
-            .map(|history| Arc::from(history.iter().cloned().collect::<Vec<_>>()))
+            .and_then(|session_id| self.network_sessions.get(session_id))
+            .map(|state| state.history.clone())
             .unwrap_or_else(|| Arc::from([]))
     }
 
@@ -230,6 +238,9 @@ impl StatsPaneState {
                 self.selected_network_interfaces.remove(session_id);
             }
         }
+        if let Some(state) = self.network_sessions.get_mut(session_id) {
+            state.select(interface);
+        }
         self.touch();
         true
     }
@@ -252,10 +263,6 @@ impl StatsPaneState {
 
     pub(super) fn last_refresh_at(&self) -> Option<Instant> {
         self.job.last_refresh_at()
-    }
-
-    pub(super) fn consecutive_refresh_failures(&self) -> u8 {
-        self.job.consecutive_refresh_failures()
     }
 
     pub(super) fn is_pending_for(&self, session_id: &str) -> bool {
@@ -313,14 +320,14 @@ impl StatsPaneState {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn reset_refresh_failures(&mut self) {
-        self.job.reset_refresh_failures();
+        if let Some(id) = self.active_session_id.as_ref()
+            && let Some(network) = self.network_sessions.get_mut(id)
+        {
+            network.failures = 0;
+        }
         self.touch();
-    }
-
-    pub(super) fn record_refresh_failure(&mut self) -> u8 {
-        self.touch();
-        self.job.record_refresh_failure(false)
     }
 
     pub(super) fn toggle_cpu_expanded(&mut self) {
@@ -359,7 +366,7 @@ impl StatsPaneState {
             users_revision: 0,
             users_refresh_pending: false,
             active_session_id: None,
-            network_history: HashMap::new(),
+            network_sessions: HashMap::new(),
             selected_network_interfaces: HashMap::new(),
             snapshots: HashMap::new(),
             icon_probes: HashMap::new(),
@@ -376,7 +383,7 @@ impl StatsPaneState {
     pub(super) fn clear_stats_sample(&mut self, session_id: &str) {
         self.icon_probes.remove(session_id);
         self.sampler.clear_session(session_id);
-        self.network_history.remove(session_id);
+        self.network_sessions.remove(session_id);
         self.selected_network_interfaces.remove(session_id);
         self.snapshots.remove(session_id);
         if self.job.is_pending_for(session_id) {
@@ -388,12 +395,21 @@ impl StatsPaneState {
     }
 
     pub(super) fn stats_presentation(&self) -> StatsPresentationState {
+        let network = self
+            .active_session_id
+            .as_ref()
+            .and_then(|id| self.network_sessions.get(id));
+        let failures = network.map_or(0, |state| state.failures);
         StatsPresentationState {
+            network_chart: network.map(|state| state.chart.clone()).unwrap_or_default(),
+            network_interfaces_expanded: network.is_none_or(|state| state.expanded),
+            last_success_at: network.and_then(|state| state.last_success_at),
             data: self
                 .active_session_id
                 .as_deref()
                 .and_then(|id| self.snapshots.get(id))
                 .cloned(),
+            #[cfg(test)]
             network_history: self.active_network_history(),
             selected_network_interface: self
                 .active_session_id
@@ -402,8 +418,8 @@ impl StatsPaneState {
                 .cloned(),
             cpu_expanded: self.cpu_expanded,
             pending: self.is_pending(),
-            error: self.consecutive_refresh_failures() > 0,
-            consecutive_refresh_failures: self.consecutive_refresh_failures(),
+            error: failures > 0,
+            consecutive_refresh_failures: failures,
         }
     }
 
@@ -417,11 +433,13 @@ impl StatsPaneState {
 
     #[cfg(test)]
     pub(super) fn record_stats_refresh_failure(&mut self) -> u8 {
-        let failures = self.record_refresh_failure();
-        if failures >= 3 {
-            self.clear_data();
+        if let Some(id) = self.active_session_id.clone() {
+            self.record_network_failure(&id);
+            self.network_sessions[&id].failures
+        } else {
+            self.touch();
+            0
         }
-        failures
     }
 
     pub(super) fn apply_stats_event(
@@ -462,7 +480,10 @@ impl StatsPaneState {
             if let Ok(stats) = &event.result {
                 self.record_network_sample(&event.session_id, stats);
                 self.snapshots
-                    .insert(event.session_id.clone(), stats.clone());
+                    .insert(event.session_id.clone(), Arc::new(stats.clone()));
+            }
+            if event.result.is_err() {
+                self.record_network_failure(&event.session_id);
             }
             if probe_matches && let Ok(stats) = event.result {
                 return StatsApplyOutcome::IconProbeCompleted {
@@ -472,9 +493,9 @@ impl StatsPaneState {
             }
             return StatsApplyOutcome::CompletedInactive;
         }
+        self.activate_session(&event.session_id);
         match event.result {
             Ok(stats) => {
-                self.reset_refresh_failures();
                 let status = format!(
                     "loaded stats for {} 路 load {:.2}/{:.2}/{:.2}",
                     if stats.system.hostname.trim().is_empty() {
@@ -495,10 +516,7 @@ impl StatsPaneState {
                 }
             }
             Err(error) => {
-                let failures = self.record_refresh_failure();
-                if failures >= 3 {
-                    self.clear_data();
-                }
+                self.record_network_failure(&event.session_id);
                 let status = format!("stats refresh failed: {error}");
                 self.set_status(status.clone());
                 StatsApplyOutcome::Failed { status }
@@ -537,7 +555,7 @@ impl StatsPaneState {
         if !self.icon_probe_needed(session_id) {
             return None;
         }
-        let snapshot = self.snapshots.get(session_id)?.clone();
+        let snapshot = self.snapshots.get(session_id)?.as_ref().clone();
         self.icon_probes
             .entry(session_id.into())
             .or_default()
@@ -708,6 +726,7 @@ mod tests {
             networks: interfaces
                 .iter()
                 .map(|(nic, rx, tx)| NetworkInfo {
+                    rate_status: nyaterm_remote_ops::stats::NetworkRateStatus::Available,
                     nic: nic.to_string(),
                     state: "up".to_string(),
                     rx_bytes_per_sec: *rx,
@@ -856,10 +875,7 @@ mod tests {
                 .is_none()
         );
         state.apply_data("a", stats(&[]));
-        assert_eq!(
-            state.stats_presentation().network_traffic(),
-            Some(NetworkSummaryInfo::default())
-        );
+        assert_eq!(state.stats_presentation().network_traffic(), None);
     }
 
     #[test]
@@ -897,5 +913,47 @@ mod tests {
                 .rx_bytes_per_sec,
             30.
         );
+    }
+    #[test]
+    fn folding_freshness_and_failure_state_remain_owned_by_their_session() {
+        use std::sync::Arc;
+        use std::time::Duration;
+        let mut state = StatsPaneState::new();
+        let now = Instant::now();
+        let mut sample = stats(&[("eth0", 0., 10.)]);
+        sample.network_sample_time.sampled_at = Some(now);
+        state.apply_data("a", sample.clone());
+        assert!(state.stats_presentation().network_interfaces_expanded);
+        assert!(state.toggle_network_interfaces("a"));
+        state.apply_data("a", sample.clone());
+        let snapshot = state.stats_presentation();
+        assert!(!snapshot.network_interfaces_expanded);
+        assert!(!snapshot.stale(now + Duration::from_secs(9), Duration::from_secs(3)));
+        assert!(snapshot.stale(now + Duration::from_secs(10), Duration::from_secs(3)));
+        assert!(!snapshot.stale(now + Duration::from_secs(10), Duration::from_secs(10)));
+        assert!(Arc::ptr_eq(
+            &snapshot.network_chart,
+            &state.stats_presentation().network_chart
+        ));
+        assert!(Arc::ptr_eq(
+            snapshot.data.as_ref().unwrap(),
+            state.stats_presentation().data.as_ref().unwrap()
+        ));
+        state.record_network_failure("a");
+        assert!(
+            state
+                .stats_presentation()
+                .stale(now, Duration::from_secs(60))
+        );
+        assert_eq!(state.stats_presentation().last_success_at, Some(now));
+        state.apply_data("b", sample);
+        assert!(state.stats_presentation().network_interfaces_expanded);
+        assert!(!state.stats_presentation().error);
+        state.activate_session("a");
+        assert!(!state.stats_presentation().network_interfaces_expanded);
+        assert!(state.stats_presentation().error);
+        state.clear_stats_sample("a");
+        assert!(state.stats_presentation().network_interfaces_expanded);
+        assert!(state.stats_presentation().last_success_at.is_none());
     }
 }

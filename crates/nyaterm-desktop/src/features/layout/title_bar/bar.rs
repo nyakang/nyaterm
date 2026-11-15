@@ -738,16 +738,12 @@ impl NyaTermApp {
 
         let memory_total = stats.memory.used.saturating_add(stats.memory.available);
         let memory_percent = percent_from_parts(stats.memory.used, memory_total);
-        let tx = stats
-            .networks
-            .iter()
-            .map(|network| network.tx_bytes_per_sec.max(0.))
-            .sum::<f64>();
-        let rx = stats
-            .networks
-            .iter()
-            .map(|network| network.rx_bytes_per_sec.max(0.))
-            .sum::<f64>();
+        let interval = std::time::Duration::from_secs(u64::from(
+            self.settings.summary().ui_remote_stats_interval.max(1),
+        ));
+        let traffic = (!stats_state.stale(std::time::Instant::now(), interval))
+            .then(|| stats.network_traffic())
+            .flatten();
         let cpu_text = stats
             .cpu
             .usage
@@ -758,8 +754,14 @@ impl NyaTermApp {
             format_binary_bytes(stats.memory.used),
             format_binary_bytes(memory_total)
         );
-        let tx_text = format_rate(tx);
-        let rx_text = format_rate(rx);
+        let tx_text = traffic
+            .as_ref()
+            .map(|traffic| format_rate(traffic.tx_bytes_per_sec))
+            .unwrap_or_else(|| "—".to_string());
+        let rx_text = traffic
+            .as_ref()
+            .map(|traffic| format_rate(traffic.rx_bytes_per_sec))
+            .unwrap_or_else(|| "—".to_string());
         let label = format!("{cpu_text} - {memory_text} - NET ↑ {tx_text} ↓ {rx_text}");
         HeaderStatusContent::parts(
             label,

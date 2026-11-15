@@ -5,6 +5,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+pub(crate) mod network;
+use network::{NetworkCounters, NetworkRateSampler};
+pub use network::{NetworkRateStatus, NetworkSampleTime, network_stale_after};
+
 const MAX_SAMPLE_WINDOW: Duration = Duration::from_secs(5 * 60);
 const SAMPLE_TTL: Duration = Duration::from_secs(10 * 60);
 const CPU_USAGE_DIFF_THRESHOLD: f64 = 5.0;
@@ -59,10 +63,27 @@ pub struct MemoryInfo {
 
 #[derive(serde::Serialize, Debug, Clone, PartialEq)]
 pub struct NetworkInfo {
+    /// Runtime validity; numeric field names/types remain serialization-compatible.
+    #[serde(skip)]
+    pub rate_status: NetworkRateStatus,
     pub nic: String,
     pub state: String,
     pub rx_bytes_per_sec: f64,
     pub tx_bytes_per_sec: f64,
+}
+
+impl NetworkInfo {
+    pub fn traffic(&self) -> Option<NetworkSummaryInfo> {
+        (self.rate_status == NetworkRateStatus::Available
+            && self.rx_bytes_per_sec.is_finite()
+            && self.rx_bytes_per_sec >= 0.
+            && self.tx_bytes_per_sec.is_finite()
+            && self.tx_bytes_per_sec >= 0.)
+            .then_some(NetworkSummaryInfo {
+                rx_bytes_per_sec: self.rx_bytes_per_sec,
+                tx_bytes_per_sec: self.tx_bytes_per_sec,
+            })
+    }
 }
 
 #[derive(serde::Serialize, Debug, Default, Clone, PartialEq)]
@@ -104,9 +125,19 @@ pub enum LoggedInUsersStatus {
     Failed,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemoteStatsOptions {
+    pub network_interval: Duration,
     pub collect_logged_in_users: bool,
+}
+
+impl Default for RemoteStatsOptions {
+    fn default() -> Self {
+        Self {
+            collect_logged_in_users: false,
+            network_interval: Duration::from_secs(3),
+        }
+    }
 }
 
 impl RemoteStatsOptions {
@@ -121,6 +152,8 @@ impl RemoteStatsOptions {
 
 #[derive(serde::Serialize, Debug, Default, Clone, PartialEq)]
 pub struct RemoteStats {
+    #[serde(skip)]
+    pub network_sample_time: NetworkSampleTime,
     pub system: SystemInfo,
     pub load: LoadInfo,
     pub cpu: CpuInfo,
@@ -131,6 +164,22 @@ pub struct RemoteStats {
     pub users: Vec<LoggedInUser>,
     pub login_sessions: Vec<LoggedInSession>,
     pub users_status: LoggedInUsersStatus,
+}
+
+impl RemoteStats {
+    /// A partial sum must not be presented as total host traffic.
+    pub fn network_traffic(&self) -> Option<NetworkSummaryInfo> {
+        if self.networks.is_empty() {
+            return None;
+        }
+        let mut sum = NetworkSummaryInfo::default();
+        for network in &self.networks {
+            let traffic = network.traffic()?;
+            sum.rx_bytes_per_sec += traffic.rx_bytes_per_sec;
+            sum.tx_bytes_per_sec += traffic.tx_bytes_per_sec;
+        }
+        (sum.rx_bytes_per_sec.is_finite() && sum.tx_bytes_per_sec.is_finite()).then_some(sum)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -161,23 +210,27 @@ struct CpuDelta {
     total: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NetworkCounters {
-    rx_bytes: u64,
-    tx_bytes: u64,
-}
-
 #[derive(Clone)]
 pub struct ParsedRemoteStats {
-    stats: RemoteStats,
+    pub(crate) stats: RemoteStats,
     cpu_snapshot: Option<CpuSnapshot>,
-    networks: BTreeMap<String, NetworkCounters>,
+    pub(crate) networks: BTreeMap<String, NetworkCounters>,
+}
+
+impl ParsedRemoteStats {
+    pub(crate) fn native(stats: RemoteStats, networks: BTreeMap<String, NetworkCounters>) -> Self {
+        Self {
+            stats,
+            networks,
+            cpu_snapshot: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct CachedRemoteSample {
     cpu_snapshot: Option<CpuSnapshot>,
-    networks: BTreeMap<String, NetworkCounters>,
+    network: NetworkRateSampler,
     updated_at: Instant,
 }
 
@@ -190,43 +243,72 @@ pub struct RemoteStatsSampler {
 
 impl RemoteStatsSampler {
     pub fn complete_snapshot(&self, session_id: &str, parsed: ParsedRemoteStats) -> RemoteStats {
-        let now = Instant::now();
+        self.complete_snapshot_at(session_id, parsed, Instant::now(), Duration::from_secs(3))
+    }
+
+    fn complete_snapshot_at(
+        &self,
+        session_id: &str,
+        parsed: ParsedRemoteStats,
+        now: Instant,
+        interval: Duration,
+    ) -> RemoteStats {
         let mut samples = self.samples.lock().expect("remote stats sampler poisoned");
         prune_stale_samples(&mut samples, now);
 
-        let previous = samples.get(session_id).cloned();
+        let previous = samples.remove(session_id);
         let mut stats = parsed.stats;
 
-        if let Some(previous) = previous.as_ref() {
-            if let (Some(previous_cpu), Some(current_cpu)) =
+        if let Some(previous) = previous.as_ref()
+            && let (Some(previous_cpu), Some(current_cpu)) =
                 (previous.cpu_snapshot.as_ref(), parsed.cpu_snapshot.as_ref())
-            {
-                apply_cpu_usage(session_id, previous, previous_cpu, current_cpu, &mut stats);
-            }
-
-            apply_network_rates(previous, &parsed.networks, &mut stats);
+        {
+            apply_cpu_usage(session_id, previous, previous_cpu, current_cpu, &mut stats);
         }
 
+        stats.networks.sort_by(|a, b| a.nic.cmp(&b.nic));
+        let mut network = previous.map(|sample| sample.network).unwrap_or_default();
+        network.sample(parsed.networks, &mut stats, now, interval);
         samples.insert(
             session_id.to_string(),
             CachedRemoteSample {
                 cpu_snapshot: parsed.cpu_snapshot,
-                networks: parsed.networks,
+                network,
                 updated_at: now,
             },
         );
 
-        update_network_summary(&mut stats);
         stats
     }
 
-    /// Snapshot the local machine natively. Deltas live inside the collector.
+    /// Compatibility facade for callers without a desktop session.
     pub fn local_snapshot(&self, collect_users: bool) -> RemoteStats {
-        self.local
+        self.local_snapshot_for_session(
+            "local",
+            RemoteStatsOptions {
+                collect_logged_in_users: collect_users,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn local_snapshot_for_session(
+        &self,
+        session_id: &str,
+        options: RemoteStatsOptions,
+    ) -> RemoteStats {
+        let parsed = self
+            .local
             .lock()
             .expect("local stats collector poisoned")
             .get_or_insert_with(crate::local_stats::LocalStatsCollector::new)
-            .snapshot(collect_users)
+            .collect(options.collect_logged_in_users);
+        let now = parsed
+            .stats
+            .network_sample_time
+            .sampled_at
+            .expect("native sample time");
+        self.complete_snapshot_at(session_id, parsed, now, options.network_interval)
     }
 
     pub fn clear_session(&self, session_id: &str) {
@@ -312,27 +394,10 @@ fn apply_cpu_usage(
     stats.cpu.usage_source = source;
 }
 
-fn apply_network_rates(
-    previous: &CachedRemoteSample,
-    current_networks: &BTreeMap<String, NetworkCounters>,
-    stats: &mut RemoteStats,
-) {
-    let elapsed = previous.updated_at.elapsed().as_secs_f64();
-    if elapsed <= 0.0 || elapsed > MAX_SAMPLE_WINDOW.as_secs_f64() {
-        return;
-    }
-
-    for net in &mut stats.networks {
-        let Some(current) = current_networks.get(&net.nic) else {
-            continue;
-        };
-        let Some(previous) = previous.networks.get(&net.nic) else {
-            continue;
-        };
-
-        net.rx_bytes_per_sec = current.rx_bytes.saturating_sub(previous.rx_bytes) as f64 / elapsed;
-        net.tx_bytes_per_sec = current.tx_bytes.saturating_sub(previous.tx_bytes) as f64 / elapsed;
-    }
+fn parse_network_rate(value: &str) -> anyhow::Result<f64> {
+    let value = value.parse::<f64>()?;
+    anyhow::ensure!(value.is_finite() && value >= 0., "invalid network rate");
+    Ok(value)
 }
 
 fn update_network_summary(stats: &mut RemoteStats) {
@@ -735,7 +800,7 @@ impl RemoteStatsService {
         options: RemoteStatsOptions,
     ) -> anyhow::Result<RemoteStats> {
         if self.target.is_local() {
-            return Ok(sampler.local_snapshot(options.collect_logged_in_users));
+            return Ok(sampler.local_snapshot_for_session(session_id, options));
         }
         self.target.ensure_probes_allowed()?;
         if self
@@ -747,7 +812,12 @@ impl RemoteStatsService {
         }
         let output = self.exec_success(&options.command(), "Failed to fetch stats")?;
         let parsed = parse_stats_output(&output.stdout)?;
-        Ok(sampler.complete_snapshot(session_id, parsed))
+        Ok(sampler.complete_snapshot_at(
+            session_id,
+            parsed,
+            Instant::now(),
+            options.network_interval,
+        ))
     }
 
     fn exec_success(&self, command: &str, context: &str) -> anyhow::Result<RemoteCommandOutput> {
@@ -887,6 +957,7 @@ pub fn parse_stats_output(output: &str) -> anyhow::Result<ParsedRemoteStats> {
                     let tx_bytes = parse_u64_field(cols[4], "NETDEV tx bytes")?;
                     networks.insert(cols[1].to_string(), NetworkCounters { rx_bytes, tx_bytes });
                     stats.networks.push(NetworkInfo {
+                        rate_status: NetworkRateStatus::WarmingUp,
                         nic: cols[1].to_string(),
                         state: cols[2].to_string(),
                         rx_bytes_per_sec: 0.0,
@@ -900,8 +971,9 @@ pub fn parse_stats_output(output: &str) -> anyhow::Result<ParsedRemoteStats> {
                     stats.networks.push(NetworkInfo {
                         nic: cols[1].to_string(),
                         state: cols[2].to_string(),
-                        rx_bytes_per_sec: cols[3].parse().unwrap_or(0.0),
-                        tx_bytes_per_sec: cols[4].parse().unwrap_or(0.0),
+                        rx_bytes_per_sec: parse_network_rate(cols[3])?,
+                        tx_bytes_per_sec: parse_network_rate(cols[4])?,
+                        rate_status: NetworkRateStatus::Available,
                     });
                 }
             }
@@ -1386,6 +1458,7 @@ mod tests {
                     "-c",
                     &RemoteStatsOptions {
                         collect_logged_in_users: enabled,
+                        ..Default::default()
                     }
                     .command(),
                 ])

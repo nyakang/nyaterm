@@ -22,7 +22,8 @@ use rust_i18n::t;
 use std::sync::Arc;
 
 mod network;
-use network::resource_network_card;
+pub(in crate::features::pages::remote) use network::NetworkCardPresentation;
+use network::{network_updated_text, resource_network_card};
 
 #[derive(Clone, Copy)]
 struct ResourceRowPosition {
@@ -61,6 +62,7 @@ pub(in crate::features::pages::remote) fn stats_panel(
     show_users: bool,
     stats_state: StatsPresentationState,
     network_select: Entity<NyaSelectState>,
+    network_presentation: NetworkCardPresentation,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::AnyElement {
     let palette = chrome.palette;
@@ -89,6 +91,12 @@ pub(in crate::features::pages::remote) fn stats_panel(
             .into_any_element();
     };
 
+    let stale = stats_state.stale(network_presentation.now, network_presentation.interval);
+    let stale_message = network_updated_text(
+        &stats_state,
+        network_presentation.now,
+        network_presentation.interval,
+    );
     let memory_total = stats.memory.used.saturating_add(stats.memory.available);
     let memory_percent = if memory_total > 0 {
         stats.memory.used as f64 / memory_total as f64 * 100.
@@ -146,6 +154,7 @@ pub(in crate::features::pages::remote) fn stats_panel(
                 .flex()
                 .flex_col()
                 .gap_2()
+                .when(stale, |body| body.child(div().text_size(px(11.)).text_color(rgb(palette.text_muted)).child(stale_message)))
                     .child(resource_section_card_with_action(
                         palette,
                         "icons/conn/server.svg",
@@ -371,7 +380,7 @@ pub(in crate::features::pages::remote) fn stats_panel(
                                     )),
                             ),
                     ))
-                .child(resource_network_card(palette, &stats_state, &network_select))
+                .child(resource_network_card(palette, &stats_state, &network_select, &network_presentation, cx))
                 .child(resource_section_card(palette, "icons/file/storage.svg", disk_label, disk_rows))
                 .overflow_y_scrollbar()
                 .id(SharedString::from("stats-scroll")),

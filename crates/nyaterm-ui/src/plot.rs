@@ -67,6 +67,33 @@ impl NyaLinePlot {
     pub fn max_value(&self) -> f64 {
         self.max_value
     }
+
+    /// Fix the horizontal domain without stretching a short series to fill it.
+    /// Invalid ranges leave the automatically inferred domain unchanged.
+    pub fn x_range(mut self, range: [f64; 2]) -> Self {
+        if range.iter().all(|value| value.is_finite()) && range[0] < range[1] {
+            self.x_domain = range;
+            self.max_value = self
+                .series
+                .iter()
+                .flat_map(|series| series.points.iter())
+                .filter(|point| self.contains_x(point.x))
+                .filter_map(|point| point.value.filter(|value| value.is_finite()))
+                .fold(1., f64::max);
+        }
+        self
+    }
+
+    pub fn y_max(mut self, maximum: f64) -> Self {
+        if maximum.is_finite() && maximum > 0. {
+            self.max_value = maximum;
+        }
+        self
+    }
+
+    fn contains_x(&self, x: f64) -> bool {
+        x.is_finite() && x >= self.x_domain[0] && x <= self.x_domain[1]
+    }
 }
 
 impl Plot for NyaLinePlot {
@@ -102,7 +129,8 @@ impl Plot for NyaLinePlot {
                 for segment in series
                     .points
                     .split(|point| {
-                        !point.x.is_finite() || point.value.is_none_or(|value| !value.is_finite())
+                        !self.contains_x(point.x)
+                            || point.value.is_none_or(|value| !value.is_finite())
                     })
                     .filter(|segment| !segment.is_empty())
                 {
@@ -179,5 +207,61 @@ impl Plot for NyaRingGauge {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NyaLinePlot, NyaLinePoint, NyaLineSeries};
+    use gpui::rgb;
+
+    fn plot() -> NyaLinePlot {
+        NyaLinePlot::new(
+            "test",
+            vec![NyaLineSeries {
+                color: rgb(0x3b82f6).into(),
+                points: vec![
+                    NyaLinePoint {
+                        x: -3.,
+                        value: Some(40.),
+                    },
+                    NyaLinePoint {
+                        x: 0.,
+                        value: Some(80.),
+                    },
+                ]
+                .into(),
+            }],
+            rgb(0x777777).into(),
+        )
+    }
+
+    #[test]
+    fn fixed_domain_does_not_stretch_two_samples_and_default_stays_automatic() {
+        assert_eq!(plot().x_domain, [-3., 0.]);
+        let fixed = plot().x_range([-60., 0.]).y_max(100.);
+        assert_eq!(fixed.x_domain, [-60., 0.]);
+        assert_eq!(fixed.max_value(), 100.);
+        assert_eq!(3. / (fixed.x_domain[1] - fixed.x_domain[0]), 0.05);
+    }
+
+    #[test]
+    fn out_of_window_points_are_not_painted_or_used_for_automatic_y_range() {
+        let plot = plot().x_range([-60., -1.]);
+        assert!(plot.contains_x(-3.));
+        assert!(!plot.contains_x(0.));
+        assert!(!plot.contains_x(f64::NAN));
+        assert_eq!(plot.max_value(), 40.);
+    }
+
+    #[test]
+    fn invalid_explicit_domains_leave_safe_defaults() {
+        let plot = plot()
+            .x_range([1., 1.])
+            .x_range([f64::NAN, f64::INFINITY])
+            .y_max(0.)
+            .y_max(f64::NAN);
+        assert_eq!(plot.x_domain, [-3., 0.]);
+        assert_eq!(plot.max_value(), 80.);
     }
 }

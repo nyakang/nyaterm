@@ -30,7 +30,7 @@
 use super::docker_view::docker_panel;
 use super::process::{process_display_mode, process_row_height_px};
 use super::process_view::processes_panel;
-use super::stats_view::{gpu_panel, npu_panel, stats_panel};
+use super::stats_view::{NetworkCardPresentation, gpu_panel, npu_panel, stats_panel};
 use crate::features::NyaTermApp;
 use crate::features::remote::{
     DockerDerivedItems, DockerPresentationState, GpuPresentationState, NpuPresentationState,
@@ -52,7 +52,7 @@ use nyaterm_ui::{
 };
 use rust_i18n::t;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How often a polling panel asks whether its own interval has come due.
 ///
@@ -148,6 +148,7 @@ struct RemoteMonitorKey {
     panel_width: f32,
     /// Whether the Stats pane lists logged-in users. Always false for the other panes.
     show_users: bool,
+    stats_interval: u32,
 }
 
 pub(in crate::features) enum RemoteMonitorData {
@@ -209,6 +210,9 @@ pub(in crate::features) struct RemoteMonitorPanel {
     clock: Option<Task<()>>,
     /// The snapshot this panel renders from.
     snapshot: Option<RemoteMonitorSnapshot>,
+    /// Display time advanced by the existing polling task, without rebuilding data.
+    network_clock: Instant,
+    network_scroll: UniformListScrollHandle,
     /// Variable-height process rows live here because expanding a process changes only
     /// that row's measured height. The panel entity is the authoritative UI owner.
     process_list: ListState,
@@ -265,6 +269,14 @@ impl RemoteMonitorPanel {
     }
 
     fn set_snapshot(&mut self, snapshot: RemoteMonitorSnapshot, cx: &mut Context<Self>) {
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|old| old.key.host_identity != snapshot.key.host_identity)
+        {
+            self.network_scroll = UniformListScrollHandle::new();
+        }
+        self.network_clock = Instant::now();
         self.reconcile_scroll_state(&snapshot);
         self.snapshot = Some(snapshot);
         // Notifies this panel only. The app is untouched, so nothing else repaints.
@@ -277,6 +289,8 @@ impl RemoteMonitorPanel {
             app,
             clock: None,
             snapshot: None,
+            network_clock: Instant::now(),
+            network_scroll: UniformListScrollHandle::new(),
             process_list: ListState::new(0, ListAlignment::Top, px(256.)),
             docker_container_scroll: UniformListScrollHandle::new(),
             docker_resource_scroll: UniformListScrollHandle::new(),
@@ -404,9 +418,34 @@ impl RemoteMonitorPanel {
                     app.refresh_remote_monitor_if_due(kind, cx);
                     // Flush boundary: submitting a refresh changes the pane status.
                     app.flush_remote_panel_snapshots(cx);
+                    if kind == RemoteMonitorKind::Stats && app.panel_is_rendered(kind.nav_item()) {
+                        let panel = app.remote_panels.entity(kind).clone();
+                        panel.update(cx, |panel, cx| {
+                            panel.advance_network_clock(Instant::now(), cx)
+                        });
+                    }
                 });
             }
         }));
+    }
+
+    fn advance_network_clock(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let Some(RemoteMonitorSnapshot {
+            data: RemoteMonitorData::Stats { state, .. },
+            ..
+        }) = self.snapshot.as_ref()
+        else {
+            return;
+        };
+        let Some(last) = state.last_success_at else {
+            return;
+        };
+        if now.saturating_duration_since(last).as_secs()
+            != self.network_clock.saturating_duration_since(last).as_secs()
+        {
+            self.network_clock = now;
+            cx.notify();
+        }
     }
 
     /// Widened past this module so the session-activation boundary can assert that a
@@ -470,6 +509,11 @@ impl Render for RemoteMonitorPanel {
                     snapshot.key.show_users,
                     state.clone(),
                     network_select.clone(),
+                    NetworkCardPresentation {
+                        now: self.network_clock,
+                        interval: Duration::from_secs(u64::from(snapshot.key.stats_interval)),
+                        scroll: self.network_scroll.clone(),
+                    },
                     cx,
                 ),
                 RemoteMonitorData::Gpu {
@@ -680,6 +724,11 @@ impl NyaTermApp {
                 | RemoteMonitorKind::Gpu
                 | RemoteMonitorKind::Npu => self.shell.right_panel_width(),
                 _ => 0.,
+            },
+            stats_interval: if kind == RemoteMonitorKind::Stats {
+                self.settings.summary().ui_remote_stats_interval.max(1)
+            } else {
+                0
             },
             show_users: kind == RemoteMonitorKind::Stats
                 && self.settings.summary().ui_remote_stats_show_users,
@@ -1033,6 +1082,7 @@ mod tests {
 
         fn stats(include_eth1: bool) -> RemoteStats {
             let mut networks = vec![NetworkInfo {
+                rate_status: nyaterm_remote_ops::stats::NetworkRateStatus::Available,
                 nic: "eth0".to_string(),
                 state: "up".to_string(),
                 rx_bytes_per_sec: 10.,
@@ -1040,6 +1090,7 @@ mod tests {
             }];
             if include_eth1 {
                 networks.push(NetworkInfo {
+                    rate_status: nyaterm_remote_ops::stats::NetworkRateStatus::Available,
                     nic: "eth1".to_string(),
                     state: "up".to_string(),
                     rx_bytes_per_sec: 100.,
@@ -1115,6 +1166,11 @@ mod tests {
             };
             assert_eq!(state.selected_network_interface.as_deref(), Some("eth1"));
             assert_eq!(state.network_traffic().unwrap().rx_bytes_per_sec, 100.);
+            assert_eq!(
+                state.data.as_ref().unwrap().networks.len(),
+                2,
+                "selection must not filter interface rows"
+            );
             assert_eq!(network_select.read(cx).selected_value(), Some("nic:eth1"));
             assert_eq!(
                 snapshot.key.revision,
@@ -1153,6 +1209,156 @@ mod tests {
             assert_eq!(state.network_traffic().unwrap().rx_bytes_per_sec, 10.);
             assert_eq!(network_select.read(cx).selected_value(), Some("all"));
         });
+    }
+
+    #[test]
+    fn network_rows_scroll_and_folding_survives_snapshot_refresh() {
+        use crate::features::runtime_jobs::StatsJobResult;
+        use nyaterm_remote_ops::stats::{NetworkInfo, NetworkRateStatus, RemoteStats};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let apply = |app: &mut NyaTermApp, count: usize| {
+            let mut stats = RemoteStats::default();
+            stats.network_sample_time.sampled_at = Some(now);
+            stats.networks = (0..count)
+                .map(|index| NetworkInfo {
+                    nic: format!("eth{index:03}"),
+                    state: "up".into(),
+                    rx_bytes_per_sec: index as f64,
+                    tx_bytes_per_sec: index as f64 * 2.,
+                    rate_status: NetworkRateStatus::Available,
+                })
+                .collect();
+            let ticket = app
+                .remote_ops
+                .begin_stats_job("remote-panel-test".into(), false);
+            app.remote_ops.apply_stats_event(
+                StatsJobResult {
+                    users_revision: 0,
+                    job_id: ticket.job_id,
+                    session_id: "remote-panel-test".into(),
+                    result: Ok(stats),
+                },
+                Some("remote-panel-test"),
+            );
+        };
+        let test_dir = TestConfigDir::new("nyaterm-network-list");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        activate_ssh_session(&app, &mut cx);
+        let panel = cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            apply(app, 40);
+            app.flush_remote_panel_snapshots(cx);
+            app.remote_panels.entity(RemoteMonitorKind::Stats).clone()
+        });
+        let host_panel = panel.clone();
+        let (_, vcx) = cx.add_window_view(move |_, _| PanelHost {
+            panels: vec![host_panel],
+        });
+        let vcx: &mut VisualTestContext = vcx;
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(
+            vcx.debug_bounds("stats-network-interface-list")
+                .unwrap()
+                .size
+                .height,
+            gpui::px(120.)
+        );
+        vcx.update(|_, cx| {
+            assert!(panel.read(cx).network_scroll.is_scrollable());
+            panel.update(cx, |panel, cx| {
+                panel
+                    .network_scroll
+                    .scroll_to_item_strict(20, gpui::ScrollStrategy::Top);
+                let RemoteMonitorData::Stats { state, .. } = &panel.snapshot.as_ref().unwrap().data
+                else {
+                    panic!("stats")
+                };
+                let chart = state.network_chart.clone();
+                let revision = panel.snapshot_revision();
+                panel.advance_network_clock(now + Duration::from_secs(12), cx);
+                let RemoteMonitorData::Stats { state, .. } = &panel.snapshot.as_ref().unwrap().data
+                else {
+                    panic!("stats")
+                };
+                assert!(Arc::ptr_eq(&chart, &state.network_chart));
+                assert_eq!(
+                    revision,
+                    panel.snapshot_revision(),
+                    "a clock tick must not rebuild the data snapshot"
+                );
+                assert!(state.stale(panel.network_clock, Duration::from_secs(3)));
+                panel.with_app(cx, |app, _| {
+                    app.remote_ops
+                        .toggle_stats_network_interfaces("remote-panel-test")
+                });
+            });
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert!(vcx.debug_bounds("stats-network-interface-list").is_none());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                apply(app, 1);
+                app.flush_remote_panel_snapshots(cx);
+                assert!(
+                    !app.remote_ops
+                        .stats_presentation()
+                        .network_interfaces_expanded
+                );
+            });
+            panel.update(cx, |panel, cx| {
+                panel.with_app(cx, |app, _| {
+                    app.remote_ops
+                        .toggle_stats_network_interfaces("remote-panel-test")
+                });
+            });
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert_eq!(
+            vcx.debug_bounds("stats-network-interface-list")
+                .unwrap()
+                .size
+                .height,
+            gpui::px(24.)
+        );
+        vcx.update(|_, cx| {
+            assert!(!panel.read(cx).network_scroll.is_scrollable());
+            assert_eq!(
+                panel
+                    .read(cx)
+                    .network_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .y,
+                gpui::px(0.)
+            );
+        });
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                apply(app, 0);
+                app.flush_remote_panel_snapshots(cx);
+            });
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert!(vcx.debug_bounds("stats-network-interface-list").is_none());
+        assert!(vcx.debug_bounds("stats-network-empty").is_some());
     }
 
     struct AppHost {
