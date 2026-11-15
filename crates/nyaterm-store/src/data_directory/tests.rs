@@ -91,7 +91,7 @@ fn complete_migration_preserves_credentials_unknown_fields_plugins_and_recording
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
     assert_eq!(
-        opened.selection.data_dir,
+        fs::canonicalize(&opened.selection.data_dir).unwrap(),
         fs::canonicalize(&target).unwrap()
     );
     let connection = opened.store.list_connections().unwrap().remove(0);
@@ -342,7 +342,7 @@ fn every_publication_boundary_retries_without_losing_source_data() {
         drop(failed);
         let retried = open_startup(&local, &local, AppFlavor::Stable).unwrap();
         assert_eq!(
-            retried.selection.data_dir,
+            fs::canonicalize(&retried.selection.data_dir).unwrap(),
             fs::canonicalize(&target).unwrap(),
             "{point}: {:?}",
             retried.selection.notice
@@ -570,7 +570,10 @@ fn migration_loads_a_supported_legacy_database_with_only_text_documents() {
     }
     let choice = queue_switch(&local, &local, &root.join("target"), AppFlavor::Stable).unwrap();
     let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, choice.target);
+    assert_eq!(
+        fs::canonicalize(&opened.selection.data_dir).unwrap(),
+        fs::canonicalize(&choice.target).unwrap()
+    );
     assert!(
         opened
             .store
@@ -602,7 +605,7 @@ fn explicit_recovery_selection_persists_and_does_not_switch_back_when_disk_retur
     fs::rename(root.join("unmounted"), &custom).unwrap();
     let reopened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
     assert_eq!(
-        reopened.selection.data_dir,
+        fs::canonicalize(&reopened.selection.data_dir).unwrap(),
         fs::canonicalize(&local).unwrap()
     );
     assert_eq!(
@@ -670,7 +673,7 @@ fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
         }
         let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
         assert_eq!(
-            restored.selection.data_dir,
+            fs::canonicalize(&restored.selection.data_dir).unwrap(),
             fs::canonicalize(&local).unwrap()
         );
         assert_eq!(
@@ -745,7 +748,7 @@ fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_cu
             );
         } else {
             assert_eq!(
-                result.unwrap().selection.data_dir,
+                fs::canonicalize(result.unwrap().selection.data_dir).unwrap(),
                 fs::canonicalize(&local).unwrap()
             );
             assert!(!local.join("plugins").exists());
@@ -778,7 +781,10 @@ fn cancelling_an_interrupted_migration_persists_source_selection() {
     assert!(location.pending.is_none());
     assert!(target.join(JOURNAL_NAME).exists());
     let source = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(source.selection.data_dir, fs::canonicalize(&local).unwrap());
+    assert_eq!(
+        fs::canonicalize(&source.selection.data_dir).unwrap(),
+        fs::canonicalize(&local).unwrap()
+    );
     assert!(!target.join(DATABASE_FILE_NAME).exists());
 }
 
