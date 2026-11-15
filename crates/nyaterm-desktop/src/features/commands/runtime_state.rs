@@ -42,11 +42,21 @@ impl CommandRuntimeState {
             .submit_detached("command-persistence", move |_| {
                 let result = match request {
                     CommandPersistenceRequest::AppendHistory(commands) => {
+                        let warning_tx = result_tx.clone();
                         CommandPersistenceResult::History(
                             store
                                 .request_fn(StoreDomain::Commands, move |database| {
                                     for command in commands {
                                         database.append_command_history(&command)?;
+                                    }
+                                    if let Some(message) =
+                                        database.take_command_history_retention_warning()
+                                    {
+                                        let _ = warning_tx.unbounded_send(
+                                            CommandPersistenceResult::HistoryMaintenanceWarning(
+                                                message,
+                                            ),
+                                        );
                                     }
                                     database.list_command_history(64)
                                 })

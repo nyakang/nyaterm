@@ -5,7 +5,7 @@ use futures::channel::{mpsc::UnboundedSender, oneshot};
 use nyaterm_core::completion::CompletionEngine;
 use nyaterm_core::completion::history::TokenHistoryIndex;
 use nyaterm_core::completion::matching::TextMatcher;
-use nyaterm_core::completion::query::search_candidates;
+use nyaterm_core::completion::query::search_candidates_with_cancel;
 use nyaterm_core::completion::types::{
     CompletionFillPolicy, CompletionMode, CompletionResult, ShellCommandContext,
 };
@@ -15,17 +15,26 @@ use nyaterm_store::{StoreBlockingClient, StoreDomain};
 use std::path::PathBuf;
 use std::sync::{
     Arc, OnceLock,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{SyncSender, sync_channel},
+    atomic::{AtomicU64, Ordering},
 };
+
+mod queue;
+
+#[derive(Debug)]
+pub(in crate::features) enum CompletionSearchOutcome {
+    Ready(CompletionResult),
+    Superseded,
+    Busy,
+    Unavailable,
+}
 
 #[derive(Clone)]
 pub(in crate::features) struct CompletionRuntime {
-    tx: SyncSender<Request>,
+    tx: queue::Sender,
     epoch: Arc<AtomicU64>,
     catalog_epoch: Arc<AtomicU64>,
     specs: UserSpecLoader,
-    dirty: Arc<AtomicBool>,
+    latest_search: Arc<AtomicU64>,
     shared_generation: Arc<OnceLock<Arc<AtomicU64>>>,
 }
 
@@ -62,12 +71,16 @@ impl CompletionQuery {
 
 enum Request {
     Observe(ShellCommandContext, String, bool),
-    Search(CompletionQuery, u64, oneshot::Sender<CompletionResult>),
+    Search(
+        CompletionQuery,
+        u64,
+        u64,
+        oneshot::Sender<CompletionSearchOutcome>,
+    ),
     Delete(
         String,
         oneshot::Sender<Result<Vec<CommandHistoryEntry>, String>>,
     ),
-    Reload,
 }
 
 impl CompletionRuntime {
@@ -85,14 +98,14 @@ impl CompletionRuntime {
         events: UnboundedSender<CommandPersistenceResult>,
         user_specs_dir: Option<PathBuf>,
     ) -> Self {
-        let (tx, rx) = sync_channel(64);
+        let (tx, rx) = queue::channel();
         let epoch = Arc::new(AtomicU64::new(0));
         let catalog_epoch = Arc::new(AtomicU64::new(0));
         let worker_catalog_epoch = catalog_epoch.clone();
         let specs = UserSpecLoader::spawn(user_specs_dir);
         let worker_specs = specs.clone();
-        let dirty = Arc::new(AtomicBool::new(false));
-        let worker_dirty = dirty.clone();
+        let latest_search = Arc::new(AtomicU64::new(0));
+        let worker_search = latest_search.clone();
         let shared_generation = Arc::new(OnceLock::<Arc<AtomicU64>>::new());
         let worker_generation = shared_generation.clone();
         let spawn =
@@ -114,32 +127,69 @@ impl CompletionRuntime {
                 let mut whole_history = WholeCommandHistoryIndex::default();
                 let mut loaded_generation =
                     reload_history(&store, &mut history, &mut whole_history).ok();
-                while let Ok(request) = rx.recv() {
+                while let Some(request) = rx.recv() {
                     match request {
                         Request::Observe(context, command, include_global) => {
                             let outcome = store
                                 .request_fn(StoreDomain::Commands, move |database| {
-                                    database.append_completion_contribution(
-                                        &context.scope,
-                                        context.dialect,
-                                        &command,
-                                        include_global,
-                                    )?;
-                                    database.list_command_history(64)
+                                    let before =
+                                        database.completion_generation().load(Ordering::Acquire);
+                                    let update = database
+                                        .append_completion_contribution_with_update(
+                                            &context.scope,
+                                            context.dialect,
+                                            &command,
+                                            include_global,
+                                        )?;
+                                    let after =
+                                        database.completion_generation().load(Ordering::Acquire);
+                                    Ok((
+                                        before,
+                                        after,
+                                        update,
+                                        database.list_command_history(64)?,
+                                        database.take_command_history_retention_warning(),
+                                    ))
                                 })
                                 .map_err(|error| error.to_string());
-                            // Keep the previous generation until both indexes are refreshed.
+                            let outcome =
+                                outcome.map(|(before, after, update, entries, warning)| {
+                                    if loaded_generation == Some(before)
+                                        && after == before.wrapping_add(1)
+                                        && let Some((_, update)) = update
+                                    {
+                                        apply_history_update(
+                                            &mut history,
+                                            &mut whole_history,
+                                            update,
+                                        );
+                                        loaded_generation = Some(after);
+                                    }
+                                    if let Some(message) = warning {
+                                        let _ = events.unbounded_send(
+                                            CommandPersistenceResult::HistoryMaintenanceWarning(
+                                                message,
+                                            ),
+                                        );
+                                    }
+                                    entries
+                                });
                             let _ =
                                 events.unbounded_send(CommandPersistenceResult::History(outcome));
                         }
-                        Request::Search(query, revision, response) => {
+                        Request::Search(query, revision, search_id, response) => {
+                            let mut cancelled = || {
+                                response.is_canceled()
+                                    || worker_search.load(Ordering::Acquire) != search_id
+                            };
+                            if cancelled() {
+                                continue;
+                            }
                             if let Some(updated) = worker_specs.take() {
                                 engine = updated;
                                 worker_catalog_epoch.fetch_add(1, Ordering::AcqRel);
                             }
-                            if worker_dirty.swap(false, Ordering::AcqRel)
-                                || loaded_generation != Some(generation())
-                            {
+                            if loaded_generation != Some(generation()) {
                                 loaded_generation =
                                     reload_history(&store, &mut history, &mut whole_history).ok();
                                 if loaded_generation.is_none() {
@@ -147,19 +197,24 @@ impl CompletionRuntime {
                                     whole_history = WholeCommandHistoryIndex::default();
                                 }
                             }
-                            let candidates = search_candidates(
+                            let candidates = search_candidates_with_cancel(
                                 &mut engine,
                                 &history,
                                 &whole_history,
                                 &query.borrowed(),
                                 &mut whole_matcher,
+                                &mut cancelled,
                             );
-                            let _ = response.send(CompletionResult {
-                                candidates,
-                                revision: revision
-                                    .wrapping_add(loaded_generation.unwrap_or_else(generation))
-                                    .wrapping_add(worker_catalog_epoch.load(Ordering::Acquire)),
-                            });
+                            let Some(candidates) = candidates else {
+                                continue;
+                            };
+                            let _ =
+                                response.send(CompletionSearchOutcome::Ready(CompletionResult {
+                                    candidates,
+                                    revision: revision
+                                        .wrapping_add(loaded_generation.unwrap_or_else(generation))
+                                        .wrapping_add(worker_catalog_epoch.load(Ordering::Acquire)),
+                                }));
                         }
                         Request::Delete(command, response) => {
                             let outcome = store
@@ -169,15 +224,6 @@ impl CompletionRuntime {
                                 })
                                 .map_err(|error| error.to_string());
                             let _ = response.send(outcome);
-                        }
-                        Request::Reload => {
-                            worker_specs.request();
-                            loaded_generation =
-                                reload_history(&store, &mut history, &mut whole_history).ok();
-                            if loaded_generation.is_none() {
-                                history = TokenHistoryIndex::default();
-                                whole_history = WholeCommandHistoryIndex::default();
-                            }
                         }
                     }
                 }
@@ -189,7 +235,7 @@ impl CompletionRuntime {
             epoch,
             catalog_epoch,
             specs,
-            dirty,
+            latest_search,
             shared_generation,
         }
     }
@@ -223,24 +269,39 @@ impl CompletionRuntime {
     }
     pub(in crate::features) fn reload(&self) {
         self.specs.request();
-        self.dirty.store(true, Ordering::Release);
         self.epoch.fetch_add(1, Ordering::AcqRel);
-        let _ = self.tx.try_send(Request::Reload);
     }
+    #[cfg(test)]
     pub(in crate::features) async fn search(&self, query: CompletionQuery) -> CompletionResult {
-        let revision = self.epoch.load(Ordering::Acquire);
-        let (tx, rx) = oneshot::channel();
-        if self
-            .tx
-            .try_send(Request::Search(query, revision, tx))
-            .is_err()
-        {
-            return CompletionResult {
-                candidates: Vec::new(),
-                revision,
-            };
+        match self.search_outcome(query).await {
+            CompletionSearchOutcome::Ready(result) => result,
+            _ => CompletionResult::default(),
         }
-        rx.await.unwrap_or_default()
+    }
+    pub(in crate::features) async fn search_outcome(
+        &self,
+        query: CompletionQuery,
+    ) -> CompletionSearchOutcome {
+        let revision = self.epoch.load(Ordering::Acquire);
+        let search_id = self
+            .latest_search
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let (tx, rx) = oneshot::channel();
+        match self
+            .tx
+            .try_send(Request::Search(query, revision, search_id, tx))
+        {
+            Ok(()) => rx.await.unwrap_or_else(|_| {
+                if self.tx.is_closed() {
+                    CompletionSearchOutcome::Unavailable
+                } else {
+                    CompletionSearchOutcome::Superseded
+                }
+            }),
+            Err(queue::QueueError::Busy) => CompletionSearchOutcome::Busy,
+            Err(queue::QueueError::Closed) => CompletionSearchOutcome::Unavailable,
+        }
     }
     pub(in crate::features) async fn delete(
         &self,
@@ -253,6 +314,33 @@ impl CompletionRuntime {
             .map_err(|_| "Completion worker is unavailable".to_string())?;
         rx.await
             .map_err(|_| "Completion worker disconnected".to_string())?
+    }
+}
+
+fn apply_history_update(
+    tokens: &mut TokenHistoryIndex,
+    whole: &mut WholeCommandHistoryIndex,
+    update: nyaterm_core::completion::types::CompletionHistoryUpdate,
+) {
+    if let Some(global) = &update.global {
+        whole.upsert_global(global);
+    }
+    whole.upsert_scoped(&update.record);
+    let scope = update.record.scope.clone();
+    tokens.upsert(update.record);
+    // A clock moving backwards can evict the contribution just written.
+    // Apply transaction deletions last so the cache reflects the committed rows.
+    for command in &update.evicted_global {
+        whole.remove_global(command);
+    }
+    for command in &update.evicted_legacy {
+        let scope = nyaterm_core::completion::types::CompletionScope::legacy();
+        whole.remove_scoped(&scope, command);
+        tokens.remove_scoped(&scope, command);
+    }
+    for command in &update.evicted_scoped {
+        whole.remove_scoped(&scope, command);
+        tokens.remove_scoped(&scope, command);
     }
 }
 
@@ -403,6 +491,8 @@ mod tests {
             .unwrap();
         waiting.recv_timeout(Duration::from_secs(5)).unwrap();
         let (finished, result) = channel();
+        runtime.reload();
+        let expected_revision = runtime.revision();
         let searcher =
             crate::thread_owner::spawn_joinable("completion-cache-search-test", move || {
                 let _ = finished.send(futures::executor::block_on(runtime.search(query())));
@@ -414,7 +504,7 @@ mod tests {
         blocker.join().unwrap().unwrap();
         searcher.join().unwrap();
         let cached = cached.expect("unchanged queries must not wait for the database actor");
-        assert_eq!(cached.revision, first.revision);
+        assert_eq!(cached.revision, expected_revision);
         assert_eq!(
             cached.candidates[0].insert_text,
             first.candidates[0].insert_text
@@ -508,5 +598,106 @@ mod tests {
         assert!(search(&second, "fixture-only-glo").candidates.is_empty());
         assert!(runtime.observe(context, "curl --user fixture-sensitive".into()));
         assert!(search(&runtime, "fixture-sensitive").candidates.is_empty());
+    }
+    #[test]
+    fn newest_queued_search_supersedes_older_requests_and_worker_loss_is_visible() {
+        use super::CompletionSearchOutcome;
+        use futures::FutureExt;
+        use nyaterm_store::StoreDomain;
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let dir = TestConfigDir::new("nyaterm-completion-newest-search");
+        let store = blocking_test_store(dir.path());
+        let held_store = store.clone();
+        let (started, ready) = channel();
+        let (release, blocked) = channel();
+        let blocker = crate::thread_owner::spawn_joinable("completion-queue-test", move || {
+            held_store.request_fn(StoreDomain::Commands, move |_| {
+                started.send(()).unwrap();
+                let _ = blocked.recv_timeout(Duration::from_secs(10));
+                Ok(())
+            })
+        })
+        .unwrap();
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (events, _rx) = unbounded();
+        let runtime = CompletionRuntime::new(store, events);
+        let query = || CompletionQuery {
+            fill_policy: None,
+            context: ShellCommandContext {
+                scope: CompletionScope::new(&["latest"]),
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            },
+            input: "dock".into(),
+            mode: CompletionMode::Token,
+            quick: Arc::from([]),
+            min: 1,
+            max: 100,
+        };
+        let mut first = Box::pin(runtime.search_outcome(query()));
+        let mut newest = Box::pin(runtime.search_outcome(query()));
+        assert!(first.as_mut().now_or_never().is_none());
+        assert!(newest.as_mut().now_or_never().is_none());
+        assert!(matches!(
+            futures::executor::block_on(first),
+            CompletionSearchOutcome::Superseded
+        ));
+        release.send(()).unwrap();
+        blocker.join().unwrap().unwrap();
+        assert!(matches!(
+            futures::executor::block_on(newest),
+            CompletionSearchOutcome::Ready(_)
+        ));
+        // A closed queue must be distinguishable from a superseded query.
+        let (sender, receiver) = super::queue::channel();
+        let mut unavailable = runtime.clone();
+        unavailable.tx = sender;
+        drop(receiver);
+        assert!(matches!(
+            futures::executor::block_on(unavailable.search_outcome(query())),
+            CompletionSearchOutcome::Unavailable
+        ));
+    }
+    #[test]
+    fn incremental_updates_respect_eviction_of_a_newly_written_contribution() {
+        use super::apply_history_update;
+        use nyaterm_core::completion::history::TokenHistoryIndex;
+        use nyaterm_core::completion::types::{CompletionHistoryUpdate, ScopedHistoryRecord};
+        use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
+        use nyaterm_core::models::quick_commands::CommandHistoryEntry;
+        let scope = CompletionScope::new(&["clock-rollback"]);
+        let command = "fixture rollback";
+        let mut tokens = TokenHistoryIndex::default();
+        let mut whole = WholeCommandHistoryIndex::default();
+        apply_history_update(
+            &mut tokens,
+            &mut whole,
+            CompletionHistoryUpdate {
+                record: ScopedHistoryRecord {
+                    version: 1,
+                    scope: scope.clone(),
+                    dialect: ShellDialect::Bash,
+                    command: command.into(),
+                    use_count: 1,
+                    last_used_at_ms: 1,
+                    extensions: Default::default(),
+                },
+                global: Some(CommandHistoryEntry {
+                    command: command.into(),
+                    use_count: 1,
+                    last_used_at_ms: 1,
+                }),
+                evicted_global: vec![command.into()],
+                evicted_scoped: vec![command.into()],
+                evicted_legacy: Vec::new(),
+            },
+        );
+        assert!(whole.get(command, &scope).is_none());
+        assert!(
+            tokens
+                .candidates(&scope, &[], ShellDialect::Bash)
+                .is_empty()
+        );
     }
 }

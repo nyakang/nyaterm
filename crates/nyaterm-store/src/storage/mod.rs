@@ -30,6 +30,7 @@ mod cloud_sync_v4;
 mod command_history;
 mod completion_history;
 mod config_backup;
+mod history_retention;
 mod keyword_highlights;
 mod known_hosts;
 pub mod maintenance;
@@ -192,6 +193,8 @@ pub enum StorageError {
     },
     #[error("invalid data: {0}")]
     InvalidData(String),
+    #[error("history safety backup I/O failed: {0}")]
+    HistoryBackupIo(#[from] std::io::Error),
     #[error("local configuration changed during cloud sync")]
     CloudSyncLocalChanged,
 }
@@ -202,6 +205,7 @@ pub struct ConnectionStore {
     db_path: PathBuf,
     portable_key_path: Option<PathBuf>,
     completion_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    history_retention: std::sync::Mutex<history_retention::RetentionState>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -247,6 +251,7 @@ impl ConnectionStore {
             db_path,
             portable_key_path,
             completion_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            history_retention: std::sync::Mutex::new(history_retention::RetentionState::default()),
         };
         store.ensure_tables()?;
         store.initialize_completion_history()?;
@@ -331,6 +336,12 @@ impl ConnectionStore {
     /// Content identity excludes redb's mutable allocator/header bookkeeping.
     pub(crate) fn database_fingerprint(db: &Database) -> Result<String, StorageError> {
         let txn = db.begin_read()?;
+        Self::transaction_fingerprint(&txn)
+    }
+
+    pub(super) fn transaction_fingerprint(
+        txn: &redb::ReadTransaction,
+    ) -> Result<String, StorageError> {
         if txn.list_multimap_tables()?.next().is_some() {
             return Err(StorageError::InvalidData(
                 "unsupported multimap database layout".into(),
@@ -1713,24 +1724,6 @@ impl ConnectionStore {
         self.list_raw_by_prefix(definition, prefix)?
             .into_iter()
             .map(|(_, value)| serde_json::from_slice(&value).map_err(StorageError::from))
-            .collect()
-    }
-
-    fn list_keyed_json_by_prefix<T>(
-        &self,
-        definition: TableDefinition<&str, &[u8]>,
-        prefix: &str,
-    ) -> Result<Vec<(String, T)>, StorageError>
-    where
-        T: DeserializeOwned,
-    {
-        self.list_raw_by_prefix(definition, prefix)?
-            .into_iter()
-            .map(|(key, value)| {
-                serde_json::from_slice(&value)
-                    .map(|value| (key, value))
-                    .map_err(StorageError::from)
-            })
             .collect()
     }
 }

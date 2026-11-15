@@ -1,5 +1,5 @@
 //! Combine whole-command history and token completion without I/O or a clock.
-use crate::command_search::{RankedCommandSourceQuery, search_ranked_command_sources_using};
+use crate::command_search::{RankedCommandSourceQuery, search_ranked_command_sources_with_cancel};
 use crate::completion::history::TokenHistoryIndex;
 use crate::completion::matching::TextMatcher;
 use crate::completion::types::{
@@ -28,9 +28,21 @@ pub fn search_candidates(
     query: &CompletionQuery<'_>,
     matcher: &mut TextMatcher,
 ) -> Vec<CompletionCandidate> {
-    let mut candidates = full_history(whole, query, matcher);
+    search_candidates_with_cancel(engine, history, whole, query, matcher, &mut || false)
+        .unwrap_or_default()
+}
+
+pub fn search_candidates_with_cancel(
+    engine: &mut CompletionEngine,
+    history: &TokenHistoryIndex,
+    whole: &WholeCommandHistoryIndex,
+    query: &CompletionQuery<'_>,
+    matcher: &mut TextMatcher,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Option<Vec<CompletionCandidate>> {
+    let mut candidates = full_history(whole, query, matcher, cancelled)?;
     if query.mode == CompletionMode::History {
-        return candidates;
+        return Some(candidates);
     }
     // Whole commands retain their display, kind and statistics when a token
     // provider reaches the same target. Match scores from the two queries are
@@ -40,16 +52,19 @@ pub fn search_candidates(
         .enumerate()
         .filter_map(|(index, item)| item.target_line(query.input).map(|line| (line, index)))
         .collect();
-    let tokens = engine.complete(TokenCompletionRequest {
-        fill_policy: query.fill_policy,
-        input: query.input,
-        cursor: query.input.len(),
-        dialect: query.context.dialect,
-        scope: query.context.scope.clone(),
-        history,
-        quick: &TokenHistoryIndex::default(),
-        limit: 12,
-    });
+    let tokens = engine.complete_with_cancel(
+        TokenCompletionRequest {
+            fill_policy: query.fill_policy,
+            input: query.input,
+            cursor: query.input.len(),
+            dialect: query.context.dialect,
+            scope: query.context.scope.clone(),
+            history,
+            quick: &TokenHistoryIndex::default(),
+            limit: 12,
+        },
+        cancelled,
+    )?;
     let history_rows = candidates.len();
     for token in tokens {
         let Some(target) = token.target_line(query.input) else {
@@ -67,7 +82,7 @@ pub fn search_candidates(
     }
     reserve_argument_rows(&mut candidates, history_rows, query.input);
     candidates.truncate(12);
-    candidates
+    Some(candidates)
 }
 
 /// Rows reserved for flags and subcommands so a long history cannot push the
@@ -115,8 +130,9 @@ fn full_history(
     index: &WholeCommandHistoryIndex,
     query: &CompletionQuery<'_>,
     matcher: &mut TextMatcher,
-) -> Vec<CompletionCandidate> {
-    search_ranked_command_sources_using(
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Option<Vec<CompletionCandidate>> {
+    search_ranked_command_sources_with_cancel(
         matcher,
         RankedCommandSourceQuery {
             fill_policy: query.fill_policy,
@@ -129,6 +145,7 @@ fn full_history(
             max_history_command_length: Some(query.max),
             now_ms: query.now_ms,
         },
+        cancelled,
     )
 }
 

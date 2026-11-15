@@ -19,28 +19,17 @@ impl ConnectionStore {
         let Some(command) = sanitize_history_command(command) else {
             return Ok(());
         };
-        // Read the canonical raw row only. list_command_history also includes
-        // legacy control-prefixed rows, whose counts must not be saved twice.
-        let mut entry = self
-            .list_keyed_json_by_prefix::<CommandHistoryEntry>(
-                COMMAND_HISTORY_TABLE,
-                COMMAND_HISTORY_PREFIX,
-            )?
-            .into_iter()
-            .map(|(_, entry)| entry)
-            .find(|entry| entry.command == command)
-            .unwrap_or(CommandHistoryEntry {
-                command,
-                last_used_at_ms: 0,
-                use_count: 0,
-            });
-        entry.last_used_at_ms = current_time_ms();
-        entry.use_count = if entry.use_count == 0 {
-            1
-        } else {
-            entry.use_count.saturating_add(1)
-        };
-        self.save_command_history_entry(&entry)
+        let retain = self.prepare_history_retention()?;
+        let txn = self.db.begin_write()?;
+        append_global_history_in_txn(&txn, &command, current_time_ms())?;
+        if retain {
+            super::history_retention::retain_history_in_txn(&txn)?;
+        }
+        super::completion_history::bump_revision(&txn)?;
+        txn.commit()?;
+        self.invalidate_completion();
+        self.note_history_retention_committed();
+        Ok(())
     }
 
     pub fn list_command_history(
@@ -83,15 +72,6 @@ impl ConnectionStore {
     ) -> Result<(), StorageError> {
         let txn = self.db.begin_write()?;
         replace_command_history_in_txn(&txn, entries)?;
-        txn.commit()?;
-        self.invalidate_completion();
-        Ok(())
-    }
-
-    fn save_command_history_entry(&self, entry: &CommandHistoryEntry) -> Result<(), StorageError> {
-        let txn = self.db.begin_write()?;
-        save_command_history_entry_in_txn(&txn, entry)?;
-        super::completion_history::bump_revision(&txn)?;
         txn.commit()?;
         self.invalidate_completion();
         Ok(())
@@ -346,12 +326,20 @@ pub(super) fn append_global_history_in_txn(
     txn: &redb::WriteTransaction,
     command: &str,
     now: u64,
-) -> Result<(), StorageError> {
+) -> Result<CommandHistoryEntry, StorageError> {
     let table = txn.open_table(COMMAND_HISTORY_TABLE)?;
+    let id = command_history_id(command);
+    let suffix = format!("|{id}");
     let mut document =
         serde_json::json!({"command": command, "use_count": 0, "last_used_at_ms": 0});
     for row in table.iter()? {
-        let (_, value) = row?;
+        let (key, value) = row?;
+        if !key.value().starts_with(COMMAND_HISTORY_PREFIX) || !key.value().ends_with(&suffix) {
+            continue;
+        }
+        // Validate known fields before replacing a raw document; extensions
+        // remain untouched, but unsupported known-field data must fail closed.
+        serde_json::from_slice::<CommandHistoryEntry>(value.value())?;
         let raw: serde_json::Value = serde_json::from_slice(value.value())?;
         if raw.get("command").and_then(serde_json::Value::as_str) == Some(command) {
             document = raw;
@@ -367,7 +355,6 @@ pub(super) fn append_global_history_in_txn(
         .min(u32::MAX as u64) as u32;
     document["use_count"] = serde_json::json!(count);
     document["last_used_at_ms"] = serde_json::json!(now);
-    let id = command_history_id(command);
     remove_command_history_id_in_txn(txn, &id)?;
     let entry = CommandHistoryEntry {
         command: command.into(),
@@ -379,5 +366,6 @@ pub(super) fn append_global_history_in_txn(
         COMMAND_HISTORY_TABLE,
         &command_history_key(&entry, &id),
         &document,
-    )
+    )?;
+    Ok(entry)
 }

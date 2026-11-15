@@ -11,17 +11,18 @@ use nyaterm_core::models::quick_commands::CommandHistoryEntry;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
 use std::hint::black_box;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 struct CountedAllocator;
+static COUNT_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 static LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
 static PEAK_BYTES: AtomicU64 = AtomicU64::new(0);
 unsafe impl GlobalAlloc for CountedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { System.alloc(layout) };
-        if !ptr.is_null() {
+        if !ptr.is_null() && COUNT_ALLOCATIONS.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
             let live = LIVE_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed)
                 + layout.size() as u64;
@@ -30,7 +31,11 @@ unsafe impl GlobalAlloc for CountedAllocator {
         ptr
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE_BYTES.fetch_sub(layout.size() as u64, Ordering::Relaxed);
+        if COUNT_ALLOCATIONS.load(Ordering::Relaxed) {
+            let _ = LIVE_BYTES.try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+                Some(live.saturating_sub(layout.size() as u64))
+            });
+        }
         unsafe {
             System.dealloc(ptr, layout);
         }
@@ -42,31 +47,34 @@ static ALLOCATOR: CountedAllocator = CountedAllocator;
 fn measure(label: &str, size: usize, query: &str, mut run: impl FnMut()) {
     run();
     let mut samples = Vec::with_capacity(25);
-    let mut allocations = 0;
-    let mut peak = 0;
+    // Timing runs have accounting disabled; collect allocation evidence separately.
     for _ in 0..25 {
-        let count = ALLOCATIONS.load(Ordering::Relaxed);
-        let live = LIVE_BYTES.load(Ordering::Relaxed);
-        PEAK_BYTES.store(live, Ordering::Relaxed);
         let started = Instant::now();
         run();
         samples.push(started.elapsed().as_nanos());
-        allocations += ALLOCATIONS.load(Ordering::Relaxed).saturating_sub(count);
-        peak = peak.max(PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(live));
     }
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    LIVE_BYTES.store(0, Ordering::Relaxed);
+    PEAK_BYTES.store(0, Ordering::Relaxed);
+    COUNT_ALLOCATIONS.store(true, Ordering::Relaxed);
+    run();
+    COUNT_ALLOCATIONS.store(false, Ordering::Relaxed);
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    let peak = PEAK_BYTES.load(Ordering::Relaxed);
     samples.sort_unstable();
     println!(
         "{label},{size},{query},{:.3},{:.3},{},{peak}",
         samples[12] as f64 / 1e6,
         samples[23] as f64 / 1e6,
-        allocations / 25
+        allocations
     );
 }
 
 fn main() {
+    let optimized_only = std::env::args().any(|arg| arg == "--optimized-only");
     let weighted_only = std::env::args().any(|arg| arg == "--weighted-only");
     println!("engine,candidates,query,p50_ms,p95_ms,allocations,peak_increment_bytes");
-    for size in [64, 1000, 10000, 50000] {
+    for size in [64, 1000, 5000, 10000, 50000] {
         let candidates: Vec<_> = (0..size)
             .map(|i| format!("docker compose run service-{i:05} 工具"))
             .collect();
@@ -74,7 +82,7 @@ fn main() {
             .iter()
             .map(|text| (text.as_str(), text.as_str()))
             .collect();
-        if !weighted_only {
+        if !weighted_only && !optimized_only {
             measure("search_adapter", size, "dcr", || {
                 black_box(fuzzy_search_items(&items, "dcr", "history", 12, None, None));
             });
@@ -129,7 +137,7 @@ fn main() {
                 ));
             });
         }
-        if weighted_only {
+        if weighted_only || optimized_only {
             continue;
         }
         for query in [
@@ -160,16 +168,43 @@ fn main() {
     }
     let scope = CompletionScope::new(&["synthetic-host"]);
     let mut history = TokenHistoryIndex::default();
-    for i in 0..5000 {
-        history.upsert(ScopedHistoryRecord {
-            version: 1,
-            scope: scope.clone(),
-            dialect: ShellDialect::Bash,
-            command: format!("docker run image-{i:05}"),
-            use_count: 1,
-            last_used_at_ms: i,
-            extensions: BTreeMap::new(),
+    for size in [1000, 5000, 10000] {
+        let records: Vec<_> = (0..size)
+            .map(|i| ScopedHistoryRecord {
+                version: 1,
+                scope: scope.clone(),
+                dialect: ShellDialect::Bash,
+                command: format!("docker run image-{i:05}"),
+                use_count: 1,
+                last_used_at_ms: i as u64,
+                extensions: BTreeMap::new(),
+            })
+            .collect();
+        measure("token_cold", size, "shared-prefix", || {
+            let mut index = TokenHistoryIndex::default();
+            for record in &records {
+                index.upsert(record.clone());
+            }
+            black_box(index);
         });
+        let mut sample_history = TokenHistoryIndex::default();
+        sample_history.reconcile(records);
+        let mut count = 0;
+        measure("token_update", size, "existing", || {
+            count += 1;
+            sample_history.upsert(ScopedHistoryRecord {
+                version: 1,
+                scope: scope.clone(),
+                dialect: ShellDialect::Bash,
+                command: "docker run image-00000".into(),
+                use_count: count,
+                last_used_at_ms: 10000,
+                extensions: BTreeMap::new(),
+            });
+        });
+        if size == 5000 {
+            history = sample_history;
+        }
     }
     let mut engine = CompletionEngine::embedded();
     let quick = TokenHistoryIndex::default();
@@ -187,6 +222,71 @@ fn main() {
             }));
         });
     }
+    use nyaterm_core::completion::path::{PathEntry, path_candidates, path_query_for_input};
+    let entries: Vec<_> = (0..20000)
+        .map(|i| PathEntry {
+            name: format!("project-{i:05}"),
+            is_dir: i % 3 == 0,
+            is_symlink: false,
+            size: None,
+        })
+        .collect();
+    let input = "cd pr";
+    let path = path_query_for_input(input, ShellDialect::Bash, scope.clone()).unwrap();
+    let mut matcher = TextMatcher::default();
+    measure("paths", 20000, "pr", || {
+        black_box(path_candidates(&path, &entries, input, &mut matcher, 12));
+    });
+    let globals: Vec<_> = (0..50000)
+        .map(|i| CommandHistoryEntry {
+            command: format!("fixture command-{i:05}"),
+            use_count: 1,
+            last_used_at_ms: i,
+        })
+        .collect();
+    let mut whole = WholeCommandHistoryIndex::default();
+    whole.reconcile(&globals, &[]);
+    measure("cancelled_whole", 50000, "fixture", || {
+        let mut checks = 0;
+        black_box(
+            nyaterm_core::command_search::search_ranked_command_sources_with_cancel(
+                &mut matcher,
+                RankedCommandSourceQuery {
+                    history: &whole,
+                    scope: &scope,
+                    quick_commands: &[],
+                    pattern: "fixture",
+                    limit: 12,
+                    min_history_command_length: None,
+                    max_history_command_length: None,
+                    now_ms: 10000,
+                    fill_policy: None,
+                },
+                &mut || {
+                    checks += 1;
+                    checks >= 3
+                },
+            ),
+        );
+    });
+    let scoped: Vec<_> = (0..5000)
+        .map(|i| ScopedHistoryRecord {
+            version: 1,
+            scope: CompletionScope::new(&["fixture-scope", &(i % 16).to_string()]),
+            dialect: ShellDialect::Bash,
+            command: globals[i].command.clone(),
+            use_count: 1,
+            last_used_at_ms: i as u64,
+            extensions: BTreeMap::new(),
+        })
+        .collect();
+    whole.reconcile(&globals, &scoped);
+    measure("whole_reconcile", 50000, "16-scopes", || {
+        whole.reconcile(&globals, &scoped);
+    });
+    measure("whole_update", 50000, "existing", || {
+        whole.upsert_scoped(&scoped[0]);
+    });
 }
 
 // The pre-migration algorithm, retained only for the reproducible baseline.

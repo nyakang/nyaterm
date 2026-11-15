@@ -3,6 +3,9 @@ use crate::file_browser::FileBrowserService;
 use crate::sftp::{SftpFileType, SftpTransferControl};
 use std::time::Instant;
 
+/// A completion request may follow only this many selected targets.
+pub const MAX_DIRECTORY_TARGETS: usize = 12;
+
 #[derive(Clone, Copy)]
 pub struct DirectoryLimits {
     pub entries: usize,
@@ -23,6 +26,41 @@ pub struct DirectoryListing {
 }
 
 impl FileBrowserService {
+    /// Follows only the caller-selected targets, never recursively enumerates them.
+    pub fn probe_directory_targets(
+        &self,
+        paths: &[String],
+        control: SftpTransferControl,
+        deadline: Instant,
+    ) -> anyhow::Result<Vec<Option<bool>>> {
+        anyhow::ensure!(
+            paths.len() <= MAX_DIRECTORY_TARGETS,
+            "too many directory targets"
+        );
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self {
+            Self::Local(_) => {
+                let mut result = Vec::with_capacity(paths.len());
+                for path in paths {
+                    if control.is_cancelled() || Instant::now() >= deadline {
+                        break;
+                    }
+                    result.push(
+                        std::fs::metadata(path)
+                            .ok()
+                            .map(|metadata| metadata.is_dir()),
+                    );
+                }
+                result.resize(paths.len(), None);
+                Ok(result)
+            }
+            Self::Remote(service) => service.probe_directory_targets(paths, control, deadline),
+            Self::Adb(_) => anyhow::bail!("directory target probing is unavailable"),
+        }
+    }
+
     pub fn list_directory_lightweight(
         &self,
         path: &str,
@@ -160,5 +198,57 @@ mod tests {
         assert!(listing.complete);
         assert_eq!(listing.entries.len(), 1);
         assert_eq!(listing.entries[0].name, "valid");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn selected_link_targets_distinguish_directories_files_and_broken_loops() {
+        use crate::file_browser::FileBrowserService;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("directory")).unwrap();
+        std::fs::write(dir.path().join("file"), []).unwrap();
+        for (name, target) in [
+            ("dir-link", "directory"),
+            ("file-link", "file"),
+            ("broken", "missing"),
+            ("loop", "loop"),
+        ] {
+            std::os::unix::fs::symlink(target, dir.path().join(name)).unwrap();
+        }
+        let paths: Vec<_> = ["dir-link", "file-link", "broken", "loop"]
+            .iter()
+            .map(|name| dir.path().join(name).to_str().unwrap().to_string())
+            .collect();
+        let service = FileBrowserService::local();
+        let result = service
+            .probe_directory_targets(
+                &paths,
+                SftpTransferControl::default(),
+                Instant::now() + Duration::from_secs(2),
+            )
+            .unwrap();
+        assert_eq!(result, vec![Some(true), Some(false), None, None]);
+        let control = SftpTransferControl::default();
+        control.cancel();
+        assert_eq!(
+            service
+                .probe_directory_targets(&paths, control, Instant::now() + Duration::from_secs(2))
+                .unwrap(),
+            vec![None; 4]
+        );
+        assert_eq!(
+            service
+                .probe_directory_targets(&paths, SftpTransferControl::default(), Instant::now())
+                .unwrap(),
+            vec![None; 4]
+        );
+        assert!(
+            service
+                .probe_directory_targets(
+                    &vec![paths[0].clone(); 13],
+                    SftpTransferControl::default(),
+                    Instant::now() + Duration::from_secs(2)
+                )
+                .is_err()
+        );
     }
 }

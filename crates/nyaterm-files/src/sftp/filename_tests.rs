@@ -331,7 +331,15 @@ fn reply(
                 path
             };
             let path = if kind == 17 {
-                files.links.get(&path).cloned().unwrap_or(path)
+                let mut path = path;
+                let mut visited = HashSet::new();
+                while let Some(target) = files.links.get(&path) {
+                    if !visited.insert(path.clone()) {
+                        return status(id, 4);
+                    }
+                    path = target.clone();
+                }
+                path
             } else {
                 path
             };

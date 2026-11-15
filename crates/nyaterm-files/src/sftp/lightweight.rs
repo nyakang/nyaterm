@@ -1,10 +1,63 @@
-use crate::file_browser::lightweight::{DirectoryEntry, DirectoryLimits, DirectoryListing};
+use crate::file_browser::lightweight::{
+    DirectoryEntry, DirectoryLimits, DirectoryListing, MAX_DIRECTORY_TARGETS,
+};
 use crate::sftp::{
     SftpPathCodec, SftpService, SftpTransferControl, attrs_to_sftp_file_type, close_sftp_session,
 };
 use std::time::{Duration, Instant};
 
 impl SftpService {
+    pub(crate) fn probe_directory_targets(
+        &self,
+        paths: &[String],
+        control: SftpTransferControl,
+        deadline: Instant,
+    ) -> anyhow::Result<Vec<Option<bool>>> {
+        anyhow::ensure!(
+            paths.len() <= MAX_DIRECTORY_TARGETS,
+            "too many directory targets"
+        );
+        if paths.is_empty() || control.is_cancelled() || Instant::now() >= deadline {
+            return Ok(vec![None; paths.len()]);
+        }
+        let codec = SftpPathCodec::from_ssh_config(&self.config)?;
+        let paths = paths
+            .iter()
+            .map(|path| codec.encode_path(path))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let factory = self.session_factory();
+        let cancel = control.clone();
+        let timeout = control.clone();
+        let timer = self.export_runtime()?.spawn(async move {
+            tokio::time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+            timeout.cancel();
+        });
+        let result = self.run_controlled_operation(control, false, async move {
+            let session = cancel.until_cancelled(factory.open()).await??;
+            let mut result = Vec::with_capacity(paths.len());
+            let count = paths.len();
+            for path in paths {
+                if cancel.is_cancelled() || Instant::now() >= deadline {
+                    break;
+                }
+                match cancel
+                    .until_cancelled(session.sftp.metadata_bytes(path))
+                    .await
+                {
+                    Ok(value) => result.push(value.ok().map(|attrs| {
+                        attrs_to_sftp_file_type(&attrs) == crate::sftp::SftpFileType::Directory
+                    })),
+                    Err(_) => break,
+                }
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(1), close_sftp_session(session)).await;
+            result.resize(count, None);
+            Ok(result)
+        });
+        timer.abort();
+        result
+    }
+
     pub(crate) fn list_directory_lightweight(
         &self,
         path: &str,
@@ -164,6 +217,105 @@ mod tests {
             .block_on(hold)
             .unwrap();
         assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn selected_links_use_bounded_stat_only_and_the_configured_path_encoding() {
+        let (service, files) = filename_tests::service("GBK");
+        let target = crate::sftp::SftpPathCodec::from_ssh_config(&service.config)
+            .unwrap()
+            .encode_path("/目录")
+            .unwrap();
+        {
+            let mut files = files.lock().unwrap();
+            files.directories.insert(target.clone());
+            files.contents.insert(b"/file".to_vec(), Vec::new());
+            files.links.insert(b"/loop".to_vec(), b"/loop".to_vec());
+            files.links.insert(b"/dir-link".to_vec(), target);
+            files
+                .links
+                .insert(b"/file-link".to_vec(), b"/file".to_vec());
+            files
+                .links
+                .insert(b"/broken".to_vec(), b"/missing".to_vec());
+        }
+        let paths: Vec<_> = ["/dir-link", "/file-link", "/broken", "/目录", "/loop"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let values = service
+            .probe_directory_targets(
+                &paths,
+                SftpTransferControl::default(),
+                Instant::now() + Duration::from_secs(2),
+            )
+            .unwrap();
+        assert_eq!(
+            values,
+            vec![Some(true), Some(false), None, Some(true), None]
+        );
+        let files = files.lock().unwrap();
+        assert_eq!(
+            files
+                .request_kinds
+                .iter()
+                .filter(|&&kind| kind == 17)
+                .count(),
+            5
+        );
+        assert!(files.request_kinds.iter().all(|&kind| kind == 17));
+        drop(files);
+        assert!(
+            service
+                .probe_directory_targets(
+                    &vec!["/dir-link".into(); 13],
+                    SftpTransferControl::default(),
+                    Instant::now() + Duration::from_secs(2)
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn link_probe_deadline_interrupts_a_server_that_never_returns_stat() {
+        let (service, files) = filename_tests::service("UTF-8");
+        files
+            .lock()
+            .unwrap()
+            .request_delay
+            .insert(17, Duration::from_secs(30));
+        let start = Instant::now();
+        let result = service.probe_directory_targets(
+            &["/link".into()],
+            SftpTransferControl::default(),
+            start + Duration::from_millis(50),
+        );
+        assert!(result.is_err() || result.unwrap() == vec![None]);
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn cancellation_interrupts_an_in_flight_link_probe() {
+        let (service, files) = filename_tests::service("UTF-8");
+        let (started, ready) = std::sync::mpsc::channel();
+        {
+            let mut files = files.lock().unwrap();
+            files.request_delay.insert(17, Duration::from_secs(30));
+            files.request_delay_started = Some(started);
+        }
+        let control = SftpTransferControl::default();
+        let worker_control = control.clone();
+        let worker = std::thread::spawn(move || {
+            service.probe_directory_targets(
+                &["/link".into()],
+                worker_control,
+                Instant::now() + Duration::from_secs(10),
+            )
+        });
+        assert_eq!(ready.recv_timeout(Duration::from_secs(2)).unwrap(), 17);
+        let start = Instant::now();
+        control.cancel();
+        let result = worker.join().unwrap();
+        assert!(result.is_err() || result.unwrap() == vec![None]);
         assert!(start.elapsed() < Duration::from_secs(2));
     }
 }

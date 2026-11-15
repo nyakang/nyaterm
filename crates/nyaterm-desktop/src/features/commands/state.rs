@@ -472,6 +472,7 @@ impl CommandFeatureState {
         event: CommandPersistenceResult,
     ) -> Result<(), String> {
         match event {
+            CommandPersistenceResult::HistoryMaintenanceWarning(message) => Err(message),
             CommandPersistenceResult::History(Ok(history)) => {
                 self.replace_command_history(history);
                 Ok(())

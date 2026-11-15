@@ -67,7 +67,7 @@ fn full_history(
     query: &CompletionQuery,
     matcher: &mut TextMatcher,
 ) -> Vec<CompletionCandidate> {
-    search_whole(&index.whole, &query.borrowed(), matcher)
+    search_whole(&index.whole, &query.borrowed(), matcher, &mut || false).unwrap()
 }
 
 #[test]

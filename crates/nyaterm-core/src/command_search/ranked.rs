@@ -11,7 +11,7 @@ use crate::completion::whole_history::{
 };
 use crate::models::quick_commands::QuickCommand;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 const LOCAL_BONUS: u32 = 8;
 const MAX_FREQUENCY_BONUS: u32 = 4;
@@ -156,15 +156,31 @@ fn eligible_target(command: &str, query: &RankedCommandSourceQuery<'_>) -> bool 
         .is_none_or(|policy| policy.allows(query.pattern, command))
 }
 
-fn best_items(mut items: Vec<Item<'_>>, limit: usize) -> Vec<Item<'_>> {
-    // All candidates have been scored. Partition before sorting to bound work
-    // for a large global catalog while keeping the same deterministic top rows.
-    if items.len() > limit {
-        items.select_nth_unstable_by(limit, Item::compare);
-        items.truncate(limit);
+impl PartialEq for Item<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.compare(other) == Ordering::Equal
     }
-    items.sort_unstable_by(Item::compare);
-    items
+}
+impl Eq for Item<'_> {}
+impl PartialOrd for Item<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Item<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.compare(other)
+    }
+}
+
+fn retain_best<'a>(items: &mut BinaryHeap<Item<'a>>, item: Item<'a>, limit: usize) {
+    if items.len() < limit {
+        items.push(item);
+    } else if let Some(mut worst) = items.peek_mut()
+        && item.compare(&worst) == Ordering::Less
+    {
+        *worst = item;
+    }
 }
 
 /// Score borrowed catalog text; allocate owned command text only for the selected rows.
@@ -172,8 +188,19 @@ pub fn search_ranked_command_sources_using(
     matcher: &mut TextMatcher,
     query: RankedCommandSourceQuery<'_>,
 ) -> Vec<CompletionCandidate> {
+    search_ranked_command_sources_with_cancel(matcher, query, &mut || false).unwrap_or_default()
+}
+
+pub fn search_ranked_command_sources_with_cancel(
+    matcher: &mut TextMatcher,
+    query: RankedCommandSourceQuery<'_>,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Option<Vec<CompletionCandidate>> {
+    if cancelled() {
+        return None;
+    }
     if query.limit == 0 {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let quick_targets: HashSet<_> = query
         .quick_commands
@@ -181,10 +208,9 @@ pub fn search_ranked_command_sources_using(
         .map(|quick| quick.command.as_str())
         .collect();
     if query.pattern.trim().is_empty() {
-        return empty_suggestions(matcher, &query, &quick_targets);
+        return empty_suggestions(matcher, &query, &quick_targets, cancelled);
     }
     let needle = normalized_text(query.pattern);
-    // Preserve the existing matcher normalization and highlight behavior.
     matcher.set_query(
         &query
             .pattern
@@ -193,11 +219,49 @@ pub fn search_ranked_command_sources_using(
             .filter(|ch| !ch.is_whitespace())
             .collect::<String>(),
     );
-    // History is already unique in the catalog. Only quick-command targets
-    // need a lookup for merging, so avoid hashing every matched history row.
-    let mut items = Vec::new();
-    let mut quick_rows = HashMap::<&str, usize>::new();
-    for entry in query.history.iter(query.scope) {
+    // Only quick targets need merging storage; the history stream occupies K slots.
+    let mut quick_rows = HashMap::<&str, Item<'_>>::new();
+    for (i, quick) in query.quick_commands.iter().enumerate() {
+        if i % 128 == 0 && cancelled() {
+            return None;
+        }
+        if !eligible_target(&quick.command, &query) {
+            continue;
+        }
+        let display = if quick.label.trim().is_empty() {
+            quick.command.as_str()
+        } else {
+            quick.label.as_str()
+        };
+        let Some(score) = matcher.score(display) else {
+            continue;
+        };
+        let item = Item::new(
+            &quick.command,
+            display,
+            CandidateKind::QuickCommand,
+            query.history.get(&quick.command, query.scope),
+            score,
+            match_class(&normalized_text(display), &needle),
+            query.now_ms,
+        );
+        match quick_rows.get_mut(quick.command.as_str()) {
+            Some(previous)
+                if (item.class, item.raw_score) > (previous.class, previous.raw_score) =>
+            {
+                *previous = item
+            }
+            Some(_) => {}
+            None => {
+                quick_rows.insert(&quick.command, item);
+            }
+        }
+    }
+    let mut items = BinaryHeap::with_capacity(query.limit.min(64));
+    for (i, entry) in query.history.iter(query.scope).enumerate() {
+        if i % 128 == 0 && cancelled() {
+            return None;
+        }
         if !within_limits(entry, &query) || !eligible_target(entry.command, &query) {
             continue;
         }
@@ -219,78 +283,60 @@ pub fn search_ranked_command_sources_using(
         );
         if quick_targets.contains(entry.command) {
             item.sources |= 1 << CandidateSource::QuickCommand as u8;
-            quick_rows.insert(entry.command, items.len());
-        }
-        items.push(item);
-    }
-    for quick in query.quick_commands {
-        if !eligible_target(&quick.command, &query) {
-            continue;
-        }
-        let display = if quick.label.trim().is_empty() {
-            quick.command.as_str()
-        } else {
-            quick.label.as_str()
-        };
-        let Some(score) = matcher.score(display) else {
-            continue;
-        };
-        let mut item = Item::new(
-            &quick.command,
-            display,
-            CandidateKind::QuickCommand,
-            query.history.get(&quick.command, query.scope),
-            score,
-            match_class(&normalized_text(display), &needle),
-            query.now_ms,
-        );
-        if let Some(&index) = quick_rows.get(quick.command.as_str()) {
-            let previous = &mut items[index];
-            item.sources |= previous.sources;
-            // The better text match controls display; history wins an exact tie.
-            if (item.class, item.raw_score) > (previous.class, previous.raw_score) {
-                *previous = item;
-            } else {
-                previous.sources |= item.sources;
+            if let Some(mut quick) = quick_rows.remove(entry.command) {
+                quick.sources |= item.sources;
+                if (quick.class, quick.raw_score) > (item.class, item.raw_score) {
+                    item = quick;
+                }
             }
-        } else {
-            quick_rows.insert(&quick.command, items.len());
-            items.push(item);
         }
+        retain_best(&mut items, item, query.limit);
     }
-    best_items(items, query.limit)
-        .into_iter()
-        .map(|item| item.finish(matcher, query.pattern))
-        .collect()
+    for item in quick_rows.into_values() {
+        retain_best(&mut items, item, query.limit);
+    }
+    if cancelled() {
+        return None;
+    }
+    Some(
+        items
+            .into_sorted_vec()
+            .into_iter()
+            .map(|item| item.finish(matcher, query.pattern))
+            .collect(),
+    )
 }
 
 fn empty_suggestions(
     matcher: &mut TextMatcher,
     query: &RankedCommandSourceQuery<'_>,
     quick_targets: &HashSet<&str>,
-) -> Vec<CompletionCandidate> {
-    let items: Vec<_> = query
-        .history
-        .iter(query.scope)
-        .filter(|entry| within_limits(*entry, query))
-        .filter(|entry| eligible_target(entry.command, query))
-        .map(|entry| {
-            let mut item = Item::new(
-                entry.command,
-                entry.command,
-                CandidateKind::History,
-                Some(entry),
-                1,
-                0,
-                query.now_ms,
-            );
-            if quick_targets.contains(entry.command) {
-                item.sources |= 1 << CandidateSource::QuickCommand as u8;
-            }
-            item
-        })
-        .collect();
-    let mut items = best_items(items, EMPTY_MANUAL_HISTORY_LIMIT.min(query.limit));
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Option<Vec<CompletionCandidate>> {
+    let mut best = BinaryHeap::new();
+    let limit = EMPTY_MANUAL_HISTORY_LIMIT.min(query.limit);
+    for (i, entry) in query.history.iter(query.scope).enumerate() {
+        if i % 128 == 0 && cancelled() {
+            return None;
+        }
+        if !within_limits(entry, query) || !eligible_target(entry.command, query) {
+            continue;
+        }
+        let mut item = Item::new(
+            entry.command,
+            entry.command,
+            CandidateKind::History,
+            Some(entry),
+            1,
+            0,
+            query.now_ms,
+        );
+        if quick_targets.contains(entry.command) {
+            item.sources |= 1 << CandidateSource::QuickCommand as u8;
+        }
+        retain_best(&mut best, item, limit);
+    }
+    let mut items = best.into_sorted_vec();
     let mut seen: HashSet<_> = items.iter().map(|item| item.command).collect();
     let mut quick: Vec<_> = query
         .quick_commands
@@ -320,10 +366,15 @@ fn empty_suggestions(
         ));
     }
     items.truncate(query.limit);
-    items
-        .into_iter()
-        .map(|item| item.finish(matcher, query.pattern))
-        .collect()
+    if cancelled() {
+        return None;
+    }
+    Some(
+        items
+            .into_iter()
+            .map(|item| item.finish(matcher, query.pattern))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -657,5 +708,70 @@ mod tests {
         );
         assert_eq!(results[8].insert_text, "fixture quick-9");
         assert!(results.iter().all(|item| item.indices.is_empty()));
+    }
+    #[test]
+    fn bounded_selection_matches_full_sort_for_all_ranking_ties() {
+        use crate::command_search::ranked::{Item, retain_best};
+        use std::collections::BinaryHeap;
+        let scope = CompletionScope::new(&["rank-equivalence"]);
+        let mut index = WholeCommandHistoryIndex::default();
+        let records: Vec<_> = (0..1000)
+            .map(|i| CommandHistoryEntry {
+                command: format!("fixture {i:04}"),
+                use_count: (i % 31) + 1,
+                last_used_at_ms: u64::from(i % 23),
+            })
+            .collect();
+        index.reconcile(&records, &[]);
+        fn item(entry: crate::completion::whole_history::HistorySearchEntry<'_>) -> Item<'_> {
+            Item::new(
+                entry.command,
+                entry.command,
+                CandidateKind::History,
+                Some(entry),
+                entry.statistics.use_count % 7,
+                (entry.statistics.use_count % 3) as u8,
+                DAY_MS,
+            )
+        }
+        let mut sorted: Vec<_> = index.iter(&scope).map(item).collect();
+        sorted.sort_by(Item::compare);
+        for limit in [1, 12, 128, 2000] {
+            let mut heap = BinaryHeap::new();
+            for entry in index.iter(&scope) {
+                retain_best(&mut heap, item(entry), limit);
+            }
+            let actual: Vec<_> = heap
+                .into_sorted_vec()
+                .into_iter()
+                .map(|i| i.command)
+                .collect();
+            let expected: Vec<_> = sorted.iter().take(limit).map(|i| i.command).collect();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn cancellation_interrupts_matching_and_empty_history_scans() {
+        use crate::command_search::ranked::search_ranked_command_sources_with_cancel;
+        let scope = CompletionScope::new(&["cancel"]);
+        let mut index = WholeCommandHistoryIndex::default();
+        let records: Vec<_> = (0..1000)
+            .map(|i| record(&scope, &format!("fixture {i:04}")))
+            .collect();
+        index.reconcile(&[], &records);
+        for pattern in ["fixture", "", "no-match"] {
+            let mut checks = 0;
+            let result = search_ranked_command_sources_with_cancel(
+                &mut TextMatcher::default(),
+                query(&index, &scope, pattern, &[]),
+                &mut || {
+                    checks += 1;
+                    checks >= 3
+                },
+            );
+            assert!(result.is_none());
+            assert_eq!(checks, 3);
+        }
     }
 }

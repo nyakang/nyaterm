@@ -2,7 +2,7 @@
 use crate::completion::matching::matching_chars;
 use crate::completion::types::{CandidateSource, CompletionScope, ScopedHistoryRecord};
 use crate::models::quick_commands::CommandHistoryEntry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct HistoryStatistics {
@@ -17,8 +17,28 @@ struct Entry {
     char_count: usize,
     global: Option<HistoryStatistics>,
     fallback: HistoryStatistics,
+    legacy: Option<HistoryStatistics>,
     scopes: HashMap<CompletionScope, HistoryStatistics>,
     sources: u8,
+}
+
+impl Entry {
+    fn refresh_statistics(&mut self) {
+        self.fallback = HistoryStatistics::default();
+        for stats in self.scopes.values().chain(self.legacy.iter()) {
+            self.fallback.use_count = self.fallback.use_count.max(stats.use_count);
+            self.fallback.last_used_at_ms =
+                self.fallback.last_used_at_ms.max(stats.last_used_at_ms);
+        }
+        self.sources = if self.legacy.is_some() {
+            1 << CandidateSource::LegacyHistory as u8
+        } else {
+            0
+        };
+        if !self.scopes.is_empty() || self.sources == 0 {
+            self.sources |= 1 << CandidateSource::History as u8;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -63,43 +83,110 @@ pub(crate) fn normalized_text(text: &str) -> String {
 }
 
 impl WholeCommandHistoryIndex {
-    /// Rebuild only when the persisted snapshot changes, not on each keystroke.
+    /// Keep expensive matching representations when only statistics changed.
     pub fn reconcile(&mut self, global: &[CommandHistoryEntry], scoped: &[ScopedHistoryRecord]) {
-        let mut entries = HashMap::<String, Entry>::new();
+        let present: HashSet<_> = global
+            .iter()
+            .map(|r| r.command.as_str())
+            .chain(
+                scoped
+                    .iter()
+                    .filter(|r| r.version == 1)
+                    .map(|r| r.command.as_str()),
+            )
+            .collect();
+        self.entries
+            .retain(|command, _| present.contains(command.as_str()));
+        for entry in self.entries.values_mut() {
+            entry.global = None;
+            entry.legacy = None;
+            entry.scopes.clear();
+        }
         for record in global {
-            entries.entry(record.command.clone()).or_default().global = Some(HistoryStatistics {
+            self.entry(&record.command).global = Some(HistoryStatistics {
                 use_count: record.use_count,
                 last_used_at_ms: record.last_used_at_ms,
             });
         }
-        for record in scoped.iter().filter(|record| record.version == 1) {
-            let entry = entries.entry(record.command.clone()).or_default();
-            // A broadcast contributes to multiple scopes but only once globally.
-            entry.fallback.use_count = entry.fallback.use_count.max(record.use_count);
-            entry.fallback.last_used_at_ms =
-                entry.fallback.last_used_at_ms.max(record.last_used_at_ms);
+        for record in scoped.iter().filter(|r| r.version == 1) {
+            let entry = self.entry(&record.command);
+            let stats = HistoryStatistics {
+                use_count: record.use_count,
+                last_used_at_ms: record.last_used_at_ms,
+            };
             if record.scope == CompletionScope::legacy() {
-                entry.sources |= 1 << CandidateSource::LegacyHistory as u8;
+                entry.legacy = Some(stats);
             } else {
-                entry.sources |= 1 << CandidateSource::History as u8;
-                entry.scopes.insert(
-                    record.scope.clone(),
-                    HistoryStatistics {
-                        use_count: record.use_count,
-                        last_used_at_ms: record.last_used_at_ms,
-                    },
-                );
+                entry.scopes.insert(record.scope.clone(), stats);
             }
         }
-        for (command, entry) in &mut entries {
-            entry.normalized = normalized_text(command);
-            entry.prepared = (!command.is_ascii()).then(|| matching_chars(command).collect());
-            entry.char_count = command.trim().chars().count();
-            if entry.sources == 0 {
-                entry.sources = 1 << CandidateSource::History as u8;
+        for entry in self.entries.values_mut() {
+            entry.refresh_statistics();
+        }
+    }
+
+    fn entry(&mut self, command: &str) -> &mut Entry {
+        if !self.entries.contains_key(command) {
+            self.entries.insert(
+                command.into(),
+                Entry {
+                    normalized: normalized_text(command),
+                    prepared: (!command.is_ascii()).then(|| matching_chars(command).collect()),
+                    char_count: command.trim().chars().count(),
+                    ..Entry::default()
+                },
+            );
+        }
+        self.entries.get_mut(command).expect("entry was inserted")
+    }
+
+    pub fn upsert_global(&mut self, record: &CommandHistoryEntry) {
+        let entry = self.entry(&record.command);
+        entry.global = Some(HistoryStatistics {
+            use_count: record.use_count,
+            last_used_at_ms: record.last_used_at_ms,
+        });
+        entry.refresh_statistics();
+    }
+    pub fn upsert_scoped(&mut self, record: &ScopedHistoryRecord) {
+        if record.version != 1 {
+            return;
+        }
+        let entry = self.entry(&record.command);
+        let stats = HistoryStatistics {
+            use_count: record.use_count,
+            last_used_at_ms: record.last_used_at_ms,
+        };
+        if record.scope == CompletionScope::legacy() {
+            entry.legacy = Some(stats);
+        } else {
+            entry.scopes.insert(record.scope.clone(), stats);
+        }
+        entry.refresh_statistics();
+    }
+    pub fn remove_global(&mut self, command: &str) {
+        if let Some(entry) = self.entries.get_mut(command) {
+            entry.global = None;
+        }
+        self.prune(command);
+    }
+    pub fn remove_scoped(&mut self, scope: &CompletionScope, command: &str) {
+        if let Some(entry) = self.entries.get_mut(command) {
+            if *scope == CompletionScope::legacy() {
+                entry.legacy = None;
+            } else {
+                entry.scopes.remove(scope);
             }
         }
-        self.entries = entries;
+        self.prune(command);
+    }
+    fn prune(&mut self, command: &str) {
+        if let Some(entry) = self.entries.get_mut(command) {
+            entry.refresh_statistics();
+            if entry.global.is_none() && entry.legacy.is_none() && entry.scopes.is_empty() {
+                self.entries.remove(command);
+            }
+        }
     }
 
     pub fn iter<'a>(
@@ -221,5 +308,67 @@ mod tests {
         assert!(!entry.current_scope);
         assert_eq!(entry.statistics.use_count, 2);
         assert!(!format!("{entry:?} {index:?}").contains("fixture-only-global"));
+    }
+    #[test]
+    fn incremental_changes_match_snapshot_and_reuse_prepared_unicode() {
+        let scope = CompletionScope::new(&["incremental"]);
+        let foreign = CompletionScope::new(&["foreign"]);
+        let global = CommandHistoryEntry {
+            command: "fixture 工具".into(),
+            use_count: 2,
+            last_used_at_ms: 5,
+        };
+        let scoped = ScopedHistoryRecord {
+            command: global.command.clone(),
+            ..record(scope.clone(), 3, 10)
+        };
+        let legacy = ScopedHistoryRecord {
+            command: global.command.clone(),
+            ..record(CompletionScope::legacy(), 4, 12)
+        };
+        let mut incremental = WholeCommandHistoryIndex::default();
+        incremental.upsert_global(&global);
+        incremental.upsert_scoped(&scoped);
+        incremental.upsert_scoped(&legacy);
+        let prepared = incremental
+            .get(&global.command, &scope)
+            .unwrap()
+            .prepared
+            .unwrap()
+            .as_ptr();
+        let normalized = incremental
+            .get(&global.command, &scope)
+            .unwrap()
+            .normalized
+            .as_ptr();
+        let mut snapshot = WholeCommandHistoryIndex::default();
+        snapshot.reconcile(
+            std::slice::from_ref(&global),
+            &[scoped.clone(), legacy.clone()],
+        );
+        for context in [&scope, &foreign, &CompletionScope::legacy()] {
+            let a = incremental.get(&global.command, context).unwrap();
+            let b = snapshot.get(&global.command, context).unwrap();
+            assert_eq!(
+                (a.statistics, a.current_scope, a.sources),
+                (b.statistics, b.current_scope, b.sources)
+            );
+        }
+        incremental.reconcile(std::slice::from_ref(&global), &[scoped.clone(), legacy]);
+        let entry = incremental.get(&global.command, &scope).unwrap();
+        assert_eq!(entry.prepared.unwrap().as_ptr(), prepared);
+        assert_eq!(entry.normalized.as_ptr(), normalized);
+        incremental.remove_global(&global.command);
+        incremental.remove_scoped(&CompletionScope::legacy(), &global.command);
+        snapshot.reconcile(&[], std::slice::from_ref(&scoped));
+        assert_eq!(
+            incremental
+                .get(&global.command, &foreign)
+                .unwrap()
+                .statistics,
+            snapshot.get(&global.command, &foreign).unwrap().statistics
+        );
+        incremental.remove_scoped(&scope, &global.command);
+        assert!(incremental.get(&global.command, &scope).is_none());
     }
 }

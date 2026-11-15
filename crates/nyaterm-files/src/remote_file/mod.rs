@@ -488,6 +488,21 @@ impl RemoteFileService {
             .list_directory_lightweight(path, limits, control, deadline)
     }
 
+    pub fn probe_directory_targets(
+        &self,
+        paths: &[String],
+        control: crate::sftp::SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<Vec<Option<bool>>> {
+        anyhow::ensure!(
+            self.selected_backend()
+                .is_none_or(|kind| kind == RemoteFileBackendKind::Sftp),
+            "directory target probing requires SFTP"
+        );
+        self.sftp_service
+            .probe_directory_targets(paths, control, deadline)
+    }
+
     pub fn home_dir(&self) -> anyhow::Result<String> {
         let backend = self.backend()?;
         let output = self.shell(backend).exec_ok("printf '%s' \"$HOME\"", None)?;

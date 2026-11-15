@@ -4,7 +4,9 @@ use nyaterm_ui::{NyaScrollable, NyaTooltip};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::features::commands::completion_runtime::{CompletionQuery, CompletionRuntime};
+use crate::features::commands::completion_runtime::{
+    CompletionQuery, CompletionRuntime, CompletionSearchOutcome,
+};
 use gpui::{
     Bounds, Context, FontWeight, IntoElement, KeyDownEvent, Pixels, SharedString, div, prelude::*,
     px, rgb, rgba, svg,
@@ -747,11 +749,13 @@ impl NyaTermApp {
                 let search_started_at = Instant::now();
                 let path_task = request.path_source.clone().map(|source| {
                     let input = request.pattern.clone();
-                    cx.background_executor()
-                        .spawn(async move { source.candidates(&input).await })
+                    let policy = request.fill_policy;
+                    cx.background_executor().spawn(async move {
+                        source.candidates_with_policy(&input, Some(policy)).await
+                    })
                 });
                 let completion = request.completion.clone();
-                let ordinary = completion.search(CompletionQuery {
+                let ordinary = completion.search_outcome(CompletionQuery {
                     fill_policy: Some(request.fill_policy),
                     context: request.context.clone(),
                     input: request.pattern.clone(),
@@ -766,29 +770,63 @@ impl NyaTermApp {
                         None => Vec::new(),
                     }
                 };
-                progressive::publish_progressively(ordinary, paths, |result, paths| {
-                    let mut publication = request.clone();
-                    let result = match (paths, publication.path_source.as_ref()) {
-                        (Some(paths), Some(source)) => merge_path_candidates(
-                            result,
-                            paths,
-                            !source.query().dir_text.is_empty(),
-                            &publication.pattern,
-                        ),
-                        _ => {
-                            publication.path_source = None;
-                            result
-                        }
-                    };
-                    let _ = this.update(cx, |this, cx| {
-                        this.publish_command_suggestion_search(
-                            publication,
-                            result,
-                            search_started_at.elapsed(),
-                            cx,
-                        );
-                    });
-                })
+                let result = match ordinary.await {
+                    CompletionSearchOutcome::Ready(result) => result,
+                    CompletionSearchOutcome::Busy => {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.terminal.assist.command_suggestion_search_gen
+                                == request.request_id
+                            {
+                                this.schedule_command_suggestion_search_mode(
+                                    COMMAND_SUGGESTION_REFRESH_PRESSURE_RETRY,
+                                    request.mode,
+                                    cx,
+                                );
+                            }
+                        });
+                        return;
+                    }
+                    CompletionSearchOutcome::Superseded => return,
+                    CompletionSearchOutcome::Unavailable => {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.terminal.assist.command_suggestion_search_gen
+                                == request.request_id
+                            {
+                                this.hide_command_suggestions_if_present(cx);
+                                this.settings
+                                    .update_store_status("completion worker is unavailable", false);
+                            }
+                        });
+                        return;
+                    }
+                };
+                progressive::publish_progressively(
+                    std::future::ready(result),
+                    paths,
+                    |result, paths| {
+                        let mut publication = request.clone();
+                        let result = match (paths, publication.path_source.as_ref()) {
+                            (Some(paths), Some(source)) => merge_path_candidates(
+                                result,
+                                paths,
+                                !source.query().dir_text.is_empty(),
+                                &publication.pattern,
+                            ),
+                            _ => {
+                                publication.path_source = None;
+                                result
+                            }
+                        };
+                        let _ = this.update(cx, |this, cx| {
+                            this.publish_command_suggestion_search(
+                                publication,
+                                result,
+                                search_started_at.elapsed(),
+                                cx,
+                            );
+                        });
+                    },
+                )
                 .await;
             }));
     }
@@ -852,7 +890,10 @@ impl NyaTermApp {
         );
     }
 
-    fn command_suggestion_context(&self, session: &str) -> ShellCommandContext {
+    pub(in crate::features) fn command_suggestion_context(
+        &self,
+        session: &str,
+    ) -> ShellCommandContext {
         let mut context =
             self.commands
                 .command_context(session)
@@ -1021,8 +1062,7 @@ impl NyaTermApp {
                 .get(&request.session_id)
                 .and_then(|state| state.file_context.current())
                 .is_none_or(|context| context.cache_key() != source.context())
-        }) || self.commands.completion_runtime().revision() != result.revision
-            || self.command_suggestion_context(&request.session_id).scope != request.context.scope
+        }) || self.command_suggestion_context(&request.session_id) != request.context
             || self.terminal.assist.command_suggestion_search_gen != request.request_id
             || self.session.active_id() != Some(request.session_id.as_str())
             || self
@@ -1034,6 +1074,14 @@ impl NyaTermApp {
             || self.sync_input.revision() != request.sync_revision
             || self.terminal.editing.assist_input().value != request.pattern
         {
+            return;
+        }
+        if self.commands.completion_runtime().revision() != result.revision {
+            self.schedule_command_suggestion_search_mode(
+                COMMAND_SUGGESTION_REFRESH_PRESSURE_RETRY,
+                request.mode,
+                cx,
+            );
             return;
         }
         self.reconcile_command_suggestion_availability(cx);
@@ -3729,6 +3777,65 @@ mod tests {
             assert!(!app.active_terminal_uses_alternate_screen());
             app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
             assert!(app.handle_command_suggestion_key(&escape_key_event(), cx));
+        });
+    }
+    #[test]
+    fn revision_only_changes_retry_search_but_shell_context_changes_discard_it() {
+        let dir = TestConfigDir::new("nyaterm-suggestion-revision-retry");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            app.note_shell_editing_input(b"echo ex", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ echo ex".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            let generation = app.terminal.assist.command_suggestion_search_gen;
+            let request = app
+                .prepare_command_suggestion_search(
+                    generation,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx,
+                )
+                .unwrap();
+            let stale = app.commands.completion_runtime().revision().wrapping_sub(1);
+            app.publish_command_suggestion_search(
+                request,
+                history_search_fixture("echo example", "echo ex", stale),
+                Duration::ZERO,
+                cx,
+            );
+            assert_ne!(
+                app.terminal.assist.command_suggestion_search_gen,
+                generation
+            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            let generation = app.terminal.assist.command_suggestion_search_gen;
+            let mut request = app
+                .prepare_command_suggestion_search(
+                    generation,
+                    nyaterm_core::completion::types::CompletionMode::Token,
+                    cx,
+                )
+                .unwrap();
+            request.context.command_events = !request.context.command_events;
+            let current = app.commands.completion_runtime().revision();
+            app.publish_command_suggestion_search(
+                request,
+                history_search_fixture("echo example", "echo ex", current),
+                Duration::ZERO,
+                cx,
+            );
+            assert_eq!(
+                app.terminal.assist.command_suggestion_search_gen,
+                generation
+            );
+            assert!(app.terminal.assist.command_suggestions.is_none());
         });
     }
 }

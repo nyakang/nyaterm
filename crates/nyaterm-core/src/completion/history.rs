@@ -1,31 +1,32 @@
 use crate::completion::parser::{unwrap_words, words};
 use crate::completion::privacy::{command_may_be_learned, safe_word};
 use crate::completion::types::{CompletionScope, ScopedHistoryRecord, ShellDialect};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-type ContextKey = (CompletionScope, Vec<String>);
+type ContextKey = (CompletionScope, ShellDialect, Vec<String>);
 #[derive(Default)]
 struct Contributions {
     commands: HashMap<String, (u32, u64)>,
-    count: u32,
-    time: u64,
+    count: u64,
+    times: BTreeMap<u64, usize>,
 }
 impl Contributions {
     fn insert(&mut self, command: String, stats: (u32, u64)) {
+        self.remove(&command);
         self.commands.insert(command, stats);
-        self.recompute();
+        self.count += u64::from(stats.0);
+        *self.times.entry(stats.1).or_default() += 1;
     }
-    fn recompute(&mut self) {
-        self.count = self
-            .commands
-            .values()
-            .fold(0u32, |sum, (count, _)| sum.saturating_add(*count));
-        self.time = self
-            .commands
-            .values()
-            .map(|(_, time)| *time)
-            .max()
-            .unwrap_or_default();
+    fn remove(&mut self, command: &str) {
+        if let Some((count, time)) = self.commands.remove(command) {
+            self.count -= u64::from(count);
+            if let Some(occurrences) = self.times.get_mut(&time) {
+                *occurrences -= 1;
+                if *occurrences == 0 {
+                    self.times.remove(&time);
+                }
+            }
+        }
     }
 }
 
@@ -57,10 +58,11 @@ pub(crate) fn normalized(mut preceding: Vec<String>, dialect: ShellDialect) -> V
                     .then(|| token.split_once(':'))
                     .flatten()
                 });
-            pair.map_or_else(
-                || vec![token.clone()],
-                |(flag, value)| vec![flag.into(), value.into()],
-            )
+            if let Some((flag, value)) = pair {
+                vec![flag.into(), value.into()]
+            } else {
+                vec![token]
+            }
         })
         .collect();
     if preceding
@@ -159,7 +161,7 @@ impl TokenHistoryIndex {
         {
             for (context, token) in transitions(&record.command, record.dialect) {
                 self.buckets
-                    .entry((record.scope.clone(), context))
+                    .entry((record.scope.clone(), record.dialect, context))
                     .or_default()
                     .entry(token)
                     .or_default()
@@ -175,11 +177,10 @@ impl TokenHistoryIndex {
     fn remove_record(&mut self, scope: &CompletionScope, command: &str) {
         if let Some(old) = self.records.remove(&(scope.clone(), command.into())) {
             for (context, token) in transitions(&old.command, old.dialect) {
-                let key = (scope.clone(), context);
+                let key = (scope.clone(), old.dialect, context);
                 if let Some(bucket) = self.buckets.get_mut(&key) {
                     if let Some(contributions) = bucket.get_mut(&token) {
-                        contributions.commands.remove(command);
-                        contributions.recompute();
+                        contributions.remove(command);
                         if contributions.commands.is_empty() {
                             bucket.remove(&token);
                         }
@@ -248,10 +249,20 @@ impl TokenHistoryIndex {
         dialect: ShellDialect,
     ) -> impl Iterator<Item = (&'a str, u32, u64)> {
         self.buckets
-            .get(&(scope.clone(), normalized(preceding.to_vec(), dialect)))
+            .get(&(
+                scope.clone(),
+                dialect,
+                normalized(preceding.to_vec(), dialect),
+            ))
             .into_iter()
             .flat_map(|bucket| bucket.iter())
-            .map(|(token, values)| (token.as_str(), values.count, values.time))
+            .map(|(token, values)| {
+                (
+                    token.as_str(),
+                    values.count.min(u64::from(u32::MAX)) as u32,
+                    values.times.last_key_value().map_or(0, |(time, _)| *time),
+                )
+            })
     }
     pub fn records_for(&self, scope: &CompletionScope) -> Vec<&ScopedHistoryRecord> {
         let mut records: Vec<_> = self
@@ -317,5 +328,39 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(index.records_for(&CompletionScope::new(&["host"])).len(), 1);
+    }
+
+    #[test]
+    fn saturated_counts_remain_exact_after_removing_a_contributor_and_dialects_are_isolated() {
+        let scope = CompletionScope::new(&["isolated"]);
+        let mut index = TokenHistoryIndex::default();
+        index.upsert(record(scope.clone(), "tool run one", u32::MAX, 20));
+        index.upsert(record(scope.clone(), "tool run two", 5, 30));
+        assert_eq!(
+            index.candidates(&scope, &["tool".into()], ShellDialect::Bash),
+            [("run".into(), u32::MAX, 30)]
+        );
+        assert!(
+            index
+                .candidates(&scope, &["tool".into()], ShellDialect::PowerShell)
+                .is_empty()
+        );
+        index.remove_command("tool run one");
+        assert_eq!(
+            index.candidates(&scope, &["tool".into()], ShellDialect::Bash),
+            [("run".into(), 5, 30)]
+        );
+        let mut updated = record(scope.clone(), "tool run two", 7, 40);
+        updated.dialect = ShellDialect::PowerShell;
+        index.upsert(updated);
+        assert!(
+            index
+                .candidates(&scope, &["tool".into()], ShellDialect::Bash)
+                .is_empty()
+        );
+        assert_eq!(
+            index.candidates(&scope, &["tool".into()], ShellDialect::PowerShell),
+            [("run".into(), 7, 40)]
+        );
     }
 }

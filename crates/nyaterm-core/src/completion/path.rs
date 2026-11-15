@@ -2,13 +2,15 @@
 //! listed entries become candidates. Listing itself (SFTP or local FS) is I/O
 //! and lives in the desktop crate so this stays UI- and transport-independent.
 use crate::completion::matching::TextMatcher;
-use crate::completion::parser::parse_context;
+use crate::completion::parser::parse_path_context;
 use crate::completion::types::{
     CandidateKind, CandidateSource, CompletionCandidate, CompletionContext, CompletionScope,
     ShellDialect,
 };
 use crate::terminal::editing::supports_scalar_editing;
 use crate::terminal::input_tracker::MAX_TRACKED_INPUT_BYTES;
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
 use std::ops::Range;
 
 /// Commands whose positional arguments are file-system paths.
@@ -91,6 +93,7 @@ pub struct PathQuery {
 pub struct PathEntry {
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub size: Option<u64>,
 }
 
@@ -101,32 +104,19 @@ pub fn path_query(context: &CompletionContext) -> Option<PathQuery> {
 
 /// Parses `input` and returns the path query for its last token.
 ///
-/// The parser rejects any word starting with `~` because tilde expansion
-/// changes meaning. Only the token being completed may start with one, so it
-/// is masked with a same-width placeholder for parsing and restored here;
-/// a `~` anywhere earlier still makes the whole line uncertain.
+/// Only the current token may use tilde expansion. Lexical ranges distinguish
+/// escaped separators and literal tildes from shell expansions.
 pub fn path_query_for_input(
     input: &str,
     dialect: ShellDialect,
     scope: CompletionScope,
 ) -> Option<PathQuery> {
-    let token_start = input
-        .char_indices()
-        .rev()
-        .find(|(_, ch)| ch.is_whitespace())
-        .map_or(0, |(index, ch)| index + ch.len_utf8());
-    let tilde = token_start > 0 && input[token_start..].starts_with('~');
-    if !tilde {
-        let context = parse_context(input, input.len(), dialect, scope)?;
-        return path_query(&context);
+    let context = parse_path_context(input, dialect, scope)?;
+    // An escaped tilde is a literal directory name, not a home expansion.
+    if context.prefix.starts_with('~') && !input[context.token_range.clone()].starts_with('~') {
+        return path_query_with_prefix(&context, &format!("./{}", context.prefix));
     }
-    let masked = format!("{}H{}", &input[..token_start], &input[token_start + 1..]);
-    let context = parse_context(&masked, masked.len(), dialect, scope)?;
-    if context.token_range.start != token_start || !context.prefix.starts_with('H') {
-        return None;
-    }
-    let prefix = format!("~{}", &context.prefix[1..]);
-    path_query_with_prefix(&context, &prefix)
+    path_query(&context)
 }
 
 fn path_query_with_prefix(context: &CompletionContext, prefix: &str) -> Option<PathQuery> {
@@ -145,7 +135,12 @@ fn path_query_with_prefix(context: &CompletionContext, prefix: &str) -> Option<P
     let command_name = command.rsplit('/').next().unwrap_or(command);
     let known = PATH_COMMANDS.contains(&command_name);
     let directories_only = DIRECTORY_COMMANDS.contains(&command_name);
-    if prefix.starts_with('-') || prefix.contains(['*', '?', '[', '$', '`']) {
+    if prefix.starts_with('-')
+        || context
+            .input
+            .get(context.token_range.clone())
+            .is_none_or(has_unescaped_expansion)
+    {
         return None;
     }
     // `cd ` + nothing lists the working directory; other commands wait for
@@ -178,6 +173,23 @@ fn path_query_with_prefix(context: &CompletionContext, prefix: &str) -> Option<P
         base,
         directories_only,
     })
+}
+
+fn has_unescaped_expansion(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if chars.next().is_none() {
+                return true;
+            }
+        } else if matches!(
+            ch,
+            '*' | '?' | '[' | ']' | '$' | '`' | '(' | ')' | '{' | '}' | '<' | '>'
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Absolute directory to list, or None when the typed prefix cannot be resolved
@@ -266,76 +278,141 @@ pub fn path_candidates(
     matcher: &mut TextMatcher,
     limit: usize,
 ) -> Vec<CompletionCandidate> {
+    path_candidates_with_policy(query, entries, input, matcher, limit, None)
+}
+
+pub fn path_candidates_with_policy(
+    query: &PathQuery,
+    entries: &[PathEntry],
+    input: &str,
+    matcher: &mut TextMatcher,
+    limit: usize,
+    policy: Option<crate::completion::types::CompletionFillPolicy>,
+) -> Vec<CompletionCandidate> {
     if limit == 0 {
         return Vec::new();
     }
     let show_hidden = query.base.starts_with('.');
     matcher.set_query(&query.base);
-    let mut scored: Vec<(&PathEntry, u32, bool)> = entries
-        .iter()
-        .take(MAX_LISTED_ENTRIES)
-        .filter(|entry| {
-            entry_is_safe(&entry.name)
-                && (entry.is_dir || !query.directories_only)
-                && (show_hidden || !entry.name.starts_with('.'))
-        })
-        .filter_map(|entry| {
-            let score = matcher.score(&entry.name)?;
-            Some((entry, score, entry.name.starts_with(&query.base)))
-        })
-        .collect();
-    // Prefix matches first, then fuzzy score; directories lead on ties so the
-    // next segment is reachable with a single Tab. Names break the final tie
-    // for a deterministic popup.
-    scored.sort_unstable_by(|a, b| {
-        b.2.cmp(&a.2)
-            .then(b.1.cmp(&a.1))
-            .then(b.0.is_dir.cmp(&a.0.is_dir))
-            .then(a.0.name.cmp(&b.0.name))
-    });
-    scored
+    let mut best = BinaryHeap::<RankedPath>::new();
+    for entry in entries.iter().take(MAX_LISTED_ENTRIES) {
+        if !entry_is_safe(&entry.name)
+            || (query.directories_only && !entry.is_dir)
+            || (!show_hidden && entry.name.starts_with('.'))
+        {
+            continue;
+        }
+        let Some(score) = matcher.score(&entry.name) else {
+            continue;
+        };
+        let prefix = entry.name.starts_with(&query.base);
+        // Most rows need only borrowed scoring. Allocate fill text when a row
+        // can enter the bounded result set, and validate it before using a slot.
+        if best.len() == limit
+            && best.peek().is_some_and(|worst| {
+                path_rank(prefix, score, entry.is_dir, &entry.name).cmp(&path_rank(
+                    worst.prefix,
+                    worst.candidate.score,
+                    worst.is_dir,
+                    &worst.name,
+                )) != Ordering::Less
+            })
+        {
+            continue;
+        }
+        let display = if entry.is_dir {
+            format!("{}/", entry.name)
+        } else {
+            entry.name.clone()
+        };
+        let anchor = if query.dir_text.is_empty() && display.starts_with(['~', '=', '-']) {
+            "./"
+        } else {
+            ""
+        };
+        let insert_text = escape_shell_path(&format!("{anchor}{}{display}", query.dir_text));
+        let mut candidate = CompletionCandidate {
+            indices: Vec::new(),
+            display,
+            insert_text,
+            description: if entry.is_dir {
+                "directory".into()
+            } else {
+                entry.size.map(human_size).unwrap_or_default()
+            },
+            range: query.range.clone(),
+            kind: CandidateKind::Argument,
+            sources: vec![CandidateSource::Catalog],
+            use_count: 0,
+            last_used_at_ms: 0,
+            score,
+            fillable: false,
+            context_priority: 2,
+        };
+        let Some(target) = candidate.target_line(input) else {
+            continue;
+        };
+        candidate.fillable = !target.is_empty()
+            && target.len() <= MAX_TRACKED_INPUT_BYTES
+            && supports_scalar_editing(&target);
+        if !candidate.fillable || policy.is_some_and(|policy| !policy.allows(input, &target)) {
+            continue;
+        }
+        if best.len() == limit {
+            best.pop();
+        }
+        best.push(RankedPath {
+            name: entry.name.clone(),
+            prefix,
+            is_dir: entry.is_dir,
+            candidate,
+        });
+    }
+    best.into_sorted_vec()
         .into_iter()
-        .take(limit)
-        .filter_map(|(entry, score, _)| {
-            let display = if entry.is_dir {
-                format!("{}/", entry.name)
-            } else {
-                entry.name.clone()
-            };
-            // A bare name that starts with `~`, `=` or `-` would be expanded or
-            // read as an option, so anchor it to the current directory.
-            let anchor = if query.dir_text.is_empty() && display.starts_with(['~', '=', '-']) {
-                "./"
-            } else {
-                ""
-            };
-            let insert_text = escape_shell_path(&format!("{anchor}{}{display}", query.dir_text));
-            let mut candidate = CompletionCandidate {
-                indices: matcher.indices(&entry.name),
-                display,
-                insert_text,
-                description: if entry.is_dir {
-                    "directory".into()
-                } else {
-                    entry.size.map(human_size).unwrap_or_default()
-                },
-                range: query.range.clone(),
-                kind: CandidateKind::Argument,
-                sources: vec![CandidateSource::Catalog],
-                use_count: 0,
-                last_used_at_ms: 0,
-                score,
-                fillable: false,
-                context_priority: 2,
-            };
-            let target = candidate.target_line(input)?;
-            candidate.fillable = !target.is_empty()
-                && target.len() <= MAX_TRACKED_INPUT_BYTES
-                && supports_scalar_editing(&target);
-            Some(candidate)
+        .map(|mut item| {
+            item.candidate.indices = matcher.indices(&item.name);
+            item.candidate
         })
         .collect()
 }
+
+// Prefix, fuzzy score and directory priority lead; name is the stable final tie.
+fn path_rank(
+    prefix: bool,
+    score: u32,
+    is_dir: bool,
+    name: &str,
+) -> (Reverse<bool>, Reverse<u32>, Reverse<bool>, &str) {
+    (Reverse(prefix), Reverse(score), Reverse(is_dir), name)
+}
+struct RankedPath {
+    name: String,
+    prefix: bool,
+    is_dir: bool,
+    candidate: CompletionCandidate,
+}
+impl Ord for RankedPath {
+    fn cmp(&self, other: &Self) -> Ordering {
+        path_rank(self.prefix, self.candidate.score, self.is_dir, &self.name).cmp(&path_rank(
+            other.prefix,
+            other.candidate.score,
+            other.is_dir,
+            &other.name,
+        ))
+    }
+}
+impl PartialOrd for RankedPath {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for RankedPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for RankedPath {}
 
 #[cfg(test)]
 mod tests {
@@ -347,6 +424,55 @@ mod tests {
     use crate::completion::parser::parse_context;
     use crate::completion::types::{CompletionScope, ShellDialect};
 
+    #[test]
+    fn escaped_directories_continue_completion_without_changing_byte_ranges() {
+        for dialect in [ShellDialect::Bash, ShellDialect::Zsh, ShellDialect::Fish] {
+            for (input, directory, base) in [
+                (r"cd my\ dir/sub", "my dir/", "sub"),
+                (r"cd my\ dir/", "my dir/", ""),
+                (r"cd ~/my\ dir/sub", "~/my dir/", "sub"),
+                (r"cd \~literal/sub", "./~literal/", "sub"),
+                ("cd 中文/子", "中文/", "子"),
+            ] {
+                let query =
+                    path_query_for_input(input, dialect, CompletionScope::legacy()).unwrap();
+                assert_eq!(query.dir_text, directory);
+                assert_eq!(query.base, base);
+                assert_eq!(query.range, 3..input.len());
+            }
+            for input in ["cd 'my dir/", "cd my\\", "echo ~/earlier | cd pr"] {
+                assert!(path_query_for_input(input, dialect, CompletionScope::legacy()).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn unfillable_names_do_not_displace_valid_paths() {
+        let input = "cd a";
+        let query =
+            path_query_for_input(input, ShellDialect::Bash, CompletionScope::legacy()).unwrap();
+        let mut entries: Vec<_> = (0..12)
+            .map(|i| PathEntry {
+                name: format!("a{i:02}e\u{301}"),
+                is_dir: true,
+                is_symlink: false,
+                size: None,
+            })
+            .collect();
+        entries.push(PathEntry {
+            name: "az-valid".into(),
+            is_dir: true,
+            is_symlink: false,
+            size: None,
+        });
+        let candidates = path_candidates(&query, &entries, input, &mut TextMatcher::default(), 12);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].target_line(input).as_deref(),
+            Some("cd az-valid/")
+        );
+    }
+
     fn query(input: &str) -> Option<PathQuery> {
         path_query_for_input(input, ShellDialect::Bash, CompletionScope::legacy())
     }
@@ -355,6 +481,7 @@ mod tests {
         PathEntry {
             name: name.into(),
             is_dir,
+            is_symlink: false,
             size: (!is_dir).then_some(2048),
         }
     }
@@ -510,5 +637,28 @@ mod tests {
         assert!(
             path_candidates(&q, &entries, "cat /tmp/a", &mut TextMatcher::default(), 8).is_empty()
         );
+    }
+    #[test]
+    fn generated_escapes_continue_through_literal_shell_metacharacters() {
+        for dialect in [ShellDialect::Bash, ShellDialect::Zsh, ShellDialect::Fish] {
+            for name in [
+                "my$dir", "my*dir", "my?dir", "my[dir]", "my`dir", "my(dir)", "my{dir}",
+            ] {
+                let input = format!("cd {}/ch", escape_shell_path(name));
+                let query =
+                    path_query_for_input(&input, dialect, CompletionScope::legacy()).unwrap();
+                assert_eq!(query.dir_text, format!("{name}/"));
+                assert_eq!(query.base, "ch");
+                assert_eq!(query.range, 3..input.len());
+                assert!(
+                    path_query_for_input(
+                        &format!("cd {name}/ch"),
+                        dialect,
+                        CompletionScope::legacy()
+                    )
+                    .is_none()
+                );
+            }
+        }
     }
 }

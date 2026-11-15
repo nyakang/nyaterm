@@ -301,7 +301,10 @@ impl NyaTermApp {
                             continue;
                         }
                         self.session.record_command_history(&session_id, &command);
-                        let context = self.commands.command_context(&session_id).cloned();
+                        let context = self
+                            .commands
+                            .command_context(&session_id)
+                            .map(|_| self.command_suggestion_context(&session_id));
                         let queued = if let Some(context) = context {
                             self.commands.observe_completion_command(context, command)
                         } else {

@@ -140,3 +140,81 @@ fn an_unexecuted_claim_releases_its_waiters_on_drop() {
     assert!(futures::executor::block_on(answer).is_none());
     assert!(state.lock().unwrap().running.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn directory_links_are_shared_cached_and_can_continue_into_escaped_names() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("target")).unwrap();
+    std::fs::create_dir(dir.path().join("target/child")).unwrap();
+    std::fs::write(dir.path().join("file"), []).unwrap();
+    for (name, target) in [
+        ("project $link", "target"),
+        ("project-file", "file"),
+        ("project-broken", "missing"),
+        ("project-loop", "project-loop"),
+    ] {
+        std::os::unix::fs::symlink(target, dir.path().join(name)).unwrap();
+    }
+    let source = source(dir.path());
+    let candidates = futures::executor::block_on(source.candidates("cd pr"));
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].target_line("cd pr").unwrap(),
+        r"cd project\ \$link/"
+    );
+    assert_eq!(source.jobs.metrics().submitted, 2);
+    let (release, wait) = std::sync::mpsc::channel();
+    let blocked = source
+        .jobs
+        .submit_task("test-held-link-worker", move |_| wait.recv().unwrap())
+        .unwrap();
+    // A cached probe succeeds even while the I/O worker cannot run.
+    assert_eq!(
+        futures::executor::block_on(source.candidates("cd pr")).len(),
+        1
+    );
+    assert_eq!(source.jobs.metrics().submitted, 3);
+    release.send(()).unwrap();
+    futures::executor::block_on(blocked).unwrap();
+    let mut next = source.clone();
+    next.query = path_query_for_input(
+        r"cd project\ \$link/ch",
+        ShellDialect::Bash,
+        CompletionScope::legacy(),
+    )
+    .unwrap();
+    next.key.directory = format!("{}/project $link/", dir.path().display());
+    assert_eq!(
+        futures::executor::block_on(next.candidates(r"cd project\ \$link/ch"))[0]
+            .target_line(r"cd project\ \$link/ch")
+            .unwrap(),
+        r"cd project\ \$link/child/"
+    );
+}
+
+#[test]
+fn link_probe_waiters_coalesce_and_cancellation_cannot_repopulate_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = source(dir.path());
+    let runtime = PathCompletionRuntime {
+        state: source.state.clone(),
+        jobs: None,
+    };
+    let (release, wait) = std::sync::mpsc::channel();
+    let blocked = source
+        .jobs
+        .submit_task("test-held-probe", move |_| wait.recv().unwrap())
+        .unwrap();
+    let names = vec!["project-link".into()];
+    for _ in 0..20 {
+        assert!(source.probe_links(names.clone()).now_or_never().is_none());
+    }
+    assert_eq!(source.jobs.metrics().submitted, 2);
+    runtime.cancel_session("session");
+    release.send(()).unwrap();
+    futures::executor::block_on(blocked).unwrap();
+    assert!(futures::executor::block_on(source.probe_links(names)).is_none());
+    assert!(source.state.lock().unwrap().links.is_empty());
+    assert_eq!(source.jobs.metrics().submitted, 2);
+}
