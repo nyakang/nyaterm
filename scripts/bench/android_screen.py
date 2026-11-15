@@ -63,10 +63,10 @@ class Counters:
         self.kernel.CloseHandle(self.handle)
 
 
-def access_units(ffmpeg):
+def access_units(ffmpeg, width=1280, height=720):
     # AUD marks complete access units; one cyclic GOP provides identical input.
     data = subprocess.check_output([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-        "testsrc2=size=1280x720:rate=120", "-frames:v", "120", "-c:v", "libx264", "-preset", "ultrafast",
+        f"testsrc2=size={width}x{height}:rate=120", "-frames:v", "120", "-c:v", "libx264", "-preset", "ultrafast",
         "-tune", "zerolatency", "-x264-params", "aud=1:keyint=120:repeat-headers=1", "-f", "h264", "pipe:1"])
     offsets = [m.start() for m in re.finditer(b"\x00\x00\x00\x01\x09", data)]
     if len(offsets) != 120:
@@ -75,7 +75,7 @@ def access_units(ffmpeg):
 
 
 class Run:
-    def __init__(self, helper, units, fps, hidden):
+    def __init__(self, helper, units, fps, hidden, width=1280, height=720, yuv=False):
         self.lock = threading.Lock()
         self.stopped = threading.Event()
         self.pause = threading.Event()
@@ -83,6 +83,7 @@ class Run:
         self.frame_event = threading.Event()
         self.sampling = False
         self.frames = 0
+        self.frame_bytes = 0
         self.fed_frames = 0
         self.latencies = []
         self.errors = []
@@ -102,7 +103,7 @@ class Run:
             self.counters = Counters(self.child.pid)
             hello = self.packet()
             self.version = hello[1]["protocol"]
-            if self.version not in (2, 3):
+            if self.version not in (2, 3, 4):
                 raise RuntimeError("unsupported helper protocol")
             self.control({"type": "connect", "binding": {"server": "127.0.0.1:5037", "serial": "synthetic", "transport_id": None, "generation": 1},
                 "endpoint": "127.0.0.1:" + str(self.listener.getsockname()[1]), "settings": {"max_size": 1280, "max_fps": fps, "bit_rate": 8000000}})
@@ -111,12 +112,14 @@ class Run:
             video, _ = self.listener.accept()
             self.sockets.append(video)
             video.settimeout(2)
-            video.sendall(b"\0" + b"\0"*64 + b"h264" + struct.pack(">III", 0x80000000, 1280, 720))
+            video.sendall(b"\0" + b"\0"*64 + b"h264" + struct.pack(">III", 0x80000000, width, height))
             control, _ = self.listener.accept()
             self.sockets.append(control)
             self.listener.close()
             if not self.ready.wait(5):
                 raise RuntimeError("helper not ready")
+            if self.version >= 4:
+                self.control({"type": "frame_format", "format": "i420" if yuv else "bgra"})
             if hidden:
                 self.control({"type": "presentation", "visible": False})
             self.sender = threading.Thread(target=self.feed, args=(video, units, fps), daemon=True)
@@ -133,7 +136,7 @@ class Run:
 
     def packet(self):
         kind, length = struct.unpack("<BI", exact(self.child.stdout, 5))
-        if length > 16*1024*1024 + 52:
+        if length > 16*1024*1024 + 56:
             raise RuntimeError("helper packet limit")
         data = exact(self.child.stdout, length)
         return kind, json.loads(data) if kind == 1 else data
@@ -151,6 +154,7 @@ class Run:
                     sequence, _, _, pts = struct.unpack_from("<QQQQ", data)
                     if self.sampling:
                         self.frames += 1
+                        self.frame_bytes += len(data) - (56 if self.version >= 4 else 52)
                         self.latencies.append((time.perf_counter_ns() // 1000 - pts) / 1000)
                     self.frame_event.set()
                     self.control({"type": "frame_ack", "sequence": sequence})
@@ -222,11 +226,11 @@ class Run:
             self.child = None
 
 
-def measure(helper, units, fps, count, hidden, seconds):
+def measure(helper, units, fps, count, hidden, seconds, width=1280, height=720, yuv=False):
     runs = []
     try:
         for _ in range(count):
-            runs.append(Run(helper, units, fps, hidden))
+            runs.append(Run(helper, units, fps, hidden, width, height, yuv))
         time.sleep(0.5)
         for run in runs:
             run.sampling = True
@@ -245,7 +249,7 @@ def measure(helper, units, fps, count, hidden, seconds):
         resume = [run.resume_ms() for run in runs for _ in range(5)]
         if any(run.errors for run in runs):
             raise RuntimeError("helper failed during benchmark")
-        return {"fps_limit": fps, "screens": count, "hidden": hidden, "cpu_one_core_percent": round(cpu / elapsed * 100, 2),
+        return {"width": width, "height": height, "format": "i420" if yuv else "bgra", "pixel_bytes": sum(run.frame_bytes for run in runs), "fps_limit": fps, "screens": count, "hidden": hidden, "cpu_one_core_percent": round(cpu / elapsed * 100, 2),
             "peak_rss_mib_sum": round(peak, 2), "fed_frames": fed, "fed_fps_sum": round(fed / elapsed, 2), "presented_frames": frames,
             "presented_fps_sum": round(frames / elapsed, 2),
             "frame_latency_p50_ms": round(statistics.median(latency), 2) if latency else None,
@@ -263,15 +267,21 @@ def main():
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--seconds", type=float, default=4)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--candidate-yuv", action="store_true")
     args = parser.parse_args()
-    units = access_units(args.ffmpeg)
     results = []
-    for fps, count, hidden in [(30, 1, False), (120, 1, False), (120, 3, True)]:
-        for label, helper in [("baseline", args.baseline), ("candidate", args.candidate)]:
-            result = {"build": label, **measure(helper.resolve(), units, fps, count, hidden, args.seconds)}
-            results.append(result)
-            print(json.dumps(result), flush=True)
-    args.output.write_text(json.dumps({"scope": "synthetic 1280x720 H264 helper only; no capture or GPU", "results": results}, indent=2) + "\n", encoding="utf-8")
+    for width, height in [(1280, 720), (1920, 1080)]:
+        units = access_units(args.ffmpeg, width, height)
+        for fps, count, hidden in [(30, 1, False), (60, 1, False), (120, 1, False), (120, 3, True)]:
+            for repeat in range(args.repeats):
+                order = [("baseline", args.baseline), ("candidate", args.candidate)]
+                if repeat % 2: order.reverse()
+                for label, helper in order:
+                    result = {"build": label, "repeat": repeat, **measure(helper.resolve(), units, fps, count, hidden, args.seconds, width, height, args.candidate_yuv and label == "candidate")}
+                    results.append(result)
+                    print(json.dumps(result), flush=True)
+    args.output.write_text(json.dumps({"scope": "synthetic H264 helper only; no capture, GPU upload, or display", "results": results}, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

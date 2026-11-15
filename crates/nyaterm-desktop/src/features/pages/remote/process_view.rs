@@ -11,7 +11,10 @@ use crate::widgets::empty_panel_with_icon;
 use gpui::{Context, Entity, IntoElement, ListState, SharedString, div, list, prelude::*, px, rgb};
 use nyaterm_remote_ops::process_control::ProcessControlCapabilities;
 use nyaterm_remote_ops::remote_process::{PROCESS_LIST_UNSUPPORTED_ERROR, RemoteProcess};
-use nyaterm_ui::{NyaInputState, NyaNumberInputState, NyaScrollable, NyaSearchInput};
+use nyaterm_ui::{
+    NyaButton, NyaInputState, NyaNumberInputState, NyaScrollable, NyaSearchInput, NyaSelect,
+    NyaSelectState,
+};
 use rust_i18n::t;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -32,6 +35,7 @@ pub(in crate::features::pages::remote) fn processes_panel(
     panel_width: f32,
     search: Entity<NyaInputState>,
     nice: Option<Entity<NyaNumberInputState>>,
+    sort: Entity<NyaSelectState>,
     process_list: ListState,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::AnyElement {
@@ -270,21 +274,30 @@ pub(in crate::features::pages::remote) fn processes_panel(
         ),
         (RemoteProcessSortKey::User, t!("processManager.user")),
     ];
-    let sort_label = sort_options
-        .iter()
-        .find(|(key, _)| *key == process_state.sort_key)
-        .map(|(_, label)| format!("{} {}", label, process_state.sort_direction.marker()))
-        .unwrap_or_default();
-    let sort_menu = nyaterm_ui::NyaDropdownMenu::new("process-sort")
-        .label(sort_label)
-        .items(sort_options.iter().map(|(key, label)| {
-            let key = *key;
-            nyaterm_ui::NyaMenuItem::action(label.to_string())
-                .checked(key == process_state.sort_key)
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                    panel.with_app(cx, |app, cx| app.toggle_process_sort(key, cx));
-                }))
-        }));
+    let sort_menu = div()
+        .size_full()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(NyaSelect::new(&sort)),
+        )
+        .child(
+            NyaButton::new(
+                "process-sort-direction",
+                process_state.sort_direction.marker(),
+            )
+            .on_click(cx.listener(|panel, _, _, cx| {
+                panel.with_app(cx, |app, cx| {
+                    let key = app.remote_ops.process_presentation().sort_key;
+                    app.toggle_process_sort(key, cx);
+                });
+            })),
+        );
     let mut header = div()
         .h(px(32.))
         .flex_none()
@@ -362,7 +375,13 @@ pub(in crate::features::pages::remote) fn processes_panel(
                         .child(count_label),
                 ),
         )
-        .child(div().h(px(28.)).flex_none().min_w_0().child(sort_menu))
+        .child(
+            div()
+                .h(px(nyaterm_ui::NYA_FORM_CONTROL_HEIGHT_PX))
+                .flex_none()
+                .min_w_0()
+                .child(sort_menu),
+        )
         .child(
             div()
                 .flex_1()

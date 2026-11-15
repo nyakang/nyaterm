@@ -274,6 +274,25 @@ impl std::fmt::Debug for ScopedHistoryRecord {
 }
 
 /// A consistent, schema-neutral view of both history tables. Never serialized.
+pub struct CompletionHistoryUpdate {
+    pub record: ScopedHistoryRecord,
+    pub global: Option<CommandHistoryEntry>,
+    pub evicted_scoped: Vec<String>,
+    pub evicted_global: Vec<String>,
+    pub evicted_legacy: Vec<String>,
+}
+
+impl std::fmt::Debug for CompletionHistoryUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletionHistoryUpdate")
+            .field("global_updated", &self.global.is_some())
+            .field("scoped_evictions", &self.evicted_scoped.len())
+            .field("global_evictions", &self.evicted_global.len())
+            .field("legacy_evictions", &self.evicted_legacy.len())
+            .finish_non_exhaustive()
+    }
+}
+
 pub struct CompletionHistorySnapshot {
     pub revision: u64,
     pub global_history: Vec<CommandHistoryEntry>,
@@ -356,7 +375,7 @@ impl CompletionCandidate {
         Some(format!("{before}{}{after}", self.insert_text))
     }
 }
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CompletionResult {
     pub candidates: Vec<CompletionCandidate>,
     pub revision: u64,

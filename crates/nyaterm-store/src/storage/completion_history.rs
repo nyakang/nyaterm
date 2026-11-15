@@ -5,7 +5,8 @@ use super::command_history::{
 use super::{ConnectionStore, StorageError, current_time_ms, lower_hex};
 use nyaterm_core::completion::privacy::command_may_be_learned;
 use nyaterm_core::completion::types::{
-    CompletionHistorySnapshot, CompletionScope, ScopedHistoryRecord, ShellDialect,
+    CompletionHistorySnapshot, CompletionHistoryUpdate, CompletionScope, ScopedHistoryRecord,
+    ShellDialect,
 };
 use nyaterm_core::models::quick_commands::CommandHistoryEntry;
 use redb::{ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition};
@@ -25,7 +26,7 @@ fn record_key(scope: &CompletionScope, command: &str) -> String {
         lower_hex(&Sha256::digest(command.as_bytes()))
     )
 }
-fn check_version(
+pub(super) fn check_version(
     table: &impl ReadableTable<&'static str, &'static [u8]>,
 ) -> Result<(), StorageError> {
     if let Some(value) = table.get("version")?
@@ -122,12 +123,26 @@ impl ConnectionStore {
         command: &str,
         include_global: bool,
     ) -> Result<Option<HistoryUpdate>, StorageError> {
+        self.append_completion_contribution_with_update(scope, dialect, command, include_global)
+            .map(|update| {
+                update.map(|(revision, update)| (revision, update.record, update.evicted_scoped))
+            })
+    }
+
+    pub fn append_completion_contribution_with_update(
+        &self,
+        scope: &CompletionScope,
+        dialect: ShellDialect,
+        command: &str,
+        include_global: bool,
+    ) -> Result<Option<(u64, CompletionHistoryUpdate)>, StorageError> {
         if !command_may_be_learned(command, false) || scope == &CompletionScope::legacy() {
             return Ok(None);
         }
         let Some(command) = sanitize_history_command(command) else {
             return Ok(None);
         };
+        let retain = self.prepare_history_retention()?;
         let txn = self.db.begin_write()?;
         let mut table = txn.open_table(COMPLETION_HISTORY_TABLE)?;
         check_version(&table)?;
@@ -150,6 +165,7 @@ impl ConnectionStore {
                 "unsupported completion history record",
             ));
         }
+        record.dialect = dialect;
         record.use_count = record.use_count.saturating_add(1);
         record.last_used_at_ms = current_time_ms();
         table.insert(key.as_str(), serde_json::to_vec(&record)?.as_slice())?;
@@ -180,13 +196,34 @@ impl ConnectionStore {
             evicted.push(row.command);
         }
         drop(table);
-        if include_global {
-            append_global_history_in_txn(&txn, &command, record.last_used_at_ms)?;
-        }
+        let global = if include_global {
+            Some(append_global_history_in_txn(
+                &txn,
+                &command,
+                record.last_used_at_ms,
+            )?)
+        } else {
+            None
+        };
+        let (evicted_global, evicted_legacy) = if retain {
+            super::history_retention::retain_history_in_txn(&txn)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let revision = bump_revision(&txn)?;
         txn.commit()?;
         self.invalidate_completion();
-        Ok(Some((revision, record, evicted)))
+        self.note_history_retention_committed();
+        Ok(Some((
+            revision,
+            CompletionHistoryUpdate {
+                record,
+                global,
+                evicted_scoped: evicted,
+                evicted_global,
+                evicted_legacy,
+            },
+        )))
     }
 }
 

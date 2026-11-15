@@ -125,3 +125,51 @@ RDP 和 VNC 的协议解码器解析的是**服务器控制的字节流**，因�
 - 新功能优先放入已有 focused feature state；只有需要独立生命周期时才新增权威 Entity。
 
 更具体的界面层规则见 [GPUI 桌面开发](./frontend)，运行时与持久化规则见 [运行时、传输与存储开发](./backend)。
+
+## Desktop 职责收敛
+
+本轮拆分保留 desktop 的 GPUI 组合、业务状态、任务协调、持久化适配和操作授权：
+
+| 承载 crate | 迁移内容 | desktop 保留内容 |
+| --- | --- | --- |
+| `nyaterm-core` | AI reasoning 文本解析 | AI 功能状态和视图 |
+| `nyaterm-remote-ops::query` | 进程排序、Docker/GPU/NPU 检索 | 搜索状态和结果缓存 |
+| `nyaterm-files` | 传输路径、注入时间的 50 ms 进度门控 | 任务 ID、事件发送与生命周期 |
+| `nyaterm-preview::icons` | 原尺寸 RGBA 托盘图像解码 | 系统托盘创建 |
+| `nyaterm-ui` | 子窗口壳、布局定位、标题与面板头部 | 平台策略、Windows 缩放和业务关闭回调 |
+| `nyaterm-i18n`（新增） | 六份语言目录、别名归一化、一次性预加载 | 语言设置持久化、组件标签更新 |
+| `nyaterm-completion-runtime`（新增） | 补全 worker、队列、缓存、用户规格加载 | 数据库适配、UI 事件、补全授权和任务生命周期 |
+| `nyaterm-updater` | 在下载和准备阶段产生类型化错误 | 本地化文案、重试按钮、任务取消与安装退出保护 |
+
+实施顺序是纯查询与路径迁移、通用窗口组件迁移、语言资源集中、补全运行时解耦、
+更新错误类型化，最后补充架构门禁、CI 路径选择和跨 crate 回归测试。
+大型业务面板和通用任务系统不在本轮拆分范围内。
+
+`nyaterm-i18n` 不依赖任何 workspace crate。desktop 通过 rust-i18n 的公开
+`backend` 参数与空目录桥接，继续使用原有 `t!` 调用；六份目录内容、键名和
+语言别名保持兼容。预加载在独立的 16 MiB 栈线程完成，重复调用共享结果。
+
+`nyaterm-completion-runtime` 的 workspace 依赖仅允许 core，测试依赖也遵守同一
+边界。desktop 注入 `CompletionHistoryRepository` 和类型化事件回调；快照与代次
+在同一个数据库请求中读取。队列合并搜索但保留已接受写操作的顺序，外部删除或恢复
+通过代次刷新缓存。真实 store 集成测试保留在 desktop。
+
+上述迁移不改变数据库表、序列化字段、备份格式、凭据格式或更新 helper 协议。
+架构检查覆盖普通、开发、构建、平台限定及依赖别名，防止新 crate 反向依赖 desktop。
+
+### 终端命令补全的内部边界
+
+`TerminalAssistState.commands` 是补全可变状态的唯一所有者：
+`CommandSuggestionFeatureState` 集中管理弹窗、选择、滚动、模式、抑制原因、
+待记录历史、路径运行时、搜索代次和刷新任务。输入与回显仍由 `TerminalEditingState`
+管理，历史与补全客户端仍归 `CommandFeatureState`。
+
+桌面端 `command_suggestions` 分为 `input`（输入与可用性）、`search`（调度与发布）、
+`interaction`（按键与历史删除）、`fill`/`paste`（填入授权与回显确认）、
+`view`（元素与布局）和 `diagnostics`。隐藏、取消及会话切换保留各自的清理语义。
+
+候选合并和路径配额位于 core 的 `completion::merge`；runtime 的
+`progressive::publish_progressively` 只等待调用者提供的 future，先发布普通候选，
+路径非空时再发布一次。desktop 继续拥有路径缓存与 I/O、GPUI 任务、过期结果校验和
+终端写入授权；增量结果只在会话、模式、输入版本及草稿一致时按命令内容保留选择。
+此拆分不改变数据格式、补全延迟、授权检查或回显确认协议。

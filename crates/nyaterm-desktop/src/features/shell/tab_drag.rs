@@ -102,7 +102,7 @@ impl NyaTermApp {
             self.clear_session_tab_drag(cx);
             return true;
         }
-        motion.borrow_mut().finish(std::time::Instant::now());
+        motion.borrow_mut().commit(std::time::Instant::now());
         self.commit_session_strip_order(group, &preview, &payload.tab_id.layout_key(), cx);
         true
     }

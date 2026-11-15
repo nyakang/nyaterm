@@ -1,7 +1,6 @@
 use super::labels::AndroidError;
 use crate::features::NyaTermApp;
 use crate::features::view_widgets::color_icon;
-use crate::widgets::small_button;
 use gpui::{
     Bounds, Context, DevicePixels, IntoElement, KeyDownEvent, MouseButton, Pixels, Point, Size,
     Window, canvas, div, prelude::*, px, rgb,
@@ -205,7 +204,7 @@ impl NyaTermApp {
     }
     pub(super) fn prepare_android_texture(&mut self, id: &str, window: &mut Window) {
         for texture in self.android.retired_textures.drain(..) {
-            window.remove_dynamic_texture(texture);
+            texture.remove(window);
         }
         let Some(screen) = self.android.screens.get_mut(id) else {
             return;
@@ -221,30 +220,71 @@ impl NyaTermApp {
             DevicePixels(frame.width as i32),
             DevicePixels(frame.height as i32),
         );
-        let result = if screen.texture_size != Some(dimensions) {
-            if let Some(texture) = screen.texture.take() {
-                window.remove_dynamic_texture(texture);
+        use super::ScreenTexture;
+        use nyaterm_android::ipc::PixelFormat;
+        if screen.requested_format == Some(PixelFormat::Bgra) && frame.format == PixelFormat::I420 {
+            if let Some(handle) = &screen.handle {
+                handle.release_frame(frame);
             }
-            window
-                .create_dynamic_texture(size, &frame.pixels, frame.stride)
-                .map(|texture| {
-                    screen.texture = Some(texture);
-                    screen.texture_size = Some(dimensions);
-                })
-        } else if let Some(texture) = screen.texture {
-            window.update_dynamic_texture(
-                texture,
-                Bounds::new(Point::new(DevicePixels(0), DevicePixels(0)), size),
-                &frame.pixels,
-                frame.stride,
-            )
+            return;
+        }
+        let same_format = matches!(
+            (screen.texture, frame.format),
+            (Some(ScreenTexture::Bgra(_)), PixelFormat::Bgra)
+                | (Some(ScreenTexture::Video(_, _)), PixelFormat::I420)
+        );
+        let result = if screen.texture_size != Some(dimensions) || !same_format {
+            if let Some(texture) = screen.texture.take() {
+                texture.remove(window);
+            }
+            let created = match frame.format {
+                PixelFormat::Bgra => window
+                    .create_dynamic_texture(size, &frame.pixels, frame.stride)
+                    .map(ScreenTexture::Bgra),
+                PixelFormat::I420 => window
+                    .create_video_texture(size, &frame.pixels)
+                    .map(|texture| ScreenTexture::Video(texture, frame.color)),
+            };
+            created.map(|texture| {
+                screen.texture = Some(texture);
+                screen.texture_size = Some(dimensions);
+            })
         } else {
-            Ok(())
+            match screen.texture {
+                Some(ScreenTexture::Bgra(texture)) => window.update_dynamic_texture(
+                    texture,
+                    Bounds::new(Point::new(DevicePixels(0), DevicePixels(0)), size),
+                    &frame.pixels,
+                    frame.stride,
+                ),
+                Some(ScreenTexture::Video(texture, _)) => {
+                    screen.texture = Some(ScreenTexture::Video(texture, frame.color));
+                    window.update_video_texture(texture, &frame.pixels)
+                }
+                None => Ok(()),
+            }
         };
         if result.is_err() {
-            screen.error = Some(AndroidError::TextureUpload);
-            if let Some(handle) = &screen.handle {
-                handle.close();
+            if frame.format == PixelFormat::I420 {
+                screen.requested_format = Some(PixelFormat::Bgra);
+                if let Some(texture) = screen.texture.take() {
+                    texture.remove(window);
+                }
+                screen.texture_size = None;
+                if let Some(handle) = &screen.handle
+                    && handle
+                        .send(Control::FrameFormat {
+                            format: PixelFormat::Bgra,
+                        })
+                        .is_err()
+                {
+                    screen.error = Some(AndroidError::Disconnected);
+                }
+            } else {
+                screen.error = Some(AndroidError::TextureUpload);
+                if let Some(handle) = &screen.handle {
+                    handle.close();
+                }
             }
         }
         if let Some(handle) = &screen.handle {
@@ -266,109 +306,11 @@ impl NyaTermApp {
         let viewport = screen.viewport;
         let layout_epoch = screen.layout_epoch;
         let error = screen.error.as_ref().map(AndroidError::message);
-        let mut toolbar = div()
-            .id(format!("android-toolbar-{id}"))
-            .flex()
-            .items_center()
-            .gap_1()
-            .h(px(36.))
-            .px_2()
-            .bg(rgb(palette.surface));
-        for (action, label, keycode) in [
-            ("back", t!("android.back"), 4),
-            ("home", t!("android.home"), 3),
-            ("recent", t!("android.recent"), 187),
-        ] {
-            let target = id.clone();
-            toolbar = toolbar.child(small_button(
-                palette,
-                format!("android-{action}-{id}"),
-                label,
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    app.android_key(&target, keycode, 0, 0, cx);
-                    app.android_key(&target, keycode, 1, 0, cx);
-                }),
-            ));
-        }
-        let rotate = id.clone();
-        let paste = id.clone();
-        let reconnect = id.clone();
-        let fit = id.clone();
-        let zoom_in = id.clone();
-        let zoom_out = id.clone();
-        toolbar = toolbar
-            .child(small_button(
-                palette,
-                format!("android-rotate-{id}"),
-                t!("android.rotate"),
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    app.android_send(&rotate, Control::Rotate, cx);
-                }),
-            ))
-            .child(small_button(
-                palette,
-                format!("android-fit-{id}"),
-                t!("android.fit"),
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    if let Some(screen) = app.android.screens.get_mut(&fit) {
-                        screen.viewport = Default::default();
-                        screen.bounds = None;
-                        screen.layout_epoch += 1;
-                    }
-                    cx.notify();
-                }),
-            ))
-            .child(small_button(
-                palette,
-                format!("android-zoom-{id}"),
-                t!("android.zoom"),
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    app.android_zoom(&zoom_in, 1.25, None, cx);
-                    cx.notify();
-                }),
-            ))
-            .child(small_button(
-                palette,
-                format!("android-zoom-out-{id}"),
-                t!("android.zoomOut"),
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    app.android_zoom(&zoom_out, 0.8, None, cx);
-                }),
-            ))
-            .child(small_button(
-                palette,
-                format!("android-paste-{id}"),
-                t!("android.paste"),
-                cx.listener(move |app, _, _, cx| {
-                    cx.stop_propagation();
-                    app.android_paste(&paste, cx);
-                }),
-            ))
-            .child(small_button(
-                palette,
-                format!("android-reconnect-{id}"),
-                t!("android.reconnect"),
-                cx.listener(move |app, _, window, cx| {
-                    cx.stop_propagation();
-                    app.reconnect_session(reconnect.clone(), window, cx);
-                }),
-            ));
-        toolbar = toolbar.child(div().flex_1()).child(
-            nyaterm_ui::NyaIconButton::new(
-                format!("android-input-help-{id}"),
-                "icons/menu/info.svg",
-            )
-            .size(px(28.))
-            .icon_size(px(18.))
-            .tooltip(t!("android.inputHint")),
-        );
+        let toolbar = self.android_toolbar(&id, cx);
         let app = cx.weak_entity();
         let bounds_id = id.clone();
+        let paint_app = app.clone();
+        let paint_id = id.clone();
         let image = canvas(
             move |bounds, window, cx| {
                 let (x, y, width, height) = viewport
@@ -384,22 +326,63 @@ impl NyaTermApp {
                 let app = app.clone();
                 let bounds_id = bounds_id.clone();
                 window.defer(cx, move |_, cx| {
-                    let _ = app.update(cx, |app, _| {
+                    let _ = app.update(cx, |app, cx| {
                         if let Some(screen) = app.android.screens.get_mut(&bounds_id)
                             && screen.generation == geometry_generation
                             && screen.layout_epoch == layout_epoch
                         {
+                            let was_narrow = screen
+                                .viewport_bounds
+                                .is_some_and(|previous| f32::from(previous.size.width) < 440.);
+                            let is_narrow = f32::from(bounds.size.width) < 440.;
                             screen.viewport_bounds = Some(bounds);
                             screen.bounds = Some(image);
+                            if was_narrow != is_narrow {
+                                cx.notify();
+                            }
                             screen.bounds_generation = geometry_generation;
                         }
                     });
                 });
                 image
             },
-            move |_, image, window, _| {
-                if let Some(texture) = texture {
-                    let _ = window.paint_dynamic_texture(image, texture);
+            move |_, image, window, cx| {
+                if let Some(texture) = texture
+                    && texture.paint(image, window).is_err()
+                {
+                    let app = paint_app.clone();
+                    let id = paint_id.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = app.update(cx, |app, cx| {
+                            if let Some(screen) = app.android.screens.get_mut(&id) {
+                                if let Some(texture) = screen.texture.take() {
+                                    app.android.retired_textures.push(texture);
+                                }
+                                screen.texture_size = None;
+                                if screen.requested_format
+                                    == Some(nyaterm_android::ipc::PixelFormat::I420)
+                                {
+                                    screen.requested_format =
+                                        Some(nyaterm_android::ipc::PixelFormat::Bgra);
+                                    if let Some(handle) = &screen.handle
+                                        && handle
+                                            .send(Control::FrameFormat {
+                                                format: nyaterm_android::ipc::PixelFormat::Bgra,
+                                            })
+                                            .is_err()
+                                    {
+                                        screen.error = Some(AndroidError::Disconnected);
+                                    }
+                                } else {
+                                    screen.error = Some(AndroidError::TextureUpload);
+                                    if let Some(handle) = &screen.handle {
+                                        handle.close();
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        });
+                    });
                 }
             },
         )
@@ -609,7 +592,7 @@ impl NyaTermApp {
             .child(surface)
             .into_any_element()
     }
-    fn android_paste(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(super) fn android_paste(&mut self, id: &str, cx: &mut Context<Self>) {
         let Some(text) = cx
             .read_from_clipboard()
             .and_then(|item| item.text())
@@ -640,7 +623,7 @@ impl NyaTermApp {
             cx,
         );
     }
-    fn android_zoom(
+    pub(super) fn android_zoom(
         &mut self,
         id: &str,
         factor: f32,
@@ -668,7 +651,7 @@ impl NyaTermApp {
         }
         cx.notify();
     }
-    fn android_send(&mut self, id: &str, control: Control, cx: &mut Context<Self>) {
+    pub(super) fn android_send(&mut self, id: &str, control: Control, cx: &mut Context<Self>) {
         let result = control
             .validate_input()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
@@ -738,7 +721,7 @@ impl NyaTermApp {
             );
         }
     }
-    fn android_key(
+    pub(super) fn android_key(
         &mut self,
         id: &str,
         code: u32,

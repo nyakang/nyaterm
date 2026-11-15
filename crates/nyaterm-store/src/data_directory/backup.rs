@@ -64,12 +64,14 @@ fn private_directory(path: &Path) -> Result<(), DataDirectoryError> {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => return Err(DataDirectoryError::UnsupportedEntry(path.into())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = fs::DirBuilder::new();
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
-            {
+            let builder = {
                 use std::os::unix::fs::DirBuilderExt as _;
+                let mut builder = builder;
                 builder.mode(0o700);
-            }
+                builder
+            };
             builder
                 .create(path)
                 .map_err(|e| io_error("create backup directory", path, e))?;

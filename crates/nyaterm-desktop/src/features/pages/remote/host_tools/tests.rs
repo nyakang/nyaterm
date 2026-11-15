@@ -1068,3 +1068,44 @@ fn native_adapter_child_fixture() {
         assert!(panel.can_refresh());
     });
 }
+
+#[test]
+fn sort_select_events_update_each_panel_without_toggling_reselected_direction() {
+    use super::state::{PortSortKey, ServiceSortKey, SortDirection};
+    use nyaterm_ui::NyaSelectEvent;
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let (app, _) = setup(&mut cx, Arc::new(ControlledExecutor::default()));
+    for kind in [HostToolKind::Ports, HostToolKind::Services] {
+        let panel = app.read_with(&cx, |app, _| app.host_tool_panels.entity(kind).clone());
+        let select = panel.read_with(&cx, |panel, _| panel.sort_select.clone());
+        select.update(&mut cx, |_, cx| {
+            cx.emit(NyaSelectEvent::Changed(Some("1".into())))
+        });
+        cx.run_until_parked();
+        panel.update(&mut cx, |panel, _| match kind {
+            HostToolKind::Ports => {
+                assert_eq!(panel.ports_view.sort, PortSortKey::ALL[1]);
+                assert_eq!(panel.ports_view.direction, SortDirection::Ascending);
+                panel.ports_view.direction = SortDirection::Descending;
+            }
+            HostToolKind::Services => {
+                assert_eq!(panel.services_view.sort, ServiceSortKey::ALL[1]);
+                assert_eq!(panel.services_view.direction, SortDirection::Ascending);
+                panel.services_view.direction = SortDirection::Descending;
+            }
+        });
+        select.update(&mut cx, |_, cx| {
+            cx.emit(NyaSelectEvent::Changed(Some("1".into())))
+        });
+        cx.run_until_parked();
+        panel.read_with(&cx, |panel, _| match kind {
+            HostToolKind::Ports => {
+                assert_eq!(panel.ports_view.direction, SortDirection::Descending)
+            }
+            HostToolKind::Services => {
+                assert_eq!(panel.services_view.direction, SortDirection::Descending)
+            }
+        });
+    }
+}

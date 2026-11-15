@@ -1059,12 +1059,7 @@ fn legacy_low_latency_setting_does_not_override_individual_feature_switches() {
 
         app.note_shell_editing_input(b"echo abc", cx);
         app.note_command_suggestion_input(b"echo abc", cx);
-        assert!(
-            app.terminal
-                .assist
-                .command_suggestion_refresh_task
-                .is_some()
-        );
+        assert!(app.terminal.assist.commands.refresh_task.is_some());
         assert!(!app.resolved_keyword_highlight_rules().is_empty());
         app.ensure_paint_theme_caches();
         assert!(!app.resolved_keyword_highlight_rules().is_empty());
@@ -1081,12 +1076,7 @@ fn legacy_low_latency_setting_does_not_override_individual_feature_switches() {
         app.invalidate_paint_theme_caches();
 
         app.note_command_suggestion_input(b"echo abc", cx);
-        assert!(
-            app.terminal
-                .assist
-                .command_suggestion_refresh_task
-                .is_none()
-        );
+        assert!(app.terminal.assist.commands.refresh_task.is_none());
         assert!(app.resolved_keyword_highlight_rules().is_empty());
         app.ensure_paint_theme_caches();
         assert!(app.resolved_keyword_highlight_rules().is_empty());

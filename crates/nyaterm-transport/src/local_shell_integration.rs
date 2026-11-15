@@ -328,7 +328,10 @@ fn startup_directory(session_id: &str) -> Option<tempfile::TempDir> {
         (crate::ssh_shell_integration::ShellKind::Zsh, "full.zsh"),
         (crate::ssh_shell_integration::ShellKind::Fish, "full.fish"),
     ] {
-        let script = crate::ssh_shell_integration::persistent_script(kind)?;
+        let script = crate::ssh_shell_integration::bind_file_context(
+            kind,
+            crate::ssh_shell_integration::persistent_script(kind)?,
+        );
         // Preserve the local MSYS/WSL path conversion when reusing SSH's hooks.
         let script = script.replace(r#"printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}""#, "__nyaterm_local_cwd")
             .replace(r#"printf '\033]7;file://%s%s\007' (hostname) (string replace -a -- '%' '%25' $PWD)"#, "__nyaterm_local_cwd");

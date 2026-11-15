@@ -335,7 +335,7 @@ impl NyaTermApp {
         self.cancel_file_sudo_for_sessions(&[session_id.to_owned()], cx);
         self.cancel_native_runs_for_disconnected_session(session_id, cx);
         self.commands.cancel_staged_quick_command(session_id);
-        self.terminal.invalidate_shell_editing_session(session_id);
+        self.terminal.disconnect_shell_editing_session(session_id);
         self.clear_terminal_mouse_report_for_session(session_id);
         self.terminal.clear_session_pressed_keys(session_id);
         self.transfer.clear_file_clipboard_for_session(session_id);

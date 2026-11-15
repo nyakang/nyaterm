@@ -168,22 +168,15 @@ fn selectable_enum_values_are_accepted_by_the_patch_builder() {
 #[test]
 fn every_batch_field_label_exists_in_all_supported_locales() {
     use super::fields::{DISPLAY_FIELDS, EDITABLE_FIELDS};
-    for (locale, source) in [
-        ("en", include_str!("../../../../locales/en.json")),
-        ("fr", include_str!("../../../../locales/fr.json")),
-        ("ja", include_str!("../../../../locales/ja.json")),
-        ("ko", include_str!("../../../../locales/ko.json")),
-        ("zh-CN", include_str!("../../../../locales/zh-CN.json")),
-        ("zh-TW", include_str!("../../../../locales/zh-TW.json")),
-    ] {
-        let catalog: serde_json::Value = serde_json::from_str(source).unwrap();
+    use rust_i18n::Backend as _;
+    crate::preload_i18n().unwrap();
+    for locale in nyaterm_i18n::available_locales() {
         for field in DISPLAY_FIELDS.into_iter().chain(EDITABLE_FIELDS) {
             let key = field.label_key();
-            let value = key
-                .split('.')
-                .try_fold(&catalog, |value, part| value.get(part));
             assert!(
-                value.and_then(serde_json::Value::as_str).is_some(),
+                nyaterm_i18n::SharedCatalogBackend
+                    .translate(&locale, key)
+                    .is_some(),
                 "{locale}: {key}"
             );
         }
@@ -196,7 +189,9 @@ fn every_batch_field_label_exists_in_all_supported_locales() {
             ("skipNonFixed", &["count"][..]),
             ("skipGlobalRecording", &["count"][..]),
         ] {
-            let value = catalog["assets"]["batch"][key].as_str().unwrap();
+            let value = nyaterm_i18n::SharedCatalogBackend
+                .translate(&locale, &format!("assets.batch.{key}"))
+                .unwrap();
             for placeholder in placeholders {
                 assert!(
                     value.contains(&format!("%{{{placeholder}}}")),

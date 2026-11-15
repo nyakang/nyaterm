@@ -1,0 +1,14 @@
+[package]
+name = "nyaterm-i18n"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rust-i18n.workspace = true
+
+[dev-dependencies]
+regex.workspace = true
+serde_json.workspace = true

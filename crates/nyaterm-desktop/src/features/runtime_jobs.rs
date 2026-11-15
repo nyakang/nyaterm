@@ -211,6 +211,7 @@ pub(in crate::features) enum CommandPersistenceRequest {
 #[derive(Debug)]
 pub(in crate::features) enum CommandPersistenceResult {
     History(Result<Vec<CommandHistoryEntry>, String>),
+    HistoryMaintenanceWarning(String),
     QuickCommandUseCount {
         command_id: String,
         result: Result<(), String>,

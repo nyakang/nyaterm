@@ -579,8 +579,20 @@ pub(super) fn prepare_shell_integration(
         shell,
         mode,
         ready_marker,
-        payload.to_string(),
+        bind_file_context(shell, payload),
     ))
+}
+
+/// Each installation gets a distinct binding, including reconnects using the
+/// same desktop session id. This shell-local variable is never exported or
+/// written into the persistent RC script. It is evidence, not authentication.
+pub(super) fn bind_file_context(shell: ShellKind, script: &str) -> String {
+    let binding = uuid::Uuid::new_v4().simple().to_string();
+    let assignment = match shell {
+        ShellKind::Fish => format!("set -g __nyaterm_file_binding {binding}"),
+        _ => format!("__nyaterm_file_binding={binding}"),
+    };
+    format!("{assignment}\n{script}")
 }
 
 fn wrap_shell_integration_payload(
@@ -671,7 +683,7 @@ fn prepare_activation(
         shell,
         mode,
         ready_marker,
-        payload,
+        bind_file_context(shell, &payload),
     ))
 }
 
@@ -829,6 +841,17 @@ async fn install_remote_shell_integration(
 // validated by temp/tty7. NyaTerm-prefixed symbols avoid replacing an existing
 // bash-preexec installation.
 const BASH_PERSISTENT_SCRIPT: &str = r#"# nyaterm shell integration v2
+__nyaterm_file_seq=0
+__nyaterm_file_context(){
+  local ret=$? pid=${BASHPID:-$$} home cwd
+  [ -n "${__nyaterm_file_binding-}" ] || return "$ret"
+  [ "${#HOME}" -le 1024 ] && [ "${#PWD}" -le 1024 ] || return "$ret"
+  home=$(printf '%s' "$HOME" | command base64 | command tr -d '\r\n') || return "$ret"
+  cwd=$(printf '%s' "$PWD" | command base64 | command tr -d '\r\n') || return "$ret"
+  __nyaterm_file_seq=$((__nyaterm_file_seq + 1))
+  printf '\033]7777;NyaTermFileContext;1;%s;%s;%s;%s;%s;%s\007' "$__nyaterm_file_binding" "$pid" "$EUID" "$__nyaterm_file_seq" "$home" "$cwd"
+  return "$ret"
+}
 __nyaterm_host(){ hostname 2>/dev/null || printf localhost; }
 __nyaterm_prune_history(){
   [ -n "${NYATERM_PRUNE_HISTORY:-}" ] || return 0
@@ -882,6 +905,7 @@ __nyaterm_prompt(){
   __nyaterm_prune_history
   printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//%/%25}"
   printf '\033]133;A\007'
+  __nyaterm_file_context
   case "$PS1" in (*133\;B*) ;; (*) PS1="$PS1"'\[\033]133;B\007\]' ;; esac
   return "$ret"
 }
@@ -1102,7 +1126,23 @@ __nyaterm_install_prompt(){
 }
 "#;
 
+// `__nyaterm_line_init` exists for prompt frameworks (powerlevel10k, ...) that
+// rebuild PS1 after our precmd hook and drop the B mark appended there.
+// line-init runs once the prompt is drawn, where the input starts, so it emits
+// the mark when PS1 no longer carries it. No comments inside the script: it is
+// delivered as injected shell input.
 const ZSH_PERSISTENT_SCRIPT: &str = r#"# nyaterm shell integration v2
+__nyaterm_file_seq=0
+__nyaterm_file_context(){
+  local ret=$? pid=${BASHPID:-$$} home cwd
+  [ -n "${__nyaterm_file_binding-}" ] || return "$ret"
+  [ "${#HOME}" -le 1024 ] && [ "${#PWD}" -le 1024 ] || return "$ret"
+  home=$(printf '%s' "$HOME" | command base64 | command tr -d '\r\n') || return "$ret"
+  cwd=$(printf '%s' "$PWD" | command base64 | command tr -d '\r\n') || return "$ret"
+  __nyaterm_file_seq=$((__nyaterm_file_seq + 1))
+  printf '\033]7777;NyaTermFileContext;1;%s;%s;%s;%s;%s;%s\007' "$__nyaterm_file_binding" "$pid" "$EUID" "$__nyaterm_file_seq" "$home" "$cwd"
+  return "$ret"
+}
 __nyaterm_host(){ hostname 2>/dev/null || printf localhost; }
 __nyaterm_emit_command(){
   if [ -n "$1" ] && command -v base64 >/dev/null 2>&1; then
@@ -1131,7 +1171,12 @@ __nyaterm_prompt(){
   [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
   printf '\033]7;file://%s%s\007' "$(__nyaterm_host)" "${PWD//\%/%25}"
   printf '\033]133;A\007'
+  __nyaterm_file_context
   [[ "$PS1" == *$'\033]133;B\007'* ]] || PS1="$PS1"$'%{\033]133;B\007%}'
+}
+__nyaterm_line_init(){
+  [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
+  [[ "$PS1" == *$'\033]133;B\007'* ]] || printf '\033]133;B\007'
 }
 __nyaterm_preexec(){
   [ -n "${NYATERM_ZSH_HOOKS_READY:-}" ] || return 0
@@ -1156,6 +1201,8 @@ __nyaterm_install_full(){
   add-zsh-hook -d precmd __nyaterm_prompt 2>/dev/null || true
   add-zsh-hook -d preexec __nyaterm_preexec 2>/dev/null || true
   add-zsh-hook precmd __nyaterm_prompt || return 1
+  autoload -Uz add-zle-hook-widget 2>/dev/null \
+    && add-zle-hook-widget line-init __nyaterm_line_init 2>/dev/null || true
   add-zsh-hook preexec __nyaterm_preexec || return 1
   typeset -g NYATERM_ZSH_HOOKS_READY=1
 }
@@ -1169,6 +1216,17 @@ __nyaterm_install_prompt(){
 "#;
 
 const FISH_PERSISTENT_SCRIPT: &str = r#"# nyaterm shell integration v2
+set -g __nyaterm_file_seq 0
+function __nyaterm_file_context
+  set -l ret $status
+  set -q __nyaterm_file_binding; or return $ret
+  test (string length -- "$HOME") -le 1024; and test (string length -- "$PWD") -le 1024; or return $ret
+  set -l home (printf '%s' "$HOME" | command base64 | command tr -d '\r\n')
+  set -l cwd (printf '%s' "$PWD" | command base64 | command tr -d '\r\n')
+  set -g __nyaterm_file_seq (math $__nyaterm_file_seq + 1)
+  printf '\033]7777;NyaTermFileContext;1;%s;%s;%s;%s;%s;%s\007' "$__nyaterm_file_binding" $fish_pid (command id -u) $__nyaterm_file_seq "$home" "$cwd"
+  return $ret
+end
 function __nyaterm_emit_command
   if test -n "$argv[1]"; and command -sq base64
     set -l b64 (printf '%s' "$argv[1]" | base64 | tr -d '\r\n')
@@ -1205,6 +1263,7 @@ function __nyaterm_precmd
   end
   printf '\033]7;file://%s%s\007' (hostname) (string replace -a -- '%' '%25' $PWD)
   printf '\033]133;A\007'
+  __nyaterm_file_context
   __nyaterm_ensure_prompt_wrapper
 end
 function __nyaterm_preexec
@@ -1755,6 +1814,17 @@ mod tests {
     }
 
     #[test]
+    fn zsh_script_marks_the_input_start_even_when_a_prompt_framework_rewrites_ps1() {
+        let script = super::ZSH_PERSISTENT_SCRIPT;
+        assert!(script.contains("__nyaterm_line_init(){"));
+        assert!(script.contains("add-zle-hook-widget line-init __nyaterm_line_init"));
+        // Only emitted when PS1 lost the mark, so ordinary prompts see one B.
+        assert!(
+            script.contains(r#"[[ "$PS1" == *$'\033]133;B\007'* ]] || printf '\033]133;B\007'"#)
+        );
+    }
+
+    #[test]
     fn ready_marker_stays_on_the_final_physical_line() {
         // The shell echoes each injected physical line before executing it, so
         // any physical line after the ready marker's line is echoed past the
@@ -1966,5 +2036,47 @@ mod tests {
             .windows(needle.len())
             .filter(|window| *window == needle)
             .count()
+    }
+}
+
+#[cfg(all(test, unix))]
+mod file_context_tests {
+    use super::{OscStripper, ShellKind, bind_file_context, persistent_script};
+    use nyaterm_core::terminal::file_context::ShellFileContext;
+    #[test]
+    fn real_shells_emit_fresh_context_and_keep_their_identity() {
+        for (program, kind) in [
+            ("bash", ShellKind::Bash),
+            ("zsh", ShellKind::Zsh),
+            ("fish", ShellKind::Fish),
+        ] {
+            let script = bind_file_context(kind, persistent_script(kind).unwrap());
+            let script = format!("{script}\n__nyaterm_file_context\n__nyaterm_file_context\n");
+            let output = match std::process::Command::new(program)
+                .args(["-c", &script])
+                .env("HOME", "/tmp/nyaterm-test-home")
+                .current_dir("/tmp")
+                .output()
+            {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("{program} unavailable: native context probe skipped");
+                    continue;
+                }
+                output => output.unwrap(),
+            };
+            assert!(output.status.success(), "{program} context probe failed");
+            let text = String::from_utf8(output.stdout).unwrap();
+            let contexts: Vec<_> = text
+                .split('\x07')
+                .filter_map(|part| ShellFileContext::parse_osc(part.trim_start_matches("\x1b]")))
+                .collect();
+            assert_eq!(contexts.len(), 2, "{program}");
+            assert!(contexts[0].same_shell(&contexts[1]));
+            assert_eq!(contexts[0].sequence, 1);
+            assert_eq!(contexts[1].sequence, 2);
+            assert_eq!(contexts[0].home, "/tmp/nyaterm-test-home");
+            let mut stripper = OscStripper::new("\x1b]7777;NyaTermReady:test\x07", None);
+            assert_eq!(stripper.push(text.as_bytes()).visible, text.as_bytes());
+        }
     }
 }

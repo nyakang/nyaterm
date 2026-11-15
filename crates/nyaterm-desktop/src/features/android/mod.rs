@@ -12,9 +12,11 @@ use std::time::Instant;
 
 pub(in crate::features) mod labels;
 mod runtime;
+mod settings;
 mod surface;
 #[cfg(test)]
 mod tests;
+mod toolbar;
 mod view;
 
 // Attempts survive window transfers; a window-local counter can accept stale results.
@@ -33,6 +35,32 @@ pub(in crate::features) struct AndroidView {
     pub device_key: String,
     pub kind: AndroidViewKind,
 }
+#[derive(Clone, Copy)]
+pub(in crate::features) enum ScreenTexture {
+    Bgra(DynamicTexture),
+    Video(gpui::VideoTexture, nyaterm_android::ipc::FrameColor),
+}
+impl ScreenTexture {
+    pub(in crate::features) fn remove(self, window: &mut gpui::Window) {
+        match self {
+            Self::Bgra(texture) => window.remove_dynamic_texture(texture),
+            Self::Video(texture, _) => window.remove_video_texture(texture),
+        }
+    }
+    fn paint(self, bounds: Bounds<Pixels>, window: &mut gpui::Window) -> anyhow::Result<()> {
+        match self {
+            Self::Bgra(texture) => window.paint_dynamic_texture(bounds, texture),
+            Self::Video(texture, color) => {
+                let matrix = match color.matrix {
+                    nyaterm_android::ipc::ColorMatrix::Bt601 => gpui::VideoColorMatrix::Bt601,
+                    nyaterm_android::ipc::ColorMatrix::Bt709 => gpui::VideoColorMatrix::Bt709,
+                    nyaterm_android::ipc::ColorMatrix::Bt2020 => gpui::VideoColorMatrix::Bt2020,
+                };
+                window.paint_video_texture(bounds, texture, matrix, color.full_range)
+            }
+        }
+    }
+}
 pub(super) struct ScreenState {
     focus: FocusHandle,
     focus_out: Option<gpui::Subscription>,
@@ -40,8 +68,9 @@ pub(super) struct ScreenState {
     attempt: u64,
     physical_keys: HashSet<u32>,
     frame: Option<Frame>,
-    texture: Option<DynamicTexture>,
+    texture: Option<ScreenTexture>,
     texture_size: Option<(u32, u32)>,
+    requested_format: Option<nyaterm_android::ipc::PixelFormat>,
     bounds: Option<Bounds<Pixels>>,
     bounds_generation: u64,
     generation: u64,
@@ -57,6 +86,8 @@ pub(super) struct ScreenState {
     layout_epoch: u64,
     pan_drag: Option<gpui::Point<Pixels>>,
     paste_shortcut: bool,
+    settings: nyaterm_core::models::android::AndroidScreenSettings,
+    settings_draft: Option<settings::ScreenSettingsDraft>,
 }
 impl ScreenState {
     fn new(
@@ -73,6 +104,7 @@ impl ScreenState {
             frame: None,
             texture: None,
             texture_size: None,
+            requested_format: None,
             bounds: None,
             bounds_generation: 0,
             generation: 0,
@@ -88,6 +120,8 @@ impl ScreenState {
             layout_epoch: 0,
             pan_drag: None,
             paste_shortcut: false,
+            settings: Default::default(),
+            settings_draft: None,
         }
     }
 }
@@ -97,7 +131,7 @@ pub(in crate::features) struct AndroidFeatureState {
     screens: HashMap<String, ScreenState>,
     surfaces: HashMap<String, Entity<surface::AndroidSurface>>,
     cleanup: Vec<CleanupTicket>,
-    pub(super) retired_textures: Vec<DynamicTexture>,
+    pub(super) retired_textures: Vec<ScreenTexture>,
     pub(in crate::features) pending: HashMap<String, String>,
     pub(super) tracker: SharedDeviceService,
     pub(super) clock: Option<gpui::Task<()>>,
@@ -249,9 +283,11 @@ impl AndroidFeatureState {
                         self.retired_textures.push(texture);
                     }
                     screen.texture_size = None;
+                    screen.requested_format = None;
                     screen.bounds = None;
                     screen.viewport_bounds = None;
                     screen.focus_out = None;
+                    screen.settings_draft = None;
                 }
                 views.push(AndroidTransferredView {
                     id: id.clone(),

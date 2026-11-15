@@ -3,7 +3,10 @@ use crate::{CommandHistoryEntry, FuzzyResult, QuickCommand};
 use std::collections::HashSet;
 
 mod ranked;
-pub use ranked::{RankedCommandSourceQuery, search_ranked_command_sources_using};
+pub use ranked::{
+    RankedCommandSourceQuery, search_ranked_command_sources_using,
+    search_ranked_command_sources_with_cancel,
+};
 
 const EMPTY_MANUAL_HISTORY_LIMIT: usize = 8;
 const EMPTY_MANUAL_QUICK_COMMAND_LIMIT: usize = 8;

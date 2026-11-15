@@ -71,8 +71,8 @@ cargo clippy --workspace --all-targets
 
 When adding or changing application UI text, update both:
 
-- `crates/nyaterm-desktop/src/i18n/locales/zh-CN.json`
-- `crates/nyaterm-desktop/src/i18n/locales/en.json`
+- `crates/nyaterm-i18n/locales/zh-CN.json`
+- `crates/nyaterm-i18n/locales/en.json`
 
 For docs-site changes, keep the Chinese source under `docs-site/docs/` and the English pages under `docs-site/i18n/en/docusaurus-plugin-content-docs/current/` in sync, add any new page to `docs-site/sidebars.ts`, then run:
 

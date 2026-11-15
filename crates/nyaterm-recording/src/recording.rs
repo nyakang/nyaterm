@@ -488,6 +488,7 @@ struct SessionCaptureState {
     output_buffer: String,
     output_scan_from: usize,
     provisional_raw_output: VecDeque<u8>,
+    file_context_filter: nyaterm_core::terminal::file_context::filter::FileContextFilter,
     live_echo_buffer: String,
     submitted_line_echo: Option<String>,
     /// Byte offset where interactive echo started on the pending row.
@@ -525,6 +526,7 @@ impl SessionCaptureState {
             output_buffer: String::new(),
             output_scan_from: 0,
             provisional_raw_output: VecDeque::new(),
+            file_context_filter: Default::default(),
             live_echo_buffer: String::new(),
             submitted_line_echo: None,
             input_echo_start: None,
@@ -587,6 +589,9 @@ impl SessionCaptureState {
             .ok_or_else(|| RecordingError::Config("no active recording".to_string()))?;
         let file_path = recording.file_path.clone();
         let input_file_path = recording.input_file_path.clone();
+        if let Err(error) = recording.write_raw(self.file_context_filter.flush_prefix()) {
+            self.mark_failed(error.to_string());
+        }
         if let Err(error) = recording.finish() {
             self.mark_failed(error.to_string());
         }
@@ -779,9 +784,10 @@ impl SessionCaptureState {
     }
 
     fn write_raw_output(&mut self, data: &[u8]) {
+        let data = self.file_context_filter.filter(data);
         if let Some(recording) = self.recording.as_mut() {
             if self.recording_state != RecordingStatusState::Failed
-                && let Err(error) = recording.write_raw(data)
+                && let Err(error) = recording.write_raw(&data)
             {
                 self.mark_failed(error.to_string());
             }
@@ -934,6 +940,12 @@ impl SessionCaptureState {
             return;
         }
         self.disconnected = true;
+        if let Some(recording) = self.recording.as_mut()
+            && let Err(error) = recording.write_raw(self.file_context_filter.flush_prefix())
+        {
+            self.mark_failed(error.to_string());
+        }
+        self.file_context_filter = Default::default();
         self.commit_partial_input();
         self.release_pending_output_lines();
         self.pending_input_escape = None;
@@ -952,6 +964,8 @@ impl SessionCaptureState {
     }
 
     fn absorb_early_state(&mut self, mut early: Self) {
+        // Reconnect can rekey between any two bytes of the new stream.
+        self.file_context_filter = std::mem::take(&mut early.file_context_filter);
         early.commit_partial_input();
         early.release_pending_output_lines();
         if let Some(recording) = self.recording.as_mut()
@@ -2558,9 +2572,12 @@ mod tests {
             .start_with_profile("s1", context, profile, Some(path.clone()))
             .unwrap();
         manager.write_raw_output("s1", b"before\n");
+        manager.write_raw_output("s1", b"\x1b]7777;NyaTermFileContext;unfinished");
         manager.disconnect_session("s1");
         manager.write_raw_output("s2", b"\x1b[32mearly\x1b[0m\n");
+        manager.write_raw_output("s2", b"\x1b]7777;NyaTermFile");
         manager.rekey_session("s1", "s2");
+        manager.write_raw_output("s2", b"Context;1;private-context\x07");
         manager.write_raw_output("s2", b"after\n");
         manager.stop("s2").unwrap();
         assert_eq!(
@@ -2810,6 +2827,53 @@ mod tests {
         );
         let _ = fs::remove_file(super::input_recording_path(&path));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn runtime_context_is_removed_from_raw_recordings_at_every_split() {
+        let manager = input_enabled_manager();
+        let path = std::path::PathBuf::from(unique_path("raw-context"));
+        let profile = super::RecordingProfile {
+            mode: super::RecordingMode::Raw,
+            base_path: path.parent().unwrap().to_path_buf(),
+            path_template: path.file_name().unwrap().to_string_lossy().to_string(),
+            include_timestamps: false,
+            include_io_labels: false,
+            include_session_metadata: false,
+            rotation: super::RecordingRotationPolicy::Session,
+            existing_file_behavior: super::ExistingFileBehavior::Overwrite,
+            include_binary_transfer_payloads: false,
+            include_input: true,
+        };
+        let context = super::RecordingContext {
+            session_id: "s1".to_string(),
+            session_name: "session".to_string(),
+            connection_id: None,
+            connection_name: None,
+            group_path: None,
+            protocol: "terminal".to_string(),
+            host: None,
+            port: None,
+            username: None,
+            started_at: time::OffsetDateTime::now_utc(),
+        };
+        manager
+            .start_with_profile("s1", context, profile, Some(path.clone()))
+            .unwrap();
+        let marker = b"\x1b]7777;NyaTermFileContext;1;private-runtime-evidence\x07";
+        for split in 0..=marker.len() {
+            manager.write_raw_output("s1", b"\xff\x1b[31m");
+            manager.write_raw_output("s1", &marker[..split]);
+            manager.write_raw_output("s1", &marker[split..]);
+            manager.write_raw_output("s1", b"visible\x1b[0m");
+        }
+        manager.write_raw_output("s1", b"\x1b");
+        manager.stop("s1").unwrap();
+        let mut expected = b"\xff\x1b[31mvisible\x1b[0m".repeat(marker.len() + 1);
+        expected.push(b'\x1b');
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(super::input_recording_path(&path));
     }
 
     #[test]

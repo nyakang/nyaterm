@@ -7,6 +7,10 @@ use nyaterm_remote_ops::docker::{
     DockerComposeProject, DockerComposeService, DockerContainer, DockerContainerDetails,
     DockerImage, DockerNetwork, DockerVolume, RemoteDockerOverview,
 };
+use nyaterm_remote_ops::query::docker::{
+    docker_compose_project_matches, docker_container_matches, docker_image_matches,
+    docker_network_matches, docker_volume_matches,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -374,67 +378,6 @@ impl DockerPaneState {
         self.compose_service_errors = Arc::default();
         self.status = "start an SSH session to inspect Docker".to_string();
     }
-}
-
-fn docker_container_matches(container: &DockerContainer, query: &str) -> bool {
-    docker_text_matches(
-        query,
-        [
-            container.id.as_str(),
-            container.name.as_str(),
-            container.image.as_str(),
-            container.status.as_str(),
-            container.state.as_str(),
-            container.ports.as_str(),
-        ],
-    )
-}
-
-fn docker_image_matches(image: &DockerImage, query: &str) -> bool {
-    docker_text_matches(
-        query,
-        [
-            image.id.as_str(),
-            image.repository.as_str(),
-            image.tag.as_str(),
-            image.size.as_str(),
-            image.created_since.as_str(),
-        ],
-    )
-}
-
-fn docker_volume_matches(volume: &DockerVolume, query: &str) -> bool {
-    docker_text_matches(query, [volume.driver.as_str(), volume.name.as_str()])
-}
-
-fn docker_network_matches(network: &DockerNetwork, query: &str) -> bool {
-    docker_text_matches(
-        query,
-        [
-            network.id.as_str(),
-            network.name.as_str(),
-            network.driver.as_str(),
-            network.scope.as_str(),
-        ],
-    )
-}
-
-fn docker_compose_project_matches(project: &DockerComposeProject, query: &str) -> bool {
-    docker_text_matches(
-        query,
-        [
-            project.name.as_str(),
-            project.status.as_str(),
-            project.config_files.as_str(),
-        ],
-    )
-}
-
-fn docker_text_matches<const N: usize>(query: &str, values: [&str; N]) -> bool {
-    query.is_empty()
-        || values
-            .iter()
-            .any(|value| value.to_ascii_lowercase().contains(query))
 }
 
 impl DockerPaneState {

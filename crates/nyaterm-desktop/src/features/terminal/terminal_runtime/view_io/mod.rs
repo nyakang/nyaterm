@@ -278,6 +278,7 @@ fn terminal_snapshot_with_newer_edge_row(
             command_blocks: base.command_blocks.clone(),
             display_rows: base.display_rows.clone(),
             history: base.history,
+            file_context: base.file_context.clone(),
             shell_input_anchor: base.shell_input_anchor,
             command_navigation_target: None,
             command_navigation_revision: 0,
@@ -345,6 +346,7 @@ fn terminal_snapshot_with_retained_scroll_window(
             command_blocks: base.command_blocks.clone(),
             display_rows: base.display_rows.clone(),
             history: base.history,
+            file_context: base.file_context.clone(),
             shell_input_anchor: base.shell_input_anchor,
             command_navigation_target: None,
             command_navigation_revision: 0,
@@ -732,7 +734,8 @@ impl NyaTermApp {
             let popup_open = app
                 .terminal
                 .assist
-                .command_suggestions
+                .commands
+                .popup
                 .as_ref()
                 .is_some_and(|state| state.session_id == popup_session_id)
                 || app

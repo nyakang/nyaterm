@@ -31,7 +31,7 @@ use nyaterm_core::SecretString;
 use nyaterm_remote_ops::host::{Elevation, HostOs, HostTarget, looks_like_permission_error};
 use nyaterm_remote_ops::ports::{PortEntry, PortsSnapshot, ProcessDetails};
 use nyaterm_remote_ops::services::{ServiceAction, ServiceBackend, ServiceEntry, ServicesSnapshot};
-use nyaterm_ui::{NyaInputEvent, NyaInputKind, NyaInputState};
+use nyaterm_ui::{NyaInputEvent, NyaInputKind, NyaInputState, NyaSelectEvent, NyaSelectState};
 use rust_i18n::t;
 use state::{PortRow, PortsView, ServicesView, derive_ports, derive_services};
 use std::collections::HashMap;
@@ -137,6 +137,7 @@ pub(in crate::features) struct HostToolsPanel {
     last_refresh: Option<Instant>,
 
     search: Entity<NyaInputState>,
+    sort_select: Entity<NyaSelectState>,
     query: String,
     /// Rows have variable height: a selected row expands in place.
     list: ListState,
@@ -198,6 +199,39 @@ impl HostToolsPanel {
                 this.submit_sudo(cx);
             }
         });
+        let sort_select = cx.new(|cx| NyaSelectState::new(cx, Vec::new(), None));
+        let sort_subscription = cx.subscribe(&sort_select, |this, _, event, cx| {
+            let NyaSelectEvent::Changed(Some(value)) = event else {
+                return;
+            };
+            let Ok(index) = value.parse::<usize>() else {
+                return;
+            };
+            match this.kind {
+                HostToolKind::Ports => {
+                    let Some(&key) = state::PortSortKey::ALL.get(index) else {
+                        return;
+                    };
+                    if this.ports_view.sort == key {
+                        return;
+                    }
+                    this.ports_view.sort = key;
+                    this.ports_view.direction = state::SortDirection::Ascending;
+                }
+                HostToolKind::Services => {
+                    let Some(&key) = state::ServiceSortKey::ALL.get(index) else {
+                        return;
+                    };
+                    if this.services_view.sort == key {
+                        return;
+                    }
+                    this.services_view.sort = key;
+                    this.services_view.direction = state::SortDirection::Ascending;
+                }
+            }
+            this.rederive();
+            cx.notify();
+        });
         Self {
             kind,
             app,
@@ -212,6 +246,7 @@ impl HostToolsPanel {
             executor: Arc::new(NativeExecutor),
             last_refresh: None,
             search,
+            sort_select,
             query: String::new(),
             list: ListState::new(0, ListAlignment::Top, px(256.)),
             selected: None,
@@ -233,7 +268,7 @@ impl HostToolsPanel {
             sudo_prompt: None,
             sudo_input,
             pending_action: None,
-            _subscriptions: vec![search_subscription, sudo_subscription],
+            _subscriptions: vec![search_subscription, sudo_subscription, sort_subscription],
         }
     }
 

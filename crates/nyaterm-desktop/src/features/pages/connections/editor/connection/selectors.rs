@@ -19,7 +19,8 @@ impl NyaTermApp {
         window: &gpui::Window,
         cx: &gpui::App,
     ) -> bool {
-        self.select_is_focused("connection-editor-kind", window, cx)
+        self.select_with_prefix_is_focused("connection-editor-android.", window, cx)
+            || self.select_is_focused("connection-editor-kind", window, cx)
             || connection_editor_select_keys().into_iter().any(|select| {
                 self.select_is_focused(connection_editor_select_id(select), window, cx)
             })
@@ -35,7 +36,8 @@ impl NyaTermApp {
         window: &gpui::Window,
         cx: &gpui::App,
     ) -> bool {
-        self.select_menu_is_focused("connection-editor-kind", window, cx)
+        self.select_menu_with_prefix_is_focused("connection-editor-android.", window, cx)
+            || self.select_menu_is_focused("connection-editor-kind", window, cx)
             || connection_editor_select_keys().into_iter().any(|select| {
                 self.select_menu_is_focused(connection_editor_select_id(select), window, cx)
             })

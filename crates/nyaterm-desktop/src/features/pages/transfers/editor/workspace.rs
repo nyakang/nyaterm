@@ -1,6 +1,8 @@
 pub(super) use nyaterm_files::external_edit::workspace::ExternalEditWorkspace;
 use nyaterm_files::external_edit::workspace::prepare_external_edit_workspace as prepare;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(not(windows), test))]
+use std::path::PathBuf;
 
 pub(super) fn prepare_external_edit_workspace(
     file_name: &str,

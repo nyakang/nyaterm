@@ -8,6 +8,7 @@ use nyaterm_ui::NyaSwitch;
 use rust_i18n::t;
 
 pub(super) fn section(
+    app: &mut NyaTermApp,
     section: ConnectionEditorSectionContext<'_>,
     snapshot: nyaterm_android::devices::DeviceSnapshot,
     cx: &mut Context<NyaTermApp>,
@@ -20,10 +21,38 @@ pub(super) fn section(
         ..
     } = section;
     if editor.section == ConnectionEditorSection::AndroidScreen {
+        let (quality, orientation) = app.android_screen_select_controls(
+            "connection-editor-android",
+            Some(editor.android_screen),
+            editor.android_screen,
+            cx,
+        );
         return div()
             .flex()
             .flex_col()
             .gap_3()
+            .child(quality)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(t!("android.powerOn"))
+                    .child(
+                        NyaSwitch::new("android-power-on")
+                            .checked(editor.android_screen.power_on)
+                            .on_click(cx.listener({
+                                let settings = editor.android_screen;
+                                move |app, value: &bool, _, cx| {
+                                    let mut settings = settings;
+                                    settings.power_on = *value;
+                                    app.connection_state.set_android_screen_settings(settings);
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+            )
+            .child(orientation)
             .child(editor_stepper_field(
                 palette,
                 t!("android.maxSize"),

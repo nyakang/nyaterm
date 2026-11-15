@@ -79,6 +79,9 @@ impl NyaTermApp {
         let sampler = self.remote_ops.stats_sampler();
         let users_revision = self.remote_ops.stats_users_revision();
         let options = RemoteStatsOptions {
+            network_interval: std::time::Duration::from_secs(u64::from(
+                self.settings.summary().ui_remote_stats_interval.max(1),
+            )),
             collect_logged_in_users: self.settings.summary().ui_remote_stats_show_users,
         };
         if let Err(error) = self

@@ -266,7 +266,10 @@ impl NyaTermApp {
         let mut recorded = std::collections::HashSet::new();
         let mut fallback = std::collections::HashSet::new();
         for session_id in session_ids {
-            let context = self.commands.command_context(session_id).cloned();
+            let context = self
+                .commands
+                .command_context(session_id)
+                .map(|_| self.command_suggestion_context(session_id));
             // The marked shell owns the observation. Do not consume its secret
             // latch until CommandAccepted arrives from that same submission.
             if self.completion_has_marked_shell(session_id)
@@ -341,6 +344,12 @@ impl NyaTermApp {
             while let Some(event) = rx.next().await {
                 if this
                     .update(cx, |this, cx| {
+                        if let CommandPersistenceResult::HistoryMaintenanceWarning(message) = event
+                        {
+                            this.settings.update_store_status(message, false);
+                            cx.notify();
+                            return;
+                        }
                         this.commands.note_persistence_event_delivered();
                         if let Err(message) = this.commands.apply_persistence_result(event) {
                             this.settings.update_store_status(message, false);
@@ -368,3 +377,4 @@ impl NyaTermApp {
         .detach();
     }
 }
+use crate::features::runtime_jobs::CommandPersistenceResult;

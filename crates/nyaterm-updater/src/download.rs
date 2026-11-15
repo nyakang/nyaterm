@@ -1,3 +1,4 @@
+use crate::error::{UpdateError, UpdatePackageProblem};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nyaterm_core::updater::{
     UpdateManifest, UpdatePackageKind, UpdateTarget, parse_current_version,
@@ -47,14 +48,17 @@ pub fn supports_native_install(portable: bool) -> bool {
     false
 }
 
-fn decode_update_signature(value: &str) -> Result<minisign_verify::Signature, String> {
-    let signature = STANDARD
-        .decode(value)
-        .map_err(|_| "invalid update signature encoding")?;
-    minisign_verify::Signature::decode(
-        std::str::from_utf8(&signature).map_err(|_| "invalid update signature")?,
-    )
-    .map_err(|_| "invalid update signature".to_string())
+fn decode_update_signature(value: &str) -> Result<minisign_verify::Signature, UpdateError> {
+    let signature = STANDARD.decode(value).map_err(|_| {
+        UpdateError::package(
+            UpdatePackageProblem::Signature,
+            "invalid update signature encoding",
+        )
+    })?;
+    minisign_verify::Signature::decode(std::str::from_utf8(&signature).map_err(|_| {
+        UpdateError::package(UpdatePackageProblem::Signature, "invalid update signature")
+    })?)
+    .map_err(|_| UpdateError::package(UpdatePackageProblem::Signature, "invalid update signature"))
 }
 
 /// Download and verify an artifact on a blocking worker before preparing installation.
@@ -65,13 +69,15 @@ pub fn download_signed_update(
     portable: bool,
     check_cancel: impl Fn() -> Result<(), String>,
     mut progress: impl FnMut(u64, Option<u64>),
-) -> Result<super::install::PreparedUpdate, String> {
-    let version = parse_current_version(version).map_err(|error| error.to_string())?;
+) -> Result<super::install::PreparedUpdate, UpdateError> {
+    let version = parse_current_version(version)?;
     if !nyaterm_core::app_identity::AppFlavor::current().accepts_update(&version) {
-        return Err("update belongs to a different application flavor".into());
+        return Err(UpdateError::package(
+            UpdatePackageProblem::Rejected,
+            "update belongs to a different application flavor",
+        ));
     }
-    let target = UpdateTarget::from_rust_target(std::env::consts::OS, std::env::consts::ARCH)
-        .map_err(|error| error.to_string())?;
+    let target = UpdateTarget::from_rust_target(std::env::consts::OS, std::env::consts::ARCH)?;
     let package = if portable {
         UpdatePackageKind::WindowsPortable
     } else {
@@ -81,39 +87,43 @@ pub fn download_signed_update(
         .connect_timeout(std::time::Duration::from_secs(20))
         .timeout(std::time::Duration::from_secs(300))
         .build()
-        .map_err(|error| error.to_string())?;
+        .map_err(UpdateError::download)?;
     let manifest_url = format!("https://downloads.nyaterm.app/releases/v{version}/latest.json");
     let mut manifest_body = String::new();
     client
         .get(&manifest_url)
         .send()
-        .map_err(|error| error.to_string())?
+        .map_err(UpdateError::download)?
         .error_for_status()
-        .map_err(|error| error.to_string())?
+        .map_err(UpdateError::download)?
         .take(1024 * 1024 + 1)
         .read_to_string(&mut manifest_body)
-        .map_err(|error| error.to_string())?;
+        .map_err(UpdateError::download)?;
     if manifest_body.len() > 1024 * 1024 {
-        return Err("update manifest too large".into());
+        return Err(UpdateError::package(
+            UpdatePackageProblem::Invalid,
+            "update manifest too large",
+        ));
     }
-    let manifest = UpdateManifest::parse_for_version(&manifest_body, &version)
-        .map_err(|error| error.to_string())?;
-    let selected = manifest
-        .select_artifact(&version, target, package)
-        .map_err(|error| error.to_string())?;
+    let manifest = UpdateManifest::parse_for_version(&manifest_body, &version)?;
+    let selected = manifest.select_artifact(&version, target, package)?;
     let signature = decode_update_signature(&selected.signature)?;
     let public_key = STANDARD
         .decode(PUBLIC_KEY)
-        .map_err(|_| "invalid public key")?;
-    let public_key = minisign_verify::PublicKey::decode(
-        std::str::from_utf8(&public_key).map_err(|_| "invalid public key")?,
-    )
-    .map_err(|_| "invalid public key")?;
-    let mut verifier = public_key
-        .verify_stream(&signature)
-        .map_err(|_| "unsupported update signature")?;
-    check_cancel()?;
-    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+        .map_err(|_| UpdateError::package(UpdatePackageProblem::Signature, "invalid public key"))?;
+    let public_key =
+        minisign_verify::PublicKey::decode(std::str::from_utf8(&public_key).map_err(|_| {
+            UpdateError::package(UpdatePackageProblem::Signature, "invalid public key")
+        })?)
+        .map_err(|_| UpdateError::package(UpdatePackageProblem::Signature, "invalid public key"))?;
+    let mut verifier = public_key.verify_stream(&signature).map_err(|_| {
+        UpdateError::package(
+            UpdatePackageProblem::Signature,
+            "unsupported update signature",
+        )
+    })?;
+    check_cancel().map_err(UpdateError::download)?;
+    std::fs::create_dir_all(directory).map_err(UpdateError::download)?;
     let name = selected.filename;
     let partial = directory.join(format!("{name}.partial"));
     let artifact = directory.join(&name);
@@ -134,44 +144,53 @@ pub fn download_signed_update(
             }
         }
         let mut response = response.ok_or_else(|| {
-            last_error.unwrap_or_else(|| "no update download URL is available".to_string())
+            UpdateError::download(
+                last_error.unwrap_or_else(|| "no update download URL is available".to_string()),
+            )
         })?;
         let total = response.content_length();
         if total.is_some_and(|total| total > 1024 * 1024 * 1024) {
-            return Err("update too large".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Invalid,
+                "update too large",
+            ));
         }
-        let mut output = std::fs::File::create(&partial).map_err(|error| error.to_string())?;
+        let mut output = std::fs::File::create(&partial).map_err(UpdateError::download)?;
         let mut buffer = vec![0; 256 * 1024];
         let mut received = 0;
         loop {
-            check_cancel()?;
-            let count = response
-                .read(&mut buffer)
-                .map_err(|error| error.to_string())?;
+            check_cancel().map_err(UpdateError::download)?;
+            let count = response.read(&mut buffer).map_err(UpdateError::download)?;
             if count == 0 {
                 break;
             }
             received += count as u64;
             if received > 1024 * 1024 * 1024 {
-                return Err("update too large".into());
+                return Err(UpdateError::package(
+                    UpdatePackageProblem::Invalid,
+                    "update too large",
+                ));
             }
             verifier.update(&buffer[..count]);
             output
                 .write_all(&buffer[..count])
-                .map_err(|error| error.to_string())?;
+                .map_err(UpdateError::download)?;
             progress(received, total);
         }
         if total.is_some_and(|total| received != total) {
-            return Err("update download truncated".into());
+            return Err(UpdateError::download("update download truncated"));
         }
-        verifier
-            .finalize()
-            .map_err(|_| "update signature verification failed")?;
-        output.sync_all().map_err(|error| error.to_string())?;
+        verifier.finalize().map_err(|_| {
+            UpdateError::package(
+                UpdatePackageProblem::Signature,
+                "update signature verification failed",
+            )
+        })?;
+        output.sync_all().map_err(UpdateError::download)?;
         drop(output);
-        check_cancel()?;
-        std::fs::rename(&partial, &artifact).map_err(|error| error.to_string())?;
-        let target = std::env::current_exe().map_err(|error| error.to_string())?;
+        check_cancel().map_err(UpdateError::download)?;
+        std::fs::rename(&partial, &artifact).map_err(UpdateError::download)?;
+        let target = std::env::current_exe().map_err(UpdateError::download)?;
         super::install::prepare_artifact(artifact, target, portable)
     })();
     if result.is_err() {
@@ -183,6 +202,7 @@ pub fn download_signed_update(
 #[cfg(test)]
 mod tests {
     use super::{PUBLIC_KEY, decode_update_signature, supports_native_install};
+    use crate::error::{UpdateError, UpdatePackageProblem};
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     #[test]
@@ -197,7 +217,17 @@ mod tests {
 
     #[test]
     fn malformed_update_signatures_are_rejected_before_download() {
-        assert!(decode_update_signature("not-base64").is_err());
-        assert!(decode_update_signature(&STANDARD.encode("not a minisign signature")).is_err());
+        for signature in [
+            "not-base64".to_string(),
+            STANDARD.encode("not a minisign signature"),
+        ] {
+            assert!(matches!(
+                decode_update_signature(&signature),
+                Err(UpdateError::Package {
+                    problem: UpdatePackageProblem::Signature,
+                    ..
+                })
+            ));
+        }
     }
 }

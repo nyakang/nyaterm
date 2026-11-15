@@ -13,7 +13,7 @@ impl NyaTermApp {
     pub(in crate::features) fn prepare_terminal_context_menu(&mut self, cx: &mut Context<Self>) {
         self.terminal.menus.action_link_menu = None;
         self.terminal.menus.action_link_tooltip = None;
-        self.terminal.assist.command_suggestions = None;
+        self.terminal.assist.commands.popup = None;
         self.terminal.assist.credential_suggestions = None;
         self.shell
             .set_status("terminal context menu opened".to_string());

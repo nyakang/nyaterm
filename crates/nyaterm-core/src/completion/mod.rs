@@ -3,7 +3,9 @@ pub mod catalog;
 pub mod fill;
 pub mod history;
 pub mod matching;
+pub mod merge;
 pub mod parser;
+pub mod path;
 pub mod privacy;
 pub mod query;
 pub mod types;
@@ -23,20 +25,60 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 pub struct CompletionEngine {
+    /// The shared built-in catalog, never modified.
+    base: Option<Arc<Catalog>>,
+    /// `base`, or a private copy with user spec files merged over it.
     catalog: Option<Arc<Catalog>>,
     matcher: TextMatcher,
 }
 impl CompletionEngine {
     pub fn embedded() -> Self {
         static CATALOG: OnceLock<Option<Arc<Catalog>>> = OnceLock::new();
+        let base = CATALOG
+            .get_or_init(|| Catalog::embedded().ok().map(Arc::new))
+            .clone();
         Self {
-            catalog: CATALOG
-                .get_or_init(|| Catalog::embedded().ok().map(Arc::new))
-                .clone(),
+            catalog: base.clone(),
+            base,
             matcher: TextMatcher::default(),
         }
     }
+
+    /// Replaces the active user specs; an empty slice restores the built-in
+    /// catalog. Each file is applied in order, later files winning. Returns the
+    /// indices of rejected files, which leave the catalog unchanged. The shared
+    /// built-in catalog is only copied when there is something to merge.
+    pub fn set_user_specs(&mut self, specs: &[Vec<u8>]) -> Vec<usize> {
+        let Some(base) = self.base.as_ref() else {
+            return (0..specs.len()).collect();
+        };
+        if specs.is_empty() {
+            self.catalog = self.base.clone();
+            return Vec::new();
+        }
+        let mut merged = Catalog::clone(base);
+        let mut rejected = Vec::new();
+        for (index, spec) in specs.iter().enumerate() {
+            if merged.merge_user_spec(spec).is_err() {
+                rejected.push(index);
+            }
+        }
+        self.catalog = Some(Arc::new(merged));
+        rejected
+    }
     pub fn complete(&mut self, request: TokenCompletionRequest<'_>) -> Vec<CompletionCandidate> {
+        self.complete_with_cancel(request, &mut || false)
+            .unwrap_or_default()
+    }
+
+    pub fn complete_with_cancel(
+        &mut self,
+        request: TokenCompletionRequest<'_>,
+        cancelled: &mut dyn FnMut() -> bool,
+    ) -> Option<Vec<CompletionCandidate>> {
+        if cancelled() {
+            return None;
+        }
         let TokenCompletionRequest {
             input,
             cursor,
@@ -48,7 +90,7 @@ impl CompletionEngine {
             fill_policy,
         } = request;
         let Some(mut context) = parse_context(input, cursor, dialect, scope) else {
-            return Vec::new();
+            return Some(Vec::new());
         };
         // Catalog inference may adjust the value range (e.g. --format=json).
         let static_items = self
@@ -97,9 +139,14 @@ impl CompletionEngine {
         let quick_iter = quick
             .candidate_iter(&context.scope, &context.preceding, dialect)
             .map(|(text, _, _)| (text, "", learned_kind, CandidateSource::QuickCommand, 0, 0));
-        for (text, description, kind, source, count, time) in
-            static_iter.chain(history_iter).chain(quick_iter)
+        for (index, (text, description, kind, source, count, time)) in static_iter
+            .chain(history_iter)
+            .chain(quick_iter)
+            .enumerate()
         {
+            if index % 128 == 0 && cancelled() {
+                return None;
+            }
             // Score borrowed words first; only matching words need a dedup key.
             let Some(score) = self.matcher.score(text) else {
                 continue;
@@ -159,59 +206,64 @@ impl CompletionEngine {
                 .then(a.sources.cmp(&b.sources))
                 .then(a.text.cmp(b.text))
         });
-        ranked
-            .into_iter()
-            .map(|item| {
-                let mut insert_text = item.text.to_string();
-                if native_case
-                    && insert_text
-                        .get(..context.prefix.len())
-                        .is_some_and(|p| p.eq_ignore_ascii_case(&context.prefix))
-                {
-                    insert_text.replace_range(..context.prefix.len(), &context.prefix);
-                }
-                let mut candidate = CompletionCandidate {
-                    display: item.text.into(),
-                    insert_text,
-                    description: item.description.into(),
-                    range: context.token_range.clone(),
-                    kind: item.kind,
-                    sources: [
-                        CandidateSource::Catalog,
-                        CandidateSource::History,
-                        CandidateSource::QuickCommand,
-                    ]
-                    .into_iter()
-                    .filter(|source| item.sources & (1 << *source as u8) != 0)
-                    .collect(),
-                    use_count: item.count,
-                    last_used_at_ms: item.time,
-                    score: item.score,
-                    indices: Vec::new(),
-                    fillable: false,
-                    context_priority: item.priority,
-                };
-                candidate.fillable = candidate.target_line(input).is_some_and(|target| {
-                    !target.is_empty()
-                        && target.len() <= MAX_TRACKED_INPUT_BYTES
-                        && supports_scalar_editing(&target)
-                });
-                candidate
-            })
-            .filter(|candidate| {
-                fill_policy.is_none_or(|policy| {
-                    candidate.fillable
-                        && candidate
-                            .target_line(input)
-                            .is_some_and(|target| policy.allows(input, &target))
+        if cancelled() {
+            return None;
+        }
+        Some(
+            ranked
+                .into_iter()
+                .map(|item| {
+                    let mut insert_text = item.text.to_string();
+                    if native_case
+                        && insert_text
+                            .get(..context.prefix.len())
+                            .is_some_and(|p| p.eq_ignore_ascii_case(&context.prefix))
+                    {
+                        insert_text.replace_range(..context.prefix.len(), &context.prefix);
+                    }
+                    let mut candidate = CompletionCandidate {
+                        display: item.text.into(),
+                        insert_text,
+                        description: item.description.into(),
+                        range: context.token_range.clone(),
+                        kind: item.kind,
+                        sources: [
+                            CandidateSource::Catalog,
+                            CandidateSource::History,
+                            CandidateSource::QuickCommand,
+                        ]
+                        .into_iter()
+                        .filter(|source| item.sources & (1 << *source as u8) != 0)
+                        .collect(),
+                        use_count: item.count,
+                        last_used_at_ms: item.time,
+                        score: item.score,
+                        indices: Vec::new(),
+                        fillable: false,
+                        context_priority: item.priority,
+                    };
+                    candidate.fillable = candidate.target_line(input).is_some_and(|target| {
+                        !target.is_empty()
+                            && target.len() <= MAX_TRACKED_INPUT_BYTES
+                            && supports_scalar_editing(&target)
+                    });
+                    candidate
                 })
-            })
-            .take(limit)
-            .map(|mut candidate| {
-                candidate.indices = self.matcher.indices(&candidate.display);
-                candidate
-            })
-            .collect()
+                .filter(|candidate| {
+                    fill_policy.is_none_or(|policy| {
+                        candidate.fillable
+                            && candidate
+                                .target_line(input)
+                                .is_some_and(|target| policy.allows(input, &target))
+                    })
+                })
+                .take(limit)
+                .map(|mut candidate| {
+                    candidate.indices = self.matcher.indices(&candidate.display);
+                    candidate
+                })
+                .collect(),
+        )
     }
 }
 
@@ -247,6 +299,32 @@ mod tests {
     };
     use crate::completion::{CompletionEngine, TokenCompletionRequest};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn powershell_quoted_commas_never_become_array_arguments() {
+        let scope = CompletionScope::new(&["quoted-comma"]);
+        let mut history = TokenHistoryIndex::default();
+        let mut entry = record(scope.clone(), "Write-Output 'a,b'");
+        entry.dialect = ShellDialect::PowerShell;
+        history.upsert(entry);
+        let mut engine = CompletionEngine::embedded();
+        let input = "Write-Output a";
+        let candidates = engine.complete(TokenCompletionRequest {
+            fill_policy: Some(CompletionFillPolicy::ReplaceAllowed),
+            input,
+            cursor: input.len(),
+            dialect: ShellDialect::PowerShell,
+            scope,
+            history: &history,
+            quick: &TokenHistoryIndex::default(),
+            limit: 12,
+        });
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| !candidate.insert_text.contains(','))
+        );
+    }
     fn record(scope: CompletionScope, command: &str) -> ScopedHistoryRecord {
         ScopedHistoryRecord {
             version: 1,
@@ -269,6 +347,7 @@ mod tests {
         history.upsert(fuzzy);
         history.upsert(record(scope.clone(), "fixture zz-tail"));
         let mut engine = CompletionEngine {
+            base: None,
             catalog: None,
             matcher: TextMatcher::default(),
         };
@@ -313,6 +392,7 @@ mod tests {
         // A long assignment leaves room for a short replacement but not longer prefix matches.
         let input = format!("A={} fixture zz", "x".repeat(4078));
         let mut engine = CompletionEngine {
+            base: None,
             catalog: None,
             matcher: TextMatcher::default(),
         };

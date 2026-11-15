@@ -484,8 +484,25 @@ fn stats_owner_reduces_matching_success_failure_and_stale_events() {
         assert!(matches!(outcome, StatsApplyOutcome::Failed { .. }));
     }
     let presentation = state.stats_presentation();
-    assert!(presentation.data.is_none());
+    assert_eq!(
+        presentation.data.as_ref().unwrap().system.hostname,
+        "host-a"
+    );
+    assert!(presentation.error);
     assert_eq!(presentation.consecutive_refresh_failures, 3);
+    let ticket = state.begin_stats_job("session-a".into(), false);
+    state.apply_stats_event(
+        StatsJobResult {
+            users_revision: 0,
+            job_id: ticket.job_id,
+            session_id: "session-a".into(),
+            result: Ok(RemoteStats::default()),
+        },
+        Some("session-a"),
+    );
+    assert!(!state.stats_presentation().error);
+    assert_eq!(state.stats_presentation().consecutive_refresh_failures, 0);
+    assert!(state.stats_presentation().last_success_at >= presentation.last_success_at);
 }
 
 #[test]
@@ -493,6 +510,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
     fn stats(rate: f64) -> RemoteStats {
         RemoteStats {
             networks: vec![NetworkInfo {
+                rate_status: nyaterm_remote_ops::stats::NetworkRateStatus::Available,
                 nic: "eth0".to_string(),
                 state: "up".to_string(),
                 rx_bytes_per_sec: rate,
@@ -507,7 +525,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
     }
 
     let mut state = RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {});
-    for rate in 0..61 {
+    for rate in 0..257 {
         let ticket = state.begin_stats_job("session-a".to_string(), false);
         assert!(matches!(
             state.apply_stats_event(
@@ -523,9 +541,9 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
         ));
     }
     let history = state.stats_presentation().network_history;
-    assert_eq!(history.len(), 60);
+    assert_eq!(history.len(), 256);
     assert_eq!(history[0].rx_bytes_per_sec, 1.0);
-    assert_eq!(history[59].interfaces["eth0"], (60.0, 120.0));
+    assert_eq!(history[255].interfaces["eth0"], (256.0, 512.0));
 
     let ticket = state.begin_stats_job("session-b".to_string(), false);
     assert!(matches!(
@@ -564,9 +582,9 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
             .unwrap()
             .network_summary
             .rx_bytes_per_sec,
-        60.0
+        256.0
     );
-    assert_eq!(state.stats_presentation().network_history.len(), 60);
+    assert_eq!(state.stats_presentation().network_history.len(), 256);
 
     let stale = state.begin_stats_job("session-a".to_string(), false);
     state.clear_stats_sample("session-a");

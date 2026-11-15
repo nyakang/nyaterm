@@ -66,6 +66,7 @@ impl NyaTermApp {
             plugins,
             sync_operations,
         } = process_entities;
+        let completion_specs_dir = Some(runtime.config_dir().join("completions"));
         let session_manager = session_hub.manager();
         let android_devices = session_hub.android_devices();
         let ssh_connections = session_hub.ssh_connections();
@@ -316,6 +317,7 @@ impl NyaTermApp {
                 },
                 store: command_store,
                 scheduler: blocking_jobs,
+                completion_specs_dir,
             }),
             send_command,
             terminal: TerminalFeatureState::new(

@@ -971,6 +971,17 @@ impl ConnectionFeatureState {
     pub fn active_editor_draft(&self) -> Option<ConnectionEditorState> {
         self.editor.active_draft()
     }
+    pub(in crate::features) fn set_android_screen_settings(
+        &mut self,
+        settings: nyaterm_core::models::android::AndroidScreenSettings,
+    ) {
+        if self.editor_save_in_flight() {
+            return;
+        }
+        if let Some(draft) = self.editor.draft.as_mut() {
+            draft.android_screen = settings;
+        }
+    }
     pub(in crate::features) fn set_android_editor_usb(&mut self, value: bool) {
         if self.editor_save_in_flight() {
             return;
@@ -2597,9 +2608,10 @@ fn connection_editor_number_options(field: ConnectionEditorField) -> Option<NyaN
         ),
         ConnectionEditorField::AndroidBitRate => Some(
             NyaNumberInputOptions::default()
-                .range(100_000.0, 100_000_000.0)
-                .step(100_000.0)
-                .decimal_places(0),
+                .range(0.1, 100.0)
+                .step(0.1)
+                .decimal_places(6)
+                .suffix("Mbps"),
         ),
         ConnectionEditorField::SftpShellDetectionTimeout => Some(
             NyaNumberInputOptions::default()

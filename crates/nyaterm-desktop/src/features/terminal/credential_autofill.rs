@@ -283,7 +283,7 @@ impl NyaTermApp {
             self.terminal.assist.credential_prompt_input_until_ms =
                 Self::now_unix_ms().saturating_add(CREDENTIAL_PROMPT_INPUT_TTL_MS);
             // Suppress command suggestions while a credential prompt is live.
-            if self.terminal.assist.command_suggestions.take().is_some() {
+            if self.terminal.assist.commands.popup.take().is_some() {
                 root_overlay_dirty = true;
             }
             *self.terminal.editing.input_mut() = TerminalInputState::new();
@@ -2609,7 +2609,7 @@ mod tests {
                 app.write_session_protocol_response(id, b"END").unwrap();
             }
             assert!(app.commands.command_history().is_empty());
-            assert!(app.terminal.assist.pending_command_history_entry.is_none());
+            assert!(app.terminal.assist.commands.pending_history_entry.is_none());
         });
         let store_client = cx.update_entity(&app, |app, _| app.store_blocking_client());
         assert!(

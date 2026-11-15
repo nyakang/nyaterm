@@ -1,13 +1,13 @@
 //! Authoritative inline command and credential assistance state.
 
 use nyaterm_core::CredentialPromptKind;
-use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
 use nyaterm_terminal::TerminalLineId;
 
+use super::command_suggestions::state::CommandSuggestionFeatureState;
 use super::state::TerminalFeatureState;
 use crate::models::{
-    CommandSuggestionState, CredentialAutofillMatchPipeline, CredentialAutofillMatchRequestKey,
-    CredentialSuggestionState, PendingCredentialAutofill,
+    CredentialAutofillMatchPipeline, CredentialAutofillMatchRequestKey, CredentialSuggestionState,
+    PendingCredentialAutofill,
 };
 
 /// Inline command completion and terminal-output credential prompt assistance.
@@ -16,13 +16,7 @@ use crate::models::{
 /// mode changes, and settings updates reset them together. The credential
 /// matcher remains a background pipeline and never runs in a render path.
 pub(super) struct TerminalAssistState {
-    pub(super) command_suggestions: Option<CommandSuggestionState>,
-    pub(super) command_suggestion_scroll: gpui::ScrollHandle,
-    pub(super) command_suggestion_mode: nyaterm_core::completion::types::CompletionMode,
-    pub(super) command_suggestion_suppression: CommandSuggestionSuppression,
-    pub(super) pending_command_history_entry: Option<String>,
-    pub(super) command_suggestion_search_gen: u64,
-    pub(super) command_suggestion_refresh_task: Option<gpui::Task<()>>,
+    pub(super) commands: CommandSuggestionFeatureState,
     pub(super) credential_suggestions: Option<CredentialSuggestionState>,
     pub(super) credential_autofill_buffer: String,
     pub(super) credential_autofill_recent: Option<(CredentialPromptKind, String)>,
@@ -41,13 +35,7 @@ pub(super) struct TerminalAssistState {
 impl TerminalAssistState {
     pub(super) fn new() -> Self {
         Self {
-            command_suggestions: None,
-            command_suggestion_scroll: gpui::ScrollHandle::default(),
-            command_suggestion_mode: nyaterm_core::completion::types::CompletionMode::Token,
-            command_suggestion_suppression: CommandSuggestionSuppression::None,
-            pending_command_history_entry: None,
-            command_suggestion_search_gen: 0,
-            command_suggestion_refresh_task: None,
+            commands: CommandSuggestionFeatureState::default(),
             credential_suggestions: None,
             credential_autofill_buffer: String::new(),
             credential_autofill_recent: None,
@@ -64,24 +52,12 @@ impl TerminalAssistState {
         }
     }
 
-    fn clear_command_tracking(&mut self) {
-        self.command_suggestions = None;
-        self.command_suggestion_suppression = CommandSuggestionSuppression::None;
-        self.pending_command_history_entry = None;
-    }
-
-    fn invalidate_command_suggestion_search(&mut self) {
-        self.command_suggestion_mode = nyaterm_core::completion::types::CompletionMode::Token;
-        self.command_suggestion_search_gen = self.command_suggestion_search_gen.saturating_add(1);
-    }
-
     fn reset_for_session_switch(&mut self) {
         self.cancel_credential_autofill();
         self.credential_prompt_instance = None;
         self.credential_prompt_awaiting_output = false;
         self.credential_prompt_input_until_ms = 0;
-        self.clear_command_tracking();
-        self.invalidate_command_suggestion_search();
+        self.commands.reset_for_session_switch();
     }
 
     pub(super) fn dismiss_credential_suggestions(&mut self) -> bool {
@@ -157,7 +133,7 @@ impl TerminalAssistState {
 
 impl TerminalFeatureState {
     pub(in crate::features) fn command_suggestions_open(&self) -> bool {
-        self.assist.command_suggestions.is_some()
+        self.assist.commands.popup.is_some()
     }
 
     pub(in crate::features) fn credential_suggestions_open(&self) -> bool {
@@ -165,11 +141,11 @@ impl TerminalFeatureState {
     }
 
     pub(in crate::features) fn take_pending_command_history_entry(&mut self) -> Option<String> {
-        self.assist.pending_command_history_entry.take()
+        self.assist.commands.take_pending_history_entry()
     }
 
     pub(in crate::features) fn clear_command_tracking(&mut self) {
-        self.assist.clear_command_tracking();
+        self.assist.commands.clear_tracking();
     }
 
     pub(in crate::features) fn reset_assist_for_session_switch(&mut self) {
@@ -178,7 +154,7 @@ impl TerminalFeatureState {
 
     pub(in crate::features) fn clear_active_session_assist(&mut self) {
         self.editing.clear_active();
-        self.assist.command_suggestions = None;
+        self.assist.commands.hide();
         self.assist.credential_suggestions = None;
     }
 }

@@ -6,6 +6,6 @@ pub(crate) mod install;
 mod state;
 mod update_runtime;
 
-pub(in crate::features) use failure::{UpdateFailure, UpdateFailureKind, classify_update_failure};
+pub(in crate::features) use failure::{UpdateFailure, UpdateFailureKind};
 
 pub(crate) use state::{UpdateCheckKind, UpdateEvent, UpdatePhase, UpdateStore};

@@ -1,6 +1,7 @@
 //! Stateless presentation helpers. Applications supply labels and actions.
 use gpui::{
-    App, ClickEvent, FontWeight, IntoElement, SharedString, Window, div, prelude::*, px, rgb, svg,
+    AnyElement, App, ClickEvent, FontWeight, IntoElement, SharedString, TextOverflow, Window, div,
+    prelude::*, px, rgb, svg,
 };
 
 use crate::theme::ThemePalette;
@@ -202,6 +203,98 @@ pub fn menu_item(
 
 pub fn menu_separator(palette: ThemePalette) -> impl IntoElement {
     div().h(px(1.)).flex_none().my_1().bg(rgb(palette.border))
+}
+
+pub fn panel_header_with_actions(
+    title: impl Into<SharedString>,
+    meta: impl Into<SharedString>,
+    palette: ThemePalette,
+    background: gpui::Rgba,
+    actions: Option<AnyElement>,
+) -> impl IntoElement {
+    let title = title.into();
+    let meta = meta.into();
+    let show_meta = !meta.is_empty();
+    let heading = div()
+        .min_w_0()
+        .flex_1()
+        .overflow_hidden()
+        .flex()
+        .items_baseline()
+        .gap_2()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(11.))
+                .font_weight(FontWeight(700.))
+                .text_color(rgb(palette.text_muted))
+                .child(title.to_uppercase()),
+        )
+        .when(show_meta, |this| {
+            this.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_muted))
+                    .opacity(0.85)
+                    .child(meta),
+            )
+        });
+    panel_header_shell(heading.into_any_element(), palette, background, actions)
+}
+pub fn conversation_panel_header_with_actions(
+    title: impl Into<SharedString>,
+    palette: ThemePalette,
+    background: gpui::Rgba,
+    actions: Option<AnyElement>,
+) -> impl IntoElement {
+    let heading = div()
+        .debug_selector(|| "ai-conversation-title".into())
+        .min_w_0()
+        .flex_1()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_overflow(TextOverflow::Truncate("...".into()))
+        .text_size(px(11.))
+        .text_color(rgb(palette.text_muted))
+        .child(title.into());
+    panel_header_shell(heading.into_any_element(), palette, background, actions)
+}
+fn panel_header_shell(
+    heading: AnyElement,
+    palette: ThemePalette,
+    background: gpui::Rgba,
+    actions: Option<AnyElement>,
+) -> gpui::Div {
+    // Keep controls in flow; narrow panels may need another row for actions.
+    div()
+        .min_h(px(36.))
+        .flex_none()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap_x_3()
+        .px_3()
+        .py(px(3.))
+        .border_b_1()
+        .border_color(rgb(palette.border))
+        .bg(background)
+        .child(heading)
+        .when_some(actions, |this, actions| {
+            this.child(
+                div()
+                    .flex_none()
+                    .max_w_full()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .child(actions),
+            )
+        })
 }
 
 #[cfg(test)]

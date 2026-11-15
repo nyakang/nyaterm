@@ -1,12 +1,12 @@
 use crate::blocking_jobs::{BlockingJobScheduler, JobHandle, JobOutcome};
 use crate::models::{TransferJobEvent, TransferJobKind, TransferJobResult, TransferJobState};
 use futures::channel::mpsc::UnboundedSender;
+pub(super) use nyaterm_files::file_browser::transfer_paths::remote_parent_path as transfer_job_remote_parent_path;
 use nyaterm_files::sftp::SFTP_TRANSFER_CANCELLED;
 use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
+use nyaterm_files::sftp_transfer_types::progress::TransferProgressGate;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
-
-const TRANSFER_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(50);
+use std::time::Instant;
 
 pub(in crate::features) fn submit_transfer_blocking_job(
     scheduler: &BlockingJobScheduler,
@@ -72,9 +72,7 @@ pub(in crate::features) fn submit_transfer_cancellable_blocking_job(
 pub(in crate::features) struct TransferProgressEventSender {
     id: String,
     tx: UnboundedSender<TransferJobResult>,
-    last_sent_at: Option<Instant>,
-    final_sent: bool,
-    phase: Option<nyaterm_files::sftp_transfer_types::FileTransferPhase>,
+    gate: TransferProgressGate,
 }
 
 impl TransferProgressEventSender {
@@ -82,49 +80,18 @@ impl TransferProgressEventSender {
         Self {
             id,
             tx,
-            last_sent_at: None,
-            final_sent: false,
-            phase: None,
+            gate: TransferProgressGate::default(),
         }
     }
 
     pub(in crate::features) fn send(&mut self, progress: SftpTransferProgress) {
-        let now = Instant::now();
-        let completed = progress
-            .total_bytes
-            .is_some_and(|total| progress.bytes_transferred >= total)
-            && progress.item_count_total.is_none_or(|total| {
-                progress
-                    .item_count_completed
-                    .is_some_and(|completed| completed >= total)
-            });
-        let due = self.last_sent_at.is_none_or(|last_sent_at| {
-            now.duration_since(last_sent_at) >= TRANSFER_PROGRESS_EVENT_INTERVAL
-        });
-        if completed && self.final_sent {
+        if !self.gate.should_emit(&progress, Instant::now()) {
             return;
         }
-        let phase_changed = self.phase != progress.phase;
-        if !completed && !due && !phase_changed {
-            return;
-        }
-
-        self.phase = progress.phase;
-        self.final_sent |= completed;
-        self.last_sent_at = Some(now);
         let _ = self.tx.unbounded_send(TransferJobResult {
             id: self.id.clone(),
             event: TransferJobEvent::Progress(progress),
         });
-    }
-}
-
-pub(super) fn transfer_job_remote_parent_path(path: &str) -> String {
-    let path = path.trim_end_matches('/');
-    match path.rfind('/') {
-        Some(0) => "/".to_string(),
-        Some(index) => path[..index].to_string(),
-        None => ".".to_string(),
     }
 }
 
@@ -335,7 +302,6 @@ mod tests {
         };
         sender.send(progress.clone());
         assert!(receiver.try_recv().is_ok());
-        assert!(!sender.final_sent);
         progress.item_count_completed = Some(1);
         for _ in 0..100 {
             sender.send(progress.clone());

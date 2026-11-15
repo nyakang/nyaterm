@@ -229,7 +229,7 @@ NyaTerm 打了补丁的第三方依赖**没有 vendor 到仓库里**。每个都
 - 先阅读根目录 `AGENTS.md` 和 `CONTRIBUTING.md`。
 - UI 状态与视图放在 `nyaterm-desktop`，共享控件放在 `nyaterm-ui`。
 - transport、terminal 和 core crate 保持独立于 GPUI。
-- 新增 UI 文本时同步更新 `crates/nyaterm-desktop/src/i18n/locales/` 下的中英文文件。
+- 新增 UI 文本时同步更新 `crates/nyaterm-i18n/locales/` 下的中英文文件。
 - 不要在测试、日志或诊断数据中使用真实凭据。
 
 ## GPUI 主线切换
