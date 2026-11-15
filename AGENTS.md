@@ -17,7 +17,7 @@ must include explicit conversion logic and tests.
   and root-window creation.
 * `crates/nyaterm-core`: UI-independent domain models, parsing, policies, AI
   settings/risk/provider logic, schema-neutral serialization and encryption
-  contracts, command-completion fill planning, and shared pure logic. Do not add GPUI
+  contracts, command-completion fill planning and candidate merging, and shared pure logic. Do not add GPUI
   dependencies here. Desktop authorizes and executes completion plans.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
@@ -27,7 +27,7 @@ must include explicit conversion logic and tests.
   language settings and component-label updates, using the public rust-i18n
   backend bridge rather than compiling another catalog.
 * `crates/nyaterm-completion-runtime`: UI-independent completion worker, bounded
-  queue, history caches and user-spec loader. Only core is allowed as a workspace
+  queue, history caches, user-spec loader and progressive result publication. Only core is allowed as a workspace
   dependency, including tests. Desktop injects the blocking history repository
   and event sink and owns persistence, approvals, settings and UI lifecycle.
 * `crates/nyaterm-mcp-host`: UI-independent loopback MCP service, authentication,
@@ -152,6 +152,14 @@ must include explicit conversion logic and tests.
 lives in focused structs for connections, commands, remote operations, remote
 desktop, security, settings, AI, terminal presentation, sessions, transfers,
 sync, translation, updates, tunnels, recording, and shell behavior.
+
+Command completion state belongs to `TerminalAssistState.commands`, whose
+`CommandSuggestionFeatureState` owns the popup, selection, suppression, pending
+history entry, path runtime, search generation and refresh task. Input/echo stays
+in `TerminalEditingState`; history and the runtime client stay in `CommandFeatureState`.
+The completion feature separates input, search, interaction, fill, view and diagnostics;
+core owns candidate merging, and completion-runtime publishes caller-owned futures.
+Desktop retains path I/O, scheduling, stale-result checks and terminal fill authorization.
 
 Persisted collections and compatibility-sensitive catalogs belong to their
 feature owners. Schema-neutral persistence formats and parsing contracts belong

@@ -156,3 +156,20 @@ RDP 和 VNC 的协议解码器解析的是**服务器控制的字节流**，因�
 
 上述迁移不改变数据库表、序列化字段、备份格式、凭据格式或更新 helper 协议。
 架构检查覆盖普通、开发、构建、平台限定及依赖别名，防止新 crate 反向依赖 desktop。
+
+### 终端命令补全的内部边界
+
+`TerminalAssistState.commands` 是补全可变状态的唯一所有者：
+`CommandSuggestionFeatureState` 集中管理弹窗、选择、滚动、模式、抑制原因、
+待记录历史、路径运行时、搜索代次和刷新任务。输入与回显仍由 `TerminalEditingState`
+管理，历史与补全客户端仍归 `CommandFeatureState`。
+
+桌面端 `command_suggestions` 分为 `input`（输入与可用性）、`search`（调度与发布）、
+`interaction`（按键与历史删除）、`fill`/`paste`（填入授权与回显确认）、
+`view`（元素与布局）和 `diagnostics`。隐藏、取消及会话切换保留各自的清理语义。
+
+候选合并和路径配额位于 core 的 `completion::merge`；runtime 的
+`progressive::publish_progressively` 只等待调用者提供的 future，先发布普通候选，
+路径非空时再发布一次。desktop 继续拥有路径缓存与 I/O、GPUI 任务、过期结果校验和
+终端写入授权；增量结果只在会话、模式、输入版本及草稿一致时按命令内容保留选择。
+此拆分不改变数据格式、补全延迟、授权检查或回显确认协议。

@@ -173,3 +173,21 @@ those types; installation helper protocols and package formats are unchanged.
 - New features prefer an existing focused feature state; add an authoritative Entity only when an independent lifecycle requires one.
 
 See [GPUI Desktop Development](./frontend) for presentation rules and [Runtime, Transport, and Storage Development](./backend) for runtime and persistence guidance.
+
+### Terminal command completion boundaries
+
+`TerminalAssistState.commands` is the sole mutable completion owner.
+`CommandSuggestionFeatureState` holds the popup, selection, scroll, mode,
+suppression, pending history entry, path runtime, search generation and refresh
+task. Input and echo remain in `TerminalEditingState`; history and the runtime
+client remain in `CommandFeatureState`.
+
+Desktop separates `input`, `search`, `interaction`, `fill`/`paste`, `view` and
+`diagnostics`. Hide, dismiss and session-switch transitions retain distinct
+cleanup semantics. Core's `completion::merge` owns candidate merging and path
+quotas. Runtime's `progressive::publish_progressively` awaits caller-owned
+futures, publishing ordinary results first and nonempty paths once afterward.
+It starts no tasks. Desktop owns path caches and I/O, GPUI scheduling, stale
+result checks, terminal write authorization and echo confirmation. Incremental
+results preserve selection by command only when session, mode, input version and
+draft match. Data formats and completion timing are unchanged.

@@ -427,7 +427,7 @@ impl NyaTermApp {
             })
             .collect::<Vec<_>>();
         self.terminal.menus.action_link_tooltip = None;
-        self.terminal.assist.command_suggestions = None;
+        self.terminal.assist.commands.popup = None;
         self.terminal.assist.credential_suggestions = None;
         let Some(session_id) = self.terminal_session_at_point(event.position()).flatten() else {
             return false;

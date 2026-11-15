@@ -734,7 +734,8 @@ impl NyaTermApp {
             let popup_open = app
                 .terminal
                 .assist
-                .command_suggestions
+                .commands
+                .popup
                 .as_ref()
                 .is_some_and(|state| state.session_id == popup_session_id)
                 || app

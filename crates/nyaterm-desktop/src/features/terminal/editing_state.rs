@@ -271,7 +271,10 @@ impl super::state::TerminalFeatureState {
     pub(in crate::features) fn disconnect_shell_editing_session(&mut self, session_id: &str) {
         // Background sessions must retire evidence and jobs too; they may
         // reconnect before the active-view reconciliation ever observes EOF.
-        self.assist.path_completion.cancel_session(session_id);
+        self.assist
+            .commands
+            .path_completion
+            .cancel_session(session_id);
         if let Some(state) = self.editing.sessions.get_mut(session_id) {
             state.file_context = Default::default();
         }

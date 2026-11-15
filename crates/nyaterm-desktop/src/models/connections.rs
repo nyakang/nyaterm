@@ -630,46 +630,6 @@ pub(crate) struct TranslationDialogState {
     pub(crate) provider_label: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CommandSuggestionItem {
-    pub(crate) fillable: bool,
-    pub(crate) description: String,
-    pub(crate) command: String,
-    pub(crate) display: String,
-    pub(crate) source: String,
-    pub(crate) score: u32,
-    pub(crate) indices: Vec<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CommandSuggestionState {
-    /// Previous results may stay visible during typing, but cannot be accepted.
-    pub(crate) refreshing: bool,
-    pub(crate) mode: nyaterm_core::completion::types::CompletionMode,
-    pub(crate) completion_revision: u64,
-    pub(crate) scope: Option<nyaterm_core::completion::types::CompletionScope>,
-    pub(crate) session_id: String,
-    pub(crate) input_version: u64,
-    pub(crate) sync_revision: u64,
-    pub(crate) draft: String,
-    pub(crate) items: Vec<CommandSuggestionItem>,
-    pub(crate) selected_index: Option<usize>,
-}
-
-impl CommandSuggestionState {
-    pub(crate) fn begin_input_refresh(&mut self, text: &str) -> bool {
-        let ordinary_edit = (!text.is_empty() && text.chars().all(|ch| !ch.is_control()))
-            || matches!(text, "\u{7f}" | "\u{8}" | "\u{1b}[3~");
-        let changed =
-            self.refreshing != ordinary_edit || (ordinary_edit && self.selected_index.is_some());
-        self.refreshing = ordinary_edit;
-        if ordinary_edit {
-            self.selected_index = None;
-        }
-        changed
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CredentialSuggestionState {
     pub(crate) session_id: String,

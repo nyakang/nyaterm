@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod fill;
 pub mod history;
 pub mod matching;
+pub mod merge;
 pub mod parser;
 pub mod path;
 pub mod privacy;

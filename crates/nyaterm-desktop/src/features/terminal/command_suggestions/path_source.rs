@@ -8,6 +8,7 @@ use futures::{
     future::{BoxFuture, Shared},
 };
 use nyaterm_core::completion::matching::TextMatcher;
+use nyaterm_core::completion::merge::PATH_CANDIDATE_LIMIT;
 use nyaterm_core::completion::path::{
     MAX_LISTED_ENTRIES, PathEntry, PathQuery, path_candidates_with_policy, path_query_for_input,
     resolve_directory,
@@ -30,7 +31,6 @@ const LISTING_BUDGET: Duration = Duration::from_millis(2500);
 const MAX_NAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CACHED_LISTINGS: usize = 48;
-pub(super) const PATH_CANDIDATE_LIMIT: usize = 12;
 type Listing = Arc<Vec<PathEntry>>;
 type Answer = Shared<BoxFuture<'static, Option<Listing>>>;
 type LinkAnswer = Shared<BoxFuture<'static, Option<Vec<Option<bool>>>>>;
@@ -576,7 +576,7 @@ impl NyaTermApp {
             }
             FileBrowserBackendKind::Adb => return None,
         };
-        let runtime = &mut self.terminal.assist.path_completion;
+        let runtime = &mut self.terminal.assist.commands.path_completion;
         if runtime.jobs.is_none() {
             runtime.jobs = BlockingJobScheduler::with_limits(2, 8).ok();
         }

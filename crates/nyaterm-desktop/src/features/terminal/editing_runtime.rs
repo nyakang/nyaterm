@@ -50,7 +50,11 @@ impl NyaTermApp {
             .file_context
             .note_input(bytes)
         {
-            self.terminal.assist.path_completion.cancel_session(&id);
+            self.terminal
+                .assist
+                .commands
+                .path_completion
+                .cancel_session(&id);
         }
         self.terminal.editing.state_mut().suggestion_fill = None;
         let fallback = candidate.as_ref().and_then(|evidence| {
@@ -107,26 +111,27 @@ impl NyaTermApp {
             .state_mut()
             .command_navigation
             .note_input(text);
-        let was_suppressed = self
-            .terminal
-            .assist
-            .command_suggestion_suppression
-            .is_suppressed();
+        let was_suppressed = self.terminal.assist.commands.suppression.is_suppressed();
         if text == "\u{3}" || (was_suppressed && text == "q") {
-            self.terminal.assist.command_suggestion_suppression =
-                CommandSuggestionSuppression::None;
+            self.terminal.assist.commands.suppression = CommandSuggestionSuppression::None;
         }
         if !was_suppressed && text.contains(['\r', '\n']) {
             let submitted = get_tracked_submission_command(self.terminal.editing.predicted_input());
             if !submitted.is_empty() {
                 if command_starts_suggestion_suppressing_program(&submitted) {
-                    self.terminal.assist.command_suggestion_suppression =
+                    self.terminal.assist.commands.suppression =
                         CommandSuggestionSuppression::InteractiveProgram;
                 }
                 // The outer `su` history entry may remain pending throughout
                 // the child shell. It must not disable pager suppression there.
-                if self.terminal.assist.pending_command_history_entry.is_none() {
-                    self.terminal.assist.pending_command_history_entry = Some(submitted);
+                if self
+                    .terminal
+                    .assist
+                    .commands
+                    .pending_history_entry
+                    .is_none()
+                {
+                    self.terminal.assist.commands.pending_history_entry = Some(submitted);
                 }
             }
         }
@@ -228,7 +233,11 @@ impl NyaTermApp {
         if self.session.is_disconnected(id) {
             // A reconnect starts a fresh shell on the session's own host.
             self.terminal.editing.state_mut().file_context = Default::default();
-            self.terminal.assist.path_completion.cancel_session(id);
+            self.terminal
+                .assist
+                .commands
+                .path_completion
+                .cancel_session(id);
         }
         if self.session.is_disconnected(id)
             || self.active_terminal_uses_alternate_screen()
@@ -257,7 +266,11 @@ impl NyaTermApp {
             .and_then(|state| state.file_context.current())
             .map(|context| context.cache_key());
         if previous_context != next_context {
-            self.terminal.assist.path_completion.cancel_session(id);
+            self.terminal
+                .assist
+                .commands
+                .path_completion
+                .cancel_session(id);
         }
 
         self.terminal
@@ -474,7 +487,8 @@ impl NyaTermApp {
             && self
                 .terminal
                 .assist
-                .command_suggestion_suppression
+                .commands
+                .suppression
                 .release_at_shell_prompt()
         {
             self.schedule_command_suggestion_refresh(cx);
@@ -878,8 +892,7 @@ mod tests {
             let mut settings = app.settings.summary().clone();
             settings.interaction_command_suggestions_enabled = false;
             app.settings.replace_summary(settings);
-            app.terminal.assist.command_suggestion_suppression =
-                CommandSuggestionSuppression::CommandRunning;
+            app.terminal.assist.commands.suppression = CommandSuggestionSuppression::CommandRunning;
             app.note_shell_editing_input(b"echo abc", cx);
             app.terminal
                 .seed_session_view("s1".into(), "$ echo abc".into(), "UTF-8");
@@ -909,8 +922,7 @@ mod tests {
             );
             app.reconcile_shell_editing("s1", cx);
             app.note_shell_editing_input(b"\r", cx);
-            app.terminal.assist.command_suggestion_suppression =
-                CommandSuggestionSuppression::CommandRunning;
+            app.terminal.assist.commands.suppression = CommandSuggestionSuppression::CommandRunning;
             // Child typing may precede delivery of the outer shell's OSC C.
             app.note_shell_editing_input(b"echo abc", cx);
             app.terminal
@@ -929,12 +941,7 @@ mod tests {
             assert!(app.can_use_smart_cursor_selection());
             // The unmarked child shell never emits OSC 133; a confirmed prompt
             // echo releases the outer command's suppression instead.
-            assert!(
-                !app.terminal
-                    .assist
-                    .command_suggestion_suppression
-                    .is_suppressed()
-            );
+            assert!(!app.terminal.assist.commands.suppression.is_suppressed());
         });
     }
 
