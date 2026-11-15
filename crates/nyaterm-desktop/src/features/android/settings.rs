@@ -4,8 +4,7 @@ use nyaterm_core::models::android::{
     AndroidScreenSettings, CaptureOrientation, ScreenQualityPreset,
 };
 use nyaterm_ui::{
-    NyaDropdownMenu, NyaMenuItem, NyaNumberInput, NyaNumberInputOptions, NyaNumberInputState,
-    NyaSwitch,
+    NyaNumberInput, NyaNumberInputOptions, NyaNumberInputState, NyaSelectOption, NyaSwitch,
 };
 use rust_i18n::t;
 
@@ -47,6 +46,114 @@ impl ScreenSettingsDraft {
     }
 }
 impl NyaTermApp {
+    pub(in crate::features) fn android_screen_select_controls(
+        &mut self,
+        prefix: &str,
+        current: Option<AndroidScreenSettings>,
+        settings: AndroidScreenSettings,
+        cx: &mut Context<Self>,
+    ) -> (gpui::AnyElement, gpui::AnyElement) {
+        let selected = current.and_then(|settings| {
+            ScreenQualityPreset::ALL
+                .into_iter()
+                .find(|preset| preset.matches(settings))
+        });
+        let mut options = ScreenQualityPreset::ALL
+            .into_iter()
+            .map(|preset| NyaSelectOption::new(preset.label_key(), t!(preset.label_key())))
+            .collect::<Vec<_>>();
+        options.push(NyaSelectOption::new("custom", t!("android.qualityCustom")).disabled(true));
+        let quality = self
+            .form_select_control(
+                format!("{prefix}.quality"),
+                options,
+                Some(
+                    selected
+                        .map_or("custom", ScreenQualityPreset::label_key)
+                        .to_owned(),
+                ),
+                false,
+                cx,
+            )
+            .into_any_element();
+        let orientation = self
+            .form_select_control(
+                format!("{prefix}.orientation"),
+                CaptureOrientation::ALL
+                    .into_iter()
+                    .map(|value| NyaSelectOption::new(value.server_value(), t!(value.label_key())))
+                    .collect(),
+                Some(settings.capture_orientation.server_value().to_owned()),
+                false,
+                cx,
+            )
+            .into_any_element();
+        (quality, orientation)
+    }
+
+    pub(in crate::features) fn change_android_screen_select(
+        &mut self,
+        id: &str,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((prefix, field)) = id.rsplit_once('.') else {
+            return false;
+        };
+        let editor = prefix == "connection-editor-android";
+        let session = prefix.strip_prefix("android-session-settings:");
+        if !editor && session.is_none() {
+            return false;
+        }
+        let preset = ScreenQualityPreset::ALL
+            .into_iter()
+            .find(|preset| preset.label_key() == value);
+        let orientation = CaptureOrientation::ALL
+            .into_iter()
+            .find(|orientation| orientation.server_value() == value);
+        if editor {
+            if let Some(draft) = self.connection_state.active_editor_draft() {
+                let mut settings = draft.android_screen;
+                match field {
+                    "quality" => {
+                        if let Some(preset) = preset {
+                            preset.apply(&mut settings);
+                        }
+                    }
+                    "orientation" => {
+                        if let Some(orientation) = orientation {
+                            settings.capture_orientation = orientation;
+                        }
+                    }
+                    _ => return false,
+                }
+                self.connection_state.set_android_screen_settings(settings);
+                if field == "quality" {
+                    self.connection_state.sync_editor_fields_from_draft(cx);
+                }
+            }
+        } else if let Some(draft) = session
+            .and_then(|id| self.android.screens.get_mut(id))
+            .and_then(|screen| screen.settings_draft.as_mut())
+        {
+            match field {
+                "quality" => {
+                    if let Some(preset) = preset {
+                        draft.preset(preset, cx);
+                    }
+                }
+                "orientation" => {
+                    if let Some(orientation) = orientation {
+                        draft.settings.capture_orientation = orientation;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        cx.notify();
+        true
+    }
+
     pub(super) fn open_android_screen_settings(
         &mut self,
         id: &str,
@@ -150,7 +257,7 @@ impl NyaTermApp {
             cx,
         );
     }
-    fn android_settings_content(&self, id: &str, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn android_settings_content(&mut self, id: &str, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(draft) = self
             .android
             .screens
@@ -159,35 +266,26 @@ impl NyaTermApp {
         else {
             return div().into_any_element();
         };
+        let settings = draft.settings;
+        let current = draft.read(cx);
+        let fields = [draft.size.clone(), draft.fps.clone(), draft.rate.clone()];
+        let invalid = draft.invalid;
+        let (quality, orientation) = self.android_screen_select_controls(
+            &format!("android-session-settings:{id}"),
+            current,
+            settings,
+            cx,
+        );
         let mut content = div()
             .flex()
             .flex_col()
             .gap_3()
             .child(t!("android.sessionSettingsHint"))
-            .child(
-                NyaDropdownMenu::new("android-session-quality")
-                    .label(t!("android.qualityPreset"))
-                    .items(ScreenQualityPreset::ALL.into_iter().map(|preset| {
-                        let target = id.to_owned();
-                        NyaMenuItem::action(t!(preset.label_key())).on_click(cx.listener(
-                            move |app, _, _, cx| {
-                                if let Some(draft) = app
-                                    .android
-                                    .screens
-                                    .get_mut(&target)
-                                    .and_then(|s| s.settings_draft.as_mut())
-                                {
-                                    draft.preset(preset, cx);
-                                }
-                                cx.notify();
-                            },
-                        ))
-                    })),
-            );
+            .child(quality);
         for (label, field) in [
-            ("android.maxSize", &draft.size),
-            ("android.maxFps", &draft.fps),
-            ("android.bitRate", &draft.rate),
+            ("android.maxSize", &fields[0]),
+            ("android.maxFps", &fields[1]),
+            ("android.bitRate", &fields[2]),
         ] {
             content = content.child(
                 div()
@@ -207,7 +305,7 @@ impl NyaTermApp {
                 .child(t!("android.powerOn"))
                 .child(
                     NyaSwitch::new("android-session-power")
-                        .checked(draft.settings.power_on)
+                        .checked(settings.power_on)
                         .on_click(cx.listener(move |app, value: &bool, _, cx| {
                             if let Some(draft) = app
                                 .android
@@ -221,27 +319,8 @@ impl NyaTermApp {
                         })),
                 ),
         );
-        content = content.child(
-            NyaDropdownMenu::new("android-session-orientation")
-                .label(t!(draft.settings.capture_orientation.label_key()))
-                .items(CaptureOrientation::ALL.into_iter().map(|orientation| {
-                    let target = id.to_owned();
-                    NyaMenuItem::action(t!(orientation.label_key()))
-                        .checked(draft.settings.capture_orientation == orientation)
-                        .on_click(cx.listener(move |app, _, _, cx| {
-                            if let Some(draft) = app
-                                .android
-                                .screens
-                                .get_mut(&target)
-                                .and_then(|s| s.settings_draft.as_mut())
-                            {
-                                draft.settings.capture_orientation = orientation;
-                            }
-                            cx.notify();
-                        }))
-                })),
-        );
-        if draft.invalid {
+        content = content.child(orientation);
+        if invalid {
             content = content.child(t!("android.invalidScreenSettings"));
         }
         content.into_any_element()
@@ -254,7 +333,6 @@ mod tests {
     use crate::features::test_support::app_with_visible_android_session;
     use crate::test_support::{TestAppCleanup, TestConfigDir};
     use gpui::{AppContext as _, IntoElement as _, ParentElement as _, Styled as _};
-    use nyaterm_core::models::android::ScreenQualityPreset;
     use nyaterm_ui::NyaDialogWindowExt as _;
     struct Host(gpui::Entity<crate::features::NyaTermApp>);
     impl gpui::Render for Host {
@@ -273,7 +351,7 @@ mod tests {
         }
     }
     #[test]
-    fn android_settings_cancel_discards_preset_and_restores_screen_focus() {
+    fn android_settings_select_cancel_discards_preset_and_restores_screen_focus() {
         let root = TestConfigDir::new("nyaterm-screen-draft-cancel");
         let mut cx = gpui::TestAppContext::single();
         cx.update(nyaterm_ui::init_components);
@@ -296,9 +374,22 @@ mod tests {
         vcx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 app.open_android_screen_settings("fixture", window, cx);
+                app.on_select_changed(
+                    "android-session-settings:fixture.quality",
+                    Some("android.qualitySmooth"),
+                    cx,
+                );
+                app.on_select_changed(
+                    "android-session-settings:fixture.orientation",
+                    Some("@90"),
+                    cx,
+                );
                 let screen = app.android.screens.get_mut("fixture").unwrap();
                 let draft = screen.settings_draft.as_mut().unwrap();
-                draft.preset(ScreenQualityPreset::Smooth, cx);
+                assert_eq!(
+                    draft.settings.capture_orientation,
+                    nyaterm_core::models::android::CaptureOrientation::Degrees90
+                );
                 assert_eq!(draft.read(cx).unwrap().max_fps, 60);
                 draft.rate.update(cx, |rate, cx| rate.set_content("0", cx));
                 assert!(draft.read(cx).is_none());

@@ -19,7 +19,7 @@ use nyaterm_remote_ops::ports::PortExposure;
 use nyaterm_remote_ops::services::{ServiceAction, ServiceEntry, ServiceStartup, ServiceState};
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaInputShell, NyaMenuItem, NyaScrollable,
-    NyaSearchInput, NyaTooltip,
+    NyaSearchInput, NyaSelect, NyaSelectOption, NyaTooltip,
 };
 use rust_i18n::t;
 
@@ -371,10 +371,43 @@ fn frame(chrome: PanelChrome, children: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-fn sort_menu(id: &'static str, label: String, items: Vec<NyaMenuItem>) -> AnyElement {
+fn sort_control(
+    panel: &HostToolsPanel,
+    id: &'static str,
+    options: Vec<NyaSelectOption>,
+    selected: usize,
+    direction: SortDirection,
+    cx: &mut Context<HostToolsPanel>,
+) -> AnyElement {
+    panel.sort_select.update(cx, |select, cx| {
+        select.set_options(options, cx);
+        select.set_selected_value(Some(selected.to_string()), cx);
+    });
     div()
         .flex_none()
-        .child(NyaDropdownMenu::new(id).label(label).items(items))
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .w(px(116.))
+                .h(px(nyaterm_ui::NYA_FORM_CONTROL_HEIGHT_PX))
+                .child(NyaSelect::new(&panel.sort_select)),
+        )
+        .child(
+            NyaButton::new(id, direction.marker()).on_click(cx.listener(|panel, _, _, cx| {
+                match panel.kind {
+                    super::HostToolKind::Ports => {
+                        panel.ports_view.direction = panel.ports_view.direction.flipped()
+                    }
+                    super::HostToolKind::Services => {
+                        panel.services_view.direction = panel.services_view.direction.flipped()
+                    }
+                }
+                panel.rederive();
+                cx.notify();
+            })),
+        )
         .into_any_element()
 }
 
@@ -466,41 +499,31 @@ pub(super) fn ports_panel(
             }),
         );
 
-    let sort_items = PortSortKey::ALL
-        .into_iter()
-        .map(|key| {
-            let label = match key {
-                PortSortKey::Port => t!("hostTools.sortPort"),
-                PortSortKey::Process => t!("hostTools.sortProcess"),
-                PortSortKey::Protocol => t!("hostTools.sortProtocol"),
-                PortSortKey::Pid => t!("hostTools.sortPid"),
-                PortSortKey::User => t!("hostTools.sortUser"),
-            }
-            .to_string();
-            NyaMenuItem::action(label)
-                .checked(view.sort == key)
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                    if panel.ports_view.sort == key {
-                        panel.ports_view.direction = panel.ports_view.direction.flipped();
-                    } else {
-                        panel.ports_view.sort = key;
-                        panel.ports_view.direction = SortDirection::Ascending;
-                    }
-                    panel.rederive();
-                    cx.notify();
-                }))
-        })
-        .collect::<Vec<_>>();
-    let sort_label = format!(
-        "{} {}",
-        match view.sort {
-            PortSortKey::Port => t!("hostTools.sortPort"),
-            PortSortKey::Process => t!("hostTools.sortProcess"),
-            PortSortKey::Protocol => t!("hostTools.sortProtocol"),
-            PortSortKey::Pid => t!("hostTools.sortPid"),
-            PortSortKey::User => t!("hostTools.sortUser"),
-        },
-        view.direction.marker()
+    let sort = sort_control(
+        panel,
+        "ports-sort-direction",
+        PortSortKey::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| {
+                NyaSelectOption::new(
+                    index.to_string(),
+                    match key {
+                        PortSortKey::Port => t!("hostTools.sortPort"),
+                        PortSortKey::Process => t!("hostTools.sortProcess"),
+                        PortSortKey::Protocol => t!("hostTools.sortProtocol"),
+                        PortSortKey::Pid => t!("hostTools.sortPid"),
+                        PortSortKey::User => t!("hostTools.sortUser"),
+                    },
+                )
+            })
+            .collect(),
+        PortSortKey::ALL
+            .iter()
+            .position(|key| *key == view.sort)
+            .unwrap_or(0),
+        view.direction,
+        cx,
     );
 
     let mut children = top_rows(
@@ -509,7 +532,7 @@ pub(super) fn ports_panel(
         "host-tools-ports-search",
         count,
         chips.into_any_element(),
-        sort_menu("ports-sort", sort_label, sort_items),
+        sort,
         cx,
     );
     children.extend(sudo_banner(panel, palette, cx));
@@ -794,24 +817,21 @@ pub(super) fn services_panel(
         }
         .to_string()
     };
-    let sort_items = ServiceSortKey::ALL
-        .into_iter()
-        .map(|key| {
-            NyaMenuItem::action(sort_name(key))
-                .checked(view.sort == key)
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                    if panel.services_view.sort == key {
-                        panel.services_view.direction = panel.services_view.direction.flipped();
-                    } else {
-                        panel.services_view.sort = key;
-                        panel.services_view.direction = SortDirection::Ascending;
-                    }
-                    panel.rederive();
-                    cx.notify();
-                }))
-        })
-        .collect::<Vec<_>>();
-    let sort_label = format!("{} {}", sort_name(view.sort), view.direction.marker());
+    let sort = sort_control(
+        panel,
+        "services-sort-direction",
+        ServiceSortKey::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| NyaSelectOption::new(index.to_string(), sort_name(key)))
+            .collect(),
+        ServiceSortKey::ALL
+            .iter()
+            .position(|key| *key == view.sort)
+            .unwrap_or(0),
+        view.direction,
+        cx,
+    );
 
     let mut children = top_rows(
         panel,
@@ -819,7 +839,7 @@ pub(super) fn services_panel(
         "host-tools-services-search",
         counts.total.to_string(),
         chips.into_any_element(),
-        sort_menu("services-sort", sort_label, sort_items),
+        sort,
         cx,
     );
     if panel.services_partial {

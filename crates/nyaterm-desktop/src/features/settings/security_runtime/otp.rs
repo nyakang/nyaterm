@@ -262,14 +262,6 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn cycle_security_otp_algorithm(&mut self, cx: &mut Context<Self>) {
-        if self.security.editor_busy() {
-            return;
-        }
-        self.security.cycle_otp_algorithm();
-        cx.notify();
-    }
-
     pub(in crate::features) fn handle_security_otp_editor_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -279,6 +271,12 @@ impl NyaTermApp {
         self.mark_user_activity();
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
+            return;
+        }
+        if self.select_menu_is_focused("security-otp-algorithm", window, cx)
+            || (keystroke.key == "enter"
+                && self.select_is_focused("security-otp-algorithm", window, cx))
+        {
             return;
         }
         // The boxes own the text; the editor owns the keys that close or save

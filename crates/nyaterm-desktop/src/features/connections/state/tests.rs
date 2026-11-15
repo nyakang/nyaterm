@@ -3140,3 +3140,42 @@ fn large_ranked_catalog_reuses_scoring_across_navigation_and_fold_changes() {
         );
     });
 }
+
+#[test]
+fn android_selects_update_draft_without_resetting_other_screen_settings() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = cache_test_app(&mut cx);
+    cx.update_entity(&app, |app, cx| {
+        let mut draft = connection_editor_state_with_secret_draft();
+        draft.kind = ConnectionKindTab::Adb;
+        draft.android_screen.power_on = true;
+        app.connection_state.begin_editor(draft);
+        app.on_select_changed("connection-editor-android.orientation", Some("@90"), cx);
+        app.on_select_changed(
+            "connection-editor-android.quality",
+            Some("android.qualitySharp"),
+            cx,
+        );
+        let screen = app
+            .connection_state
+            .active_editor_draft()
+            .unwrap()
+            .android_screen;
+        assert!(screen.power_on);
+        assert_eq!(
+            screen.capture_orientation,
+            nyaterm_core::models::android::CaptureOrientation::Degrees90
+        );
+        assert_eq!(screen.max_size, 1920);
+        assert_eq!(screen.bit_rate, 12_000_000);
+        app.on_select_changed("connection-editor-android.quality", Some("custom"), cx);
+        assert_eq!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .android_screen,
+            screen
+        );
+    });
+}

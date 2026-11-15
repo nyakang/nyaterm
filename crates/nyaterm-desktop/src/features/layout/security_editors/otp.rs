@@ -2,9 +2,7 @@ use rust_i18n::t;
 
 use std::borrow::Cow;
 
-use gpui::{
-    Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb,
-};
+use gpui::{Context, IntoElement, KeyDownEvent, div, prelude::*, px, rgb};
 use nyaterm_ui::NyaNumberInputOptions;
 
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
@@ -62,26 +60,18 @@ impl NyaTermApp {
                     ))
                     .child(div().flex_1())
                     .child(
-                        div()
-                            .id(SharedString::from("security-otp-algo"))
-                            .h(px(22.))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .rounded_sm()
-                            .text_size(px(10.))
-                            .font_weight(FontWeight(700.))
-                            .when(!self.security.editor_busy(), |this| this.cursor_pointer())
-                            .text_color(rgb(palette.text))
-                            .bg(rgb(palette.surface_elevated))
-                            .when(!self.security.editor_busy(), |this| {
-                                this.hover(|this| this.bg(rgb(palette.border)))
-                            })
-                            .when(self.security.editor_busy(), |this| this.opacity(0.5))
-                            .child(editor.algorithm.clone())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.cycle_security_otp_algorithm(cx);
-                            })),
+                        div().w(px(130.)).child(
+                            self.form_select_control(
+                                "security-otp-algorithm",
+                                ["SHA1", "SHA256", "SHA512"]
+                                    .into_iter()
+                                    .map(|value| nyaterm_ui::NyaSelectOption::new(value, value))
+                                    .collect(),
+                                Some(editor.algorithm.clone()),
+                                self.security.editor_busy(),
+                                cx,
+                            ),
+                        ),
                     ),
             )
             .child(security_editor_field(

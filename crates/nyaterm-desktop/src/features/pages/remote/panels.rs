@@ -175,6 +175,7 @@ pub(in crate::features) enum RemoteMonitorData {
         search: Entity<NyaInputState>,
         /// Only built while a process is selected, and keyed per pid.
         nice: Option<Entity<NyaNumberInputState>>,
+        sort: Entity<NyaSelectState>,
     },
     /// Boxed because it is far the largest variant -- `DockerPresentationState` alone
     /// carries fourteen fields including an inline `Option<DockerContainerDetails>` -- and
@@ -510,7 +511,9 @@ impl Render for RemoteMonitorPanel {
                     processes,
                     search,
                     nice,
+                    sort,
                 } => {
+                    let sort = sort.clone();
                     let (state, processes, search, nice) = (
                         state.clone(),
                         processes.clone(),
@@ -527,6 +530,7 @@ impl Render for RemoteMonitorPanel {
                         panel_width,
                         search,
                         nice,
+                        sort,
                         self.process_list.clone(),
                         cx,
                     )
@@ -781,11 +785,43 @@ impl NyaTermApp {
                             cx,
                         )
                     });
+                let sort = self.select_entity(
+                    "remote.process.sort",
+                    [
+                        (
+                            crate::models::RemoteProcessSortKey::Command,
+                            t!("processManager.process"),
+                        ),
+                        (
+                            crate::models::RemoteProcessSortKey::Pid,
+                            t!("processManager.sortPid"),
+                        ),
+                        (
+                            crate::models::RemoteProcessSortKey::Cpu,
+                            t!("processManager.sortCpu"),
+                        ),
+                        (
+                            crate::models::RemoteProcessSortKey::Memory,
+                            t!("processManager.sortMemory"),
+                        ),
+                        (
+                            crate::models::RemoteProcessSortKey::User,
+                            t!("processManager.user"),
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(key, label)| NyaSelectOption::new(key.label(), label))
+                    .collect(),
+                    Some(state.sort_key.label().to_owned()),
+                    false,
+                    cx,
+                );
                 RemoteMonitorData::Processes {
                     state,
                     processes,
                     search,
                     nice,
+                    sort,
                 }
             }
             RemoteMonitorKind::Docker => {
@@ -1983,6 +2019,40 @@ mod isolation_tests {
             after > before,
             "the remote search subscription must publish its changed state"
         );
+    }
+
+    #[test]
+    fn process_sort_select_is_idempotent_and_direction_remains_independent() {
+        let mut cx = TestAppContext::single();
+        let root = TestConfigDir::new("nyaterm-process-sort-select");
+        let (app, vcx) = hosted_processes(&mut cx, root.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let key = crate::models::RemoteProcessSortKey::Pid;
+                app.on_select_changed("remote.process.sort", Some(key.label()), cx);
+                let direction = app.remote_ops.process_presentation().sort_direction;
+                assert_eq!(app.remote_ops.process_presentation().sort_key, key);
+                app.on_select_changed("remote.process.sort", Some(key.label()), cx);
+                assert_eq!(
+                    app.remote_ops.process_presentation().sort_direction,
+                    direction
+                );
+                app.toggle_process_sort(key, cx);
+                assert_ne!(
+                    app.remote_ops.process_presentation().sort_direction,
+                    direction
+                );
+                app.flush_remote_panel_snapshots(cx);
+                assert_eq!(
+                    app.selects
+                        .field(&"remote.process.sort".into())
+                        .unwrap()
+                        .read(cx)
+                        .selected_value(),
+                    Some(key.label())
+                );
+            })
+        });
     }
 
     /// Open the Processes panel on an SSH session and settle.

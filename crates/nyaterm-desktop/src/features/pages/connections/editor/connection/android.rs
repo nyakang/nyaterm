@@ -8,6 +8,7 @@ use nyaterm_ui::NyaSwitch;
 use rust_i18n::t;
 
 pub(super) fn section(
+    app: &mut NyaTermApp,
     section: ConnectionEditorSectionContext<'_>,
     snapshot: nyaterm_android::devices::DeviceSnapshot,
     cx: &mut Context<NyaTermApp>,
@@ -20,35 +21,17 @@ pub(super) fn section(
         ..
     } = section;
     if editor.section == ConnectionEditorSection::AndroidScreen {
+        let (quality, orientation) = app.android_screen_select_controls(
+            "connection-editor-android",
+            Some(editor.android_screen),
+            editor.android_screen,
+            cx,
+        );
         return div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                nyaterm_ui::NyaDropdownMenu::new("android-quality")
-                    .label(
-                        nyaterm_core::models::android::ScreenQualityPreset::ALL
-                            .into_iter()
-                            .find(|preset| preset.matches(editor.android_screen))
-                            .map(|preset| t!(preset.label_key()).into_owned())
-                            .unwrap_or_else(|| t!("android.qualityCustom").into_owned()),
-                    )
-                    .items(
-                        nyaterm_core::models::android::ScreenQualityPreset::ALL
-                            .into_iter()
-                            .map(|preset| {
-                                let mut settings = editor.android_screen;
-                                preset.apply(&mut settings);
-                                nyaterm_ui::NyaMenuItem::action(t!(preset.label_key())).on_click(
-                                    cx.listener(move |app, _, _, cx| {
-                                        app.connection_state.set_android_screen_settings(settings);
-                                        app.connection_state.sync_editor_fields_from_draft(cx);
-                                        cx.notify();
-                                    }),
-                                )
-                            }),
-                    ),
-            )
+            .child(quality)
             .child(
                 div()
                     .flex()
@@ -69,26 +52,7 @@ pub(super) fn section(
                             })),
                     ),
             )
-            .child(
-                nyaterm_ui::NyaDropdownMenu::new("android-orientation")
-                    .label(t!(editor.android_screen.capture_orientation.label_key()))
-                    .items(
-                        nyaterm_core::models::android::CaptureOrientation::ALL
-                            .into_iter()
-                            .map(|orientation| {
-                                let mut settings = editor.android_screen;
-                                settings.capture_orientation = orientation;
-                                nyaterm_ui::NyaMenuItem::action(t!(orientation.label_key()))
-                                    .checked(
-                                        editor.android_screen.capture_orientation == orientation,
-                                    )
-                                    .on_click(cx.listener(move |app, _, _, cx| {
-                                        app.connection_state.set_android_screen_settings(settings);
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
-            )
+            .child(orientation)
             .child(editor_stepper_field(
                 palette,
                 t!("android.maxSize"),
