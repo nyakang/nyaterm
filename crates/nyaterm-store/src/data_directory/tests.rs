@@ -605,7 +605,7 @@ fn explicit_recovery_selection_persists_and_does_not_switch_back_when_disk_retur
     fs::rename(root.join("unmounted"), &custom).unwrap();
     let reopened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
     assert_eq!(
-        fs::canonicalize(&reopened.selection.data_dir).unwrap(),
+        reopened.selection.data_dir,
         fs::canonicalize(&local).unwrap()
     );
     assert_eq!(
@@ -673,7 +673,7 @@ fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
         }
         let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
         assert_eq!(
-            fs::canonicalize(&restored.selection.data_dir).unwrap(),
+            restored.selection.data_dir,
             fs::canonicalize(&local).unwrap()
         );
         assert_eq!(
@@ -748,7 +748,7 @@ fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_cu
             );
         } else {
             assert_eq!(
-                fs::canonicalize(result.unwrap().selection.data_dir).unwrap(),
+                result.unwrap().selection.data_dir,
                 fs::canonicalize(&local).unwrap()
             );
             assert!(!local.join("plugins").exists());
@@ -781,10 +781,7 @@ fn cancelling_an_interrupted_migration_persists_source_selection() {
     assert!(location.pending.is_none());
     assert!(target.join(JOURNAL_NAME).exists());
     let source = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(
-        fs::canonicalize(&source.selection.data_dir).unwrap(),
-        fs::canonicalize(&local).unwrap()
-    );
+    assert_eq!(source.selection.data_dir, fs::canonicalize(&local).unwrap());
     assert!(!target.join(DATABASE_FILE_NAME).exists());
 }
 
