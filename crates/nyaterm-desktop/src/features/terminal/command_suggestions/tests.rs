@@ -519,7 +519,11 @@ fn shell_like_pager_echo_cannot_release_explicit_interactive_suppression() {
         crate::features::test_support::app_with_visible_local_session(&mut cx, dir.path(), "s1");
     cx.update_entity(&app, |app, cx| {
         show_surface_for_session(app, "s1");
-        app.terminal.assist.commands.pending_history_entry = Some("su - root".into());
+        app.terminal.assist.commands.pending_history_entry =
+            Some(super::state::PendingCommandHistoryEntry {
+                command: "su - root".into(),
+                source_session: None,
+            });
         app.note_shell_editing_input(b"less", cx);
         app.note_shell_editing_input(b"\r", cx);
         app.apply_shell_integration_edges("s1", true, false, true);

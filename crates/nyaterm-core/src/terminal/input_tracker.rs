@@ -393,6 +393,21 @@ pub fn get_tracked_submission_command(state: &TerminalInputState) -> String {
     sanitize_terminal_command(&state.value)
 }
 
+/// Navigation evidence alone is insufficient for learning a completed command.
+/// Require an end-of-line Tab and the entire typed prefix, preserving whitespace
+/// so a leading-space privacy opt-out cannot disappear during recovery.
+pub fn can_learn_tab_completed_command(input: &TerminalInputState, command: &str) -> bool {
+    input.desynced
+        && input.desync_reason == Some("tab")
+        && !input.multiline
+        && !input.paste_mode
+        && input.cursor == input.value.len()
+        && !input.value.trim().is_empty()
+        && command.len() <= MAX_TRACKED_INPUT_BYTES
+        && !command.chars().any(char::is_control)
+        && command.starts_with(&input.value)
+}
+
 fn normalize_line_content(value: &str) -> String {
     value.replace("\r\n", "").replace(['\n', '\r'], "")
 }
@@ -537,6 +552,7 @@ pub fn resync_from_terminal_line(
 
 #[cfg(test)]
 mod tests {
+    use super::can_learn_tab_completed_command;
     use super::{
         MAX_TRACKED_INPUT_BYTES, TerminalInputState, apply_terminal_input_data,
         apply_terminal_input_data_in_place, build_move_input_cursor_data,
@@ -545,6 +561,57 @@ mod tests {
         resync_from_terminal_line, sanitize_terminal_command, strip_terminal_command_prompt,
         terminal_input_tracker_below_min_chars,
     };
+
+    #[test]
+    fn tab_history_requires_the_complete_nonempty_prefix_at_the_start() {
+        let input = apply_terminal_input_data(&TerminalInputState::new(), "git ch");
+        let input = apply_terminal_input_data(&input, "\t");
+        assert!(can_learn_tab_completed_command(&input, "git checkout"));
+        for command in [
+            "echo unrelated",
+            "echo git checkout",
+            "git",
+            "git checkout\n",
+        ] {
+            assert!(!can_learn_tab_completed_command(&input, command));
+        }
+        assert!(!can_learn_tab_completed_command(
+            &input,
+            &format!("git ch{}", "x".repeat(MAX_TRACKED_INPUT_BYTES)),
+        ));
+        for prefix in ["", " "] {
+            let input = apply_terminal_input_data(&TerminalInputState::new(), prefix);
+            let input = apply_terminal_input_data(&input, "\t");
+            assert!(!can_learn_tab_completed_command(&input, "git checkout"));
+        }
+    }
+
+    #[test]
+    fn tab_history_rejects_other_desyncs_midline_edits_and_pastes() {
+        let input = apply_terminal_input_data(&TerminalInputState::new(), "git ch");
+        for key in ["\x1b[A", "\x1b[999~", "\x1b[200~"] {
+            let input = apply_terminal_input_data(&input, key);
+            assert!(!can_learn_tab_completed_command(&input, "git checkout"));
+        }
+        let input = apply_terminal_input_data(&input, "\t");
+        let mut midline = input.clone();
+        midline.cursor = 2;
+        assert!(!can_learn_tab_completed_command(&midline, "git checkout"));
+        let mut multiline = input.clone();
+        multiline.multiline = true;
+        assert!(!can_learn_tab_completed_command(&multiline, "git checkout"));
+        let mut paste = input;
+        paste.paste_mode = true;
+        assert!(!can_learn_tab_completed_command(&paste, "git checkout"));
+    }
+
+    #[test]
+    fn tab_history_preserves_leading_space_privacy() {
+        let input = apply_terminal_input_data(&TerminalInputState::new(), " git ch");
+        let input = apply_terminal_input_data(&input, "\t");
+        assert!(!can_learn_tab_completed_command(&input, "git checkout"));
+        assert!(can_learn_tab_completed_command(&input, " git checkout"));
+    }
 
     #[test]
     fn tracks_insert_backspace_and_submit() {

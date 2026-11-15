@@ -4,13 +4,19 @@ use gpui::{ScrollHandle, Task, point, px};
 use nyaterm_core::command_suggestion_suppression::CommandSuggestionSuppression;
 use nyaterm_core::completion::types::{CompletionFillPolicy, CompletionMode};
 
+pub(in crate::features) struct PendingCommandHistoryEntry {
+    pub(in crate::features) command: String,
+    /// A visible completion is evidence only for the session that echoed it.
+    pub(in crate::features) source_session: Option<String>,
+}
+
 pub(in crate::features::terminal) struct CommandSuggestionFeatureState {
     pub(in crate::features::terminal) path_completion: PathCompletionRuntime,
     pub(in crate::features::terminal) popup: Option<CommandSuggestionState>,
     pub(in crate::features::terminal) scroll: ScrollHandle,
     pub(in crate::features::terminal) mode: CompletionMode,
     pub(in crate::features::terminal) suppression: CommandSuggestionSuppression,
-    pub(in crate::features::terminal) pending_history_entry: Option<String>,
+    pub(in crate::features::terminal) pending_history_entry: Option<PendingCommandHistoryEntry>,
     pub(in crate::features::terminal) search_generation: u64,
     pub(in crate::features::terminal) refresh_task: Option<Task<()>>,
 }
@@ -62,7 +68,9 @@ impl CommandSuggestionFeatureState {
         self.invalidate_search();
     }
 
-    pub(in crate::features::terminal) fn take_pending_history_entry(&mut self) -> Option<String> {
+    pub(in crate::features::terminal) fn take_pending_history_entry(
+        &mut self,
+    ) -> Option<PendingCommandHistoryEntry> {
         self.pending_history_entry.take()
     }
 
@@ -403,7 +411,10 @@ mod tests {
             popup: Some(open_suggestions_popup("s1")),
             mode: CompletionMode::History,
             suppression: CommandSuggestionSuppression::CommandRunning,
-            pending_history_entry: Some("fixture command".into()),
+            pending_history_entry: Some(super::PendingCommandHistoryEntry {
+                command: "fixture command".into(),
+                source_session: None,
+            }),
             search_generation: 7,
             refresh_task: Some(gpui::Task::ready(())),
             ..Default::default()
@@ -469,10 +480,13 @@ mod tests {
     fn taking_history_entry_consumes_it_once() {
         let mut state = active_feature();
         assert_eq!(
-            state.take_pending_history_entry().as_deref(),
+            state
+                .take_pending_history_entry()
+                .as_ref()
+                .map(|entry| entry.command.as_str()),
             Some("fixture command")
         );
-        assert_eq!(state.take_pending_history_entry(), None);
+        assert!(state.take_pending_history_entry().is_none());
         assert!(state.popup.is_some());
     }
 

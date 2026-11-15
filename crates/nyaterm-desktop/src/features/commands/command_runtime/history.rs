@@ -226,7 +226,7 @@ impl NyaTermApp {
         self.record_command_history_for_sessions(&sessions, bytes);
     }
 
-    /// Resolve a submitted command once and attach it to every successful session.
+    /// Tracked input applies to successful sessions; recovered echo only to its source.
     /// Global command history is appended only once per submission.
     pub(in crate::features) fn record_command_history_for_sessions(
         &mut self,
@@ -241,7 +241,13 @@ impl NyaTermApp {
         }
         let submitted: Vec<String> =
             if let Some(command) = self.terminal.take_pending_command_history_entry() {
-                vec![command]
+                if let Some(source) = command.source_session {
+                    if session_ids.contains(&source.as_str()) {
+                        self.record_submitted_command_history(&[&source], vec![command.command]);
+                    }
+                    return;
+                }
+                vec![command.command]
             } else {
                 text.split(['\r', '\n'])
                     .map(str::trim)

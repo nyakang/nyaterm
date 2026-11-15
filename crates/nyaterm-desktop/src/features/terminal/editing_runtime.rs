@@ -12,12 +12,13 @@ use nyaterm_core::terminal::editing::{
     EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase, ShellLineEditing,
 };
 use nyaterm_core::terminal::input_tracker::{
-    MAX_TRACKED_INPUT_BYTES, TerminalInputState, get_tracked_submission_command,
-    strip_terminal_command_prompt,
+    MAX_TRACKED_INPUT_BYTES, TerminalInputState, can_learn_tab_completed_command,
+    get_tracked_submission_command, strip_terminal_command_prompt,
 };
 use nyaterm_core::terminal::shell_prompt::{ShellPrompt, classify_shell_prompt};
 use nyaterm_terminal::editing::{recover_marked_input, resolve_input};
 
+use super::command_suggestions::state::PendingCommandHistoryEntry;
 use super::editing_state::SnapshotEvidence;
 use crate::features::NyaTermApp;
 
@@ -118,17 +119,22 @@ impl NyaTermApp {
         if !was_suppressed && text.contains(['\r', '\n']) {
             let mut submitted =
                 get_tracked_submission_command(self.terminal.editing.predicted_input());
+            let mut source_session = None;
             if submitted.is_empty() {
-                // A tab completion desyncs the tracker, so a tab-completed
-                // command line is invisible to it. On hosts without shell
-                // integration nothing reports the executed line either, and
-                // the raw keystroke bytes only carry the typed prefix. The
-                // navigation evidence already recovered the submitted command
-                // from the prompt line the terminal echoed (#1246).
+                // Navigation can recognize recalled or unrelated prompt lines.
+                // History requires the prefix retained before Tab, and the
+                // recovered command belongs only to the terminal that echoed it.
                 submitted = candidate
                     .as_ref()
+                    .filter(|evidence| {
+                        can_learn_tab_completed_command(
+                            self.terminal.editing.predicted_input(),
+                            &evidence.command,
+                        )
+                    })
                     .map(|evidence| evidence.command.clone())
                     .unwrap_or_default();
+                source_session = Some(id.clone());
             }
             if !submitted.is_empty() {
                 if command_starts_suggestion_suppressing_program(&submitted) {
@@ -144,7 +150,11 @@ impl NyaTermApp {
                     .pending_history_entry
                     .is_none()
                 {
-                    self.terminal.assist.commands.pending_history_entry = Some(submitted);
+                    self.terminal.assist.commands.pending_history_entry =
+                        Some(PendingCommandHistoryEntry {
+                            command: submitted,
+                            source_session,
+                        });
                 }
             }
         }
@@ -555,31 +565,129 @@ mod tests {
     use crate::models::{TerminalBufferCellPos, TerminalSelection};
     use crate::test_support::TestConfigDir;
 
-    #[test]
-    fn tab_completed_submission_is_learned_from_the_visible_prompt_line() {
-        // Hosts without shell integration cannot report the executed command,
-        // so a tab-completed line must be learned from the prompt line the
-        // terminal already echoed. The tracker alone stops at the tab desync
-        // and the raw keystroke bytes only carry the typed prefix (#1246).
+    fn assert_tab_submission_history(visible: &str, sessions: &[&str], expected: Option<&str>) {
+        use futures::StreamExt as _;
+        use nyaterm_completion_runtime::runtime::{CompletionQuery, CompletionSearchOutcome};
+        use nyaterm_core::completion::types::CompletionMode;
+        use nyaterm_store::StoreDomain;
+
         let dir = TestConfigDir::new("nyaterm-tab-completion-history");
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
-        cx.update_entity(&app, |app, cx| {
-            // Busybox-style unmarked prompt; the completion echo is on screen.
-            app.terminal.seed_session_view(
-                "s1".into(),
-                "root@embedded:~# git checkout".into(),
-                "UTF-8",
-            );
+        let (store, runtime, context, mut events) = cx.update_entity(&app, |app, cx| {
+            app.terminal
+                .seed_session_view("s1".into(), visible.into(), "UTF-8");
+            app.terminal
+                .seed_session_view("s2".into(), "$ git cherry-pick".into(), "UTF-8");
             app.note_shell_editing_input(b"git ch", cx);
             app.note_shell_editing_input(b"\t", cx);
             app.note_shell_editing_input(b"\r", cx);
+            app.record_command_history_for_sessions(sessions, b"\r");
+            assert!(app.terminal.assist.commands.pending_history_entry.is_none());
+            let history = app.session.command_history_for("s1").unwrap_or_default();
             assert_eq!(
-                app.terminal.assist.pending_command_history_entry.as_deref(),
-                Some("git checkout"),
-                "tab-completed submission must be learned from the echoed prompt line"
+                history,
+                &expected.into_iter().map(str::to_owned).collect::<Vec<_>>()
             );
+            // Each remote shell completes independently. Echo from s1 cannot
+            // become either the command or the raw prefix in s2's history.
+            assert!(
+                app.session
+                    .command_history_for("s2")
+                    .unwrap_or_default()
+                    .is_empty()
+            );
+            (
+                app.store_blocking_client(),
+                app.commands.completion_runtime(),
+                app.command_suggestion_context("s1"),
+                app.commands.take_persistence_event_receiver().unwrap(),
+            )
+        });
+        if expected.is_some() {
+            let event = futures::executor::block_on(events.next()).expect("history persisted");
+            cx.update_entity(&app, |app, _| {
+                app.commands.note_persistence_event_delivered();
+                app.commands.apply_persistence_result(event).unwrap();
+            });
+        }
+        let history = store
+            .request_fn(StoreDomain::Commands, |db| db.list_command_history(64))
+            .unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .map(|entry| entry.command.as_str())
+                .collect::<Vec<_>>(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+        let result = futures::executor::block_on(runtime.search_outcome(CompletionQuery {
+            context,
+            fill_policy: None,
+            input: "git ch".into(),
+            mode: CompletionMode::History,
+            quick: std::sync::Arc::from([]),
+            min: 1,
+            max: 100,
+        }));
+        let CompletionSearchOutcome::Ready(result) = result else {
+            panic!("history query did not complete");
+        };
+        assert_eq!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.insert_text == "git checkout"),
+            expected.is_some()
+        );
+    }
+
+    #[test]
+    fn tab_completed_submission_is_persisted_and_available_to_history_suggestions() {
+        assert_tab_submission_history(
+            "root@embedded:~# git checkout",
+            &["s1"],
+            Some("git checkout"),
+        );
+    }
+
+    #[test]
+    fn tab_completed_submission_rejects_unrelated_lines_and_missing_prompts() {
+        for visible in [
+            "$ echo unrelated",
+            "$ echo git checkout",
+            "git checkout",
+            "Password: ",
+            "$ ",
+        ] {
+            assert_tab_submission_history(visible, &["s1"], None);
+        }
+    }
+
+    #[test]
+    fn tab_completed_submission_is_learned_only_for_the_session_that_echoed_it() {
+        assert_tab_submission_history("$ git checkout", &["s1", "s2"], Some("git checkout"));
+        assert_tab_submission_history("$ git checkout", &["s2"], None);
+        assert_tab_submission_history("$ git checkout", &[], None);
+    }
+
+    #[test]
+    fn ordinary_tracked_submission_still_records_each_successful_sync_session() {
+        let dir = TestConfigDir::new("nyaterm-tracked-sync-history");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"git status", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.record_command_history_for_sessions(&["s1", "s2"], b"\r");
+            for session in ["s1", "s2"] {
+                assert_eq!(
+                    app.session.command_history_for(session).unwrap(),
+                    &["git status"]
+                );
+            }
         });
     }
 

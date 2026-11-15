@@ -976,7 +976,12 @@ mod tests {
         let mut state = terminal_state();
         state.editing.input_mut().value = "git status".to_string();
         state.assist.commands.suppression = CommandSuggestionSuppression::CommandRunning;
-        state.assist.commands.pending_history_entry = Some("git status".to_string());
+        state.assist.commands.pending_history_entry = Some(
+            crate::features::terminal::command_suggestions::state::PendingCommandHistoryEntry {
+                command: "git status".into(),
+                source_session: None,
+            },
+        );
         state.assist.credential_autofill_buffer = "login:".to_string();
         state.assist.credential_autofill_recent = Some((
             nyaterm_core::CredentialPromptKind::Username,

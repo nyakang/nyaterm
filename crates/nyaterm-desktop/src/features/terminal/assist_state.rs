@@ -140,7 +140,9 @@ impl TerminalFeatureState {
         self.assist.credential_suggestions.is_some()
     }
 
-    pub(in crate::features) fn take_pending_command_history_entry(&mut self) -> Option<String> {
+    pub(in crate::features) fn take_pending_command_history_entry(
+        &mut self,
+    ) -> Option<super::command_suggestions::state::PendingCommandHistoryEntry> {
         self.assist.commands.take_pending_history_entry()
     }
 
