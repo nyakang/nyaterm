@@ -24,7 +24,7 @@
   },
   "android": {
     "zoomOut": "Réduire",
-    "paste": "Coller (Ctrl+V / Cmd+V)",
+    "paste": "Coller",
     "inputHint": "Glisser avec le bouton central : déplacer · Ctrl/Cmd + molette : zoomer autour du pointeur. Utilisez le presse-papiers ou le clavier de l’appareil pour le chinois.",
     "directoryLoadFailed": "Échec du chargement du répertoire : %{error}",
     "screenSettings": "Paramètres de l’écran",

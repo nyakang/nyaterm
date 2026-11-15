@@ -24,7 +24,7 @@
   },
   "android": {
     "zoomOut": "Zoom out",
-    "paste": "Paste (Ctrl+V / Cmd+V)",
+    "paste": "Paste",
     "inputHint": "Middle drag: pan · Ctrl/Cmd + wheel: zoom at pointer. Use the computer clipboard or device keyboard for Chinese text.",
     "directoryLoadFailed": "Directory load failed: %{error}",
     "screenSettings": "Screen settings",

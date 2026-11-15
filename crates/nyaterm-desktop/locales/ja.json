@@ -24,7 +24,7 @@
   },
   "android": {
     "zoomOut": "縮小",
-    "paste": "貼り付け（Ctrl+V / Cmd+V）",
+    "paste": "貼り付け",
     "inputHint": "中ボタンでドラッグして移動、Ctrl/Cmd+ホイールでポインターを中心に拡大縮小。中国語はパソコンのクリップボードか端末の入力方法を使用してください。",
     "directoryLoadFailed": "ディレクトリの読み込みに失敗しました：%{error}",
     "screenSettings": "画面設定",

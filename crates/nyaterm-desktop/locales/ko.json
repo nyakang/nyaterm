@@ -24,7 +24,7 @@
   },
   "android": {
     "zoomOut": "축소",
-    "paste": "붙여넣기 (Ctrl+V / Cmd+V)",
+    "paste": "붙여넣기",
     "inputHint": "가운데 버튼 드래그: 이동 · Ctrl/Cmd+휠: 포인터 중심 확대/축소. 중국어는 컴퓨터 클립보드나 기기 입력기를 사용하세요.",
     "directoryLoadFailed": "디렉터리 로드 실패: %{error}",
     "screenSettings": "화면 설정",

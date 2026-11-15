@@ -24,7 +24,7 @@
   },
   "android": {
     "zoomOut": "缩小",
-    "paste": "粘贴（Ctrl+V／Cmd+V）",
+    "paste": "粘贴",
     "inputHint": "中键拖动平移；Ctrl／Cmd+滚轮围绕指针缩放。中文可通过电脑剪贴板或设备输入法输入。",
     "directoryLoadFailed": "目录加载失败：%{error}",
     "screenSettings": "屏幕设置",
