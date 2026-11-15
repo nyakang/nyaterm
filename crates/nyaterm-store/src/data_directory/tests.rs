@@ -250,15 +250,18 @@ fn special_plugin_entries_fail_without_publishing_the_database() {
     let root = TestTempDir::new("nyaterm-data-directory-special");
     let local = root.join("local");
     fixture(&local);
-    // Bind at a short path before moving into the fixture: macOS limits the
-    // socket address length even when the filesystem accepts the final path.
-    let socket_root = TestTempDir::from_path(
-        std::env::temp_dir().join(format!("nyaterm-{}", uuid::Uuid::new_v4().simple())),
-    );
-    fs::create_dir_all(socket_root.path()).unwrap();
-    let socket_path = socket_root.join("s");
-    let _socket = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-    fs::rename(socket_path, local.join("plugins/socket")).unwrap();
+    // A FIFO rather than a Unix socket: binding a socket fails when its path
+    // is longer than SUN_LEN (104 bytes on macOS), which the temporary
+    // directory path alone nearly reaches there.
+    let fifo = std::ffi::CString::new(
+        local
+            .join("plugins/special")
+            .into_os_string()
+            .into_encoded_bytes(),
+    )
+    .unwrap();
+    // SAFETY: `fifo` is a NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
