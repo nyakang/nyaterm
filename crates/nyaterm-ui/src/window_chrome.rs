@@ -197,7 +197,7 @@ pub fn window_control_button(
         .when(!native_control || !cfg!(target_os = "windows"), |this| {
             this.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         })
-        .cursor_pointer()
+        .cursor_default()
         .hover(move |this| {
             if close {
                 this.bg(rgb(0xe81123)).text_color(rgb(0xffffff))
