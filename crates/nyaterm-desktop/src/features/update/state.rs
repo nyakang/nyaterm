@@ -1,4 +1,5 @@
 //! Process-wide authoritative state for native updates.
+use super::failure::UpdateFailure;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
@@ -23,7 +24,7 @@ pub(crate) enum UpdatePhase {
     Ready,
     Applying,
     UpToDate,
-    Failed { message: String, download: bool },
+    Failed(UpdateFailure),
 }
 
 pub(crate) enum UpdateEvent {
@@ -278,10 +279,7 @@ impl UpdateStore {
                     Err(error) => {
                         self.update_attention = false;
                         self.status = format!("update check failed: {error}");
-                        self.assign_phase(UpdatePhase::Failed {
-                            message: error,
-                            download: false,
-                        });
+                        self.assign_phase(UpdatePhase::Failed(UpdateFailure::check(error)));
                         self.info = None;
                     }
                 }
@@ -298,10 +296,9 @@ impl UpdateStore {
                         total: *total,
                     },
                     DownloadState::Ready(_) => UpdatePhase::Ready,
-                    DownloadState::Failed(error) => UpdatePhase::Failed {
-                        message: error.clone(),
-                        download: true,
-                    },
+                    DownloadState::Failed(error) => {
+                        UpdatePhase::Failed(UpdateFailure::from_update(error.clone()))
+                    }
                 });
                 self.status = match &state {
                     DownloadState::Idle => "update available".to_string(),
@@ -443,10 +440,7 @@ mod tests {
         )));
         assert!(matches!(
             state.phase(),
-            UpdatePhase::Failed {
-                download: false,
-                ..
-            }
+            UpdatePhase::Failed(failure) if failure.kind == crate::features::update::UpdateFailureKind::Check
         ));
         assert!(state.status().contains("offline"));
     }
@@ -539,8 +533,11 @@ mod tests {
             state.apply_event(UpdateEvent::Download {
                 generation,
                 state: DownloadState::Failed(
-                    "portable update archive contains an unexpected file: conpty/LICENSE.txt"
-                        .to_string(),
+                    nyaterm_updater::error::UpdateError::package(
+                        nyaterm_updater::error::UpdatePackageProblem::UnexpectedFile,
+                        "portable update archive contains an unexpected file: conpty/LICENSE.txt"
+                    )
+                    .with_detail("conpty/LICENSE.txt"),
                 ),
             })
         );

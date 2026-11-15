@@ -9,6 +9,8 @@ nyaterm-app
   └─ starts GPUI, registers assets, creates the root window
        └─ nyaterm-desktop
             ├─ AppShell / NyaTermApp / feature state / views
+            ├─ nyaterm-i18n              shared catalogs and locale normalization
+            ├─ nyaterm-completion-runtime completion worker and spec loader
             ├─ nyaterm-ui                shared GPUI controls and theme
             ├─ nyaterm-terminal-gpui     terminal layout, input, and painting
             ├─ nyaterm-terminal-runtime  frame worker, search, and ingress routing
@@ -31,7 +33,9 @@ The main responsibilities are:
 |------|----------------|
 | `nyaterm-app` | Executable entry point, logging, embedded assets, and root-window creation |
 | `nyaterm-desktop` | GPUI composition, state, views, platform adapters, and background coordination |
-| `nyaterm-ui` | Shared controls, theme tokens, and the `gpui-kit` integration boundary |
+| `nyaterm-i18n` | Shared catalogs, locale normalization and preload; no workspace dependencies |
+| `nyaterm-completion-runtime` | Completion worker, queue and spec loader; desktop injects the history repository and event sink |
+| `nyaterm-ui` | Shared controls, theme tokens, child-window shells/placement, panel headers and the `gpui-kit` integration boundary |
 | `nyaterm-terminal` | UI-independent terminal state, control sequences, encodings, and graphics protocols |
 | `nyaterm-terminal-runtime` | UI-independent frame worker, coalesced events, searches, ordered recording and transport event routing; desktop retains visibility, UI application and shutdown scheduling |
 | `nyaterm-terminal-gpui` | GPUI terminal input, layout, selection, highlighting, images, and painting |
@@ -131,8 +135,35 @@ watching; desktop injects platform permissions and owns editor/upload jobs.
 actor and verifies the durable file on the caller's blocking worker, using the
 existing backup format and reader.
 
+## Desktop extraction boundaries
+
+Pure process sorting, Docker matching and accelerator queries live in
+`nyaterm-remote-ops::query`; query state and caches stay in desktop. AI reasoning
+text parsing lives in `nyaterm-core::ai::reasoning_text`. Transfer paths and the
+50 ms progress gate live in `nyaterm-files`; task identity and event delivery stay
+in desktop. Tray decoding returns full-size RGBA from `nyaterm-preview::icons`.
+
+Child-window shells, placement and header elements live in `nyaterm-ui`.
+Desktop injects application identity, window decorations, Windows zoom handling
+and business close callbacks. Large feature panels remain in desktop.
+
+`nyaterm-i18n` builds the catalogs once. Desktop uses rust-i18n's public `backend`
+option with an empty bridge catalog, retaining language persistence and component
+label updates. Locale aliases, keys and serialized settings are unchanged.
+
+`nyaterm-completion-runtime` uses core queries and injected blocking repository
+operations. Snapshot rows and generation are read in one store request. The
+bounded worker queue preserves mutation ordering while coalescing searches;
+external generation changes refresh history. Store integration tests remain in
+desktop; worker, spec loader and queue tests live with the runtime.
+
+Updater download and preparation errors carry package problem types and optional
+details from their source. Desktop chooses localized text and retry actions from
+those types; installation helper protocols and package formats are unchanged.
+
 ## Dependency rules
 
+- `nyaterm-i18n` has no workspace dependencies. `nyaterm-completion-runtime` may depend only on core among workspace crates, including tests; core cannot depend back on it.
 - `nyaterm-terminal-runtime` may depend only on core, terminal, transport and recording among workspace crates, including tests. None of these lower-level crates may depend back on the runtime.
 - `nyaterm-core`, `nyaterm-terminal`, `nyaterm-transport`, and `nyaterm-remote-desktop` stay independent of GPUI.
 - `nyaterm-updater` may depend only on `nyaterm-core` within the project; ordinary, development, build, and platform dependencies must not introduce GPUI, desktop, store, or other business crates. `nyaterm-recording` also remains independent of GPUI, desktop, transport, and other business crates.

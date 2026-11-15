@@ -3,7 +3,7 @@
 mod app_menu_bar;
 mod button;
 pub mod chat;
-mod child_window;
+pub mod child_window;
 mod command;
 mod compact_menu;
 mod dialog;

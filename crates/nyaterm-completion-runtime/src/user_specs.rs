@@ -11,13 +11,13 @@ use std::time::{Duration, SystemTime};
 
 use nyaterm_core::completion::CompletionEngine;
 
-pub(super) const MAX_SPEC_FILE_BYTES: u64 = 1024 * 1024;
-pub(super) const MAX_SPEC_FILES: usize = 64;
+pub(crate) const MAX_SPEC_FILE_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_SPEC_FILES: usize = 64;
 /// Bounds memory when many near-limit files are present.
-pub(super) const MAX_SPEC_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_SPEC_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
-pub(super) struct SpecEntry {
+pub(crate) struct SpecEntry {
     path: PathBuf,
     name: OsString,
     len: u64,
@@ -26,10 +26,10 @@ pub(super) struct SpecEntry {
 
 /// Identity of the spec directory contents; equal fingerprints mean no reload.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(super) struct Fingerprint(Vec<(OsString, u64, Option<SystemTime>)>);
+pub(crate) struct Fingerprint(Vec<(OsString, u64, Option<SystemTime>)>);
 
 impl Fingerprint {
-    pub(super) fn of(entries: &[SpecEntry]) -> Self {
+    pub(crate) fn of(entries: &[SpecEntry]) -> Self {
         Self(
             entries
                 .iter()
@@ -40,7 +40,7 @@ impl Fingerprint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkipReason {
+pub(crate) enum SkipReason {
     TooLarge,
     TooManyFiles,
     TotalTooLarge,
@@ -49,7 +49,7 @@ pub(super) enum SkipReason {
 }
 
 impl SkipReason {
-    pub(super) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::TooLarge => "file exceeds the size limit",
             Self::TooManyFiles => "too many spec files",
@@ -61,7 +61,7 @@ impl SkipReason {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct LoadedSpecs {
+pub(crate) struct LoadedSpecs {
     /// `(file name, bytes)` in file-name order, so later names win merges.
     pub files: Vec<(String, Vec<u8>)>,
     pub skipped: Vec<(String, SkipReason)>,
@@ -76,7 +76,7 @@ fn is_json(path: &Path) -> bool {
 /// unreadable or oversized scans preserve the previous catalog. Symlinks are ignored, so a
 /// link cannot point the reader at an arbitrary path or device.
 #[cfg(test)]
-pub(super) fn list_entries(dir: &Path) -> Vec<SpecEntry> {
+pub(crate) fn list_entries(dir: &Path) -> Vec<SpecEntry> {
     try_list_entries(dir).unwrap_or_default()
 }
 
@@ -169,7 +169,7 @@ fn read_limited(path: &Path) -> Option<Vec<u8>> {
     Some(data)
 }
 
-pub(super) fn load(entries: &[SpecEntry]) -> LoadedSpecs {
+pub(crate) fn load(entries: &[SpecEntry]) -> LoadedSpecs {
     let mut loaded = LoadedSpecs::default();
     let mut total = 0u64;
     for (index, entry) in entries.iter().enumerate() {
@@ -208,13 +208,13 @@ pub(super) fn load(entries: &[SpecEntry]) -> LoadedSpecs {
 const RECHECK_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Owned by the spec loader; prepares a catalog for the query worker.
-pub(super) struct UserSpecs {
+pub(crate) struct UserSpecs {
     dir: Option<PathBuf>,
     fingerprint: Option<Fingerprint>,
 }
 
 impl UserSpecs {
-    pub(super) fn new(dir: Option<PathBuf>) -> Self {
+    pub(crate) fn new(dir: Option<PathBuf>) -> Self {
         Self {
             dir,
             fingerprint: None,
@@ -223,7 +223,7 @@ impl UserSpecs {
 
     /// Applies the directory when its fingerprint changed. Never panics into
     /// the worker: a failure leaves the previous catalog in place.
-    pub(super) fn refresh(&mut self, engine: &mut CompletionEngine) -> bool {
+    pub(crate) fn refresh(&mut self, engine: &mut CompletionEngine) -> bool {
         let Some(dir) = self.dir.as_deref() else {
             return false;
         };
@@ -275,12 +275,12 @@ impl UserSpecs {
 }
 
 #[derive(Clone)]
-pub(super) struct UserSpecLoader {
+pub(crate) struct UserSpecLoader {
     requests: std::sync::mpsc::SyncSender<()>,
     result: std::sync::Arc<std::sync::Mutex<Option<CompletionEngine>>>,
 }
 impl UserSpecLoader {
-    pub(super) fn spawn(dir: Option<PathBuf>) -> Self {
+    pub(crate) fn spawn(dir: Option<PathBuf>) -> Self {
         let mut specs = UserSpecs::new(dir.clone());
         let mut engine = None;
         Self::spawn_refresh(dir.is_some(), move || {
@@ -313,10 +313,10 @@ impl UserSpecLoader {
         }
         Self { requests, result }
     }
-    pub(super) fn request(&self) {
+    pub(crate) fn request(&self) {
         let _ = self.requests.try_send(());
     }
-    pub(super) fn take(&self) -> Option<CompletionEngine> {
+    pub(crate) fn take(&self) -> Option<CompletionEngine> {
         self.result.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 }

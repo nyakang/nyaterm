@@ -17,6 +17,7 @@ class PluginDependencyTests(unittest.TestCase):
             )
             crates = (
                 "nyaterm-terminal-gpui", "nyaterm-terminal-runtime",
+                "nyaterm-i18n", "nyaterm-completion-runtime",
                 "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
                 "nyaterm-core", "nyaterm-android", "nyaterm-transport", "nyaterm-terminal", "nyaterm-store", "nyaterm-sync",
                 "nyaterm-remote-desktop", "nyaterm-desktop", "nyaterm-plugin-api", "nyaterm-plugin-host",
@@ -31,6 +32,20 @@ class PluginDependencyTests(unittest.TestCase):
                 (directory / "Cargo.toml").write_text(document, encoding="utf-8")
             with patch.object(check_architecture, "ROOT", root):
                 return check_architecture.dependency_errors()
+
+    def test_catalog_and_completion_dependencies_include_aliased_dev_and_target_entries(self):
+        for source in ["nyaterm-i18n", "nyaterm-completion-runtime"]:
+            for target in ["nyaterm-core", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui", "nyaterm-i18n", "nyaterm-completion-runtime", "gpui_platform"]:
+                for section in ["dependencies", "dev-dependencies", "build-dependencies", "target.'cfg(windows)'.dev-dependencies"]:
+                    with self.subTest(source=source, target=target, section=section):
+                        errors = self.check_dependencies("", "", {source:
+                            f'[{section}]\nhidden = {{ package = "{target}", version = "1" }}\n'})
+                        allowed = source == "nyaterm-completion-runtime" and target == "nyaterm-core"
+                        expected = [] if allowed else [f"crate_boundary: {source} must not depend on {target.replace('_', '-')}" ]
+                        self.assertEqual(errors, expected)
+            self.assertEqual(self.check_dependencies("", "", {source:
+                '[dev-dependencies]\nhidden-transport.workspace = true\n'}),
+                [f"crate_boundary: {source} must not depend on nyaterm-transport"])
 
     def test_terminal_runtime_accepts_only_its_four_workspace_dependencies(self):
         allowed = {"nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording"}

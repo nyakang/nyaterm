@@ -104,7 +104,7 @@ impl Drop for Receiver {
 #[cfg(test)]
 mod tests {
     use super::{CAPACITY, QueueError, channel};
-    use crate::features::commands::completion_runtime::{CompletionQuery, Request};
+    use crate::runtime::{CompletionQuery, Request};
     use futures::channel::oneshot;
     use nyaterm_core::completion::types::{
         CompletionMode, CompletionScope, ShellCommandContext, ShellDialect,
@@ -119,7 +119,7 @@ mod tests {
     }
     fn search() -> (
         Request,
-        oneshot::Receiver<crate::features::commands::completion_runtime::CompletionSearchOutcome>,
+        oneshot::Receiver<crate::runtime::CompletionSearchOutcome>,
     ) {
         let (tx, rx) = oneshot::channel();
         (

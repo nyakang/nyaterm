@@ -22,6 +22,14 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
   coordination, service adapters, and GPUI Entity stores.
+* `crates/nyaterm-i18n`: shared translation catalogs, locale normalization and
+  one-time preload. No workspace dependencies, including tests. Desktop retains
+  language settings and component-label updates, using the public rust-i18n
+  backend bridge rather than compiling another catalog.
+* `crates/nyaterm-completion-runtime`: UI-independent completion worker, bounded
+  queue, history caches and user-spec loader. Only core is allowed as a workspace
+  dependency, including tests. Desktop injects the blocking history repository
+  and event sink and owns persistence, approvals, settings and UI lifecycle.
 * `crates/nyaterm-mcp-host`: UI-independent loopback MCP service, authentication,
   client identities, cancellation routing, and atomic discovery-file I/O. It may
   depend on core and mcp-protocol only among workspace crates. Desktop injects
@@ -47,7 +55,7 @@ must include explicit conversion logic and tests.
   Sync orchestration, caches, and credential persistence remain in desktop/store.
   Its default-off `test-support` feature exposes local fixtures only for tests.
 * `crates/nyaterm-updater`: UI-independent native update HTTP checks, signed
-  downloads, installation preparation, helper execution, and portable recovery.
+  downloads, typed download/package errors, installation preparation, helper execution, and portable recovery.
   Desktop owns update state, scheduling, close guards, and native progress UI;
   cancellation and helper progress execution are injected through callbacks.
   These adapter crates may depend on `nyaterm-core`, but not GPUI, desktop,
@@ -71,12 +79,13 @@ must include explicit conversion logic and tests.
   recording, or remote-operations crates.
 * `crates/nyaterm-files`: local and remote file services, SFTP and shell file
   backends, file revisions, path safety, listing/sort and navigation policies, and
-  file-transfer policies. Desktop owns listing caches and navigation state. Its
+  file-transfer policies, transfer path helpers and time-injected progress gating. Desktop owns listing caches and navigation state. Its
   `external_edit` module owns private workspaces and blocking file watching;
   desktop injects platform permissions and owns editor/upload orchestration.
 * `crates/nyaterm-remote-ops`: system metrics, process management, Docker, and
   GPU/NPU operations over transport execution APIs. Docker state is shared by
-  the desktop SSH connection lease, not owned by transport.
+  the desktop SSH connection lease, not owned by transport. Its `query` module
+  owns process/Docker/accelerator matching and ordering; desktop owns query caches.
 * `crates/nyaterm-recording`: recording, transcripts, rotation, and terminal
   history search over the core and terminal contracts. Its `pipeline` module
   owns the recording writer, bounded queues, and coalesced events; desktop owns
@@ -87,7 +96,9 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-ui`: shared GPUI theme tokens, the `gpui-kit`
   integration boundary, static icon catalogs/resolvers/rendering, and reusable
   NyaTerm presentation and interaction widgets. `markdown::lightweight` retains the lightweight Markdown renderer
-  separately from `NyaMarkdown`; `presentation` owns stateless menu rows.
+  separately from `NyaMarkdown`; `presentation` owns stateless menu rows and panel
+  headers. `child_window::shell` and `window_chrome` own reusable child-window
+  presentation and placement; desktop injects application and platform policies.
 * `crates/nyaterm-sync`: UI-independent sync protocol and policies. Its
   `auto_sync` schedule receives time from callers; desktop owns operations,
   task cancellation, safe-window checks, result mapping and history persistence.

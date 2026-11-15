@@ -6913,6 +6913,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-completion-runtime"
+version = "2.0.5"
+dependencies = [
+ "futures",
+ "libc",
+ "nyaterm-core",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nyaterm-core"
 version = "2.0.5"
 dependencies = [
@@ -6979,8 +6991,10 @@ dependencies = [
  "nyaterm-ai-client",
  "nyaterm-android",
  "nyaterm-cloud-storage",
+ "nyaterm-completion-runtime",
  "nyaterm-core",
  "nyaterm-files",
+ "nyaterm-i18n",
  "nyaterm-mcp-host",
  "nyaterm-mcp-protocol",
  "nyaterm-otp",
@@ -7051,6 +7065,15 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nyaterm-i18n"
+version = "2.0.5"
+dependencies = [
+ "regex",
+ "rust-i18n",
+ "serde_json",
 ]
 
 [[package]]

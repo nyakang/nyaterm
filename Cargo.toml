@@ -12,6 +12,8 @@ members = [
     "crates/nyaterm-android-helper",
     "crates/nyaterm-android",
     "crates/nyaterm-app",
+    "crates/nyaterm-i18n",
+    "crates/nyaterm-completion-runtime",
     "crates/nyaterm-ai-client",
     "crates/nyaterm-agent-client",
     "crates/nyaterm-cloud-storage",
@@ -58,6 +60,8 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nyaterm-completion-runtime = { path = "crates/nyaterm-completion-runtime" }
+nyaterm-i18n = { path = "crates/nyaterm-i18n" }
 nyaterm-android = { path = "crates/nyaterm-android" }
 nucleo-matcher = "0.3.1"
 automerge = "=0.12.0"

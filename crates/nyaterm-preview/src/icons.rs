@@ -5,6 +5,23 @@ use std::sync::Arc;
 
 use crate::content::RasterImage;
 
+/// Native tray APIs consume RGBA8, unlike GPUI's BGRA raster contract.
+pub struct TrayIconImage {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Decode a bundled tray icon without resizing or swapping color channels.
+pub fn decode_tray_icon(bytes: &[u8]) -> Result<TrayIconImage, image::ImageError> {
+    let image = image::load_from_memory(bytes)?.to_rgba8();
+    Ok(TrayIconImage {
+        width: image.width(),
+        height: image.height(),
+        pixels: image.into_raw(),
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconDecodeError {
     InvalidFormat,
@@ -75,6 +92,24 @@ mod tests {
     use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
 
     use super::{IconDecodeError, decode_icon, detect_icon_mime};
+
+    #[test]
+    fn tray_icons_preserve_native_size_rgba_channels_and_alpha() {
+        let bytes = encode(
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(256, 32, Rgba([11, 33, 77, 123]))),
+            ImageFormat::Png,
+        );
+        let icon = super::decode_tray_icon(&bytes).unwrap();
+        assert_eq!((icon.width, icon.height), (256, 32));
+        assert!(
+            icon.pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel == &[11, 33, 77, 123])
+        );
+        assert!(super::decode_tray_icon(b"invalid").is_err());
+    }
 
     fn encode(image: DynamicImage, format: ImageFormat) -> Vec<u8> {
         let mut bytes = Cursor::new(Vec::new());

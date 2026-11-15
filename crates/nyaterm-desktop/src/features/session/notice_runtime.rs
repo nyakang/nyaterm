@@ -97,12 +97,11 @@ mod tests {
             (X11Platform::Linux, "DISPLAY"),
         ] {
             let key = x11_platform_hint_key(platform);
-            let locales: serde_json::Value =
-                serde_json::from_str(include_str!("../../../locales/en.json")).unwrap();
-            let name = key.strip_prefix("sessionNotice.").unwrap();
+            use rust_i18n::Backend as _;
+            crate::preload_i18n().unwrap();
             assert!(
-                locales["sessionNotice"][name]
-                    .as_str()
+                nyaterm_i18n::SharedCatalogBackend
+                    .translate("en", key)
                     .unwrap()
                     .contains(expected)
             );

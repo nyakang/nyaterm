@@ -40,19 +40,17 @@ impl DesktopController {
                         env!("CARGO_MANIFEST_DIR"),
                         "/../nyaterm-app/resources/icons/32x32.png"
                     ));
-                    image::load_from_memory(icon_bytes).map(|image| {
-                        let image = image.to_rgba8();
-                        (image.width(), image.height(), image.into_raw())
-                    })
+                    nyaterm_preview::icons::decode_tray_icon(icon_bytes)
                 })
                 .await;
-            let Ok((width, height, pixels)) = image else {
+            let Ok(image) = image else {
                 return;
             };
             let initialized = this
                 .update(cx, |controller, cx| {
                     let snapshot = controller.tray_snapshot(cx);
-                    controller.tray = SystemTray::new(snapshot, pixels, width, height).ok();
+                    controller.tray =
+                        SystemTray::new(snapshot, image.pixels, image.width, image.height).ok();
                     controller.tray.is_some()
                 })
                 .unwrap_or(false);

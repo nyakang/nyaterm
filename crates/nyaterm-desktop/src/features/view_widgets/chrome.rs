@@ -1,13 +1,14 @@
 use gpui::{
-    AnyElement, App, ClickEvent, FontWeight, IntoElement, MouseButton, SharedString, Stateful,
-    TextOverflow, TitlebarOptions, Window, WindowControlArea, deferred, div, prelude::*, px, rgb,
-    rgba, svg,
+    AnyElement, App, ClickEvent, IntoElement, MouseButton, SharedString, Stateful, Window,
+    WindowControlArea, deferred, div, prelude::*, px, rgb, rgba,
+};
+pub(in crate::features) use nyaterm_ui::presentation::{
+    conversation_panel_header_with_actions, panel_header_with_actions,
 };
 
 use super::child_window::ChildWindowChrome;
 use crate::theme::ThemePalette;
 use crate::window_chrome::WindowChrome;
-use nyaterm_ui::window_chrome::{TitleDragEvent, title_drag_region};
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 
 pub(in crate::features) fn logo_mark(palette: ThemePalette) -> impl IntoElement {
@@ -33,17 +34,6 @@ pub(in crate::features) fn window_control_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     window_control_button_with_area(palette, id, icon_path, area, true, on_click)
-}
-
-fn child_window_control_button(
-    palette: ThemePalette,
-    id: &'static str,
-    icon_path: &'static str,
-    area: WindowControlArea,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    // Windows dispatches non-client caption events separately from GPUI clicks.
-    window_control_button_with_area(palette, id, icon_path, area, false, on_click)
 }
 
 fn window_control_button_with_area(
@@ -83,225 +73,6 @@ fn toggle_child_window_zoom(window: &mut Window, _cx: &mut App) {
     }
 
     window.zoom_window();
-}
-
-/// The 40px child-window header, omitted when Linux supplies a system title bar.
-///
-/// Which controls appear is read off the window itself rather than passed in, so
-/// a window cannot end up offering a button the platform will ignore -- or, worse,
-/// omitting one it needs: a resizable window with no restore button can still be
-/// maximised with `Win`+`Up` and then has no way back.
-pub(in crate::features) fn child_window_header(
-    palette: ThemePalette,
-    title: impl Into<SharedString>,
-    icon_path: Option<&'static str>,
-    chrome: ChildWindowChrome,
-    window: &mut Window,
-    cx: &mut App,
-    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let policy = WindowChrome::child(window, chrome == ChildWindowChrome::Sheet);
-    if !policy.show_child_header {
-        return div().size_0().into_any_element();
-    }
-    let title = title.into();
-    div()
-        .h(px(40.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .border_b_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.surface))
-        .child(
-            div()
-                .h_full()
-                .min_w_0()
-                .flex_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .when(policy.native_button_gutter, |this| {
-                    // Room for the traffic lights AppKit draws over the content.
-                    this.pl(px(70.))
-                })
-                .map(|this| {
-                    title_drag_region(
-                        this,
-                        "child-title-region",
-                        policy.drag,
-                        window,
-                        cx,
-                        |event, window, cx| match event {
-                            TitleDragEvent::Pressed => {}
-                            TitleDragEvent::StartMove => window.start_window_move(),
-                            TitleDragEvent::DoubleClick => toggle_child_window_zoom(window, cx),
-                        },
-                    )
-                })
-                .when_some(icon_path, |this, icon_path| {
-                    this.child(
-                        svg()
-                            .size(px(16.))
-                            .flex_none()
-                            .path(icon_path)
-                            .text_color(rgb(palette.primary)),
-                    )
-                })
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_sm()
-                        .font_weight(FontWeight(500.))
-                        .text_color(rgb(palette.text))
-                        .child(title),
-                ),
-        )
-        .child(
-            div()
-                .h_full()
-                .flex_none()
-                .flex()
-                .items_center()
-                .when(policy.minimize, |this| {
-                    this.child(child_window_control_button(
-                        palette,
-                        "child-window-min",
-                        "icons/window/minimize.svg",
-                        WindowControlArea::Min,
-                        |_, window, _| window.minimize_window(),
-                    ))
-                })
-                .when(policy.maximize, |this| {
-                    this.child(child_window_control_button(
-                        palette,
-                        "child-window-max",
-                        if policy.restore {
-                            "icons/window/restore.svg"
-                        } else {
-                            "icons/window/maximize.svg"
-                        },
-                        WindowControlArea::Max,
-                        |_, window, cx| toggle_child_window_zoom(window, cx),
-                    ))
-                })
-                .when(policy.close, |this| {
-                    this.child(child_window_control_button(
-                        palette,
-                        "child-window-close",
-                        "icons/window/close.svg",
-                        WindowControlArea::Close,
-                        on_close,
-                    ))
-                }),
-        )
-        .into_any_element()
-}
-
-pub(in crate::features) fn child_window_titlebar(
-    title: impl Into<SharedString>,
-) -> Option<TitlebarOptions> {
-    (cfg!(target_os = "macos") || cfg!(target_os = "linux")).then(|| TitlebarOptions {
-        title: Some(title.into()),
-        appears_transparent: true,
-        ..Default::default()
-    })
-}
-
-pub(in crate::features) fn panel_header_with_actions(
-    title: impl Into<SharedString>,
-    meta: impl Into<SharedString>,
-    palette: ThemePalette,
-    background: gpui::Rgba,
-    actions: Option<AnyElement>,
-) -> impl IntoElement {
-    let title = title.into();
-    let meta = meta.into();
-    let show_meta = !meta.is_empty();
-    let heading = div()
-        .min_w_0()
-        .flex_1()
-        .overflow_hidden()
-        .flex()
-        .items_baseline()
-        .gap_2()
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_size(px(11.))
-                .font_weight(FontWeight(700.))
-                .text_color(rgb(palette.text_muted))
-                .child(title.to_uppercase()),
-        )
-        .when(show_meta, |this| {
-            this.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.text_muted))
-                    .opacity(0.85)
-                    .child(meta),
-            )
-        });
-    panel_header_shell(heading.into_any_element(), palette, background, actions)
-}
-
-pub(in crate::features) fn conversation_panel_header_with_actions(
-    title: impl Into<SharedString>,
-    palette: ThemePalette,
-    background: gpui::Rgba,
-    actions: Option<AnyElement>,
-) -> impl IntoElement {
-    let heading = div()
-        .debug_selector(|| "ai-conversation-title".into())
-        .min_w_0()
-        .flex_1()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_overflow(TextOverflow::Truncate("...".into()))
-        .text_size(px(11.))
-        .text_color(rgb(palette.text_muted))
-        .child(title.into());
-    panel_header_shell(heading.into_any_element(), palette, background, actions)
-}
-
-fn panel_header_shell(
-    heading: AnyElement,
-    palette: ThemePalette,
-    background: gpui::Rgba,
-    actions: Option<AnyElement>,
-) -> gpui::Div {
-    // Keep controls in flow; narrow panels may need another row for actions.
-    div()
-        .min_h(px(36.))
-        .flex_none()
-        .flex()
-        .flex_wrap()
-        .items_center()
-        .justify_between()
-        .gap_x_3()
-        .px_3()
-        .py(px(3.))
-        .border_b_1()
-        .border_color(rgb(palette.border))
-        .bg(background)
-        .child(heading)
-        .when_some(actions, |this, actions| {
-            this.child(
-                div()
-                    .flex_none()
-                    .max_w_full()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_1()
-                    .child(actions),
-            )
-        })
 }
 
 /// Full-window boundary for modal and outside-click overlays.
@@ -460,6 +231,44 @@ pub(in crate::features) fn dialog_action_button(
         .on_click(on_click)
 }
 
+/// The 40px child-window header, omitted when Linux supplies a system title bar.
+///
+/// Which controls appear is read off the window itself rather than passed in, so
+/// a window cannot end up offering a button the platform will ignore -- or, worse,
+/// omitting one it needs: a resizable window with no restore button can still be
+/// maximised with `Win`+`Up` and then has no way back.
+pub(in crate::features) fn child_window_header(
+    palette: ThemePalette,
+    title: impl Into<SharedString>,
+    icon_path: Option<&'static str>,
+    chrome: ChildWindowChrome,
+    window: &mut Window,
+    cx: &mut App,
+    on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let policy = WindowChrome::child(window, chrome == ChildWindowChrome::Sheet);
+    nyaterm_ui::window_chrome::child_window_header(
+        palette,
+        title,
+        icon_path,
+        nyaterm_ui::window_chrome::ChildWindowPresentation {
+            show_child_header: policy.show_child_header,
+            minimize: policy.minimize,
+            maximize: policy.maximize,
+            close: policy.close,
+            restore: policy.restore,
+            native_button_gutter: policy.native_button_gutter,
+            drag: policy.drag,
+        },
+        window,
+        cx,
+        nyaterm_ui::window_chrome::ChildWindowActions {
+            on_close,
+            on_zoom: toggle_child_window_zoom,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -469,12 +278,12 @@ mod tests {
     use gpui::{
         Context, InteractiveElement as _, IntoElement, Modifiers, MouseButton, ParentElement as _,
         Render, StatefulInteractiveElement as _, Styled as _, TestAppContext, VisualTestContext,
-        Window, WindowControlArea, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
+        Window, canvas, deferred, div, point, prelude::FluentBuilder as _, px,
     };
 
     use super::{
-        bounded_dialog_width, child_window_control_button, full_window_input_layer,
-        horizontal_resize_handle_visual, vertical_resize_handle_visual,
+        bounded_dialog_width, full_window_input_layer, horizontal_resize_handle_visual,
+        vertical_resize_handle_visual,
     };
     use crate::features::shell::ResizeHandleHoverState;
     use crate::theme::theme_palette;
@@ -545,43 +354,6 @@ mod tests {
         });
         assert_eq!(overlay_clicks.load(Ordering::SeqCst), 1);
         assert_eq!(background_events.load(Ordering::SeqCst), 0);
-    }
-
-    struct ChildControlsFixture {
-        clicks: Arc<[AtomicUsize; 3]>,
-    }
-
-    impl Render for ChildControlsFixture {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let palette = theme_palette("github-dark");
-            div().w(px(138.)).h(px(40.)).flex().children(
-                [
-                    (
-                        "test-child-min",
-                        "icons/window/minimize.svg",
-                        WindowControlArea::Min,
-                    ),
-                    (
-                        "test-child-max",
-                        "icons/window/maximize.svg",
-                        WindowControlArea::Max,
-                    ),
-                    (
-                        "test-child-close",
-                        "icons/window/close.svg",
-                        WindowControlArea::Close,
-                    ),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (id, icon, area))| {
-                    let clicks = self.clicks.clone();
-                    child_window_control_button(palette, id, icon, area, move |_, _, _| {
-                        clicks[index].fetch_add(1, Ordering::SeqCst);
-                    })
-                }),
-            )
-        }
     }
 
     struct ResizeHandleFixture {
@@ -769,22 +541,6 @@ mod tests {
         cx.update(|window, cx| {
             _ = window.draw(cx);
         });
-    }
-
-    #[gpui::test]
-    fn child_window_controls_dispatch_clicks(cx: &mut TestAppContext) {
-        let clicks = Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
-        let fixture = ChildControlsFixture {
-            clicks: clicks.clone(),
-        };
-        let (_, cx) = cx.add_window_view(|_, _| fixture);
-        let cx: &mut VisualTestContext = cx;
-        draw(cx);
-
-        for (index, x) in [px(23.), px(69.), px(115.)].into_iter().enumerate() {
-            cx.simulate_click(point(x, px(20.)), Modifiers::default());
-            assert_eq!(clicks[index].load(Ordering::SeqCst), 1);
-        }
     }
 
     #[test]

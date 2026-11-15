@@ -35,7 +35,9 @@ class PathSelectionTests(unittest.TestCase):
             ("AGENTS.md", {"run_docs"}),
             ("LICENSE", set()),
             (".github/ISSUE_TEMPLATE/bug_report.yml", set()),
-            ("crates/nyaterm-desktop/locales/ja.json", {"run_rust"}),
+            ("crates/nyaterm-i18n/locales/ja.json", {"run_rust"}),
+            ("crates/nyaterm-completion-runtime/src/runtime.rs", {"run_rust"}),
+            ("crates/nyaterm-i18n/src/lib.rs", {"run_rust"}),
             ("crates/nyaterm-desktop/src/features/settings.rs", {"run_rust"}),
             ("crates/nyaterm-desktop/src/features/tmux.rs", {"run_rust"}),
             ("crates/nyaterm-files/src/sftp/mod.rs", {"run_rust"}),
@@ -219,7 +221,7 @@ class GitSelectionTests(unittest.TestCase):
 
     def test_run_tmux_label_applies_on_label_event_and_later_updates(self):
         base = self.commit({})
-        head = self.commit({"crates/nyaterm-desktop/locales/fr.json": b"{}"}, base)
+        head = self.commit({"crates/nyaterm-i18n/locales/fr.json": b"{}"}, base)
         for action in ("labeled", "synchronize"):
             with self.subTest(action=action):
                 event = self.event(base, action=action, labels=("run-tmux",))

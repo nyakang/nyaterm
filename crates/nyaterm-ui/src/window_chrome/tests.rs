@@ -1,5 +1,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use gpui::{
     AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, MouseDownEvent,
@@ -9,7 +13,8 @@ use gpui::{
 
 use crate::theme::theme_palette;
 use crate::window_chrome::{
-    TitleDragBehavior, TitleDragEvent, TitleDragState, title_drag_region, window_control_button,
+    TitleDragBehavior, TitleDragEvent, TitleDragState, child_window_control_button,
+    title_drag_region, window_control_button,
 };
 use crate::{NyaDropdownMenu, NyaInput, NyaInputState, NyaMenuItem};
 
@@ -412,4 +417,57 @@ fn title_input_keeps_focus_and_menu_opens_without_arming_drag(cx: &mut TestAppCo
     assert!(events.borrow().is_empty());
     assert_eq!(*menu_opens.borrow(), 1);
     cx.simulate_keystrokes("escape");
+}
+
+struct ChildControlsFixture {
+    clicks: Arc<[AtomicUsize; 3]>,
+}
+
+impl Render for ChildControlsFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let palette = theme_palette("github-dark");
+        div().w(px(138.)).h(px(40.)).flex().children(
+            [
+                (
+                    "test-child-min",
+                    "icons/window/minimize.svg",
+                    WindowControlArea::Min,
+                ),
+                (
+                    "test-child-max",
+                    "icons/window/maximize.svg",
+                    WindowControlArea::Max,
+                ),
+                (
+                    "test-child-close",
+                    "icons/window/close.svg",
+                    WindowControlArea::Close,
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, icon, area))| {
+                let clicks = self.clicks.clone();
+                child_window_control_button(palette, id, icon, area, move |_, _, _| {
+                    clicks[index].fetch_add(1, Ordering::SeqCst);
+                })
+            }),
+        )
+    }
+}
+
+#[gpui::test]
+fn child_window_controls_dispatch_clicks(cx: &mut TestAppContext) {
+    let clicks = Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
+    let fixture = ChildControlsFixture {
+        clicks: clicks.clone(),
+    };
+    let (_, cx) = cx.add_window_view(|_, _| fixture);
+    let cx: &mut VisualTestContext = cx;
+    draw(cx);
+
+    for (index, x) in [px(23.), px(69.), px(115.)].into_iter().enumerate() {
+        cx.simulate_click(point(x, px(20.)), Modifiers::default());
+        assert_eq!(clicks[index].load(Ordering::SeqCst), 1);
+    }
 }

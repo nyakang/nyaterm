@@ -1,3 +1,4 @@
+pub(super) use nyaterm_files::file_browser::transfer_paths::send_to_target_directory;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TransferContextMenuNode {
     Action(TransferContextMenuAction),
@@ -200,39 +201,6 @@ pub(super) fn send_to_candidate_is_eligible(
         && !candidate.is_disconnected
 }
 
-/// Resolve the destination directory for a "Send to" transfer.
-///
-/// Prefers the target session's own cached browser directory; otherwise falls
-/// back to that session's home (or `cwd`). The source session's path must never
-/// leak in here, so both fallbacks are explicit target-session inputs.
-pub(super) fn send_to_target_directory(
-    cached_current_path: Option<&str>,
-    target_home_or_cwd: Option<&str>,
-) -> String {
-    let normalize = |value: &str| -> Option<String> {
-        let trimmed = value.trim();
-        (!trimmed.is_empty() && trimmed != ".").then(|| trimmed.trim_end_matches('/').to_string())
-    };
-    cached_current_path
-        .and_then(normalize)
-        .or_else(|| target_home_or_cwd.and_then(normalize))
-        .unwrap_or_else(|| ".".to_string())
-}
-
-/// Join a target directory and a source entry name into a destination path.
-///
-/// The entry name comes from the source listing; the directory is the resolved
-/// target directory above. Root is preserved so `/` + `file` becomes `/file`.
-#[cfg(test)]
-pub(super) fn send_to_destination_path(target_dir: &str, entry_name: &str) -> String {
-    let dir = target_dir.trim_end_matches('/');
-    match dir {
-        "" if target_dir.starts_with('/') => format!("/{entry_name}"),
-        "" | "." => entry_name.to_string(),
-        dir => format!("{dir}/{entry_name}"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -264,8 +232,7 @@ mod tests {
     }
     use super::{
         SendToCandidate, TransferContextMenuAction as Action, TransferContextMenuNode as Node,
-        TransferEntryMenuCapabilities, send_to_candidate_is_eligible, send_to_destination_path,
-        send_to_target_directory, transfer_action_bar_enabled,
+        TransferEntryMenuCapabilities, send_to_candidate_is_eligible, transfer_action_bar_enabled,
         transfer_context_action_visible_for_backend,
         transfer_current_directory_context_menu_policy,
         transfer_directory_terminal_actions_visible, transfer_entry_context_menu_policy,
@@ -545,38 +512,38 @@ mod tests {
     }
 
     #[test]
-    fn send_to_target_directory_prefers_cache_then_home_never_source() {
-        // Cached browser path wins.
-        assert_eq!(
-            send_to_target_directory(Some("/srv/data/"), Some("/home/bob")),
-            "/srv/data"
-        );
-        // No usable cache falls back to the target session's home/cwd.
-        assert_eq!(
-            send_to_target_directory(None, Some("/home/bob")),
-            "/home/bob"
-        );
-        assert_eq!(
-            send_to_target_directory(Some("."), Some("/home/bob")),
-            "/home/bob"
-        );
-        // Nothing usable at all degrades to the safe relative default, and it is
-        // never seeded from a source path (the caller passes only target inputs).
-        assert_eq!(send_to_target_directory(Some("   "), None), ".");
-        assert_eq!(send_to_target_directory(None, None), ".");
-    }
-
-    #[test]
     fn send_to_destination_path_joins_directory_and_entry_name() {
         assert_eq!(
-            send_to_destination_path("/srv/data", "file.txt"),
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                "/srv/data",
+                "file.txt"
+            ),
             "/srv/data/file.txt"
         );
         assert_eq!(
-            send_to_destination_path("/srv/data/", "file.txt"),
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                "/srv/data/",
+                "file.txt"
+            ),
             "/srv/data/file.txt"
         );
-        assert_eq!(send_to_destination_path("/", "file.txt"), "/file.txt");
-        assert_eq!(send_to_destination_path(".", "file.txt"), "file.txt");
+        assert_eq!(
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                "/",
+                "file.txt"
+            ),
+            "/file.txt"
+        );
+        assert_eq!(
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                ".",
+                "file.txt"
+            ),
+            "file.txt"
+        );
     }
 }

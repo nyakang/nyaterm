@@ -116,38 +116,12 @@ fn tooltip_verbs_follow_targets_and_unknown_actions_keep_their_labels() {
     assert_eq!(presentation.hint(false, false, "en"), "Ctrl + click Run");
 }
 
-const LOCALES: [(&str, &str); 6] = [
-    (
-        "en",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/en.json")),
-    ),
-    (
-        "zh-CN",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/zh-CN.json")),
-    ),
-    (
-        "zh-TW",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/zh-TW.json")),
-    ),
-    (
-        "ja",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/ja.json")),
-    ),
-    (
-        "ko",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/ko.json")),
-    ),
-    (
-        "fr",
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/fr.json")),
-    ),
-];
-
 #[test]
 fn every_catalog_translates_tooltip_titles_and_both_modifier_hints() {
     crate::preload_i18n().unwrap();
-    for (locale, catalog) in LOCALES {
-        let catalog: serde_json::Value = serde_json::from_str(catalog).unwrap();
+    use rust_i18n::Backend as _;
+    for locale in nyaterm_i18n::available_locales() {
+        let locale = locale.as_ref();
         for value in [
             "assets.zip",
             "192.0.2.1",
@@ -164,7 +138,9 @@ fn every_catalog_translates_tooltip_titles_and_both_modifier_hints() {
                 .unwrap();
             assert_eq!(
                 presentation.title(&default, locale),
-                catalog["terminal"][title_key].as_str().unwrap()
+                nyaterm_i18n::SharedCatalogBackend
+                    .translate(locale, &format!("terminal.{title_key}"))
+                    .unwrap()
             );
             for is_macos in [false, true] {
                 let hint = presentation.hint(true, is_macos, locale);
@@ -174,7 +150,14 @@ fn every_catalog_translates_tooltip_titles_and_both_modifier_hints() {
                     .activation_key
                     .strip_prefix("terminal.")
                     .unwrap();
-                assert!(hint.contains(catalog["terminal"][verb_key].as_str().unwrap()));
+                assert!(
+                    hint.contains(
+                        nyaterm_i18n::SharedCatalogBackend
+                            .translate(locale, &format!("terminal.{verb_key}"))
+                            .unwrap()
+                            .as_ref()
+                    )
+                );
                 assert!(hint.contains(if is_macos { "Option" } else { "Alt" }));
                 assert!(hint.contains(if is_macos { "⌘" } else { "Ctrl" }));
             }
@@ -185,7 +168,7 @@ fn every_catalog_translates_tooltip_titles_and_both_modifier_hints() {
 struct TooltipHost {
     tip: ActionLinkTooltipState,
     theme: &'static str,
-    locale: &'static str,
+    locale: String,
     focus: FocusHandle,
     clicks: Vec<Modifiers>,
 }
@@ -207,7 +190,7 @@ impl Render for TooltipHost {
                 palette,
                 rgb(palette.surface_elevated),
                 window.viewport_size().width.into(),
-                self.locale,
+                &self.locale,
             )))
     }
 }
@@ -234,7 +217,7 @@ fn tooltip_wraps_within_window_edges_and_passes_modifier_clicks_through(cx: &mut
             match_key: "fixture|Archive|assets.zip|0|10".into(),
         },
         theme: "github-dark",
-        locale: "en",
+        locale: "en".into(),
         focus: cx.focus_handle(),
         clicks: Vec::new(),
     });
@@ -254,13 +237,13 @@ fn tooltip_wraps_within_window_edges_and_passes_modifier_clicks_through(cx: &mut
             size(px(width), px(500.)),
         );
         for theme in ["github-dark", "github-light"] {
-            for (locale, _) in LOCALES {
+            for locale in nyaterm_i18n::available_locales() {
                 for (x, y) in [(0., 0.), (width - 1., 0.), (0., 499.), (width - 1., 499.)] {
                     host.update(cx, |host, cx| {
                         host.tip.x = px(x);
                         host.tip.y = px(y);
                         host.theme = theme;
-                        host.locale = locale;
+                        host.locale = locale.to_string();
                         cx.notify();
                     });
                     draw(cx);
