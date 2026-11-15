@@ -1,3 +1,4 @@
+use crate::error::{UpdateError, UpdatePackageProblem};
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(any(windows, target_os = "macos", test))]
@@ -62,34 +63,40 @@ pub fn prepare_artifact(
     artifact: PathBuf,
     executable: PathBuf,
     portable: bool,
-) -> Result<PreparedUpdate, String> {
+) -> Result<PreparedUpdate, UpdateError> {
     if portable {
         #[cfg(windows)]
         return prepare_windows_portable(artifact, executable);
         #[cfg(not(windows))]
-        return Err("portable updates are only supported on Windows".into());
+        return Err(UpdateError::package(
+            UpdatePackageProblem::Rejected,
+            "portable updates are only supported on Windows",
+        ));
     }
     #[cfg(windows)]
     {
         let directory = executable
             .parent()
-            .ok_or("installed executable has no parent directory")?;
+            .ok_or_else(|| UpdateError::download("installed executable has no parent directory"))?;
         if !is_valid_installed_executable(&executable) {
-            return Err(format!(
+            return Err(UpdateError::download(format!(
                 "unexpected installed executable name: {}",
                 executable.display()
-            ));
+            )));
         }
 
         if !directory.join("Uninstall.exe").is_file() {
-            return Err("this installation must be updated manually".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Rejected,
+                "this installation must be updated manually",
+            ));
         }
         let work_dir = artifact
             .parent()
-            .ok_or("update directory unavailable")?
+            .ok_or_else(|| UpdateError::download("update directory unavailable"))?
             .to_path_buf();
         let helper = work_dir.join("NyaTerm-update-helper.exe");
-        std::fs::copy(&executable, &helper).map_err(|error| error.to_string())?;
+        std::fs::copy(&executable, &helper).map_err(UpdateError::download)?;
         Ok(PreparedUpdate::WindowsInstalled {
             helper,
             installer: artifact,
@@ -102,36 +109,51 @@ pub fn prepare_artifact(
         let target = executable
             .ancestors()
             .nth(3)
-            .ok_or("application bundle unavailable")?
+            .ok_or_else(|| UpdateError::download("application bundle unavailable"))?
             .to_path_buf();
         if target
             .components()
             .any(|part| part.as_os_str() == "Caskroom" || part.as_os_str() == "Cellar")
         {
-            return Err("use Homebrew to update this installation".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Rejected,
+                "use Homebrew to update this installation",
+            ));
         }
         if target.extension().and_then(|value| value.to_str()) != Some("app") {
-            return Err("not an application bundle".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Rejected,
+                "not an application bundle",
+            ));
         }
         if target.file_name().and_then(|name| name.to_str())
             != Some(nyaterm_core::app_identity::AppFlavor::current().macos_bundle_name())
         {
-            return Err("application bundle belongs to a different identity".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Rejected,
+                "application bundle belongs to a different identity",
+            ));
         }
         let stage = target
             .parent()
-            .ok_or("application parent unavailable")?
+            .ok_or_else(|| UpdateError::download("application parent unavailable"))?
             .join(format!(".nyaterm-update-{}", nyaterm_core::uuid()));
-        std::fs::create_dir(&stage).map_err(|error| error.to_string())?;
-        let file = std::fs::File::open(&artifact).map_err(|error| error.to_string())?;
+        std::fs::create_dir(&stage).map_err(UpdateError::download)?;
+        let file = std::fs::File::open(&artifact).map_err(UpdateError::download)?;
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
-        for entry in archive.entries().map_err(|error| error.to_string())? {
-            let mut entry = entry.map_err(|error| error.to_string())?;
+        for entry in archive.entries().map_err(UpdateError::download)? {
+            let mut entry = entry.map_err(UpdateError::download)?;
             if !entry.header().entry_type().is_file() && !entry.header().entry_type().is_dir() {
-                return Err("unsupported bundle archive entry".into());
+                return Err(UpdateError::package(
+                    UpdatePackageProblem::Rejected,
+                    "unsupported bundle archive entry",
+                ));
             }
-            if !entry.unpack_in(&stage).map_err(|error| error.to_string())? {
-                return Err("invalid bundle archive path".into());
+            if !entry.unpack_in(&stage).map_err(UpdateError::download)? {
+                return Err(UpdateError::package(
+                    UpdatePackageProblem::Rejected,
+                    "invalid bundle archive path",
+                ));
             }
         }
         let bundle = staged_macos_bundle(&stage, nyaterm_core::app_identity::AppFlavor::current())?;
@@ -144,18 +166,17 @@ pub fn prepare_artifact(
     {
         use std::os::unix::fs::PermissionsExt as _;
         let _ = executable;
-        let target = PathBuf::from(
-            std::env::var_os("APPIMAGE")
-                .ok_or("use the package manager to update this installation")?,
-        );
-        let target = target.canonicalize().map_err(|error| error.to_string())?;
+        let target = PathBuf::from(std::env::var_os("APPIMAGE").ok_or_else(|| {
+            UpdateError::download("use the package manager to update this installation")
+        })?);
+        let target = target.canonicalize().map_err(UpdateError::download)?;
         let stage = target
             .parent()
-            .ok_or("AppImage parent unavailable")?
+            .ok_or_else(|| UpdateError::download("AppImage parent unavailable"))?
             .join(format!(".nyaterm-update-{}.AppImage", nyaterm_core::uuid()));
-        std::fs::copy(&artifact, &stage).map_err(|error| error.to_string())?;
+        std::fs::copy(&artifact, &stage).map_err(UpdateError::download)?;
         std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o755))
-            .map_err(|error| error.to_string())?;
+            .map_err(UpdateError::download)?;
         Ok(PreparedUpdate::Installed {
             artifact: stage,
             target,
@@ -167,31 +188,34 @@ pub fn prepare_artifact(
 fn prepare_windows_portable(
     artifact: PathBuf,
     executable: PathBuf,
-) -> Result<PreparedUpdate, String> {
+) -> Result<PreparedUpdate, UpdateError> {
     let target_dir = executable
         .parent()
-        .ok_or("portable executable has no parent directory")?
+        .ok_or_else(|| UpdateError::download("portable executable has no parent directory"))?
         .to_path_buf();
     if !target_dir.join(&windows_portable_layout().marker).is_file() {
-        return Err("portable installation marker is missing".into());
+        return Err(UpdateError::package(
+            UpdatePackageProblem::Rejected,
+            "portable installation marker is missing",
+        ));
     }
     let work_dir = artifact
         .parent()
-        .ok_or("update directory unavailable")?
+        .ok_or_else(|| UpdateError::download("update directory unavailable"))?
         .to_path_buf();
     let staged_dir = work_dir.join("portable-payload");
-    std::fs::create_dir(&staged_dir).map_err(|error| error.to_string())?;
-    let architecture = UpdateTarget::from_rust_target("windows", std::env::consts::ARCH)
-        .map_err(|error| error.to_string())?
-        .architecture;
+    std::fs::create_dir(&staged_dir).map_err(UpdateError::download)?;
+    let architecture =
+        UpdateTarget::from_rust_target("windows", std::env::consts::ARCH)?.architecture;
     let result = extract_windows_portable(&artifact, &staged_dir, architecture);
     if let Err(error) = result {
         let _ = std::fs::remove_dir_all(&staged_dir);
         return Err(error);
     }
     let helper = work_dir.join("NyaTerm-update-helper.exe");
-    std::fs::copy(&executable, &helper)
-        .map_err(|error| format!("failed to prepare portable update helper: {error}"))?;
+    std::fs::copy(&executable, &helper).map_err(|error| {
+        UpdateError::download(format!("failed to prepare portable update helper: {error}"))
+    })?;
     Ok(PreparedUpdate::WindowsPortable {
         helper,
         staged_dir,
@@ -599,7 +623,7 @@ fn write_update_error(target_dir: &Path, message: &str) {
 fn staged_macos_bundle(
     stage: &Path,
     flavor: nyaterm_core::app_identity::AppFlavor,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, UpdateError> {
     let bundle = stage.join(flavor.macos_bundle_name());
     for binary in [
         "NyaTerm",
@@ -608,7 +632,9 @@ fn staged_macos_bundle(
         "nyaterm-mcp",
     ] {
         if !bundle.join("Contents/MacOS").join(binary).is_file() {
-            return Err("update bundle is missing an application helper".into());
+            return Err(UpdateError::download(
+                "update bundle is missing an application helper",
+            ));
         }
     }
     Ok(bundle)

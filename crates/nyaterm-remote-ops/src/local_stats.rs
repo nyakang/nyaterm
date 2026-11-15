@@ -8,9 +8,11 @@
 
 use crate::stats::{
     CpuCoreUsage, CpuInfo, CpuUsageSource, DiskInfo, LoadInfo, LoggedInUsersStatus, MemoryInfo,
-    NetworkInfo, NetworkSummaryInfo, RemoteStats, SystemInfo,
+    NetworkInfo, NetworkRateStatus, NetworkSampleTime, NetworkSummaryInfo, ParsedRemoteStats,
+    RemoteStats, SystemInfo,
+    network::{NetworkCounters, NetworkRateSampler},
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Instant;
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind, System};
 
@@ -18,7 +20,7 @@ pub struct LocalStatsCollector {
     system: System,
     networks: Networks,
     disks: Disks,
-    previous_network: HashMap<String, (u64, u64)>,
+    standalone_network: NetworkRateSampler,
     last_refresh: Option<Instant>,
 }
 
@@ -39,12 +41,24 @@ impl LocalStatsCollector {
             system,
             networks: Networks::new_with_refreshed_list(),
             disks: Disks::new_with_refreshed_list(),
-            previous_network: HashMap::new(),
+            standalone_network: NetworkRateSampler::default(),
             last_refresh: None,
         }
     }
 
     pub fn snapshot(&mut self, collect_users: bool) -> RemoteStats {
+        let mut parsed = self.collect(collect_users);
+        let time = parsed.stats.network_sample_time.clone();
+        self.standalone_network.sample(
+            parsed.networks,
+            &mut parsed.stats,
+            time.sampled_at.unwrap(),
+            time.interval,
+        );
+        parsed.stats
+    }
+
+    pub(crate) fn collect(&mut self, collect_users: bool) -> ParsedRemoteStats {
         let now = Instant::now();
         let elapsed = self
             .last_refresh
@@ -52,6 +66,7 @@ impl LocalStatsCollector {
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
         self.networks.refresh(true);
+        let sampled_at = Instant::now();
         self.disks.refresh(true);
 
         let cpus = self.system.cpus();
@@ -95,32 +110,25 @@ impl LocalStatsCollector {
             cached: available.saturating_sub(self.system.free_memory()),
         };
 
-        let seconds = elapsed.map(|elapsed| elapsed.as_secs_f64()).unwrap_or(0.0);
         let mut networks = Vec::new();
-        let mut current = HashMap::new();
+        let mut counters = BTreeMap::new();
         for (name, data) in self.networks.list() {
-            let (rx, tx) = (data.total_received(), data.total_transmitted());
-            let (rx_rate, tx_rate) = match self.previous_network.get(name) {
-                Some((prev_rx, prev_tx)) if seconds > 0.0 => (
-                    rx.saturating_sub(*prev_rx) as f64 / seconds,
-                    tx.saturating_sub(*prev_tx) as f64 / seconds,
-                ),
-                _ => (0.0, 0.0),
-            };
-            current.insert(name.clone(), (rx, tx));
+            counters.insert(
+                name.clone(),
+                NetworkCounters {
+                    rx_bytes: data.total_received(),
+                    tx_bytes: data.total_transmitted(),
+                },
+            );
             networks.push(NetworkInfo {
                 nic: name.clone(),
                 state: "up".to_string(),
-                rx_bytes_per_sec: rx_rate,
-                tx_bytes_per_sec: tx_rate,
+                rx_bytes_per_sec: 0.,
+                tx_bytes_per_sec: 0.,
+                rate_status: NetworkRateStatus::WarmingUp,
             });
         }
         networks.sort_by(|a, b| a.nic.cmp(&b.nic));
-        self.previous_network = current;
-        let network_summary = NetworkSummaryInfo {
-            rx_bytes_per_sec: networks.iter().map(|n| n.rx_bytes_per_sec).sum(),
-            tx_bytes_per_sec: networks.iter().map(|n| n.tx_bytes_per_sec).sum(),
-        };
 
         let mut seen = std::collections::HashSet::new();
         let disks = self
@@ -151,7 +159,11 @@ impl LocalStatsCollector {
         } else {
             (LoggedInUsersStatus::NotCollected, Vec::new(), Vec::new())
         };
-        RemoteStats {
+        let stats = RemoteStats {
+            network_sample_time: NetworkSampleTime {
+                sampled_at: Some(sampled_at),
+                ..Default::default()
+            },
             system: SystemInfo {
                 hostname: System::host_name().unwrap_or_default(),
                 uptime_sec: System::uptime(),
@@ -166,12 +178,13 @@ impl LocalStatsCollector {
             cpu,
             memory,
             networks,
-            network_summary,
+            network_summary: NetworkSummaryInfo::default(),
             disks,
             users: users.1,
             login_sessions: users.2,
             users_status: users.0,
-        }
+        };
+        ParsedRemoteStats::native(stats, counters)
     }
 }
 
@@ -198,6 +211,8 @@ mod tests {
         let mut collector = LocalStatsCollector::new();
         let first = collector.snapshot(false);
         assert_eq!(first.cpu.usage_source, CpuUsageSource::WarmingUp);
+        assert!(first.network_traffic().is_none());
+        assert!(first.network_sample_time.sampled_at.is_some());
         assert!(first.memory.used > 0 && first.memory.available > 0);
         assert!(first.cpu.cores > 0);
         assert!(!first.system.hostname.is_empty());

@@ -163,6 +163,7 @@ pub fn encode(control: &Control) -> io::Result<Vec<u8>> {
             text(&mut bytes, value)?;
         }
         Control::Rotate => bytes.push(11),
+        Control::NotificationPanel { expand } => bytes.push(if *expand { 5 } else { 7 }),
         _ => return Err(invalid("not a device input")),
     }
     Ok(bytes)
@@ -198,6 +199,17 @@ pub fn read_device_message(reader: &mut impl Read) -> io::Result<Option<Control>
 mod tests {
     use crate::protocol::{MAX_MEDIA_BYTES, VideoPacket, encode, read_video};
     use nyaterm_android::ipc::Control;
+    #[test]
+    fn notification_panel_controls_match_scrcpy_wire_tags() {
+        assert_eq!(
+            encode(&Control::NotificationPanel { expand: true }).unwrap(),
+            [5]
+        );
+        assert_eq!(
+            encode(&Control::NotificationPanel { expand: false }).unwrap(),
+            [7]
+        );
+    }
     #[test]
     fn key_and_clipboard_match_scrcpy_501_wire_layout() {
         assert_eq!(

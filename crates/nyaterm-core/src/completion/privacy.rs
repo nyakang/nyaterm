@@ -56,7 +56,12 @@ pub fn command_may_be_learned(command: &str, sensitive: bool) -> bool {
                 "-pw",
             ]
             .iter()
-            .any(|flag| token == flag || token.starts_with(&format!("{flag}=")))
+            .any(|flag| {
+                token == flag
+                    || token
+                        .strip_prefix(flag)
+                        .is_some_and(|rest| rest.starts_with('='))
+            })
     }) {
         return false;
     }
@@ -111,7 +116,9 @@ pub(crate) fn safe_word(value: &str, dialect: crate::completion::types::ShellDia
     bare_word(value)
         && match dialect {
             crate::completion::types::ShellDialect::Cmd => !value.contains('%'),
-            crate::completion::types::ShellDialect::PowerShell => !value.starts_with('@'),
+            crate::completion::types::ShellDialect::PowerShell => {
+                !value.starts_with('@') && !value.contains(',')
+            }
             _ => !value.contains('\\'),
         }
 }

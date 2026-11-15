@@ -180,6 +180,13 @@ impl RemoteOpsFeatureState {
         self.stats.stats_presentation()
     }
 
+    pub(in crate::features) fn toggle_stats_network_interfaces(
+        &mut self,
+        session_id: &str,
+    ) -> bool {
+        self.stats.toggle_network_interfaces(session_id)
+    }
+
     pub(in crate::features) fn select_stats_network_interface(
         &mut self,
         session_id: &str,

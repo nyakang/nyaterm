@@ -1201,13 +1201,12 @@ impl SecurityFeatureState {
         self.status = "credential editor closed".to_string();
     }
 
-    pub(in crate::features) fn cycle_otp_algorithm(&mut self) {
+    pub(in crate::features) fn set_otp_algorithm(&mut self, algorithm: &str) {
+        if self.editor_busy() || !matches!(algorithm, "SHA1" | "SHA256" | "SHA512") {
+            return;
+        }
         if let Some(editor) = self.editors.otp.as_mut() {
-            editor.algorithm = match editor.algorithm.as_str() {
-                "SHA1" => "SHA256".to_string(),
-                "SHA256" => "SHA512".to_string(),
-                _ => "SHA1".to_string(),
-            };
+            editor.algorithm = algorithm.to_owned();
         }
     }
 
@@ -1296,6 +1295,39 @@ mod tests {
                 screen_lock: focus(),
             },
         )
+    }
+
+    #[test]
+    fn otp_algorithm_select_preserves_draft_and_rejects_invalid_or_busy_changes() {
+        let mut security = security_state();
+        security.open_otp_editor(
+            crate::models::SecurityOtpEditorState {
+                id: Some("saved-otp".into()),
+                otp_type: "totp".into(),
+                issuer: "fixture".into(),
+                username: "user".into(),
+                secret: Default::default(),
+                algorithm: "SHA1".into(),
+                digits: "6".into(),
+                period: "30".into(),
+                counter: "0".into(),
+                has_secret: true,
+                error: None,
+            },
+            String::new(),
+        );
+        security.set_otp_algorithm("SHA512");
+        assert_eq!(security.otp_editor().unwrap().algorithm, "SHA512");
+        assert_eq!(
+            security.otp_editor().unwrap().id.as_deref(),
+            Some("saved-otp")
+        );
+        assert!(security.otp_editor().unwrap().has_secret);
+        security.set_otp_algorithm("unknown");
+        assert_eq!(security.otp_editor().unwrap().algorithm, "SHA512");
+        security.begin_editor_request().unwrap();
+        security.set_otp_algorithm("SHA256");
+        assert_eq!(security.otp_editor().unwrap().algorithm, "SHA512");
     }
 
     #[test]

@@ -220,9 +220,8 @@ pub fn resolve_input(
         } else {
             0
         };
-        if snapshot
-            .row(row)?
-            .cells
+        let cells = &snapshot.row(row)?.cells;
+        if cells
             .iter()
             .skip(start)
             .any(|cell| cell.width > 0 && !cell.text.chars().all(|ch| ch == ' '))
@@ -313,6 +312,88 @@ pub fn recover_marked_input(
 mod tests {
     use super::{recover_marked_input, resolve_input};
     use crate::TerminalScreen;
+
+    /// Left prompt, a right prompt pinned to the margin, then the cursor back
+    /// on the input column, the way zsh draws RPROMPT.
+    fn screen_with_right_prompt(input: &str) -> TerminalScreen {
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.advance(b"$ ");
+        screen.advance(b"\x1b[1;73H12:00 \xe2\x94\x80\xe2\x95\xaf\x1b[1;3H");
+        screen.advance(input.as_bytes());
+        screen
+    }
+
+    /// What zsh does for `clear`: the command's output erases the screen, then
+    /// the next prompt is drawn with a fresh input mark.
+    #[test]
+    fn input_is_resolved_again_after_the_screen_is_cleared() {
+        for erase in [
+            &b"\x1b[H\x1b[2J"[..],
+            &b"\x1b[H\x1b[2J\x1b[3J"[..],
+            &b"\x1b[3J\x1b[H\x1b[2J"[..],
+        ] {
+            let mut screen = TerminalScreen::new(80, 24);
+            screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07clear\r\n\x1b]133;C\x07");
+            screen.advance(erase);
+            screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07cd /");
+            let snapshot = screen.snapshot();
+            assert!(snapshot.shell_input_anchor.is_some(), "{erase:?}");
+            assert!(resolve_input(&snapshot, "cd /", 4).is_some(), "{erase:?}");
+        }
+    }
+
+    #[test]
+    fn an_unproven_right_prompt_cannot_confirm_the_input() {
+        let screen = screen_with_right_prompt("cd /");
+        let snapshot = screen.snapshot();
+        assert!(resolve_input(&snapshot, "cd /", 4).is_none());
+    }
+
+    #[test]
+    fn marked_recovery_does_not_discard_an_ambiguous_right_suffix() {
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.advance(b"$ \x1b]133;B\x07");
+        screen.advance(b"\x1b[1;73H12:00 \xe2\x94\x80\xe2\x95\xaf\x1b[1;3H");
+        screen.advance(b"cd /");
+        let snapshot = screen.snapshot();
+        assert!(recover_marked_input(&snapshot, 4096).is_none());
+    }
+
+    #[test]
+    fn text_adjacent_to_the_input_is_still_a_stale_suffix() {
+        let mut screen = TerminalScreen::default();
+        screen.advance(b"$ cd /varXYZ");
+        screen.advance(b"\x1b[1;7H");
+        let snapshot = screen.snapshot();
+        assert!(resolve_input(&snapshot, "cd /v", 5).is_none());
+    }
+
+    #[test]
+    fn a_gapped_suffix_away_from_the_margin_is_not_a_right_prompt() {
+        let mut screen = TerminalScreen::default();
+        screen.advance(b"$ cd /   old");
+        screen.advance(b"\x1b[1;7H");
+        let snapshot = screen.snapshot();
+        assert!(resolve_input(&snapshot, "cd /", 4).is_none());
+    }
+
+    #[test]
+    fn old_text_near_the_right_margin_is_not_confirmation() {
+        for marked in [false, true] {
+            for suffix in ["old", "界x"] {
+                let mut screen = TerminalScreen::new(40, 4);
+                screen.advance(b"$ ");
+                if marked {
+                    screen.advance(b"\x1b]133;B\x07");
+                }
+                screen.advance(format!("abc\x1b[1;37H{suffix}\x1b[1;6H").as_bytes());
+                assert!(resolve_input(&screen.snapshot(), "abc", 3).is_none());
+                assert!(recover_marked_input(&screen.snapshot(), 4096).is_none());
+                screen.advance(b"\x1b[K");
+                assert!(resolve_input(&screen.snapshot(), "abc", 3).is_some());
+            }
+        }
+    }
 
     #[test]
     fn unique_echo_keeps_tail_spaces_and_wide_cell_boundaries() {
@@ -428,5 +509,45 @@ mod tests {
         assert!(resolve_input(&screen.snapshot(), "aaa", 3).is_none());
         screen.advance(b"\r\nnext");
         assert!(resolve_input(&screen.snapshot(), "aaaa", 4).is_none());
+    }
+}
+
+#[cfg(test)]
+mod file_context_tests {
+    use crate::TerminalScreen;
+    const MARK: &str = "\x1b]7777;NyaTermFileContext;1;0123456789abcdef0123456789abcdef;123;1000;1;L2hvbWUvdXNlcg==;L3RtcA==\x07";
+    #[test]
+    fn context_follows_prompt_boundaries_even_across_single_byte_chunks() {
+        for split in [false, true] {
+            let mut screen = TerminalScreen::new(80, 24);
+            let bytes = format!("\x1b]133;A\x07{MARK}$ \x1b]133;B\x07cd /");
+            if split {
+                for byte in bytes.bytes() {
+                    screen.advance(&[byte]);
+                }
+            } else {
+                screen.advance(bytes.as_bytes());
+            }
+            let snapshot = screen.snapshot();
+            assert!(snapshot.shell_input_anchor.is_some());
+            assert_eq!(snapshot.file_context.as_ref().unwrap().cwd, "/tmp");
+            screen.advance(b"\x1b]133;C\x07");
+            assert!(screen.snapshot().file_context.is_none());
+            screen.advance(MARK.as_bytes());
+            screen.advance(b"\x1b]133;A\x07");
+            assert!(screen.snapshot().file_context.is_none());
+        }
+    }
+    #[test]
+    fn malformed_and_oversized_markers_invalidate_previous_context() {
+        let mut screen = TerminalScreen::new(80, 24);
+        screen.advance(MARK.as_bytes());
+        assert!(screen.snapshot().file_context.is_some());
+        screen.advance(b"\x1b]7777;NyaTermFileContext;99;bad\x07");
+        assert!(screen.snapshot().file_context.is_none());
+        screen.advance(MARK.as_bytes());
+        screen
+            .advance(format!("\x1b]7777;NyaTermFileContext;1;{}\x07", "x".repeat(5000)).as_bytes());
+        assert!(screen.snapshot().file_context.is_none());
     }
 }

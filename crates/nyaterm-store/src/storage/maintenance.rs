@@ -39,6 +39,7 @@ impl ConnectionStore {
     ) -> Result<LocalStorageMaintenanceResult, StorageError> {
         let started = Instant::now();
         let bytes_before = self.storage_file_len();
+        self.maintain_command_history()?;
         let migration = self.prepare_local_replica_migration()?;
         let compaction = if migration.pending_compaction || self.storage_compaction_beneficial() {
             match self.db.compact() {

@@ -369,7 +369,16 @@ impl TerminalFeatureState {
         &mut self,
     ) -> Option<impl FnOnce() + Send + 'static> {
         self.assist.shutdown_workers();
-        self.view.frame_pipeline.take_shutdown()
+        let paths = self.assist.commands.path_completion.begin_shutdown();
+        let frames = self.view.frame_pipeline.take_shutdown();
+        Some(move || {
+            if let Some(cleanup) = paths {
+                cleanup();
+            }
+            if let Some(cleanup) = frames {
+                cleanup();
+            }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -506,6 +515,10 @@ impl TerminalFeatureState {
     }
 
     pub(in crate::features) fn remove_search_session_state(&mut self, session_id: &str) {
+        self.assist
+            .commands
+            .path_completion
+            .cancel_session(session_id);
         self.search.wrap_around_by_session.remove(session_id);
     }
 
@@ -962,8 +975,8 @@ mod tests {
     fn session_switch_reset_clears_terminal_assist_transients() {
         let mut state = terminal_state();
         state.editing.input_mut().value = "git status".to_string();
-        state.assist.command_suggestion_suppression = CommandSuggestionSuppression::CommandRunning;
-        state.assist.pending_command_history_entry = Some("git status".to_string());
+        state.assist.commands.suppression = CommandSuggestionSuppression::CommandRunning;
+        state.assist.commands.pending_history_entry = Some("git status".to_string());
         state.assist.credential_autofill_buffer = "login:".to_string();
         state.assist.credential_autofill_recent = Some((
             nyaterm_core::CredentialPromptKind::Username,
@@ -971,19 +984,19 @@ mod tests {
         ));
         state.assist.credential_autofill_sending = true;
         state.assist.credential_prompt_input_until_ms = 99;
-        let search_generation = state.assist.command_suggestion_search_gen;
+        let search_generation = state.assist.commands.search_generation;
 
         state.reset_assist_for_session_switch();
 
         assert_eq!(state.editing.predicted_input().value, "git status");
-        assert!(!state.assist.command_suggestion_suppression.is_suppressed());
-        assert!(state.assist.pending_command_history_entry.is_none());
+        assert!(!state.assist.commands.suppression.is_suppressed());
+        assert!(state.assist.commands.pending_history_entry.is_none());
         assert!(state.assist.credential_autofill_buffer.is_empty());
         assert!(state.assist.credential_autofill_recent.is_none());
         assert!(!state.assist.credential_autofill_sending);
         assert_eq!(state.assist.credential_prompt_input_until_ms, 0);
         assert_eq!(
-            state.assist.command_suggestion_search_gen,
+            state.assist.commands.search_generation,
             search_generation.saturating_add(1)
         );
     }

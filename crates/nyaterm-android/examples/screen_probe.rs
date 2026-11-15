@@ -48,6 +48,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::env::consts::EXE_SUFFIX
             )),
         )?;
+        let yuv_requested = args.get(6).is_some_and(|value| value == "yuv");
+        let mut yuv_frames = 0u64;
+        if yuv_requested {
+            screen.send(Control::FrameFormat {
+                format: nyaterm_android::ipc::PixelFormat::I420,
+            })?;
+        }
         let started = Instant::now();
         let mut frames = 0u64;
         let mut first = None;
@@ -91,6 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     started.elapsed()
                 });
+                frame.validate()?;
+                if frame.format == nyaterm_android::ipc::PixelFormat::I420 {
+                    yuv_frames += 1;
+                }
                 frames += 1;
                 screen.release_frame(frame);
             }
@@ -114,6 +125,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cleanup.last_error.as_deref().unwrap_or("unknown failure")
             )
             .into());
+        }
+        if yuv_requested && yuv_frames == 0 {
+            return Err("no I420 frames received".into());
+        }
+        if yuv_requested {
+            println!("I420 frames={yuv_frames}");
         }
         if first.is_none() {
             return Err("no decoded frames".into());

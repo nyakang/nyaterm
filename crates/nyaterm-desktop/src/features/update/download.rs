@@ -9,7 +9,7 @@ pub(crate) enum DownloadState {
     Idle,
     Downloading { received: u64, total: Option<u64> },
     Ready(super::install::PreparedUpdate),
-    Failed(String),
+    Failed(nyaterm_updater::error::UpdateError),
 }
 
 fn defer_update_quit(
@@ -77,7 +77,9 @@ impl NyaTermApp {
         if let Err(error) = scheduled {
             let _ = event_tx.unbounded_send(super::UpdateEvent::Download {
                 generation,
-                state: DownloadState::Failed(format!("could not start update download: {error}")),
+                state: DownloadState::Failed(nyaterm_updater::error::UpdateError::download(
+                    format!("could not start update download: {error}"),
+                )),
             });
         }
         cx.notify();

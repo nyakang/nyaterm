@@ -2105,16 +2105,16 @@ fn android_numeric_fields_accept_integer_bounds_and_apply_their_steps(cx: &mut T
         });
     });
     for (field, seed, min, max, step) in [
-        (ConnectionEditorField::Port, 5555, 1, 65_535, 1),
-        (ConnectionEditorField::AndroidMaxSize, 1280, 128, 2560, 1),
-        (ConnectionEditorField::AndroidFps, 30, 1, 120, 1),
+        (ConnectionEditorField::Port, 5555., 1., 65_535., 1.),
         (
-            ConnectionEditorField::AndroidBitRate,
-            8_000_000,
-            100_000,
-            100_000_000,
-            100_000,
+            ConnectionEditorField::AndroidMaxSize,
+            1280.,
+            128.,
+            2560.,
+            1.,
         ),
+        (ConnectionEditorField::AndroidFps, 30., 1., 120., 1.),
+        (ConnectionEditorField::AndroidBitRate, 8., 0.1, 100., 0.1),
     ] {
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2142,7 +2142,14 @@ fn android_numeric_fields_accept_integer_bounds_and_apply_their_steps(cx: &mut T
             );
         }
         let expected = (seed + step).to_string();
-        for invalid in [(max + 1).to_string(), format!("{seed}.5")] {
+        for invalid in [
+            (max + 1.).to_string(),
+            if field == ConnectionEditorField::AndroidBitRate {
+                "not-a-number".into()
+            } else {
+                format!("{seed}.5")
+            },
+        ] {
             vcx.update(|_, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(invalid));
             });
@@ -2207,4 +2214,45 @@ fn android_save_focuses_invalid_screen_setting_from_basic_page(cx: &mut TestAppC
             .component_focus_handle(cx);
         assert!(focus.is_focused(window));
     });
+}
+
+#[gpui::test]
+fn android_select_escape_closes_popup_before_editor(cx: &mut TestAppContext) {
+    let test_dir = TestConfigDir::new("nyaterm-android-select-escape");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_connection_editor_kind(ConnectionKindTab::Adb, cx);
+            app.set_connection_editor_section(
+                crate::models::ConnectionEditorSection::AndroidScreen,
+                cx,
+            );
+        })
+    });
+    draw_editor(&app, vcx);
+    for id in [
+        "connection-editor-android.quality",
+        "connection-editor-android.orientation",
+    ] {
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.focus_select(id, window, cx));
+            })
+        });
+        draw_editor(&app, vcx);
+        vcx.simulate_keystrokes("enter");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|window, cx| {
+            app.read(cx)
+                .connection_editor_select_menu_is_focused(window, cx)
+        }));
+        vcx.simulate_keystrokes("escape");
+        draw_editor(&app, vcx);
+        assert!(vcx.update(|window, cx| {
+            let app = app.read(cx);
+            app.connection_state.active_editor_draft().is_some()
+                && app.connection_editor_select_is_focused(window, cx)
+                && !app.connection_editor_select_menu_is_focused(window, cx)
+        }));
+    }
 }

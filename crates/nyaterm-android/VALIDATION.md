@@ -1,5 +1,90 @@
 # Android / ADB validation
 
+## Windows planar screen rendering validation — 2026-11-15
+
+The screen path now uses IPC **4**, with validated BGRA/I420 layout and explicit
+matrix/range metadata. Mixed helper versions are rejected. H.264 decoding stays
+inside the isolated helper. I420 is requested only when the renderer supports it;
+upload/paint failures request a cached BGRA frame. Hardware decoding and audio
+are outside this change.
+
+Saved settings retain their existing names and bitrate units (bits/s); the UI
+edits Mbps. New wake/orientation fields have compatibility defaults. Quality
+presets and per-session drafts do not overwrite saved connection defaults.
+Applying a session draft restarts only that screen channel. Tests cover legacy
+settings, round trips, presets, plane bounds, odd sizes, color metadata, format
+switches, cached-frame refresh and session ownership.
+
+Published fork revisions:
+
+- Zed/GPUI `nyakang/zed`, branch `nyaterm`,
+  `2302414991d9495c2b0c6a1b5534689a58da06c4` (common API, Windows, Metal, wgpu
+  commits remain separate).
+- GPUI kit `nyakang/gpui-kit`, branch `nyaterm`,
+  `7119d8193f559bd5a692ee6c8ee01f6365e4e499` (aligned GPUI dependency).
+
+Windows DirectX native GPU readback passed (limited/full-range black and white,
+BT.709 red, opacity, clipping and texture removal). Both HLSL entrypoints compile.
+Four wgpu shader/layout tests passed, including storage and WebGL shader variants.
+Metal and Linux/wgpu native rendering still require platform acceptance. Full
+interactive application toolbar/dialog/resize acceptance and end-to-end display
+latency have not been measured by these renderer and headless tests.
+
+### Windows live-device probes
+
+An authorized device completed two six-second 30 FPS I420 visibility cycles and
+one six-second 120 FPS cycle. Each delivered 12 I420 frames at 576×1280; first
+frame times were 148–162 ms after screen startup. Hidden frame IPC stopped and
+cached frames resumed on visibility restoration. No device key input or clipboard
+changes were sent. Device identity and pixel contents are intentionally omitted.
+The mostly static display verifies negotiation and lifecycle, not sustained
+120 FPS presentation.
+
+### Automated checks
+
+- `cargo check --workspace`: passed with the published fork revisions.
+- `cargo clippy --workspace --all-targets`: passed after resolving warnings in
+  this change. Existing unrelated unused-mut (store backup) and unused-import
+  (desktop transfer editor) warnings remain.
+- `cargo fmt --all -- --check`: passed.
+- `python scripts/ci/check_architecture.py`: passed.
+- `cargo test --workspace --no-fail-fast -- --test-threads=2`: 6730 passed,
+  8 failed, 60 ignored. The run is **not green**: seven untouched
+  store migration tests compare canonical/verbatim or long/8.3 paths as strings.
+  A focused rerun of `complete_migration_preserves_credentials_unknown_fields_plugins_and_recordings`
+  reproduces the verbatim-prefix mismatch. The cross-process migration-lock test
+  blocked in its child database open; that identified test child was terminated
+  after several minutes so the remaining workspace tests could continue. This
+  produces an eighth store failure. No storage production code was changed.
+- Android desktop regression filter: 37 passed, including draft cancellation,
+  input validation, focus restoration and session settings ownership.
+- Android client/helper tests: 32 client + 9 helper + 4 lifecycle tests passed.
+- Native DirectX readback: 1 passed; wgpu shader/layout validation: 4 passed.
+
+### Synthetic helper comparison
+
+Windows x64 MSVC release, FFmpeg 8.0.1 helper, FFmpeg 7.0.2 synthetic H.264
+producer. Each condition ran for 10 seconds, three times, alternating order.
+There are 48 samples in
+[`android_screen_yuv_results.json`](../../scripts/bench/android_screen_yuv_results.json).
+The table reports medians across the three runs, BGRA baseline → I420 candidate.
+
+| Size / FPS | Helper p95 (ms) | CPU (% of one core) | Peak RSS (MiB) | Delivered FPS |
+| --- | --- | --- | --- | --- |
+| 1280×720 / 30 | 4.67 → 2.49 | 10.31 → 6.72 | 20.63 → 14.60 | 30.00 → 30.00 |
+| 1280×720 / 60 | 4.78 → 2.47 | 13.75 → 9.53 | 20.55 → 14.61 | 60.00 → 60.00 |
+| 1280×720 / 120 | 7.03 → 3.35 | 30.16 → 21.25 | 21.85 → 14.64 | 119.50 → 119.99 |
+| 1920×1080 / 30 | 9.11 → 4.40 | 16.25 → 8.44 | 34.55 → 21.51 | 30.00 → 30.00 |
+| 1920×1080 / 60 | 9.02 → 4.31 | 37.03 → 30.15 | 34.54 → 21.52 | 60.00 → 60.00 |
+| 1920×1080 / 120 | 15.42 → 6.00 | 94.69 → 59.22 | 37.57 → 21.68 | 119.49 → 119.90 |
+
+Pixel payload per equal-size even-dimension frame falls by 62.5%. All hidden
+three-screen samples emitted zero frames. Decode still runs while hidden; this is
+not a promise of zero background CPU. CPU samples are noisy. These measurements
+exclude ADB capture, GPU upload, display and user-input latency. The candidate
+binary precedes the final unsupported-color-space fallback adjustment, which does
+not affect the normal I420 stream measured here.
+
 ## Windows IPC 3 validation — 2026-11-11
 
 The application and helper use IPC **3**, including capture dimensions and

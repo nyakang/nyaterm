@@ -53,7 +53,7 @@ impl Render for AndroidSurface {
         let has_frame = self
             .app
             .update(cx, |app, _| {
-                if let Some(screen) = app.android.screens.get(&self.id) {
+                if let Some(screen) = app.android.screens.get_mut(&self.id) {
                     if self.bound_attempt != Some(screen.attempt)
                         && let Some(handle) = &screen.handle
                     {
@@ -61,6 +61,21 @@ impl Render for AndroidSurface {
                             wake.signal(ANY_INTEREST);
                         }));
                         self.bound_attempt = Some(screen.attempt);
+                    }
+                    if screen.requested_format.is_none()
+                        && let Some(handle) = &screen.handle
+                    {
+                        let format = if window.supports_video_textures() {
+                            nyaterm_android::ipc::PixelFormat::I420
+                        } else {
+                            nyaterm_android::ipc::PixelFormat::Bgra
+                        };
+                        if handle
+                            .send(nyaterm_android::ipc::Control::FrameFormat { format })
+                            .is_ok()
+                        {
+                            screen.requested_format = Some(format);
+                        }
                     }
                     screen.visible && screen.frame.is_some()
                 } else {

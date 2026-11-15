@@ -1,3 +1,4 @@
+use crate::error::{UpdateError, UpdatePackageProblem};
 use std::collections::BTreeSet;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;
@@ -18,7 +19,7 @@ pub(super) fn extract_windows_portable(
     archive_path: &Path,
     destination: &Path,
     architecture: UpdateArchitecture,
-) -> Result<(), String> {
+) -> Result<(), UpdateError> {
     extract_with_limits(
         archive_path,
         destination,
@@ -34,13 +35,16 @@ fn extract_with_limits(
     architecture: UpdateArchitecture,
     max_entries: usize,
     max_bytes: u64,
-) -> Result<(), String> {
+) -> Result<(), UpdateError> {
     let layout = windows_portable_layout();
     let files = layout.files(architecture);
-    let file = std::fs::File::open(archive_path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let file = std::fs::File::open(archive_path).map_err(UpdateError::download)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(UpdateError::download)?;
     if archive.len() > max_entries {
-        return Err("portable update archive contains too many entries".into());
+        return Err(UpdateError::package(
+            UpdatePackageProblem::Invalid,
+            "portable update archive contains too many entries",
+        ));
     }
     validate_directory_entry_count(
         archive_path,
@@ -50,28 +54,41 @@ fn extract_with_limits(
     let mut found = BTreeSet::new();
     let mut total = 0_u64;
     for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let entry = archive.by_index(index).map_err(UpdateError::download)?;
         let name = entry.name().trim_end_matches('/').to_owned();
         // Validate the raw ZIP name before any host-specific path normalization.
         if name.split('/').any(|part| {
             part.is_empty() || part == "." || part == ".." || part.contains(['\\', ':'])
         }) || entry.enclosed_name().is_none()
         {
-            return Err("portable update archive contains an unsafe path".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::UnsafePath,
+                "portable update archive contains an unsafe path",
+            ));
         }
         if entry.is_symlink() {
-            return Err("portable update archive contains a symbolic link".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::UnsafePath,
+                "portable update archive contains a symbolic link",
+            ));
         }
         let relative = if name == layout.root && entry.is_dir() {
             ""
         } else {
             name.strip_prefix(&format!("{}/", layout.root))
-                .ok_or("portable update archive has an unexpected root directory")?
+                .ok_or_else(|| {
+                    UpdateError::package(
+                        UpdatePackageProblem::UnexpectedDirectory,
+                        "portable update archive has an unexpected root directory",
+                    )
+                })?
         };
         if !found.insert(relative.to_ascii_lowercase()) {
-            return Err(format!(
-                "portable update archive contains a duplicate entry: {name}"
-            ));
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Duplicate,
+                format!("portable update archive contains a duplicate entry: {name}"),
+            )
+            .with_detail(name));
         }
         let is_data = relative == layout.data_directory()
             || relative.starts_with(&format!("{}/", layout.data_directory()));
@@ -82,84 +99,133 @@ fn extract_with_limits(
                     .iter()
                     .any(|file| file.starts_with(&format!("{relative}/")))
             {
-                return Err(format!(
-                    "portable update archive contains an unexpected directory: {name}"
-                ));
+                return Err(UpdateError::package(
+                    UpdatePackageProblem::UnexpectedDirectory,
+                    format!("portable update archive contains an unexpected directory: {name}"),
+                )
+                .with_detail(name));
             }
             continue;
         }
         if !is_data && !files.contains(&relative) {
-            return Err(format!(
-                "portable update archive contains an unexpected file: {name}"
-            ));
+            return Err(UpdateError::package(
+                UpdatePackageProblem::UnexpectedFile,
+                format!("portable update archive contains an unexpected file: {name}"),
+            )
+            .with_detail(name));
         }
         let size = entry.size();
         total = total.saturating_add(size);
         if total > max_bytes {
-            return Err("portable update archive is too large".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Invalid,
+                "portable update archive is too large",
+            ));
         }
         if is_data {
             continue;
         }
         let output = destination.join(relative);
-        std::fs::create_dir_all(output.parent().ok_or("missing payload parent")?)
-            .map_err(|error| format!("failed to stage {relative}: {error}"))?;
-        let mut file = std::fs::File::create_new(&output)
-            .map_err(|error| format!("failed to stage {relative}: {error}"))?;
-        let copied = std::io::copy(&mut entry.take(size.saturating_add(1)), &mut file)
-            .map_err(|error| format!("failed to extract {relative}: {error}"))?;
+        std::fs::create_dir_all(output.parent().ok_or_else(|| {
+            UpdateError::package(UpdatePackageProblem::Invalid, "missing payload parent")
+        })?)
+        .map_err(|error| {
+            UpdateError::package(
+                UpdatePackageProblem::Invalid,
+                format!("failed to stage {relative}: {error}"),
+            )
+            .with_detail(format!("{relative}: {error}"))
+        })?;
+        let mut file = std::fs::File::create_new(&output).map_err(|error| {
+            UpdateError::package(
+                UpdatePackageProblem::Invalid,
+                format!("failed to stage {relative}: {error}"),
+            )
+            .with_detail(format!("{relative}: {error}"))
+        })?;
+        let copied =
+            std::io::copy(&mut entry.take(size.saturating_add(1)), &mut file).map_err(|error| {
+                UpdateError::package(
+                    UpdatePackageProblem::Invalid,
+                    format!("failed to extract {relative}: {error}"),
+                )
+                .with_detail(format!("{relative}: {error}"))
+            })?;
         if copied != size {
-            return Err(format!(
-                "portable update archive entry has an invalid size: {}",
-                output.display()
-            ));
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Invalid,
+                format!(
+                    "portable update archive entry has an invalid size: {}",
+                    output.display()
+                ),
+            )
+            .with_detail(output.display().to_string()));
         }
-        file.sync_all()
-            .map_err(|error| format!("failed to stage {}: {error}", output.display()))?;
+        file.sync_all().map_err(|error| {
+            UpdateError::package(
+                UpdatePackageProblem::Invalid,
+                format!("failed to stage {}: {error}", output.display()),
+            )
+            .with_detail(format!("{}: {error}", output.display()))
+        })?;
     }
     for name in files {
         if !found.contains(&name.to_ascii_lowercase()) || !destination.join(name).is_file() {
-            return Err(format!("portable update archive is missing {name}"));
+            return Err(UpdateError::package(
+                UpdatePackageProblem::MissingFile,
+                format!("portable update archive is missing {name}"),
+            )
+            .with_detail(name));
         }
     }
     Ok(())
 }
 
-fn validate_directory_entry_count(path: &Path, offset: u64, expected: usize) -> Result<(), String> {
+fn validate_directory_entry_count(
+    path: &Path,
+    offset: u64,
+    expected: usize,
+) -> Result<(), UpdateError> {
     // ZipArchive indexes by raw filename and silently merges identical names.
     // Count central records as well, so hidden duplicates cannot bypass validation.
     // The central record's fixed header and length fields are the same in ZIP64.
-    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let file = std::fs::File::open(path).map_err(UpdateError::download)?;
     let mut reader = std::io::BufReader::new(file);
     reader
         .seek(SeekFrom::Start(offset))
-        .map_err(|error| error.to_string())?;
+        .map_err(UpdateError::download)?;
     for index in 0..=expected {
         let mut signature = [0_u8; 4];
         reader
             .read_exact(&mut signature)
-            .map_err(|error| error.to_string())?;
+            .map_err(UpdateError::download)?;
         if signature != *b"PK\x01\x02" {
             return if index == expected {
                 Ok(())
             } else {
-                Err("portable update archive has an inconsistent directory".into())
+                Err(UpdateError::package(
+                    UpdatePackageProblem::Invalid,
+                    "portable update archive has an inconsistent directory",
+                ))
             };
         }
         if index == expected {
-            return Err("portable update archive contains a duplicate entry".into());
+            return Err(UpdateError::package(
+                UpdatePackageProblem::Duplicate,
+                "portable update archive contains a duplicate entry",
+            ));
         }
         let mut header = [0_u8; 42];
         reader
             .read_exact(&mut header)
-            .map_err(|error| error.to_string())?;
+            .map_err(UpdateError::download)?;
         let variable_size: i64 = [24, 26, 28]
             .into_iter()
             .map(|start| i64::from(u16::from_le_bytes([header[start], header[start + 1]])))
             .sum();
         reader
             .seek(SeekFrom::Current(variable_size))
-            .map_err(|error| error.to_string())?;
+            .map_err(UpdateError::download)?;
     }
     unreachable!("central directory count must terminate")
 }
@@ -362,6 +428,42 @@ mod tests {
     }
 
     #[test]
+    fn validation_errors_carry_package_reason_and_detail_without_parsing_diagnostics() {
+        use crate::error::{UpdateError, UpdatePackageProblem};
+        for (name, problem, has_detail) in [
+            (
+                "conpty/unknown.dll",
+                UpdatePackageProblem::UnexpectedFile,
+                true,
+            ),
+            ("NYATERM.EXE", UpdatePackageProblem::Duplicate, true),
+            ("../outside", UpdatePackageProblem::UnsafePath, false),
+        ] {
+            let root = TestTempDir::new("nyaterm-portable-typed-error");
+            let mut entries = entries(UpdateArchitecture::X86_64);
+            let full_name = format!("{}/{name}", windows_portable_layout().root);
+            entries.push((full_name.clone(), b"bad".to_vec()));
+            write_zip(&root.join("archive.zip"), &entries, None);
+            let error = extract_windows_portable(
+                &root.join("archive.zip"),
+                &root.join("staged"),
+                UpdateArchitecture::X86_64,
+            )
+            .unwrap_err();
+            let UpdateError::Package {
+                problem: actual,
+                detail,
+                ..
+            } = error
+            else {
+                panic!("expected package error")
+            };
+            assert_eq!(actual, problem);
+            assert_eq!(detail, has_detail.then_some(full_name));
+        }
+    }
+
+    #[test]
     fn portable_archives_extract_both_architectures_without_user_data() {
         for architecture in ARCHITECTURES {
             let root = TestTempDir::new("nyaterm-portable-extract");
@@ -442,6 +544,7 @@ mod tests {
                         architecture
                     )
                     .unwrap_err()
+                    .to_string()
                     .contains("symbolic link")
                 );
             }
@@ -478,6 +581,7 @@ mod tests {
                 1024
             )
             .unwrap_err()
+            .to_string()
             .contains("too many entries")
         );
         assert!(
@@ -489,6 +593,7 @@ mod tests {
                 1
             )
             .unwrap_err()
+            .to_string()
             .contains("too large")
         );
     }
@@ -525,6 +630,7 @@ mod tests {
         assert!(
             extract_windows_portable(&path, &root.join("staged"), UpdateArchitecture::X86_64)
                 .unwrap_err()
+                .to_string()
                 .contains("duplicate entry")
         );
     }

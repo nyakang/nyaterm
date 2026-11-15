@@ -61,8 +61,8 @@ crates/nyaterm-desktop/src/
 
 应用语言包位于：
 
-- `crates/nyaterm-desktop/src/i18n/locales/zh-CN.json`
-- `crates/nyaterm-desktop/src/i18n/locales/en.json`
+- `crates/nyaterm-i18n/locales/zh-CN.json`
+- `crates/nyaterm-i18n/locales/en.json`
 
 新增或修改用户可见文本时同步更新两种语言，并复用现有 translation key 命名方式。
 

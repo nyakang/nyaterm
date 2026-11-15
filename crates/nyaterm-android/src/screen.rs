@@ -348,7 +348,7 @@ impl ScreenHandle {
             .map_err(|_| AdbError::Protocol("forward port"))?;
         let mut command = b"echo $$; CLASSPATH=".to_vec();
         command.extend_from_slice(&quote(resources.cleanup.remote_path.as_bytes())?);
-        command.extend_from_slice(format!(" exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={} tunnel_forward=true audio=false control=true video_codec=h264 max_size={} max_fps={} video_bit_rate={} clipboard_autosync=false cleanup=false power_on=false log_level=error", resources.cleanup.scid, settings.max_size, settings.max_fps, settings.bit_rate).as_bytes());
+        command.extend_from_slice(format!(" exec app_process / com.genymobile.scrcpy.Server {SCRCPY_VERSION} scid={} tunnel_forward=true audio=false control=true video_codec=h264 max_size={} max_fps={} video_bit_rate={} clipboard_autosync=false cleanup=false power_on={} capture_orientation={} log_level=error", resources.cleanup.scid, settings.max_size, settings.max_fps, settings.bit_rate, settings.power_on, settings.capture_orientation.server_value()).as_bytes());
         control.check()?;
         let mut server = open_shell_with_cancel(&binding, &command, false, || control.check())?;
         server.set_read_timeout(Some(Duration::from_millis(100)))?;
@@ -680,6 +680,7 @@ impl ScreenHandle {
         if matches!(
             control,
             Control::Presentation { .. }
+                | Control::FrameFormat { .. }
                 | Control::RefreshPresentation
                 | Control::FrameAck { .. }
                 | Control::ReleaseInputs
@@ -688,6 +689,7 @@ impl ScreenHandle {
                 !matches!(
                     (&control, queued),
                     (Control::Presentation { .. }, Control::Presentation { .. })
+                        | (Control::FrameFormat { .. }, Control::FrameFormat { .. })
                         | (Control::RefreshPresentation, Control::RefreshPresentation)
                         | (Control::ReleaseInputs, Control::ReleaseInputs)
                         | (Control::FrameAck { .. }, Control::FrameAck { .. })
@@ -701,6 +703,7 @@ impl ScreenHandle {
                             | Control::FrameAck { .. }
                             | Control::Ping { .. }
                             | Control::Presentation { .. }
+                            | Control::FrameFormat { .. }
                             | Control::RefreshPresentation
                     )
                 });
@@ -725,6 +728,7 @@ impl ScreenHandle {
                     Control::Connect { .. }
                         | Control::FrameAck { .. }
                         | Control::Ping { .. }
+                        | Control::FrameFormat { .. }
                         | Control::RefreshPresentation
                         | Control::Presentation { .. }
                 )
@@ -850,7 +854,10 @@ mod tests {
         use crate::ipc::PROTOCOL_VERSION;
         use crate::screen::validate_helper_hello;
         assert!(validate_helper_hello(PROTOCOL_VERSION, env!("CARGO_PKG_VERSION")).is_ok());
-        for (protocol, version) in [(2, env!("CARGO_PKG_VERSION")), (PROTOCOL_VERSION, "0.0.0")] {
+        for (protocol, version) in [
+            (PROTOCOL_VERSION - 1, env!("CARGO_PKG_VERSION")),
+            (PROTOCOL_VERSION, "0.0.0"),
+        ] {
             assert!(matches!(
                 validate_helper_hello(protocol, version),
                 Err(AdbError::HelperVersionMismatch)
@@ -930,6 +937,8 @@ mod tests {
                 width: 1,
                 height: 1,
                 stride: 4,
+                format: Default::default(),
+                color: Default::default(),
                 pixels: vec![0; 4],
             });
             let _ = handle.send(Control::Rotate);

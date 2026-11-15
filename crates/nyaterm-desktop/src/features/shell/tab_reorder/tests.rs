@@ -78,16 +78,96 @@ fn cancel_or_leave_restores_slots_and_reentry_can_preview_again() {
 }
 
 #[test]
-fn membership_change_invalidates_the_preview_and_commit_rebases_without_a_jump() {
+fn paused_drop_keeps_the_settled_neighbor_in_place_despite_a_delayed_layout() {
+    for (source, pointer, expected) in [("0", 250., ["1", "0"]), ("1", 0., ["1", "0"])] {
+        for delay_ms in [0, 16, 50, 150, 300] {
+            let (mut motion, now) = strip(&[120., 200.]);
+            motion.begin(source, 60.);
+            motion.update(pointer, now);
+            assert_eq!(order(&motion, source), expected);
+            let released = now + Duration::from_millis(500);
+            motion.animate_frame(released);
+            let neighbor = if source == "0" { "1" } else { "0" };
+            let destination = if neighbor == "1" { 0. } else { 200. };
+            assert_eq!(
+                motion.geometry[neighbor].0 + motion.offset(neighbor, released).0,
+                destination
+            );
+            motion.commit(released);
+            assert!(motion.preview(source).is_none());
+            // Both the drop handler and hover cleanup can finish the drag.
+            motion.finish(released);
+            let frame = released + Duration::from_millis(delay_ms);
+            motion.finish(frame);
+            motion.animate_frame(frame);
+            motion.configure(vec!["1".into(), "0".into()], vec!["1".into(), "0".into()]);
+            motion.measure("1", 0., 200., frame);
+            motion.measure("0", 200., 120., frame);
+            assert_eq!(
+                motion.offset(neighbor, frame),
+                (0., false),
+                "source {source}, layout delay {delay_ms} ms"
+            );
+            assert_eq!(motion.target_offset(neighbor), 0.);
+            let settled = frame + Duration::from_millis(150);
+            assert!(!motion.animate_frame(settled));
+            assert!(motion.motions.is_empty());
+        }
+    }
+}
+
+#[test]
+fn dropping_mid_animation_preserves_each_tabs_position_until_the_new_layout() {
+    let (mut motion, now) = strip(&[120., 200., 150.]);
+    motion.begin("0", 60.);
+    motion.update(450., now);
+    motion.update(250., now + Duration::from_millis(75));
+    assert_eq!(order(&motion, "0"), ["1", "0", "2"]);
+    let released = now + Duration::from_millis(100);
+    let before = ["0", "1", "2"].map(|id| {
+        let (base, width) = motion.geometry[id];
+        (id, base + motion.offset(id, released).0, width)
+    });
+    // Tab 2 is still returning from its earlier preview, although its final
+    // layout origin is unchanged. It must also resume and settle after commit.
+    assert!(before[2].1 < 320.);
+    motion.set_pointer(Some(250.));
+    motion.commit(released);
+    assert!(motion.pointer().is_none());
+    assert!(
+        motion
+            .advance_scroll(0., 200., 0., 270., released)
+            .is_none()
+    );
+    let frame = released + Duration::from_millis(200);
+    motion.finish(frame);
+    motion.animate_frame(frame);
+    let committed = vec!["1".into(), "0".into(), "2".into()];
+    motion.configure(committed.clone(), committed);
+    for ((id, position, width), destination) in before.into_iter().zip([200., 0., 320.]) {
+        motion.measure(id, destination, width, frame);
+        assert!((destination + motion.offset(id, frame).0 - position).abs() < 0.001);
+        assert_eq!(motion.target_offset(id), 0.);
+        let mut distance = (position - destination).abs();
+        for elapsed in [16, 50, 100, 150] {
+            let next = motion
+                .offset(id, frame + Duration::from_millis(elapsed))
+                .0
+                .abs();
+            assert!(next <= distance);
+            distance = next;
+        }
+        assert_eq!(distance, 0.);
+    }
+    assert!(!motion.animate_frame(frame + Duration::from_millis(150)));
+    assert!(motion.motions.is_empty());
+}
+
+#[test]
+fn membership_change_invalidates_the_preview() {
     let (mut motion, now) = strip(&[120., 200.]);
     motion.begin("0", 60.);
     motion.update(250., now);
-    let settled = now + Duration::from_millis(150);
-    motion.finish(settled);
-    motion.configure(vec!["1".into(), "0".into()], vec!["1".into(), "0".into()]);
-    motion.measure("1", 0., 200., settled);
-    assert_eq!(motion.offset("1", settled).0, 0.);
-    motion.begin("0", 60.);
     motion.configure(vec!["1".into()], vec!["1".into()]);
     assert!(motion.preview("0").is_none());
 }

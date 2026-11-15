@@ -1080,26 +1080,24 @@ impl NyaTermApp {
         }
         if started {
             // Outer command execution suppresses suggestions, not nested-shell editing.
-            self.terminal.assist.command_suggestions = None;
-            self.terminal
-                .assist
-                .command_suggestion_suppression
-                .command_started();
-            self.terminal.assist.command_suggestion_search_gen = self
+            self.terminal.assist.commands.popup = None;
+            self.terminal.assist.commands.suppression.command_started();
+            self.terminal.assist.commands.search_generation = self
                 .terminal
                 .assist
-                .command_suggestion_search_gen
+                .commands
+                .search_generation
                 .saturating_add(1);
         }
         if finished {
             // Command finished: re-enable suggestions; editor input has its own lifecycle.
-            self.terminal.assist.command_suggestion_suppression =
-                CommandSuggestionSuppression::None;
-            self.terminal.assist.command_suggestions = None;
-            self.terminal.assist.command_suggestion_search_gen = self
+            self.terminal.assist.commands.suppression = CommandSuggestionSuppression::None;
+            self.terminal.assist.commands.popup = None;
+            self.terminal.assist.commands.search_generation = self
                 .terminal
                 .assist
-                .command_suggestion_search_gen
+                .commands
+                .search_generation
                 .saturating_add(1);
         }
         let _ = command_running;

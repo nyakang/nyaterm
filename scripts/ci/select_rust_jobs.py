@@ -16,6 +16,7 @@ OUTPUTS = ("run_rust", "run_tmux", "run_plugin_sdk", "run_python", "run_workflow
 
 # Explicit registration makes a new crate fail closed until its CI impact is reviewed.
 KNOWN_CRATES = frozenset({
+    "nyaterm-i18n", "nyaterm-completion-runtime",
     "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
     "nyaterm-agent-client", "nyaterm-app", "nyaterm-core",
     "nyaterm-android", "nyaterm-desktop", "nyaterm-mcp",

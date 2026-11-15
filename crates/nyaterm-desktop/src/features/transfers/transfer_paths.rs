@@ -5,6 +5,7 @@ use crate::models::{TransferPathPromptKind, TransferPathPromptResult};
 use gpui::{Context, PathPromptOptions, SharedString, Window};
 use nyaterm_core::truncate_preview;
 use nyaterm_files::file_browser::FileTransferEntryError;
+use nyaterm_files::file_browser::transfer_paths::upload_local_name as transfer_upload_local_name;
 use nyaterm_files::sftp::RemoteFilePath;
 use nyaterm_files::sftp_transfer_types::{
     SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
@@ -853,14 +854,6 @@ fn expand_transfer_home_path(path: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(path))
 }
 
-fn transfer_upload_local_name(path: &std::path::Path, fallback: &str) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or(fallback)
-        .to_string()
-}
-
 fn local_directory_children(directories: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let mut children = Vec::new();
     let mut seen = HashSet::new();
@@ -884,22 +877,8 @@ fn local_directory_children(directories: &[PathBuf]) -> Result<Vec<PathBuf>, Str
 }
 
 #[cfg(test)]
-fn transfer_upload_remote_child_path(remote_dir: &str, name: &str) -> String {
-    let remote_dir = remote_dir.trim();
-    if remote_dir == "/" {
-        return format!("/{name}");
-    }
-    match remote_dir.trim_end_matches('/') {
-        "" | "." => name.to_string(),
-        parent => format!("{parent}/{name}"),
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::{
-        local_directory_children, transfer_upload_local_name, transfer_upload_remote_child_path,
-    };
+    use super::{local_directory_children, transfer_upload_local_name};
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::models::SettingsTab;
@@ -1359,15 +1338,27 @@ mod tests {
     #[test]
     fn upload_remote_child_path_joins_browser_directory_and_local_name() {
         assert_eq!(
-            transfer_upload_remote_child_path("/remote", "local.txt"),
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                "/remote",
+                "local.txt"
+            ),
             "/remote/local.txt"
         );
         assert_eq!(
-            transfer_upload_remote_child_path("/", "local.txt"),
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                "/",
+                "local.txt"
+            ),
             "/local.txt"
         );
         assert_eq!(
-            transfer_upload_remote_child_path(".", "local.txt"),
+            nyaterm_files::file_browser::file_browser_join(
+                nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                ".",
+                "local.txt"
+            ),
             "local.txt"
         );
     }
@@ -1379,7 +1370,11 @@ mod tests {
             .iter()
             .map(|path| {
                 let name = transfer_upload_local_name(path, "uploaded_item");
-                transfer_upload_remote_child_path("/remote", &name)
+                nyaterm_files::file_browser::file_browser_join(
+                    nyaterm_files::file_browser::FileBrowserBackendKind::Remote,
+                    "/remote",
+                    &name,
+                )
             })
             .collect::<Vec<_>>();
 

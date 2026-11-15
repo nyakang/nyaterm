@@ -3,7 +3,9 @@ use ffmpeg_next::{
     software::scaling,
     util::{format::pixel::Pixel, frame::Video},
 };
-use nyaterm_android::ipc::{Frame, MAX_CAPTURE_EDGE, presentation_size, valid_capture};
+use nyaterm_android::ipc::{
+    ColorMatrix, Frame, FrameColor, MAX_CAPTURE_EDGE, PixelFormat, presentation_size, valid_capture,
+};
 use std::sync::Arc;
 
 // SPS dimensions can disagree with scrcpy's session header. Enforce the edge
@@ -95,7 +97,15 @@ impl Decoder {
 /// Created and used only on the presentation thread; Video::clone is a deep copy.
 pub struct Presenter {
     scaler: Option<scaling::Context>,
-    signature: Option<(Pixel, u32, u32)>,
+    signature: Option<(
+        Pixel,
+        u32,
+        u32,
+        PixelFormat,
+        FrameColor,
+        ffmpeg_next::util::color::Space,
+    )>,
+    pub format: PixelFormat,
     bgra: Video,
     #[cfg(test)]
     pub conversions: usize,
@@ -105,6 +115,7 @@ impl Presenter {
         Self {
             scaler: None,
             signature: None,
+            format: PixelFormat::Bgra,
             bgra: Video::empty(),
             #[cfg(test)]
             conversions: 0,
@@ -120,38 +131,115 @@ impl Presenter {
         let (capture_width, capture_height) = (video.width(), video.height());
         let (width, height) = presentation_size(capture_width, capture_height)
             .ok_or(ffmpeg_next::Error::InvalidData)?;
-        let signature = (video.format(), capture_width, capture_height);
-        if self.signature != Some(signature) {
-            self.scaler = Some(scaling::Context::get(
-                video.format(),
-                capture_width,
-                capture_height,
-                Pixel::BGRA,
-                width,
-                height,
-                scaling::Flags::FAST_BILINEAR,
-            )?);
-            self.signature = Some(signature);
-            self.bgra = Video::empty();
-        }
-        self.scaler
-            .as_mut()
-            .ok_or(ffmpeg_next::Error::InvalidData)?
-            .run(video, &mut self.bgra)?;
-        #[cfg(test)]
+        use ffmpeg_next::util::color::{Range, Space};
+        let matrix = match video.color_space() {
+            Space::BT709 => ColorMatrix::Bt709,
+            Space::BT2020NCL => ColorMatrix::Bt2020,
+            _ => ColorMatrix::Bt601,
+        };
+        let color = FrameColor {
+            matrix,
+            full_range: video.color_range() == Range::JPEG || video.format() == Pixel::YUVJ420P,
+        };
+        let supported_color = matches!(
+            video.color_space(),
+            Space::Unspecified
+                | Space::BT470BG
+                | Space::SMPTE170M
+                | Space::BT709
+                | Space::BT2020NCL
+        );
+        let format = if self.format == PixelFormat::I420
+            && supported_color
+            && matches!(video.format(), Pixel::YUV420P | Pixel::YUVJ420P)
         {
-            self.conversions += 1;
+            PixelFormat::I420
+        } else {
+            PixelFormat::Bgra
+        };
+        let signature = (
+            video.format(),
+            capture_width,
+            capture_height,
+            format,
+            color,
+            video.color_space(),
+        );
+        let direct =
+            format == PixelFormat::I420 && (width, height) == (capture_width, capture_height);
+        if !direct {
+            if self.signature != Some(signature) {
+                let destination = if format == PixelFormat::I420 {
+                    Pixel::YUV420P
+                } else {
+                    Pixel::BGRA
+                };
+                let mut scaler = scaling::Context::get(
+                    video.format(),
+                    capture_width,
+                    capture_height,
+                    destination,
+                    width,
+                    height,
+                    scaling::Flags::BILINEAR,
+                )?;
+                // swscale defaults do not inherit AVFrame color metadata. Set both
+                // range and coefficients explicitly for parity with GPU conversion.
+                unsafe {
+                    let space = match video.color_space() {
+                        Space::BT709 => ffmpeg_next::ffi::SWS_CS_ITU709,
+                        Space::BT2020NCL | Space::BT2020CL => ffmpeg_next::ffi::SWS_CS_BT2020,
+                        Space::FCC => ffmpeg_next::ffi::SWS_CS_FCC,
+                        Space::SMPTE240M => ffmpeg_next::ffi::SWS_CS_SMPTE240M,
+                        _ => ffmpeg_next::ffi::SWS_CS_ITU601,
+                    };
+                    let coefficients = ffmpeg_next::ffi::sws_getCoefficients(space);
+                    let result = ffmpeg_next::ffi::sws_setColorspaceDetails(
+                        scaler.as_mut_ptr(),
+                        coefficients,
+                        i32::from(color.full_range),
+                        coefficients,
+                        i32::from(format == PixelFormat::Bgra || color.full_range),
+                        0,
+                        1 << 16,
+                        1 << 16,
+                    );
+                    if result < 0 {
+                        return Err(ffmpeg_next::Error::InvalidData);
+                    }
+                }
+                self.scaler = Some(scaler);
+                self.signature = Some(signature);
+                self.bgra = Video::empty();
+            }
+            self.scaler
+                .as_mut()
+                .ok_or(ffmpeg_next::Error::InvalidData)?
+                .run(video, &mut self.bgra)?;
+            #[cfg(test)]
+            {
+                self.conversions += 1;
+            }
         }
-        let stride = width as usize * 4;
+        let source = if direct { video.as_ref() } else { &self.bgra };
+        let (stride, length) = format
+            .layout(width, height)
+            .ok_or(ffmpeg_next::Error::InvalidData)?;
         pixels.clear();
-        pixels.reserve(stride * height as usize);
-        for row in self
-            .bgra
-            .data(0)
-            .chunks(self.bgra.stride(0))
-            .take(height as usize)
-        {
-            pixels.extend_from_slice(&row[..stride]);
+        pixels.reserve(length);
+        let planes = if format == PixelFormat::I420 { 3 } else { 1 };
+        for plane in 0..planes {
+            let (row_width, rows) = if plane == 0 {
+                (stride as usize, height as usize)
+            } else {
+                (width.div_ceil(2) as usize, height.div_ceil(2) as usize)
+            };
+            for row in source.data(plane).chunks(source.stride(plane)).take(rows) {
+                pixels.extend_from_slice(
+                    row.get(..row_width)
+                        .ok_or(ffmpeg_next::Error::InvalidData)?,
+                );
+            }
         }
         Ok(Frame {
             sequence: 0,
@@ -162,7 +250,9 @@ impl Presenter {
             capture_height,
             width,
             height,
-            stride: stride as u32,
+            stride,
+            format,
+            color,
             pixels,
         })
     }
@@ -173,6 +263,37 @@ mod tests {
     use crate::decoder::{Decoded, Decoder, Presenter};
     use ffmpeg_next::util::{format::pixel::Pixel, frame::Video};
     use std::sync::Arc;
+    #[test]
+    fn direct_i420_preserves_color_and_odd_planes_without_conversion() {
+        use nyaterm_android::ipc::{ColorMatrix, PixelFormat};
+        let mut video = Video::new(Pixel::YUV420P, 5, 3);
+        video.set_color_space(ffmpeg_next::util::color::Space::BT709);
+        video.set_color_range(ffmpeg_next::util::color::Range::JPEG);
+        for plane in 0..3 {
+            video.data_mut(plane).fill(50 + plane as u8);
+        }
+        let decoded = Decoded {
+            video: Arc::new(video),
+            serial: 1,
+            pts: 1,
+            generation: 1,
+        };
+        let mut presenter = Presenter::new();
+        presenter.format = PixelFormat::I420;
+        let frame = presenter.present(&decoded, 1, Vec::new()).unwrap();
+        assert_eq!(frame.format, PixelFormat::I420);
+        assert_eq!(frame.pixels.len(), 27);
+        assert_eq!(&frame.pixels[..15], &[50; 15]);
+        assert_eq!(&frame.pixels[15..21], &[51; 6]);
+        assert_eq!(frame.color.matrix, ColorMatrix::Bt709);
+        assert!(frame.color.full_range);
+        assert_eq!(presenter.conversions, 0);
+        presenter.format = PixelFormat::Bgra;
+        let frame = presenter.present(&decoded, 1, frame.pixels).unwrap();
+        assert_eq!(frame.format, PixelFormat::Bgra);
+        assert_eq!(frame.pixels.len(), 60);
+        assert_eq!(presenter.conversions, 1);
+    }
     #[test]
     fn sps_edge_limit_is_enforced_even_when_total_pixels_are_small() {
         ffmpeg_next::init().unwrap();

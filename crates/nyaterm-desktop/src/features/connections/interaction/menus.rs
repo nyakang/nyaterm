@@ -4,6 +4,10 @@ use gpui::{Context, Window};
 use nyaterm_core::SavedConnection;
 
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
+
+// Keep ordinary selections quick while making large accidental launches reviewable.
+const BULK_CONNECTION_CONFIRM_THRESHOLD: usize = 20;
+
 impl NyaTermApp {
     pub(in crate::features) fn prepare_connection_context_menu(
         &mut self,
@@ -70,10 +74,43 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(mut connections) = self.resolve_saved_connection_targets(connection_ids, cx)
-        else {
+        let Some(connections) = self.resolve_saved_connection_targets(connection_ids, cx) else {
             return;
         };
+        if connections.len() > BULK_CONNECTION_CONFIRM_THRESHOLD {
+            let ids = connection_ids.to_vec();
+            self.open_confirm_dialog(
+                (
+                    t!("savedConnections.connectSelected").to_string(),
+                    t!(
+                        "savedConnections.connectSelectedConfirm",
+                        count = connections.len()
+                    )
+                    .to_string(),
+                    t!("savedConnections.connectSelected").to_string(),
+                    false,
+                    move |app, window, cx| {
+                        // Resolve again after confirmation; never start a deleted or stale record.
+                        if let Some(connections) = app.resolve_saved_connection_targets(&ids, cx) {
+                            app.start_resolved_saved_connections(connections, window, cx);
+                        }
+                        true
+                    },
+                ),
+                window,
+                cx,
+            );
+            return;
+        }
+        self.start_resolved_saved_connections(connections, window, cx);
+    }
+
+    fn start_resolved_saved_connections(
+        &mut self,
+        mut connections: Vec<SavedConnection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if connections.len() == 1 {
             self.start_saved_connection(connections.remove(0), window, cx);
         } else {

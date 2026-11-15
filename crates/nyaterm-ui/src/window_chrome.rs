@@ -3,9 +3,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, DispatchPhase, Div, IntoElement, MouseButton, MouseMoveEvent, Pixels, Point,
-    PointerCancelEvent, SharedString, Stateful, Window, WindowControlArea, canvas, div, prelude::*,
-    px, rgb, svg,
+    AnyElement, App, ClickEvent, DispatchPhase, Div, FontWeight, IntoElement, MouseButton,
+    MouseMoveEvent, Pixels, Point, PointerCancelEvent, SharedString, Stateful, TitlebarOptions,
+    Window, WindowControlArea, canvas, div, prelude::*, px, rgb, svg,
 };
 
 use crate::theme::ThemePalette;
@@ -197,7 +197,7 @@ pub fn window_control_button(
         .when(!native_control || !cfg!(target_os = "windows"), |this| {
             this.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         })
-        .cursor_pointer()
+        .cursor_default()
         .hover(move |this| {
             if close {
                 this.bg(rgb(0xe81123)).text_color(rgb(0xffffff))
@@ -226,6 +226,154 @@ pub fn window_control_button(
                 })
             },
         )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChildWindowPresentation {
+    pub show_child_header: bool,
+    pub minimize: bool,
+    pub maximize: bool,
+    pub close: bool,
+    pub restore: bool,
+    pub native_button_gutter: bool,
+    pub drag: TitleDragBehavior,
+}
+
+fn child_window_control_button(
+    palette: ThemePalette,
+    id: &'static str,
+    icon_path: &'static str,
+    area: WindowControlArea,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    // Windows dispatches non-client caption events separately from GPUI clicks.
+    window_control_button(palette, id, icon_path, area, false, on_click)
+}
+pub fn child_window_titlebar(title: impl Into<SharedString>) -> Option<TitlebarOptions> {
+    (cfg!(target_os = "macos") || cfg!(target_os = "linux")).then(|| TitlebarOptions {
+        title: Some(title.into()),
+        appears_transparent: true,
+        ..Default::default()
+    })
+}
+/// Application callbacks for child-window close and native zoom handling.
+pub struct ChildWindowActions<Close, Zoom> {
+    pub on_close: Close,
+    pub on_zoom: Zoom,
+}
+
+pub fn child_window_header(
+    palette: ThemePalette,
+    title: impl Into<SharedString>,
+    icon_path: Option<&'static str>,
+    policy: ChildWindowPresentation,
+    window: &mut Window,
+    cx: &mut App,
+    actions: ChildWindowActions<
+        impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        impl Fn(&mut Window, &mut App) + 'static,
+    >,
+) -> AnyElement {
+    let ChildWindowActions { on_close, on_zoom } = actions;
+    let on_zoom = Rc::new(on_zoom);
+    let drag_zoom = on_zoom.clone();
+    if !policy.show_child_header {
+        return div().size_0().into_any_element();
+    }
+    let title = title.into();
+    div()
+        .h(px(40.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .border_b_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.surface))
+        .child(
+            div()
+                .h_full()
+                .min_w_0()
+                .flex_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .when(policy.native_button_gutter, |this| {
+                    // Room for the traffic lights AppKit draws over the content.
+                    this.pl(px(70.))
+                })
+                .map(|this| {
+                    title_drag_region(
+                        this,
+                        "child-title-region",
+                        policy.drag,
+                        window,
+                        cx,
+                        move |event, window, cx| match event {
+                            TitleDragEvent::Pressed => {}
+                            TitleDragEvent::StartMove => window.start_window_move(),
+                            TitleDragEvent::DoubleClick => drag_zoom(window, cx),
+                        },
+                    )
+                })
+                .when_some(icon_path, |this, icon_path| {
+                    this.child(
+                        svg()
+                            .size(px(16.))
+                            .flex_none()
+                            .path(icon_path)
+                            .text_color(rgb(palette.primary)),
+                    )
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_sm()
+                        .font_weight(FontWeight(500.))
+                        .text_color(rgb(palette.text))
+                        .child(title),
+                ),
+        )
+        .child(
+            div()
+                .h_full()
+                .flex_none()
+                .flex()
+                .items_center()
+                .when(policy.minimize, |this| {
+                    this.child(child_window_control_button(
+                        palette,
+                        "child-window-min",
+                        "icons/window/minimize.svg",
+                        WindowControlArea::Min,
+                        |_, window, _| window.minimize_window(),
+                    ))
+                })
+                .when(policy.maximize, |this| {
+                    this.child(child_window_control_button(
+                        palette,
+                        "child-window-max",
+                        if policy.restore {
+                            "icons/window/restore.svg"
+                        } else {
+                            "icons/window/maximize.svg"
+                        },
+                        WindowControlArea::Max,
+                        move |_, window, cx| on_zoom(window, cx),
+                    ))
+                })
+                .when(policy.close, |this| {
+                    this.child(child_window_control_button(
+                        palette,
+                        "child-window-close",
+                        "icons/window/close.svg",
+                        WindowControlArea::Close,
+                        on_close,
+                    ))
+                }),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]

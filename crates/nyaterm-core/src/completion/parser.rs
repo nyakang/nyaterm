@@ -9,9 +9,15 @@ pub(crate) struct Word {
     pub end: usize,
     pub segment: usize,
     pub quoted: bool,
+    has_quotes: bool,
+    tilde: bool,
 }
 
 pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
+    lex_words(input, dialect, false)
+}
+
+fn lex_words(input: &str, dialect: ShellDialect, allow_tilde: bool) -> Option<Vec<Word>> {
     if dialect == ShellDialect::Unknown
         || input.len() > MAX_TRACKED_INPUT_BYTES
         || input.chars().any(char::is_control)
@@ -23,6 +29,8 @@ pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
     let mut start = None;
     let mut quote = None;
     let mut quoted = false;
+    let mut has_quotes = false;
+    let mut tilde = false;
     let mut escaped = false;
     let mut segment = 0;
     let mut iter = input.char_indices().peekable();
@@ -91,12 +99,14 @@ pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
             start.get_or_insert(i);
             quote = Some(ch);
             quoted = true;
+            has_quotes = true;
             continue;
         }
         if (matches!(
             dialect,
             ShellDialect::Bash | ShellDialect::Zsh | ShellDialect::Fish
-        ) && (matches!(ch, '*' | '?' | '[' | ']') || ch == '~' && start.is_none()))
+        ) && (matches!(ch, '*' | '?' | '[' | ']')
+            || ch == '~' && start.is_none() && !allow_tilde))
             || (dialect == ShellDialect::PowerShell && ch == '@' && start.is_none())
         {
             return None;
@@ -121,6 +131,9 @@ pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
             continue;
         }
         let separator = matches!(ch, '|' | '&') || (ch == ';' && dialect != ShellDialect::Cmd);
+        if ch == '~' && start.is_none() {
+            tilde = true;
+        }
         if ch.is_whitespace() || separator {
             if let Some(s) = start.take() {
                 out.push(Word {
@@ -129,8 +142,12 @@ pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
                     end: i,
                     segment,
                     quoted,
+                    has_quotes,
+                    tilde,
                 });
                 quoted = false;
+                has_quotes = false;
+                tilde = false;
             }
             if separator {
                 if ch == '&'
@@ -150,6 +167,8 @@ pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
                     end: i + ch.len_utf8(),
                     segment,
                     quoted: false,
+                    has_quotes: false,
+                    tilde: false,
                 });
             }
         } else {
@@ -167,6 +186,8 @@ pub(crate) fn words(input: &str, dialect: ShellDialect) -> Option<Vec<Word>> {
             end: input.len(),
             segment,
             quoted,
+            has_quotes,
+            tilde,
         });
     }
     let mut previous_segment = None;
@@ -315,20 +336,39 @@ pub fn parse_context(
     dialect: ShellDialect,
     scope: CompletionScope,
 ) -> Option<CompletionContext> {
+    parse_context_inner(input, cursor, dialect, scope, false)
+}
+
+pub(crate) fn parse_path_context(
+    input: &str,
+    dialect: ShellDialect,
+    scope: CompletionScope,
+) -> Option<CompletionContext> {
+    parse_context_inner(input, input.len(), dialect, scope, true)
+}
+
+fn parse_context_inner(
+    input: &str,
+    cursor: usize,
+    dialect: ShellDialect,
+    scope: CompletionScope,
+    allow_tilde: bool,
+) -> Option<CompletionContext> {
     if cursor != input.len() || !input.is_char_boundary(cursor) {
         return None;
     }
-    let all = words(input, dialect)?;
+    let all = lex_words(input, dialect, allow_tilde)?;
+    // Only the current unquoted path may perform tilde expansion.
+    if all.iter().any(|word| word.tilde && word.end != cursor) {
+        return None;
+    }
     let segment = all.last().map_or(0, |w| w.segment);
     let mut active: Vec<_> = all
         .into_iter()
         .filter(|w| w.segment == segment && (!w.text.is_empty() || w.quoted))
         .collect();
-    let current = active
-        .last()
-        .filter(|w| w.end == cursor && !input.ends_with(char::is_whitespace))
-        .cloned();
-    if current.as_ref().is_some_and(|w| w.quoted) {
+    let current = active.last().filter(|w| w.end == cursor).cloned();
+    if current.as_ref().is_some_and(|w| w.has_quotes) {
         return None;
     }
     if current.is_some() {
@@ -354,9 +394,15 @@ pub fn parse_context(
             .flatten()
         });
     if let Some((name, value)) = inline_value {
+        let separator = if prefix.starts_with("--") && prefix.contains('=') {
+            '='
+        } else {
+            ':'
+        };
+        let value_offset = input[token_range.clone()].find(separator)? + 1;
         let name = name.to_string();
         let value = value.to_string();
-        token_range.start += name.len() + 1;
+        token_range.start += value_offset;
         preceding.push(name.clone());
         option_value = Some(name);
         prefix = value;
@@ -538,6 +584,16 @@ mod tests {
                 parse_context(input, input.len(), dialect, CompletionScope::legacy()).unwrap();
             assert_eq!(context.preceding, ["tool", "--mode", ""]);
             assert_eq!(&input[context.token_range], "--next");
+        }
+    }
+    #[test]
+    fn escaped_inline_option_names_keep_raw_value_offsets() {
+        let input = r"docker --for\mat=json";
+        for dialect in [ShellDialect::Bash, ShellDialect::Zsh] {
+            let context =
+                parse_context(input, input.len(), dialect, CompletionScope::legacy()).unwrap();
+            assert_eq!(context.option_value.as_deref(), Some("--format"));
+            assert_eq!(&input[context.token_range], "json");
         }
     }
 }

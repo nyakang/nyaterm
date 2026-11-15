@@ -1,5 +1,6 @@
 pub mod completion;
 pub mod proxy;
+pub mod reasoning_text;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 

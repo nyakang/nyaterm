@@ -7,9 +7,7 @@ use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaMarkdown, NyaScrollable};
 
 use crate::features::NyaTermApp;
 use crate::features::shell::gpui_code_font_family;
-use crate::features::update::{
-    UpdateFailure, UpdateFailureKind, UpdatePhase, classify_update_failure,
-};
+use crate::features::update::{UpdateFailure, UpdateFailureKind, UpdatePhase};
 use crate::features::view_widgets::dialog_action_button;
 use crate::theme::ThemePalette;
 use crate::widgets::small_button;
@@ -38,9 +36,7 @@ fn update_dialog_title_key(phase: &UpdatePhase) -> &'static str {
         UpdatePhase::Downloading { .. } => "updater.downloading",
         UpdatePhase::Ready => "updater.readyTitle",
         UpdatePhase::Applying => "updater.installing",
-        UpdatePhase::Failed { message, download } => {
-            classify_update_failure(*download, message).title_key()
-        }
+        UpdatePhase::Failed(failure) => failure.title_key(),
         UpdatePhase::Available => "updater.newVersionAvailable",
         UpdatePhase::Idle | UpdatePhase::UpToDate => "updater.upToDate",
     }
@@ -118,9 +114,7 @@ impl NyaTermApp {
         let ready = matches!(phase, UpdatePhase::Ready);
         let applying = matches!(phase, UpdatePhase::Applying);
         let failure = match &phase {
-            UpdatePhase::Failed { message, download } => {
-                Some(classify_update_failure(*download, message))
-            }
+            UpdatePhase::Failed(failure) => Some(failure.clone()),
             _ => None,
         };
         let portable = self.runtime.mode() == RuntimeMode::Portable;
@@ -627,25 +621,28 @@ mod tests {
             "updater.upToDate"
         );
         assert_eq!(
-            update_dialog_title_key(&UpdatePhase::Failed {
-                message: "offline".into(),
-                download: false,
-            }),
+            update_dialog_title_key(&UpdatePhase::Failed(
+                crate::features::update::UpdateFailure::check("offline")
+            )),
             "updater.checkFailedTitle"
         );
         assert_eq!(
-            update_dialog_title_key(&UpdatePhase::Failed {
-                message: "update download truncated".into(),
-                download: true,
-            }),
+            update_dialog_title_key(&UpdatePhase::Failed(
+                crate::features::update::UpdateFailure::from_update(
+                    nyaterm_updater::error::UpdateError::download("update download truncated")
+                )
+            )),
             "updater.downloadIncompleteTitle"
         );
         assert_eq!(
-            update_dialog_title_key(&UpdatePhase::Failed {
-                message: "portable update archive contains an unexpected file: conpty\\LICENSE.txt"
-                    .into(),
-                download: true,
-            }),
+            update_dialog_title_key(&UpdatePhase::Failed(
+                crate::features::update::UpdateFailure::from_update(
+                    nyaterm_updater::error::UpdateError::package(
+                        nyaterm_updater::error::UpdatePackageProblem::UnexpectedFile,
+                        "diagnostic"
+                    )
+                )
+            )),
             "updater.couldNotInstall"
         );
     }

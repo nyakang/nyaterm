@@ -84,6 +84,8 @@ def dependency_errors() -> list[str]:
         "nyaterm-preview",
         "nyaterm-translation-client",
         "nyaterm-core",
+        "nyaterm-i18n",
+        "nyaterm-completion-runtime",
         "nyaterm-android",
         "nyaterm-transport",
         "nyaterm-files",
@@ -109,6 +111,8 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
+        ("nyaterm-i18n", set()),
+        ("nyaterm-completion-runtime", set()),
         ("nyaterm-android", set()),
         ("nyaterm-ai-client", set()),
         ("nyaterm-agent-client", set()),
@@ -119,7 +123,7 @@ def dependency_errors() -> list[str]:
         ("nyaterm-translation-client", set()),
         ("nyaterm-terminal-runtime", set()),
         ("nyaterm-terminal", {"nyaterm-terminal-runtime"}),
-        ("nyaterm-core", {"nyaterm-terminal-runtime", "nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
+        ("nyaterm-core", {"nyaterm-completion-runtime", "nyaterm-terminal-runtime", "nyaterm-sync", "nyaterm-store", "nyaterm-desktop", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-transport"}),
         ("nyaterm-transport", {"nyaterm-terminal-runtime", "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
         ("nyaterm-files", {"nyaterm-terminal-runtime", "nyaterm-recording", "nyaterm-remote-ops", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
         ("nyaterm-remote-ops", {"nyaterm-terminal-runtime", "nyaterm-files", "nyaterm-recording", "nyaterm-desktop", "nyaterm-store", "nyaterm-ui"}),
@@ -144,7 +148,7 @@ def dependency_errors() -> list[str]:
                 and package != "nyaterm-core"
             )
             wrong_adapter_direction = (
-                crate in {"nyaterm-android", "nyaterm-agent-client", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
+                crate in {"nyaterm-completion-runtime", "nyaterm-android", "nyaterm-agent-client", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
             )
@@ -158,7 +162,8 @@ def dependency_errors() -> list[str]:
                 and package.startswith("nyaterm-")
                 and package not in {"nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording"}
             )
-            if wrong_terminal_runtime_direction or wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
+            wrong_i18n_direction = crate == "nyaterm-i18n" and package.startswith("nyaterm-")
+            if wrong_i18n_direction or wrong_terminal_runtime_direction or wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
     terminal_presentation = tomllib.loads(
         (ROOT / "crates/nyaterm-terminal-gpui/Cargo.toml").read_text(encoding="utf-8")

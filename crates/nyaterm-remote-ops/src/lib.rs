@@ -10,3 +10,5 @@ pub mod process_control;
 pub mod remote_process;
 pub mod services;
 pub mod stats;
+
+pub mod query;

@@ -7,8 +7,8 @@ use nyaterm_terminal::TerminalSnapshot;
 use nyaterm_terminal::editing::resolve_input;
 use std::sync::Arc;
 
+use super::state::CommandSuggestionState;
 use crate::features::NyaTermApp;
-use crate::models::CommandSuggestionState;
 
 pub(in crate::features::terminal) struct SuggestionPasteContext {
     pub(in crate::features::terminal) session_id: String,

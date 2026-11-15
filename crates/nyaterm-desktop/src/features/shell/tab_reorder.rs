@@ -10,10 +10,14 @@ struct Motion {
     from: f32,
     to: f32,
     started: Instant,
+    awaiting_layout: bool,
 }
 
 impl Motion {
     fn sample(self, now: Instant) -> f32 {
+        if self.awaiting_layout {
+            return self.from;
+        }
         let t = (now.duration_since(self.started).as_secs_f32() / MOTION_DURATION.as_secs_f32())
             .min(1.);
         self.to + (self.from - self.to) * (1. - t).powi(3)
@@ -55,8 +59,8 @@ impl TabReorderMotion {
 
     pub fn measure(&mut self, id: &str, x: f32, width: f32, now: Instant) {
         if let Some((old_x, _)) = self.geometry.insert(id.to_owned(), (x, width))
-            && (old_x - x).abs() > 0.1
-            && self.motions.contains_key(id)
+            && let Some(motion) = self.motions.get(id)
+            && (motion.awaiting_layout || (old_x - x).abs() > 0.1)
         {
             // FLIP: committing the business order changes layout origins. Keep
             // the painted position continuous while converging on the new origin.
@@ -67,6 +71,7 @@ impl TabReorderMotion {
                     from: offset,
                     to: 0.,
                     started: now,
+                    awaiting_layout: false,
                 },
             );
         }
@@ -146,6 +151,7 @@ impl TabReorderMotion {
                         from: target,
                         to: target,
                         started: now,
+                        awaiting_layout: false,
                     },
                 );
             } else {
@@ -171,6 +177,7 @@ impl TabReorderMotion {
                 from,
                 to: target,
                 started: now,
+                awaiting_layout: false,
             },
         );
     }
@@ -179,7 +186,8 @@ impl TabReorderMotion {
         self.motions.get(id).map_or((0., false), |motion| {
             (
                 motion.sample(now),
-                now.duration_since(motion.started) < MOTION_DURATION
+                !motion.awaiting_layout
+                    && now.duration_since(motion.started) < MOTION_DURATION
                     && (motion.from - motion.to).abs() > 0.1,
             )
         })
@@ -191,10 +199,13 @@ impl TabReorderMotion {
 
     pub fn animate_frame(&mut self, now: Instant) -> bool {
         self.motions.retain(|_, motion| {
-            motion.to.abs() > 0.1 || now.duration_since(motion.started) < MOTION_DURATION
+            motion.awaiting_layout
+                || motion.to.abs() > 0.1
+                || now.duration_since(motion.started) < MOTION_DURATION
         });
         self.motions.values().any(|motion| {
-            now.duration_since(motion.started) < MOTION_DURATION
+            !motion.awaiting_layout
+                && now.duration_since(motion.started) < MOTION_DURATION
                 && (motion.from - motion.to).abs() > 0.1
         })
     }
@@ -250,11 +261,31 @@ impl TabReorderMotion {
             .map(|active| active.order.as_slice())
     }
 
+    pub fn commit(&mut self, now: Instant) {
+        self.active = None;
+        self.pointer_x = None;
+        self.frame_at = None;
+        // Hold the release position until measure rebases it onto the committed
+        // layout. Returning to zero now would animate toward the old slots.
+        for motion in self.motions.values_mut() {
+            motion.from = motion.sample(now);
+            motion.awaiting_layout = true;
+        }
+    }
+
     pub fn finish(&mut self, now: Instant) {
         self.active = None;
         self.pointer_x = None;
         self.frame_at = None;
         for id in self.order.clone() {
+            // Drop cleanup can run again before the committed layout is measured.
+            if self
+                .motions
+                .get(&id)
+                .is_some_and(|motion| motion.awaiting_layout)
+            {
+                continue;
+            }
             self.retarget(&id, 0., now);
         }
     }

@@ -4,7 +4,7 @@ use nyaterm_core::models::android::AndroidScreenSettings;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_CAPTURE_EDGE: u32 = 2560;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CONTROL_BYTES: usize = 128 * 1024;
@@ -61,6 +61,9 @@ pub enum Control {
         sequence: u64,
     },
     RefreshPresentation,
+    FrameFormat {
+        format: PixelFormat,
+    },
     Presentation {
         visible: bool,
     },
@@ -69,6 +72,9 @@ pub enum Control {
         code: InputRejection,
     },
     Rotate,
+    NotificationPanel {
+        expand: bool,
+    },
     ReleaseInputs,
     FrameAck {
         sequence: u64,
@@ -95,6 +101,7 @@ pub enum InputOperation {
     Text,
     Paste,
     Rotate,
+    NotificationPanel,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, thiserror::Error)]
 #[serde(rename_all = "snake_case")]
@@ -127,6 +134,7 @@ impl Control {
             Self::Text { .. } => Some(InputOperation::Text),
             Self::Paste { .. } => Some(InputOperation::Paste),
             Self::Rotate => Some(InputOperation::Rotate),
+            Self::NotificationPanel { .. } => Some(InputOperation::NotificationPanel),
             _ => None,
         }
     }
@@ -193,6 +201,69 @@ impl std::fmt::Debug for Control {
     }
 }
 
+/// Tight planes: BGRA rows, or Y followed by U and V (ceil-divided chroma).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PixelFormat {
+    #[default]
+    Bgra,
+    I420,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorMatrix {
+    #[default]
+    Bt601,
+    Bt709,
+    Bt2020,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameColor {
+    pub matrix: ColorMatrix,
+    pub full_range: bool,
+}
+impl PixelFormat {
+    pub fn layout(self, width: u32, height: u32) -> Option<(u32, usize)> {
+        if !valid_capture(width, height) {
+            return None;
+        }
+        let pixels = (width as usize).checked_mul(height as usize)?;
+        Some(match self {
+            Self::Bgra => (width.checked_mul(4)?, pixels.checked_mul(4)?),
+            Self::I420 => (
+                width,
+                pixels.checked_add(
+                    (width.div_ceil(2) as usize)
+                        .checked_mul(height.div_ceil(2) as usize)?
+                        .checked_mul(2)?,
+                )?,
+            ),
+        })
+    }
+}
+fn decode_format(value: u32) -> io::Result<(PixelFormat, FrameColor)> {
+    if value & !0x0001_0301 != 0 || ((value >> 8) & 3) > 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid frame format",
+        ));
+    }
+    Ok((
+        if value & 1 == 0 {
+            PixelFormat::Bgra
+        } else {
+            PixelFormat::I420
+        },
+        FrameColor {
+            matrix: match (value >> 8) & 3 {
+                0 => ColorMatrix::Bt601,
+                1 => ColorMatrix::Bt709,
+                _ => ColorMatrix::Bt2020,
+            },
+            full_range: value & 0x10000 != 0,
+        },
+    ))
+}
+
 #[derive(Clone)]
 pub struct Frame {
     pub sequence: u64,
@@ -204,12 +275,14 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    pub format: PixelFormat,
+    pub color: FrameColor,
     pub pixels: Vec<u8>,
 }
 
 impl Frame {
     pub fn validate(&self) -> io::Result<()> {
-        let length = (self.stride as usize).checked_mul(self.height as usize);
+        let layout = self.format.layout(self.width, self.height);
         if self.sequence == 0
             || self.binding_generation == 0
             || self.generation == 0
@@ -218,8 +291,7 @@ impl Frame {
             || self.width > self.capture_width
             || self.height > self.capture_height
             || !valid_capture(self.capture_width, self.capture_height)
-            || self.stride != self.width.checked_mul(4).unwrap_or(0)
-            || length != Some(self.pixels.len())
+            || layout != Some((self.stride, self.pixels.len()))
             || self.pixels.len() > MAX_FRAME_BYTES
         {
             return Err(io::Error::new(
@@ -253,7 +325,7 @@ pub fn write_packet(writer: &mut impl Write, packet: &Packet) -> io::Result<()> 
         Packet::Frame(frame) => {
             frame.validate()?;
             writer.write_all(&[2])?;
-            writer.write_all(&(52 + frame.pixels.len() as u32).to_le_bytes())?;
+            writer.write_all(&(56 + frame.pixels.len() as u32).to_le_bytes())?;
             for value in [
                 frame.sequence,
                 frame.binding_generation,
@@ -271,6 +343,14 @@ pub fn write_packet(writer: &mut impl Write, packet: &Packet) -> io::Result<()> 
             ] {
                 writer.write_all(&value.to_le_bytes())?;
             }
+            let format = u32::from(frame.format == PixelFormat::I420)
+                | ((match frame.color.matrix {
+                    ColorMatrix::Bt601 => 0,
+                    ColorMatrix::Bt709 => 1,
+                    ColorMatrix::Bt2020 => 2,
+                }) << 8)
+                | (u32::from(frame.color.full_range) << 16);
+            writer.write_all(&format.to_le_bytes())?;
             writer.write_all(&frame.pixels)?;
         }
     }
@@ -303,13 +383,13 @@ pub fn read_packet_reusing(
             .map(|control| Some(Packet::Control(control)))
             .map_err(io::Error::other);
     }
-    if kind[0] != 2 || !(52..=MAX_FRAME_BYTES + 52).contains(&length) {
+    if kind[0] != 2 || !(56..=MAX_FRAME_BYTES + 56).contains(&length) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Android IPC packet length",
         ));
     }
-    let mut header = [0; 52];
+    let mut header = [0; 56];
     reader.read_exact(&mut header)?;
     let get64 = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().unwrap());
     let get32 = |offset| u32::from_le_bytes(header[offset..offset + 4].try_into().unwrap());
@@ -319,6 +399,7 @@ pub fn read_packet_reusing(
     let stride = get32(40);
     let capture_width = get32(44);
     let capture_height = get32(48);
+    let (format, color) = decode_format(get32(52))?;
     if get64(0) == 0
         || get64(8) == 0
         || get64(16) == 0
@@ -327,15 +408,14 @@ pub fn read_packet_reusing(
         || width > capture_width
         || height > capture_height
         || !valid_capture(capture_width, capture_height)
-        || width.checked_mul(4) != Some(stride)
-        || (stride as usize).checked_mul(height as usize) != Some(length - 52)
+        || format.layout(width, height) != Some((stride, length - 56))
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Android IPC frame geometry",
         ));
     }
-    pixels.resize(length - 52, 0);
+    pixels.resize(length - 56, 0);
     reader.read_exact(pixels)?;
     Ok(Some(Packet::Frame(Frame {
         sequence: get64(0),
@@ -347,6 +427,8 @@ pub fn read_packet_reusing(
         width,
         height,
         stride,
+        format,
+        color,
         pixels: std::mem::take(pixels),
     })))
 }
@@ -387,6 +469,8 @@ mod tests {
             width: 2,
             height: 1,
             stride: 8,
+            format: Default::default(),
+            color: Default::default(),
             pixels: vec![7; 8],
         };
         let mut data = Vec::new();
@@ -398,7 +482,7 @@ mod tests {
         data[37..41].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(read_packet(&mut data.as_slice()).is_err());
         let mut header = vec![2];
-        header.extend_from_slice(&(MAX_FRAME_BYTES as u32 + 53).to_le_bytes());
+        header.extend_from_slice(&(MAX_FRAME_BYTES as u32 + 57).to_le_bytes());
         assert!(read_packet(&mut header.as_slice()).is_err());
     }
     #[test]
@@ -418,6 +502,8 @@ mod tests {
                 width: pw,
                 height: ph,
                 stride: pw * 4,
+                format: Default::default(),
+                color: Default::default(),
                 pixels: vec![0; pw as usize * ph as usize * 4],
             };
             frame.validate().unwrap();
@@ -440,6 +526,8 @@ mod tests {
             width: 1,
             height: 1,
             stride: 4,
+            format: Default::default(),
+            color: Default::default(),
             pixels: vec![9; 4],
         };
         let mut data = Vec::new();
@@ -522,5 +610,60 @@ mod tests {
             .validate_input()
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use crate::ipc::{
+        ColorMatrix, Frame, FrameColor, Packet, PixelFormat, read_packet, write_packet,
+    };
+    #[test]
+    fn odd_i420_planes_and_color_round_trip_and_reject_malformed_headers() {
+        for matrix in [ColorMatrix::Bt601, ColorMatrix::Bt709, ColorMatrix::Bt2020] {
+            for full_range in [false, true] {
+                let (_, length) = PixelFormat::I420.layout(5, 3).unwrap();
+                assert_eq!(length, 27);
+                let frame = Frame {
+                    sequence: 1,
+                    binding_generation: 1,
+                    generation: 1,
+                    pts: 7,
+                    capture_width: 5,
+                    capture_height: 3,
+                    width: 5,
+                    height: 3,
+                    stride: 5,
+                    format: PixelFormat::I420,
+                    color: FrameColor { matrix, full_range },
+                    pixels: vec![128; length],
+                };
+                let mut bytes = Vec::new();
+                write_packet(&mut bytes, &Packet::Frame(frame)).unwrap();
+                let Some(Packet::Frame(frame)) = read_packet(&mut bytes.as_slice()).unwrap() else {
+                    panic!("frame missing")
+                };
+                assert_eq!(frame.format, PixelFormat::I420);
+                assert_eq!(frame.color, FrameColor { matrix, full_range });
+                assert_eq!(frame.pixels.len(), 27);
+                let mut malformed = bytes.clone();
+                malformed[57] = 2;
+                assert!(read_packet(&mut malformed.as_slice()).is_err());
+                let mut malformed = bytes.clone();
+                malformed[45..49].copy_from_slice(&20u32.to_le_bytes());
+                assert!(read_packet(&mut malformed.as_slice()).is_err());
+                bytes.pop();
+                assert!(read_packet(&mut bytes.as_slice()).is_err());
+            }
+        }
+    }
+    #[test]
+    fn planar_layout_stays_bounded_and_rejects_overflow_dimensions() {
+        assert_eq!(
+            PixelFormat::I420.layout(1920, 1080),
+            Some((1920, 3_110_400))
+        );
+        assert!(PixelFormat::I420.layout(u32::MAX, 1).is_none());
+        assert!(PixelFormat::I420.layout(0, 1).is_none());
     }
 }

@@ -71,8 +71,8 @@ cargo clippy --workspace --all-targets
 
 新增或修改应用 UI 文本时同步更新：
 
-- `crates/nyaterm-desktop/src/i18n/locales/zh-CN.json`
-- `crates/nyaterm-desktop/src/i18n/locales/en.json`
+- `crates/nyaterm-i18n/locales/zh-CN.json`
+- `crates/nyaterm-i18n/locales/en.json`
 
 修改 docs-site 时同步维护 `docs-site/docs/` 中文源文档和 `docs-site/i18n/en/docusaurus-plugin-content-docs/current/` 英文页面，新增页面还要加入 `docs-site/sidebars.ts`，并运行：
 
