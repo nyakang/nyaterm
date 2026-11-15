@@ -186,7 +186,6 @@ impl NyaTermApp {
                 },
             )),
         );
-        menu.push(NyaMenuItem::label(t!("android.inputHint")));
         let target = id.to_owned();
         toolbar = toolbar.child(
             NyaDropdownMenu::new(format!("android-more-{id}"))
