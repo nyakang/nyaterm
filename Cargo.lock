@@ -6974,6 +6974,7 @@ dependencies = [
  "hex",
  "image",
  "keyring",
+ "libc",
  "nyaterm-agent-client",
  "nyaterm-ai-client",
  "nyaterm-android",
@@ -9985,7 +9986,7 @@ dependencies = [
 [[package]]
 name = "russh-sftp"
 version = "3.0.1"
-source = "git+https://github.com/nyakang/russh-sftp?rev=b638b4896de6a0efd699e4c3833873221b3b3f01#b638b4896de6a0efd699e4c3833873221b3b3f01"
+source = "git+https://github.com/nyakang/russh-sftp?rev=e2c3affd010e680556b1d1adc86d58d910075f4b#e2c3affd010e680556b1d1adc86d58d910075f4b"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",

@@ -470,6 +470,24 @@ impl RemoteFileService {
         ShellRemote::new(self.config.clone(), self.multiplex.clone(), kind)
     }
 
+    /// Bounded SFTP-only enumeration; never probes a shell fallback or changes
+    /// the file manager's persisted backend preference.
+    pub fn list_directory_lightweight(
+        &self,
+        path: &str,
+        limits: crate::file_browser::lightweight::DirectoryLimits,
+        control: crate::sftp::SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<crate::file_browser::lightweight::DirectoryListing> {
+        anyhow::ensure!(
+            self.selected_backend()
+                .is_none_or(|kind| kind == RemoteFileBackendKind::Sftp),
+            "lightweight listing requires SFTP"
+        );
+        self.sftp_service
+            .list_directory_lightweight(path, limits, control, deadline)
+    }
+
     pub fn home_dir(&self) -> anyhow::Result<String> {
         let backend = self.backend()?;
         let output = self.shell(backend).exec_ok("printf '%s' \"$HOME\"", None)?;

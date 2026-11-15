@@ -43,6 +43,9 @@ pub(super) struct SessionEditingState {
     pub(super) suggestion_fill: Option<SuggestionFillRequest>,
     pub(super) pending_evidence: Option<SnapshotEvidence>,
     pub(super) awaiting_snapshot: bool,
+    /// Survives `clear_active`: a password prompt or alternate screen inside
+    /// the nested shell must not make the outer host's files look current.
+    pub(super) file_context: super::file_context::FileContextState,
 }
 
 /// This is a fill acknowledgement, never permission to synthesize Enter.
@@ -250,12 +253,14 @@ impl TerminalEditingState {
         // cannot prove that the foreground program returned to the shell.
         let command_navigation = std::mem::take(&mut self.state_mut().command_navigation);
         let awaiting_snapshot = self.state_mut().awaiting_snapshot;
+        let file_context = std::mem::take(&mut self.state_mut().file_context);
         let version = self.state_mut().model.version.wrapping_add(1);
         let mut model = ShellEditState::default();
         model.version = version;
         *self.state_mut() = SessionEditingState {
             command_navigation,
             awaiting_snapshot,
+            file_context,
             model,
             ..SessionEditingState::default()
         };
@@ -263,6 +268,16 @@ impl TerminalEditingState {
 }
 
 impl super::state::TerminalFeatureState {
+    pub(in crate::features) fn disconnect_shell_editing_session(&mut self, session_id: &str) {
+        // Background sessions must retire evidence and jobs too; they may
+        // reconnect before the active-view reconciliation ever observes EOF.
+        self.assist.path_completion.cancel_session(session_id);
+        if let Some(state) = self.editing.sessions.get_mut(session_id) {
+            state.file_context = Default::default();
+        }
+        self.invalidate_shell_editing_session(session_id);
+    }
+
     pub(in crate::features) fn activate_shell_editing_session(&mut self, session_id: &str) {
         self.editing.activate(session_id);
     }
@@ -289,6 +304,34 @@ mod tests {
     use super::{SuggestionFillRequest, TerminalEditingState};
     use nyaterm_core::terminal::editing::{EDIT_CONFIRMATION_TIMEOUT, EditCapability, EditPhase};
     use std::time::Instant;
+
+    #[test]
+    fn clearing_editing_keeps_the_original_shell_and_submission_guard() {
+        use nyaterm_core::terminal::file_context::ShellFileContext;
+        let mut editing = TerminalEditingState::default();
+        editing.activate("session");
+        let mut context = ShellFileContext {
+            binding: "0123456789abcdef0123456789abcdef".into(),
+            instance: 42,
+            user: 1000,
+            sequence: 1,
+            home: "/home/test".into(),
+            cwd: "/tmp".into(),
+        };
+        editing.state_mut().file_context.observe(Some(&context));
+        editing.state_mut().file_context.note_input(b"sudo -i\r");
+        editing.clear_active();
+        editing.state_mut().file_context.observe(Some(&context));
+        assert!(editing.state().unwrap().file_context.current().is_none());
+        let mut inner = context.clone();
+        inner.user = 0;
+        inner.sequence += 1;
+        editing.state_mut().file_context.observe(Some(&inner));
+        assert!(editing.state().unwrap().file_context.current().is_none());
+        context.sequence += 1;
+        editing.state_mut().file_context.observe(Some(&context));
+        assert!(editing.state().unwrap().file_context.current().is_some());
+    }
 
     #[test]
     fn history_navigation_suppression_survives_cursor_moves_and_session_switches() {

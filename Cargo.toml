@@ -142,7 +142,7 @@ regex = "1.11.1"
 rmcp = "=3.1.4"
 rustls = { version = "0.23.43", default-features = false, features = ["aws_lc_rs", "std"] }
 russh = { git = "https://github.com/nyakang/russh", rev = "f02221071224eb53501a620464e572c0559a91bd", features = ["des", "dsa"] }
-russh-sftp = { git = "https://github.com/nyakang/russh-sftp", rev = "b638b4896de6a0efd699e4c3833873221b3b3f01" }
+russh-sftp = { git = "https://github.com/nyakang/russh-sftp", rev = "e2c3affd010e680556b1d1adc86d58d910075f4b" }
 rusty-leveldb = "4.0"
 rust-embed = { version = "8.11", features = ["include-exclude", "debug-embed"] }
 rust-i18n = "4.2"

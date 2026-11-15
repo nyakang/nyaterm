@@ -1,4 +1,5 @@
 //! A single background owner for the catalog, token index and scoped mutations.
+use super::completion_user_specs::UserSpecLoader;
 use crate::features::runtime_jobs::CommandPersistenceResult;
 use futures::channel::{mpsc::UnboundedSender, oneshot};
 use nyaterm_core::completion::CompletionEngine;
@@ -11,6 +12,7 @@ use nyaterm_core::completion::types::{
 use nyaterm_core::completion::whole_history::WholeCommandHistoryIndex;
 use nyaterm_core::models::quick_commands::{CommandHistoryEntry, QuickCommand};
 use nyaterm_store::{StoreBlockingClient, StoreDomain};
+use std::path::PathBuf;
 use std::sync::{
     Arc, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -21,6 +23,8 @@ use std::sync::{
 pub(in crate::features) struct CompletionRuntime {
     tx: SyncSender<Request>,
     epoch: Arc<AtomicU64>,
+    catalog_epoch: Arc<AtomicU64>,
+    specs: UserSpecLoader,
     dirty: Arc<AtomicBool>,
     shared_generation: Arc<OnceLock<Arc<AtomicU64>>>,
 }
@@ -67,12 +71,26 @@ enum Request {
 }
 
 impl CompletionRuntime {
+    #[cfg(test)]
     pub(super) fn new(
         store: StoreBlockingClient,
         events: UnboundedSender<CommandPersistenceResult>,
     ) -> Self {
+        Self::new_with_user_specs(store, events, None)
+    }
+
+    /// `user_specs_dir` is read by the worker only; a missing directory is fine.
+    pub(super) fn new_with_user_specs(
+        store: StoreBlockingClient,
+        events: UnboundedSender<CommandPersistenceResult>,
+        user_specs_dir: Option<PathBuf>,
+    ) -> Self {
         let (tx, rx) = sync_channel(64);
         let epoch = Arc::new(AtomicU64::new(0));
+        let catalog_epoch = Arc::new(AtomicU64::new(0));
+        let worker_catalog_epoch = catalog_epoch.clone();
+        let specs = UserSpecLoader::spawn(user_specs_dir);
+        let worker_specs = specs.clone();
         let dirty = Arc::new(AtomicBool::new(false));
         let worker_dirty = dirty.clone();
         let shared_generation = Arc::new(OnceLock::<Arc<AtomicU64>>::new());
@@ -90,6 +108,7 @@ impl CompletionRuntime {
                         .map_or(0, |value| value.load(Ordering::Acquire))
                 };
                 let mut engine = CompletionEngine::embedded();
+
                 let mut whole_matcher = TextMatcher::default();
                 let mut history = TokenHistoryIndex::default();
                 let mut whole_history = WholeCommandHistoryIndex::default();
@@ -114,6 +133,10 @@ impl CompletionRuntime {
                                 events.unbounded_send(CommandPersistenceResult::History(outcome));
                         }
                         Request::Search(query, revision, response) => {
+                            if let Some(updated) = worker_specs.take() {
+                                engine = updated;
+                                worker_catalog_epoch.fetch_add(1, Ordering::AcqRel);
+                            }
                             if worker_dirty.swap(false, Ordering::AcqRel)
                                 || loaded_generation != Some(generation())
                             {
@@ -134,7 +157,8 @@ impl CompletionRuntime {
                             let _ = response.send(CompletionResult {
                                 candidates,
                                 revision: revision
-                                    .wrapping_add(loaded_generation.unwrap_or_else(generation)),
+                                    .wrapping_add(loaded_generation.unwrap_or_else(generation))
+                                    .wrapping_add(worker_catalog_epoch.load(Ordering::Acquire)),
                             });
                         }
                         Request::Delete(command, response) => {
@@ -147,6 +171,7 @@ impl CompletionRuntime {
                             let _ = response.send(outcome);
                         }
                         Request::Reload => {
+                            worker_specs.request();
                             loaded_generation =
                                 reload_history(&store, &mut history, &mut whole_history).ok();
                             if loaded_generation.is_none() {
@@ -162,16 +187,21 @@ impl CompletionRuntime {
         Self {
             tx,
             epoch,
+            catalog_epoch,
+            specs,
             dirty,
             shared_generation,
         }
     }
     pub(in crate::features) fn revision(&self) -> u64 {
-        self.epoch.load(Ordering::Acquire).wrapping_add(
-            self.shared_generation
-                .get()
-                .map_or(0, |value| value.load(Ordering::Acquire)),
-        )
+        self.epoch
+            .load(Ordering::Acquire)
+            .wrapping_add(self.catalog_epoch.load(Ordering::Acquire))
+            .wrapping_add(
+                self.shared_generation
+                    .get()
+                    .map_or(0, |value| value.load(Ordering::Acquire)),
+            )
     }
     pub(in crate::features) fn observe(
         &self,
@@ -192,6 +222,7 @@ impl CompletionRuntime {
             .is_ok()
     }
     pub(in crate::features) fn reload(&self) {
+        self.specs.request();
         self.dirty.store(true, Ordering::Release);
         self.epoch.fetch_add(1, Ordering::AcqRel);
         let _ = self.tx.try_send(Request::Reload);

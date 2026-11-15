@@ -356,7 +356,7 @@ impl CompletionCandidate {
         Some(format!("{before}{}{after}", self.insert_text))
     }
 }
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CompletionResult {
     pub candidates: Vec<CompletionCandidate>,
     pub revision: u64,

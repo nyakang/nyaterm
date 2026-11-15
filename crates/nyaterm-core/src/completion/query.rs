@@ -3,7 +3,7 @@ use crate::command_search::{RankedCommandSourceQuery, search_ranked_command_sour
 use crate::completion::history::TokenHistoryIndex;
 use crate::completion::matching::TextMatcher;
 use crate::completion::types::{
-    CompletionCandidate, CompletionFillPolicy, CompletionMode, ShellCommandContext,
+    CandidateKind, CompletionCandidate, CompletionFillPolicy, CompletionMode, ShellCommandContext,
 };
 use crate::completion::whole_history::WholeCommandHistoryIndex;
 use crate::completion::{CompletionEngine, TokenCompletionRequest};
@@ -50,6 +50,7 @@ pub fn search_candidates(
         quick: &TokenHistoryIndex::default(),
         limit: 12,
     });
+    let history_rows = candidates.len();
     for token in tokens {
         let Some(target) = token.target_line(query.input) else {
             continue;
@@ -64,8 +65,50 @@ pub fn search_candidates(
             candidates.push(token);
         }
     }
+    reserve_argument_rows(&mut candidates, history_rows, query.input);
     candidates.truncate(12);
     candidates
+}
+
+/// Rows reserved for flags and subcommands so a long history cannot push the
+/// contextual rows out of the popup.
+const RESERVED_ARGUMENT_ROWS: usize = 6;
+const FLAG_LEAD_ROWS: usize = 8;
+
+/// `candidates[history_rows..]` are token rows appended after whole commands.
+/// Typing a flag (`ls -`) puts the flags first; otherwise whole commands keep
+/// their lead but leave room for the token rows. Plain command words
+/// (`dock`) are untouched so whole commands keep their documented priority.
+fn reserve_argument_rows(
+    candidates: &mut Vec<CompletionCandidate>,
+    history_rows: usize,
+    input: &str,
+) {
+    let argument_rows = candidates[history_rows..]
+        .iter()
+        .filter(|row| row.kind != CandidateKind::Command)
+        .count();
+    if argument_rows == 0 {
+        return;
+    }
+    let mut tokens = candidates.split_off(history_rows);
+    let typing_flag = input
+        .rsplit(char::is_whitespace)
+        .next()
+        .is_some_and(|word| word.starts_with('-'));
+    // Whole commands still get a share when flags lead, and vice versa.
+    tokens.truncate(if typing_flag {
+        FLAG_LEAD_ROWS
+    } else {
+        RESERVED_ARGUMENT_ROWS
+    });
+    let mut history = std::mem::take(candidates);
+    history.truncate(12usize.saturating_sub(tokens.len()));
+    *candidates = if typing_flag {
+        tokens.into_iter().chain(history).collect()
+    } else {
+        history.into_iter().chain(tokens).collect()
+    };
 }
 
 fn full_history(

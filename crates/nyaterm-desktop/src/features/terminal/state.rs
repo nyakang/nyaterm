@@ -369,7 +369,16 @@ impl TerminalFeatureState {
         &mut self,
     ) -> Option<impl FnOnce() + Send + 'static> {
         self.assist.shutdown_workers();
-        self.view.frame_pipeline.take_shutdown()
+        let paths = self.assist.path_completion.begin_shutdown();
+        let frames = self.view.frame_pipeline.take_shutdown();
+        Some(move || {
+            if let Some(cleanup) = paths {
+                cleanup();
+            }
+            if let Some(cleanup) = frames {
+                cleanup();
+            }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -506,6 +515,7 @@ impl TerminalFeatureState {
     }
 
     pub(in crate::features) fn remove_search_session_state(&mut self, session_id: &str) {
+        self.assist.path_completion.cancel_session(session_id);
         self.search.wrap_around_by_session.remove(session_id);
     }
 

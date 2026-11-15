@@ -146,3 +146,5 @@ mod tests {
         assert!(bindings[1].action().partial_eq(&RootCopy));
     }
 }
+
+mod file_context;

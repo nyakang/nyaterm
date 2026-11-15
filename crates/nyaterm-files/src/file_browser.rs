@@ -1,3 +1,4 @@
+pub mod lightweight;
 pub mod listing;
 pub mod navigation;
 

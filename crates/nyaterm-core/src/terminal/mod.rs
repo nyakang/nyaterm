@@ -7,6 +7,7 @@
 pub mod connection_input;
 pub mod dynamic_title;
 pub mod editing;
+pub mod file_context;
 pub mod file_drop;
 pub mod input_fanout;
 pub mod input_tracker;

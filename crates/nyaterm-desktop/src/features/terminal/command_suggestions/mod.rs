@@ -30,10 +30,13 @@ mod fill;
 mod fill_tests;
 mod helpers;
 pub(super) mod paste;
+pub(super) mod path_source;
+mod progressive;
 
 use self::fill::{SuggestionSubmitResult, suggestion_fill_rejection_message};
 use self::helpers::command_suggestion_highlight_parts;
 use self::paste::SuggestionPasteContext;
+use self::path_source::{PATH_CANDIDATE_LIMIT, PathSource};
 use nyaterm_core::completion::fill::{SuggestionFill, plan_suggestion_fill};
 
 const COMMAND_SUGGESTION_INPUT_SLOW_THRESHOLD: Duration = Duration::from_millis(4);
@@ -95,6 +98,7 @@ struct CommandSuggestionRefreshTiming {
     hide_popup: Duration,
 }
 
+#[derive(Clone)]
 struct CommandSuggestionSearchRequest {
     request_id: u64,
     session_id: String,
@@ -112,6 +116,7 @@ struct CommandSuggestionSearchRequest {
     popup_visible_at_start: bool,
     timing: CommandSuggestionRefreshTiming,
     fill_policy: CompletionFillPolicy,
+    path_source: Option<PathSource>,
 }
 
 impl CommandSuggestionRefreshTiming {
@@ -136,6 +141,84 @@ fn command_suggestion_refresh_input_delay(
         let elapsed = now.saturating_duration_since(last);
         (elapsed < TERMINAL_INPUT_LATENCY_WINDOW).then(|| TERMINAL_INPUT_LATENCY_WINDOW - elapsed)
     })
+}
+
+/// Path rows lead once the user typed a directory part (`cd /va`); a bare
+/// name (`cd pr`) keeps history and catalog rows first.
+fn merge_path_candidates(
+    mut result: CompletionResult,
+    paths: Vec<CompletionCandidate>,
+    explicit_directory: bool,
+    input: &str,
+) -> CompletionResult {
+    if paths.is_empty() {
+        return result;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut existing = std::mem::take(&mut result.candidates);
+    let reserved: Vec<_> = existing
+        .iter()
+        .filter(|item| matches!(item.kind, CandidateKind::Option | CandidateKind::Subcommand))
+        .take(3)
+        .cloned()
+        .collect();
+    let mut merged = Vec::new();
+    let mut add = |item: CompletionCandidate| {
+        if let Some(target) = item.target_line(input)
+            && seen.insert(target)
+        {
+            merged.push(item);
+        }
+    };
+    for item in reserved {
+        add(item);
+    }
+    existing.truncate(6);
+    let paths = paths.into_iter().take(6);
+    if !explicit_directory {
+        for item in existing {
+            add(item);
+        }
+        for item in paths {
+            add(item);
+        }
+    } else {
+        for item in paths {
+            add(item);
+        }
+        for item in existing {
+            add(item);
+        }
+    }
+    merged.truncate(PATH_CANDIDATE_LIMIT);
+    result.candidates = merged;
+    result
+}
+
+fn preserve_suggestion_selection(
+    previous: Option<&CommandSuggestionState>,
+    next: &mut CommandSuggestionState,
+) {
+    if let Some(previous) = previous
+        && previous.session_id == next.session_id
+        && previous.mode == next.mode
+        && previous.input_version == next.input_version
+        && previous.draft == next.draft
+    {
+        next.selected_index = previous
+            .selected_index
+            .and_then(|i| previous.items.get(i))
+            .and_then(|selected| {
+                next.items
+                    .iter()
+                    .position(|item| item.command == selected.command)
+            });
+    }
+}
+
+/// True when `next` is `previous` plus characters typed at the end.
+fn command_suggestion_draft_only_appended(previous: &str, next: &str) -> bool {
+    !previous.is_empty() && next.len() > previous.len() && next.starts_with(previous)
 }
 
 fn command_suggestion_input_can_defer_refresh(state: &TerminalInputState) -> bool {
@@ -304,13 +387,40 @@ impl NyaTermApp {
         if popup.refreshing
             || !self.command_suggestions_allowed_for_session(&popup.session_id)
             || !self.command_suggestion_input_is_confirmed()
-            || self.terminal.editing.assist_input().value != popup.draft
-            || self.terminal.editing.state().unwrap().model.version != popup.input_version
             || self.sync_input.revision() != popup.sync_revision
         {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
+        let draft = self.terminal.editing.assist_input().value.clone();
+        let version = self.terminal.editing.state().unwrap().model.version;
+        if draft != popup.draft || version != popup.input_version {
+            // Typing forward only narrows the visible rows, so keep the popup
+            // instead of flickering until the debounced search lands. Any
+            // other edit (backspace, mid-line, paste) still hides it.
+            if !command_suggestion_draft_only_appended(&popup.draft, &draft) {
+                self.hide_command_suggestions_if_present(cx);
+                return;
+            }
+            let popup = self.terminal.assist.command_suggestions.as_mut().unwrap();
+            let selected = popup
+                .selected_index
+                .and_then(|index| popup.items.get(index))
+                .map(|item| item.command.clone());
+            popup.items.retain(|item| item.command.starts_with(&draft));
+            popup.draft = draft;
+            popup.input_version = version;
+            popup.selected_index = selected
+                .and_then(|command| popup.items.iter().position(|item| item.command == command));
+            if popup.items.is_empty() {
+                self.hide_command_suggestions_if_present(cx);
+                return;
+            }
+            cx.notify();
+        }
+        let Some(popup) = self.terminal.assist.command_suggestions.as_ref() else {
+            return;
+        };
         let policy = self.command_suggestion_fill_policy(&popup.session_id);
         let popup = self.terminal.assist.command_suggestions.as_mut().unwrap();
         let selected_command = popup
@@ -621,7 +731,8 @@ impl NyaTermApp {
                         return None;
                     }
                     if this.runtime_output_pressure_active() {
-                        this.hide_command_suggestions_if_present(cx);
+                        // The visible rows were already narrowed to the current
+                        // draft, so keep them; echo of typed keys is also output.
                         this.schedule_command_suggestion_refresh_after(
                             COMMAND_SUGGESTION_REFRESH_PRESSURE_RETRY,
                             cx,
@@ -634,22 +745,51 @@ impl NyaTermApp {
                     return;
                 };
                 let search_started_at = Instant::now();
-                let results = request
-                    .completion
-                    .search(CompletionQuery {
-                        fill_policy: Some(request.fill_policy),
-                        context: request.context.clone(),
-                        input: request.pattern.clone(),
-                        mode: request.mode,
-                        quick: request.quick_commands.clone(),
-                        min: request.min_chars,
-                        max: request.max_chars,
-                    })
-                    .await;
-                let search_duration = search_started_at.elapsed();
-                let _ = this.update(cx, |this, cx| {
-                    this.publish_command_suggestion_search(request, results, search_duration, cx);
+                let path_task = request.path_source.clone().map(|source| {
+                    let input = request.pattern.clone();
+                    cx.background_executor()
+                        .spawn(async move { source.candidates(&input).await })
                 });
+                let completion = request.completion.clone();
+                let ordinary = completion.search(CompletionQuery {
+                    fill_policy: Some(request.fill_policy),
+                    context: request.context.clone(),
+                    input: request.pattern.clone(),
+                    mode: request.mode,
+                    quick: request.quick_commands.clone(),
+                    min: request.min_chars,
+                    max: request.max_chars,
+                });
+                let paths = async move {
+                    match path_task {
+                        Some(task) => task.await,
+                        None => Vec::new(),
+                    }
+                };
+                progressive::publish_progressively(ordinary, paths, |result, paths| {
+                    let mut publication = request.clone();
+                    let result = match (paths, publication.path_source.as_ref()) {
+                        (Some(paths), Some(source)) => merge_path_candidates(
+                            result,
+                            paths,
+                            !source.query().dir_text.is_empty(),
+                            &publication.pattern,
+                        ),
+                        _ => {
+                            publication.path_source = None;
+                            result
+                        }
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        this.publish_command_suggestion_search(
+                            publication,
+                            result,
+                            search_started_at.elapsed(),
+                            cx,
+                        );
+                    });
+                })
+                .await;
             }));
     }
 
@@ -795,6 +935,7 @@ impl NyaTermApp {
         if !self.command_suggestions_allowed_for_session(&session_id)
             || !self.command_suggestion_input_is_confirmed()
         {
+            self.log_command_suggestions_unavailable(&session_id);
             if !self.command_suggestion_refresh_can_remain_visible() {
                 self.hide_command_suggestions_if_present(cx);
             }
@@ -841,6 +982,10 @@ impl NyaTermApp {
             timing.hide_popup = hide_started_at.elapsed();
             finish_refresh!("pager_prefix", pattern_chars, 0);
         }
+        let context = self.command_suggestion_context(&session_id);
+        let path_source = (mode == CompletionMode::Token)
+            .then(|| self.path_source_for_session(&session_id, &pattern, context.dialect))
+            .flatten();
         Some(CommandSuggestionSearchRequest {
             request_id,
             session_id: session_id.clone(),
@@ -851,13 +996,14 @@ impl NyaTermApp {
             min_chars,
             max_chars,
             mode,
-            context: self.command_suggestion_context(&session_id),
+            context,
             completion: self.commands.completion_runtime(),
             quick_commands: self.commands.quick_commands_snapshot(),
             started_at,
             popup_visible_at_start,
             timing,
             fill_policy: self.command_suggestion_fill_policy(&session_id),
+            path_source,
         })
     }
 
@@ -868,7 +1014,14 @@ impl NyaTermApp {
         search_duration: Duration,
         cx: &mut Context<Self>,
     ) {
-        if self.commands.completion_runtime().revision() != result.revision
+        if request.path_source.as_ref().is_some_and(|source| {
+            self.terminal
+                .editing
+                .sessions
+                .get(&request.session_id)
+                .and_then(|state| state.file_context.current())
+                .is_none_or(|context| context.cache_key() != source.context())
+        }) || self.commands.completion_runtime().revision() != result.revision
             || self.command_suggestion_context(&request.session_id).scope != request.context.scope
             || self.terminal.assist.command_suggestion_search_gen != request.request_id
             || self.session.active_id() != Some(request.session_id.as_str())
@@ -905,6 +1058,7 @@ impl NyaTermApp {
             })
             .collect();
         let completion_revision = result.revision;
+        let incremental = request.path_source.is_some();
         let scope = Some(request.context.scope.clone());
         let mode = request.mode;
         let CommandSuggestionSearchRequest {
@@ -935,7 +1089,7 @@ impl NyaTermApp {
             return;
         }
         let update_started_at = Instant::now();
-        let next_state = CommandSuggestionState {
+        let mut next_state = CommandSuggestionState {
             refreshing: false,
             mode,
             completion_revision,
@@ -950,6 +1104,12 @@ impl NyaTermApp {
                 .collect(),
             selected_index: None,
         };
+        if incremental {
+            preserve_suggestion_selection(
+                self.terminal.assist.command_suggestions.as_ref(),
+                &mut next_state,
+            );
+        }
         if !command_suggestion_state_changed(
             self.terminal.assist.command_suggestions.as_ref(),
             &next_state,
@@ -1030,6 +1190,28 @@ impl NyaTermApp {
             hide_popup_us = timing.hide_popup.as_micros(),
             schedule_us = timing.schedule.as_micros(),
             "slow terminal suggestion input"
+        );
+    }
+
+    /// Explains why no popup was offered. Flags only, never input text.
+    fn log_command_suggestions_unavailable(&mut self, session_id: &str) {
+        if !self.should_log_slow_diagnostic("terminal_suggestion_unavailable", Instant::now()) {
+            return;
+        }
+        let allowed = self.command_suggestions_allowed_for_session(session_id);
+        let state = self.terminal.editing.state();
+        tracing::info!(
+            diagnostic = "terminal_suggestion_unavailable",
+            allowed,
+            editing_active = self.terminal.editing.is_active(session_id),
+            suppression = ?self.terminal.assist.command_suggestion_suppression,
+            phase = ?state.map(|s| s.model.phase),
+            has_mapping = state.is_some_and(|s| s.mapping.is_some()),
+            awaiting_snapshot = state.is_some_and(|s| s.awaiting_snapshot),
+            desynced = state.is_some_and(|s| s.model.input.desynced),
+            multiline = state.is_some_and(|s| s.model.input.multiline),
+            line_rewrite = state.is_some_and(|s| s.model.input.line_rewrite_required),
+            "command suggestions unavailable"
         );
     }
 
@@ -2389,10 +2571,11 @@ mod tests {
 
     use super::{
         command_history_input_update, command_suggestion_clamp_selection,
-        command_suggestion_input_can_defer_refresh, command_suggestion_input_candidate_chars,
-        command_suggestion_input_obvious_pager_prefix, command_suggestion_item_for_selection,
-        command_suggestion_refresh_input_delay, command_suggestion_state_changed,
-        command_suggestion_step_selection, terminal_line_prefix_for_cell_col,
+        command_suggestion_draft_only_appended, command_suggestion_input_can_defer_refresh,
+        command_suggestion_input_candidate_chars, command_suggestion_input_obvious_pager_prefix,
+        command_suggestion_item_for_selection, command_suggestion_refresh_input_delay,
+        command_suggestion_state_changed, command_suggestion_step_selection,
+        terminal_line_prefix_for_cell_col,
     };
 
     #[test]
@@ -3072,6 +3255,15 @@ mod tests {
     }
 
     #[test]
+    fn only_forward_typing_keeps_the_popup_alive() {
+        assert!(command_suggestion_draft_only_appended("git c", "git ch"));
+        assert!(!command_suggestion_draft_only_appended("git ch", "git c"));
+        assert!(!command_suggestion_draft_only_appended("git c", "git c"));
+        assert!(!command_suggestion_draft_only_appended("", "g"));
+        assert!(!command_suggestion_draft_only_appended("git c", "ls"));
+    }
+
+    #[test]
     fn command_suggestion_refresh_input_delay_waits_for_terminal_idle_window() {
         let now = Instant::now();
         assert_eq!(
@@ -3252,6 +3444,25 @@ mod tests {
             }],
             selected_index: Some(0),
         }
+    }
+
+    #[test]
+    fn incremental_selection_follows_the_command_and_never_a_reused_row_index() {
+        let previous = open_suggestions_popup("s1");
+        let mut next = open_suggestions_popup("s1");
+        let mut added = next.items[0].clone();
+        added.command = "new-path".into();
+        next.items.insert(0, added);
+        next.selected_index = None;
+        super::preserve_suggestion_selection(Some(&previous), &mut next);
+        assert_eq!(next.selected_index, Some(1));
+        next.items.pop();
+        super::preserve_suggestion_selection(Some(&previous), &mut next);
+        assert_eq!(next.selected_index, None);
+        next.input_version += 1;
+        next.items = previous.items.clone();
+        super::preserve_suggestion_selection(Some(&previous), &mut next);
+        assert_eq!(next.selected_index, None);
     }
 
     #[test]

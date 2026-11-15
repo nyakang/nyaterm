@@ -398,3 +398,52 @@ fn both_modes_find_other_host_whole_commands_without_learning_its_argument_token
         }
     }
 }
+
+#[test]
+fn flags_are_not_crowded_out_by_a_long_history() {
+    use crate::completion::CompletionEngine;
+    use crate::completion::matching::TextMatcher;
+    use crate::completion::query::tests::HistoryFixture;
+    use std::collections::BTreeMap;
+
+    let scope = CompletionScope::new(&["flag-crowding-fixture"]);
+    let mut index = HistoryFixture::default();
+    for n in 0..20 {
+        index.upsert(ScopedHistoryRecord {
+            version: 1,
+            scope: scope.clone(),
+            dialect: ShellDialect::Bash,
+            command: format!("ls -l /srv/fixture-{n}"),
+            use_count: 1,
+            last_used_at_ms: n,
+            extensions: BTreeMap::new(),
+        });
+    }
+    let mut query = CompletionQuery {
+        fill_policy: None,
+        context: ShellCommandContext {
+            scope,
+            dialect: ShellDialect::Bash,
+            command_events: true,
+        },
+        input: "ls -".into(),
+        mode: CompletionMode::Token,
+        quick: Arc::from([]),
+        min: 2,
+        max: 64,
+    };
+    let mut engine = CompletionEngine::embedded();
+    let mut matcher = TextMatcher::default();
+    let typing_flag = search_candidates(&mut engine, &index, &query, &mut matcher);
+    assert_eq!(typing_flag.len(), 12);
+    assert!(typing_flag[0].insert_text.starts_with('-'), "flags lead");
+    assert!(
+        typing_flag
+            .iter()
+            .any(|c| c.insert_text.starts_with("ls -l /srv"))
+    );
+    // A subcommand position keeps history first but still shows the subcommand.
+    query.input = "git ch".into();
+    let subcommands = search_candidates(&mut engine, &index, &query, &mut matcher);
+    assert!(subcommands.iter().any(|c| c.insert_text == "checkout"));
+}

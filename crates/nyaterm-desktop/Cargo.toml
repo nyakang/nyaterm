@@ -90,3 +90,6 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 x11rb = { version = "0.13.2", features = ["allow-unsafe-code"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

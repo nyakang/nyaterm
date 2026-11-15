@@ -91,7 +91,7 @@ fn complete_migration_preserves_credentials_unknown_fields_plugins_and_recording
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
     assert_eq!(
-        opened.selection.data_dir,
+        fs::canonicalize(&opened.selection.data_dir).unwrap(),
         fs::canonicalize(&target).unwrap()
     );
     let connection = opened.store.list_connections().unwrap().remove(0);
@@ -250,7 +250,15 @@ fn special_plugin_entries_fail_without_publishing_the_database() {
     let root = TestTempDir::new("nyaterm-data-directory-special");
     let local = root.join("local");
     fixture(&local);
-    let _socket = std::os::unix::net::UnixListener::bind(local.join("plugins/socket")).unwrap();
+    // Bind at a short path before moving into the fixture: macOS limits the
+    // socket address length even when the filesystem accepts the final path.
+    let socket_root = TestTempDir::from_path(
+        std::env::temp_dir().join(format!("nyaterm-{}", uuid::Uuid::new_v4().simple())),
+    );
+    fs::create_dir_all(socket_root.path()).unwrap();
+    let socket_path = socket_root.join("s");
+    let _socket = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    fs::rename(socket_path, local.join("plugins/socket")).unwrap();
     let target = root.join("target/.nyaterm");
     queue_switch(&local, &local, &target, AppFlavor::Stable).unwrap();
     assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
@@ -334,7 +342,7 @@ fn every_publication_boundary_retries_without_losing_source_data() {
         drop(failed);
         let retried = open_startup(&local, &local, AppFlavor::Stable).unwrap();
         assert_eq!(
-            retried.selection.data_dir,
+            fs::canonicalize(&retried.selection.data_dir).unwrap(),
             fs::canonicalize(&target).unwrap(),
             "{point}: {:?}",
             retried.selection.notice
@@ -403,15 +411,32 @@ fn migration_lock_excludes_redb_in_another_process() {
     let path = root.join(DATABASE_FILE_NAME);
     let before = fs::read(&path).unwrap();
     let locked = crate::data_directory::LockedDatabase::open(&path).unwrap();
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "data_directory::tests::migration_lock_excludes_redb_in_another_process",
             "--nocapture",
         ])
         .env(CHILD_PATH, &path)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
+    // A blocking lock implementation must fail this probe instead of keeping
+    // the entire test binary alive and hiding all other migration failures.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let timed_out = loop {
+        if child.try_wait().unwrap().is_some() {
+            break false;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            break true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let output = child.wait_with_output().unwrap();
+    assert!(!timed_out, "migration lock probe exceeded its deadline");
     assert!(
         output.status.success(),
         "{}",
@@ -545,7 +570,10 @@ fn migration_loads_a_supported_legacy_database_with_only_text_documents() {
     }
     let choice = queue_switch(&local, &local, &root.join("target"), AppFlavor::Stable).unwrap();
     let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(opened.selection.data_dir, choice.target);
+    assert_eq!(
+        fs::canonicalize(&opened.selection.data_dir).unwrap(),
+        fs::canonicalize(&choice.target).unwrap()
+    );
     assert!(
         opened
             .store
@@ -576,7 +604,10 @@ fn explicit_recovery_selection_persists_and_does_not_switch_back_when_disk_retur
     drop(opened);
     fs::rename(root.join("unmounted"), &custom).unwrap();
     let reopened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(reopened.selection.data_dir, local);
+    assert_eq!(
+        fs::canonicalize(&reopened.selection.data_dir).unwrap(),
+        fs::canonicalize(&local).unwrap()
+    );
     assert_eq!(
         reopened.store.list_connections().unwrap()[0].name,
         connection.name
@@ -641,7 +672,10 @@ fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
             );
         }
         let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-        assert_eq!(restored.selection.data_dir, local);
+        assert_eq!(
+            fs::canonicalize(&restored.selection.data_dir).unwrap(),
+            fs::canonicalize(&local).unwrap()
+        );
         assert_eq!(
             restored.store.list_connections().unwrap()[0].name,
             "current data"
@@ -713,7 +747,10 @@ fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_cu
                 b"unexpected"
             );
         } else {
-            assert_eq!(result.unwrap().selection.data_dir, local);
+            assert_eq!(
+                fs::canonicalize(result.unwrap().selection.data_dir).unwrap(),
+                fs::canonicalize(&local).unwrap()
+            );
             assert!(!local.join("plugins").exists());
             assert!(!local.join("recordings").exists());
         }
@@ -744,7 +781,10 @@ fn cancelling_an_interrupted_migration_persists_source_selection() {
     assert!(location.pending.is_none());
     assert!(target.join(JOURNAL_NAME).exists());
     let source = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-    assert_eq!(source.selection.data_dir, local);
+    assert_eq!(
+        fs::canonicalize(&source.selection.data_dir).unwrap(),
+        fs::canonicalize(&local).unwrap()
+    );
     assert!(!target.join(DATABASE_FILE_NAME).exists());
 }
 

@@ -63,6 +63,56 @@ NyaTerm provides two related helpers for session workflows.
 
 While typing, NyaTerm suggests commands based on history. In **Settings → Interaction**, you can enable suggestions and set the minimum and maximum history command lengths. Length filters select completion candidates while preserving history records.
 
+### Path completion
+
+For input such as `cd /var/lo`, `~/`, or a relative path, directory results join the popup when ready. History, flags, and subcommands appear without waiting for directory I/O.
+
+- Available for local POSIX shells with shell integration evidence and SSH sessions with SFTP enabled. Windows local paths, ADB, and shell-only file backends are currently unsupported.
+- Submitting a command suspends path completion until a fresh prompt identifies the original shell instance, user, and HOME. This also covers `sudo -i`, `su -`, nested SSH, and aliases that enter another environment. Ordinary completion remains available when file context is unknown.
+- Each query reads at most 20,000 directory entries and 4 MiB of filenames. Large directories may produce incomplete results. Completion does not resolve link targets or user/group names; directory-only suggestions omit symlinks whose target type is unknown.
+- When a right prompt cannot be distinguished from leftover input, automatic filling waits for unambiguous input evidence.
+
+### Custom completion specs
+
+The built-in command, subcommand and flag completion can be extended or overridden with your own specs, for internal tools or personal scripts.
+
+Put `*.json` files in the `completions/` folder inside the configuration directory (next to the settings files):
+
+```json
+{
+  "version": 1,
+  "roots": [
+    {
+      "token": "deploy",
+      "description": "Ship a release",
+      "children": [
+        {
+          "token": "staging",
+          "description": "Deploy to staging",
+          "flags": [
+            { "long": "force", "short": "f", "description": "Skip checks" },
+            { "long": "env", "takes_value": true, "values": ["blue", "green"] }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "ls",
+      "flags": [{ "long": "all", "short": "a", "description": "Show hidden entries" }]
+    }
+  ]
+}
+```
+
+- Commands and subcommands with the same name are merged; a flag with the same name **overrides** the built-in one, and everything else built in stays.
+- Files apply in file-name order, and later files win.
+- Edits take effect within a few seconds without a restart; removing a file restores the built-in completion.
+- Each file is limited to 1 MiB, at most 64 files and 8 MiB total are read, and only regular `.json` files are used (symlinks are not followed).
+- An invalid file is skipped. The log records only the reason. Loading runs on a separate background thread without delaying ordinary completion queries.
+- Command, flag and value names may only contain letters, digits and `- _ . : / + @ , % = \`. Control characters are removed from descriptions, which are cut to 256 characters.
+
+The directory is read on a separate background worker. Scans above 4,096 entries or temporarily unreadable directories retain the last successful catalog.
+
 ## Invoking AI from the terminal
 
 The terminal context menu offers these AI entry points, each carrying the current session context automatically:

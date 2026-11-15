@@ -4,6 +4,8 @@
 //! targets; downloads validate remote names, local path boundaries, and symbolic
 //! links to prevent server-controlled names from redirecting local writes.
 
+mod lightweight;
+
 use crate::remote_file::copy_progress::CopyProgress;
 use crate::remote_file::{
     RemoteTextDocument, RemoteTextMetadata, RemoteTextRevision, RemoteTextWriteResult,

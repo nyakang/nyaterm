@@ -43,6 +43,15 @@ impl NyaTermApp {
             return;
         };
         self.terminal.editing.activate(&id);
+        if self
+            .terminal
+            .editing
+            .state_mut()
+            .file_context
+            .note_input(bytes)
+        {
+            self.terminal.assist.path_completion.cancel_session(&id);
+        }
         self.terminal.editing.state_mut().suggestion_fill = None;
         let fallback = candidate.as_ref().and_then(|evidence| {
             self.terminal
@@ -216,6 +225,11 @@ impl NyaTermApp {
             return;
         }
         self.terminal.editing.activate(id);
+        if self.session.is_disconnected(id) {
+            // A reconnect starts a fresh shell on the session's own host.
+            self.terminal.editing.state_mut().file_context = Default::default();
+            self.terminal.assist.path_completion.cancel_session(id);
+        }
         if self.session.is_disconnected(id)
             || self.active_terminal_uses_alternate_screen()
             || self.is_credential_prompt_input_mode()
@@ -225,6 +239,27 @@ impl NyaTermApp {
             return;
         }
         let snapshot = self.terminal_snapshot_for_session(Some(id), 0);
+        let previous_context = self
+            .terminal
+            .editing
+            .state()
+            .and_then(|state| state.file_context.current())
+            .map(|context| context.cache_key());
+        self.terminal.editing.state_mut().file_context.observe(
+            snapshot
+                .shell_input_anchor
+                .and(snapshot.file_context.as_deref()),
+        );
+        let next_context = self
+            .terminal
+            .editing
+            .state()
+            .and_then(|state| state.file_context.current())
+            .map(|context| context.cache_key());
+        if previous_context != next_context {
+            self.terminal.assist.path_completion.cancel_session(id);
+        }
+
         self.terminal
             .editing
             .state_mut()
@@ -283,6 +318,7 @@ impl NyaTermApp {
         {
             let old_anchor = state.observed_anchor.flatten();
             let submitted = old_anchor.is_some() && old_anchor == state.submitted_anchor;
+
             state.invalidate();
             state.submitted_anchor = None;
             // OSC C may arrive after typing has already started in a child shell.
@@ -311,7 +347,14 @@ impl NyaTermApp {
         } else {
             None
         };
+        // A line that was just submitted stays on screen, still marked, until the
+        // shell reports the command started. Recovering from it would resurrect
+        // the executed command as the new input (`clear` wipes the screen right
+        // after, leaving every later keystroke appended to the dead text).
+        let marked_line_was_submitted = state.submitted_anchor.is_some()
+            && state.submitted_anchor == snapshot.shell_input_anchor;
         if mapping.is_none()
+            && !marked_line_was_submitted
             && state.model.phase != EditPhase::Pending
             && (state.model.input.desynced
                 || state.model.input.line_rewrite_required
@@ -452,6 +495,14 @@ impl NyaTermApp {
             } else {
                 "Suggestion fill confirmed"
             });
+            // Accepting a directory leaves the cursor right after its `/`, so
+            // offer its entries at once instead of waiting for another key.
+            if !execute_requested
+                && self.terminal.editing.assist_input().value.ends_with('/')
+                && self.command_suggestions_allowed_for_session(id)
+            {
+                self.refresh_command_suggestions(cx);
+            }
             cx.notify();
         }
     }
@@ -476,6 +527,43 @@ mod tests {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{TerminalBufferCellPos, TerminalSelection};
     use crate::test_support::TestConfigDir;
+
+    #[test]
+    fn a_background_disconnect_allows_a_fresh_binding_on_reconnect() {
+        use nyaterm_core::terminal::file_context::ShellFileContext;
+        let dir = TestConfigDir::new("nyaterm-background-file-context");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "active");
+        cx.update_entity(&app, |app, cx| {
+            let mut context = ShellFileContext {
+                binding: "0123456789abcdef0123456789abcdef".into(),
+                instance: 123,
+                user: 1000,
+                sequence: 1,
+                home: "/home/test".into(),
+                cwd: "/tmp".into(),
+            };
+            app.terminal.editing.activate("background");
+            app.terminal
+                .editing
+                .state_mut()
+                .file_context
+                .observe(Some(&context));
+            app.terminal
+                .editing
+                .state_mut()
+                .file_context
+                .note_input(b"sudo -i\r");
+            app.terminal.editing.activate("active");
+            app.mark_session_disconnected("background", cx);
+            context.binding = "abcdef0123456789abcdef0123456789".into();
+            let state = app.terminal.editing.sessions.get_mut("background").unwrap();
+            assert!(state.file_context.current().is_none());
+            state.file_context.observe(Some(&context));
+            assert_eq!(state.file_context.current(), Some(&context));
+        });
+    }
     use nyaterm_terminal::selection::{TerminalCellSide, TerminalSelectionEndpoint};
 
     struct InputHost;
@@ -607,6 +695,54 @@ mod tests {
                     .value
                     .is_empty()
             );
+        });
+    }
+
+    #[test]
+    fn input_is_confirmed_again_after_clear_wipes_the_screen() {
+        let dir = TestConfigDir::new("nyaterm-shell-edit-clear");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            // The view is rebuilt from the whole byte stream each time, which
+            // is exactly what one persistent screen would have received.
+            let mut stream = String::new();
+            let mut feed = |app: &mut crate::features::NyaTermApp, text: &str| {
+                stream.push_str(text);
+                app.terminal
+                    .seed_session_view("s1".into(), stream.clone(), "UTF-8");
+            };
+            feed(app, "\x1b]133;A\x07$ \x1b]133;B\x07");
+            app.note_shell_editing_input(b"clear", cx);
+            feed(app, "clear");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.command_suggestion_input_is_confirmed(), "before clear");
+            app.note_shell_editing_input(b"\r", cx);
+            // The shell has not reported the command start yet, so the marked
+            // line is still on screen. It must not come back as new input.
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.terminal.editing.predicted_input().value.is_empty());
+            feed(app, "\r\n\x1b]133;C\x07");
+            app.reconcile_shell_editing("s1", cx);
+            feed(
+                app,
+                "\x1b[H\x1b[2J\x1b[3J\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07",
+            );
+            app.reconcile_shell_editing("s1", cx);
+            app.note_shell_editing_input(b"cd /", cx);
+            feed(app, "cd /");
+            app.reconcile_shell_editing("s1", cx);
+            let state = app.terminal.editing.state().unwrap();
+            assert!(
+                app.command_suggestion_input_is_confirmed(),
+                "after clear: phase={:?} mapping={} desynced={} value={:?}",
+                state.model.phase,
+                state.mapping.is_some(),
+                state.model.input.desynced,
+                state.model.input.value,
+            );
+            assert_eq!(app.terminal.editing.predicted_input().value, "cd /");
         });
     }
 
