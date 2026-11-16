@@ -352,8 +352,15 @@ impl SessionFeatureState {
     pub(in crate::features) fn mark_restore_complete(&mut self) -> bool {
         self.restore.mark_complete()
     }
-    pub(in crate::features) fn active_list_scroll(&self) -> &UniformListScrollHandle {
-        &self.active_list_scroll
+    pub(in crate::features) fn sync_active_sessions_list(
+        &mut self,
+        session_ids: &[String],
+    ) -> ListState {
+        if self.active_list_ids.as_slice() != session_ids {
+            self.active_list_scroll.reset(session_ids.len());
+            self.active_list_ids = session_ids.to_vec();
+        }
+        self.active_list_scroll.clone()
     }
     pub(in crate::features) fn active_search_draft(&self) -> &str {
         &self.active_search_draft
