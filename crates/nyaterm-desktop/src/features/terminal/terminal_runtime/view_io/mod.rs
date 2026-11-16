@@ -69,6 +69,17 @@ fn terminal_paint_snapshot_for_view(
         .or(retained_surface_snapshot)
 }
 
+/// A cached scroll snapshot may only paint while its shared rows still match
+/// the live frame; in-place output keeps history coordinates unchanged.
+fn terminal_cached_snapshot_is_current(
+    view: &TerminalViewState,
+    snapshot: &std::sync::Arc<TerminalSnapshot>,
+) -> bool {
+    view.frame_snapshot.as_ref().is_none_or(|live| {
+        std::sync::Arc::ptr_eq(live, snapshot) || snapshot.content_agrees_with(live)
+    })
+}
+
 fn terminal_cached_scrollback_snapshot_covering_display_offset(
     view: &TerminalViewState,
     display_offset: usize,
@@ -81,6 +92,7 @@ fn terminal_cached_scrollback_snapshot_covering_display_offset(
         && view
             .history_state()
             .preserves_coordinates_from(snapshot.history)
+        && terminal_cached_snapshot_is_current(view, snapshot)
     {
         return Some(snapshot.clone());
     }
@@ -90,6 +102,7 @@ fn terminal_cached_scrollback_snapshot_covering_display_offset(
         .filter(|snapshot| {
             view.history_state()
                 .preserves_coordinates_from(snapshot.history)
+                && terminal_cached_snapshot_is_current(view, snapshot)
                 && terminal_snapshot_covers_display_offset(
                     snapshot.as_ref(),
                     display_offset,
@@ -643,7 +656,9 @@ impl NyaTermApp {
                     .clone()
                     .unwrap_or_else(|| view.live_snapshot_with_scroll_window());
             }
-            if let Some(snapshot) = view.scrollback_snapshots.get(&offset).cloned() {
+            if let Some(snapshot) = view.scrollback_snapshots.get(&offset).cloned()
+                && terminal_cached_snapshot_is_current(view, &snapshot)
+            {
                 return snapshot;
             }
             if let Some(snapshot) = view.frame_snapshot.as_ref()

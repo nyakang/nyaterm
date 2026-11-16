@@ -2206,3 +2206,18 @@ fn cached_history_rows_use_the_latest_navigation_target_after_reset() {
     assert_eq!(painted.command_navigation_target, None);
     assert!(Arc::ptr_eq(&painted.row_data, &old.row_data));
 }
+
+#[test]
+fn cached_scrollback_snapshot_stops_matching_after_in_place_output() {
+    let mut view = TerminalViewState::new();
+    view.screen = TerminalScreen::new(20, 6);
+    view.screen.advance(b"old\r\nold\r\n\x1b[2J\x1b[Hroot# ");
+    let cached = Arc::new(view.screen.viewport_snapshot_with_window(0, 2, 2));
+    view.frame_snapshot = Some(cached.clone());
+    assert!(super::terminal_cached_snapshot_is_current(&view, &cached));
+
+    // New output repaints the live viewport without moving history.
+    view.screen.advance(b"ls 2\r\n");
+    view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot_with_window(0, 2, 2)));
+    assert!(!super::terminal_cached_snapshot_is_current(&view, &cached));
+}
