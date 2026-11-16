@@ -53,22 +53,26 @@ impl BridgeEndpoint {
 }
 
 struct Connection {
+    endpoint: BridgeEndpoint,
     client_resume: bool,
     lifecycle: bool,
     connection_targets: bool,
     reader: BufReader<tokio::net::tcp::OwnedReadHalf>,
     writer: tokio::net::tcp::OwnedWriteHalf,
     next_id: u64,
-    rpc_timeout: Duration,
+}
+
+struct BridgeConnectionState {
+    last_endpoint: BridgeEndpoint,
+    connection: Option<Connection>,
+    resume_token: Option<nyaterm_core::SecretString>,
 }
 
 #[derive(Clone)]
 pub struct BridgeClient {
-    endpoint: BridgeEndpoint,
     discovery: Option<PathBuf>,
-    connection: Arc<Mutex<Option<Connection>>>,
+    state: Arc<Mutex<BridgeConnectionState>>,
     identity: Arc<Mutex<Option<ClientIdentifyParams>>>,
-    resume_token: Arc<Mutex<Option<nyaterm_core::SecretString>>>,
     negotiated: Arc<AtomicBool>,
     lifecycle: Arc<AtomicBool>,
     connection_targets: Arc<AtomicBool>,
@@ -77,11 +81,13 @@ pub struct BridgeClient {
 impl BridgeClient {
     pub fn new(endpoint: BridgeEndpoint) -> Self {
         Self {
-            endpoint,
             discovery: None,
-            connection: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(BridgeConnectionState {
+                last_endpoint: endpoint,
+                connection: None,
+                resume_token: None,
+            })),
             identity: Arc::new(Mutex::new(None)),
-            resume_token: Arc::new(Mutex::new(None)),
             negotiated: Arc::new(AtomicBool::new(false)),
             lifecycle: Arc::new(AtomicBool::new(false)),
             connection_targets: Arc::new(AtomicBool::new(false)),
@@ -92,17 +98,18 @@ impl BridgeClient {
     /// attempt, so a restarted NyaTerm publishing a new bridge credential heals
     /// the next connection instead of staying wedged on the dead endpoint until
     /// the forwarder itself is restarted. A missing or invalid document falls
-    /// back to the last resolved endpoint.
+    /// back to the last fully negotiated endpoint, or the constructor endpoint
+    /// before the first successful connection.
     pub fn with_discovery_path(mut self, path: PathBuf) -> Self {
         self.discovery = Some(path);
         self
     }
 
-    fn endpoint_for_connect(&self) -> BridgeEndpoint {
+    fn endpoint_for_connect(&self, fallback: &BridgeEndpoint) -> BridgeEndpoint {
         self.discovery
             .as_ref()
             .and_then(|path| read_discovery_endpoint(path).ok())
-            .unwrap_or_else(|| self.endpoint.clone())
+            .unwrap_or_else(|| fallback.clone())
     }
 
     pub fn supports_connection_targets(&self) -> bool {
@@ -123,7 +130,7 @@ impl BridgeClient {
             return;
         }
         let _ = tokio::time::timeout(FIRST_NEGOTIATION_TIMEOUT, async {
-            let mut guard = self.connection.lock().await;
+            let mut guard = self.state.lock().await;
             self.ensure_connection(&mut guard, true).await
         })
         .await;
@@ -155,7 +162,7 @@ impl BridgeClient {
             arguments,
         })
         .map_err(|error| bridge_error("invalid_argument", &error.to_string()))?;
-        let mut guard = self.connection.lock().await;
+        let mut guard = self.state.lock().await;
         if cancellation.is_cancelled() {
             return Err(bridge_error(
                 "cancelled",
@@ -163,14 +170,16 @@ impl BridgeClient {
             ));
         }
         self.ensure_connection(&mut guard, true).await?;
-        let connection = guard.as_mut().unwrap();
+        let resume = guard.resume_token.clone();
+        let connection = guard.connection.as_mut().unwrap();
+        // Capture the execution's credential before discovery can rotate or a
+        // later connection can publish a different owner recovery token.
+        let endpoint = connection.endpoint.clone();
         let result = tokio::select! {
             _ = cancellation.cancelled() => {
-                let endpoint = self.endpoint_for_connect();
-                let resume = self.resume_token.lock().await.clone();
                 tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id, resume.as_ref()).await; });
                 self.negotiated.store(false, Ordering::Release);
-                *guard = None;
+                guard.connection = None;
                 return Err(bridge_error("cancelled", "The MCP tool call was cancelled."));
             }
             result = connection_rpc(connection, "capability.execute", params) => result,
@@ -179,17 +188,17 @@ impl BridgeClient {
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        let mut guard = self.connection.lock().await;
+        let mut guard = self.state.lock().await;
         self.ensure_connection(&mut guard, method != "client.identify")
             .await?;
-        let connection = guard.as_mut().unwrap();
+        let connection = guard.connection.as_mut().unwrap();
         let result = connection_rpc(connection, method, params).await;
         self.finish_rpc(&mut guard, result)
     }
 
     fn finish_rpc(
         &self,
-        guard: &mut Option<Connection>,
+        guard: &mut BridgeConnectionState,
         result: Result<Value, ConnectionRpcError>,
     ) -> Result<Value, RpcError> {
         match result {
@@ -198,7 +207,7 @@ impl BridgeClient {
             Err(ConnectionRpcError::Disconnected(error)) => {
                 // Retain the last successful feature set, but require renegotiation.
                 self.negotiated.store(false, Ordering::Release);
-                *guard = None;
+                guard.connection = None;
                 Err(error)
             }
         }
@@ -206,32 +215,32 @@ impl BridgeClient {
 
     async fn ensure_connection(
         &self,
-        guard: &mut Option<Connection>,
+        guard: &mut BridgeConnectionState,
         replay_identity: bool,
     ) -> Result<(), RpcError> {
-        if guard.is_some() {
+        if guard.connection.is_some() {
             return Ok(());
         }
-        let mut connection = connect(&self.endpoint_for_connect())
-            .await
-            .map_err(io_error)?;
-        if connection.client_resume {
-            let resume = self.resume_token.lock().await.clone();
-            let attached = match attach_owner(&mut connection, resume.as_ref()).await {
+        let endpoint = self.endpoint_for_connect(&guard.last_endpoint);
+        let mut connection = connect(&endpoint).await.map_err(io_error)?;
+        let attached = if connection.client_resume {
+            let attached = match attach_owner(&mut connection, guard.resume_token.as_ref()).await {
                 Ok(token) => token,
-                Err(error) => {
-                    if resume.is_some() {
-                        // A stale resume token (for example the host restarted
-                        // and lost the owner) must not wedge reconnection:
-                        // fall back to a fresh attach.
-                        attach_owner(&mut connection, None).await?
-                    } else {
-                        return Err(error);
-                    }
+                Err(ConnectionRpcError::Remote(error))
+                    if guard.resume_token.is_some() && error.code == "resume_failed" =>
+                {
+                    // Only an explicit stale-owner response leaves the socket
+                    // usable and authorizes a fresh attachment.
+                    attach_owner(&mut connection, None)
+                        .await
+                        .map_err(ConnectionRpcError::into_rpc_error)?
                 }
+                Err(error) => return Err(error.into_rpc_error()),
             };
-            *self.resume_token.lock().await = Some(attached);
-        }
+            Some(attached)
+        } else {
+            None
+        };
 
         if replay_identity && let Some(identity) = self.identity.lock().await.clone() {
             let params = serde_json::to_value(identity)
@@ -242,12 +251,16 @@ impl BridgeClient {
                 Err(ConnectionRpcError::Disconnected(error)) => return Err(error),
             }
         }
-        // Publish features only after attach and identity replay have succeeded.
+        // Commit the endpoint and its owner together only after the complete
+        // negotiation succeeds. Failed candidates must not replace recovery
+        // credentials belonging to the last known-good host.
+        guard.last_endpoint = endpoint;
+        guard.resume_token = attached;
         self.lifecycle
             .store(connection.lifecycle, Ordering::Release);
         self.connection_targets
             .store(connection.connection_targets, Ordering::Release);
-        *guard = Some(connection);
+        guard.connection = Some(connection);
         self.negotiated.store(true, Ordering::Release);
         Ok(())
     }
@@ -258,12 +271,20 @@ enum ConnectionRpcError {
     Disconnected(RpcError),
 }
 
+impl ConnectionRpcError {
+    fn into_rpc_error(self) -> RpcError {
+        match self {
+            Self::Remote(error) | Self::Disconnected(error) => error,
+        }
+    }
+}
+
 async fn connection_rpc(
     connection: &mut Connection,
     method: &str,
     params: Value,
 ) -> Result<Value, ConnectionRpcError> {
-    let timeout = connection.rpc_timeout;
+    let timeout = connection.endpoint.rpc_timeout;
     match tokio::time::timeout(timeout, connection_rpc_inner(connection, method, params)).await {
         Ok(result) => result,
         Err(_) => Err(ConnectionRpcError::Disconnected(bridge_error(
@@ -316,13 +337,13 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
     let stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port)).await?;
     let (read, write) = stream.into_split();
     let mut connection = Connection {
+        endpoint: endpoint.clone(),
         client_resume: false,
         lifecycle: false,
         connection_targets: false,
         reader: BufReader::new(read),
         writer: write,
         next_id: 1,
-        rpc_timeout: endpoint.rpc_timeout,
     };
     let params = serde_json::to_value(AuthParams {
         token: endpoint.token.clone(),
@@ -355,18 +376,17 @@ async fn connect(endpoint: &BridgeEndpoint) -> std::io::Result<Connection> {
 async fn attach_owner(
     connection: &mut Connection,
     resume: Option<&nyaterm_core::SecretString>,
-) -> Result<nyaterm_core::SecretString, RpcError> {
+) -> Result<nyaterm_core::SecretString, ConnectionRpcError> {
     let params = serde_json::json!({ "resumeToken": resume.map(|s| s.expose_secret()) });
-    let result = connection_rpc(connection, "client.attach", params)
-        .await
-        .map_err(|e| match e {
-            ConnectionRpcError::Remote(e) | ConnectionRpcError::Disconnected(e) => e,
-        })?;
+    let result = connection_rpc(connection, "client.attach", params).await?;
     let token = result["resumeToken"]
         .as_str()
         .filter(|token| token.len() == 64)
         .ok_or_else(|| {
-            bridge_error("bridge_protocol_error", "Invalid client recovery response.")
+            ConnectionRpcError::Disconnected(bridge_error(
+                "bridge_protocol_error",
+                "Invalid client recovery response.",
+            ))
         })?;
     Ok(nyaterm_core::SecretString::new(token.to_string()))
 }
@@ -378,9 +398,12 @@ async fn cancel_request(
 ) -> std::io::Result<()> {
     let mut connection = connect(endpoint).await?;
     if connection.client_resume {
-        attach_owner(&mut connection, resume)
+        let resume = resume.ok_or_else(|| {
+            std::io::Error::other("Cannot cancel without the execution's recovery credential.")
+        })?;
+        attach_owner(&mut connection, Some(resume))
             .await
-            .map_err(|e| std::io::Error::other(e.code))?;
+            .map_err(|error| std::io::Error::other(error.into_rpc_error().code))?;
     }
     let params = serde_json::to_value(RequestCancelParams {
         request_id: request_id.to_string(),
@@ -496,14 +519,6 @@ pub fn resolve_endpoint_source() -> Result<EndpointSource, Box<dyn std::error::E
     let path = discovery_path()?;
     let endpoint = read_discovery_endpoint(&path)?;
     Ok(EndpointSource::Discovery { endpoint, path })
-}
-
-pub fn endpoint_from_environment_or_discovery() -> Result<BridgeEndpoint, Box<dyn std::error::Error>>
-{
-    Ok(match resolve_endpoint_source()? {
-        EndpointSource::Fixed(endpoint) => endpoint,
-        EndpointSource::Discovery { endpoint, .. } => endpoint,
-    })
 }
 
 /// Read and validate a discovery document. Startup and reconnects share this
@@ -643,7 +658,7 @@ mod tests {
     #[tokio::test]
     async fn negotiation_deadline_includes_waiting_for_the_connection_lock() {
         let client = BridgeClient::new(BridgeEndpoint::for_test(1));
-        let _guard = client.connection.lock().await;
+        let _guard = client.state.lock().await;
         tokio::time::timeout(
             super::FIRST_NEGOTIATION_TIMEOUT + std::time::Duration::from_secs(2),
             client.ensure_connected(),
@@ -669,7 +684,7 @@ mod tests {
         assert!(client.negotiated.load(Ordering::Acquire));
         assert!(!client.supports_lifecycle());
         assert!(!client.supports_connection_targets());
-        let _guard = client.connection.lock().await;
+        let _guard = client.state.lock().await;
         tokio::time::timeout(std::time::Duration::from_secs(1), client.ensure_connected())
             .await
             .expect("a negotiated legacy host must use the lock-free path");
@@ -709,12 +724,12 @@ mod tests {
         assert!(!client.negotiated.load(Ordering::Acquire));
         assert!(!client.supports_lifecycle());
         assert!(!client.supports_connection_targets());
-        assert!(client.connection.lock().await.is_none());
+        assert!(client.state.lock().await.connection.is_none());
         client.ensure_connected().await;
         assert!(client.negotiated.load(Ordering::Acquire));
         assert!(client.supports_lifecycle());
         assert!(client.supports_connection_targets());
-        assert!(client.connection.lock().await.is_some());
+        assert!(client.state.lock().await.connection.is_some());
         server.await.unwrap();
     }
 
@@ -1091,6 +1106,9 @@ mod tests {
         server.await.unwrap();
     }
 }
+
+#[cfg(test)]
+mod reconnect_tests;
 
 #[cfg(test)]
 mod bridge_security_tests {

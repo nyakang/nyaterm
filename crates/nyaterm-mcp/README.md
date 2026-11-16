@@ -34,6 +34,21 @@ credentials to reconnect within ten minutes; retries with the same idempotency
 key and normalized arguments return the original job. Different arguments with
 the same key are rejected. RPC or SSH failures do not trigger command replay.
 
+Discovery-based sidecars re-read the discovery document for each new bridge
+connection. If the document is missing, unreadable or invalid, they use the last
+endpoint that completed authentication, owner attachment and identity replay;
+before the first successful connection they use the startup endpoint. A valid
+document whose endpoint cannot connect reports the failure without trying an
+older endpoint in the same call. Explicit environment endpoints stay fixed.
+
+An expired owner recovery credential triggers one fresh attachment only when
+the Host explicitly returns `resume_failed`. Timeouts, disconnects, malformed
+responses and other rejections propagate without retrying attachment. A lost
+connection fails the current call; the next call can reconnect, without
+automatically replaying a submitted command. Cancellation uses the executing
+connection's endpoint and owner credential even if discovery has since rotated.
+Cancellation never creates a replacement owner when recovery fails.
+
 Exec and SFTP share cached background transports by saved identity, effective
 configuration and authentication revision. Active operations retain a lease;
 idle transports are released after 120 seconds. No shell or PTY is created.
