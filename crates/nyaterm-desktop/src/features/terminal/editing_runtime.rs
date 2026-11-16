@@ -692,6 +692,35 @@ mod tests {
     }
 
     #[test]
+    fn command_accepted_does_not_duplicate_a_freshly_recorded_submission() {
+        // A submission reaches history through the typed-input path first,
+        // then the shell integration reports the same command through OSC
+        // CommandAccepted. Whenever the marked-prompt observation lags the
+        // report (fresh session, awaiting snapshot), both paths record and
+        // the history panel lists every command twice (#1187).
+        let dir = TestConfigDir::new("nyaterm-history-duplicate");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.record_command_history_for_sessions(&["s1"], b"ls\r");
+            app.session
+                .extend_pending_events([nyaterm_transport::SessionEvent::CommandAccepted {
+                    session_id: "s1".to_string(),
+                    command: "ls".to_string(),
+                }]);
+            app.drain_session_events(cx);
+            assert_eq!(
+                app.session.command_history_for("s1"),
+                Some(&["ls".to_string()][..]),
+                "the accepted-command report must not duplicate the submission already recorded"
+            );
+        });
+    }
+
+    #[test]
     fn a_background_disconnect_allows_a_fresh_binding_on_reconnect() {
         use nyaterm_core::terminal::file_context::ShellFileContext;
         let dir = TestConfigDir::new("nyaterm-background-file-context");

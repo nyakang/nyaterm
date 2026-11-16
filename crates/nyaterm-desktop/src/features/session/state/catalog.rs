@@ -374,6 +374,15 @@ impl SessionFeatureState {
             .command_history
             .entry(session_id.to_string())
             .or_default();
+        // One submission reaches history through the typed-input path and,
+        // on integrated hosts, again through the accepted-command report.
+        // The report can beat the marked-prompt observation that gates the
+        // typed path, so both records land back to back; collapse them here
+        // instead of trusting cross-subsystem timing (#1187). Adjacent
+        // repeats follow the shell-history `ignoredups` convention.
+        if history.first().is_some_and(|head| head == command) {
+            return;
+        }
         history.insert(0, command.to_string());
         history.truncate(COMMAND_HISTORY_LIMIT);
     }
