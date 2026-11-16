@@ -226,6 +226,8 @@ mod tests {
             vcx.run_until_parked();
             vcx.update(|window, cx| {
                 _ = window.draw(cx);
+                // Apply deferred tab layout and hitboxes before the next pointer event.
+                window.simulate_next_frame(cx);
             });
             vcx.run_until_parked();
         };
@@ -271,6 +273,11 @@ mod tests {
         let settings_close = vcx
             .debug_bounds("settings-tab-close")
             .expect("the settings tab paints its close control");
+        vcx.simulate_mouse_move(settings_close.center(), None, gpui::Modifiers::default());
+        draw(vcx);
+        let settings_close = vcx
+            .debug_bounds("settings-tab-close")
+            .expect("the close control stays painted after pointer hover");
         vcx.simulate_click(settings_close.center(), gpui::Modifiers::default());
         draw(vcx);
         vcx.update(|_, cx| {
@@ -400,6 +407,7 @@ mod tests {
             vcx.run_until_parked();
             vcx.update(|window, cx| {
                 _ = window.draw(cx);
+                window.simulate_next_frame(cx);
             });
             vcx.run_until_parked();
         };
