@@ -569,6 +569,16 @@ impl NyaTermApp {
                 },
                 cx,
             ),
+            "ai-mcp-terminal-execution-mode" => {
+                use nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode;
+                let mode = match value {
+                    "inline" => McpTerminalExecutionMode::Inline,
+                    "background" => McpTerminalExecutionMode::Background,
+                    "auto" => McpTerminalExecutionMode::Auto,
+                    _ => return,
+                };
+                self.set_ai_mcp_terminal_execution_mode(mode, cx);
+            }
             "ai-mcp-terminal-display-mode" => match value {
                 "inline" => {
                     self.set_ai_mcp_terminal_display_mode(McpTerminalDisplayMode::Inline, cx)

@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use gpui::FocusHandle;
+use nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode;
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAgentKind, AiCustomActionConfig, AiModelConfigItem,
     AiModelDiscovery, AiModelSource, AiPermissionMode, AiProviderCredential, AiProviderKind,
@@ -208,6 +209,13 @@ impl AiFeatureState {
         mode: McpTerminalDisplayMode,
     ) {
         self.settings.config.external_mcp.terminal_display_mode = mode;
+    }
+
+    pub(in crate::features) fn set_settings_mcp_terminal_execution_mode(
+        &mut self,
+        mode: McpTerminalExecutionMode,
+    ) {
+        self.settings.config.external_mcp.terminal_execution_mode = mode;
     }
 
     pub(in crate::features) fn settings_enabled(&self) -> bool {
@@ -677,6 +685,7 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn set_settings_file_size_mb(&mut self, value: u64) {
+        // Historical MB names denote MiB; the persisted setting remains a byte count.
         let mb = 1024 * 1024;
         self.settings.config.max_ai_file_size_bytes = value.clamp(1, 256) * mb;
         self.panel.status = "AI file size limit updated".to_string();

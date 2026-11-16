@@ -149,8 +149,20 @@ mod tests {
     use nyaterm_core::SavedConnection;
 
     #[test]
-    fn saved_connection_tooltip_matches_tauri_fields_for_every_session_type() {
+    fn saved_connection_tooltip_and_share_use_protocol_fields_for_every_session_type() {
         let cases = [
+            (
+                serde_json::json!({
+                    "type": "adb",
+                    "device": { "kind": "usb", "serial": "test-device" },
+                    "directory": "/sdcard"
+                }),
+                vec![
+                    "Android",
+                    "android.directory",
+                    "savedConnections.description",
+                ],
+            ),
             (
                 serde_json::json!({
                     "type": "ssh",
@@ -265,9 +277,13 @@ mod tests {
                 rows.last().map(|row| row.value.as_str()),
                 Some("production host")
             );
+            assert!(
+                !rows.last().expect("description row").multiline,
+                "description must use single-line ellipsis presentation"
+            );
             let expected_copy_count = match connection.kind_label() {
                 "SSH" | "Telnet" | "RDP" => 3,
-                "VNC" => 2,
+                "VNC" | "ADB" => 2,
                 _ => 0,
             };
             assert_eq!(
@@ -276,6 +292,16 @@ mod tests {
                 "unexpected copy buttons for {}",
                 connection.kind_label()
             );
+            let summary = super::connection_share_text(&connection, &rows);
+            assert!(summary.starts_with(&format!(
+                "{}: Test\n{}: {}\n",
+                rust_i18n::t!("savedConnections.connectionName"),
+                rust_i18n::t!("savedConnections.connectionType"),
+                connection.kind_label(),
+            )));
+            for row in &rows {
+                assert!(summary.contains(&format!("{}: {}", row.label, row.value)));
+            }
         }
     }
 
@@ -341,6 +367,111 @@ mod tests {
         assert_eq!(ssh_rows[0].copy_value, None);
         assert_eq!(ssh_rows[1].copy_value.as_deref(), Some("22"));
         assert_eq!(ssh_rows[2].copy_value, None);
+        let summary = super::connection_share_text(&local, &local_rows);
+        assert!(summary.contains(&format!(
+            "{}: {}",
+            rust_i18n::t!("savedConnections.terminalPath"),
+            rust_i18n::t!("savedConnections.notSet")
+        )));
+        assert!(summary.ends_with(&format!(
+            "{}: {}",
+            rust_i18n::t!("savedConnections.description"),
+            rust_i18n::t!("savedConnections.noDescription")
+        )));
+    }
+
+    #[test]
+    fn saved_connection_share_preserves_full_values_and_multiline_description() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "name": "Production host",
+            "type": "ssh",
+            "host": " a-very-long-hostname-for-the-production-server.example.com ",
+            "port": 2222,
+            "username": " operator ",
+            "description": " First line\nSecond line "
+        }))
+        .expect("valid connection");
+        let rows = super::connection_detail_rows(&connection, &HashMap::new());
+        assert_eq!(
+            super::connection_share_text(&connection, &rows),
+            format!(
+                "{}: Production host\n{}: SSH\n{}: a-very-long-hostname-for-the-production-server.example.com\n{}: 2222\n{}: operator\n{}: First line\nSecond line",
+                rust_i18n::t!("savedConnections.connectionName"),
+                rust_i18n::t!("savedConnections.connectionType"),
+                rust_i18n::t!("savedConnections.host"),
+                rust_i18n::t!("savedConnections.port"),
+                rust_i18n::t!("savedConnections.user"),
+                rust_i18n::t!("savedConnections.description"),
+            )
+        );
+    }
+
+    #[test]
+    fn saved_connection_share_excludes_credentials_and_opaque_fields() {
+        let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+            "name": "Production host",
+            "type": "ssh",
+            "host": "example.com",
+            "auth": {
+                "password": "test-only-password",
+                "account_id": "test-only-account",
+                "key_id": "test-only-key",
+                "otp_id": "test-only-otp",
+                "future_secret": "test-only-auth-extension"
+            },
+            "network": { "proxy_id": "test-only-proxy" },
+            "post_login": { "command": "test-only-command" },
+            "future_secret": "test-only-top-level-extension"
+        }))
+        .expect("valid connection with opaque fields");
+        let rows = super::connection_detail_rows(&connection, &HashMap::new());
+        let summary = super::connection_share_text(&connection, &rows);
+        assert!(!summary.contains("test-only-"));
+        assert!(summary.contains("example.com"));
+    }
+
+    #[test]
+    fn saved_connection_share_includes_jump_chain_and_missing_or_cyclic_markers() {
+        let mut target: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "target", "name": "Target", "type": "ssh", "host": "target.example.com",
+            "network": { "proxy_jump_id": "jump" }
+        }))
+        .expect("valid connection");
+        let jump: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "jump", "name": "Bastion", "type": "ssh", "host": "jump.example.com",
+            "network": { "proxy_jump_id": "outer" }
+        }))
+        .expect("valid jump");
+        let outer: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id": "outer", "name": "Outer bastion", "type": "ssh", "host": "outer.example.com"
+        }))
+        .expect("valid outer jump");
+        let mut by_id = HashMap::from([("jump".into(), jump), ("outer".into(), outer)]);
+        let rows = super::connection_detail_rows(&target, &by_id);
+        assert!(
+            super::connection_share_text(&target, &rows).contains(&format!(
+                "{}: Bastion -> Outer bastion",
+                rust_i18n::t!("savedConnections.jumpHostChain")
+            ))
+        );
+
+        by_id.remove("outer");
+        let rows = super::connection_detail_rows(&target, &by_id);
+        assert!(
+            super::connection_share_text(&target, &rows).contains(&format!(
+                "Bastion -> {}",
+                rust_i18n::t!("savedConnections.jumpHostMissing")
+            ))
+        );
+
+        target.id = "outer".into();
+        let rows = super::connection_detail_rows(&target, &by_id);
+        assert!(
+            super::connection_share_text(&target, &rows).contains(&format!(
+                "Bastion -> {}",
+                rust_i18n::t!("savedConnections.jumpHostCycle")
+            ))
+        );
     }
 
     fn connection(
@@ -1019,11 +1150,35 @@ pub(super) fn connection_detail_rows(
             .multiline(),
         );
     }
-    rows.push(
-        ConnectionDetailRow::new(t!("savedConnections.description").to_string(), description)
-            .multiline(),
-    );
+    rows.push(ConnectionDetailRow::new(
+        t!("savedConnections.description").to_string(),
+        description,
+    ));
     rows
+}
+
+/// Share the displayed summary without serializing credentials or extensions.
+pub(super) fn connection_share_text(
+    connection: &SavedConnection,
+    rows: &[ConnectionDetailRow],
+) -> String {
+    let mut lines = vec![
+        format!(
+            "{}: {}",
+            t!("savedConnections.connectionName"),
+            connection.name
+        ),
+        format!(
+            "{}: {}",
+            t!("savedConnections.connectionType"),
+            connection.kind_label()
+        ),
+    ];
+    lines.extend(
+        rows.iter()
+            .map(|row| format!("{}: {}", row.label, row.value)),
+    );
+    lines.join("\n")
 }
 
 fn required_detail_value(value: &str) -> String {

@@ -692,6 +692,214 @@ mod tests {
     }
 
     #[test]
+    fn command_accepted_does_not_duplicate_a_freshly_recorded_submission() {
+        // A submission reaches history through the typed-input path first,
+        // then the shell integration reports the same command through OSC
+        // CommandAccepted. Whenever the marked-prompt observation lags the
+        // report (fresh session, awaiting snapshot), both paths record and
+        // the history panel lists every command twice (#1187).
+        let dir = TestConfigDir::new("nyaterm-history-duplicate");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"ls", cx);
+            app.note_shell_editing_input(b"\r", cx);
+            app.record_command_history_for_sessions(&["s1"], b"ls\r");
+            app.session
+                .extend_pending_events([nyaterm_transport::SessionEvent::CommandAccepted {
+                    session_id: "s1".to_string(),
+                    command: "ls".to_string(),
+                }]);
+            app.drain_session_events(cx);
+            assert_eq!(
+                app.session.command_history_for("s1"),
+                Some(&["ls".to_string()][..]),
+                "the accepted-command report must not duplicate the submission already recorded"
+            );
+        });
+    }
+
+    fn assert_command_history_trace(trace: &[(&str, bool)], expected: &[&str]) {
+        let dir = TestConfigDir::new("nyaterm-history-reconciliation");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            for &(command, accepted) in trace {
+                if accepted {
+                    app.session.extend_pending_events([
+                        nyaterm_transport::SessionEvent::CommandAccepted {
+                            session_id: "s1".into(),
+                            command: command.into(),
+                        },
+                    ]);
+                    app.drain_session_events(cx);
+                } else {
+                    app.note_shell_editing_input(command.as_bytes(), cx);
+                    app.note_shell_editing_input(b"\r", cx);
+                    app.record_command_history_for_sessions(&["s1"], b"\r");
+                }
+            }
+            assert_eq!(app.session.command_history_for("s1").unwrap(), expected);
+        });
+    }
+
+    #[test]
+    fn command_history_preserves_consecutive_executions_with_immediate_reports() {
+        assert_command_history_trace(
+            &[
+                ("ls", false),
+                ("ls", true),
+                ("ls", false),
+                ("ls", true),
+                ("pwd", false),
+                ("pwd", true),
+            ],
+            &["pwd", "ls", "ls"],
+        );
+    }
+
+    #[test]
+    fn command_history_reconciles_batched_reports_without_reordering_submissions() {
+        assert_command_history_trace(
+            &[("ls", false), ("pwd", false), ("ls", true), ("pwd", true)],
+            &["pwd", "ls"],
+        );
+    }
+
+    #[test]
+    fn command_history_osc_only_reports_leave_other_submissions_pending() {
+        assert_command_history_trace(
+            &[
+                ("ls", false),
+                ("pwd", false),
+                ("echo", true),
+                ("ls", true),
+                ("pwd", true),
+            ],
+            &["echo", "pwd", "ls"],
+        );
+    }
+
+    #[test]
+    fn command_history_preserves_repeated_executions_with_only_input() {
+        assert_command_history_trace(
+            &[("ls", false), ("ls", false), ("pwd", false)],
+            &["pwd", "ls", "ls"],
+        );
+    }
+
+    #[test]
+    fn command_history_preserves_repeated_executions_with_only_shell_reports() {
+        assert_command_history_trace(
+            &[("ls", true), ("ls", true), ("pwd", true)],
+            &["pwd", "ls", "ls"],
+        );
+    }
+
+    #[test]
+    fn command_history_delayed_report_does_not_consume_newer_sensitive_submission() {
+        let dir = TestConfigDir::new("nyaterm-history-sensitive-report");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.record_submitted_command_history(&["s1"], vec!["ls".into()]);
+            app.commands.mark_completion_sensitive("s1");
+            app.commands.complete_completion_submission("s1");
+            app.session.extend_pending_events([
+                nyaterm_transport::SessionEvent::CommandAccepted {
+                    session_id: "s1".into(),
+                    command: "ls".into(),
+                },
+                nyaterm_transport::SessionEvent::CommandAccepted {
+                    session_id: "s1".into(),
+                    command: "synthetic-private-input".into(),
+                },
+            ]);
+            app.drain_session_events(cx);
+            assert_eq!(app.session.command_history_for("s1").unwrap(), &["ls"]);
+        });
+    }
+
+    #[test]
+    fn command_history_learns_each_execution_once_globally_and_in_its_shell_scope() {
+        use futures::StreamExt as _;
+        use nyaterm_completion_runtime::runtime::CompletionQuery;
+        use nyaterm_core::completion::types::{
+            CompletionMode, CompletionScope, ShellCommandContext, ShellDialect,
+        };
+        use nyaterm_store::StoreDomain;
+
+        for input_has_scope in [false, true] {
+            let dir = TestConfigDir::new("nyaterm-history-learning-once");
+            let mut cx = TestAppContext::single();
+            let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+            let context = ShellCommandContext {
+                scope: CompletionScope::new(&["history-learning-test"]),
+                dialect: ShellDialect::Bash,
+                command_events: true,
+            };
+            let (store, runtime, mut events) = cx.update_entity(&app, |app, _| {
+                if input_has_scope {
+                    app.commands
+                        .set_command_context("s1".into(), context.clone());
+                }
+                for _ in 0..2 {
+                    app.commands.mark_completion_confirmed("s1", true);
+                    app.record_submitted_command_history(&["s1"], vec!["ls".into()]);
+                }
+                (
+                    app.store_blocking_client(),
+                    app.commands.completion_runtime(),
+                    app.commands.take_persistence_event_receiver().unwrap(),
+                )
+            });
+            // Finish both input observations before checking what reports add.
+            for _ in 0..2 {
+                futures::executor::block_on(events.next()).expect("input history persisted");
+            }
+            cx.update_entity(&app, |app, cx| {
+                app.commands
+                    .set_command_context("s1".into(), context.clone());
+                for _ in 0..2 {
+                    app.session.extend_pending_events([
+                        nyaterm_transport::SessionEvent::CommandAccepted {
+                            session_id: "s1".into(),
+                            command: "ls".into(),
+                        },
+                    ]);
+                }
+                app.drain_session_events(cx);
+                assert_eq!(
+                    app.session.command_history_for("s1").unwrap(),
+                    &["ls", "ls"]
+                );
+            });
+            // A search is ordered after all observations on the completion worker.
+            futures::executor::block_on(runtime.search_outcome(CompletionQuery {
+                context: context.clone(),
+                fill_policy: None,
+                input: "ls".into(),
+                mode: CompletionMode::History,
+                quick: std::sync::Arc::from([]),
+                min: 1,
+                max: 100,
+            }));
+            let snapshot = store
+                .request_fn(StoreDomain::Commands, |db| db.completion_history_snapshot())
+                .unwrap();
+            assert_eq!(snapshot.global_history.len(), 1);
+            assert_eq!(snapshot.global_history[0].use_count, 2);
+            assert_eq!(snapshot.scoped_history.len(), 1);
+            assert_eq!(snapshot.scoped_history[0].use_count, 2);
+            assert_eq!(snapshot.scoped_history[0].scope, context.scope);
+        }
+    }
+
+    #[test]
     fn a_background_disconnect_allows_a_fresh_binding_on_reconnect() {
         use nyaterm_core::terminal::file_context::ShellFileContext;
         let dir = TestConfigDir::new("nyaterm-background-file-context");

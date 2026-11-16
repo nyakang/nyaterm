@@ -1,6 +1,6 @@
 use super::jobs::TerminalJob;
 use crate::features::NyaTermApp;
-use crate::features::capability_runtime::{CapabilityRequest, idempotency::Lookup, to_value};
+use crate::features::capability_runtime::{CapabilityRequest, to_value};
 use crate::features::mcp::server::rpc_failure;
 use crate::features::runtime_jobs::await_blocking_result;
 use gpui::Context;
@@ -30,6 +30,7 @@ impl super::TerminalExecutionState {
         })
     }
     pub(in crate::features) fn request_background_shutdown(&mut self) {
+        self.cancel_pending_inline_starts();
         for job in self
             .jobs
             .values_mut()
@@ -165,63 +166,7 @@ impl NyaTermApp {
         self.ensure_terminal_execution_clock(cx);
     }
 
-    pub(super) fn dispatch_connection_start(
-        &mut self,
-        request: CapabilityRequest,
-        mut args: TerminalStartArgs,
-        cx: &mut Context<Self>,
-    ) {
-        let target = args.target.clone().expect("validated connection target");
-        let connection_id = target.connection_id().expect("connection target");
-        if let Err(error) = self.authorize_saved_target(&request, connection_id) {
-            let _ = request.reply.send(Err(error));
-            return;
-        }
-        args.backend = Some(TerminalBackend::SshExec);
-        args.timeout_ms = Some(args.timeout_ms.unwrap_or(300_000));
-        let canonical = serde_json::to_value(&args).expect("start arguments");
-        let operation = match self.mcp.capabilities.ledger.begin(
-            &request.connection_id,
-            &request.tool,
-            args.idempotency_key.as_deref(),
-            &canonical,
-        ) {
-            Ok(Lookup::Complete(result)) => {
-                let result = result.and_then(|value| {
-                    self.authorize_terminal_job(
-                        &request.connection_id,
-                        &request.scope,
-                        value["jobId"].as_str().unwrap_or_default(),
-                    )?;
-                    Ok(value)
-                });
-                let _ = request.reply.send(result);
-                return;
-            }
-            Ok(Lookup::Pending(_)) => {
-                let _ = request.reply.send(Err(rpc_failure(
-                    "operation_pending",
-                    "The original start is pending; do not replay it.",
-                )));
-                return;
-            }
-            Ok(Lookup::New(id)) => id,
-            Err(error) => {
-                let _ = request.reply.send(Err(error));
-                return;
-            }
-        };
-        let result = self.register_connection_job(&request, args, target, operation.clone(), cx);
-        self.mcp.capabilities.ledger.pin(&operation, result.is_ok());
-        self.mcp
-            .capabilities
-            .ledger
-            .finish(&operation, result.clone());
-        let _ = request.reply.send(result);
-        self.ensure_terminal_execution_clock(cx);
-    }
-
-    fn register_connection_job(
+    pub(super) fn register_connection_job(
         &mut self,
         request: &CapabilityRequest,
         args: TerminalStartArgs,

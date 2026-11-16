@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::assets::snapshot::{AssetAcceleratorSnapshot, AssetStatsSnapshot};
 use crate::models::{AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetMetadata};
 
+// Historical MB names here and in memory_total_mb represent MiB (1024² bytes).
 const BYTES_PER_MB: u64 = 1024 * 1024;
 const UNKNOWN_VALUES: [&str; 5] = ["", "-", "unknown", "n/a", "null"];
 

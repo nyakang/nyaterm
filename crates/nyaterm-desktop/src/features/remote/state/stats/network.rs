@@ -105,7 +105,7 @@ impl NetworkChart {
             .filter(visible)
             .filter(|point| point.value.is_some())
             .count();
-        let units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
+        let units = ["B/s", "KiB/s", "MiB/s", "GiB/s", "TiB/s"];
         let mut unit = 0;
         let mut divisor = 1.;
         while peak.unwrap_or(0.) / divisor >= 1024. && unit + 1 < units.len() {
@@ -327,7 +327,7 @@ mod tests {
         let scale = state.chart.scale(now);
         assert_eq!(scale.peak, Some(120. * 1024.));
         assert_eq!(scale.maximum, 200. * 1024.);
-        assert_eq!(scale.unit, "KB/s");
+        assert_eq!(scale.unit, "KiB/s");
         assert!(scale.maximum >= scale.peak.unwrap() * 1.15);
         let empty = state.chart.scale(now + Duration::from_secs(61));
         assert_eq!(empty.peak, None);

@@ -7,7 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::Path;
 
-/// Hold redb's byte-range lock as well as the legacy Unix flock. Read through
+/// Hold a database byte-range lock as well as the legacy Unix flock. Read through
 /// the locking handle: Windows rejects reads from a different handle while locked.
 pub(super) struct LockedDatabase {
     backend: redb::backends::FileBackend,
@@ -16,7 +16,7 @@ pub(super) struct LockedDatabase {
 impl LockedDatabase {
     pub(super) fn open(path: &Path) -> Result<Self, DataDirectoryError> {
         use redb::StorageBackend as _;
-        use std::ops::Bound::Unbounded;
+        use std::ops::Bound::{Excluded, Unbounded};
         if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0) {
             return Err(DataDirectoryError::InvalidDatabase(path.into()));
         }
@@ -33,7 +33,17 @@ impl LockedDatabase {
         lock_file(&file, path.parent().unwrap_or(path))?;
         let backend = redb::backends::FileBackend::new(file)
             .map_err(|_| DataDirectoryError::InvalidDatabase(path.into()))?;
-        match backend.try_lock_range(Unbounded, Unbounded) {
+        let length = backend
+            .len()
+            .map_err(|e| io_error("measure database", path, std::io::Error::other(e)))?;
+        if length == 0 {
+            return Err(DataDirectoryError::InvalidDatabase(path.into()));
+        }
+        // Lock the data, leaving redb's reserved coordination bytes beyond EOF
+        // free. A whole-address-space lock also holds its Windows query mutex:
+        // a competing nonblocking Database::open then waits on that mutex forever.
+        // Exclusive redb opens lock this data range too, including older versions.
+        match backend.try_lock_range(Unbounded, Excluded(length)) {
             Ok(true) => Ok(Self { backend }),
             Ok(false) => Err(DataDirectoryError::InUse(
                 path.parent().unwrap_or(path).into(),

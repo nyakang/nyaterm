@@ -1,3 +1,4 @@
+use crate::features::session::CommandHistoryLearning;
 use crate::features::session::notice_runtime::session_notice_text;
 use crate::features::session::notices::SessionNoticeKind;
 use crate::features::shell::event_pump::helpers::{
@@ -292,23 +293,42 @@ impl NyaTermApp {
                             &mut pending_frame_outputs,
                             &mut drain_timings,
                         );
-                        self.commands.take_completion_confirmed(&session_id);
-                        let sensitive = self.commands.take_completion_sensitive(&session_id)
-                            || self.recording_input_is_sensitive(&session_id);
-                        if !nyaterm_core::completion::privacy::command_may_be_learned(
-                            &command, sensitive,
-                        ) {
+                        let recorded = self
+                            .session
+                            .take_recorded_command_submission(&session_id, &command);
+                        if recorded
+                            .is_some_and(|learning| learning != CommandHistoryLearning::GlobalOnly)
+                        {
                             continue;
                         }
-                        self.session.record_command_history(&session_id, &command);
+                        // Matched input has already passed the privacy gate. Its
+                        // report must not consume latches belonging to newer input.
+                        if recorded.is_none() {
+                            self.commands.take_completion_confirmed(&session_id);
+                            let sensitive = self.commands.take_completion_sensitive(&session_id)
+                                || self.recording_input_is_sensitive(&session_id);
+                            if !nyaterm_core::completion::privacy::command_may_be_learned(
+                                &command, sensitive,
+                            ) {
+                                continue;
+                            }
+                            self.session
+                                .record_accepted_command_history(&session_id, &command);
+                        }
                         let context = self
                             .commands
                             .command_context(&session_id)
                             .map(|_| self.command_suggestion_context(&session_id));
                         let queued = if let Some(context) = context {
-                            self.commands.observe_completion_command(context, command)
-                        } else {
+                            self.commands.observe_completion_submission(
+                                context,
+                                command,
+                                recorded.is_none(),
+                            )
+                        } else if recorded.is_none() {
                             self.commands.queue_command_history(vec![command])
+                        } else {
+                            true
                         };
                         if !queued {
                             self.settings.update_store_status(

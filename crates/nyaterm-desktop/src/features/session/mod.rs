@@ -78,7 +78,7 @@ pub(in crate::features) use prompt_runtime::{
     uuid_like_prompt_id,
 };
 pub(in crate::features) use state::{
-    PendingSessionStart, SavedConnectionStartOptions, SerialConnectPromptState,
-    SerialConnectSelection, SessionCatalogTransferBundle, SessionFeatureFocus, SessionFeatureState,
-    SessionStartEventRequest, SessionStartTabPlacement,
+    CommandHistoryLearning, PendingSessionStart, SavedConnectionStartOptions,
+    SerialConnectPromptState, SerialConnectSelection, SessionCatalogTransferBundle,
+    SessionFeatureFocus, SessionFeatureState, SessionStartEventRequest, SessionStartTabPlacement,
 };

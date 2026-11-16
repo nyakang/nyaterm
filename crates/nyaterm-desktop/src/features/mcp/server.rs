@@ -6,6 +6,7 @@ pub(in crate::features) use nyaterm_mcp_host::server::{McpHostEvent, McpHostRunt
 impl From<McpHostRequest> for CapabilityRequest {
     fn from(request: McpHostRequest) -> Self {
         Self {
+            terminal_plan: None,
             extended_results: request.extended_results,
             resolved_session_id: None,
             connection_id: request.connection_id,

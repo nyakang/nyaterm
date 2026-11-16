@@ -1116,10 +1116,7 @@ impl NyaTermApp {
                 next
             });
             next.section =
-                crate::models::ConnectionEditorSection::for_kind(kind, next.defaults_mode)
-                    .first()
-                    .copied()
-                    .unwrap_or(crate::models::ConnectionEditorSection::Basic);
+                crate::models::ConnectionEditorSection::initial_for_kind(kind, next.defaults_mode);
             // A serial draft may be titled after its device; that title belongs
             // to the device, not to the kind the user switched to.
             if current.kind == ConnectionKindTab::Serial && kind != ConnectionKindTab::Serial {

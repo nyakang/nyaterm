@@ -23,7 +23,8 @@ use crate::features::{
 };
 
 use super::super::list::{
-    ConnectionDetailRow, ConnectionSectionHeader, connection_detail_rows, connection_tree_indent_px,
+    ConnectionDetailRow, ConnectionSectionHeader, connection_detail_rows, connection_share_text,
+    connection_tree_indent_px,
 };
 use super::super::panel::{ConnectionListSnapshot, ConnectionPanel};
 use super::CONNECTION_ACTION_CLEARANCE_PX;
@@ -47,6 +48,7 @@ fn connection_group_icon(expanded: bool) -> gpui::Svg {
 pub(in crate::features) struct ConnectionDetailsHoverCard {
     connection_id: String,
     rows: Arc<[ConnectionDetailRow]>,
+    share_text: String,
     palette: crate::theme::ThemePalette,
 }
 
@@ -54,11 +56,13 @@ impl ConnectionDetailsHoverCard {
     pub(in crate::features) fn new(
         connection_id: String,
         rows: Arc<[ConnectionDetailRow]>,
+        share_text: String,
         palette: crate::theme::ThemePalette,
     ) -> Self {
         Self {
             connection_id,
             rows,
+            share_text,
             palette,
         }
     }
@@ -75,7 +79,7 @@ impl RenderOnce for ConnectionDetailsHoverCard {
                 .text_color(rgb(self.palette.text))
                 .when(row.multiline, |this| this.whitespace_normal())
                 .when(!row.multiline, |this| {
-                    this.overflow_hidden().whitespace_nowrap().text_ellipsis()
+                    this.whitespace_nowrap().line_clamp(1).text_ellipsis()
                 })
                 .child(row.value.clone());
             let copy = row.copy_value.clone().map(|copy_value| {
@@ -106,6 +110,48 @@ impl RenderOnce for ConnectionDetailsHoverCard {
                             }),
                     )
             });
+            // connection_detail_rows always places the description last.
+            let action = if index + 1 == self.rows.len() {
+                let share_id = format!("connection-detail-share-{}", self.connection_id);
+                let share_selector = share_id.clone();
+                let share_text = self.share_text.clone();
+                div()
+                    .id(SharedString::from(share_id.clone()))
+                    .debug_selector(move || share_selector.clone())
+                    .size(px(20.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        NyaIconButton::new(format!("{share_id}-button"), "icons/share.svg")
+                            .icon_size(px(12.))
+                            .size(px(20.))
+                            .tooltip(t!("savedConnections.share").to_string())
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    share_text.clone(),
+                                ));
+                                window.notify_operation(
+                                    "share-connection-detail",
+                                    NyaNotificationKind::Success,
+                                    t!("common.copied").to_string(),
+                                    cx,
+                                );
+                            }),
+                    )
+                    .into_any_element()
+            } else {
+                div()
+                    .size(px(20.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .children(copy)
+                    .into_any_element()
+            };
             grid = grid.child(
                 div()
                     .min_w_0()
@@ -121,16 +167,7 @@ impl RenderOnce for ConnectionDetailsHoverCard {
                             .child(row.label.clone()),
                     )
                     .child(value)
-                    .child(
-                        div()
-                            .w(px(20.))
-                            .h(px(20.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .children(copy),
-                    ),
+                    .child(action),
             );
         }
 
@@ -520,6 +557,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
         .cloned();
     let details_rows: Arc<[ConnectionDetailRow]> =
         connection_detail_rows(&connection, &snapshot.connections_by_id).into();
+    let share_text = connection_share_text(&connection, &details_rows);
     let drop_position = snapshot
         .drop_position_for_kind_target(ConnectionDragKind::Connection, Some(&connection.id));
     let show_before = drop_position == Some(ConnectionDropPosition::Before);
@@ -708,7 +746,12 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                             .whitespace_nowrap()
                             .child(connection.name.clone()),
                     ),
-                ConnectionDetailsHoverCard::new(connection.id.clone(), details_rows, palette),
+                ConnectionDetailsHoverCard::new(
+                    connection.id.clone(),
+                    details_rows,
+                    share_text,
+                    palette,
+                ),
             )
             // Beside the row, vertically centred on it, matching Tauri's
             // `side="right" align="center" sideOffset={6}`. A card below the row
@@ -751,10 +794,11 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
 
 #[cfg(test)]
 mod hover_card_tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
     use gpui::{
-        AppContext as _, Context, InteractiveElement as _, Modifiers, ParentElement as _, Render,
+        AppContext as _, ClipboardItem, Context, InteractiveElement as _, KeyDownEvent, KeyUpEvent,
+        Keystroke, Modifiers, ParentElement as _, Render, StatefulInteractiveElement as _,
         Styled as _, TestAppContext, Window, div, px,
     };
     use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
@@ -763,24 +807,42 @@ mod hover_card_tests {
 
     use super::{ConnectionDetailRow, ConnectionDetailsHoverCard};
 
-    struct HoverCardHarness;
+    const SHARE_TEXT: &str = "Name: Production\nType: SSH\nHost: example.com\nDescription: Production server with a long description that wraps onto several lines\nSecond line";
+
+    struct HoverCardHarness {
+        parent_clicks: Rc<Cell<usize>>,
+    }
 
     impl Render for HoverCardHarness {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
-            let rows: Arc<[ConnectionDetailRow]> = [ConnectionDetailRow {
-                label: "Host".to_string(),
-                value: "example.com".to_string(),
-                copy_value: Some("example.com".to_string()),
-                multiline: false,
-            }]
+            let rows: Arc<[ConnectionDetailRow]> = [
+                ConnectionDetailRow {
+                    label: "Host".to_string(),
+                    value: "example.com".to_string(),
+                    copy_value: Some("example.com".to_string()),
+                    multiline: false,
+                },
+                ConnectionDetailRow {
+                    label: "Description".to_string(),
+                    value:
+                        "Production server with a long description that wraps onto several lines\nSecond line"
+                            .to_string(),
+                    copy_value: None,
+                    multiline: false,
+                },
+            ]
             .into();
+            let parent_clicks = self.parent_clicks.clone();
             // Left-aligned host, so the card has room on its preferred side and
             // the assertions below read the un-flipped placement.
             div()
+                .id("connection-share-parent")
+                .tab_group()
                 .size_full()
                 .flex()
                 .items_center()
                 .justify_start()
+                .on_click(move |_, _, _| parent_clicks.set(parent_clicks.get() + 1))
                 .child(
                     NyaHoverCard::new(
                         "connection-details-hover-card-test",
@@ -790,6 +852,7 @@ mod hover_card_tests {
                         ConnectionDetailsHoverCard::new(
                             "test".to_string(),
                             rows,
+                            SHARE_TEXT.to_string(),
                             theme_palette("github-dark"),
                         ),
                     )
@@ -804,7 +867,7 @@ mod hover_card_tests {
     }
 
     #[gpui::test]
-    fn connection_hover_card_stays_open_and_copy_button_works(cx: &mut TestAppContext) {
+    fn connection_hover_card_stays_open_and_copy_and_share_buttons_work(cx: &mut TestAppContext) {
         cx.update(|cx| {
             apply_component_theme(
                 theme_palette("github-dark"),
@@ -813,9 +876,12 @@ mod hover_card_tests {
                 cx,
             )
         });
+        let parent_clicks = Rc::new(Cell::new(0));
         let (_, cx) = cx.add_window_view(|window, cx| {
             window.activate_window();
-            let view = cx.new(|_| HoverCardHarness);
+            let view = cx.new(|_| HoverCardHarness {
+                parent_clicks: parent_clicks.clone(),
+            });
             nyaterm_ui::nya_root(view, window, cx)
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -835,6 +901,10 @@ mod hover_card_tests {
         let content = cx
             .debug_bounds(content_selector)
             .expect("opened hover-card content");
+        assert!(
+            content.size.height < px(80.),
+            "a long description must remain on one line"
+        );
         // Beside the row, not under it: a card below would cover the
         // neighbouring connections in the list.
         assert_eq!(content.left(), trigger.right() + px(6.));
@@ -849,6 +919,29 @@ mod hover_card_tests {
             "moving from the trigger into content must cancel delayed close"
         );
 
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+            window.blur(cx);
+            window.focus_next(cx);
+            window.focus_next(cx);
+            assert!(window.focused(cx).is_some());
+            window.draw(cx).clear(cx);
+        });
+        let keystroke = Keystroke::parse("enter").expect("Enter keystroke");
+        cx.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(KeyUpEvent { keystroke });
+        let keyboard_clipboard = cx.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
+        });
+        assert_eq!(keyboard_clipboard, SHARE_TEXT, "Enter must activate share");
+        assert_eq!(parent_clicks.get(), 0);
+
         let copy = cx
             .debug_bounds("connection-detail-copy-test-0")
             .expect("copy button target");
@@ -859,5 +952,23 @@ mod hover_card_tests {
                 .unwrap_or_default()
         });
         assert_eq!(clipboard, "example.com");
+
+        let share = cx
+            .debug_bounds("connection-detail-share-test")
+            .expect("share button target");
+        assert!(share.left() >= content.left() && share.right() <= content.right());
+        assert!(share.top() >= content.top() && share.bottom() <= content.bottom());
+        cx.simulate_click(share.center(), Modifiers::default());
+        let clipboard = cx.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
+        });
+        assert_eq!(clipboard, SHARE_TEXT);
+        assert_eq!(
+            parent_clicks.get(),
+            0,
+            "copy actions must not activate the row"
+        );
     }
 }

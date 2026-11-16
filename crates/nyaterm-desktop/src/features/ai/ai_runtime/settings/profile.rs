@@ -1,4 +1,5 @@
 use gpui::Context;
+use nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode;
 use nyaterm_core::{
     AgentCommandExecutionMode, AiAgentKind, AiMode, AiPermissionMode, AiReasoningEffort,
     CodexThreadMode, ExternalMcpSessionScope, McpTerminalDisplayMode, RiskLevel,
@@ -214,6 +215,16 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.ai.set_settings_mcp_terminal_display_mode(mode);
+        self.persist_ai_settings_now(cx);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn set_ai_mcp_terminal_execution_mode(
+        &mut self,
+        mode: McpTerminalExecutionMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.ai.set_settings_mcp_terminal_execution_mode(mode);
         self.persist_ai_settings_now(cx);
         cx.notify();
     }

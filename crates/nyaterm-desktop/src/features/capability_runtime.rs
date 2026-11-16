@@ -58,6 +58,7 @@ pub(in crate::features) enum CapabilityCaller {
 }
 
 pub(in crate::features) struct CapabilityRequest {
+    pub terminal_plan: Option<terminal_execution::McpTerminalExecutionPlan>,
     pub extended_results: bool,
     pub resolved_session_id: Option<String>,
     /// Server-issued MCP client owner identity; never a saved host ID.
@@ -553,6 +554,9 @@ impl NyaTermApp {
             return;
         }
         nyaterm_mcp_protocol::normalize_session_target(&mut request.arguments);
+        if request.terminal_plan.is_none() {
+            request.terminal_plan = self.resolve_public_mcp_terminal_plan(&request);
+        }
         let saved_target = request
             .arguments
             .get("target")
@@ -625,6 +629,15 @@ impl NyaTermApp {
         }
         let mut assessment =
             nyaterm_core::capabilities::assess_tool_risk(&request.tool, &request.arguments);
+        if saved_target.is_some()
+            && request
+                .terminal_plan
+                .is_some_and(|plan| !plan.policy.background)
+            && let Some(risk) = assessment.as_mut()
+        {
+            // The same approval covers opening a terminal and running the command.
+            risk.level = risk.level.clone().max(RiskLevel::Medium);
+        }
         let known_operation = request
             .arguments
             .get("idempotencyKey")
@@ -722,7 +735,19 @@ impl NyaTermApp {
                         client: request.client.clone(),
                         capability: request.tool.clone(),
                         target: mcp_request_target(&request),
-                        parameter_summary: mcp_parameter_summary(&request.tool, &request.arguments),
+                        parameter_summary: {
+                            let summary = mcp_parameter_summary(&request.tool, &request.arguments);
+                            match request.terminal_plan {
+                                Some(plan) if saved_target.is_some() && !plan.policy.background => {
+                                    format!("{summary} · inline terminal (reuse or open)")
+                                }
+                                Some(plan) if plan.policy.background => {
+                                    format!("{summary} · SSH exec")
+                                }
+                                Some(_) => format!("{summary} · inline terminal"),
+                                None => summary,
+                            }
+                        },
                         risk_level: assessment
                             .as_ref()
                             .map(|risk| format!("{:?}", risk.level).to_ascii_lowercase())
@@ -825,6 +850,14 @@ impl NyaTermApp {
                                 && value["timedOut"] == false
                                 && value["sourceTruncated"] == false)
                     });
+                    let mut audit_context = audit_context;
+                    if audit_context.session_id.is_none() && output_tool == tool::TERMINAL_START {
+                        audit_context.session_id = result
+                            .as_ref()
+                            .ok()
+                            .and_then(|value| value["sessionId"].as_str())
+                            .map(str::to_owned);
+                    }
                     let result = if cancellation.is_cancelled() || !valid_caller {
                         Err(rpc_failure(
                             "cancelled",
@@ -837,7 +870,6 @@ impl NyaTermApp {
                                 .protect_output(&owner, &output_tool, value)
                         })
                     };
-                    let mut audit_context = audit_context;
                     audit_context.inserted_to_terminal = this
                         .mcp
                         .capabilities
@@ -1671,6 +1703,7 @@ mod tests {
     fn request(owner: &str, caller: CapabilityCaller, command: &str) -> CapabilityRequest {
         let (reply, _) = tokio::sync::oneshot::channel();
         CapabilityRequest {
+            terminal_plan: None,
             extended_results: true,
             resolved_session_id: None,
             connection_id: owner.into(),

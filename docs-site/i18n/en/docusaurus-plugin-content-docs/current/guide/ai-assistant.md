@@ -161,6 +161,8 @@ When terminal output matches error patterns, AI Assistant can suggest analyzing 
 
 ## MCP execution lifecycle
 
+Public external MCP has separate **Execution mode** and **Terminal result display** settings. Automatic is the default: `terminal_start` uses background `ssh_exec` for saved SSH connections and `inline_pty` for sessions, with an explicit `backend` overriding the default. Inline and Background override the client’s `backend`; background requires SSH. Inline saved connections reuse or open a terminal and return a session job containing the actual `sessionId`. Result display controls summaries in an associated terminal; jobs without a terminal remain available in the task panel. Codex and Claude Code launched inside NyaTerm retain their own execution policies.
+
 `session_open` creates a new session by default. Set `mode: "reuse_or_create"` to reuse a connected, executable terminal from the same saved connection within the current scope. Names and addresses do not identify a saved connection. An explicit scope is never widened automatically.
 
 Use `idempotencyKey` on session opens and terminal executions to recover the original operation after a lost response. Keys bind the client, tool and normalized parameters. Changed parameters conflict; confirmed failures require a new key. Expired keys cannot execute again, and a full ledger rejects new records.
@@ -169,7 +171,7 @@ Use `idempotencyKey` on session opens and terminal executions to recover the ori
 
 The integrated client's legacy local background mode remains available, but rejects `returnJob: true`. Use `terminal_start` with `inline_pty` for a pollable local job.
 
-The default `inline_pty` backend preserves the current shell directory and variables. Only one automatic command can occupy a shell. Timeout, uncertain writes, cancellation or output loss require recovery before further automatic execution. Manually interrupt and inspect the shell, then use **Confirm shell is ready** in the terminal tab menu. A matching late END marker also confirms recovery. Ordinary output, time passing and Ctrl+C alone do not prove recovery. Commands are never replayed automatically.
+The `inline_pty` backend preserves the current shell directory and variables. Only one automatic command can occupy a shell. Timeout, uncertain writes, cancellation or output loss require recovery before further automatic execution. Manually interrupt and inspect the shell, then use **Confirm shell is ready** in the terminal tab menu. A matching late END marker also confirms recovery. Ordinary output, time passing and Ctrl+C alone do not prove recovery. Commands are never replayed automatically.
 
 SSH sessions may explicitly select `ssh_exec`, an auxiliary channel that does not inherit interactive shell state. `terminal_stop` sends at most one safe Ctrl+C or channel INT and never escalates to KILL. It distinguishes accepted, sent, confirmed, unconfirmed, manual recovery and invalid targets. EOF does not prove process exit. Stop remains unconfirmed after two seconds without exit evidence; reaching the execution deadline closes only the auxiliary channel.
 

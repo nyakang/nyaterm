@@ -14,8 +14,9 @@ impl SettingsPanel {
         let palette = self.theme_palette();
         let limit = ai_field(
             palette,
-            format!("{} (MB)", t!("ai.maxAiFileSize")),
+            format!("{} (MiB)", t!("ai.maxAiFileSize")),
             Some(t!("ai.maxAiFileSizeDesc").into()),
+            // Keep the historical input ID; its numeric value is measured in MiB.
             self.existing_number_input_box("ai.number.file-size-mb"),
         );
         let terminal = self.ai_action_editor(AiActionListKind::Terminal, cx);

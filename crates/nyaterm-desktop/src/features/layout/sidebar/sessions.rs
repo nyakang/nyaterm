@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, rgba,
-    uniform_list,
+    AnyElement, Context, FontWeight, IntoElement, SharedString, div, list, prelude::*, px, rgb,
+    rgba,
 };
-use nyaterm_core::{RuntimeMode, truncate_preview};
+use nyaterm_core::RuntimeMode;
 use nyaterm_transport::SessionInfo;
 use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem, NyaScrollable};
 
@@ -17,8 +17,6 @@ use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::widgets::{capability_line, empty_panel, small_button, status_pill};
 
 use super::super::view_helpers::session_action_svg_button;
-
-const SESSION_PANEL_LOGICAL_ROW_HEIGHT_PX: f32 = 52.;
 
 #[derive(Clone)]
 struct ActiveSessionPanelRow {
@@ -87,7 +85,12 @@ impl NyaTermApp {
             query_active: _,
         } = model;
         let palette = self.theme_palette();
-        let list_scroll = self.session.active_list_scroll().clone();
+        let list_scroll = self.session.sync_active_sessions_list(
+            &rows
+                .iter()
+                .map(|row| row.session.id.clone())
+                .collect::<Vec<_>>(),
+        );
         // Built before the panel, which reads `self` throughout: creating the
         // box needs it mutably.
         let search_draft = self.session.active_search_draft().to_string();
@@ -122,30 +125,23 @@ impl NyaTermApp {
                 ))
                 .into_any_element()
         } else {
-            uniform_list(
-                "active-sessions-list",
-                rows.len(),
-                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                    let mut items = Vec::with_capacity(range.len());
-                    for index in range {
-                        let Some(row) = rows.get(index).cloned() else {
-                            continue;
-                        };
-                        items.push(
-                            div()
-                                .h(px(SESSION_PANEL_LOGICAL_ROW_HEIGHT_PX))
-                                .px_2()
-                                .pb_1()
-                                .flex_none()
-                                .child(this.active_session_row(row.session, row.display_name, cx)),
-                        );
-                    }
-                    items
+            list(
+                list_scroll.clone(),
+                cx.processor(move |this, index: usize, _, cx| {
+                    let Some(row) = rows.get(index).cloned() else {
+                        return div().into_any_element();
+                    };
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .px_2()
+                        .pb_1()
+                        .child(this.active_session_row(row.session, row.display_name, cx))
+                        .into_any_element()
                 }),
             )
             .flex_1()
             .min_h_0()
-            .track_scroll(&list_scroll)
             .into_any_element()
         };
 
@@ -513,11 +509,11 @@ impl NyaTermApp {
         } else {
             rgb(palette.hover)
         };
-        // Tauri ActiveSessions: full display name + type badge + full mono session id.
+        // Name stays on one line so it cannot collide with the id. The id itself
+        // wraps inside the row: a fixed slot clipped it once the panel was narrow.
         let kind = session_kind_label(session.kind).to_ascii_uppercase();
-        let full_id = session.id.clone();
-        let id_preview = truncate_preview(&full_id, 42);
-        let title = truncate_preview(&display_name, 32);
+        let title = session_panel_single_line(&display_name);
+        let session_id_text = session_panel_single_line(&session.id);
 
         div()
             .id(SharedString::from(format!(
@@ -525,9 +521,12 @@ impl NyaTermApp {
             )))
             .group(row_group.clone())
             .relative()
-            .h(px(48.))
+            .w_full()
+            .min_w_0()
+            .min_h(px(48.))
             .rounded_md()
             .px_2()
+            .py_1()
             .bg(row_bg)
             .when(is_disconnected, |this| this.opacity(0.5))
             .when(is_busy, |this| this.opacity(0.72))
@@ -535,34 +534,63 @@ impl NyaTermApp {
             .hover(move |this| this.bg(hover_bg))
             .child(
                 div()
-                    .size_full()
+                    .w_full()
+                    .min_w_0()
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap_2()
-                    .child(div().size(px(8.)).rounded_full().bg(accent).flex_none())
+                    .child(
+                        div()
+                            .mt(px(6.))
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(accent)
+                            .flex_none(),
+                    )
                     .child(
                         div()
                             .min_w_0()
                             .flex_1()
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
+                            .gap(px(2.))
                             .child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .h(px(20.))
+                                    .flex_none()
+                                    .overflow_hidden()
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(
+                                    .child({
+                                        let title_tooltip = title.clone();
                                         div()
+                                            .id(SharedString::from(format!(
+                                                "active-session-name-{session_id}"
+                                            )))
                                             .min_w_0()
                                             .flex_1()
                                             .text_xs()
                                             .font_weight(FontWeight(600.))
                                             .text_color(rgb(palette.text))
-                                            .overflow_hidden()
-                                            .child(title),
-                                    )
+                                            .truncate()
+                                            .child(title)
+                                            .when(!title_tooltip.is_empty(), |this| {
+                                                this.tooltip(move |window, cx| {
+                                                    nyaterm_ui::NyaTooltip::new(
+                                                        title_tooltip.clone(),
+                                                    )
+                                                    .build(window, cx)
+                                                })
+                                            })
+                                    })
                                     .child(
                                         div()
+                                            .flex_none()
+                                            .whitespace_nowrap()
                                             .px_1()
                                             .py(px(1.))
                                             .rounded_sm()
@@ -575,37 +603,45 @@ impl NyaTermApp {
                             )
                             .child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
                                     .font_family(crate::features::shell::gpui_code_font_family())
                                     .text_size(px(10.))
+                                    .line_height(px(14.))
                                     .text_color(rgb(palette.text_dimmed))
-                                    .overflow_hidden()
-                                    .child(id_preview),
+                                    .child(session_id_text),
                             ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_0()
-                            .flex_none()
-                            .opacity(0.)
-                            .group_hover(row_group, |style| style.opacity(1.))
-                            .child(session_action_svg_button(
-                                palette,
-                                format!("active-session-rename-{rename_session_id}"),
-                                "icons/session/rename.svg",
-                                t!("tabCtx.rename").to_string(),
-                                !is_busy,
-                                cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    if this.session.session_is_busy(&rename_session_id) {
-                                        return;
-                                    }
-                                    this.open_rename_session(rename_session_id.clone(), window, cx);
-                                }),
-                            ))
-                            .child(menu),
                     ),
+            )
+            .child(
+                // Out of flow so a narrow panel can show the name, type, and session id.
+                // Hover paints this cluster over the corner instead of reserving a column.
+                div()
+                    .absolute()
+                    .top_1()
+                    .right_1()
+                    .flex()
+                    .items_center()
+                    .gap_0()
+                    .rounded_md()
+                    .bg(hover_bg)
+                    .opacity(0.)
+                    .group_hover(row_group, |style| style.opacity(1.))
+                    .child(session_action_svg_button(
+                        palette,
+                        format!("active-session-rename-{rename_session_id}"),
+                        "icons/session/rename.svg",
+                        t!("tabCtx.rename").to_string(),
+                        !is_busy,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            if this.session.session_is_busy(&rename_session_id) {
+                                return;
+                            }
+                            this.open_rename_session(rename_session_id.clone(), window, cx);
+                        }),
+                    ))
+                    .child(menu),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_session(session_id.clone(), cx);
@@ -643,11 +679,20 @@ fn session_panel_count_label(total: usize, visible: usize, query_active: bool) -
     }
 }
 
+// GPUI shapes an explicit newline even inside a nowrap line, so the display
+// copy is flattened before it is measured.
+fn session_panel_single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use nyaterm_transport::{SessionInfo, SessionKind};
 
-    use super::{active_session_matches_query, session_panel_count_label, sort_active_sessions};
+    use super::{
+        active_session_matches_query, session_panel_count_label, session_panel_single_line,
+        sort_active_sessions,
+    };
 
     fn session(id: &str, name: &str, kind: SessionKind) -> SessionInfo {
         SessionInfo {
@@ -698,6 +743,14 @@ mod tests {
             "Production Shell",
             "missing"
         ));
+    }
+
+    #[test]
+    fn active_session_row_text_stays_on_one_measured_line() {
+        assert_eq!(
+            session_panel_single_line(" master01 \n 100.7.1.2\t"),
+            "master01 100.7.1.2"
+        );
     }
 
     #[test]

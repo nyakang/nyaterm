@@ -275,7 +275,9 @@ pub(super) fn connection_editor_serial_section(
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::Div {
     let content = match section.editor.section {
-        ConnectionEditorSection::Serial => serial_serial(section, cx),
+        ConnectionEditorSection::Basic | ConnectionEditorSection::Serial => {
+            serial_settings(section, cx)
+        }
         ConnectionEditorSection::Terminal => serial_terminal(section, cx),
         _ => div(),
     };
@@ -287,7 +289,7 @@ pub(super) fn connection_editor_serial_section(
         .child(content)
 }
 
-fn serial_serial(
+fn serial_settings(
     section: ConnectionEditorSectionContext<'_>,
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::Div {

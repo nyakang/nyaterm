@@ -403,19 +403,6 @@ impl CommandFeatureState {
     pub(in crate::features) fn take_completion_sensitive(&mut self, session: &str) -> bool {
         self.completed_sensitive_submissions.remove(session)
     }
-    pub(in crate::features) fn observe_completion_command(
-        &mut self,
-        context: ShellCommandContext,
-        command: String,
-    ) -> bool {
-        if self.completion.observe(context, command) {
-            self.runtime.note_queued();
-            true
-        } else {
-            false
-        }
-    }
-
     pub(in crate::features) fn observe_completion_submission(
         &mut self,
         context: ShellCommandContext,
