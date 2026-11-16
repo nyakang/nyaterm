@@ -70,6 +70,18 @@ pub struct TerminalKeywordHighlightPrecomputeStats {
 const MAX_KEYWORD_WRAPPED_GROUP_ROWS: usize = 512;
 const MAX_KEYWORD_WRAPPED_GROUP_BYTES: usize = 256 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    static KEYWORD_GROUP_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn count_keyword_group_scans<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    let before = KEYWORD_GROUP_SCANS.get();
+    let result = operation();
+    (result, KEYWORD_GROUP_SCANS.get() - before)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum TerminalKeywordRowReuseKey {
     Single { revision: u64, semantic_key: u64 },
@@ -733,6 +745,8 @@ fn terminal_keyword_wrapped_group_bounds(
     snapshot: &TerminalSnapshot,
     row: usize,
 ) -> TerminalKeywordWrappedGroup {
+    #[cfg(test)]
+    KEYWORD_GROUP_SCANS.set(KEYWORD_GROUP_SCANS.get() + 1);
     let source_start = snapshot
         .total_rows
         .saturating_sub(snapshot.display_offset)
