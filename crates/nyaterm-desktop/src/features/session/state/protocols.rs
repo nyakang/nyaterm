@@ -328,6 +328,7 @@ impl SessionFeatureState {
         let metadata = self.metadata.get_mut(session_id)?;
         let already_disconnected = metadata.disconnected;
         metadata.disconnected = true;
+        self.clear_pending_command_submissions(session_id);
         self.protocols.remote_files.remove(session_id);
         self.protocols.ssh_connections.remove(session_id);
         Some(SessionDisconnectUpdate {
