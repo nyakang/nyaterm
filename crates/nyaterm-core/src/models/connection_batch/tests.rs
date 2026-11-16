@@ -1223,3 +1223,98 @@ fn batch_kind_counts_keep_supported_order_and_ignore_missing_or_android_targets(
         vec![(ConnectionBatchKind::Ssh, 2), (ConnectionBatchKind::Rdp, 1)]
     );
 }
+
+#[test]
+fn serial_batch_values_disable_only_the_corresponding_connect_prompt() {
+    for (edit, expected_port, expected_baud) in [
+        (
+            ConnectionBatchEdit {
+                serial_port_name: BatchField::Set("COM9".into()),
+                ..Default::default()
+            },
+            false,
+            true,
+        ),
+        (
+            ConnectionBatchEdit {
+                serial_baud_rate: BatchField::Set(57_600),
+                ..Default::default()
+            },
+            true,
+            false,
+        ),
+        (
+            ConnectionBatchEdit {
+                serial_baud_rate: BatchField::Clear,
+                ..Default::default()
+            },
+            true,
+            false,
+        ),
+        (
+            ConnectionBatchEdit {
+                serial_port_name: BatchField::Set("COM9".into()),
+                serial_baud_rate: BatchField::Set(57_600),
+                ..Default::default()
+            },
+            false,
+            false,
+        ),
+        (
+            ConnectionBatchEdit {
+                serial_data_bits: BatchField::Set(7),
+                ..Default::default()
+            },
+            true,
+            true,
+        ),
+    ] {
+        let mut connection = serial_connection();
+        let ConnectionType::Serial { connect_prompt, .. } = &mut connection.config else {
+            panic!("expected serial");
+        };
+        connect_prompt.port = true;
+        connect_prompt.baud_rate = true;
+        apply_connection_batch_edit(&mut connection, &edit);
+        let ConnectionType::Serial { connect_prompt, .. } = &connection.config else {
+            panic!("expected serial");
+        };
+        assert_eq!(connect_prompt.port, expected_port);
+        assert_eq!(connect_prompt.baud_rate, expected_baud);
+        let restored: SavedConnection =
+            serde_json::from_value(serde_json::to_value(&connection).unwrap()).unwrap();
+        let ConnectionType::Serial {
+            connect_prompt: restored_prompt,
+            ..
+        } = restored.config
+        else {
+            panic!("expected serial");
+        };
+        assert_eq!(restored_prompt, *connect_prompt);
+    }
+}
+
+#[test]
+fn clearing_the_serial_device_enables_prompt_without_changing_baud_prompt() {
+    for device in [BatchField::Clear, BatchField::Set(String::new())] {
+        let mut connection = serial_connection();
+        apply_connection_batch_edit(
+            &mut connection,
+            &ConnectionBatchEdit {
+                serial_port_name: device,
+                ..Default::default()
+            },
+        );
+        let ConnectionType::Serial {
+            port_name,
+            connect_prompt,
+            ..
+        } = connection.config
+        else {
+            panic!("expected serial");
+        };
+        assert!(port_name.is_empty());
+        assert!(connect_prompt.port);
+        assert!(!connect_prompt.baud_rate);
+    }
+}

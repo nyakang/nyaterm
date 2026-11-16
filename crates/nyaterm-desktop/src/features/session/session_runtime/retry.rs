@@ -119,6 +119,11 @@ impl NyaTermApp {
         self.session.start.begin_preparation(new_id, pending);
         self.shell.clear_last_connect_failure();
         self.clear_session_tab_drag(cx);
+        // The saved source was validated above, but its device values are hints.
+        // Retry the resolved serial launch, including all framing and encoding,
+        // instead of rebuilding it from a possibly empty or outdated saved port.
+        let connection =
+            connection.filter(|_| !matches!(&launch_config, Some(SessionLaunchConfig::Serial(_))));
         if let Some(connection) = connection {
             self.start_saved_connection_with_options(connection, options, window, cx);
         } else if let Some(config) = launch_config {

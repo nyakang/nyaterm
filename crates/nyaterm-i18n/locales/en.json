@@ -2731,6 +2731,7 @@
     "portPathPlaceholder": "COM1 or /dev/ttyUSB0",
     "portRequired": "Choose or enter a serial device.",
     "portRequiredUnattended": "\"%{name}\" asks for its serial port on connect, which this request cannot do.",
+    "selectionRequiredUnattended": "\"%{name}\" requires choosing its serial device or baud rate interactively. This unattended request cannot start it.",
     "title": "Serial port"
   },
   "serialSend": {

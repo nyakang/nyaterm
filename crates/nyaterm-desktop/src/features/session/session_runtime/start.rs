@@ -256,15 +256,29 @@ impl NyaTermApp {
                 baud_rate,
                 connect_prompt,
                 ..
-            } if connect_prompt.asks_anything()
-                && options.serial_selection.is_none()
-                && !options.suppress_serial_prompt =>
-            {
+            } if connect_prompt.asks_anything() && options.serial_selection.is_none() => {
                 Some((*connect_prompt, port_name.clone(), *baud_rate))
             }
             _ => None,
         };
         if let Some((prompt, port_hint, baud_hint)) = serial_prompt {
+            if options.suppress_serial_prompt {
+                // Saved defaults are hints, not unattended authorization to open
+                // a device. A resolved retry bypasses this saved-start path.
+                let message = t!(
+                    "serialPrompt.selectionRequiredUnattended",
+                    name = connection.name.as_str()
+                )
+                .to_string();
+                self.fail_start_preparation(&options, message.clone(), cx);
+                self.complete_mcp_session_open_failure(
+                    options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                    &message,
+                );
+                self.shell.set_status(message);
+                cx.notify();
+                return false;
+            }
             return self.open_serial_connect_prompt(
                 connection,
                 SerialConnectContinuation::Start(Box::new(options)),

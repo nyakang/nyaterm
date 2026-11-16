@@ -2731,6 +2731,7 @@
     "portPathPlaceholder": "COM1 또는 /dev/ttyUSB0",
     "portRequired": "시리얼 장치를 선택하거나 입력하세요.",
     "portRequiredUnattended": "'%{name}'은(는) 연결할 때 포트를 선택하므로 이 요청으로는 연결할 수 없습니다.",
+    "selectionRequiredUnattended": "「%{name}」은(는) 연결 시 직렬 장치 또는 전송 속도를 직접 선택해야 하므로 자동으로 시작할 수 없습니다.",
     "title": "시리얼 포트"
   },
   "serialSend": {

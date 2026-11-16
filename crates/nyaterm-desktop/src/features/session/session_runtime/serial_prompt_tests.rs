@@ -785,8 +785,8 @@ fn cancelling_serial_reconnect_keeps_the_actual_serial_backend_open() {
                 &mut master,
                 &mut slave,
                 name.as_mut_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         },
         0
@@ -911,5 +911,166 @@ fn failed_serial_discovery_keeps_the_manual_device_input_usable() {
             assert!(app.submit_serial_connect_prompt(window, cx));
             assert_eq!(app.session.start.pending_count(), 1);
         })
+    });
+}
+
+#[test]
+fn serial_failed_retry_keeps_the_selected_device_rate_and_resolved_framing() {
+    for saved_port in ["COM7", ""] {
+        let root = TestConfigDir::new("nyaterm-serial-resolved-retry");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let mut connection = serial(
+            saved_port,
+            115200,
+            serde_json::json!({"port": true, "baud_rate": true}),
+        );
+        let ConnectionType::Serial {
+            data_bits, parity, ..
+        } = &mut connection.config
+        else {
+            panic!("expected serial");
+        };
+        *data_bits = 7;
+        *parity = "even".into();
+        app.update(&mut cx, |app, _| {
+            app.connection_state
+                .replace_loaded(vec![connection.clone()], vec![])
+        });
+        let mut cx = open_dialog(
+            &mut cx,
+            &app,
+            connection,
+            SavedConnectionStartOptions {
+                custom_name: Some("My board".into()),
+                tab_color: Some(0x123456),
+                locked: true,
+                ..Default::default()
+            },
+        );
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.apply_serial_prompt_port("/nyaterm-missing-selected-device".into(), cx);
+                app.apply_serial_prompt_baud_rate("57600".into(), cx);
+                assert!(app.submit_serial_connect_prompt(window, cx));
+                let request_id = app
+                    .session
+                    .start
+                    .pending_entries()
+                    .next()
+                    .unwrap()
+                    .0
+                    .clone();
+                app.session.simulate_start_failure(&request_id);
+                let failed = app.session.start.failed(&request_id).unwrap();
+                let Some(SessionLaunchConfig::Serial(config)) = &failed.pending.launch_config
+                else {
+                    panic!("expected serial");
+                };
+                assert_eq!(config.port_name, "/nyaterm-missing-selected-device");
+                assert_eq!(config.baud_rate, 57600);
+                let resolved_config = config.clone();
+                app.retry_failed_session_start(request_id.clone(), window, cx);
+                assert!(app.session.dialogs.serial_connect_prompt().is_none());
+                assert_eq!(app.session.start.pending_count(), 1);
+                let (new_id, pending) = app.session.start.pending_entries().next().unwrap();
+                assert_ne!(new_id, &request_id);
+                let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+                    panic!("expected serial");
+                };
+                assert_eq!(config, &resolved_config);
+                assert_eq!(config.port_name, "/nyaterm-missing-selected-device");
+                assert_eq!(config.baud_rate, 57600);
+                assert_eq!(config.data_bits, 7);
+                assert_eq!(config.parity, "even");
+                assert_eq!(pending.custom_name.as_deref(), Some("My board"));
+                assert_eq!(pending.tab_color, Some(0x123456));
+                assert!(pending.locked);
+                let ConnectionType::Serial {
+                    port_name,
+                    baud_rate,
+                    ..
+                } = &app.connection_state.connections()[0].config
+                else {
+                    panic!("expected serial");
+                };
+                assert_eq!(port_name, saved_port);
+                assert_eq!(*baud_rate, 115200);
+            })
+        });
+    }
+}
+
+#[test]
+fn unattended_serial_starts_reject_every_deferred_field_even_with_saved_hints() {
+    for prompt in [
+        serde_json::json!({"port": true}),
+        serde_json::json!({"baud_rate": true}),
+        serde_json::json!({"port": true, "baud_rate": true}),
+    ] {
+        let root = TestConfigDir::new("nyaterm-serial-unattended-hints");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let connection = serial("COM7", 115200, prompt);
+        app.update(&mut cx, |app, cx| {
+            let mut options = app.prepare_session_start_options(SavedConnectionStartOptions {
+                suppress_serial_prompt: true,
+                ..Default::default()
+            });
+            let id = app
+                .session
+                .start
+                .begin_saved_preparation(&connection, &options);
+            options.request_id = Some(id.clone());
+            let submitted = app.blocking_jobs.metrics().submitted;
+            assert!(!app.continue_saved_connection_start(connection, options, cx));
+            assert!(app.session.dialogs.serial_connect_prompt().is_none());
+            assert_eq!(app.session.start.pending_count(), 0);
+            assert!(
+                app.session
+                    .start
+                    .failed(&id)
+                    .unwrap()
+                    .error
+                    .contains("Board")
+            );
+            assert_eq!(app.blocking_jobs.metrics().submitted, submitted);
+        });
+    }
+}
+
+#[test]
+fn an_explicit_serial_selection_allows_an_unattended_start_without_using_hints() {
+    let root = TestConfigDir::new("nyaterm-serial-explicit-unattended");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    app.update(&mut cx, |app, cx| {
+        let connection = serial(
+            "COM7",
+            115200,
+            serde_json::json!({"port": true, "baud_rate": true}),
+        );
+        assert!(app.continue_saved_connection_start(
+            connection,
+            SavedConnectionStartOptions {
+                suppress_serial_prompt: true,
+                serial_selection: Some(crate::features::session::SerialConnectSelection {
+                    port_name: "/nyaterm-missing-selected-device".into(),
+                    baud_rate: 57600,
+                }),
+                ..Default::default()
+            },
+            cx
+        ));
+        assert!(app.session.dialogs.serial_connect_prompt().is_none());
+        let pending = app.session.start.pending_entries().next().unwrap().1;
+        let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+            panic!("expected serial");
+        };
+        assert_eq!(config.port_name, "/nyaterm-missing-selected-device");
+        assert_eq!(config.baud_rate, 57600);
     });
 }

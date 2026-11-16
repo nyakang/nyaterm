@@ -2731,6 +2731,7 @@
     "portPathPlaceholder": "COM1 ou /dev/ttyUSB0",
     "portRequired": "Choisissez ou saisissez un périphérique série.",
     "portRequiredUnattended": "« %{name} » demande son port à la connexion, ce que cette requête ne permet pas.",
+    "selectionRequiredUnattended": "« %{name} » nécessite de choisir le périphérique série ou le débit de manière interactive. Cette demande automatique ne peut pas le démarrer.",
     "title": "Port série"
   },
   "serialSend": {

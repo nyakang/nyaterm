@@ -656,6 +656,74 @@ mod tests {
         assert!(!state.session_opens.pending());
     }
     #[gpui::test]
+    fn mcp_session_open_rejects_deferred_serial_hints_without_opening_a_device(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::terminal_execution::TerminalExecutionPolicy;
+        use crate::features::capability_runtime::{CapabilityCaller, CapabilityRequest};
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+        use gpui::AppContext as _;
+        use nyaterm_core::AiPermissionMode;
+
+        cx.executor().allow_parking();
+        let _cleanup = TestAppCleanup::new(cx);
+        let directory = TestConfigDir::new("nyaterm-mcp-deferred-serial");
+        let app = app_with_visible_local_session(cx, directory.path(), "existing");
+        let credential = cx.update_entity(&app, |app, _| {
+            app.create_ephemeral_mcp_credential(
+                vec!["existing".into()],
+                Some("existing".into()),
+                AiPermissionMode::FullAccess,
+                TerminalExecutionPolicy {
+                    background: false,
+                    max_lines: 0,
+                },
+            )
+            .unwrap()
+        });
+        let generation = credential
+            .environment()
+            .remove("NYATERM_MCP_GENERATION")
+            .unwrap();
+        for (index, prompt) in [
+            json!({"port": true}),
+            json!({"baud_rate": true}),
+            json!({"port": true, "baud_rate": true}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            cx.update_entity(&app, |app, cx| {
+                let saved: SavedConnection = serde_json::from_value(json!({
+                    "id": "board", "name": "Board", "type": "serial",
+                    "port_name": "COM7", "baud_rate": 115200, "connect_prompt": prompt
+                })).unwrap();
+                app.connection_state.replace_loaded(vec![saved], Vec::new());
+                let submitted = app.blocking_jobs.metrics().submitted;
+                let (reply, mut receiver) = oneshot::channel();
+                app.dispatch_mcp_session_open(CapabilityRequest {
+                    terminal_plan: None, extended_results: true, resolved_session_id: None,
+                    connection_id: "owner".into(), request_id: format!("serial-request-{index}"),
+                    generation: generation.clone(), client: "fixture".into(),
+                    permission_mode: AiPermissionMode::FullAccess,
+                    scope: CapabilityScope::explicit(vec!["existing".into()], Some("existing".into())),
+                    tool: "session_open".into(),
+                    arguments: json!({"connectionId": "board", "idempotencyKey": format!("serial-{index}")}),
+                    cancellation: CancellationToken::new(), approved: true, approval_decision: None,
+                    caller: CapabilityCaller::Mcp, reply,
+                }, cx);
+                assert_eq!(receiver.try_recv().unwrap().unwrap_err().code, "execution_failed");
+                assert!(!app.mcp.capabilities.session_opens.pending());
+                assert!(!app.session.start_has_pending());
+                assert_eq!(app.session.session_order(), &["existing"]);
+                assert_eq!(app.blocking_jobs.metrics().submitted, submitted);
+            });
+        }
+        drop(credential);
+    }
+
+    #[gpui::test]
     fn reuse_uses_source_identity_and_scope_and_default_open_still_creates(
         cx: &mut gpui::TestAppContext,
     ) {

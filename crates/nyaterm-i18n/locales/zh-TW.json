@@ -2731,6 +2731,7 @@
     "portPathPlaceholder": "COM1 或 /dev/ttyUSB0",
     "portRequired": "請選擇或填寫序列埠裝置。",
     "portRequiredUnattended": "「%{name}」需要在連線時選擇序列埠，此操作無法完成。",
+    "selectionRequiredUnattended": "「%{name}」需要互動選擇串口裝置或鮑率，無法自動啟動。",
     "title": "選擇序列埠"
   },
   "serialSend": {
