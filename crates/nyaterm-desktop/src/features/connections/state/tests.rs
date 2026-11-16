@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use super::list_model::{ConnectionListRow, connection_sections, flatten_connection_rows};
 use super::{
-    ConnectionEditorFeatureState, apply_connection_editor_shell_path,
+    ConnectionEditorFeatureState, adopt_serial_device_name, apply_connection_editor_shell_path,
     apply_connection_editor_working_dir, clear_connection_editor_runtime_state,
     clear_connection_list_runtime_state, clear_network_proxy_editor, clear_network_tunnel_editor,
     clear_selected_connection_ids, commit_connection_editor_new_group,
     connection_drop_position_for_target, connection_editor_inline_panel_draft,
-    cycle_connection_sort_mode, insert_connection_editor_description_newline,
+    cycle_connection_sort_mode, drop_device_name, insert_connection_editor_description_newline,
     move_connection_editor_ssh_algorithm, remove_connection_list_references,
     remove_group_list_references, remove_network_group_references, remove_network_item_references,
     retain_loaded_connection_references, retain_loaded_group_list_references,
@@ -16,10 +16,11 @@ use super::{
     set_connection_drop_target_if_changed, set_connection_editor_error,
     set_connection_editor_field_text, set_connection_editor_icon, set_connection_editor_kind,
     set_connection_editor_password_source, set_connection_editor_select_value,
-    set_connection_editor_ssh_algorithm_enabled, set_connection_editor_ssh_algorithm_tab,
-    set_connection_group_editor_error, set_connection_group_hover, set_network_group_editor_error,
-    set_network_group_editor_name, set_network_proxy_editor_error, set_network_proxy_editor_field,
-    set_network_proxy_protocol, set_network_tunnel_bind_localhost, set_network_tunnel_connection,
+    set_connection_editor_serial_prompt_baud_rate, set_connection_editor_ssh_algorithm_enabled,
+    set_connection_editor_ssh_algorithm_tab, set_connection_group_editor_error,
+    set_connection_group_hover, set_network_group_editor_error, set_network_group_editor_name,
+    set_network_proxy_editor_error, set_network_proxy_editor_field, set_network_proxy_protocol,
+    set_network_tunnel_bind_localhost, set_network_tunnel_connection,
     set_network_tunnel_editor_error, set_network_tunnel_editor_field, set_network_tunnel_group,
     set_network_tunnel_type, sync_connection_search_expansion, toggle_connection_editor_flag,
     toggle_network_tunnel_auto_open,
@@ -2490,6 +2491,8 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         working_dir: String::new(),
         serial_port: String::new(),
         baud_rate: "115200".to_string(),
+        serial_prompt_port: false,
+        serial_prompt_baud_rate: false,
         data_bits: "8".to_string(),
         parity: "none".to_string(),
         flow_control: Default::default(),
@@ -3178,4 +3181,220 @@ fn android_selects_update_draft_without_resetting_other_screen_settings() {
             screen
         );
     });
+}
+
+/// Deferring the device is a dropdown choice, not a separate switch, and the
+/// last device stays behind as the connect-time default.
+#[test]
+fn the_serial_port_dropdown_defers_the_device_and_keeps_it_as_the_default() {
+    let mut draft = Some(ConnectionEditorState {
+        serial_port: "COM7".to_string(),
+        ..connection_editor_state_with_secret_draft()
+    });
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some(crate::models::SERIAL_PORT_ASK_AT_CONNECT.to_string()),
+    ));
+    let editor = draft.as_ref().unwrap();
+    assert!(editor.serial_prompt_port);
+    assert_eq!(editor.serial_port, "COM7");
+
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some("COM9".to_string()),
+    ));
+    let editor = draft.as_ref().unwrap();
+    assert!(!editor.serial_prompt_port);
+    assert_eq!(editor.serial_port, "COM9");
+}
+
+/// The baud rate is deferred on its own: the saved rate stays as the default the
+/// connect dialog offers.
+#[test]
+fn deferring_the_baud_rate_is_independent_of_the_saved_rate() {
+    let mut draft = Some(ConnectionEditorState {
+        baud_rate: "76800".to_string(),
+        ..connection_editor_state_with_secret_draft()
+    });
+    assert!(set_connection_editor_serial_prompt_baud_rate(
+        &mut draft, true
+    ));
+    assert!(draft.as_ref().unwrap().serial_prompt_baud_rate);
+    assert_eq!(draft.as_ref().unwrap().baud_rate, "76800");
+    // Nothing to report when it already asks, so callers can skip a redraw.
+    assert!(!set_connection_editor_serial_prompt_baud_rate(
+        &mut draft, true
+    ));
+    assert!(set_connection_editor_serial_prompt_baud_rate(
+        &mut draft, false
+    ));
+    assert!(!draft.as_ref().unwrap().serial_prompt_baud_rate);
+}
+
+/// A draft of a serial connection that has never been saved.
+fn new_serial_draft(port: &str) -> ConnectionEditorState {
+    ConnectionEditorState {
+        id: None,
+        kind: ConnectionKindTab::Serial,
+        name: String::new(),
+        serial_port: port.to_string(),
+        ..connection_editor_state_with_secret_draft()
+    }
+}
+
+/// A new serial connection is titled after its device, so naming it is one
+/// field less to fill in before saving.
+#[test]
+fn choosing_a_device_retitles_a_new_serial_connection() {
+    let mut draft = Some(new_serial_draft("COM7"));
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some("COM9".to_string()),
+    ));
+    assert_eq!(draft.as_ref().unwrap().name, "COM9 @ 115200");
+
+    // A device pasted as a path is titled after the device, not the path.
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some("/dev/serial/by-id/usb-FTDI-if00-port0".to_string()),
+    ));
+    assert_eq!(draft.as_ref().unwrap().name, "usb-FTDI-if00-port0 @ 115200");
+}
+
+/// A hand-typed device names the draft just like a listed one.
+#[test]
+fn a_hand_typed_device_renames_the_draft() {
+    let mut draft = new_serial_draft("COM7");
+    set_connection_editor_field_text(
+        &mut draft,
+        ConnectionEditorField::SerialPort,
+        r"\\.\COM10".into(),
+    );
+    assert_eq!(draft.serial_port, r"\\.\COM10");
+    assert_eq!(draft.name, "COM10 @ 115200");
+}
+
+/// The device only gets a say while the name still says what it used to open;
+/// a name of the user's own survives.
+#[test]
+fn a_name_of_the_users_own_survives_the_next_device() {
+    let mut draft = Some(new_serial_draft("COM7"));
+    draft.as_mut().unwrap().name = "Stepper bench".into();
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some("COM9".to_string()),
+    ));
+    assert_eq!(draft.as_ref().unwrap().name, "Stepper bench");
+
+    let mut saved = Some(ConnectionEditorState {
+        id: Some("serial".to_string()),
+        name: "Board".to_string(),
+        ..new_serial_draft("COM7")
+    });
+    assert!(set_connection_editor_select_value(
+        &mut saved,
+        ConnectionEditorSelect::SerialPort,
+        Some("COM3".to_string()),
+    ));
+    assert_eq!(saved.as_ref().unwrap().name, "Board");
+}
+
+/// A saved connection titled after the device it was saved from is titled after
+/// the device it now holds, so the list and the tab agree on what is open.
+#[test]
+fn a_saved_connection_titled_by_its_device_follows_the_new_one() {
+    let mut saved = Some(ConnectionEditorState {
+        id: Some("serial".to_string()),
+        name: "COM7 @ 115200".to_string(),
+        ..new_serial_draft("COM7")
+    });
+    assert!(set_connection_editor_select_value(
+        &mut saved,
+        ConnectionEditorSelect::SerialPort,
+        Some("COM9".to_string()),
+    ));
+    assert_eq!(saved.as_ref().unwrap().name, "COM9 @ 115200");
+
+    // Old titles named the device alone, without the rate.
+    let mut older = Some(ConnectionEditorState {
+        id: Some("serial".to_string()),
+        name: "ttyUSB0".to_string(),
+        ..new_serial_draft("/dev/ttyUSB0")
+    });
+    assert!(set_connection_editor_select_value(
+        &mut older,
+        ConnectionEditorSelect::BaudRate,
+        Some("57600".to_string()),
+    ));
+    assert_eq!(older.as_ref().unwrap().name, "ttyUSB0 @ 57600");
+}
+
+/// Asking for the device keeps the saved one as the connect-time default, so
+/// the title it gave the draft stays as well.
+#[test]
+fn deferring_the_device_keeps_the_title_it_gave() {
+    let mut draft = Some(new_serial_draft("COM7"));
+    draft.as_mut().unwrap().name = "COM7 @ 115200".into();
+    assert!(set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some(crate::models::SERIAL_PORT_ASK_AT_CONNECT.to_string()),
+    ));
+    assert_eq!(draft.as_ref().unwrap().name, "COM7 @ 115200");
+}
+
+/// The device's title belongs to the serial draft, so switching kind must not
+/// carry it along as if the user had chosen it there.
+#[test]
+fn the_device_title_does_not_follow_the_draft_to_another_kind() {
+    let mut draft = new_serial_draft("COM9");
+    draft.name = "COM9 @ 115200".to_string();
+    drop_device_name(&mut draft, "COM9", "115200");
+    assert!(draft.name.is_empty());
+
+    // Anything else in the name box was typed, so it stays.
+    draft.name = "Stepper".to_string();
+    drop_device_name(&mut draft, "COM9", "115200");
+    assert_eq!(draft.name, "Stepper");
+}
+
+/// Opening the serial tab titles the draft from the device it already shows,
+/// which is the first free one in the list.
+#[test]
+fn opening_the_serial_tab_titles_the_draft_from_its_device() {
+    let mut draft = new_serial_draft("COM3");
+    adopt_serial_device_name(&mut draft);
+    assert_eq!(draft.name, "COM3 @ 115200");
+
+    // A name the user typed on another tab wins over the device.
+    draft.name = "Stepper".to_string();
+    adopt_serial_device_name(&mut draft);
+    assert_eq!(draft.name, "Stepper");
+}
+
+/// The rate is part of the title, so changing it retitles a new connection the
+/// same way picking another device does.
+#[test]
+fn a_new_rate_retitles_a_new_serial_connection() {
+    let mut draft = Some(new_serial_draft("COM7"));
+    set_connection_editor_select_value(
+        &mut draft,
+        ConnectionEditorSelect::SerialPort,
+        Some("COM7".to_string()),
+    );
+    assert_eq!(draft.as_ref().unwrap().name, "COM7 @ 115200");
+
+    let editor = draft.as_mut().unwrap();
+    set_connection_editor_field_text(editor, ConnectionEditorField::BaudRate, "921600".into());
+    assert_eq!(editor.name, "COM7 @ 921600");
+
+    // A title the user typed is not up for revision.
+    editor.name = "Stepper bench".to_string();
+    set_connection_editor_field_text(editor, ConnectionEditorField::BaudRate, "57600".into());
+    assert_eq!(editor.name, "Stepper bench");
 }

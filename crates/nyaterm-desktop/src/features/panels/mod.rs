@@ -12,6 +12,7 @@ mod quick_command_variable_overlay;
 mod quick_commands_panel;
 mod quick_switch_overlay;
 mod recording_panel;
+mod serial_connect_prompt;
 mod session_overlays;
 mod sync_groups_overlay;
 mod tab_actions_overlay;

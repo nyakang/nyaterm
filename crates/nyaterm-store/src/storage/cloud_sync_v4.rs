@@ -1314,7 +1314,22 @@ fn merge_collection(
         }
         if kind == "connection" && old.is_none() {
             match merged.get("type").and_then(Value::as_str) {
-                Some("serial") => merged["port_name"] = json!(""),
+                // Device names are machine-local: a peer's COM port means nothing
+                // here. Ask for the port on connect instead of storing a foreign one.
+                Some("serial") => {
+                    merged["port_name"] = json!("");
+                    let prompt = merged
+                        .get_mut("connect_prompt")
+                        .and_then(Value::as_object_mut);
+                    match prompt {
+                        Some(prompt) => {
+                            prompt.insert("port".to_string(), json!(true));
+                        }
+                        None => {
+                            merged["connect_prompt"] = json!({ "port": true });
+                        }
+                    }
+                }
                 Some("local_terminal") => {
                     merged["shell_path"] = json!("");
                     merged["working_dir"] = Value::Null;

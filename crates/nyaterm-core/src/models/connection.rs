@@ -50,6 +50,34 @@ fn is_default_serial_flow_control(value: &SerialFlowControl) -> bool {
     *value == SerialFlowControl::None
 }
 
+/// Opt-in connect-time questions for a serial connection.
+///
+/// Both flags default to `false`, so stored connections keep opening with their
+/// saved port and baud rate. When `port` is set the saved `port_name` is only a
+/// hint (it may even be empty, which is what cloud sync produces for imported
+/// records) and the desktop asks for the real device on every connect. When
+/// `baud_rate` is set the saved value becomes the default offered by that
+/// dialog. Settings stay out of the transport contract: the desktop resolves a
+/// prompt into a concrete `SerialSessionConfig` before scheduling a start.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SerialConnectPrompt {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub port: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub baud_rate: bool,
+}
+
+impl SerialConnectPrompt {
+    /// True when the connection never asks and always uses its saved values.
+    pub fn is_disabled(&self) -> bool {
+        !self.port && !self.baud_rate
+    }
+
+    pub fn asks_anything(&self) -> bool {
+        self.port || self.baud_rate
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -582,6 +610,9 @@ pub enum ConnectionType {
         encoding: String,
     },
     Serial {
+        /// Saved device hint. Empty means "no port chosen yet" and is only
+        /// reachable when `connect_prompt.port` asks for one at connect time.
+        #[serde(default)]
         port_name: String,
         #[serde(default = "default_baud_rate")]
         baud_rate: u32,
@@ -593,6 +624,8 @@ pub enum ConnectionType {
         flow_control: SerialFlowControl,
         #[serde(default = "default_stop_bits")]
         stop_bits: String,
+        #[serde(default, skip_serializing_if = "SerialConnectPrompt::is_disabled")]
+        connect_prompt: SerialConnectPrompt,
         #[serde(default)]
         ai_execution_profile: AiExecutionProfile,
         #[serde(default = "default_backspace_mode_serial")]

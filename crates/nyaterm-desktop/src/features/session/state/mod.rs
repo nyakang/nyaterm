@@ -29,12 +29,14 @@ mod start;
 
 pub(crate) use catalog::SessionCatalogTransferBundle;
 pub(in crate::features) use command_history::CommandHistoryLearning;
-pub(in crate::features) use dialogs::RenameSessionSubmission;
+pub(in crate::features) use dialogs::{
+    RenameSessionSubmission, SerialConnectContinuation, SerialConnectPromptState,
+};
 pub(in crate::features) use prompts::PromptResolution;
 pub(in crate::features) use start::{
     PendingReconnectCompletion, PendingSessionStart, SavedConnectionStartOptions,
-    SessionStartEndReason, SessionStartEventRequest, SessionStartTabPlacement,
-    StartTabActionSnapshot,
+    SerialConnectSelection, SessionStartEndReason, SessionStartEventRequest,
+    SessionStartTabPlacement, StartTabActionSnapshot,
 };
 
 pub(in crate::features) struct SessionFeatureState {
@@ -162,6 +164,7 @@ impl SessionFeatureState {
                 temporary_serial_port_name: String::new(),
                 temporary_serial_baud_rate: "115200".to_string(),
                 temporary_ssh_link_error: None,
+                serial_connect_prompt: None,
             },
             command_history: HashMap::new(),
             active_search_draft: String::new(),

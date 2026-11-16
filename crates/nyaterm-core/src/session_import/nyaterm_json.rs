@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use crate::{AiExecutionProfile, ConnectionAuth, ConnectionType, SavedPassword, SshKey};
+use crate::{
+    AiExecutionProfile, ConnectionAuth, ConnectionType, SavedPassword, SerialConnectPrompt, SshKey,
+};
 
 use super::{
     AppError, AppResult, PreparedSessionConnection, PreparedSessionImport,
@@ -453,11 +455,16 @@ fn prepare_nyaterm_json_session(
         } => {
             validate_serial_config(baud_rate, data_bits, &parity, &stop_bits, &backspace_mode)?;
             let context = format!("serial session '{name}'");
+            let port_name = port_name.trim().to_string();
             Ok(PreparedSessionConnection {
                 saved: None,
                 name: required_string(name, "name", "serial session")?,
                 config: ConnectionType::Serial {
-                    port_name: required_string(port_name, "port_name", &context)?,
+                    connect_prompt: SerialConnectPrompt {
+                        port: port_name.is_empty(),
+                        baud_rate: false,
+                    },
+                    port_name,
                     baud_rate,
                     data_bits,
                     parity,

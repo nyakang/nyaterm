@@ -2944,3 +2944,54 @@ fn independent_rdp_instances_can_reference_the_same_saved_connection() {
         assert!(app.session.has_session("rdp-three"));
     });
 }
+
+#[test]
+fn serial_occupancy_tracks_live_and_pending_sessions_without_discovery() {
+    let root = TestConfigDir::new("nyaterm-serial-occupancy");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "live");
+    app.update(&mut cx, |app, _| {
+        let serial_config = |port: &str| {
+            SessionLaunchConfig::Serial(nyaterm_transport::SerialSessionConfig {
+                port_name: port.into(),
+                ..Default::default()
+            })
+        };
+        app.session.metadata_mut("live").unwrap().launch_config = serial_config("COM7");
+        let mut request = pending("first");
+        request.launch_config = Some(serial_config(" COM9 "));
+        request.kind = SessionKind::Serial;
+        app.session.start.register_pending("first".into(), request);
+        let expected = std::collections::HashSet::from(["COM7".into(), "COM9".into()]);
+        assert_eq!(app.serial_ports_in_use(), expected);
+        assert_eq!(
+            app.session.serial_ports_in_use(Some("live"), None),
+            std::collections::HashSet::from(["COM9".into()])
+        );
+        assert_eq!(
+            app.session.serial_ports_in_use(None, Some("first")),
+            std::collections::HashSet::from(["COM7".into()])
+        );
+        let mut second = pending("second");
+        second.kind = SessionKind::Serial;
+        second.launch_config = Some(serial_config("COM9"));
+        second.reconnect_session_id = Some("live".into());
+        app.session.start.register_pending("second".into(), second);
+        assert!(
+            app.session
+                .serial_ports_in_use(Some("live"), Some("first"))
+                .contains("COM9")
+        );
+        app.session
+            .start
+            .cancel_pending("first", "cancelled".into());
+        assert!(app.serial_port_in_use("COM9"));
+        app.session
+            .start
+            .cancel_pending("second", "cancelled".into());
+        assert!(!app.serial_port_in_use("COM9"));
+        app.session.metadata_mut("live").unwrap().disconnected = true;
+        assert!(app.serial_ports_in_use().is_empty());
+    });
+}

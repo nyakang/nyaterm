@@ -1181,6 +1181,9 @@
     "serialPortRequired": "序列埠名不能為空",
     "serialPortUnavailable": "%{port}（不可用）",
     "serialPortsLoadFailed": "載入序列埠清單失敗",
+    "askAtConnect": "連線時詢問",
+    "askAtConnectHint": "儲存的值作為連線時的預設值。",
+    "serialPortInUse": "使用中",
     "serverPlaceholder": "我的伺服器",
     "shellArgs": "終端引數",
     "shellArgsPlaceholder": "例如：--login -i 或 -NoLogo",
@@ -2714,6 +2717,22 @@
     "sshPassword": "SSH 密碼",
     "sshVerification": "SSH 身份驗證",
     "submit": "繼續"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "請先完成目前的序列埠選擇。",
+    "baudRateInvalid": "鮑率必須介於 1 到 4000000。",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "已取消序列埠連線。",
+    "connect": "連線",
+    "customPort": "自訂…",
+    "description": "連線「%{name}」前請指定裝置與鮑率。",
+    "manualPortHint": "未列出的裝置可直接填寫路徑，例如 /dev/serial/by-id/…",
+    "noWindow": "沒有可用視窗顯示序列埠選擇。",
+    "portPathPlaceholder": "COM1 或 /dev/ttyUSB0",
+    "portRequired": "請選擇或填寫序列埠裝置。",
+    "portRequiredUnattended": "「%{name}」需要在連線時選擇序列埠，此操作無法完成。",
+    "selectionRequiredUnattended": "「%{name}」需要互動選擇串口裝置或鮑率，無法自動啟動。",
+    "title": "選擇序列埠"
   },
   "serialSend": {
     "payloadEmpty": "內容為空",

@@ -1181,6 +1181,9 @@
     "serialPortRequired": "시리얼 포트가 필요합니다",
     "serialPortUnavailable": "%{port}(사용 불가)",
     "serialPortsLoadFailed": "포트를 불러오지 못했습니다",
+    "askAtConnect": "연결할 때 묻기",
+    "askAtConnectHint": "저장된 값은 연결할 때 기본값으로 표시됩니다.",
+    "serialPortInUse": "사용 중",
     "serverPlaceholder": "내 서버",
     "shellArgs": "셸 인수",
     "shellArgsPlaceholder": "예: --login -i 또는 -NoLogo",
@@ -2714,6 +2717,22 @@
     "sshPassword": "SSH 비밀번호",
     "sshVerification": "SSH 검증",
     "submit": "계속"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "열려 있는 시리얼 선택을 먼저 완료하세요.",
+    "baudRateInvalid": "보드레이트는 1~4000000 사이여야 합니다.",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "시리얼 연결을 취소했습니다.",
+    "connect": "연결",
+    "customPort": "직접 입력…",
+    "description": "'%{name}'에 연결하기 전에 장치와 보드레이트를 지정하세요.",
+    "manualPortHint": "목록에 없는 장치는 경로를 직접 입력할 수 있습니다. 예: /dev/serial/by-id/…",
+    "noWindow": "시리얼 선택을 표시할 창이 없습니다.",
+    "portPathPlaceholder": "COM1 또는 /dev/ttyUSB0",
+    "portRequired": "시리얼 장치를 선택하거나 입력하세요.",
+    "portRequiredUnattended": "'%{name}'은(는) 연결할 때 포트를 선택하므로 이 요청으로는 연결할 수 없습니다.",
+    "selectionRequiredUnattended": "「%{name}」은(는) 연결 시 직렬 장치 또는 전송 속도를 직접 선택해야 하므로 자동으로 시작할 수 없습니다.",
+    "title": "시리얼 포트"
   },
   "serialSend": {
     "payloadEmpty": "페이로드가 비어 있습니다",

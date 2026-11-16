@@ -326,6 +326,91 @@ impl ConnectionEditorField {
     }
 }
 
+/// Dropdown value that stands for "ask for the device when connecting" rather
+/// than a port name. It is never stored in `serial_port`, which keeps the last
+/// used device as the connect-time dialog's default.
+pub(crate) const SERIAL_PORT_ASK_AT_CONNECT: &str = "__ask_at_connect__";
+
+/// Title a new serial connection takes from its device.
+///
+/// The value can come from the enumerated list (`COM7`, `/dev/ttyUSB0`) or be
+/// typed by hand, where Windows also accepts a `\\.\COM10` prefix and Linux
+/// users often paste a `/dev/serial/by-id/...` path. Only the part that names
+/// the device is kept, so a pasted path does not turn into a title as long as
+/// the path itself. `None` means there is no device to name the connection
+/// after: nothing selected, or "ask when connecting" chosen.
+pub(crate) fn serial_connection_title(port_name: &str) -> Option<String> {
+    let port_name = port_name.trim();
+    if port_name.is_empty() || port_name == SERIAL_PORT_ASK_AT_CONNECT {
+        return None;
+    }
+    // Windows needs the prefix to address COM10 and above, but it is not part
+    // of the device's name.
+    let port_name = port_name.strip_prefix(r"\\.\").unwrap_or(port_name);
+    let device = port_name
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())?;
+    Some(device.to_string())
+}
+
+/// Title a new serial connection takes from its device and framing.
+///
+/// This is the same shape a quick serial link gets (`COM7 @ 115200`), so a saved
+/// connection and a temporary one are named alike. The rate joins the title
+/// because one board is often opened at several of them; without a rate only the
+/// device is left.
+pub(crate) fn serial_connection_name(port_name: &str, baud_rate: &str) -> Option<String> {
+    let device = serial_connection_title(port_name)?;
+    let baud_rate = baud_rate.trim();
+    if baud_rate.is_empty() {
+        return Some(device);
+    }
+    Some(format!("{device} @ {baud_rate}"))
+}
+
+/// Name a serial connection is saved under when it has no device to speak of.
+///
+/// The connect prompt can own the device, leaving the editor without one; the
+/// connection list still needs something to show.
+pub(crate) const SERIAL_FALLBACK_NAME: &str = "Serial";
+
+/// Whether a name is the one a device and rate produce rather than one the user
+/// typed.
+///
+/// The device alone counts: names written before the rate joined the title, and
+/// connections imported with only a device, are the editor's default too. An
+/// empty name is nobody's choice yet, and neither is the bare ["Serial"] of a
+/// connection saved without a device, so both count as the device's as well.
+pub(crate) fn serial_name_restates_device(name: &str, port_name: &str, baud_rate: u32) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.eq_ignore_ascii_case(SERIAL_FALLBACK_NAME) {
+        return true;
+    }
+    serial_connection_name(port_name, &baud_rate.to_string()).as_deref() == Some(name)
+        || serial_connection_title(port_name).as_deref() == Some(name)
+}
+
+/// Title a serial tab carries for the device and rate it actually opens.
+///
+/// A name the user typed is kept verbatim. A name that only restated the device
+/// saved with the connection is the editor's default, so the tab follows the
+/// device this session really opened — which matters when the connect prompt
+/// asked: the same saved connection serves the `COM7` it was saved from and the
+/// `COM9` the board reappeared as, and the tab says which one is open.
+pub(crate) fn serial_session_title(
+    saved_name: &str,
+    saved_port_name: &str,
+    saved_baud_rate: u32,
+    port_name: &str,
+    baud_rate: u32,
+) -> String {
+    if !serial_name_restates_device(saved_name, saved_port_name, saved_baud_rate) {
+        return saved_name.to_string();
+    }
+    serial_connection_name(port_name, &baud_rate.to_string())
+        .unwrap_or_else(|| saved_name.to_string())
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ConnectionEditorState {
     /// "Default session settings" mode: the same editor surface minus the
@@ -416,6 +501,12 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) working_dir: String,
     pub(crate) serial_port: String,
     pub(crate) baud_rate: String,
+    /// Ask for the device when a serial session starts. The saved port becomes a
+    /// hint and may stay empty.
+    pub(crate) serial_prompt_port: bool,
+    /// Ask for the baud rate when a serial session starts. The saved rate becomes
+    /// the dialog default.
+    pub(crate) serial_prompt_baud_rate: bool,
     pub(crate) data_bits: String,
     pub(crate) parity: String,
     pub(crate) flow_control: nyaterm_core::models::connection::SerialFlowControl,
@@ -926,5 +1017,167 @@ impl ConnectionSortMode {
             Self::NameAsc => Self::NameDesc,
             Self::NameDesc => Self::Default,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SERIAL_PORT_ASK_AT_CONNECT, serial_connection_name, serial_connection_title,
+        serial_name_restates_device, serial_session_title,
+    };
+
+    #[test]
+    fn serial_settings_stay_in_basic_information_except_in_defaults() {
+        use super::{ConnectionEditorField, ConnectionEditorSection, ConnectionKindTab};
+        assert_eq!(
+            ConnectionEditorSection::for_kind(ConnectionKindTab::Serial, false),
+            &[
+                ConnectionEditorSection::Basic,
+                ConnectionEditorSection::Terminal
+            ]
+        );
+        assert_eq!(
+            ConnectionEditorSection::for_kind(ConnectionKindTab::Serial, true),
+            &[
+                ConnectionEditorSection::Serial,
+                ConnectionEditorSection::Terminal
+            ]
+        );
+        assert_eq!(
+            ConnectionEditorSection::initial_for_kind(ConnectionKindTab::Serial, false),
+            ConnectionEditorSection::Basic
+        );
+        assert_eq!(
+            ConnectionEditorSection::initial_for_kind(ConnectionKindTab::Serial, true),
+            ConnectionEditorSection::Serial
+        );
+        assert_eq!(
+            ConnectionEditorField::SerialPort.section(),
+            ConnectionEditorSection::Basic
+        );
+        assert_eq!(
+            ConnectionEditorField::BaudRate.section(),
+            ConnectionEditorSection::Basic
+        );
+    }
+
+    /// The title names the device, wherever the device name came from.
+    #[test]
+    fn a_device_names_the_connection_not_the_path_that_reaches_it() {
+        for (port_name, expected) in [
+            ("COM7", "COM7"),
+            ("  COM7  ", "COM7"),
+            // Windows needs the prefix to open COM10 and above.
+            (r"\\.\COM10", "COM10"),
+            ("/dev/ttyUSB0", "ttyUSB0"),
+            ("/dev/ttyACM0", "ttyACM0"),
+            (
+                "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0",
+                "usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0",
+            ),
+        ] {
+            assert_eq!(
+                serial_connection_title(port_name).as_deref(),
+                Some(expected),
+                "{port_name}"
+            );
+        }
+    }
+
+    /// Without a device there is nothing to name the connection after.
+    #[test]
+    fn an_unpicked_device_has_no_title() {
+        assert_eq!(serial_connection_title(""), None);
+        assert_eq!(serial_connection_title("   "), None);
+        assert_eq!(serial_connection_title(SERIAL_PORT_ASK_AT_CONNECT), None);
+    }
+
+    /// The rate joins the device, which is how a quick serial link is titled.
+    #[test]
+    fn the_rate_joins_the_device_in_the_title() {
+        assert_eq!(
+            serial_connection_name("COM7", "115200").as_deref(),
+            Some("COM7 @ 115200")
+        );
+        assert_eq!(
+            serial_connection_name(r"\.\COM10", " 921600 ").as_deref(),
+            Some("COM10 @ 921600")
+        );
+        assert_eq!(
+            serial_connection_name("/dev/serial/by-id/usb-FTDI-if00-port0", "57600").as_deref(),
+            Some("usb-FTDI-if00-port0 @ 57600")
+        );
+        // A missing rate leaves the device on its own rather than a bare " @ ".
+        assert_eq!(
+            serial_connection_name("COM7", "  ").as_deref(),
+            Some("COM7")
+        );
+        // Without a device there is nothing to name, however precise the rate.
+        assert_eq!(serial_connection_name("", "115200"), None);
+        assert_eq!(
+            serial_connection_name(SERIAL_PORT_ASK_AT_CONNECT, "115200"),
+            None
+        );
+    }
+
+    /// Only the device's own wording follows the device; anything the user typed
+    /// is theirs to keep.
+    #[test]
+    fn a_name_tells_the_devices_wording_apart_from_the_users() {
+        assert!(serial_name_restates_device("COM7 @ 115200", "COM7", 115200));
+        // Named after the device alone, which older titles did.
+        assert!(serial_name_restates_device("COM7", "COM7", 115200));
+        // Nothing typed yet, and the bare "Serial" a device-less save leaves.
+        assert!(serial_name_restates_device("   ", "COM7", 115200));
+        assert!(serial_name_restates_device("Serial", "", 115200));
+        assert!(serial_name_restates_device("serial", "", 115200));
+        assert!(!serial_name_restates_device(
+            "Stepper bench",
+            "COM7",
+            115200
+        ));
+        // Anything else written over the device's wording is a choice of words.
+        assert!(!serial_name_restates_device("Serial bench", "", 115200));
+        // A rate the connection does not open at is not the device's wording.
+        assert!(!serial_name_restates_device("COM7 @ 9600", "COM7", 115200));
+        assert!(!serial_name_restates_device(
+            "COM7 @ 115200",
+            "COM9",
+            115200
+        ));
+    }
+
+    /// The tab names the device it really opened, unless the user chose words.
+    #[test]
+    fn a_serial_tab_follows_the_device_it_opened() {
+        assert_eq!(
+            serial_session_title("COM7 @ 115200", "COM7", 115200, "COM9", 57600),
+            "COM9 @ 57600"
+        );
+        assert_eq!(
+            serial_session_title("COM7", "COM7", 115200, "/dev/ttyACM0", 115200),
+            "ttyACM0 @ 115200"
+        );
+        assert_eq!(
+            serial_session_title("", "COM7", 115200, "COM9", 115200),
+            "COM9 @ 115200"
+        );
+        // The bare "Serial" of a connection saved without a device is the
+        // device's to name too, which is the connect prompt's job then.
+        assert_eq!(
+            serial_session_title("Serial", "", 115200, "COM9", 115200),
+            "COM9 @ 115200"
+        );
+        // A name of the user's own is not the tab's to rewrite.
+        assert_eq!(
+            serial_session_title("Stepper bench", "COM7", 115200, "COM9", 57600),
+            "Stepper bench"
+        );
+        // Without a device to name it after, the saved name is all there is.
+        assert_eq!(
+            serial_session_title("COM7 @ 115200", "COM7", 115200, "", 115200),
+            "COM7 @ 115200"
+        );
     }
 }

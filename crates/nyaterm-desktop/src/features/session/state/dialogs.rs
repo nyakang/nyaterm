@@ -1,11 +1,14 @@
 //! session dialogs state and transitions.
 
 use super::SessionFeatureState;
-use super::start::{DEFAULT_DUPLICATE_STARTUP_DELAY_MS, StartTabActionSnapshot};
+use super::start::{
+    DEFAULT_DUPLICATE_STARTUP_DELAY_MS, SavedConnectionStartOptions, StartTabActionSnapshot,
+};
 use crate::features::shell::tab_mouse::TabActionTarget;
 use crate::models::{StartupCommandAction, StartupCommandRequest, TabActionsSubmenu};
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use gpui::{FocusHandle, ScrollHandle, point, px};
+use nyaterm_core::SavedConnection;
 
 /// Session-scoped overlays, confirmations and editing dialogs.
 pub(in crate::features::session) struct SessionDialogState {
@@ -38,6 +41,92 @@ pub(in crate::features::session) struct SessionDialogState {
     pub(super) temporary_serial_port_name: String,
     pub(super) temporary_serial_baud_rate: String,
     pub(super) temporary_ssh_link_error: Option<&'static str>,
+    /// A saved serial connection waiting for its device and framing.
+    pub(super) serial_connect_prompt: Option<SerialConnectPromptState>,
+}
+
+/// Connect-time questions for one saved serial connection.
+///
+/// The saved values are only defaults here: the pending start resumes with
+/// `SerialConnectSelection` built from this state, and the saved connection is
+/// never rewritten.
+pub(in crate::features) struct SerialConnectPromptState {
+    pub(in crate::features) connection: SavedConnection,
+    pub(in crate::features) continuation: SerialConnectContinuation,
+    pub(in crate::features) port_name: String,
+    pub(in crate::features) baud_rate: String,
+    /// The device is being typed rather than picked from the list, which is
+    /// also what decides whether the free-text field is on screen.
+    pub(in crate::features) custom_port: bool,
+    /// Discovery may seed an empty field only until the user edits or selects it.
+    pub(in crate::features) device_edited: bool,
+    pub(in crate::features) ask_port: bool,
+    pub(in crate::features) ask_baud_rate: bool,
+    pub(in crate::features) error: Option<&'static str>,
+}
+
+impl SerialConnectPromptState {
+    pub(in crate::features) fn set_port_text(&mut self, text: String) {
+        self.device_edited = true;
+        self.port_name = text;
+        self.error = None;
+    }
+
+    pub(in crate::features) fn select_port(&mut self, port: Option<String>) {
+        self.device_edited = true;
+        self.custom_port = port.is_none();
+        if let Some(port) = port {
+            self.port_name = port;
+        }
+        self.error = None;
+    }
+
+    pub(in crate::features) fn set_baud_text(&mut self, text: String) {
+        self.baud_rate = text.chars().filter(|ch| ch.is_ascii_digit()).collect();
+        self.error = None;
+    }
+
+    pub(in crate::features) fn seed_device(
+        &mut self,
+        ports: &[nyaterm_transport::SerialPortInfo],
+        in_use: &std::collections::HashSet<String>,
+    ) -> bool {
+        if !self.ask_port || self.device_edited {
+            return false;
+        }
+        let old_port = self.port_name.clone();
+        let old_custom = self.custom_port;
+        if self.port_name.trim().is_empty() {
+            self.port_name = ports
+                .iter()
+                .find(|port| !in_use.contains(&port.port_name))
+                .map(|port| port.port_name.clone())
+                .unwrap_or_default();
+        }
+        self.custom_port = !ports.iter().any(|port| port.port_name == self.port_name);
+        self.port_name != old_port || self.custom_port != old_custom
+    }
+}
+
+pub(in crate::features) enum SerialConnectContinuation {
+    Start(Box<SavedConnectionStartOptions>),
+    Reconnect { session_id: String },
+}
+
+impl SerialConnectContinuation {
+    pub(in crate::features) fn reconnect_session_id(&self) -> Option<&str> {
+        match self {
+            Self::Start(options) => options.reconnect_session_id.as_deref(),
+            Self::Reconnect { session_id } => Some(session_id),
+        }
+    }
+
+    pub(in crate::features) fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Start(options) => options.request_id.as_deref(),
+            Self::Reconnect { .. } => None,
+        }
+    }
 }
 
 pub(in crate::features) enum RenameSessionSubmission {
@@ -410,6 +499,30 @@ impl SessionDialogState {
         self.temporary_ssh_link_error = None;
     }
 
+    pub(in crate::features) fn begin_serial_connect_prompt(
+        &mut self,
+        state: SerialConnectPromptState,
+    ) {
+        self.serial_connect_prompt = Some(state);
+    }
+
+    pub(in crate::features) fn serial_connect_prompt(&self) -> Option<&SerialConnectPromptState> {
+        self.serial_connect_prompt.as_ref()
+    }
+
+    pub(in crate::features) fn serial_connect_prompt_mut(
+        &mut self,
+    ) -> Option<&mut SerialConnectPromptState> {
+        self.serial_connect_prompt.as_mut()
+    }
+
+    /// Remove the pending prompt together with everything it captured.
+    pub(in crate::features) fn take_serial_connect_prompt(
+        &mut self,
+    ) -> Option<SerialConnectPromptState> {
+        self.serial_connect_prompt.take()
+    }
+
     pub(in crate::features) fn apply_text_input(&mut self, field: &str, text: String) -> bool {
         match field {
             "rename" => self.rename_draft = text,
@@ -421,6 +534,10 @@ impl SessionDialogState {
 }
 
 impl SessionFeatureState {
+    pub(in crate::features) fn serial_connect_prompt(&self) -> Option<&SerialConnectPromptState> {
+        self.dialogs.serial_connect_prompt()
+    }
+
     pub(in crate::features) fn dialog_tab_actions_session_id(&self) -> Option<&str> {
         self.dialogs.tab_actions_session_id()
     }

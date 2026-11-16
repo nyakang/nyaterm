@@ -26,6 +26,7 @@ use rust_i18n::t;
 use super::super::NativeHostKeyVerifier;
 use super::{PendingSessionStartRegistration, SessionStartFocusTarget};
 use crate::features::formatting::{non_empty_string, parse_telnet_enter_mode};
+use crate::features::session::state::SerialConnectContinuation;
 use crate::features::{
     NyaTermApp, runtime_jobs::SessionStartSuccess, runtime_jobs::submit_session_start_job,
     session::AgentPromptBroker, session::CredentialPromptBroker, session::HostKeyPromptBroker,
@@ -185,8 +186,8 @@ impl NyaTermApp {
         let external_rdp =
             matches!(&connection.config, ConnectionType::Rdp { backend, .. } if backend == "mstsc");
         let focus_target = session_start_focus_target(&connection.config);
-        self.continue_saved_connection_start(connection, options, cx);
-        if !external_rdp {
+        // A connect-time serial dialog owns focus until it resolves.
+        if self.continue_saved_connection_start(connection, options, cx) && !external_rdp {
             self.focus_user_started_session_surface(focus_target, window, cx);
         }
     }
@@ -216,13 +217,13 @@ impl NyaTermApp {
         connection: SavedConnection,
         options: SavedConnectionStartOptions,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.continue_saved_connection_start_with_launcher(
             connection,
             options,
             crate::platform::mstsc::launch,
             cx,
-        );
+        )
     }
 
     fn continue_saved_connection_start_with_launcher(
@@ -235,7 +236,7 @@ impl NyaTermApp {
         + Send
         + 'static,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if !matches!(connection.config, ConnectionType::LocalTerminal { .. })
             && self.remote_start_blocked_by_configuration_replacement(cx)
         {
@@ -243,21 +244,64 @@ impl NyaTermApp {
                 options.mcp_open_operation_id.as_deref().unwrap_or(""),
                 &t!("settings.configurationReplacementInProgress"),
             );
-            return;
+            return false;
+        }
+
+        // A serial connection can defer its device and framing to this moment.
+        // Answering the dialog re-enters this function with `serial_selection`
+        // set, which is what stops it from asking twice.
+        let serial_prompt = match &connection.config {
+            ConnectionType::Serial {
+                port_name,
+                baud_rate,
+                connect_prompt,
+                ..
+            } if connect_prompt.asks_anything() && options.serial_selection.is_none() => {
+                Some((*connect_prompt, port_name.clone(), *baud_rate))
+            }
+            _ => None,
+        };
+        if let Some((prompt, port_hint, baud_hint)) = serial_prompt {
+            if options.suppress_serial_prompt {
+                // Saved defaults are hints, not unattended authorization to open
+                // a device. A resolved retry bypasses this saved-start path.
+                let message = t!(
+                    "serialPrompt.selectionRequiredUnattended",
+                    name = connection.name.as_str()
+                )
+                .to_string();
+                self.fail_start_preparation(&options, message.clone(), cx);
+                self.complete_mcp_session_open_failure(
+                    options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                    &message,
+                );
+                self.shell.set_status(message);
+                cx.notify();
+                return false;
+            }
+            return self.open_serial_connect_prompt(
+                connection,
+                SerialConnectContinuation::Start(Box::new(options)),
+                prompt,
+                port_hint,
+                baud_hint,
+                cx,
+            );
         }
 
         if matches!(connection.config, ConnectionType::Adb { .. }) {
             let kind = options.android_view;
             self.start_android_connection(connection, options, kind, cx);
-            return;
+            return true;
         }
 
         // External clients own no application tab, credential request, or Relay.
         if matches!(&connection.config, ConnectionType::Rdp { backend, .. } if backend == "mstsc") {
             self.start_mstsc_connection(connection, launcher, cx);
-            return;
+            return true;
         }
         self.continue_saved_connection_start_in_app(connection, options, cx);
+        true
     }
 
     fn continue_saved_connection_start_in_app(
@@ -616,13 +660,52 @@ impl NyaTermApp {
                 parity,
                 flow_control,
                 stop_bits,
+                connect_prompt: _,
                 ai_execution_profile,
                 backspace_mode,
                 encoding,
             } => {
+                // The tab is named after the device this session opens, not the
+                // one saved with the connection: the connect prompt may have
+                // replaced it, and a board that came back as another port would
+                // otherwise leave a tab titled after a device nobody opened.
+                let selection = options.serial_selection.clone();
+                let (opened_port, opened_baud_rate) = selection
+                    .as_ref()
+                    .map_or((port_name.as_str(), baud_rate), |selection| {
+                        (selection.port_name.as_str(), selection.baud_rate)
+                    });
+                let session_title = crate::models::serial_session_title(
+                    &connection.name,
+                    &port_name,
+                    baud_rate,
+                    opened_port,
+                    opened_baud_rate,
+                );
+                let (port_name, baud_rate) = selection
+                    .map_or((port_name, baud_rate), |selection| {
+                        (selection.port_name, selection.baud_rate)
+                    });
+                if port_name.trim().is_empty() {
+                    // Only reachable for non-interactive starts: the prompt is
+                    // the interactive way to fill this in.
+                    let message = t!(
+                        "serialPrompt.portRequiredUnattended",
+                        name = connection.name.as_str()
+                    )
+                    .to_string();
+                    self.fail_start_preparation(&options, message.clone(), cx);
+                    self.complete_mcp_session_open_failure(
+                        options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                        &message,
+                    );
+                    self.shell.set_status(message);
+                    cx.notify();
+                    return;
+                }
                 let encoding = resolve_effective_connection_encoding(&encoding, self);
                 let config = SerialSessionConfig {
-                    name: connection.name.clone(),
+                    name: session_title.clone(),
                     port_name,
                     baud_rate,
                     data_bits,
@@ -633,7 +716,7 @@ impl NyaTermApp {
                     encoding,
                 };
                 self.begin_background_session_start(
-                    connection.name,
+                    session_title,
                     SessionLaunchConfig::Serial(config),
                     Some(connection.id),
                     ai_execution_profile,
@@ -885,6 +968,8 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            serial_selection: _,
+            suppress_serial_prompt: _,
             request_id,
         } = options;
         let connection_name = connection.name.clone();

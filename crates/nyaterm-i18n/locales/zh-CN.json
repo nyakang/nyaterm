@@ -1181,6 +1181,9 @@
     "serialPortRequired": "串口名不能为空",
     "serialPortUnavailable": "%{port}（不可用）",
     "serialPortsLoadFailed": "加载串口列表失败",
+    "askAtConnect": "连接时询问",
+    "askAtConnectHint": "保存的值作为连接时的默认值。",
+    "serialPortInUse": "使用中",
     "serverPlaceholder": "我的服务器",
     "shellArgs": "终端参数",
     "shellArgsPlaceholder": "例如：--login -i 或 -NoLogo",
@@ -2714,6 +2717,22 @@
     "sshPassword": "SSH 密码",
     "sshVerification": "SSH 身份验证",
     "submit": "继续"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "请先完成当前的串口选择。",
+    "baudRateInvalid": "波特率必须在 1 到 4000000 之间。",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "已取消串口连接。",
+    "connect": "连接",
+    "customPort": "自定义…",
+    "description": "连接「%{name}」前请指定设备与波特率。",
+    "manualPortHint": "未列出的设备可直接填写路径，例如 /dev/serial/by-id/…",
+    "noWindow": "没有可用的窗口来显示串口选择。",
+    "portPathPlaceholder": "COM1 或 /dev/ttyUSB0",
+    "portRequired": "请选择或填写串口设备。",
+    "portRequiredUnattended": "「%{name}」需要在连接时选择串口，此操作无法完成。",
+    "selectionRequiredUnattended": "「%{name}」需要交互选择串口设备或波特率，无法自动启动。",
+    "title": "选择串口"
   },
   "serialSend": {
     "payloadEmpty": "内容为空",

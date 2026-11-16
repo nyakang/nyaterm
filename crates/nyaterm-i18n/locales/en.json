@@ -1181,6 +1181,9 @@
     "serialPortRequired": "Serial port required",
     "serialPortUnavailable": "%{port} (Unavailable)",
     "serialPortsLoadFailed": "Failed to load ports",
+    "askAtConnect": "Ask when connecting",
+    "askAtConnectHint": "The saved value is offered as the default when connecting.",
+    "serialPortInUse": "in use",
     "serverPlaceholder": "My Server",
     "shellArgs": "Shell Arguments",
     "shellArgsPlaceholder": "e.g. --login -i or -NoLogo",
@@ -2714,6 +2717,22 @@
     "sshPassword": "SSH Password",
     "sshVerification": "SSH Verification",
     "submit": "Continue"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "Finish the open serial prompt first.",
+    "baudRateInvalid": "Baud rate must be between 1 and 4000000.",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "Serial connection cancelled.",
+    "connect": "Connect",
+    "customPort": "Custom…",
+    "description": "Choose the device and baud rate before connecting to \"%{name}\".",
+    "manualPortHint": "Devices that are not listed can be typed in, e.g. /dev/serial/by-id/…",
+    "noWindow": "No window is available to show the serial prompt.",
+    "portPathPlaceholder": "COM1 or /dev/ttyUSB0",
+    "portRequired": "Choose or enter a serial device.",
+    "portRequiredUnattended": "\"%{name}\" asks for its serial port on connect, which this request cannot do.",
+    "selectionRequiredUnattended": "\"%{name}\" requires choosing its serial device or baud rate interactively. This unattended request cannot start it.",
+    "title": "Serial port"
   },
   "serialSend": {
     "payloadEmpty": "Payload is empty",

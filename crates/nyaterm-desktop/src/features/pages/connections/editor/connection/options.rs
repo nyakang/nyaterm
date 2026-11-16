@@ -610,21 +610,63 @@ pub(in crate::features) fn ssh_algorithm_mode_choices(
     .collect()
 }
 
+/// Serial devices, listed by port name with the USB identity as a subtitle.
+///
+/// A saved port that is no longer enumerated stays first so the user can see
+/// what the connection points at before replacing it. Ports this process already
+/// holds are listed but disabled: two sessions cannot share one device.
 pub(in crate::features) fn serial_port_choices(
-    ports: &[String],
+    ports: &[nyaterm_transport::SerialPortInfo],
+    in_use: &std::collections::HashSet<String>,
     selected: &str,
 ) -> Vec<ConnectionEditorChoice> {
     let mut choices = Vec::new();
-    if !selected.is_empty() && !ports.iter().any(|port| port == selected) {
-        choices.push(ConnectionEditorChoice::new(
-            Some(selected.to_string()),
-            selected.to_string(),
-            true,
-        ));
+    if !selected.is_empty() && !ports.iter().any(|port| port.port_name == selected) {
+        let mut choice =
+            ConnectionEditorChoice::new(Some(selected.to_string()), selected.to_string(), true);
+        if in_use.contains(selected) {
+            choice.disabled = true;
+            choice.label = format!("{selected} · {}", t!("dialog.serialPortInUse"));
+        }
+        choices.push(choice);
     }
     choices.extend(ports.iter().map(|port| {
-        ConnectionEditorChoice::new(Some(port.clone()), port.clone(), selected == port)
+        let mut choice = ConnectionEditorChoice::new(
+            Some(port.port_name.clone()),
+            port.port_name.clone(),
+            selected == port.port_name,
+        );
+        if let Some(detail) = port.detail() {
+            choice = choice
+                .search_text(format!("{} {detail}", port.port_name))
+                .subtitle(detail);
+        }
+        if in_use.contains(&port.port_name) {
+            choice.disabled = true;
+            choice.label = format!("{} · {}", port.port_name, t!("dialog.serialPortInUse"));
+        }
+        choice
     }));
+    choices
+}
+
+/// Editor port list: the device list plus the option that defers the choice.
+///
+/// Picking a device is an explicit decision, so the saved port is only shown as
+/// selected while nothing is deferred.
+pub(in crate::features) fn editor_serial_port_choices(
+    ports: &[nyaterm_transport::SerialPortInfo],
+    in_use: &std::collections::HashSet<String>,
+    selected: &str,
+    ask_at_connect: bool,
+) -> Vec<ConnectionEditorChoice> {
+    let mut choices = vec![ConnectionEditorChoice::new(
+        Some(crate::models::SERIAL_PORT_ASK_AT_CONNECT.to_string()),
+        t!("dialog.askAtConnect").to_string(),
+        ask_at_connect,
+    )];
+    let selected = if ask_at_connect { "" } else { selected };
+    choices.extend(serial_port_choices(ports, in_use, selected));
     choices
 }
 
@@ -791,4 +833,53 @@ pub(in crate::features) fn shell_choices(selected: &str) -> Vec<ConnectionEditor
         ConnectionEditorChoice::new(Some(value.to_string()), label, selected == value)
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use nyaterm_transport::SerialPortInfo;
+
+    use super::{editor_serial_port_choices, serial_port_choices};
+    use crate::models::SERIAL_PORT_ASK_AT_CONNECT;
+
+    fn port(name: &str) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_device_dropdown_offers_deferring_ahead_of_the_enumerated_ports() {
+        let ports = [port("COM3"), port("COM4")];
+        let in_use = HashSet::from(["COM4".to_string()]);
+
+        let deferred = editor_serial_port_choices(&ports, &in_use, "COM3", true);
+        assert_eq!(
+            deferred[0].value.as_deref(),
+            Some(SERIAL_PORT_ASK_AT_CONNECT)
+        );
+        assert!(deferred[0].selected);
+        // Deferring wins the display: the saved device is only a default now.
+        assert!(deferred[1..].iter().all(|choice| !choice.selected));
+        assert!(!deferred[1].disabled);
+        assert!(
+            deferred[2].disabled,
+            "a busy port stays listed but unusable"
+        );
+
+        // Picking a device is an explicit choice, so the deferral loses the check.
+        let explicit = editor_serial_port_choices(&ports, &in_use, "COM3", false);
+        assert!(!explicit[0].selected);
+        assert!(explicit[1].selected);
+    }
+
+    #[test]
+    fn batch_editing_sets_a_device_and_never_defers_it() {
+        let choices = serial_port_choices(&[port("COM3")], &HashSet::new(), "COM3");
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].value.as_deref(), Some("COM3"));
+    }
 }
