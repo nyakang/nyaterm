@@ -411,7 +411,7 @@ impl NyaTermApp {
                     pressure_color(card.memory_percent).unwrap_or(palette.text_muted);
                 cards = cards.child(
                     div()
-                        .w(px(92.))
+                        .min_w(px(92.))
                         .flex_none()
                         .flex()
                         .flex_col()
@@ -1095,12 +1095,12 @@ fn format_memory_mb_value(value: u64) -> String {
     if value >= 1024 {
         let gib = value as f64 / 1024.;
         if gib < 10. && gib.fract() >= 0.05 {
-            format!("{gib:.1}G")
+            format!("{gib:.1}GiB")
         } else {
-            format!("{gib:.0}G")
+            format!("{gib:.0}GiB")
         }
     } else {
-        format!("{value}M")
+        format!("{value}MiB")
     }
 }
 
@@ -1303,7 +1303,7 @@ mod tests {
         assert_eq!(pressure_color(Some(90.)), Some(0xf87171));
         assert_eq!(percent_from_parts(1, 4), Some(25.));
         assert_eq!(percent_from_parts(1, 0), None);
-        assert_eq!(format_memory_mb_compact(1536, 4096), "1.5G/4G");
+        assert_eq!(format_memory_mb_compact(1536, 4096), "1.5GiB/4GiB");
         assert_eq!(format_memory_mb_compact(0, 0), "-");
         assert_eq!(hardware_card_limit(699.), 1);
         assert_eq!(hardware_card_limit(700.), 2);

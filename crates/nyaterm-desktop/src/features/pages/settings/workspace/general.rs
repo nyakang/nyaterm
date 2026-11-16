@@ -35,7 +35,7 @@ impl SettingsPanel {
             .map(|megabytes| {
                 NyaSelectOption::new(
                     (megabytes * mebibyte).to_string(),
-                    format!("{megabytes} MB"),
+                    format!("{megabytes} MiB"),
                 )
             })
             .collect();

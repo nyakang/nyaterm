@@ -1574,7 +1574,7 @@ fn format_resource_bytes(bytes: u64) -> String {
     if bytes == 0 {
         return "0 B".to_string();
     }
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
     while value >= 1024. && unit + 1 < UNITS.len() {
@@ -1594,7 +1594,7 @@ fn format_resource_rate(bytes_per_sec: f64) -> String {
     if bytes_per_sec <= 0. {
         return "0 B/s".to_string();
     }
-    const UNITS: [&str; 4] = ["B/s", "KB/s", "MB/s", "GB/s"];
+    const UNITS: [&str; 4] = ["B/s", "KiB/s", "MiB/s", "GiB/s"];
     let mut value = bytes_per_sec;
     let mut unit = 0;
     while value >= 1024. && unit + 1 < UNITS.len() {
@@ -2264,10 +2264,10 @@ mod tests {
     #[test]
     fn resource_formatters_match_tauri_precision_and_warmup_placeholders() {
         assert_eq!(format_resource_bytes(0), "0 B");
-        assert_eq!(format_resource_bytes(95_596_000_000), "89.0 GB");
-        assert_eq!(format_resource_bytes(135_291_469_824), "126 GB");
+        assert_eq!(format_resource_bytes(95_596_000_000), "89.0 GiB");
+        assert_eq!(format_resource_bytes(135_291_469_824), "126 GiB");
         assert_eq!(format_resource_rate(0.), "0 B/s");
-        assert_eq!(format_resource_rate(4.6 * 1024.), "4.6 KB/s");
+        assert_eq!(format_resource_rate(4.6 * 1024.), "4.6 KiB/s");
         assert_eq!(format_resource_percent(None), "--");
         assert_eq!(format_resource_percent(Some(23.2)), "23%");
     }

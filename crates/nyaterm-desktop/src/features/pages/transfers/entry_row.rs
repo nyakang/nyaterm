@@ -17,7 +17,7 @@ pub(in crate::features) fn format_browser_file_size(size: Option<u64>) -> String
         None | Some(0) => "-".to_string(),
         Some(size) if size < 1024 => format!("{size} B"),
         Some(size) => {
-            const UNITS: [&str; 6] = ["KB", "MB", "GB", "TB", "PB", "EB"];
+            const UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
             let mut unit_index = 0;
             let mut divisor = 1024_u64;
             while size / divisor >= 1024 && unit_index < UNITS.len() - 1 {
@@ -518,19 +518,19 @@ mod format_tests {
         assert_eq!(format_browser_file_size(None), "-");
         assert_eq!(format_browser_file_size(Some(0)), "-");
         assert_eq!(format_browser_file_size(Some(512)), "512 B");
-        assert_eq!(format_browser_file_size(Some(1536)), "1.5 KB");
-        assert_eq!(format_browser_file_size(Some(1024 * 1024)), "1.0 MB");
+        assert_eq!(format_browser_file_size(Some(1536)), "1.5 KiB");
+        assert_eq!(format_browser_file_size(Some(1024 * 1024)), "1.0 MiB");
     }
 
     #[test]
     fn browser_sizes_promote_units_at_each_binary_threshold() {
         for (exponent, unit, previous_unit) in [
-            (1, "KB", "B"),
-            (2, "MB", "KB"),
-            (3, "GB", "MB"),
-            (4, "TB", "GB"),
-            (5, "PB", "TB"),
-            (6, "EB", "PB"),
+            (1, "KiB", "B"),
+            (2, "MiB", "KiB"),
+            (3, "GiB", "MiB"),
+            (4, "TiB", "GiB"),
+            (5, "PiB", "TiB"),
+            (6, "EiB", "PiB"),
         ] {
             let threshold = 1024_u64.pow(exponent);
             let below_threshold = if exponent == 1 {
@@ -555,6 +555,6 @@ mod format_tests {
 
     #[test]
     fn browser_sizes_handle_the_largest_byte_count() {
-        assert_eq!(format_browser_file_size(Some(u64::MAX)), "16.0 EB");
+        assert_eq!(format_browser_file_size(Some(u64::MAX)), "16.0 EiB");
     }
 }

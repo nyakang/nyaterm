@@ -14,7 +14,7 @@ impl SettingsPanel {
         let palette = self.theme_palette();
         let limit = ai_field(
             palette,
-            format!("{} (MB)", t!("ai.maxAiFileSize")),
+            format!("{} (MiB)", t!("ai.maxAiFileSize")),
             Some(t!("ai.maxAiFileSizeDesc").into()),
             self.existing_number_input_box("ai.number.file-size-mb"),
         );
