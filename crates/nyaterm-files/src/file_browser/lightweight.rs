@@ -134,7 +134,7 @@ fn list_local(
 #[cfg(test)]
 mod tests {
     use super::{DirectoryLimits, list_local};
-    use crate::sftp::SftpTransferControl;
+    use crate::sftp::{SftpFileType, SftpTransferControl};
     use std::time::{Duration, Instant};
     #[test]
     fn enumeration_respects_entry_and_byte_budgets() {
@@ -160,8 +160,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn links_are_not_followed() {
-        use crate::sftp::SftpFileType;
-
         let dir = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
         let listing = list_local(

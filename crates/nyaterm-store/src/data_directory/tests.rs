@@ -403,18 +403,10 @@ fn retry_rejects_changed_source_or_published_inventory() {
 fn migration_lock_excludes_redb_in_another_process() {
     const CHILD_PATH: &str = "NYATERM_TEST_MIGRATION_LOCK_PATH";
     if let Some(path) = std::env::var_os(CHILD_PATH) {
-        use redb::StorageBackend as _;
-        use std::ops::Bound::Unbounded;
-
-        // Probe redb's nonblocking whole-storage lock directly. A normal Windows
-        // database open can wait on its query mutex while migration owns all bytes.
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        let backend = redb::backends::FileBackend::new(file).unwrap();
-        assert!(!backend.try_lock_range(Unbounded, Unbounded).unwrap());
+        assert!(matches!(
+            redb::Database::open(path),
+            Err(redb::DatabaseError::DatabaseAlreadyOpen)
+        ));
         return;
     }
     let root = TestTempDir::new("nyaterm-data-directory-process-lock");
@@ -683,9 +675,8 @@ fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
             );
         }
         let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
-        // Windows may preserve the configured spelling without the verbatim prefix.
         assert_eq!(
-            fs::canonicalize(&restored.selection.data_dir).unwrap(),
+            restored.selection.data_dir,
             fs::canonicalize(&local).unwrap()
         );
         assert_eq!(
@@ -759,9 +750,8 @@ fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_cu
                 b"unexpected"
             );
         } else {
-            // Compare directory identities, including Windows' verbatim path spelling.
             assert_eq!(
-                fs::canonicalize(result.unwrap().selection.data_dir).unwrap(),
+                result.unwrap().selection.data_dir,
                 fs::canonicalize(&local).unwrap()
             );
             assert!(!local.join("plugins").exists());
