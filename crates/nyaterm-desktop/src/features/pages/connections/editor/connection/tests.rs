@@ -1095,25 +1095,62 @@ fn serial_custom_baud_accepts_pointer_focus_and_keyboard_edits(cx: &mut TestAppC
     let test_dir = TestConfigDir::new("nyaterm-serial-custom-baud-input");
     let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
 
-    for (id, seed) in [(None, "115200"), (Some("saved-serial"), "76800")] {
+    for (id, seed, defaults_mode) in [
+        (None, "115200", false),
+        (Some("saved-serial"), "76800", false),
+        (None, "115200", true),
+    ] {
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 let mut draft = editor(None, None);
                 draft.id = id.map(ToOwned::to_owned);
                 draft.kind = ConnectionKindTab::Serial;
+                draft.defaults_mode = defaults_mode;
                 draft.baud_rate = seed.to_string();
                 app.connection_state.begin_editor(draft);
                 app.connection_state.build_editor_fields(cx);
-                app.set_connection_editor_section(
-                    crate::models::ConnectionEditorSection::Serial,
-                    cx,
-                );
                 app.set_connection_editor_baud_popover_open(true, cx);
                 cx.notify();
             });
         });
         for _ in 0..3 {
             draw_editor(&app, vcx);
+        }
+        vcx.update(|_, cx| {
+            use crate::models::ConnectionEditorSection;
+            let state = &app.read(cx).connection_state;
+            let draft = state.active_editor_draft().unwrap();
+            if defaults_mode {
+                assert_eq!(draft.section, ConnectionEditorSection::Serial);
+                assert_eq!(
+                    draft.sections(),
+                    &[
+                        ConnectionEditorSection::Serial,
+                        ConnectionEditorSection::Terminal
+                    ]
+                );
+            } else {
+                assert_eq!(draft.section, ConnectionEditorSection::Basic);
+                assert_eq!(
+                    draft.sections(),
+                    &[
+                        ConnectionEditorSection::Basic,
+                        ConnectionEditorSection::Terminal
+                    ]
+                );
+            }
+        });
+        if defaults_mode {
+            assert!(vcx.debug_bounds("connection-editor-field-Name").is_none());
+            assert!(vcx.debug_bounds("connection-editor-tags").is_none());
+        } else {
+            let name = vcx.debug_bounds("connection-editor-field-Name").unwrap();
+            let serial = vcx
+                .debug_bounds("connection-editor-serial-section")
+                .unwrap();
+            let tags = vcx.debug_bounds("connection-editor-tags").unwrap();
+            assert!(name.bottom() <= serial.top());
+            assert!(serial.bottom() <= tags.top());
         }
         let bounds = vcx
             .debug_bounds("connection-editor-custom-baud")
@@ -1998,6 +2035,7 @@ fn invalid_hidden_baud_rate_opens_its_picker_and_focuses_the_custom_input(cx: &m
     vcx.update(|window, cx| {
         app.update(cx, |app, cx| {
             app.set_connection_editor_kind(ConnectionKindTab::Serial, cx);
+            app.set_connection_editor_section(ConnectionEditorSection::Terminal, cx);
             app.connection_state
                 .set_editor_field_text(ConnectionEditorField::SerialPort, "COM1".into());
             app.connection_state
@@ -2012,7 +2050,7 @@ fn invalid_hidden_baud_rate_opens_its_picker_and_focuses_the_custom_input(cx: &m
         let state = &app.read(cx).connection_state;
         assert_eq!(
             state.active_editor_draft().unwrap().section,
-            ConnectionEditorSection::Serial
+            ConnectionEditorSection::Basic
         );
         assert!(state.editor_baud_popover_is_open());
         let input = &state.editor_number_fields()[&ConnectionEditorField::BaudRate];

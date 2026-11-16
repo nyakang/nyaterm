@@ -109,7 +109,7 @@ impl ConnectionEditorSection {
                 Self::Display,
                 Self::Session,
             ],
-            ConnectionKindTab::Serial => &[Self::Serial, Self::Basic, Self::Terminal],
+            ConnectionKindTab::Serial => &[Self::Basic, Self::Terminal],
             ConnectionKindTab::Local => &[Self::Basic, Self::Terminal],
         }
     }
@@ -302,12 +302,13 @@ impl ConnectionEditorField {
             | Self::ShellPath
             | Self::ShellArgs
             | Self::WorkingDir
+            | Self::SerialPort
+            | Self::BaudRate
             | Self::AgentEnvironmentVariable
             | Self::AgentUnixSocket => ConnectionEditorSection::Basic,
             Self::AgentForwardingEnvironmentVariable | Self::AgentForwardingSocketPath => {
                 ConnectionEditorSection::Forwarding
             }
-            Self::SerialPort | Self::BaudRate => ConnectionEditorSection::Serial,
             Self::PostLoginCommand | Self::PostLoginDelay => ConnectionEditorSection::PostLogin,
             Self::SftpShellDetectionTimeout => ConnectionEditorSection::Sftp,
             Self::TelnetKeepAliveInterval => ConnectionEditorSection::Compatibility,

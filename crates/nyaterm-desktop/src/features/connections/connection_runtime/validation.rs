@@ -193,7 +193,16 @@ impl ConnectionEditorValidationError {
             ),
             _ => ConnectionEditorFocusTarget::Field(field),
         };
-        location(field.section(), target)
+        let section = if editor.defaults_mode
+            && matches!(
+                field,
+                ConnectionEditorField::SerialPort | ConnectionEditorField::BaudRate
+            ) {
+            ConnectionEditorSection::Serial
+        } else {
+            field.section()
+        };
+        location(section, target)
     }
 }
 
@@ -293,6 +302,30 @@ mod tests {
             let location = error.location(&editor());
             assert_eq!(location.section, section);
             assert_eq!(location.target, ConnectionEditorFocusTarget::Field(field));
+        }
+        for defaults_mode in [false, true] {
+            let mut draft = editor();
+            draft.kind = crate::models::ConnectionKindTab::Serial;
+            draft.defaults_mode = defaults_mode;
+            let section = if defaults_mode {
+                ConnectionEditorSection::Serial
+            } else {
+                ConnectionEditorSection::Basic
+            };
+            let baud = ConnectionEditorValidationError::BaudRateInvalid.location(&draft);
+            assert_eq!(baud.section, section);
+            assert_eq!(
+                baud.target,
+                ConnectionEditorFocusTarget::Field(ConnectionEditorField::BaudRate)
+            );
+            let port = ConnectionEditorValidationError::SerialPortRequired.location(&draft);
+            assert_eq!(port.section, section);
+            assert_eq!(
+                port.target,
+                ConnectionEditorFocusTarget::Select(
+                    crate::models::ConnectionEditorSelect::SerialPort
+                )
+            );
         }
     }
 
