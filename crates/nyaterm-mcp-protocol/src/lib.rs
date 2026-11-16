@@ -432,11 +432,6 @@ pub struct TerminalStartArgs {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub idempotency_key: Option<String>,
-    /// Bounded wait for the job to reach a terminal state, so short commands
-    /// return their outcome in a single call instead of requiring
-    /// terminal_poll retries. Consumed by the forwarder; never forwarded.
-    #[serde(default)]
-    pub wait_ms: Option<u64>,
 }
 
 impl TerminalStartArgs {

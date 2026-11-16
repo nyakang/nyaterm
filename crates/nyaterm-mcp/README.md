@@ -7,9 +7,29 @@ use a saved SSH connection without opening a terminal:
 {"target":{"type":"connection","connectionId":"saved-id"},"command":"pwd","idempotencyKey":"request-1"}
 ```
 
-Pass this to `terminal_start`, then use the returned `jobId` with `terminal_poll`
-and `terminal_stop`. Saved targets default to `ssh_exec` and reject `inline_pty`.
-Each command has its own channel, working directory and environment. Use an
+Pass this to `terminal_start`. By default the forwarder waits up to 15 seconds
+when the Host returns an actual `ssh_exec` job, so short commands can return
+their status, exit evidence and output in one call. Actual `inline_pty` jobs
+return immediately by default, including when the Host overrides a requested
+backend through its public MCP execution setting. Saved targets default to
+`ssh_exec` in automatic mode; inline mode can reuse or open a terminal instead.
+
+`waitMs: 0` opts out. A positive `waitMs` requests a bounded wait for either
+backend, capped at 30 seconds; an omitted or `null` value uses the defaults.
+The forwarder consumes this option locally and never sends it to the Host,
+so older Hosts and idempotency keys retain their existing argument contract.
+The budget starts after the start response, excluding approval and job
+registration, and includes backoff, bridge contention, reconnects and poll I/O.
+On timeout, cancellation or a poll error, the last valid start or poll response
+is returned. Waiting does not replay or stop the command; canceling an in-flight
+poll retains the ordinary bridge request-cancellation behavior.
+
+Use the returned `jobId` with `terminal_poll` and `terminal_stop`. Waited output
+is still one bounded page, not the concatenation of internal polls. Continue
+reading with `offset: nextOffset` when more output remains, and preserve
+`sourceTruncated` and `droppedBeforeOffset` when interpreting retained output.
+`eof` only describes the current output tail and does not prove process exit.
+Each `ssh_exec` command has its own channel, working directory and environment. Use an
 explicit `cd` or environment assignment when needed. A stop response acknowledges
 the request; only `processState: "exit_confirmed"` confirms remote exit.
 

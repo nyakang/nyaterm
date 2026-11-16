@@ -13,6 +13,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(305);
@@ -149,6 +150,30 @@ impl BridgeClient {
         arguments: Value,
         cancellation: CancellationToken,
     ) -> Result<Value, RpcError> {
+        self.call_inner(name, arguments, cancellation, None).await
+    }
+
+    /// A polling budget must include contention and negotiation, not just I/O.
+    /// Keep the deadline inside the bridge so dropping an in-flight RPC always
+    /// invalidates its socket before a subsequent call can reuse it.
+    pub(crate) async fn call_with_deadline(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancellation: CancellationToken,
+        deadline: Instant,
+    ) -> Result<Value, RpcError> {
+        self.call_inner(name, arguments, cancellation, Some(deadline))
+            .await
+    }
+
+    async fn call_inner(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancellation: CancellationToken,
+        deadline: Option<Instant>,
+    ) -> Result<Value, RpcError> {
         if cancellation.is_cancelled() {
             return Err(bridge_error(
                 "cancelled",
@@ -162,26 +187,34 @@ impl BridgeClient {
             arguments,
         })
         .map_err(|error| bridge_error("invalid_argument", &error.to_string()))?;
-        let mut guard = self.state.lock().await;
-        if cancellation.is_cancelled() {
-            return Err(bridge_error(
-                "cancelled",
-                "The tool call was cancelled before submission.",
-            ));
+        let mut guard = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(bridge_error(
+                "cancelled", "The tool call was cancelled before submission.")),
+            _ = wait_for_deadline(deadline) => return Err(deadline_error()),
+            guard = self.state.lock() => guard,
+        };
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(bridge_error(
+                "cancelled", "The tool call was cancelled before submission.")),
+            _ = wait_for_deadline(deadline) => return Err(deadline_error()),
+            result = self.ensure_connection(&mut guard, true) => result?,
         }
-        self.ensure_connection(&mut guard, true).await?;
         let resume = guard.resume_token.clone();
         let connection = guard.connection.as_mut().unwrap();
         // Capture the execution's credential before discovery can rotate or a
         // later connection can publish a different owner recovery token.
         let endpoint = connection.endpoint.clone();
         let result = tokio::select! {
+            biased;
             _ = cancellation.cancelled() => {
                 tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id, resume.as_ref()).await; });
                 self.negotiated.store(false, Ordering::Release);
                 guard.connection = None;
                 return Err(bridge_error("cancelled", "The MCP tool call was cancelled."));
             }
+            _ = wait_for_deadline(deadline) => Err(ConnectionRpcError::Disconnected(deadline_error())),
             result = connection_rpc(connection, "capability.execute", params) => result,
         };
         self.finish_rpc(&mut guard, result)
@@ -264,6 +297,17 @@ impl BridgeClient {
         self.negotiated.store(true, Ordering::Release);
         Ok(())
     }
+}
+
+async fn wait_for_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+fn deadline_error() -> RpcError {
+    bridge_error("bridge_timeout", "NyaTerm MCP bridge request timed out.")
 }
 
 enum ConnectionRpcError {
