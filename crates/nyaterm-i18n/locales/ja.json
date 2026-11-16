@@ -838,6 +838,7 @@
     "dismiss": "閉じる",
     "fill": "入力",
     "passwordTitle": "パスワード",
+    "otpBadge": "OTP",
     "select": "選択",
     "usernameTitle": "ユーザー名"
   },
@@ -1967,6 +1968,8 @@
     "hideCodes": "コードを非表示",
     "issuerPlaceholder": "発行者、例: GitHub",
     "issuerLabel": "発行者",
+    "promptRegex": "プロンプト正規表現",
+    "promptRegexPlaceholder": "例: 認証コード:",
     "newTitle": "新しい OTP",
     "noEntries": "OTP エントリがありません",
     "noActiveTerminal": "書き込み可能なターミナルが接続されていません",

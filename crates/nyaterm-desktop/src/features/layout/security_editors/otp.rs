@@ -3,6 +3,7 @@ use rust_i18n::t;
 use std::borrow::Cow;
 
 use gpui::{Context, IntoElement, KeyDownEvent, div, prelude::*, px, rgb};
+use nyaterm_core::validate_prompt_regex;
 use nyaterm_ui::NyaNumberInputOptions;
 
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
@@ -26,6 +27,8 @@ impl NyaTermApp {
         } else {
             Cow::Borrowed("")
         };
+        let prompt_regex_valid =
+            editor.prompt_regex.trim().is_empty() || validate_prompt_regex(&editor.prompt_regex);
 
         div()
             .flex()
@@ -90,6 +93,22 @@ impl NyaTermApp {
                 TextInputSetup::default(),
                 cx,
             ))
+            .child(security_editor_field(
+                self,
+                "otp-prompt-regex",
+                t!("otpManager.promptRegex"),
+                editor.prompt_regex.clone(),
+                TextInputSetup::placeholder(t!("otpManager.promptRegexPlaceholder")),
+                cx,
+            ))
+            .when(!prompt_regex_valid, |this| {
+                this.child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.danger))
+                        .child(t!("credentialManager.invalidRegex")),
+                )
+            })
             .child(security_editor_field(
                 self,
                 "otp-secret",

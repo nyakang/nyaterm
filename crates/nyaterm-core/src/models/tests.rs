@@ -58,6 +58,7 @@ fn secret_bearing_model_debug_output_is_redacted() {
                 otp_type: "totp".to_string(),
                 issuer: "NyaTerm".to_string(),
                 username: "tester".to_string(),
+                prompt_regex: None,
                 secret: Some(secret.to_string().into()),
                 algorithm: "SHA1".to_string(),
                 digits: 6,

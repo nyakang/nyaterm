@@ -18,16 +18,33 @@ impl CredentialAutofillMatcher {
     }
 }
 /// A credential the autofill pipeline can act on: an entry from the security
-/// center's credential vault.
+/// center's credential vault, or an OTP entry whose prompt pattern matches.
 #[derive(Clone, PartialEq, Eq)]
 pub enum CredentialAutofillTarget {
     Vault(SavedCredential),
+    Otp(OtpPromptTarget),
+}
+
+/// What the matcher and the suggestion panel need from an OTP entry. The code
+/// itself is generated when the user picks the row, never held here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OtpPromptTarget {
+    pub id: String,
+    pub issuer: String,
+    pub username: String,
+    pub prompt_regex: String,
 }
 
 impl CredentialAutofillTarget {
-    pub fn credential(&self) -> &SavedCredential {
-        let Self::Vault(credential) = self;
-        credential
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Vault(credential) => &credential.id,
+            Self::Otp(otp) => &otp.id,
+        }
+    }
+
+    pub fn is_otp(&self) -> bool {
+        matches!(self, Self::Otp(_))
     }
 }
 
@@ -167,11 +184,14 @@ fn credential_autofill_match_outcome(
     if let Some(pending) = request.pending.as_ref()
         && pending.session_id == request.key.session_id
     {
-        let pending_credential = request
-            .credentials
-            .iter()
-            .find(|target| target.credential().id == pending.credential_id)
-            .map(CredentialAutofillTarget::credential);
+        let pending_credential = request.credentials.iter().find_map(|target| match target {
+            CredentialAutofillTarget::Vault(credential)
+                if credential.id == pending.credential_id =>
+            {
+                Some(credential)
+            }
+            _ => None,
+        });
         if let Some(credential) = pending_credential
             && (credential_matches_prompt_cached(
                 credential,
@@ -238,8 +258,10 @@ fn credential_autofill_match_outcome(
     }
 }
 
-/// Regex-matched credential suggestions: only credentials whose own prompt
-/// pattern matches the prompt are offered, so an unmatched prompt offers none.
+/// Regex-matched suggestions: only entries whose own prompt pattern matches the
+/// prompt are offered, so an unmatched prompt offers none. Saved credentials and
+/// OTP entries use the same pattern semantics; OTP entries answer a password
+/// or verification-code prompt, never a username prompt.
 fn find_matching_credential_targets_cached(
     credentials: &[CredentialAutofillTarget],
     kind: CredentialPromptKind,
@@ -248,11 +270,44 @@ fn find_matching_credential_targets_cached(
 ) -> Vec<CredentialAutofillTarget> {
     credentials
         .iter()
-        .filter(|target| {
-            credential_matches_prompt_cached(target.credential(), kind, output, regex_cache)
+        .filter(|target| match target {
+            CredentialAutofillTarget::Vault(credential) => {
+                credential_matches_prompt_cached(credential, kind, output, regex_cache)
+            }
+            CredentialAutofillTarget::Otp(otp) => {
+                otp_matches_prompt_cached(otp, kind, output, regex_cache)
+            }
         })
         .cloned()
         .collect()
+}
+
+fn otp_matches_prompt_cached(
+    otp: &OtpPromptTarget,
+    kind: CredentialPromptKind,
+    output: &str,
+    regex_cache: &mut HashMap<String, regex::Regex>,
+) -> bool {
+    if kind != CredentialPromptKind::Password {
+        return false;
+    }
+    let pattern = otp.prompt_regex.trim();
+    if pattern.is_empty() {
+        return false;
+    }
+    let cache_key = format!("otp:{}:{kind:?}:{pattern}", otp.id);
+    if !regex_cache.contains_key(&cache_key) {
+        if regex_cache.len() >= CREDENTIAL_AUTOFILL_MATCH_REGEX_CACHE_LIMIT {
+            regex_cache.clear();
+        }
+        let Some(regex) = compile_prompt_regex(pattern) else {
+            return false;
+        };
+        regex_cache.insert(cache_key.clone(), regex);
+    }
+    regex_cache
+        .get(&cache_key)
+        .is_some_and(|regex| regex.is_match(output))
 }
 
 fn credential_matches_prompt_cached(
@@ -486,13 +541,113 @@ mod tests {
                 clear_pending,
                 ..
             } => {
-                let ids: Vec<&str> = matches
-                    .iter()
-                    .map(CredentialAutofillTarget::credential)
-                    .map(|credential| credential.id.as_str())
-                    .collect();
+                let ids: Vec<&str> = matches.iter().map(CredentialAutofillTarget::id).collect();
                 assert_eq!(ids, ["c1", "c2"]);
                 assert!(clear_pending);
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+
+    fn otp_target(id: &str, prompt_regex: &str) -> CredentialAutofillTarget {
+        CredentialAutofillTarget::Otp(super::OtpPromptTarget {
+            id: id.to_string(),
+            issuer: "GitHub".to_string(),
+            username: "octocat".to_string(),
+            prompt_regex: prompt_regex.to_string(),
+        })
+    }
+
+    #[test]
+    fn otp_entry_matches_a_verification_code_prompt_by_pattern() {
+        let mut regex_cache = HashMap::new();
+        let output = credential_autofill_match_outcome(
+            request(
+                "Verification code:",
+                CredentialPromptKind::Password,
+                vec![otp_target("o1", "verification code:")],
+                None,
+            ),
+            &mut regex_cache,
+        );
+
+        match output {
+            CredentialAutofillMatchOutcome::Suggest { matches, .. } => {
+                assert_eq!(matches.len(), 1);
+                assert!(matches[0].is_otp());
+                assert_eq!(matches[0].id(), "o1");
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn otp_entry_without_a_pattern_never_matches() {
+        let mut regex_cache = HashMap::new();
+        let output = credential_autofill_match_outcome(
+            request(
+                "Verification code:",
+                CredentialPromptKind::Password,
+                vec![otp_target("o1", "   ")],
+                None,
+            ),
+            &mut regex_cache,
+        );
+
+        assert!(matches!(
+            output,
+            CredentialAutofillMatchOutcome::NoMatch {
+                clear_pending: true
+            }
+        ));
+    }
+
+    #[test]
+    fn otp_entry_is_never_offered_for_a_username_prompt() {
+        let mut regex_cache = HashMap::new();
+        let output = credential_autofill_match_outcome(
+            request(
+                "login as:",
+                CredentialPromptKind::Username,
+                vec![otp_target("o1", "login as:")],
+                None,
+            ),
+            &mut regex_cache,
+        );
+
+        assert!(matches!(
+            output,
+            CredentialAutofillMatchOutcome::NoMatch {
+                clear_pending: false
+            }
+        ));
+    }
+
+    #[test]
+    fn credentials_and_otp_entries_share_one_suggestion_list() {
+        let mut regex_cache = HashMap::new();
+        let mut targets = vault_credentials(vec![credential(
+            "c1",
+            "",
+            None,
+            Some("Verification code:"),
+            true,
+        )]);
+        targets.push(otp_target("o1", "Verification code:"));
+        let output = credential_autofill_match_outcome(
+            request(
+                "Verification code:",
+                CredentialPromptKind::Password,
+                targets,
+                None,
+            ),
+            &mut regex_cache,
+        );
+
+        match output {
+            CredentialAutofillMatchOutcome::Suggest { matches, .. } => {
+                let ids: Vec<&str> = matches.iter().map(CredentialAutofillTarget::id).collect();
+                assert_eq!(ids, ["c1", "o1"], "credentials come first");
             }
             other => panic!("unexpected outcome: {other:?}"),
         }

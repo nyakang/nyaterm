@@ -750,13 +750,46 @@ pub(crate) struct CredentialSuggestionState {
 use nyaterm_core::credential_autofill::matching::CredentialAutofillMatcher;
 pub(crate) use nyaterm_core::credential_autofill::matching::{
     CredentialAutofillAction, CredentialAutofillMatchEvent, CredentialAutofillMatchRequest,
-    CredentialAutofillMatchRequestKey, CredentialAutofillTarget, PendingCredentialAutofill,
-    credential_autofill_action,
+    CredentialAutofillMatchRequestKey, CredentialAutofillTarget, OtpPromptTarget,
+    PendingCredentialAutofill, credential_autofill_action,
 };
 
 pub(crate) fn credential_autofill_target_display_name(target: &CredentialAutofillTarget) -> String {
-    let CredentialAutofillTarget::Vault(credential) = target;
-    credential.name.clone()
+    match target {
+        CredentialAutofillTarget::Vault(credential) => credential.name.clone(),
+        CredentialAutofillTarget::Otp(otp) => {
+            if otp.issuer.trim().is_empty() {
+                otp.username.clone()
+            } else {
+                otp.issuer.clone()
+            }
+        }
+    }
+}
+
+/// Second line of a suggestion row: the account the entry belongs to.
+pub(crate) fn credential_autofill_target_subtitle(target: &CredentialAutofillTarget) -> &str {
+    match target {
+        CredentialAutofillTarget::Vault(credential) => &credential.username,
+        CredentialAutofillTarget::Otp(otp) => &otp.username,
+    }
+}
+
+/// An OTP entry only joins the suggestion pipeline when it opts in with a
+/// prompt pattern; without one it stays available through its connection bind.
+pub(crate) fn otp_prompt_target(
+    entry: &nyaterm_core::OtpEntry,
+) -> Option<CredentialAutofillTarget> {
+    let pattern = entry.prompt_regex.as_deref().unwrap_or_default().trim();
+    if pattern.is_empty() {
+        return None;
+    }
+    Some(CredentialAutofillTarget::Otp(OtpPromptTarget {
+        id: entry.id.clone(),
+        issuer: entry.issuer.clone(),
+        username: entry.username.clone(),
+        prompt_regex: pattern.to_string(),
+    }))
 }
 
 pub(crate) struct CredentialAutofillMatchPipeline {
@@ -1173,5 +1206,38 @@ mod tests {
             serial_session_title("COM7 @ 115200", "COM7", 115200, "", 115200),
             "COM7 @ 115200"
         );
+    }
+
+    #[test]
+    fn otp_entries_join_the_suggestion_pipeline_only_with_a_pattern() {
+        use super::{
+            CredentialAutofillTarget, credential_autofill_target_display_name,
+            credential_autofill_target_subtitle, otp_prompt_target,
+        };
+        use nyaterm_core::{OtpEntry, SecretString};
+
+        let entry = |pattern: Option<&str>| OtpEntry {
+            id: "otp-1".into(),
+            otp_type: "totp".into(),
+            issuer: "GitHub".into(),
+            username: "octocat".into(),
+            prompt_regex: pattern.map(str::to_string),
+            secret: Some(SecretString::from("secret")),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+            counter: 0,
+            has_secret: true,
+        };
+
+        assert!(otp_prompt_target(&entry(None)).is_none());
+        assert!(otp_prompt_target(&entry(Some("   "))).is_none());
+
+        let target = otp_prompt_target(&entry(Some(" Verification code: "))).expect("opted in");
+        assert_eq!(target.id(), "otp-1");
+        assert!(target.is_otp());
+        assert!(matches!(target, CredentialAutofillTarget::Otp(_)));
+        assert_eq!(credential_autofill_target_display_name(&target), "GitHub");
+        assert_eq!(credential_autofill_target_subtitle(&target), "octocat");
     }
 }

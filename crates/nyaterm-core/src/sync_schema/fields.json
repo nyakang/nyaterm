@@ -577,6 +577,7 @@
       "otp_type": "secret",
       "issuer": "secret",
       "username": "secret",
+      "prompt_regex": "secret",
       "secret": "secret",
       "algorithm": "secret",
       "digits": "secret",

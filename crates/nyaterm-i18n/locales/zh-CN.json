@@ -838,6 +838,7 @@
     "dismiss": "关闭",
     "fill": "填充",
     "passwordTitle": "密码凭据",
+    "otpBadge": "OTP",
     "select": "选择",
     "usernameTitle": "用户名凭据"
   },
@@ -1967,6 +1968,8 @@
     "hideCodes": "隐藏验证码",
     "issuerPlaceholder": "发行方（如 GitHub）",
     "issuerLabel": "发行方",
+    "promptRegex": "提示词正则",
+    "promptRegexPlaceholder": "例如 验证码：",
     "newTitle": "新建 OTP",
     "noEntries": "暂无 OTP 条目",
     "noActiveTerminal": "当前没有可写的已连接终端",
