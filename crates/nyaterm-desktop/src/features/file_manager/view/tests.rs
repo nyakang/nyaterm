@@ -614,10 +614,6 @@ fn system_file_drop_on_a_directory_row_uses_its_local_identity_and_actual_destin
     wait_for(cx, "external upload", |_| {
         directory.join("input.txt").exists()
     });
-    assert_eq!(
-        std::fs::read(directory.join("input.txt")).unwrap(),
-        b"external drop content"
-    );
     cx.read(|cx| {
         let app = app.read(cx);
         let job = app
@@ -643,4 +639,10 @@ fn system_file_drop_on_a_directory_row_uses_its_local_identity_and_actual_destin
             )
         })
     });
+    // The file exists as soon as the upload starts writing it, so read it
+    // only once the transfer is over
+    assert_eq!(
+        std::fs::read(directory.join("input.txt")).unwrap(),
+        b"external drop content"
+    );
 }
