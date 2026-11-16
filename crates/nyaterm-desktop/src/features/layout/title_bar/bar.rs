@@ -796,7 +796,7 @@ impl NyaTermApp {
         icon: IconDef,
         cards: Vec<HeaderHardwareCard>,
     ) -> HeaderStatusContent {
-        let limit = hardware_card_limit(self.shell.viewport_size().0).max(1);
+        let limit = hardware_card_limit(self.shell.viewport_size().0, &cards);
         let total = cards.len();
         let page_count = total.div_ceil(limit).max(1);
         let page = self
@@ -836,22 +836,15 @@ impl NyaTermApp {
         delta: i32,
         cx: &mut Context<Self>,
     ) {
-        let total = match mode {
-            HeaderStatusMode::Gpu => self
-                .remote_ops
-                .gpu_presentation()
-                .data
-                .map_or(0, |overview| overview.gpus.len()),
-            HeaderStatusMode::Npu => self
-                .remote_ops
-                .npu_presentation()
-                .data
-                .map_or(0, |overview| overview.npus.len()),
-            _ => 0,
-        };
-        let page_count = total
-            .div_ceil(hardware_card_limit(self.shell.viewport_size().0).max(1))
-            .max(1);
+        // Use the same content-aware capacity as rendering so navigation
+        // never disagrees with the number of pages on screen.
+        let page_count = match mode {
+            HeaderStatusMode::Gpu => self.gpu_header_content(),
+            HeaderStatusMode::Npu => self.npu_header_content(),
+            _ => return,
+        }
+        .hardware
+        .map_or(1, |hardware| hardware.page_count);
         let current = self.shell.header_status_hardware_page(mode) % page_count;
         let next = if delta < 0 {
             (current + page_count - 1) % page_count
@@ -1116,8 +1109,8 @@ fn format_memory_mb_compact(used: u64, total: u64) -> String {
     }
 }
 
-fn hardware_card_limit(width: f32) -> usize {
-    if width >= 1180. {
+fn hardware_card_limit(width: f32, cards: &[HeaderHardwareCard]) -> usize {
+    let viewport_limit = if width >= 1180. {
         4
     } else if width >= 920. {
         3
@@ -1125,7 +1118,25 @@ fn hardware_card_limit(width: f32) -> usize {
         2
     } else {
         1
-    }
+    };
+
+    // Card labels use 10px monospace text. Reserve a conservative 7px
+    // per character, plus the index, progress bar, and their gaps.
+    // Use the longest label across *all* cards to keep page sizes stable.
+    let longest_label = cards
+        .iter()
+        .map(|card| card.memory_text.chars().count())
+        .max()
+        .unwrap_or(0);
+    let card_width = (52. + longest_label as f32 * 7.).max(92.);
+
+    // The center status is capped at 680px and shares the title bar with
+    // menus and window controls. Leave room for those and the card pager.
+    let outer_reserve = if width < 1024. { 340. } else { 600. };
+    let available = (width - outer_reserve).clamp(0., 680.);
+    let card_budget = (available - 64.).max(0.);
+    let fitting = ((card_budget + 8.) / (card_width + 8.)).floor() as usize;
+    fitting.clamp(1, viewport_limit)
 }
 
 fn header_mini_progress(value: Option<f64>, primary: u32, background: u32) -> impl IntoElement {
@@ -1226,9 +1237,9 @@ mod tests {
     use crate::models::HeaderStatusMode;
 
     use super::{
-        format_binary_bytes, format_header_datetime, format_memory_mb_compact, hardware_card_limit,
-        header_status_mode_icon, localized_weekday, percent_from_parts, pressure_color,
-        session_header_icon,
+        HeaderHardwareCard, format_binary_bytes, format_header_datetime, format_memory_mb_compact,
+        hardware_card_limit, header_status_mode_icon, localized_weekday, percent_from_parts,
+        pressure_color, session_header_icon,
     };
 
     #[test]
@@ -1305,10 +1316,30 @@ mod tests {
         assert_eq!(percent_from_parts(1, 0), None);
         assert_eq!(format_memory_mb_compact(1536, 4096), "1.5GiB/4GiB");
         assert_eq!(format_memory_mb_compact(0, 0), "-");
-        assert_eq!(hardware_card_limit(699.), 1);
-        assert_eq!(hardware_card_limit(700.), 2);
-        assert_eq!(hardware_card_limit(920.), 3);
-        assert_eq!(hardware_card_limit(1180.), 4);
+    }
+
+    #[test]
+    fn hardware_cards_paginate_before_long_memory_labels_clip() {
+        let mut cards = (0..4)
+            .map(|index| HeaderHardwareCard {
+                index: index.to_string(),
+                utilization_percent: Some(50.),
+                memory_percent: Some(50.),
+                memory_text: "1.5GiB/4GiB".to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(hardware_card_limit(699., &cards), 1);
+        assert_eq!(hardware_card_limit(700., &cards), 2);
+        assert_eq!(hardware_card_limit(920., &cards), 3);
+        assert_eq!(hardware_card_limit(1180., &cards), 3);
+        assert_eq!(hardware_card_limit(1400., &cards), 4);
+
+        // A longer label on a later page must reduce the capacity of all
+        // pages, not change the layout only when navigating to that card.
+        cards[3].memory_text = "123456GiB/123456GiB".to_string();
+        assert_eq!(hardware_card_limit(920., &cards), 2);
+        assert_eq!(hardware_card_limit(1400., &cards), 3);
     }
 
     #[test]
