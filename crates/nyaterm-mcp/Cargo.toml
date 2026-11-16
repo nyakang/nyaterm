@@ -25,4 +25,6 @@ tokio-util = { workspace = true, features = ["rt"] }
 uuid.workspace = true
 
 [dev-dependencies]
+jsonschema = { version = "=0.33.0", default-features = false }
 nyaterm-core = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
