@@ -460,6 +460,7 @@ fn shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_termin
             app.ai.replace_settings_config(settings, true);
             let (reply, receiver) = oneshot::channel();
             app.dispatch_shared_terminal_execute(CapabilityRequest {
+            terminal_plan: None,
             extended_results: true, resolved_session_id: None,
                 connection_id: source.into(), request_id: source.into(), generation,
                 client: source.into(), permission_mode: AiPermissionMode::FullAccess,
@@ -1479,6 +1480,7 @@ fn inline_job_returns_before_completion_survives_request_cancellation_and_stops_
         let (reply, receiver) = oneshot::channel();
         (
             CapabilityRequest {
+                terminal_plan: None,
                 extended_results: true,
                 resolved_session_id: None,
                 connection_id: "owner".into(),

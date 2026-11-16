@@ -2,7 +2,7 @@ mod bridge;
 
 use std::sync::Arc;
 
-use bridge::{BridgeClient, BridgeEndpoint, endpoint_from_environment_or_discovery};
+use bridge::{BridgeClient, BridgeEndpoint, EndpointSource, resolve_endpoint_source};
 use nyaterm_mcp_protocol::{
     MCP_TOOL_REGISTRY, tool, validate_tool_arguments, validate_tool_result,
 };
@@ -75,6 +75,11 @@ impl NyaTermMcp {
                 Err(_) => return latest,
             }
         }
+    }
+
+    fn with_discovery_path(mut self, path: std::path::PathBuf) -> Self {
+        self.bridge = self.bridge.with_discovery_path(path);
+        self
     }
 
     fn new(endpoint: BridgeEndpoint) -> Self {
@@ -298,10 +303,17 @@ fn build_tools() -> Vec<Tool> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let endpoint = endpoint_from_environment_or_discovery()?;
-    let server = NyaTermMcp::new(endpoint)
-        .serve(rmcp::transport::stdio())
-        .await?;
+    // A discovery-sourced endpoint is re-resolved on every connection attempt,
+    // so a restarted NyaTerm heals the next bridge connection without
+    // restarting the forwarder. Explicit environment endpoints stay fixed.
+    let server = match resolve_endpoint_source()? {
+        EndpointSource::Fixed(endpoint) => NyaTermMcp::new(endpoint),
+        EndpointSource::Discovery { endpoint, path } => {
+            NyaTermMcp::new(endpoint).with_discovery_path(path)
+        }
+    }
+    .serve(rmcp::transport::stdio())
+    .await?;
     server.waiting().await?;
     Ok(())
 }

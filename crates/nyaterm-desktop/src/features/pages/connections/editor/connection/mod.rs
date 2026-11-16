@@ -407,8 +407,12 @@ impl NyaTermApp {
             options::sftp_filename_encoding_choices(&editor.sftp_filename_encoding);
         let ssh_algorithm_mode_options =
             options::ssh_algorithm_mode_choices(&editor.ssh_algorithm_mode);
-        let serial_port_options =
-            options::serial_port_choices(self.connection_state.serial_ports(), &editor.serial_port);
+        let serial_port_options = options::editor_serial_port_choices(
+            self.connection_state.serial_ports(),
+            &self.serial_ports_in_use(),
+            &editor.serial_port,
+            editor.serial_prompt_port,
+        );
         let baud_options = options::baud_rate_choices(&editor.baud_rate);
         let data_bits_options = options::data_bits_choices(&editor.data_bits);
         let parity_options = options::parity_choices(&editor.parity);

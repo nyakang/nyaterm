@@ -342,6 +342,7 @@ impl NyaTermApp {
                 .detach();
                 self.dispatch_capability_request(
                     CapabilityRequest {
+                        terminal_plan: None,
                         extended_results: true,
                         resolved_session_id: None,
                         connection_id: format!("native:{run_id}"),

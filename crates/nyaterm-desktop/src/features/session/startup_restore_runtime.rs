@@ -738,7 +738,7 @@ impl NyaTermApp {
                 self.settle_remote_desktop_restore(cx);
                 return true;
             }
-            self.continue_saved_connection_start(
+            return self.continue_saved_connection_start(
                 connection,
                 SavedConnectionStartOptions {
                     ssh_runtime_mode: tab
@@ -751,11 +751,13 @@ impl NyaTermApp {
                     android_view: nyaterm_core::models::android::AndroidViewKind::from_restore_type(
                         &session_type,
                     ),
+                    // Restoring must not stop on a modal or treat saved serial
+                    // hints as authorization to open a deferred device.
+                    suppress_serial_prompt: true,
                     ..Default::default()
                 },
                 cx,
             );
-            return true;
         }
 
         if session_type == "local" || session_type.is_empty() {
@@ -1072,6 +1074,56 @@ mod tests {
             let _ = window.draw(cx);
             window.simulate_next_frame(cx);
             assert!(restored.read(cx).terminal.input_focus().is_focused(window));
+        });
+    }
+
+    #[test]
+    fn startup_restore_skips_deferred_serial_devices_and_finishes_the_queue() {
+        let root = TestConfigDir::new("nyaterm-serial-skip-restore");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let connections = [
+            serde_json::json!({"port": true}),
+            serde_json::json!({"baud_rate": true}),
+            serde_json::json!({"port": true, "baud_rate": true}),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, prompt)| {
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id": format!("board-{index}"), "name": "Board", "type": "serial",
+                "port_name": "COM7", "baud_rate": 115200, "connect_prompt": prompt
+            }))
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+        let tabs = connections
+            .iter()
+            .map(|connection| {
+                serde_json::from_value::<RestorableOpenTab>(serde_json::json!({
+                    "connection_id": connection.id, "session_type": "Serial"
+                }))
+                .unwrap()
+            })
+            .collect();
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.connection_state.replace_loaded(connections, Vec::new());
+                app.stores
+                    .startup_restore
+                    .update(cx, |store, _| store.set_queue(tabs));
+                assert!(!app.session.restore_is_complete());
+                let submitted = app.blocking_jobs.metrics().submitted;
+                app.pump_startup_restore_queue(window, cx);
+                assert!(app.stores.startup_restore.read(cx).queue_empty());
+                assert!(app.session.restore_is_complete());
+                assert_eq!(app.blocking_jobs.metrics().submitted, submitted);
+                assert_eq!(app.session.session_order(), &["existing"]);
+                assert!(!app.session.start_has_pending());
+                assert!(app.session.dialogs.serial_connect_prompt().is_none());
+            });
         });
     }
 

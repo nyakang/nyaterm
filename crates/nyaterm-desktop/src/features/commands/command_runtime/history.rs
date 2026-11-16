@@ -1,3 +1,4 @@
+use crate::features::session::CommandHistoryLearning;
 use futures::StreamExt as _;
 use gpui::Context;
 use nyaterm_core::AiCommandCard;
@@ -292,7 +293,7 @@ impl NyaTermApp {
                 if !nyaterm_core::completion::privacy::command_may_be_learned(command, sensitive) {
                     continue;
                 }
-                self.session.record_command_history(session_id, command);
+                let mut learning = CommandHistoryLearning::GlobalOnly;
                 if let Some(context) = context.clone().filter(|_| confirmed) {
                     let include_global = !recorded.contains(command);
                     if self.commands.observe_completion_submission(
@@ -301,6 +302,7 @@ impl NyaTermApp {
                         include_global,
                     ) {
                         recorded.insert(command.clone());
+                        learning = CommandHistoryLearning::Scoped;
                     } else {
                         self.settings
                             .update_store_status("completion worker is unavailable", false);
@@ -308,6 +310,8 @@ impl NyaTermApp {
                 } else {
                     fallback.insert(command.clone());
                 }
+                self.session
+                    .record_submitted_command_history(session_id, command, learning);
             }
         }
         let mut fallback: Vec<_> = fallback

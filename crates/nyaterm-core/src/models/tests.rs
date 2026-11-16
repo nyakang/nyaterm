@@ -1462,6 +1462,70 @@ fn serial_flow_control_preserves_legacy_and_round_trips_supported_values() {
 }
 
 #[test]
+fn serial_connect_prompt_defaults_off_and_round_trips_independent_switches() {
+    use crate::models::connection::{ConnectionType, SerialConnectPrompt};
+
+    let legacy = serde_json::json!({"type":"serial", "port_name":"COM3"});
+    let connection: ConnectionType = serde_json::from_value(legacy).unwrap();
+    let ConnectionType::Serial { connect_prompt, .. } = &connection else {
+        panic!("serial connection");
+    };
+    assert!(!connect_prompt.asks_anything());
+    assert!(
+        serde_json::to_value(&connection)
+            .unwrap()
+            .get("connect_prompt")
+            .is_none(),
+        "a disabling prompt must not be serialized"
+    );
+
+    for prompt in [
+        SerialConnectPrompt {
+            port: true,
+            baud_rate: false,
+        },
+        SerialConnectPrompt {
+            port: false,
+            baud_rate: true,
+        },
+        SerialConnectPrompt {
+            port: true,
+            baud_rate: true,
+        },
+    ] {
+        let deployed = ConnectionType::Serial {
+            connect_prompt: prompt,
+            port_name: String::new(),
+            baud_rate: 9_600,
+            data_bits: 8,
+            parity: "none".to_string(),
+            flow_control: Default::default(),
+            stop_bits: "1".to_string(),
+            ai_execution_profile: Default::default(),
+            backspace_mode: "ctrl_h".to_string(),
+            encoding: String::new(),
+        };
+        let encoded = serde_json::to_value(&deployed).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ConnectionType>(encoded).unwrap(),
+            deployed
+        );
+    }
+}
+
+#[test]
+fn serial_prompt_only_states_its_enabled_switches() {
+    use crate::models::connection::SerialConnectPrompt;
+
+    let value = serde_json::to_value(SerialConnectPrompt {
+        port: false,
+        baud_rate: true,
+    })
+    .unwrap();
+    assert_eq!(value, serde_json::json!({"baud_rate": true}));
+}
+
+#[test]
 fn encoding_aliases_and_unknown_labels_survive_saved_connection_round_trips() {
     for label in ["GB2312", "CP936", "sjis", "euckr", "future-encoding"] {
         let value = serde_json::json!({"id":"compat", "name":"compat", "type":"ssh", "host":"localhost", "port":22, "username":"user", "encoding":label, "sftp":{"filename_encoding":label,"future_option":true}});

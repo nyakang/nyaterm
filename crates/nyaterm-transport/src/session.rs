@@ -16,11 +16,12 @@ use crate::transport_io::{
     cancel_tmux_pane_output, spawn_reader_thread, telnet_wire_size, tmux_modem_unsupported,
 };
 use crate::{
-    EnvironmentSnapshot, LocalPtyTransport, LocalSessionConfig, SerialSessionConfig,
-    SerialTransport, SessionDrain, SessionError, SessionEvent, SessionEventConsumerId, SessionInfo,
-    SessionKind, ShellEnvironmentCache, SshChannelTransport, SshMultiplexHandle, SshSessionConfig,
-    TelnetSessionConfig, TelnetTransport, TerminalTransport, TmuxPaneTransport, connection_attempt,
-    local_shell, local_shell_integration, open_ssh_multiplex_handle, ssh_mailbox, tmux,
+    EnvironmentSnapshot, LocalPtyTransport, LocalSessionConfig, SerialPortInfo,
+    SerialPortTransport, SerialSessionConfig, SerialTransport, SessionDrain, SessionError,
+    SessionEvent, SessionEventConsumerId, SessionInfo, SessionKind, ShellEnvironmentCache,
+    SshChannelTransport, SshMultiplexHandle, SshSessionConfig, TelnetSessionConfig,
+    TelnetTransport, TerminalTransport, TmuxPaneTransport, connection_attempt, local_shell,
+    local_shell_integration, open_ssh_multiplex_handle, ssh_mailbox, tmux,
     validate_ssh_algorithm_preferences, writer_mailbox, zmodem,
 };
 use nyaterm_core::runtime::reaper::Reaper;
@@ -865,16 +866,22 @@ impl SessionManager {
         Ok(info)
     }
 
-    pub fn list_serial_ports(&self) -> Result<Vec<String>, SessionError> {
+    pub fn list_serial_ports(&self) -> Result<Vec<SerialPortInfo>, SessionError> {
         let mut ports = serialport::available_ports()
             .map_err(|source| SessionError::OpenSerial {
                 port_name: "<list>".to_string(),
                 source,
             })?
             .into_iter()
-            .map(|port| port.port_name)
+            .map(serial_port_info)
             .collect::<Vec<_>>();
-        ports.sort_unstable();
+        // Natural port order so `COM9` follows `COM8` instead of `COM10`.
+        ports.sort_by(|left, right| {
+            nyaterm_core::natural_order::natural_compare(
+                left.port_name.as_str(),
+                right.port_name.as_str(),
+            )
+        });
         Ok(ports)
     }
 
@@ -1407,4 +1414,39 @@ impl Default for SessionManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Flattens the platform enumeration into the desktop-facing shape.
+///
+/// Driver-supplied strings are trimmed and dropped when blank so the UI never
+/// renders a dangling separator next to a port that has no description.
+fn serial_port_info(port: serialport::SerialPortInfo) -> SerialPortInfo {
+    let mut info = SerialPortInfo {
+        port_name: port.port_name,
+        ..SerialPortInfo::default()
+    };
+    match port.port_type {
+        serialport::SerialPortType::UsbPort(usb) => {
+            info.transport = SerialPortTransport::Usb;
+            info.usb_vid = Some(usb.vid);
+            info.usb_pid = Some(usb.pid);
+            info.usb_serial = non_empty(usb.serial_number);
+            info.manufacturer = non_empty(usb.manufacturer);
+            info.product = non_empty(usb.product);
+        }
+        serialport::SerialPortType::PciPort => {
+            info.transport = SerialPortTransport::Pci;
+        }
+        serialport::SerialPortType::BluetoothPort => {
+            info.transport = SerialPortTransport::Bluetooth;
+        }
+        serialport::SerialPortType::Unknown => {}
+    }
+    info
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

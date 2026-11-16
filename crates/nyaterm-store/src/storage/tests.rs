@@ -6340,6 +6340,12 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
         loaded.external_mcp.terminal_display_mode,
         nyaterm_core::McpTerminalDisplayMode::Inline
     );
+    assert_eq!(
+        loaded.external_mcp.terminal_execution_mode,
+        nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode::Auto
+    );
+    loaded.external_mcp.terminal_execution_mode =
+        nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode::Inline;
     loaded.external_mcp.terminal_display_mode = nyaterm_core::McpTerminalDisplayMode::Silent;
     assert_eq!(
         loaded.provider_profiles[0].base_url.as_deref(),
@@ -6370,12 +6376,17 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
     );
     assert_eq!(ai["external_mcp"]["future_mcp_field"], "preserved");
     assert_eq!(ai["external_mcp"]["terminal_display_mode"], "silent");
+    assert_eq!(ai["external_mcp"]["terminal_execution_mode"], "inline");
     assert!(ai["external_mcp"].get("server_mode").is_none());
     assert!(ai["external_mcp"].get("idle_timeout_minutes").is_none());
     let reloaded = store.load_ai_settings().expect("reload settings");
     assert_eq!(
         reloaded.external_mcp.terminal_display_mode,
         nyaterm_core::McpTerminalDisplayMode::Silent
+    );
+    assert_eq!(
+        reloaded.external_mcp.terminal_execution_mode,
+        nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode::Inline
     );
 
     std::fs::remove_dir_all(dir).ok();

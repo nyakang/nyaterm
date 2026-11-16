@@ -161,6 +161,8 @@ AI 助手不只能从面板手动输入，还可以从以下入口唤起：
 
 ## MCP 命令与会话生命周期
 
+公共外部 MCP 的 **执行方式** 与 **终端结果显示** 分别设置。执行方式默认为「自动」：`terminal_start` 的保存 SSH 连接默认使用后台 `ssh_exec`，已有会话默认使用 `inline_pty`，显式 `backend` 可覆盖默认。选择「内联」或「后台」后，应用设置覆盖客户端的 `backend`；后台仅支持 SSH。保存连接内联执行会复用或打开终端，并返回包含实际 `sessionId` 的会话任务结果。终端结果显示控制关联终端中的命令摘要，没有终端的后台任务仍可在任务面板查看。应用内启动的 Codex / Claude Code 保留自身执行策略。
+
 `session_open` 默认每次创建新会话。自动化客户端可使用 `mode: "reuse_or_create"`，在当前 scope 中优先复用同一保存连接来源、已连接且可以自动执行的终端；名称或地址相同的其他连接不会被视为同一来源。`idempotencyKey` 绑定客户端、工具和规范化参数：重复请求返回原操作，参数改变返回冲突，失败后请使用新键重试。显式 scope 不会因创建会话而扩大。
 
 `terminal_execute` 保留同步调用及原有超时范围。可传入 `idempotencyKey`；只有 `returnJob: true` 时结果附带 `jobId`。需要长时间执行时使用：
@@ -173,7 +175,7 @@ AI 助手不只能从面板手动输入，还可以从以下入口唤起：
 
 把上述参数交给 `terminal_start`，随后用 `terminal_poll({"jobId":"JOB_ID","offset":0,"maxBytes":16384})` 读取增量输出，下一次使用返回的 `nextOffset`。`baseOffset` 表示仍然保留的最早字节位置；`droppedBeforeOffset` 和 `sourceTruncated` 表示丢失，不等于分页尚未读完。游标必须位于 UTF-8 字符边界。`status` 是任务结果，`processState` 是远端退出证据，`terminalState` 是交互式终端的可用状态，三者独立。
 
-默认 `inline_pty` 在当前 Shell 中运行，保留目录、变量和 Shell 状态。同一 Shell 同时只允许一个自动执行任务。超时、取消等待、写入不确定或输出丢失后，终端会进入恢复保护；看到普通输出、等待一段时间或按一次 Ctrl+C 都不会自动解除保护。可以手动中断并检查 Shell，再从终端标签菜单选择“确认 Shell 已就绪”；匹配的迟到 END marker 也可确认恢复。不会自动重放命令。
+`inline_pty` 在当前 Shell 中运行，保留目录、变量和 Shell 状态。同一 Shell 同时只允许一个自动执行任务。超时、取消等待、写入不确定或输出丢失后，终端会进入恢复保护；看到普通输出、等待一段时间或按一次 Ctrl+C 都不会自动解除保护。可以手动中断并检查 Shell，再从终端标签菜单选择“确认 Shell 已就绪”；匹配的迟到 END marker 也可确认恢复。不会自动重放命令。
 
 SSH 会话可显式使用 `backend: "ssh_exec"`。该任务使用独立 channel，不继承交互式 Shell 的工作目录或环境。`terminal_stop` 对安全匹配的 Inline Job 最多发送一次 Ctrl+C，对 SSH Exec 的 channel 最多请求一次 INT，不会升级为 KILL。停止回复区分已接受、已发送、确认结束、未确认、人工恢复和目标失效；SSH EOF 本身不代表进程退出。两秒没有退出证据时报告未确认，执行期限到达后仅关闭辅助 channel。
 

@@ -14,8 +14,8 @@ use crate::features::NyaTermApp;
 use crate::models::{ConnectionEditorField, ConnectionEditorSelect};
 
 use super::super::super::list::{
-    ConnectionEditorRenderContext, connection_editor_select, connection_editor_select_on_open,
-    editor_stepper_field, required,
+    ConnectionEditorRenderContext, FieldLabel, connection_editor_select,
+    connection_editor_select_on_open, editor_stepper_field, required,
 };
 use super::{ConnectionEditorSectionContext, recording::connection_editor_recording_section};
 
@@ -37,6 +37,7 @@ fn serial_baud_picker(
         narrow: _,
     } = section;
     let is_preset = SERIAL_BAUD_PRESETS.contains(&editor.baud_rate.trim());
+    let ask_at_connect = editor.serial_prompt_baud_rate;
     let valid = editor
         .baud_rate
         .trim()
@@ -67,7 +68,9 @@ fn serial_baud_picker(
                 .truncate()
                 .text_xs()
                 .text_color(rgb(palette.text))
-                .child(if editor.baud_rate.trim().is_empty() {
+                .child(if ask_at_connect {
+                    t!("dialog.askAtConnect").to_string()
+                } else if editor.baud_rate.trim().is_empty() {
                     t!("dialog.selectBaudRate").to_string()
                 } else if is_preset {
                     editor.baud_rate.clone()
@@ -87,7 +90,9 @@ fn serial_baud_picker(
     let mut preset_grid = div().grid().grid_cols(3).gap_1();
     for preset in SERIAL_BAUD_PRESETS {
         let value = preset.to_string();
-        let selected = editor.baud_rate == preset;
+        // Deferring wins the display: no preset is in effect until one is
+        // chosen again.
+        let selected = !ask_at_connect && editor.baud_rate == preset;
         preset_grid = preset_grid.child(
             div()
                 .id(SharedString::from(format!(
@@ -140,6 +145,45 @@ fn serial_baud_picker(
                         .text_xs()
                         .font_weight(FontWeight(600.))
                         .child(t!("dialog.selectBaudRate")),
+                )
+                .child(
+                    div()
+                        .id("connection-editor-baud-ask")
+                        .debug_selector(|| "connection-editor-baud-ask".to_string())
+                        .h(px(30.))
+                        .w_full()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(if ask_at_connect {
+                            rgb(palette.primary)
+                        } else {
+                            rgb(palette.border)
+                        })
+                        .bg(if ask_at_connect {
+                            rgba((palette.primary << 8) | 0x20)
+                        } else {
+                            rgb(palette.input)
+                        })
+                        .text_xs()
+                        .cursor_pointer()
+                        .hover(|this| this.bg(rgb(palette.hover)))
+                        .child(t!("dialog.askAtConnect").to_string())
+                        .when(ask_at_connect, |this| {
+                            this.child(
+                                svg()
+                                    .size(px(12.))
+                                    .path("icons/check.svg")
+                                    .text_color(rgb(palette.primary)),
+                            )
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_connection_editor_baud_prompt(true, cx);
+                        })),
                 )
                 .child(preset_grid)
                 .child(
@@ -231,7 +275,9 @@ pub(super) fn connection_editor_serial_section(
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::Div {
     let content = match section.editor.section {
-        ConnectionEditorSection::Serial => serial_serial(section, cx),
+        ConnectionEditorSection::Basic | ConnectionEditorSection::Serial => {
+            serial_settings(section, cx)
+        }
         ConnectionEditorSection::Terminal => serial_terminal(section, cx),
         _ => div(),
     };
@@ -243,18 +289,25 @@ pub(super) fn connection_editor_serial_section(
         .child(content)
 }
 
-fn serial_serial(
+fn serial_settings(
     section: ConnectionEditorSectionContext<'_>,
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::Div {
     let ConnectionEditorSectionContext {
         palette,
         fields,
+        editor,
         baud_popover_open,
         narrow,
-        ..
     } = section;
     let app = cx.weak_entity();
+    // Deferring the device makes the dropdown a default rather than a
+    // requirement, so the asterisk goes away with it.
+    let port_label = if editor.serial_prompt_port {
+        FieldLabel::from(t!("dialog.serialPort").to_string())
+    } else {
+        required(t!("dialog.serialPort"))
+    };
     div()
         .flex()
         .flex_col()
@@ -278,7 +331,7 @@ fn serial_serial(
                                 cx,
                             },
                             "connection-editor-serial-port",
-                            required(t!("dialog.serialPort")),
+                            port_label,
                             ConnectionEditorSelect::SerialPort,
                             move |_, cx| {
                                 let _ = app.update(cx, |app, cx| {
@@ -292,6 +345,17 @@ fn serial_serial(
                     baud_popover_open,
                     cx,
                 ))),
+        )
+        .when(
+            editor.serial_prompt_port || editor.serial_prompt_baud_rate,
+            |this| {
+                this.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("dialog.askAtConnectHint")),
+                )
+            },
         )
         .child(
             div()

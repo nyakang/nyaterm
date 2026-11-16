@@ -90,6 +90,8 @@ fn measure(data: &[u8], line: &[u8], rows: u16, history: usize, chunk: usize) ->
 }
 
 pub fn run() {
+    // The legacy CSV column `mbps` means decimal MB/s (bytes / 1e6 / seconds),
+    // not Mbps. Keep the header stable for existing benchmark consumers.
     println!("kind,rows,history,chunk,mbps,cpu_ms,p50_us,p95_us,p99_us,scanned_rows,batches,bytes");
     let quick = std::env::args().any(|arg| arg == "--quick");
     let list = std::env::args().any(|arg| arg == "--list");

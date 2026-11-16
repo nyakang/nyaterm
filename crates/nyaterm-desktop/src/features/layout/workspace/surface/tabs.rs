@@ -13,7 +13,7 @@ use nyaterm_ui::{NyaCheckbox, NyaHoverCard, NyaPopover, NyaPopoverAlign, NyaPopo
 
 use crate::features::NyaTermApp;
 use crate::features::shell::{
-    NewSessionMenuAnchor, SessionTabDragPreview, SessionTabTooltip, WorkspaceTabDragPayload,
+    NewSessionMenuAnchor, SessionTabDragPreview, WorkspaceTabDragPayload,
 };
 use crate::features::view_widgets::{connection_spinner, themed_icon};
 use nyaterm_ui::icons::resolve_connection_icon;
@@ -243,7 +243,7 @@ impl NyaTermApp {
             id: SessionStripTabId::Start(sequence),
             request_id: Some(request_id),
             name: failed_name,
-            error: Some(failed_error),
+            error: Some(_),
         } = tab
         else {
             unreachable!("failed tab requires a failed connection attempt");
@@ -411,10 +411,6 @@ impl NyaTermApp {
                         this.close_failed_session_start(close_request_id.clone(), cx);
                     })),
             )
-            .tooltip(move |_, cx| {
-                cx.new(|_| SessionTabTooltip::new(failed_name.clone(), vec![failed_error.clone()]))
-                    .into()
-            })
             .on_click(cx.listener(move |this, event, window, cx| {
                 this.handle_tab_target_click(action_target.clone(), event, window, cx);
             }))

@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
 use gpui::{Context, Window};
+use nyaterm_core::ConnectionType;
 
 use crate::features::formatting::short_id;
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
 use crate::models::{SessionLaunchConfig, StartupCommandRequest};
 
 use super::session_runtime::{MultiplexSshStartRequest, SessionStartFocusTarget};
+use super::state::{SerialConnectContinuation, SerialConnectSelection};
 
 const RECONNECTING_BANNER: &str = "\r\n\x1b[36m[Reconnecting…]\x1b[0m\r\n";
 
@@ -399,6 +401,16 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reconnect_session_with_serial_selection(session_id, None, window, cx);
+    }
+
+    pub(in crate::features) fn reconnect_session_with_serial_selection(
+        &mut self,
+        session_id: String,
+        serial_selection: Option<SerialConnectSelection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.session.session_is_busy(&session_id) {
             self.shell
                 .set_status("session action already in progress".to_string());
@@ -460,6 +472,49 @@ impl NyaTermApp {
             SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_)
         ) {
             self.retry_rdp_runtime(&session_id, cx);
+            return;
+        }
+        if let Some(connection) = saved.as_ref()
+            && let ConnectionType::Serial {
+                connect_prompt,
+                port_name,
+                baud_rate,
+                ..
+            } = &connection.config
+        {
+            if connect_prompt.asks_anything() && serial_selection.is_none() {
+                self.open_serial_connect_prompt(
+                    connection.clone(),
+                    SerialConnectContinuation::Reconnect { session_id },
+                    *connect_prompt,
+                    port_name.clone(),
+                    *baud_rate,
+                    cx,
+                );
+                return;
+            }
+            let selected_port = serial_selection
+                .as_ref()
+                .map_or(port_name.as_str(), |selection| selection.port_name.as_str());
+            if self
+                .session
+                .serial_ports_in_use(Some(&session_id), None)
+                .contains(selected_port.trim())
+            {
+                self.shell
+                    .set_status(rust_i18n::t!("dialog.serialPortInUse"));
+                cx.notify();
+                return;
+            }
+        } else if let SessionLaunchConfig::Serial(config) = &metadata.launch_config
+            && self
+                .session
+                .serial_ports_in_use(Some(&session_id), None)
+                .contains(config.port_name.trim())
+        {
+            self.shell
+                .set_status(rust_i18n::t!("dialog.serialPortInUse"));
+            cx.notify();
             return;
         }
         self.remote_ops.clear_stats_sample(&session_id);
@@ -543,6 +598,7 @@ impl NyaTermApp {
                     locked,
                     insert_index: Some(source_index),
                     reconnect_session_id: Some(old_id.clone()),
+                    serial_selection,
                     startup_command: reconnect_cwd_command.map(|command| StartupCommandRequest {
                         command,
                         delay_ms: 0,

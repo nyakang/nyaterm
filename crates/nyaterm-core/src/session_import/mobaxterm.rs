@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::{
     AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
     ConnectionUsernameSource, RdpClipboardSettings, RdpDisplaySettings, RdpReconnectSettings,
-    RdpSecuritySettings, SavedPassword, SecretString, SerialFlowControl,
+    RdpSecuritySettings, SavedPassword, SecretString, SerialConnectPrompt, SerialFlowControl,
 };
 
 use super::{
@@ -667,19 +667,27 @@ fn connection_config(session: &MobaSession, username: String) -> ConnectionType 
             shared: true,
             view_only: false,
         },
-        MobaProtocol::Serial => ConnectionType::Serial {
-            port_name: session.serial_port_name.clone().unwrap_or_default(),
-            // MobaXterm's numeric serial fields could not be confirmed from
-            // the sample, so use the product defaults instead of guessing.
-            baud_rate: 115_200,
-            data_bits: 8,
-            parity: "none".to_string(),
-            flow_control: SerialFlowControl::None,
-            stop_bits: "1".to_string(),
-            ai_execution_profile: AiExecutionProfile::Auto,
-            backspace_mode: "ctrl_h".to_string(),
-            encoding: String::new(),
-        },
+        MobaProtocol::Serial => {
+            let port_name = session.serial_port_name.clone().unwrap_or_default();
+            // MobaXterm's numeric serial fields could not be confirmed from the
+            // sample, so baud and framing use product defaults. A serial session
+            // without a port stays openable by asking for the device on connect.
+            ConnectionType::Serial {
+                connect_prompt: SerialConnectPrompt {
+                    port: port_name.is_empty(),
+                    baud_rate: false,
+                },
+                port_name,
+                baud_rate: 115_200,
+                data_bits: 8,
+                parity: "none".to_string(),
+                flow_control: SerialFlowControl::None,
+                stop_bits: "1".to_string(),
+                ai_execution_profile: AiExecutionProfile::Auto,
+                backspace_mode: "ctrl_h".to_string(),
+                encoding: String::new(),
+            }
+        }
     }
 }
 

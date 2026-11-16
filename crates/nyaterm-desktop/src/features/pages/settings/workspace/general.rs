@@ -32,10 +32,11 @@ impl SettingsPanel {
         }
         let shard_options: Vec<NyaSelectOption> = shard_mebibytes
             .into_iter()
+            // The historical variable name denotes MiB; option values remain bytes.
             .map(|megabytes| {
                 NyaSelectOption::new(
                     (megabytes * mebibyte).to_string(),
-                    format!("{megabytes} MB"),
+                    format!("{megabytes} MiB"),
                 )
             })
             .collect();

@@ -184,7 +184,15 @@ impl SavedConnection {
                 port_name,
                 baud_rate,
                 ..
-            } => format!("{port_name} @ {baud_rate}"),
+            } => {
+                // A deferred-port connection names its device only at connect
+                // time; the framing is the only stable part to show here.
+                if port_name.is_empty() {
+                    format!("@{baud_rate}")
+                } else {
+                    format!("{port_name} @ {baud_rate}")
+                }
+            }
             ConnectionType::Rdp {
                 host,
                 port,

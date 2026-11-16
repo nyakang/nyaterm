@@ -51,4 +51,7 @@ mod mstsc;
 mod retry;
 mod start;
 
+#[cfg(test)]
+mod serial_prompt_tests;
+
 pub(in crate::features) use start::SshSessionConfigBuildContext;

@@ -610,6 +610,18 @@ impl NyaTerminalElement {
     ) -> Option<TerminalKeywordHighlightLookup<'_>> {
         // One snapshot holds every row, including the live input row.
         self.keyword_highlights.as_ref().and_then(|highlights| {
+            // A folded physical-row layout also uses segments, but its ready
+            // highlights may come from before the projection changed. Resolve
+            // the row context instead of requiring an identical worker frame.
+            // Logical lines retain their frame fast path to avoid rescanning
+            // long wrapped groups during painting.
+            let reuse_key = reuse_key
+                .or_else(|| highlights.frame_row_reuse_key(row, &self.snapshot))
+                .or_else(|| {
+                    (self.unwrapped.is_some() && self.snapshot.logical_lines.is_none())
+                        .then(|| terminal_keyword_row_reuse_key(&self.snapshot, row))
+                        .flatten()
+                });
             highlights
                 .lookup_with_reuse_key(row, &self.snapshot, reuse_key)
                 .or_else(|| highlights.stale_lookup_with_reuse_key(row, &self.snapshot, reuse_key))
@@ -619,6 +631,38 @@ impl NyaTerminalElement {
     pub fn with_unwrapped_layout(mut self, layout: Option<Arc<TerminalUnwrappedLayout>>) -> Self {
         self.unwrapped = layout;
         self
+    }
+
+    fn projected_keyword_row_reuse_keys(&self) -> Option<Vec<Option<TerminalKeywordRowReuseKey>>> {
+        let layout = self.unwrapped.as_ref()?;
+        let highlights = self.keyword_highlights.as_ref()?;
+        if self.snapshot.logical_lines.is_some() {
+            return None;
+        }
+        let segments = &layout.segments;
+        let mut keys = Vec::with_capacity(segments.len());
+        while keys.len() < segments.len() {
+            let start = keys.len();
+            let row = segments[start].source_row;
+            if let Some(key) = highlights.frame_row_reuse_key(row, &self.snapshot) {
+                keys.push(Some(key));
+                continue;
+            }
+            // Batch contiguous visible source rows so each wrapped group is
+            // scanned once. Never bridge a fold: that would allocate and scan
+            // in proportion to the hidden output instead of the viewport.
+            let mut end = start + 1;
+            while end < segments.len()
+                && segments[end].source_row == segments[end - 1].source_row + 1
+            {
+                end += 1;
+            }
+            keys.extend(terminal_keyword_row_reuse_keys_for_rows(
+                &self.snapshot,
+                row..segments[end - 1].source_row + 1,
+            ));
+        }
+        Some(keys)
     }
 
     pub fn with_visual_y_offset(mut self, offset: f32) -> Self {
@@ -1862,7 +1906,8 @@ impl Element for NyaTerminalElement {
             rows.extend(prefetch_row);
             rows
         };
-        for row in rows_to_prepare {
+        let projected_keyword_row_reuse_keys = self.projected_keyword_row_reuse_keys();
+        for (prepared_index, row) in rows_to_prepare.into_iter().enumerate() {
             let segment = self.unwrapped.as_ref().and_then(|layout| {
                 layout
                     .segments
@@ -1899,6 +1944,13 @@ impl Element for NyaTerminalElement {
                 })
                 .copied()
                 .flatten()
+                .or_else(|| {
+                    projected_keyword_row_reuse_keys
+                        .as_ref()
+                        .and_then(|keys| keys.get(prepared_index))
+                        .copied()
+                        .flatten()
+                })
                 .or_else(|| {
                     self.unwrapped
                         .is_none()

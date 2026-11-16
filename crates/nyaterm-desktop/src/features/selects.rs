@@ -490,6 +490,9 @@ impl NyaTermApp {
             "temporary-link-serial-port" => {
                 self.apply_temporary_serial_port_name(value.to_string(), cx);
             }
+            "serial-prompt.port" => {
+                self.select_serial_prompt_port(value.to_string(), cx);
+            }
             "cloud-provider-select" => self.update_cloud_sync_provider(value, cx),
             "cloud-conflict-branch" => {
                 self.cloud_sync.select_conflict_branch(value);
@@ -566,6 +569,16 @@ impl NyaTermApp {
                 },
                 cx,
             ),
+            "ai-mcp-terminal-execution-mode" => {
+                use nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode;
+                let mode = match value {
+                    "inline" => McpTerminalExecutionMode::Inline,
+                    "background" => McpTerminalExecutionMode::Background,
+                    "auto" => McpTerminalExecutionMode::Auto,
+                    _ => return,
+                };
+                self.set_ai_mcp_terminal_execution_mode(mode, cx);
+            }
             "ai-mcp-terminal-display-mode" => match value {
                 "inline" => {
                     self.set_ai_mcp_terminal_display_mode(McpTerminalDisplayMode::Inline, cx)

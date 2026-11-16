@@ -145,6 +145,7 @@ mod tests {
     ) -> PendingCapabilityApproval {
         let (reply, _) = tokio::sync::oneshot::channel();
         let request = CapabilityRequest {
+            terminal_plan: None,
             extended_results: true,
             resolved_session_id: None,
             request_id: id.into(),

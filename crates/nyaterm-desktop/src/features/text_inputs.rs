@@ -589,6 +589,10 @@ impl NyaTermApp {
             self.apply_temporary_serial_port_name(text, cx);
         } else if id.as_ref() == "temporary-ssh.baud-rate" {
             self.apply_temporary_serial_baud_rate(text, cx);
+        } else if id.as_ref() == "serial-prompt.port-path" {
+            self.apply_serial_prompt_port(text, cx);
+        } else if id.as_ref() == "serial-prompt.baud" {
+            self.apply_serial_prompt_baud_rate(text, cx);
         } else if let Some(rest) = id.strip_prefix("windterm-account.") {
             if let Some((uuid, field)) = rest.rsplit_once('.') {
                 self.apply_windterm_account_input(uuid, field, text, cx);

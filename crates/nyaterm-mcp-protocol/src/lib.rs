@@ -116,7 +116,7 @@ pub const MCP_TOOL_REGISTRY: &[McpToolDefinition] = &[
     McpToolDefinition {
         tool: tool::TERMINAL_EXECUTE,
         capability: capability::TERMINAL_EXECUTE,
-        description: "Execute a command in an existing scoped NyaTerm terminal session.",
+        description: "Execute a command targeting an existing scoped NyaTerm terminal session. Public MCP uses the PTY in automatic or inline mode; NyaTerm's background setting uses SSH exec without inheriting the interactive shell environment.",
         access: CapabilityAccess::Write,
         requires_session: true,
         read_only_hint: false,
@@ -126,7 +126,7 @@ pub const MCP_TOOL_REGISTRY: &[McpToolDefinition] = &[
     McpToolDefinition {
         tool: tool::TERMINAL_START,
         capability: capability::TERMINAL_START,
-        description: "Start a job. Prefer a saved SSH connection target for noninteractive commands: it defaults to ssh_exec without opening a terminal. Session targets default to inline_pty. Exec does not inherit an interactive shell cwd or environment. Use an idempotencyKey for retries.",
+        description: "Start a job. In automatic execution mode saved SSH connections default to ssh_exec and sessions to inline_pty; an explicit backend selects either. NyaTerm's public MCP execution setting can force inline or background execution. Inline saved connections reuse or open a terminal and return a session job with sessionId. Exec does not inherit an interactive shell cwd or environment. Use an idempotencyKey for retries.",
         access: CapabilityAccess::Write,
         requires_session: true,
         read_only_hint: false,
@@ -945,14 +945,6 @@ pub fn validate_tool_arguments(name: &str, value: &Value) -> Result<(), ToolCont
                 args.session_id.as_deref(),
                 false,
             )?;
-            if args
-                .target
-                .as_ref()
-                .is_some_and(|target| target.connection_id().is_some())
-                && args.backend() != TerminalBackend::SshExec
-            {
-                return contract_error(name, "connection targets require ssh_exec");
-            }
             validate_idempotency_key(name, args.idempotency_key.as_deref())?;
             if args.command.trim().is_empty()
                 || args.command.len() > MAX_TEXT_WRITE_BYTES
@@ -1332,7 +1324,7 @@ mod connection_target_tests {
     use serde_json::json;
 
     #[test]
-    fn saved_targets_default_to_exec_and_reject_ambiguous_or_interactive_requests() {
+    fn saved_targets_default_to_exec_and_accept_inline_without_ambiguous_targets() {
         let request =
             json!({"target":{"type":"connection","connectionId":"saved"},"command":"pwd"});
         assert!(validate_tool_arguments(tool::TERMINAL_START, &request).is_ok());
@@ -1344,15 +1336,14 @@ mod connection_target_tests {
                 connection_id: "saved".into()
             })
         );
-        for (field, value) in [
-            ("sessionId", json!("session")),
-            ("sessionId", json!(null)),
-            ("backend", json!("inline_pty")),
-        ] {
+        for (field, value) in [("sessionId", json!("session")), ("sessionId", json!(null))] {
             let mut invalid = request.clone();
             invalid[field] = value;
             assert!(validate_tool_arguments(tool::TERMINAL_START, &invalid).is_err());
         }
+        let mut inline = request.clone();
+        inline["backend"] = json!("inline_pty");
+        assert!(validate_tool_arguments(tool::TERMINAL_START, &inline).is_ok());
         let mut session = json!({"target":{"type":"session","sessionId":"s"},"command":"pwd"});
         let parsed: TerminalStartArgs = serde_json::from_value(session.clone()).unwrap();
         assert_eq!(parsed.backend(), TerminalBackend::InlinePty);

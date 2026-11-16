@@ -312,10 +312,13 @@ impl NyaTermApp {
             serial_port: self
                 .connection_state
                 .serial_ports()
-                .first()
-                .cloned()
+                .iter()
+                .find(|port| !self.serial_port_in_use(&port.port_name))
+                .map(|port| port.port_name.clone())
                 .unwrap_or_default(),
             baud_rate: "115200".to_string(),
+            serial_prompt_port: false,
+            serial_prompt_baud_rate: false,
             data_bits: "8".to_string(),
             parity: "none".to_string(),
             flow_control: Default::default(),
@@ -632,6 +635,26 @@ impl NyaTermApp {
             .set_editor_field_text(ConnectionEditorField::BaudRate, value.clone());
         self.connection_state
             .reset_editor_field(ConnectionEditorField::BaudRate, &value, cx);
+        // The rate is part of a new serial connection's title.
+        self.sync_editor_serial_name(cx);
+        // Choosing a rate is an explicit decision, so the deferred option and
+        // the rate cannot both be in effect.
+        self.connection_state
+            .set_editor_serial_prompt_baud_rate(false);
+        self.connection_state.set_editor_baud_popover_open(false);
+        cx.notify();
+    }
+
+    /// Defer the baud rate to the moment a serial session connects.
+    pub(in crate::features) fn set_connection_editor_baud_prompt(
+        &mut self,
+        ask: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection_state
+            .set_editor_serial_prompt_baud_rate(ask);
+        // Picking from the popover always closes it, even when the answer was
+        // already the current one.
         self.connection_state.set_editor_baud_popover_open(false);
         cx.notify();
     }
@@ -780,7 +803,29 @@ impl NyaTermApp {
             self.connection_state.sync_editor_password_input(cx);
         }
 
+        if matches!(
+            select,
+            ConnectionEditorSelect::SerialPort | ConnectionEditorSelect::BaudRate
+        ) {
+            self.sync_editor_serial_name(cx);
+        }
+
         cx.notify();
+    }
+
+    /// Keep the name box showing a title the serial device just produced.
+    ///
+    /// The box holds its own buffer, so a draft retitled behind it — by a picked
+    /// device, a typed path, or a new rate — has to be pushed into it.
+    fn sync_editor_serial_name(&mut self, cx: &mut Context<Self>) {
+        let name = self
+            .connection_state
+            .active_editor_draft()
+            .map(|editor| editor.name);
+        if let Some(name) = name {
+            self.connection_state
+                .reset_editor_field(ConnectionEditorField::Name, &name, cx);
+        }
     }
 
     pub(in crate::features) fn use_connection_editor_username(&mut self, cx: &mut Context<Self>) {
@@ -1013,6 +1058,14 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.connection_state.set_editor_field_text(field, text);
+        // The device and the rate both name a new serial connection, so typing
+        // either retitles the draft and the name box has to follow.
+        if matches!(
+            field,
+            ConnectionEditorField::SerialPort | ConnectionEditorField::BaudRate
+        ) {
+            self.sync_editor_serial_name(cx);
+        }
         cx.notify();
     }
 
@@ -1063,10 +1116,31 @@ impl NyaTermApp {
                 next
             });
             next.section =
-                crate::models::ConnectionEditorSection::for_kind(kind, next.defaults_mode)
-                    .first()
-                    .copied()
-                    .unwrap_or(crate::models::ConnectionEditorSection::Basic);
+                crate::models::ConnectionEditorSection::initial_for_kind(kind, next.defaults_mode);
+            // A serial draft may be titled after its device; that title belongs
+            // to the device, not to the kind the user switched to.
+            if current.kind == ConnectionKindTab::Serial && kind != ConnectionKindTab::Serial {
+                crate::features::connections::state::drop_device_name(
+                    &mut next,
+                    &current.serial_port,
+                    &current.baud_rate,
+                );
+            }
+            // The first device in the list counts as picked, so the serial tab
+            // opens with a title instead of an empty name box. A draft that was
+            // built before the device list arrived gets that device now.
+            if kind == ConnectionKindTab::Serial {
+                if next.serial_port.trim().is_empty() && !next.defaults_mode && next.id.is_none() {
+                    next.serial_port = self
+                        .connection_state
+                        .serial_ports()
+                        .iter()
+                        .find(|port| !self.serial_port_in_use(&port.port_name))
+                        .map(|port| port.port_name.clone())
+                        .unwrap_or_default();
+                }
+                crate::features::connections::state::adopt_serial_device_name(&mut next);
+            }
             self.connection_state.replace_editor_kind(next);
             self.connection_state.hide_editor_secrets(cx);
             self.dismiss_connection_editor_menus(cx);

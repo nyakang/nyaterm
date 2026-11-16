@@ -20,6 +20,7 @@ mod session_runtime;
 pub(in crate::features) use session_runtime::{
     SessionStartFocusTarget, SshSessionConfigBuildContext,
 };
+pub(in crate::features) mod serial_connect_prompt;
 mod session_state;
 mod start_tab_actions;
 mod startup_restore_runtime;
@@ -77,6 +78,7 @@ pub(in crate::features) use prompt_runtime::{
     uuid_like_prompt_id,
 };
 pub(in crate::features) use state::{
-    PendingSessionStart, SavedConnectionStartOptions, SessionCatalogTransferBundle,
+    CommandHistoryLearning, PendingSessionStart, SavedConnectionStartOptions,
+    SerialConnectPromptState, SerialConnectSelection, SessionCatalogTransferBundle,
     SessionFeatureFocus, SessionFeatureState, SessionStartEventRequest, SessionStartTabPlacement,
 };
