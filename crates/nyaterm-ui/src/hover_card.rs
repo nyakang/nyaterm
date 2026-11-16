@@ -3,8 +3,8 @@ use std::time::Duration;
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, PointerCancelEvent, Render,
-    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
+    RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
 };
 use gpui_base::{POPUP_PRIORITY, Popup, Positioner};
 use gpui_kit::component::ThemeStyled as _;
@@ -30,6 +30,7 @@ pub struct NyaHoverCard {
     close_delay: Duration,
     appearance: bool,
     flexible_trigger: bool,
+    horizontal_viewport: Option<ScrollHandle>,
     suspended: bool,
 }
 
@@ -51,6 +52,7 @@ impl NyaHoverCard {
             close_delay: Duration::from_millis(250),
             appearance: true,
             flexible_trigger: false,
+            horizontal_viewport: None,
             suspended: false,
         }
     }
@@ -74,6 +76,14 @@ impl NyaHoverCard {
     /// This keeps truncated text constrained by the available column width.
     pub fn flexible_trigger(mut self) -> Self {
         self.flexible_trigger = true;
+        self
+    }
+
+    /// Anchor side placement to a scroll viewport's horizontal edges while
+    /// retaining the trigger's vertical position. An open card stays reachable
+    /// across the visible part of its row, including space beyond a short label.
+    pub fn horizontal_viewport(mut self, handle: &ScrollHandle) -> Self {
+        self.horizontal_viewport = Some(handle.clone());
         self
     }
 
@@ -130,6 +140,8 @@ struct NyaHoverCardState {
     window_active: bool,
     trigger_bounds: Bounds<Pixels>,
     trigger_captured: bool,
+    horizontal_viewport: Option<ScrollHandle>,
+    is_hovering_corridor: bool,
     content_bounds: Option<Bounds<Pixels>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -150,6 +162,8 @@ impl NyaHoverCardState {
             window_active: true,
             trigger_bounds: Bounds::default(),
             trigger_captured: false,
+            horizontal_viewport: None,
+            is_hovering_corridor: false,
             content_bounds: None,
             _subscriptions: Vec::new(),
         }
@@ -175,6 +189,7 @@ impl NyaHoverCardState {
         self.requires_pointer_exit |= self.is_hovering_trigger;
         self.cancel_tasks();
         self.is_hovering_content = false;
+        self.is_hovering_corridor = false;
         self.content_bounds = None;
         self.set_open(false, cx);
     }
@@ -204,7 +219,10 @@ impl NyaHoverCardState {
         self.close_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let _ = this.update(cx, |state, cx| {
-                if state.epoch == epoch && !state.is_hovering_trigger && !state.is_hovering_content
+                if state.epoch == epoch
+                    && !state.is_hovering_trigger
+                    && !state.is_hovering_content
+                    && !state.is_hovering_corridor
                 {
                     state.set_open(false, cx);
                 }
@@ -251,7 +269,32 @@ impl NyaHoverCardState {
         }
     }
 
+    fn placement_bounds(&self) -> Bounds<Pixels> {
+        let mut bounds = self.trigger_bounds;
+        if let Some(handle) = &self.horizontal_viewport {
+            let viewport = handle.bounds();
+            if viewport.size.width > px(0.) {
+                bounds.origin.x = viewport.origin.x;
+                bounds.size.width = viewport.size.width;
+            }
+        }
+        bounds
+    }
+
     fn on_pointer_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let in_corridor = self.open
+            && self.horizontal_viewport.as_ref().is_some_and(|handle| {
+                handle.bounds().contains(&event.position)
+                    && self.placement_bounds().contains(&event.position)
+            });
+        if self.is_hovering_corridor != in_corridor {
+            self.is_hovering_corridor = in_corridor;
+            if in_corridor {
+                self.cancel_tasks();
+            } else if !self.is_hovering_trigger && !self.is_hovering_content {
+                self.schedule_close(cx);
+            }
+        }
         if event.dragging() || cx.has_active_drag() {
             self.dismiss(cx);
         } else if !self.suspended && !self.trigger_bounds.contains(&event.position) {
@@ -315,6 +358,7 @@ impl RenderOnce for NyaHoverCard {
         );
         state.update(cx, |state, cx| {
             state.sync(self.open_delay, self.close_delay);
+            state.horizontal_viewport = self.horizontal_viewport.clone();
             let suspended = self.suspended || cx.has_active_drag();
             if state.suspended && !suspended {
                 state.requires_pointer_exit =
@@ -441,7 +485,7 @@ impl RenderOnce for NyaHoverCard {
                 .into_any_element();
         };
 
-        let trigger_bounds = state.read(cx).trigger_bounds;
+        let trigger_bounds = state.read(cx).placement_bounds();
         root.child(
             deferred(
                 Positioner::side(trigger_bounds)
@@ -769,6 +813,110 @@ mod tests {
                 .open_delay(Duration::from_millis(10))
                 .close_delay(Duration::from_millis(100)),
             )
+        }
+    }
+
+    struct ViewportHarness {
+        width: f32,
+        right: bool,
+        scroll: gpui::ScrollHandle,
+    }
+
+    impl Render for ViewportHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .when(self.right, |this| this.justify_end())
+                .child(
+                    div()
+                        .id("viewport")
+                        .debug_selector(|| "viewport".into())
+                        .w(px(280.))
+                        .h(px(36.))
+                        .overflow_x_scroll()
+                        .track_scroll(&self.scroll)
+                        .child(
+                            NyaHoverCard::new(
+                                "viewport-card",
+                                div()
+                                    .debug_selector(|| "viewport-trigger".into())
+                                    .w(px(self.width))
+                                    .h(px(36.)),
+                                div()
+                                    .debug_selector(|| "viewport-content".into())
+                                    .w(px(100.))
+                                    .h(px(96.)),
+                            )
+                            .horizontal_viewport(&self.scroll)
+                            .placement(NyaPopoverPlacement::Right)
+                            .offset(px(6.))
+                            .appearance(false)
+                            .open_delay(Duration::from_millis(10))
+                            .close_delay(Duration::from_millis(100)),
+                        ),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn viewport_anchor_ignores_label_width_and_scroll_and_keeps_crossing_open(
+        cx: &mut TestAppContext,
+    ) {
+        for right in [false, true] {
+            for width in [118., 500.] {
+                let scroll = gpui::ScrollHandle::new();
+                let (_, cx) = cx.add_window_view(|_, _| ViewportHarness {
+                    width,
+                    right,
+                    scroll: scroll.clone(),
+                });
+                activate_and_draw(cx);
+                if width > 280. {
+                    scroll.set_offset(point(px(-80.), px(0.)));
+                    cx.update(|window, cx| window.draw(cx).clear(cx));
+                }
+                let viewport = cx.debug_bounds("viewport").unwrap();
+                cx.simulate_mouse_move(
+                    point(viewport.left() + px(30.), viewport.center().y),
+                    None,
+                    Modifiers::default(),
+                );
+                cx.executor().advance_clock(Duration::from_millis(10));
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    window.draw(cx).clear(cx);
+                    window.draw(cx).clear(cx);
+                });
+                let card = cx.debug_bounds("viewport-content").unwrap();
+                if right {
+                    assert_eq!(card.right() + px(6.), viewport.left());
+                } else {
+                    assert_eq!(card.left(), viewport.right() + px(6.));
+                }
+                assert_eq!(card.center().y, viewport.center().y);
+                // A short name leaves a substantial blank region before the card.
+                cx.simulate_mouse_move(
+                    point(viewport.right() - px(12.), viewport.center().y),
+                    None,
+                    Modifiers::default(),
+                );
+                cx.executor().advance_clock(Duration::from_millis(200));
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                assert!(cx.debug_bounds("viewport-content").is_some());
+                cx.simulate_mouse_move(card.center(), None, Modifiers::default());
+                cx.executor().advance_clock(Duration::from_millis(200));
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                assert!(cx.debug_bounds("viewport-content").is_some());
+                cx.simulate_mouse_move(point(px(4.), px(4.)), None, Modifiers::default());
+                cx.executor().advance_clock(Duration::from_millis(200));
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                assert!(cx.debug_bounds("viewport-content").is_none());
+            }
         }
     }
 

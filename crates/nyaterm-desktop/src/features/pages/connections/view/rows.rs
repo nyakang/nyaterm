@@ -539,6 +539,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
     snapshot: &ConnectionListSnapshot,
     connection: SavedConnection,
     depth: usize,
+    hover_viewport: &gpui::ScrollHandle,
     cx: &mut Context<ConnectionPanel>,
 ) -> impl IntoElement {
     let selected = snapshot.is_selected(&connection.id);
@@ -753,14 +754,13 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                     palette,
                 ),
             )
-            // Beside the row, vertically centred on it, matching Tauri's
-            // `side="right" align="center" sideOffset={6}`. A card below the row
-            // would cover the neighbouring connections. `Positioner::side`
-            // flips to the left when the panel is docked right, so this holds
-            // for either dock edge.
+            // Use the visible list edges, independent of name width, nesting
+            // and horizontal scrolling. Side placement flips at window edges.
+            .horizontal_viewport(hover_viewport)
             .placement(NyaPopoverPlacement::Right)
             .align(NyaPopoverAlign::Center)
-            .offset(px(6.))
+            // The scroll viewport excludes the list shell padding.
+            .offset(px(super::CONNECTION_LIST_PADDING_PX + 6.))
             .open_delay(Duration::from_millis(350))
             .close_delay(Duration::from_millis(120))
             .appearance(false),

@@ -72,7 +72,7 @@ pub(in crate::features::pages::connections) fn connections_panel(
         .relative()
         .flex_1()
         .min_h_0()
-        .p(px(6.))
+        .p(px(super::CONNECTION_LIST_PADDING_PX))
         .flex()
         .flex_col()
         .on_mouse_down(
@@ -141,6 +141,7 @@ pub(in crate::features::pages::connections) fn connections_panel(
         // `uniform_list` derives its scrollable width from one measured row, so
         // point it at the row most likely to be the widest or long names would
         // still be unreachable.
+        let hover_viewport = list_scroll.0.borrow().base_handle.clone();
         list = list.child(
             uniform_list(
                 "connections-list-rows",
@@ -198,11 +199,13 @@ pub(in crate::features::pages::connections) fn connections_panel(
                                 else {
                                     continue;
                                 };
-                                item.child(
-                                    div().w_full().child(saved_connection_row(
-                                        snapshot, connection, depth, cx,
-                                    )),
-                                )
+                                item.child(div().w_full().child(saved_connection_row(
+                                    snapshot,
+                                    connection,
+                                    depth,
+                                    &hover_viewport,
+                                    cx,
+                                )))
                             }
                         });
                     }
