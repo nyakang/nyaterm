@@ -29,7 +29,9 @@ mod start;
 
 pub(crate) use catalog::SessionCatalogTransferBundle;
 pub(in crate::features) use command_history::CommandHistoryLearning;
-pub(in crate::features) use dialogs::{RenameSessionSubmission, SerialConnectPromptState};
+pub(in crate::features) use dialogs::{
+    RenameSessionSubmission, SerialConnectContinuation, SerialConnectPromptState,
+};
 pub(in crate::features) use prompts::PromptResolution;
 pub(in crate::features) use start::{
     PendingReconnectCompletion, PendingSessionStart, SavedConnectionStartOptions,

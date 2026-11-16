@@ -15,7 +15,7 @@ use nyaterm_store::{StoreDomain, store_request};
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
 use crate::models::{
     ConnectionEditorField, ConnectionEditorForwardingTab, ConnectionEditorPasswordSource,
-    ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionKindTab, SessionLaunchConfig,
+    ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionKindTab,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2347,44 +2347,50 @@ impl NyaTermApp {
             .manager()
             .list_serial_ports()
             .unwrap_or_default();
-        let in_use = self.serial_ports_in_use();
-        self.connection_state.replace_serial_ports(ports, in_use);
+        self.connection_state.replace_serial_ports(ports);
     }
 
-    /// Serial devices this process already holds: running sessions plus starts
-    /// that are still connecting. The port picker lists them but refuses to
-    /// select them, so a second tab cannot race for the same device.
     pub(in crate::features) fn serial_ports_in_use(&self) -> std::collections::HashSet<String> {
-        self.session
-            .metadata_entries()
-            .filter_map(|(_, metadata)| match &metadata.launch_config {
-                SessionLaunchConfig::Serial(config) => Some(config.port_name.trim().to_string()),
-                _ => None,
-            })
-            .filter(|port_name| !port_name.is_empty())
-            .collect()
+        self.session.serial_ports_in_use(None, None)
+    }
+
+    pub(in crate::features) fn serial_port_in_use(&self, port_name: &str) -> bool {
+        self.serial_ports_in_use().contains(port_name.trim())
     }
 
     pub(in crate::features) fn request_connection_serial_ports_refresh(
         &mut self,
         cx: &mut Context<Self>,
     ) {
-        if !self.connection_state.begin_serial_ports_refresh() {
-            return;
-        }
         let manager = self.session.manager_handle();
-        let in_use = self.serial_ports_in_use();
-        let scheduler = self.blocking_jobs.clone();
-        cx.spawn(async move |this, cx| {
-            let task = scheduler.submit_task("connection-serial-ports", move |_| {
+        self.request_connection_serial_ports_refresh_with_loader(
+            move || {
                 manager
                     .list_serial_ports()
                     .map_err(|error| error.to_string())
-            });
+            },
+            cx,
+        );
+    }
+
+    pub(in crate::features) fn request_connection_serial_ports_refresh_with_loader(
+        &mut self,
+        loader: impl FnOnce() -> Result<Vec<nyaterm_transport::SerialPortInfo>, String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connection_state.begin_serial_ports_refresh() {
+            return;
+        }
+        let scheduler = self.blocking_jobs.clone();
+        cx.spawn(async move |this, cx| {
+            let task = scheduler.submit_task("connection-serial-ports", move |_| loader());
             let result = await_blocking_job(task).await.and_then(|result| result);
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(ports) => this.connection_state.replace_serial_ports(ports, in_use),
+                    Ok(ports) => {
+                        this.connection_state.replace_serial_ports(ports);
+                        this.seed_serial_connect_prompt_device(cx);
+                    }
                     Err(error) => this.connection_state.fail_serial_ports_refresh(error),
                 }
                 cx.notify();

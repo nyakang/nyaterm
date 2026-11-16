@@ -83,9 +83,8 @@ impl NyaTermApp {
                                         }
                                         None => port.port_name.clone(),
                                     };
-                                    NyaSelectOption::new(port.port_name.clone(), label).disabled(
-                                        self.connection_state.serial_port_in_use(&port.port_name),
-                                    )
+                                    NyaSelectOption::new(port.port_name.clone(), label)
+                                        .disabled(self.serial_port_in_use(&port.port_name))
                                 })
                                 .collect::<Vec<_>>();
                             if serial_ports.is_empty() {

@@ -313,7 +313,7 @@ impl NyaTermApp {
                 .connection_state
                 .serial_ports()
                 .iter()
-                .find(|port| !self.connection_state.serial_port_in_use(&port.port_name))
+                .find(|port| !self.serial_port_in_use(&port.port_name))
                 .map(|port| port.port_name.clone())
                 .unwrap_or_default(),
             baud_rate: "115200".to_string(),
@@ -1135,7 +1135,7 @@ impl NyaTermApp {
                         .connection_state
                         .serial_ports()
                         .iter()
-                        .find(|port| !self.connection_state.serial_port_in_use(&port.port_name))
+                        .find(|port| !self.serial_port_in_use(&port.port_name))
                         .map(|port| port.port_name.clone())
                         .unwrap_or_default();
                 }

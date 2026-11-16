@@ -405,14 +405,6 @@ impl ConnectionFeatureState {
         self.catalog.serial_ports()
     }
 
-    pub fn serial_port_in_use(&self, port_name: &str) -> bool {
-        self.catalog.serial_port_in_use(port_name)
-    }
-
-    pub fn serial_ports_in_use(&self) -> &std::collections::HashSet<String> {
-        self.catalog.serial_ports_in_use()
-    }
-
     pub fn serial_ports_loading(&self) -> bool {
         self.catalog.serial_ports_loading()
     }
@@ -434,13 +426,8 @@ impl ConnectionFeatureState {
         self.retain_list_references_for_catalog();
     }
 
-    pub fn replace_serial_ports(
-        &mut self,
-        serial_ports: Vec<nyaterm_transport::SerialPortInfo>,
-        serial_ports_in_use: std::collections::HashSet<String>,
-    ) {
-        self.catalog
-            .replace_serial_ports(serial_ports, serial_ports_in_use);
+    pub fn replace_serial_ports(&mut self, serial_ports: Vec<nyaterm_transport::SerialPortInfo>) {
+        self.catalog.replace_serial_ports(serial_ports);
     }
 
     pub fn update_connection(&mut self, updated: SavedConnection) -> bool {

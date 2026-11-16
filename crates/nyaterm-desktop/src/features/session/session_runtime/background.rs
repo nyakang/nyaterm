@@ -364,6 +364,25 @@ impl NyaTermApp {
         if !self.session.start.request_can_start(&options) {
             return;
         }
+        if let SessionLaunchConfig::Serial(config) = &launch_config
+            && self
+                .session
+                .serial_ports_in_use(
+                    options.reconnect_session_id.as_deref(),
+                    options.request_id.as_deref(),
+                )
+                .contains(config.port_name.trim())
+        {
+            let message = rust_i18n::t!("dialog.serialPortInUse").to_string();
+            self.fail_start_preparation(&options, message.clone(), cx);
+            self.complete_mcp_session_open_failure(
+                options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                &message,
+            );
+            self.shell.set_status(message);
+            cx.notify();
+            return;
+        }
         let options = self.prepare_session_start_options(options);
         let SavedConnectionStartOptions {
             android_view: _,

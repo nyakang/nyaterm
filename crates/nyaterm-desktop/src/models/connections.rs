@@ -1027,6 +1027,41 @@ mod tests {
         serial_name_restates_device, serial_session_title,
     };
 
+    #[test]
+    fn serial_settings_stay_in_basic_information_except_in_defaults() {
+        use super::{ConnectionEditorField, ConnectionEditorSection, ConnectionKindTab};
+        assert_eq!(
+            ConnectionEditorSection::for_kind(ConnectionKindTab::Serial, false),
+            &[
+                ConnectionEditorSection::Basic,
+                ConnectionEditorSection::Terminal
+            ]
+        );
+        assert_eq!(
+            ConnectionEditorSection::for_kind(ConnectionKindTab::Serial, true),
+            &[
+                ConnectionEditorSection::Serial,
+                ConnectionEditorSection::Terminal
+            ]
+        );
+        assert_eq!(
+            ConnectionEditorSection::initial_for_kind(ConnectionKindTab::Serial, false),
+            ConnectionEditorSection::Basic
+        );
+        assert_eq!(
+            ConnectionEditorSection::initial_for_kind(ConnectionKindTab::Serial, true),
+            ConnectionEditorSection::Serial
+        );
+        assert_eq!(
+            ConnectionEditorField::SerialPort.section(),
+            ConnectionEditorSection::Basic
+        );
+        assert_eq!(
+            ConnectionEditorField::BaudRate.section(),
+            ConnectionEditorSection::Basic
+        );
+    }
+
     /// The title names the device, wherever the device name came from.
     #[test]
     fn a_device_names_the_connection_not_the_path_that_reaches_it() {

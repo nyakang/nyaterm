@@ -20,7 +20,7 @@ mod session_runtime;
 pub(in crate::features) use session_runtime::{
     SessionStartFocusTarget, SshSessionConfigBuildContext,
 };
-mod serial_connect_prompt;
+pub(in crate::features) mod serial_connect_prompt;
 mod session_state;
 mod start_tab_actions;
 mod startup_restore_runtime;

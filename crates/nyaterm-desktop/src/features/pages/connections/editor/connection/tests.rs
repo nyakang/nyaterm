@@ -2311,7 +2311,7 @@ fn the_baud_popover_defers_the_rate_without_losing_the_saved_one(cx: &mut TestAp
             draft.baud_rate = "76800".to_string();
             app.connection_state.begin_editor(draft);
             app.connection_state.build_editor_fields(cx);
-            app.set_connection_editor_section(crate::models::ConnectionEditorSection::Serial, cx);
+            app.set_connection_editor_section(crate::models::ConnectionEditorSection::Basic, cx);
             app.set_connection_editor_baud_popover_open(true, cx);
             cx.notify();
         });

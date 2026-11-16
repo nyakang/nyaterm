@@ -3,8 +3,6 @@
 //! Persistence remains implemented by `nyaterm-core::ConnectionStore`; this
 //! state only owns the validated values currently presented by the desktop.
 
-use std::collections::HashSet;
-
 use nyaterm_core::{Group, SavedConnection};
 use nyaterm_transport::SerialPortInfo;
 
@@ -12,9 +10,6 @@ pub(super) struct ConnectionCatalogState {
     connections: Vec<SavedConnection>,
     groups: Vec<Group>,
     serial_ports: Vec<SerialPortInfo>,
-    /// Ports currently held by a session of this process, including starts that
-    /// are still connecting. They stay listed but cannot be picked.
-    serial_ports_in_use: HashSet<String>,
     serial_ports_loading: bool,
     serial_ports_error: Option<String>,
     connections_revision: u64,
@@ -27,7 +22,6 @@ impl ConnectionCatalogState {
             connections,
             groups,
             serial_ports: Vec::new(),
-            serial_ports_in_use: HashSet::new(),
             serial_ports_loading: false,
             serial_ports_error: None,
             connections_revision: 0,
@@ -45,15 +39,6 @@ impl ConnectionCatalogState {
 
     pub(super) fn serial_ports(&self) -> &[SerialPortInfo] {
         &self.serial_ports
-    }
-
-    /// Whether a port is already open (or being opened) by this process.
-    pub(super) fn serial_port_in_use(&self, port_name: &str) -> bool {
-        self.serial_ports_in_use.contains(port_name)
-    }
-
-    pub(super) fn serial_ports_in_use(&self) -> &HashSet<String> {
-        &self.serial_ports_in_use
     }
 
     pub(super) fn serial_ports_loading(&self) -> bool {
@@ -79,13 +64,8 @@ impl ConnectionCatalogState {
         self.groups_revision = self.groups_revision.wrapping_add(1);
     }
 
-    pub(super) fn replace_serial_ports(
-        &mut self,
-        serial_ports: Vec<SerialPortInfo>,
-        serial_ports_in_use: HashSet<String>,
-    ) {
+    pub(super) fn replace_serial_ports(&mut self, serial_ports: Vec<SerialPortInfo>) {
         self.serial_ports = serial_ports;
-        self.serial_ports_in_use = serial_ports_in_use;
         self.serial_ports_loading = false;
         self.serial_ports_error = None;
     }
@@ -259,20 +239,17 @@ mod tests {
         assert!(!catalog.serial_ports_loading());
         assert_eq!(catalog.serial_ports_error(), Some("enumeration failed"));
 
-        catalog.replace_serial_ports(
-            vec![
-                nyaterm_transport::SerialPortInfo {
-                    port_name: "COM3".to_string(),
-                    product: Some("USB-SERIAL CH340".to_string()),
-                    ..Default::default()
-                },
-                nyaterm_transport::SerialPortInfo {
-                    port_name: "COM4".to_string(),
-                    ..Default::default()
-                },
-            ],
-            std::collections::HashSet::from(["COM4".to_string()]),
-        );
+        catalog.replace_serial_ports(vec![
+            nyaterm_transport::SerialPortInfo {
+                port_name: "COM3".to_string(),
+                product: Some("USB-SERIAL CH340".to_string()),
+                ..Default::default()
+            },
+            nyaterm_transport::SerialPortInfo {
+                port_name: "COM4".to_string(),
+                ..Default::default()
+            },
+        ]);
         assert_eq!(
             catalog
                 .serial_ports()
@@ -281,8 +258,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["COM3", "COM4"]
         );
-        assert!(!catalog.serial_port_in_use("COM3"));
-        assert!(catalog.serial_port_in_use("COM4"));
         assert_eq!(catalog.serial_ports_error(), None);
     }
 

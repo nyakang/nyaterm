@@ -409,7 +409,7 @@ impl NyaTermApp {
             options::ssh_algorithm_mode_choices(&editor.ssh_algorithm_mode);
         let serial_port_options = options::editor_serial_port_choices(
             self.connection_state.serial_ports(),
-            self.connection_state.serial_ports_in_use(),
+            &self.serial_ports_in_use(),
             &editor.serial_port,
             editor.serial_prompt_port,
         );

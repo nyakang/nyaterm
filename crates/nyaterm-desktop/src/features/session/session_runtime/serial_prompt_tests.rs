@@ -419,3 +419,497 @@ fn picking_a_listed_device_leaves_the_custom_field_behind() {
         });
     });
 }
+
+fn prepare_serial_reconnect(app: &mut NyaTermApp) {
+    let connection = serial(
+        "COM7",
+        115200,
+        serde_json::json!({"port": true, "baud_rate": true}),
+    );
+    let metadata = app.session.metadata_mut("existing").unwrap();
+    metadata.launch_config = SessionLaunchConfig::Serial(nyaterm_transport::SerialSessionConfig {
+        port_name: "COM7".into(),
+        ..Default::default()
+    });
+    metadata.source_connection_id = Some(connection.id.clone());
+    app.connection_state
+        .replace_loaded(vec![connection], vec![]);
+    app.session
+        .set_custom_name("existing".into(), "My board".into());
+    app.session.set_tab_color("existing", Some(0x123456));
+    app.session.set_tab_locked("existing", true);
+}
+
+#[test]
+fn cancelling_serial_reconnect_preserves_the_live_session_and_selection() {
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-cancel");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            prepare_serial_reconnect(app);
+            app.reconnect_session("existing".into(), window, cx);
+            app.reconnect_session("existing".into(), window, cx);
+            assert!(!app.session.metadata("existing").unwrap().disconnected);
+            assert!(!app.session.session_is_busy("existing"));
+            assert_eq!(app.session.start.pending_count(), 0);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.apply_serial_prompt_baud_rate("0".into(), cx);
+            assert!(!app.submit_serial_connect_prompt(window, cx));
+            assert!(!app.session.metadata("existing").unwrap().disconnected);
+            assert_eq!(app.session.start.pending_count(), 0);
+        })
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(&cx, |app, _| {
+        assert!(app.session.dialogs.serial_connect_prompt().is_none());
+        assert!(!app.session.metadata("existing").unwrap().disconnected);
+        assert_eq!(app.session.active_id(), Some("existing"));
+        assert_eq!(app.session.custom_name("existing"), Some("My board"));
+        assert_eq!(app.session.tab_color("existing"), Some(0x123456));
+        assert!(app.session.tab_is_locked("existing"));
+        assert_eq!(app.session.start.pending_count(), 0);
+    });
+}
+
+#[test]
+fn confirming_serial_reconnect_reuses_its_port_and_preserves_tab_properties() {
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-submit");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            prepare_serial_reconnect(app);
+            app.reconnect_session("existing".into(), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.apply_serial_prompt_baud_rate("57600".into(), cx);
+            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert!(app.session.metadata("existing").unwrap().disconnected);
+            assert_eq!(app.session.start.pending_count(), 1);
+            let pending = app.session.start.pending_entries().next().unwrap().1;
+            let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+                panic!("expected serial");
+            };
+            assert_eq!(config.port_name, "COM7");
+            assert_eq!(config.baud_rate, 57600);
+            assert_eq!(pending.reconnect_session_id.as_deref(), Some("existing"));
+            assert_eq!(pending.custom_name.as_deref(), Some("My board"));
+            assert_eq!(pending.tab_color, Some(0x123456));
+            assert!(pending.locked);
+            let ConnectionType::Serial {
+                port_name,
+                baud_rate,
+                ..
+            } = &app.connection_state.connections()[0].config
+            else {
+                panic!("expected serial");
+            };
+            assert_eq!(port_name, "COM7");
+            assert_eq!(*baud_rate, 115200);
+        })
+    });
+}
+
+#[test]
+fn serial_reconnect_rechecks_a_deleted_or_changed_saved_connection_before_closing() {
+    for deleted in [true, false] {
+        let root = TestConfigDir::new("nyaterm-serial-reconnect-stale-source");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let mut cx = hosted(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                prepare_serial_reconnect(app);
+                app.reconnect_session("existing".into(), window, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let connections = if deleted {
+                    vec![]
+                } else {
+                    vec![
+                        serde_json::from_value(serde_json::json!({
+                            "id":"board", "name":"Changed", "type":"telnet", "host":"127.0.0.1"
+                        }))
+                        .unwrap(),
+                    ]
+                };
+                app.connection_state.replace_loaded(connections, vec![]);
+                assert!(app.submit_serial_connect_prompt(window, cx));
+                assert!(!app.session.metadata("existing").unwrap().disconnected);
+                assert_eq!(app.session.start.pending_count(), 0);
+                assert!(!app.session.session_is_busy("existing"));
+            })
+        });
+    }
+}
+
+#[test]
+fn concurrent_serial_starts_reserve_the_port_before_the_worker_finishes() {
+    let root = TestConfigDir::new("nyaterm-serial-concurrent-start");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = open_dialog(
+        &mut cx,
+        &app,
+        serial("COM9", 115200, serde_json::json!({"port": true})),
+        Default::default(),
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let config = SessionLaunchConfig::Serial(nyaterm_transport::SerialSessionConfig {
+                port_name: "COM9".into(),
+                ..Default::default()
+            });
+            app.begin_background_session_start(
+                "First".into(),
+                config.clone(),
+                None,
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            assert_eq!(app.session.start.pending_count(), 1);
+            app.select_serial_prompt_port(SERIAL_PROMPT_CUSTOM_PORT.into(), cx);
+            app.apply_serial_prompt_port(" COM9 ".into(), cx);
+            assert!(!app.submit_serial_connect_prompt(window, cx));
+            assert_eq!(
+                app.session.dialogs.serial_connect_prompt().unwrap().error,
+                Some("dialog.serialPortInUse")
+            );
+            app.begin_background_session_start(
+                "Second".into(),
+                config,
+                None,
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            assert_eq!(app.session.start.pending_count(), 1);
+            let id = app
+                .session
+                .start
+                .pending_entries()
+                .next()
+                .unwrap()
+                .0
+                .clone();
+            app.session.start.cancel_pending(&id, "cancelled".into());
+            assert!(!app.serial_port_in_use("COM9"));
+            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert_eq!(app.session.start.pending_count(), 1);
+        })
+    });
+}
+
+#[test]
+fn serial_discovery_seeds_empty_fields_without_overwriting_user_input() {
+    let root = TestConfigDir::new("nyaterm-serial-discovery-input");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = open_dialog(
+        &mut cx,
+        &app,
+        serial("", 115200, serde_json::json!({"port": true})),
+        Default::default(),
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.connection_state
+                .replace_serial_ports(vec![nyaterm_transport::SerialPortInfo {
+                    port_name: "COM9".into(),
+                    ..Default::default()
+                }]);
+            app.seed_serial_connect_prompt_device(cx);
+            assert_eq!(
+                app.session
+                    .dialogs
+                    .serial_connect_prompt()
+                    .unwrap()
+                    .port_name,
+                "COM9"
+            );
+            app.apply_serial_prompt_port("/dev/custom-board".into(), cx);
+            app.connection_state
+                .replace_serial_ports(vec![nyaterm_transport::SerialPortInfo {
+                    port_name: "COM10".into(),
+                    ..Default::default()
+                }]);
+            app.seed_serial_connect_prompt_device(cx);
+            assert_eq!(
+                app.session
+                    .dialogs
+                    .serial_connect_prompt()
+                    .unwrap()
+                    .port_name,
+                "/dev/custom-board"
+            );
+            app.apply_serial_prompt_port("".into(), cx);
+            app.seed_serial_connect_prompt_device(cx);
+            assert!(
+                app.session
+                    .dialogs
+                    .serial_connect_prompt()
+                    .unwrap()
+                    .port_name
+                    .is_empty()
+            );
+        })
+    });
+}
+
+#[test]
+fn slow_serial_discovery_allows_editing_and_cancel_without_duplicate_enumeration() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+    use std::time::{Duration, Instant};
+
+    for cancel in [false, true] {
+        let root = TestConfigDir::new("nyaterm-serial-slow-discovery");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let (release_tx, release_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        app.update(&mut cx, |app, cx| {
+            let calls = calls.clone();
+            app.request_connection_serial_ports_refresh_with_loader(
+                move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    started_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(Duration::from_secs(10))
+                        .map_err(|error| error.to_string())?;
+                    Ok(vec![nyaterm_transport::SerialPortInfo {
+                        port_name: "COM9".into(),
+                        ..Default::default()
+                    }])
+                },
+                cx,
+            );
+        });
+        let mut cx = open_dialog(
+            &mut cx,
+            &app,
+            serial("", 115200, serde_json::json!({"port": true})),
+            Default::default(),
+        );
+        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        cx.update(|window, cx| {
+            assert!(window.has_active_nya_dialog(cx));
+            app.update(cx, |app, cx| {
+                assert!(app.connection_state.serial_ports_loading());
+                app.apply_serial_prompt_port("/dev/custom-board".into(), cx);
+                let calls = calls.clone();
+                app.request_connection_serial_ports_refresh_with_loader(
+                    move || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(vec![])
+                    },
+                    cx,
+                );
+            });
+        });
+        if cancel {
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+        }
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if app.read_with(&cx, |app, _| !app.connection_state.serial_ports_loading()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "serial discovery did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        cx.update(|window, cx| {
+            assert_eq!(window.has_active_nya_dialog(cx), !cancel);
+            app.read_with(cx, |app, _| {
+                assert_eq!(app.connection_state.serial_ports()[0].port_name, "COM9");
+                if cancel {
+                    assert!(app.session.dialogs.serial_connect_prompt().is_none());
+                } else {
+                    assert_eq!(
+                        app.session
+                            .dialogs
+                            .serial_connect_prompt()
+                            .unwrap()
+                            .port_name,
+                        "/dev/custom-board"
+                    );
+                }
+            });
+        });
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelling_serial_reconnect_keeps_the_actual_serial_backend_open() {
+    use std::ffi::CStr;
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    let mut master = -1;
+    let mut slave = -1;
+    let mut name = [0 as libc::c_char; 128];
+    // openpty writes two owned descriptors and a NUL-terminated slave path.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                name.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        },
+        0
+    );
+    // Both descriptors were returned successfully and are owned by this test.
+    let _master = unsafe { OwnedFd::from_raw_fd(master) };
+    let _slave = unsafe { OwnedFd::from_raw_fd(slave) };
+    let path = unsafe { CStr::from_ptr(name.as_ptr()) }
+        .to_str()
+        .unwrap()
+        .to_string();
+    let root = TestConfigDir::new("nyaterm-serial-live-reconnect-cancel");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    let mut backend_id = String::new();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let config = nyaterm_transport::SerialSessionConfig {
+                port_name: path.clone(),
+                ..Default::default()
+            };
+            backend_id = app
+                .session
+                .manager()
+                .create_serial_session(config.clone())
+                .unwrap()
+                .id;
+            let mut metadata = app.session.metadata("existing").unwrap().clone();
+            metadata.launch_config = SessionLaunchConfig::Serial(config);
+            metadata.source_connection_id = Some("board".into());
+            app.session.register_session_metadata(&backend_id, metadata);
+            app.session.select_active_session(&backend_id);
+            app.terminal
+                .seed_session_view(backend_id.clone(), "device> ".into(), "UTF-8");
+            app.connection_state.replace_loaded(
+                vec![serial(&path, 115200, serde_json::json!({"port": true}))],
+                vec![],
+            );
+            app.reconnect_session(backend_id.clone(), window, cx);
+            assert_eq!(app.terminal.session_output(&backend_id), Some("device> "));
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(&cx, |app, _| {
+        assert!(
+            app.session
+                .manager()
+                .list_sessions()
+                .unwrap()
+                .iter()
+                .any(|s| s.id == backend_id)
+        );
+        assert!(!app.session.metadata(&backend_id).unwrap().disconnected);
+        assert_eq!(app.terminal.session_output(&backend_id), Some("device> "));
+        assert_eq!(app.session.start.pending_count(), 0);
+        app.session.manager().close(&backend_id).unwrap();
+    });
+}
+
+#[test]
+fn confirming_serial_reconnect_does_not_recreate_a_session_closed_during_the_prompt() {
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-closed-session");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            prepare_serial_reconnect(app);
+            app.reconnect_session("existing".into(), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session.remove_session_catalog("existing");
+            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert!(!app.session.has_session("existing"));
+            assert_eq!(app.session.start.pending_count(), 0);
+            assert!(app.session.dialogs.serial_connect_prompt().is_none());
+        })
+    });
+}
+
+#[test]
+fn failed_serial_discovery_keeps_the_manual_device_input_usable() {
+    use std::time::{Duration, Instant};
+
+    let root = TestConfigDir::new("nyaterm-serial-discovery-failure");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    app.update(&mut cx, |app, cx| {
+        app.request_connection_serial_ports_refresh_with_loader(
+            || Err("enumeration failed".into()),
+            cx,
+        );
+    });
+    let mut cx = open_dialog(
+        &mut cx,
+        &app,
+        serial("", 115200, serde_json::json!({"port": true})),
+        Default::default(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.read_with(&cx, |app, _| app.connection_state.serial_ports_loading()) {
+        cx.run_until_parked();
+        assert!(Instant::now() < deadline, "serial discovery did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.connection_state.serial_ports_error(),
+                Some("enumeration failed")
+            );
+            app.apply_serial_prompt_port("/dev/custom-board".into(), cx);
+            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert_eq!(app.session.start.pending_count(), 1);
+        })
+    });
+}

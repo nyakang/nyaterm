@@ -578,6 +578,32 @@ impl SessionFeatureState {
             .iter()
             .map(|(session_id, metadata)| (session_id.as_str(), metadata))
     }
+    /// Occupancy is derived from the session owners, never cached with device
+    /// discovery. A reconnect may reuse its own live port; a retry may replace
+    /// its own pending request, but neither may bypass another pending start.
+    pub(in crate::features) fn serial_ports_in_use(
+        &self,
+        excluded_session: Option<&str>,
+        excluded_request: Option<&str>,
+    ) -> std::collections::HashSet<String> {
+        self.metadata_entries()
+            .filter(|(id, metadata)| Some(*id) != excluded_session && !metadata.disconnected)
+            .map(|(_, metadata)| &metadata.launch_config)
+            .chain(
+                self.start
+                    .pending_entries()
+                    .filter(|(id, _)| Some(id.as_str()) != excluded_request)
+                    .filter_map(|(_, pending)| pending.launch_config.as_ref()),
+            )
+            .filter_map(|config| match config {
+                SessionLaunchConfig::Serial(config) => Some(config.port_name.trim()),
+                _ => None,
+            })
+            .filter(|port| !port.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
     pub(in crate::features) fn register_session_metadata(
         &mut self,
         session_id: &str,
