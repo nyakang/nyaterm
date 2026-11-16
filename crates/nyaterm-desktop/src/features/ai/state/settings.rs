@@ -677,6 +677,7 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn set_settings_file_size_mb(&mut self, value: u64) {
+        // Historical MB names denote MiB; the persisted setting remains a byte count.
         let mb = 1024 * 1024;
         self.settings.config.max_ai_file_size_bytes = value.clamp(1, 256) * mb;
         self.panel.status = "AI file size limit updated".to_string();

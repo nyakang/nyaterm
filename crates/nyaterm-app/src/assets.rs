@@ -76,7 +76,7 @@ mod tests {
     /// `img()` rasterizes at `SMOOTH_SVG_SCALE_FACTOR` (2.0) times the asset's
     /// *intrinsic* size, not its display size, and `App::fetch_asset` never evicts
     /// the result. A logo left at its authoring size of 256px would hold a 512x512
-    /// BGRA buffer (1 MB) to paint a 16px row icon.
+    /// BGRA buffer (1 MiB) to paint a 16px row icon.
     const MAX_COLOR_INTRINSIC_PX: f32 = 64.0;
 
     fn parse(path: &str, bytes: &[u8]) -> usvg::Tree {

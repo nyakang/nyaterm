@@ -1,8 +1,8 @@
 //! Display formatting and search-text extraction for asset rows.
 //!
 //! Mirrors `src/components/app/start-workspace/assetFormatters.ts`. The
-//! numeric formatting (`format_bytes`) reproduces the JS unit selection and
-//! precision so table cells match the Tauri edition byte-for-byte.
+//! numeric formatting (`format_bytes`) preserves the JS unit selection and
+//! precision, with IEC labels for the 1024-based values.
 
 use crate::models::{
     AssetAccelerator, AssetAcceleratorType, AssetDisk, AssetMetadata, ConnectionType,
@@ -49,7 +49,7 @@ pub fn format_bytes(bytes: Option<u64>, labels: &AssetDisplayLabels) -> String {
         return "0 B".to_string();
     }
 
-    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     let bytes_f = bytes as f64;
     let unit_index = ((bytes_f.ln() / 1024_f64.ln()).floor() as usize).min(UNITS.len() - 1);
     let value = bytes_f / 1024_f64.powi(unit_index as i32);
