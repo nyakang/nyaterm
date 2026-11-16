@@ -112,6 +112,7 @@ fn queue(
         app.update(cx, |app, cx| {
             let (reply, receiver) = oneshot::channel();
             let request = CapabilityRequest {
+                terminal_plan: None,
                 extended_results: true,
                 resolved_session_id: None,
                 request_id: id.into(),

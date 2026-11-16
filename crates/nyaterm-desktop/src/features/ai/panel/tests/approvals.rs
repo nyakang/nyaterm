@@ -48,6 +48,7 @@ fn queue_native_approval(
     let request_id = format!("native:{run_id}:{call_id}");
     let (reply, receiver) = tokio::sync::oneshot::channel();
     let request = CapabilityRequest {
+        terminal_plan: None,
         extended_results: true,
         resolved_session_id: None,
         connection_id: format!("native:{run_id}"),

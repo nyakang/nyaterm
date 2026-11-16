@@ -9,7 +9,7 @@ use crate::features::session::remote_files::FileAccessPurpose;
 use nyaterm_core::models::connection::{ConnectionType, SshProfile};
 use nyaterm_core::models::sessions::SavedConnection;
 use nyaterm_files::remote_file::RemoteFileService;
-use nyaterm_mcp_protocol::{CapabilityAccess, ExecutionTarget, RpcError, definition_for_tool};
+use nyaterm_mcp_protocol::{ExecutionTarget, RpcError};
 use nyaterm_store::StoreDomain;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -172,14 +172,9 @@ impl NyaTermApp {
                 "The saved SSH connection does not exist.",
             )
         })?;
-        validate_saved_target(
-            connection,
-            definition_for_tool(&request.tool).is_some_and(|definition| {
-                definition.access == CapabilityAccess::Write
-                    && request.tool == nyaterm_mcp_protocol::tool::TERMINAL_START
-            }),
-        )
-        .map_err(|error| rpc_failure("permission_denied", &error.to_string()))
+        // Independent-exec gates are checked only when acquiring that backend.
+        validate_saved_target(connection, false)
+            .map_err(|error| rpc_failure("permission_denied", &error.to_string()))
     }
 
     pub(super) fn prepare_background_target(

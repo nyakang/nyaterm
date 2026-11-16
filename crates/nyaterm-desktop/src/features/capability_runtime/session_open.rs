@@ -5,6 +5,7 @@ use crate::features::mcp::server::rpc_failure;
 use crate::features::session::SavedConnectionStartOptions;
 use gpui::Context;
 use nyaterm_core::capabilities::{CapabilityScope, CapabilitySession};
+use nyaterm_core::models::connection::AiExecutionProfile;
 use nyaterm_core::models::sessions::SavedConnection;
 use nyaterm_mcp_protocol::{RpcError, SessionOpenArgs, SessionOpenMode, SessionOpenResult};
 use serde_json::Value;
@@ -12,13 +13,72 @@ use std::collections::{HashMap, VecDeque};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+pub(super) struct SessionOpenContext {
+    request_id: String,
+    owner: String,
+    cancellation: CancellationToken,
+    scope: CapabilityScope,
+    generation: String,
+    require_command_capture: bool,
+}
+
+impl SessionOpenContext {
+    pub(super) fn from_request(
+        request: &CapabilityRequest,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            request_id: request.request_id.clone(),
+            owner: request.connection_id.clone(),
+            cancellation,
+            scope: request.scope.clone(),
+            generation: request.generation.clone(),
+            require_command_capture: false,
+        }
+    }
+
+    pub(super) fn for_terminal_start(
+        request: &CapabilityRequest,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            require_command_capture: true,
+            ..Self::from_request(request, cancellation)
+        }
+    }
+}
+
+pub(super) enum SessionOpenReply {
+    Rpc(oneshot::Sender<Result<Value, RpcError>>),
+    TerminalStart(oneshot::Sender<Result<SessionOpenResult, RpcError>>),
+}
+
+impl SessionOpenReply {
+    fn complete(self, result: Result<SessionOpenResult, RpcError>) {
+        match self {
+            Self::Rpc(reply) => {
+                let _ = reply.send(result.and_then(to_value));
+            }
+            Self::TerminalStart(reply) => {
+                let _ = reply.send(result);
+            }
+        }
+    }
+}
+
+impl From<oneshot::Sender<Result<Value, RpcError>>> for SessionOpenReply {
+    fn from(reply: oneshot::Sender<Result<Value, RpcError>>) -> Self {
+        Self::Rpc(reply)
+    }
+}
+
 struct Waiter {
     request_id: String,
     owner: String,
     cancellation: CancellationToken,
     // A retry recovers the same operation, but cannot inherit its original scope.
     recovery_scope: Option<CapabilityScope>,
-    reply: oneshot::Sender<Result<Value, RpcError>>,
+    reply: SessionOpenReply,
 }
 struct OpenOperation {
     connection: SavedConnection,
@@ -27,6 +87,7 @@ struct OpenOperation {
     scope: CapabilityScope,
     generation: String,
     started: bool,
+    require_command_capture: bool,
     waiters: Vec<Waiter>,
 }
 #[derive(Default)]
@@ -78,7 +139,7 @@ impl CapabilityRuntimeState {
         let Some(op) = self.session_opens.operations.remove(operation_id) else {
             return;
         };
-        let result = to_value(SessionOpenResult {
+        let opened = SessionOpenResult {
             session_id: session_id.clone(),
             connection_id: op.connection.id.clone(),
             name: op.connection.name.clone(),
@@ -86,8 +147,8 @@ impl CapabilityRuntimeState {
                 .unwrap_or("unknown")
                 .into(),
             connected: true,
-        });
-        self.ledger.finish(operation_id, result.clone());
+        };
+        self.ledger.finish(operation_id, to_value(opened.clone()));
         self.session_opens.queue.retain(|id| id != operation_id);
         for waiter in op.waiters {
             if !waiter.cancellation.is_cancelled() {
@@ -96,14 +157,14 @@ impl CapabilityRuntimeState {
                     .as_ref()
                     .is_none_or(|scope| scope.resolve(sessions).require(&session_id).is_ok());
                 let reply = if permitted {
-                    result.clone()
+                    Ok(opened.clone())
                 } else {
                     Err(rpc_failure(
                         "scope_denied",
                         "The previous result is outside the current scope.",
                     ))
                 };
-                let _ = waiter.reply.send(reply);
+                waiter.reply.complete(reply);
             }
         }
     }
@@ -116,15 +177,15 @@ impl CapabilityRuntimeState {
             return;
         };
         // Transport/authentication errors can contain host or credential context.
-        let result = Err(rpc_failure(
+        let error = rpc_failure(
             "execution_failed",
             "The saved connection could not be opened.",
-        ));
-        self.ledger.finish(operation_id, result.clone());
+        );
+        self.ledger.finish(operation_id, Err(error.clone()));
         self.session_opens.queue.retain(|id| id != operation_id);
         for waiter in op.waiters {
             if !waiter.cancellation.is_cancelled() {
-                let _ = waiter.reply.send(result.clone());
+                waiter.reply.complete(Err(error.clone()));
             }
         }
     }
@@ -209,11 +270,32 @@ impl NyaTermApp {
                     owner: request.connection_id,
                     cancellation: request.cancellation,
                     recovery_scope: Some(request.scope),
-                    reply: request.reply,
+                    reply: request.reply.into(),
                 });
             return;
         }
-        if args.mode == SessionOpenMode::ReuseOrCreate {
+        let context = SessionOpenContext::from_request(&request, request.cancellation.clone());
+        self.queue_mcp_session_open(
+            context,
+            connection,
+            args.mode == SessionOpenMode::ReuseOrCreate,
+            operation_id,
+            request.reply.into(),
+            cx,
+        );
+    }
+
+    pub(super) fn queue_mcp_session_open(
+        &mut self,
+        context: SessionOpenContext,
+        connection: SavedConnection,
+        reuse: bool,
+        operation_id: String,
+        reply: SessionOpenReply,
+        cx: &mut Context<Self>,
+    ) {
+        let scope = context.scope.resolve(&self.mcp_live_sessions());
+        if reuse {
             let mut candidates = self
                 .session
                 .ordered_sessions()
@@ -226,6 +308,10 @@ impl NyaTermApp {
                             m.source_connection_id.as_deref() == Some(&connection.id)
                                 && m.ai_execution_profile
                                     != nyaterm_core::AiExecutionProfile::Disabled
+                                && (!context.require_command_capture
+                                    || supports_command_capture(
+                                        self.ai_execution_profile_for_session(&s.id),
+                                    ))
                         })
                 })
                 .map(|s| s.id)
@@ -238,23 +324,23 @@ impl NyaTermApp {
                 )
             });
             if let Some(id) = candidates.into_iter().next() {
-                let result = to_value(SessionOpenResult {
+                let opened = SessionOpenResult {
                     session_id: id,
                     connection_id: connection.id,
                     name: connection.name,
                     r#type: connection_type_name(&connection.config).unwrap().into(),
                     connected: true,
-                });
+                };
                 self.mcp
                     .capabilities
                     .ledger
-                    .finish(&operation_id, result.clone());
-                let _ = request.reply.send(result);
+                    .finish(&operation_id, to_value(opened.clone()));
+                reply.complete(Ok(opened));
                 return;
             }
         }
         let mut id = operation_id.clone();
-        if args.mode == SessionOpenMode::ReuseOrCreate
+        if reuse
             && let Some((existing, _)) =
                 self.mcp
                     .capabilities
@@ -262,10 +348,11 @@ impl NyaTermApp {
                     .operations
                     .iter()
                     .find(|(_, op)| {
-                        op.owner == request.connection_id
+                        op.owner == context.owner
                             && op.reuse
-                            && op.scope == request.scope
+                            && op.scope == context.scope
                             && op.connection.id == connection.id
+                            && op.require_command_capture == context.require_command_capture
                     })
         {
             id = existing.clone();
@@ -273,20 +360,17 @@ impl NyaTermApp {
         }
         let state = &mut self.mcp.capabilities.session_opens;
         if !state.operations.contains_key(&id) && state.operations.len() >= 64 {
-            let result = Err(rpc_failure(
-                "resource_limit",
-                "Too many pending session starts.",
-            ));
-            self.mcp.capabilities.ledger.finish(&id, result.clone());
-            let _ = request.reply.send(result);
+            let error = rpc_failure("resource_limit", "Too many pending session starts.");
+            self.mcp.capabilities.ledger.finish(&id, Err(error.clone()));
+            reply.complete(Err(error));
             return;
         }
         let waiter = Waiter {
-            request_id: request.request_id,
-            owner: request.connection_id.clone(),
-            cancellation: request.cancellation,
+            request_id: context.request_id,
+            owner: context.owner.clone(),
+            cancellation: context.cancellation,
             recovery_scope: None,
-            reply: request.reply,
+            reply,
         };
         if let Some(op) = state.operations.get_mut(&id) {
             op.waiters.push(waiter);
@@ -296,11 +380,12 @@ impl NyaTermApp {
                 id,
                 OpenOperation {
                     connection,
-                    owner: request.connection_id,
-                    reuse: args.mode == SessionOpenMode::ReuseOrCreate,
-                    scope: request.scope,
-                    generation: request.generation,
+                    owner: context.owner,
+                    reuse,
+                    scope: context.scope,
+                    generation: context.generation,
                     started: false,
+                    require_command_capture: context.require_command_capture,
                     waiters: vec![waiter],
                 },
             );
@@ -322,18 +407,28 @@ impl NyaTermApp {
             let Some(op) = self.mcp.capabilities.session_opens.operations.get(&id) else {
                 continue;
             };
+            if op.waiters.is_empty() {
+                let pending_request = self
+                    .session
+                    .start_pending_entries()
+                    .find(|(_, pending)| {
+                        pending.mcp_open_operation_id.as_deref() == Some(id.as_str())
+                    })
+                    .map(|(request_id, _)| request_id.clone());
+                self.mcp
+                    .capabilities
+                    .complete_session_open_failure(&id, "cancelled before start");
+                if let Some(request_id) = pending_request {
+                    self.close_pending_session_start(request_id, cx);
+                }
+                continue;
+            }
             if op.started {
                 if !self.session.start_mcp_operation_is_pending(&id) {
                     self.mcp
                         .capabilities
                         .complete_session_open_failure(&id, "start ended without delivery");
                 }
-                continue;
-            }
-            if op.waiters.is_empty() {
-                self.mcp
-                    .capabilities
-                    .complete_session_open_failure(&id, "cancelled before start");
                 continue;
             }
             if !self.mcp.generation_matches(&op.generation) {
@@ -356,6 +451,10 @@ impl NyaTermApp {
                                 m.source_connection_id.as_deref() == Some(&op.connection.id)
                                     && m.ai_execution_profile
                                         != nyaterm_core::AiExecutionProfile::Disabled
+                                    && (!op.require_command_capture
+                                        || supports_command_capture(
+                                            self.ai_execution_profile_for_session(&s.id),
+                                        ))
                             })
                     })
                     .map(|s| s.id)
@@ -399,6 +498,13 @@ impl NyaTermApp {
     }
 }
 
+fn supports_command_capture(profile: AiExecutionProfile) -> bool {
+    matches!(
+        profile,
+        AiExecutionProfile::Posix | AiExecutionProfile::Powershell | AiExecutionProfile::Cmd
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::idempotency::Lookup;
@@ -440,7 +546,7 @@ mod tests {
                 owner: "owner".into(),
                 cancellation: CancellationToken::new(),
                 recovery_scope,
-                reply,
+                reply: reply.into(),
             }
         })
         .collect();
@@ -456,6 +562,7 @@ mod tests {
                 scope: CapabilityScope::AllSessions,
                 generation: "generation".into(),
                 started: true,
+                require_command_capture: false,
                 waiters,
             },
         );
@@ -518,12 +625,13 @@ mod tests {
                 scope: CapabilityScope::AllSessions,
                 generation: "generation".into(),
                 started: true,
+                require_command_capture: false,
                 waiters: vec![Waiter {
                     request_id: "rpc".into(),
                     owner: "owner".into(),
                     cancellation: cancellation.clone(),
                     recovery_scope: None,
-                    reply,
+                    reply: reply.into(),
                 }],
             },
         );
@@ -592,6 +700,7 @@ mod tests {
                 let (reply, mut receiver) = oneshot::channel();
                 app.dispatch_mcp_session_open(
                     CapabilityRequest {
+                        terminal_plan: None,
                         extended_results: true,
                         resolved_session_id: None,
                         connection_id: owner.into(),
