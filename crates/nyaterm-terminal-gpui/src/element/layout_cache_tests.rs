@@ -1682,6 +1682,180 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
 }
 
 #[test]
+fn folded_paint_reuses_ready_highlights_from_before_the_fold() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let highlighter = compile_terminal_keyword_highlighter(
+        &nyaterm_core::get_builtin_keyword_rules(true),
+        Default::default(),
+    );
+    let mut screen = TerminalScreen::new(100, 12);
+    screen.advance(b"https://docs.ubuntu.com\r\nLast login: Mon Nov 16 10:01:53 2026 from 172.16.0.46\r\nCodeSetup-stable-3.29.9.exe\r\n\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07hidden output\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+    let original = screen.snapshot();
+    let highlights = Arc::new(precompute_terminal_keyword_highlights(
+        &original,
+        &highlighter,
+        palette,
+        None,
+    ));
+    screen.set_collapsed_commands([original.command_blocks[0].id].into());
+    let folded = Arc::new(screen.snapshot());
+    let layout = crate::unwrapped::TerminalUnwrappedLayout::new(&folded, 0, 12, 0.0)
+        .expect("folded viewport uses segment painting");
+    assert!(!layout.unwrapped);
+    let visible = crate::keywords::terminal_keyword_highlight_expanded_ranges(
+        &folded,
+        std::slice::from_ref(&(0..folded.row_count())),
+    );
+    // The scheduler correctly considers the existing row results ready, so
+    // painting must accept them without requiring a new worker/frame identity.
+    assert!(highlights.matches_snapshot_ranges(&folded, palette, &visible));
+    let element = NyaTerminalElement::new(
+        folded,
+        Arc::new(Vec::new()),
+        Vec::new(),
+        false,
+        "block",
+        8.0,
+        16.0,
+        palette,
+        "monospace".into(),
+        14.0,
+        400.0,
+        700.0,
+    )
+    .with_unwrapped_layout(Some(Arc::new(layout)))
+    .with_keyword_highlights(highlights.clone());
+    for row in 0..3 {
+        let expected = highlights.lookup(row, &original).unwrap();
+        assert!(expected.ranges().is_some());
+        let painted = element
+            .keyword_highlight_lookup(row, None)
+            .expect("ready pre-fold highlights must remain paintable");
+        assert_eq!(painted.ranges(), expected.ranges());
+    }
+}
+
+#[test]
+fn folded_paint_batches_wrapped_groups_and_skips_hidden_output() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let highlighter = compile_terminal_keyword_highlighter(
+        &nyaterm_core::get_builtin_keyword_rules(true),
+        Default::default(),
+    );
+    let mut baseline = None;
+    for hidden in [1_000, 100_000] {
+        let mut screen = TerminalScreen::new(80, 64);
+        screen.set_scrollback_limit(hidden + 200);
+        screen.advance("ERROR ".repeat(500).as_bytes());
+        screen.advance(b"\r\n\x1b]133;A\x07$ \x1b]133;B\x07run\r\n\x1b]133;C\x07");
+        screen.advance("hidden output\r\n".repeat(hidden).as_bytes());
+        screen.advance(b"\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        let id = screen.snapshot().command_blocks[0].id;
+        screen.set_collapsed_commands([id].into());
+        let snapshot = Arc::new(screen.viewport_snapshot_with_window(0, hidden + 100, 0));
+        let highlights = Arc::new(precompute_terminal_keyword_highlights(
+            &snapshot,
+            &highlighter,
+            palette,
+            None,
+        ));
+        let layout = Arc::new(
+            crate::unwrapped::TerminalUnwrappedLayout::new(&snapshot, 0, 64, 0.0).unwrap(),
+        );
+        assert!(layout.segments.len() <= 64);
+        let mut element = NyaTerminalElement::new(
+            snapshot.clone(),
+            Arc::new(Vec::new()),
+            Vec::new(),
+            false,
+            "block",
+            8.0,
+            16.0,
+            palette,
+            "monospace".into(),
+            14.0,
+            400.0,
+            700.0,
+        )
+        .with_unwrapped_layout(Some(layout.clone()))
+        .with_keyword_highlights(highlights.clone());
+        let (same_frame, scans) = crate::keywords::count_keyword_group_scans(|| {
+            let keys = element.projected_keyword_row_reuse_keys().unwrap();
+            for (segment, key) in layout.segments.iter().zip(&keys) {
+                assert!(
+                    element
+                        .keyword_highlight_lookup(segment.source_row, *key)
+                        .is_some()
+                );
+            }
+            keys
+        });
+        assert_eq!(scans, 0, "same-frame painting must not scan wrapped groups");
+
+        // A subsequent snapshot may own another buffer while all visible row
+        // revisions remain reusable, just as when folding an existing frame.
+        let mut next = (*snapshot).clone();
+        next.row_data = snapshot.rows().to_vec().into();
+        element.snapshot = Arc::new(next);
+        let (scalar, scalar_scans) = crate::keywords::count_keyword_group_scans(|| {
+            layout
+                .segments
+                .iter()
+                .map(|segment| {
+                    crate::keywords::terminal_keyword_row_reuse_key(
+                        &element.snapshot,
+                        segment.source_row,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        let ((batched, painted), batch_scans) = crate::keywords::count_keyword_group_scans(|| {
+            let keys = element.projected_keyword_row_reuse_keys().unwrap();
+            let painted = layout
+                .segments
+                .iter()
+                .zip(&keys)
+                .map(|(segment, key)| {
+                    element
+                        .keyword_highlight_lookup(segment.source_row, *key)
+                        .expect("batched keys must preserve ready highlights")
+                        .ranges()
+                        .map(<[_]>::to_vec)
+                })
+                .collect::<Vec<_>>();
+            (keys, painted)
+        });
+        assert_eq!(batched, scalar);
+        assert_eq!(batched, same_frame);
+        assert!(
+            batch_scans * 2 < scalar_scans,
+            "batch={batch_scans}, scalar={scalar_scans}"
+        );
+        eprintln!(
+            "folded paint hidden={hidden} visible={} group_scans: scalar={scalar_scans} batched={batch_scans} same_frame={scans}",
+            batched.len()
+        );
+        for (segment, painted) in layout.segments.iter().zip(painted) {
+            assert_eq!(
+                painted.as_deref(),
+                highlights
+                    .lookup(segment.source_row, &snapshot)
+                    .unwrap()
+                    .ranges()
+            );
+        }
+        let work = (batch_scans, batched.len());
+        if let Some(baseline) = baseline {
+            assert_eq!(
+                work, baseline,
+                "hidden output must not increase paint work or key storage"
+            );
+        }
+        baseline = Some(work);
+    }
+}
+
+#[test]
 fn no_wrap_does_not_reuse_output_colors_after_its_wrapped_context_changes() {
     let palette = nyaterm_ui::theme_palette("github-dark");
     let rules = vec![ResolvedKeywordHighlightRule {
