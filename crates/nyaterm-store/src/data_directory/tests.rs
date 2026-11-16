@@ -676,7 +676,7 @@ fn returning_to_default_archives_history_and_recovers_at_every_boundary() {
         }
         let restored = open_startup(&local, &local, AppFlavor::Stable).unwrap();
         assert_eq!(
-            restored.selection.data_dir,
+            fs::canonicalize(&restored.selection.data_dir).unwrap(),
             fs::canonicalize(&local).unwrap()
         );
         assert_eq!(
@@ -751,7 +751,7 @@ fn restoring_default_does_not_mix_historical_or_unexpected_managed_trees_into_cu
             );
         } else {
             assert_eq!(
-                result.unwrap().selection.data_dir,
+                fs::canonicalize(result.unwrap().selection.data_dir).unwrap(),
                 fs::canonicalize(&local).unwrap()
             );
             assert!(!local.join("plugins").exists());
