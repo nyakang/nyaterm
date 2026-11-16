@@ -12,7 +12,7 @@ use crate::features::session::auth_runtime::NativeOtpProvider;
 use crate::features::session::notices::SessionNoticeState;
 use crate::models::{SessionEventBridge, SessionRuntimeMetadata, StartupCommandAction};
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
-use gpui::{FocusHandle, ScrollHandle, UniformListScrollHandle};
+use gpui::{FocusHandle, ListAlignment, ListState, ScrollHandle, px};
 use nyaterm_transport::SessionManager;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -48,8 +48,12 @@ pub(in crate::features) struct SessionFeatureState {
     command_history: HashMap<String, Vec<String>>,
     active_search_draft: String,
     /// Shared by the active-sessions list and its scrollbar so both read one
-    /// scroll position across re-renders.
-    active_list_scroll: UniformListScrollHandle,
+    /// scroll position across re-renders. Rows are variable height: a narrow
+    /// panel wraps the session id instead of clipping it against a fixed slot.
+    active_list_scroll: ListState,
+    /// Ids last applied to `active_list_scroll`. Filtering or reconnecting
+    /// resets measurements; an unchanged id list keeps the scroll offset.
+    active_list_ids: Vec<String>,
     /// Per-session reconnect/disconnect busy state ("reconnect" | "disconnect").
     busy_actions: HashMap<String, String>,
     active: ActiveSessionState,
@@ -158,7 +162,8 @@ impl SessionFeatureState {
             },
             command_history: HashMap::new(),
             active_search_draft: String::new(),
-            active_list_scroll: UniformListScrollHandle::new(),
+            active_list_scroll: ListState::new(0, ListAlignment::Top, px(48.)).measure_all(),
+            active_list_ids: Vec::new(),
             busy_actions: HashMap::new(),
             notices: SessionNoticeState::default(),
             active: ActiveSessionState::default(),

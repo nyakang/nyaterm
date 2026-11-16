@@ -8,7 +8,7 @@ use crate::features::session::remote_files::RemoteFilesSession;
 use crate::features::session::trzsz_runtime::TrzszSessionState;
 use crate::features::session::zmodem_runtime::ZmodemSessionState;
 use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
-use gpui::UniformListScrollHandle;
+use gpui::ListState;
 use nyaterm_core::AiExecutionProfile;
 use nyaterm_files::file_browser::FileBrowserBackendKind;
 use nyaterm_transport::{SessionEvent, SessionInfo, SessionKind, SessionManager, SshSessionConfig};
@@ -396,8 +396,15 @@ impl SessionFeatureState {
             history.retain(|entry| entry != command);
         }
     }
-    pub(in crate::features) fn active_list_scroll(&self) -> &UniformListScrollHandle {
-        &self.active_list_scroll
+    pub(in crate::features) fn sync_active_sessions_list(
+        &mut self,
+        session_ids: &[String],
+    ) -> ListState {
+        if self.active_list_ids.as_slice() != session_ids {
+            self.active_list_scroll.reset(session_ids.len());
+            self.active_list_ids = session_ids.to_vec();
+        }
+        self.active_list_scroll.clone()
     }
     pub(in crate::features) fn active_search_draft(&self) -> &str {
         &self.active_search_draft
