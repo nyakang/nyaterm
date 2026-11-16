@@ -65,6 +65,7 @@ struct Connection {
 #[derive(Clone)]
 pub struct BridgeClient {
     endpoint: BridgeEndpoint,
+    discovery: Option<PathBuf>,
     connection: Arc<Mutex<Option<Connection>>>,
     identity: Arc<Mutex<Option<ClientIdentifyParams>>>,
     resume_token: Arc<Mutex<Option<nyaterm_core::SecretString>>>,
@@ -77,6 +78,7 @@ impl BridgeClient {
     pub fn new(endpoint: BridgeEndpoint) -> Self {
         Self {
             endpoint,
+            discovery: None,
             connection: Arc::new(Mutex::new(None)),
             identity: Arc::new(Mutex::new(None)),
             resume_token: Arc::new(Mutex::new(None)),
@@ -84,6 +86,23 @@ impl BridgeClient {
             lifecycle: Arc::new(AtomicBool::new(false)),
             connection_targets: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Re-resolve the endpoint from the discovery document on every connection
+    /// attempt, so a restarted NyaTerm publishing a new bridge credential heals
+    /// the next connection instead of staying wedged on the dead endpoint until
+    /// the forwarder itself is restarted. A missing or invalid document falls
+    /// back to the last resolved endpoint.
+    pub fn with_discovery_path(mut self, path: PathBuf) -> Self {
+        self.discovery = Some(path);
+        self
+    }
+
+    fn endpoint_for_connect(&self) -> BridgeEndpoint {
+        self.discovery
+            .as_ref()
+            .and_then(|path| read_discovery_endpoint(path).ok())
+            .unwrap_or_else(|| self.endpoint.clone())
     }
 
     pub fn supports_connection_targets(&self) -> bool {
@@ -147,7 +166,7 @@ impl BridgeClient {
         let connection = guard.as_mut().unwrap();
         let result = tokio::select! {
             _ = cancellation.cancelled() => {
-                let endpoint = self.endpoint.clone();
+                let endpoint = self.endpoint_for_connect();
                 let resume = self.resume_token.lock().await.clone();
                 tokio::spawn(async move { let _ = cancel_request(&endpoint, &request_id, resume.as_ref()).await; });
                 self.negotiated.store(false, Ordering::Release);
@@ -193,11 +212,25 @@ impl BridgeClient {
         if guard.is_some() {
             return Ok(());
         }
-        let mut connection = connect(&self.endpoint).await.map_err(io_error)?;
+        let mut connection = connect(&self.endpoint_for_connect())
+            .await
+            .map_err(io_error)?;
         if connection.client_resume {
             let resume = self.resume_token.lock().await.clone();
-            let token = attach_owner(&mut connection, resume.as_ref()).await?;
-            *self.resume_token.lock().await = Some(token);
+            let attached = match attach_owner(&mut connection, resume.as_ref()).await {
+                Ok(token) => token,
+                Err(error) => {
+                    if resume.is_some() {
+                        // A stale resume token (for example the host restarted
+                        // and lost the owner) must not wedge reconnection:
+                        // fall back to a fresh attach.
+                        attach_owner(&mut connection, None).await?
+                    } else {
+                        return Err(error);
+                    }
+                }
+            };
+            *self.resume_token.lock().await = Some(attached);
         }
 
         if replay_identity && let Some(identity) = self.identity.lock().await.clone() {
@@ -424,8 +457,19 @@ async fn read_rpc_line<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-pub fn endpoint_from_environment_or_discovery() -> Result<BridgeEndpoint, Box<dyn std::error::Error>>
-{
+/// Where the bridge endpoint came from. A discovery-sourced endpoint is
+/// re-resolved on every connection attempt so a restarted host publishing a
+/// new bridge credential heals the next connection; an explicit environment
+/// endpoint stays fixed for the process lifetime.
+pub enum EndpointSource {
+    Fixed(BridgeEndpoint),
+    Discovery {
+        endpoint: BridgeEndpoint,
+        path: PathBuf,
+    },
+}
+
+pub fn resolve_endpoint_source() -> Result<EndpointSource, Box<dyn std::error::Error>> {
     let ephemeral = std::env::var("NYATERM_MCP_EPHEMERAL").as_deref() == Ok("1");
     let host = std::env::var("NYATERM_MCP_HOST").ok();
     let port = std::env::var("NYATERM_MCP_PORT")
@@ -438,18 +482,36 @@ pub fn endpoint_from_environment_or_discovery() -> Result<BridgeEndpoint, Box<dy
         if host != "127.0.0.1" {
             return Err("NyaTerm MCP bridge host must be 127.0.0.1".into());
         }
-        return Ok(BridgeEndpoint {
+        return Ok(EndpointSource::Fixed(BridgeEndpoint {
             host,
             port,
             token,
             generation,
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
-        });
+        }));
     }
     if ephemeral {
         return Err("NyaTerm ephemeral MCP credential is incomplete or unavailable".into());
     }
-    let document: DiscoveryDocument = serde_json::from_slice(&std::fs::read(discovery_path()?)?)?;
+    let path = discovery_path()?;
+    let endpoint = read_discovery_endpoint(&path)?;
+    Ok(EndpointSource::Discovery { endpoint, path })
+}
+
+pub fn endpoint_from_environment_or_discovery() -> Result<BridgeEndpoint, Box<dyn std::error::Error>>
+{
+    Ok(match resolve_endpoint_source()? {
+        EndpointSource::Fixed(endpoint) => endpoint,
+        EndpointSource::Discovery { endpoint, .. } => endpoint,
+    })
+}
+
+/// Read and validate a discovery document. Startup and reconnects share this
+/// path so a rotated document is validated identically.
+fn read_discovery_endpoint(
+    path: &std::path::Path,
+) -> Result<BridgeEndpoint, Box<dyn std::error::Error>> {
+    let document: DiscoveryDocument = serde_json::from_slice(&std::fs::read(path)?)?;
     if document.version != PROTOCOL_VERSION || document.host != "127.0.0.1" {
         return Err("Unsupported or unsafe NyaTerm MCP discovery document".into());
     }
@@ -706,6 +768,154 @@ mod tests {
         assert_eq!(recovered["value"], "recovered");
         assert!(client.negotiated.load(Ordering::Acquire));
         server.await.unwrap();
+        assert_eq!(auth_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn reconnects_through_rotated_discovery_document() {
+        use nyaterm_mcp_protocol::{DiscoveryDocument, PROTOCOL_VERSION};
+
+        // A restarted NyaTerm republishes the discovery document with a new
+        // port and generation. A discovery-sourced client must pick up the
+        // rotated document on the next connection attempt instead of staying
+        // wedged on the dead endpoint until the forwarder is restarted.
+        let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-mcp-rotate");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let path = root.path().join("discovery.json");
+        let write_document = |port: u16, generation: &str| {
+            let document = DiscoveryDocument {
+                version: PROTOCOL_VERSION,
+                pid: 0,
+                host: "127.0.0.1".into(),
+                port,
+                token: "test-token".into(),
+                generation: generation.into(),
+                permission_mode: "full_access".into(),
+            };
+            std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        };
+
+        let first_host = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second_host = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_port = first_host.local_addr().unwrap().port();
+        let second_port = second_host.local_addr().unwrap().port();
+        write_document(first_port, "generation-1");
+
+        let auth_count = Arc::new(AtomicUsize::new(0));
+        let counter = auth_count.clone();
+        let hosts = tokio::spawn(async move {
+            async fn respond_error(
+                writer: &mut tokio::net::tcp::OwnedWriteHalf,
+                id: u64,
+                code: &str,
+                message: &str,
+            ) {
+                let mut bytes = serde_json::to_vec(&RpcResponse {
+                    id,
+                    result: None,
+                    error: Some(nyaterm_mcp_protocol::RpcError {
+                        code: code.into(),
+                        message: message.into(),
+                    }),
+                })
+                .unwrap();
+                bytes.push(b'\n');
+                writer.write_all(&bytes).await.unwrap();
+            }
+
+            async fn serve(
+                stream: TcpStream,
+                counter: &AtomicUsize,
+                owner_token: &str,
+                value: Value,
+            ) {
+                let (reader, mut writer) = stream.into_split();
+                let mut lines = BufReader::new(reader).lines();
+                let auth = request(&mut lines).await;
+                assert_eq!(auth.method, "auth");
+                assert_eq!(auth.params["token"], "test-token");
+                counter.fetch_add(1, Ordering::SeqCst);
+                respond(
+                    &mut writer,
+                    auth.id,
+                    json!({ "authenticated": true, "features": [
+                        "client_resume", "mcp_lifecycle", "connection_targets"
+                    ] }),
+                )
+                .await;
+
+                let attach = request(&mut lines).await;
+                assert_eq!(attach.method, "client.attach");
+                let presented = attach.params["resumeToken"].as_str();
+                if presented.is_none() || presented == Some(owner_token) {
+                    respond(
+                        &mut writer,
+                        attach.id,
+                        json!({ "resumeToken": owner_token }),
+                    )
+                    .await;
+                } else {
+                    // A restarted host no longer knows the previous owner:
+                    // reject the stale token and expect a fresh attach.
+                    respond_error(&mut writer, attach.id, "resume_failed", "unknown owner").await;
+                    let fresh = request(&mut lines).await;
+                    assert_eq!(fresh.method, "client.attach");
+                    assert!(fresh.params["resumeToken"].is_null());
+                    respond(&mut writer, fresh.id, json!({ "resumeToken": owner_token })).await;
+                }
+
+                let identify = request(&mut lines).await;
+                assert_eq!(identify.method, "client.identify");
+                respond(&mut writer, identify.id, json!({ "identified": true })).await;
+
+                let call = request(&mut lines).await;
+                assert_eq!(call.method, "capability.execute");
+                respond(&mut writer, call.id, value).await;
+            }
+
+            let first_token = "a".repeat(64);
+            let second_token = "b".repeat(64);
+            let (stream, _) = first_host.accept().await.unwrap();
+            serve(stream, &counter, &first_token, json!({ "value": "first" })).await;
+            drop(first_host);
+
+            let (stream, _) = second_host.accept().await.unwrap();
+            serve(
+                stream,
+                &counter,
+                &second_token,
+                json!({ "value": "rotated" }),
+            )
+            .await;
+        });
+
+        // The constructor endpoint (port 1) is deliberately dead, proving
+        // connections are resolved from the discovery document.
+        let client =
+            BridgeClient::new(BridgeEndpoint::for_test(1)).with_discovery_path(path.clone());
+        client
+            .identify("rotation-test".into(), Some("1.0".into()))
+            .await;
+        let first = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(first["value"], "first");
+
+        // Rotate the document to the second host; the stale connection's
+        // death surfaces once, and the next call heals through the new host.
+        write_document(second_port, "generation-2");
+        let disconnected = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(disconnected.code, "bridge_disconnected");
+        let rotated = client
+            .call("get_environment", json!({}), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(rotated["value"], "rotated");
+        hosts.await.unwrap();
         assert_eq!(auth_count.load(Ordering::SeqCst), 2);
     }
 
