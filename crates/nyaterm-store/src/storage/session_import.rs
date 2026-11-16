@@ -60,6 +60,7 @@ impl ConnectionStore {
                 }
                 saved.name = connection.name;
                 saved.group_id = group_id;
+                saved.tree_order = None;
                 saved.description = connection.description;
                 saved.sort_order = connection.sort_order;
                 saved.icon = connection.icon;
@@ -75,6 +76,7 @@ impl ConnectionStore {
                 config: connection.config,
                 group_id,
                 description: connection.description,
+                tree_order: None,
                 sort_order: connection.sort_order,
                 icon: connection.icon,
                 icon_auto_detect: None,
@@ -285,6 +287,7 @@ fn ensure_group_path(
             id: id.clone(),
             name: segments[depth - 1].clone(),
             parent_id,
+            tree_order: None,
             sort_order: *next_sort,
             created_at_ms: None,
             updated_at_ms: None,
@@ -771,6 +774,7 @@ mod tests {
             config: config.clone(),
             group_id: None,
             description: None,
+            tree_order: None,
             sort_order: 0,
             icon: None,
             icon_auto_detect: None,

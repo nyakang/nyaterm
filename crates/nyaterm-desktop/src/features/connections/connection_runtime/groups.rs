@@ -115,6 +115,7 @@ impl NyaTermApp {
                 id: uuid(),
                 name,
                 parent_id: editor.parent_id.clone(),
+                tree_order: None,
                 sort_order: self.connection_state.groups().len() as i32,
                 created_at_ms: None,
                 updated_at_ms: None,

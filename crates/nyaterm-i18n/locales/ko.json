@@ -2491,6 +2491,7 @@
     "usersMeaning": "시스템에 기록된 로그인 세션이며 모든 SSH 연결을 뜻하지 않습니다."
   },
   "savedConnections": {
+    "dropRoot": "최상위로 이동",
     "sessionImportTitle": "세션 가져오기",
     "restoreBackupTitle": "NyaTerm 백업 복원",
     "restoreBackupDesc": "현재 설정과 저장된 연결을 교체합니다.",

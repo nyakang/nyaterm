@@ -97,6 +97,7 @@ impl ConnectionCatalogState {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn connections_reordered_into_group(
         &self,
         source_ids: &[String],
@@ -124,6 +125,7 @@ impl ConnectionCatalogState {
         staying
     }
 
+    #[cfg(test)]
     pub(super) fn group_is_descendant(&self, candidate_id: &str, ancestor_id: &str) -> bool {
         let mut current = Some(candidate_id);
         for _ in 0..=64 {
@@ -165,6 +167,7 @@ mod tests {
             },
             group_id: group_id.map(ToOwned::to_owned),
             description: None,
+            tree_order: None,
             sort_order,
             icon: None,
             icon_auto_detect: None,
@@ -270,6 +273,7 @@ mod tests {
                     id: "parent".to_string(),
                     name: "Parent".to_string(),
                     parent_id: None,
+                    tree_order: None,
                     sort_order: 0,
                     created_at_ms: None,
                     updated_at_ms: None,
@@ -278,6 +282,7 @@ mod tests {
                     id: "child".to_string(),
                     name: "Child".to_string(),
                     parent_id: Some("parent".to_string()),
+                    tree_order: None,
                     sort_order: 0,
                     created_at_ms: None,
                     updated_at_ms: None,
@@ -286,6 +291,7 @@ mod tests {
                     id: "cycle-a".to_string(),
                     name: "Cycle A".to_string(),
                     parent_id: Some("cycle-b".to_string()),
+                    tree_order: None,
                     sort_order: 0,
                     created_at_ms: None,
                     updated_at_ms: None,
@@ -294,6 +300,7 @@ mod tests {
                     id: "cycle-b".to_string(),
                     name: "Cycle B".to_string(),
                     parent_id: Some("cycle-a".to_string()),
+                    tree_order: None,
                     sort_order: 0,
                     created_at_ms: None,
                     updated_at_ms: None,

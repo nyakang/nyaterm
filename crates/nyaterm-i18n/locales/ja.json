@@ -2491,6 +2491,7 @@
     "usersMeaning": "システムに記録されたログインセッションです。すべての SSH 接続ではありません。"
   },
   "savedConnections": {
+    "dropRoot": "ルートへ移動",
     "sessionImportTitle": "セッションをインポート",
     "restoreBackupTitle": "NyaTerm バックアップを復元",
     "restoreBackupDesc": "現在の設定と保存済み接続を置き換えます。",

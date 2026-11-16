@@ -133,6 +133,7 @@ pub(in crate::features) struct ConnectionListSnapshot {
     pub(in crate::features::pages::connections) search_expanded: bool,
     pub(in crate::features::pages::connections) sort_mode: ConnectionSortMode,
     pub(in crate::features::pages::connections) store_is_empty: bool,
+    pub(super) tree_nodes: Vec<nyaterm_core::connection_tree::Node>,
     /// Outcome of the last import, shown as an inline banner above the list.
     pub(in crate::features::pages::connections) import_report: Option<ConnectionImportReportView>,
 }
@@ -196,6 +197,7 @@ pub(in crate::features) struct ConnectionPanel {
     app: WeakEntity<NyaTermApp>,
     snapshot: Option<ConnectionListSnapshot>,
     focus: FocusHandle,
+    pub(super) tree_drag: super::drag::TreeDragState,
     #[cfg(test)]
     paint_count: usize,
     #[cfg(test)]
@@ -206,6 +208,7 @@ impl ConnectionPanel {
     pub(in crate::features) fn new(app: WeakEntity<NyaTermApp>, focus: FocusHandle) -> Self {
         Self {
             app,
+            tree_drag: Default::default(),
             snapshot: None,
             focus,
             #[cfg(test)]
@@ -396,6 +399,7 @@ mod tests {
             },
             group_id: group_id.map(ToOwned::to_owned),
             description: None,
+            tree_order: None,
             sort_order: 0,
             icon: None,
             icon_auto_detect: None,
@@ -420,6 +424,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             parent_id: None,
+            tree_order: None,
             sort_order: 0,
             created_at_ms: None,
             updated_at_ms: None,
@@ -488,6 +493,274 @@ mod tests {
 
     fn paints(app: &Entity<NyaTermApp>, cx: &mut gpui::App) -> usize {
         app.read(cx).connection_panel.read(cx).paint_count()
+    }
+
+    #[test]
+    fn tree_drag_preview_and_persisted_mixed_order_agree() {
+        use gpui::MouseButton;
+        use std::time::{Duration, Instant};
+        let directory = TestConfigDir::new("nyaterm-tree-drag");
+        let store = nyaterm_store::ConnectionStore::open(directory.path().join("config")).unwrap();
+        store.save_group(&group("g", "Group")).unwrap();
+        store.save_connection(&connection("a", "A", None)).unwrap();
+        store.save_connection(&connection("b", "B", None)).unwrap();
+        let saved = store.load_sessions().unwrap();
+        drop(store);
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, cx) = hosted(&mut cx, directory.path(), saved.connections, saved.groups);
+        let source = cx.debug_bounds("connection-row-b").unwrap().center();
+        cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(
+            source + point(px(8.), px(0.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(&app, cx);
+        let bounds = cx.debug_bounds("connections-list-scroll").unwrap();
+        let target = point(source.x, bounds.top() + px(6.));
+        cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+        draw(&app, cx);
+        cx.read(|cx| {
+            assert!(cx.has_active_drag());
+            let panel = app.read(cx).connection_panel.read(cx);
+            let p = panel.tree_projection().expect("one viewport-owned target");
+            assert_eq!(p.destination.parent, None);
+            assert_eq!(p.destination.before.as_ref().unwrap().id, "g");
+        });
+        cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if cx.read(|cx| !app.read(cx).connection_panel.read(cx).tree_drag.busy) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "tree move timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        cx.read(|cx| {
+            let app = app.read(cx);
+            assert_eq!(
+                app.connection_state
+                    .connections()
+                    .iter()
+                    .find(|c| c.id == "b")
+                    .unwrap()
+                    .tree_order,
+                Some(0)
+            );
+            let rows = &app.connection_panel.read(cx).snapshot().unwrap().rows;
+            assert_eq!(rows[0].tree_key().unwrap().id, "b");
+            assert_eq!(rows[1].tree_key().unwrap().id, "g");
+        });
+    }
+
+    #[test]
+    fn tree_drag_leaving_viewport_clears_projection_without_moving() {
+        use gpui::MouseButton;
+        let directory = TestConfigDir::new("nyaterm-tree-drag-leave");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, cx) = hosted(
+            &mut cx,
+            directory.path(),
+            vec![connection("a", "A", None), connection("b", "B", None)],
+            Vec::new(),
+        );
+        let source = cx.debug_bounds("connection-row-a").unwrap().center();
+        cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(
+            source + point(px(8.), px(0.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(&app, cx);
+        let outside = point(px(500.), source.y);
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            assert!(
+                app.read(cx)
+                    .connection_panel
+                    .read(cx)
+                    .tree_projection()
+                    .is_none()
+            )
+        });
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            assert!(
+                app.read(cx)
+                    .connection_state
+                    .connections()
+                    .iter()
+                    .all(|c| c.tree_order.is_none())
+            )
+        });
+    }
+
+    #[test]
+    fn tree_drag_name_sort_and_search_only_accept_group_membership() {
+        use gpui::MouseButton;
+        for filtering in [false, true] {
+            let directory = TestConfigDir::new("nyaterm-tree-drag-filter");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let (app, cx) = hosted(
+                &mut cx,
+                directory.path(),
+                vec![
+                    connection("a", "Match A", None),
+                    connection("b", "Match B", None),
+                ],
+                vec![group("g", "Match Group")],
+            );
+            app.update(cx, |app, cx| {
+                if filtering {
+                    app.connection_state.set_list_search_text("Match".into());
+                } else {
+                    app.connection_state.cycle_list_sort_mode();
+                }
+                app.flush_connection_panel_snapshot(cx);
+            });
+            draw(&app, cx);
+            let source = cx.debug_bounds("connection-row-b").unwrap().center();
+            cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(
+                source + point(px(8.), px(0.)),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+            draw(&app, cx);
+            let target = cx.debug_bounds("connection-row-a").unwrap().center();
+            cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+            cx.read(|cx| {
+                let panel = app.read(cx).connection_panel.read(cx);
+                assert!(panel.tree_projection().is_none(), "filtering={filtering}, target={target:?}, projection={:?}, sort={:?}, search_empty={}", panel.tree_projection(), panel.snapshot().unwrap().sort_mode, panel.snapshot().unwrap().search_is_empty);
+            });
+            let bounds = cx.debug_bounds("connections-list-scroll").unwrap();
+            let target = point(source.x, bounds.top() + px(20.));
+            cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+            cx.read(|cx| {
+                let panel = app.read(cx).connection_panel.read(cx);
+                let projection = panel.tree_projection().unwrap();
+                assert!(projection.inside);
+                assert_eq!(projection.destination.parent.as_deref(), Some("g"));
+            });
+            cx.simulate_mouse_up(
+                point(px(500.), source.y),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
+        }
+    }
+
+    #[test]
+    fn tree_drag_dwell_expands_and_cancellation_restores_fold_state() {
+        use gpui::MouseButton;
+        use std::time::Duration;
+        let directory = TestConfigDir::new("nyaterm-tree-drag-dwell");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, cx) = hosted(
+            &mut cx,
+            directory.path(),
+            vec![
+                connection("a", "A", None),
+                connection("child", "Child", Some("g")),
+            ],
+            vec![group("g", "Group")],
+        );
+        app.update(cx, |app, cx| {
+            app.connection_state.set_all_catalog_groups_expanded(false);
+            app.flush_connection_panel_snapshot(cx);
+        });
+        draw(&app, cx);
+        let source = cx.debug_bounds("connection-row-a").unwrap().center();
+        cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(
+            source + point(px(8.), px(0.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(&app, cx);
+        let bounds = cx.debug_bounds("connections-list-scroll").unwrap();
+        let target = point(source.x, bounds.top() + px(20.));
+        cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            assert!(
+                !app.read(cx)
+                    .connection_state
+                    .list_expanded_group_ids()
+                    .contains("g")
+            )
+        });
+        std::thread::sleep(Duration::from_millis(460));
+        cx.executor().advance_clock(Duration::from_millis(20));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(
+                app.read(cx)
+                    .connection_state
+                    .list_expanded_group_ids()
+                    .contains("g")
+            )
+        });
+        let outside = point(px(500.), source.y);
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        cx.executor().advance_clock(Duration::from_millis(20));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            assert!(
+                !app.read(cx)
+                    .connection_state
+                    .list_expanded_group_ids()
+                    .contains("g")
+            )
+        });
+    }
+
+    #[test]
+    fn tree_drag_scrolls_at_viewport_edge_with_reduced_motion() {
+        use gpui::MouseButton;
+        use std::time::Duration;
+        let directory = TestConfigDir::new("nyaterm-tree-drag-scroll");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let connections = (0..100)
+            .map(|i| connection(&format!("c-{i:03}"), &format!("Connection {i:03}"), None))
+            .collect();
+        let (app, cx) = hosted(&mut cx, directory.path(), connections, Vec::new());
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        let source = cx.debug_bounds("connection-row-c-000").unwrap().center();
+        cx.simulate_mouse_down(source, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(
+            source + point(px(8.), px(0.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        draw(&app, cx);
+        let bounds = cx.debug_bounds("connections-list-scroll").unwrap();
+        let target = point(source.x, bounds.bottom() - px(8.));
+        cx.simulate_mouse_move(target, MouseButton::Left, Modifiers::none());
+        for _ in 0..4 {
+            cx.executor().advance_clock(Duration::from_millis(20));
+            cx.run_until_parked();
+            draw(&app, cx);
+        }
+        cx.read(|cx| {
+            let panel = app.read(cx).connection_panel.read(cx);
+            assert!(panel.tree_scroll_offset().unwrap().y < px(0.));
+            assert!(panel.tree_projection().is_some());
+        });
+        let outside = point(px(500.), source.y);
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        cx.executor().advance_clock(Duration::from_millis(20));
+        cx.run_until_parked();
     }
 
     fn rows_built(app: &Entity<NyaTermApp>, cx: &mut gpui::App) -> usize {

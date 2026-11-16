@@ -30,6 +30,7 @@ mod cloud_sync_v4;
 mod command_history;
 mod completion_history;
 mod config_backup;
+mod connection_tree;
 mod history_retention;
 mod keyword_highlights;
 mod known_hosts;
@@ -1936,6 +1937,13 @@ fn save_group_in_txn(txn: &redb::WriteTransaction, group: &Group) -> Result<(), 
         .get(key.as_str())?
         .map(|raw| serde_json::from_slice::<serde_json::Value>(raw.value()))
         .transpose()?;
+    let reparented = current.as_ref().is_some_and(|old| {
+        old.get("parent_id").and_then(serde_json::Value::as_str) != group.parent_id.as_deref()
+    });
+    if reparented || (current.is_none() && group.tree_order.is_none()) {
+        group.tree_order =
+            connection_tree::append_tree_order_in_txn(txn, group.parent_id.as_deref())?;
+    }
     let mut next = serde_json::to_value(&group)?;
     if let (Some(current), Some(next)) = (
         current.as_ref().and_then(serde_json::Value::as_object),
@@ -1946,7 +1954,12 @@ fn save_group_in_txn(txn: &redb::WriteTransaction, group: &Group) -> Result<(), 
         for (field, value) in current {
             if !matches!(
                 field.as_str(),
-                "id" | "name" | "parent_id" | "sort_order" | "created_at_ms" | "updated_at_ms"
+                "id" | "name"
+                    | "parent_id"
+                    | "sort_order"
+                    | "tree_order"
+                    | "created_at_ms"
+                    | "updated_at_ms"
             ) {
                 next.insert(field.clone(), value.clone());
             }
@@ -2012,6 +2025,20 @@ fn save_connection_with_clean_indexes_checked_in_txn(
     }
     let now = current_time_ms();
     let connection_key = entity_key(CONNECTION_PREFIX, &connection.id);
+    let previous: Option<SavedConnection> = txn
+        .open_table(CONNECTIONS_TABLE)?
+        .get(connection_key.as_str())?
+        .map(|raw| deserialize_json(raw.value()))
+        .transpose()?;
+    if previous
+        .as_ref()
+        .is_some_and(|old| old.group_id != connection.group_id)
+        || (previous.is_none() && connection.tree_order.is_none())
+    {
+        connection.tree_order =
+            connection_tree::append_tree_order_in_txn(txn, connection.group_id.as_deref())?;
+    }
+
     if connection.created_at_ms.is_none() {
         connection.created_at_ms =
             existing_connection_created_at(txn, &connection_key)?.or(Some(now));

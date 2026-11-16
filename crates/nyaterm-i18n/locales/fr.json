@@ -2491,6 +2491,7 @@
     "usersMeaning": "Sessions enregistrées par le système, pas toutes les connexions SSH."
   },
   "savedConnections": {
+    "dropRoot": "Déplacer à la racine",
     "sessionImportTitle": "Importer des sessions",
     "restoreBackupTitle": "Restaurer une sauvegarde NyaTerm",
     "restoreBackupDesc": "Remplace la configuration et les connexions enregistrées.",

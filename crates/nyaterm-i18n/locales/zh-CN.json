@@ -2491,6 +2491,7 @@
     "usersMeaning": "系统记录的登录会话，不代表所有 SSH 连接。"
   },
   "savedConnections": {
+    "dropRoot": "移至根级",
     "sessionImportTitle": "导入会话",
     "restoreBackupTitle": "恢复 NyaTerm 备份",
     "restoreBackupDesc": "会替换当前配置及已保存的连接。",

@@ -513,11 +513,15 @@ pub fn apply_connection_batch_edit(
     let rdp_security_ok = rdp_reason.is_none();
 
     if !edit.group_id.is_unchanged() {
+        let previous_parent = connection.group_id.clone();
         connection.group_id = match &edit.group_id {
             BatchField::Set(value) => Some(value.clone()),
             BatchField::Clear => None,
             BatchField::Unchanged => unreachable!(),
         };
+        if connection.group_id != previous_parent {
+            connection.tree_order = None;
+        }
         apply(true, true, &mut report);
     }
     if !edit.description.is_unchanged() {

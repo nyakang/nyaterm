@@ -31,6 +31,7 @@ fn ssh_connection() -> SavedConnection {
         group_id: Some("group-a".to_string()),
         description: Some("original".to_string()),
         tags: vec!["prod".to_string()],
+        tree_order: None,
         sort_order: 7,
         icon: Some("server".to_string()),
         icon_auto_detect: Some(true),

@@ -23,6 +23,82 @@ pub(in crate::features) enum ConnectionListRow {
     },
 }
 
+impl ConnectionListRow {
+    pub(in crate::features) fn tree_key(&self) -> Option<nyaterm_core::connection_tree::NodeId> {
+        use nyaterm_core::connection_tree::{NodeId, NodeKind};
+        match self {
+            Self::GroupHeader(header) => header.group_id.as_ref().map(|id| NodeId {
+                kind: NodeKind::Group,
+                id: id.clone(),
+            }),
+            Self::Connection { connection_id, .. } => Some(NodeId {
+                kind: NodeKind::Connection,
+                id: connection_id.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    pub(in crate::features) fn depth(&self) -> usize {
+        match self {
+            Self::GroupHeader(header) => header.depth,
+            Self::Connection { depth, .. }
+            | Self::EmptyGroup { depth }
+            | Self::InlineGroupEditor { depth, .. } => *depth,
+            Self::Separator => 0,
+        }
+    }
+}
+
+/// Reorder whole subtrees, never individual descendants. The legacy projection
+/// still owns filtering, orphan recovery, editors and empty-group presentation.
+pub(in crate::features) fn apply_mixed_order(
+    rows: Vec<ConnectionListRow>,
+    nodes: &[nyaterm_core::connection_tree::Node],
+) -> Vec<ConnectionListRow> {
+    if !nodes.iter().any(|node| node.tree_order.is_some()) {
+        return rows;
+    }
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|row| !matches!(row, ConnectionListRow::Separator))
+        .collect();
+    let index: HashMap<_, _> = nodes.iter().map(|node| (node.key.clone(), node)).collect();
+    fn ordered(
+        rows: &[ConnectionListRow],
+        index: &HashMap<
+            nyaterm_core::connection_tree::NodeId,
+            &nyaterm_core::connection_tree::Node,
+        >,
+    ) -> Vec<ConnectionListRow> {
+        let mut blocks = Vec::new();
+        let mut start = 0;
+        while start < rows.len() {
+            let mut end = start + 1;
+            while end < rows.len() && rows[end].depth() > rows[start].depth() {
+                end += 1;
+            }
+            let mut block = vec![rows[start].clone()];
+            block.extend(ordered(&rows[start + 1..end], index));
+            blocks.push(block);
+            start = end;
+        }
+        blocks.sort_by(|a, b| {
+            match (
+                a[0].tree_key().and_then(|key| index.get(&key)),
+                b[0].tree_key().and_then(|key| index.get(&key)),
+            ) {
+                (Some(a), Some(b)) => nyaterm_core::connection_tree::compare(a, b),
+                (None, Some(_)) => std::cmp::Ordering::Less,
+                (Some(_), None) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+        });
+        blocks.into_iter().flatten().collect()
+    }
+    ordered(&rows, &index)
+}
+
 pub(in crate::features) fn flatten_connection_rows(
     sections: &[ConnectionSection],
     expanded_groups: &HashSet<String>,
@@ -980,6 +1056,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             parent_id: parent_id.map(ToOwned::to_owned),
+            tree_order: None,
             sort_order,
             created_at_ms: None,
             updated_at_ms: None,
@@ -1007,6 +1084,7 @@ mod tests {
             },
             group_id: group_id.map(ToOwned::to_owned),
             description: None,
+            tree_order: None,
             sort_order,
             icon: None,
             icon_auto_detect: None,

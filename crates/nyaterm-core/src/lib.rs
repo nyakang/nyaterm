@@ -14,6 +14,7 @@ pub mod command_suggestion_suppression;
 pub mod completion;
 pub mod connection_route;
 pub mod connection_search;
+pub mod connection_tree;
 pub mod credential_autofill;
 pub mod credentials_crypto;
 pub mod data_directory;

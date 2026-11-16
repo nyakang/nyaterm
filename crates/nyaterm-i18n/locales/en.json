@@ -2491,6 +2491,7 @@
     "usersMeaning": "System-recorded login sessions; not every SSH connection."
   },
   "savedConnections": {
+    "dropRoot": "Move to root",
     "sessionImportTitle": "Import sessions",
     "restoreBackupTitle": "Restore NyaTerm backup",
     "restoreBackupDesc": "Replaces current configuration and saved connections.",

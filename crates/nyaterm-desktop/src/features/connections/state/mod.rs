@@ -13,13 +13,17 @@ use nyaterm_core::connection_search::normalize_connection_search_query;
 use nyaterm_core::{AppSettingsSummary, ConnectionType, Group, SavedConnection};
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
 
+#[cfg(test)]
+use self::list_logic::{
+    connection_drop_position_for_target, set_connection_drop_target_if_changed,
+};
 use self::list_model::{
     ConnectionListRow, ConnectionSection, connection_sections, flatten_connection_rows,
     widest_connection_row,
 };
 use super::catalog::ConnectionCatalogState;
 use super::connection_runtime::ConnectionEditorToggle;
-use super::interaction::{ConnectionDropPosition, ConnectionDropTarget};
+use super::interaction::ConnectionDropTarget;
 use crate::features::NyaTermApp;
 use crate::models::{
     ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorForwardingTab,
@@ -64,12 +68,11 @@ use self::editor_logic::{
 use self::import::{ConnectionImportState, MobaImportSlot};
 use self::list_logic::{
     AppliedSearchExpansion, clear_connection_list_runtime_state, clear_selected_connection_ids,
-    connection_drop_position_for_target, cycle_connection_sort_mode,
-    remove_connection_list_references, remove_group_list_references,
+    cycle_connection_sort_mode, remove_connection_list_references, remove_group_list_references,
     retain_loaded_connection_references, retain_loaded_group_list_references,
     saved_connections_in_group_tree_for_list_state, select_connection_ids,
-    selected_connections_for_list_state, set_connection_drop_target_if_changed,
-    set_connection_group_hover, sync_connection_search_expansion,
+    selected_connections_for_list_state, set_connection_group_hover,
+    sync_connection_search_expansion,
 };
 use self::network_logic::{
     clear_network_proxy_editor, clear_network_tunnel_editor, remove_network_group_references,
@@ -500,6 +503,17 @@ impl ConnectionFeatureState {
             self.list.expanded_group_ids(),
             self.group_editor.draft.as_ref(),
         );
+        let rows = if query.is_empty() && self.list.sort_mode() == ConnectionSortMode::Default {
+            list_model::apply_mixed_order(
+                rows,
+                &nyaterm_core::connection_tree::catalog(
+                    self.catalog.groups(),
+                    self.catalog.connections(),
+                ),
+            )
+        } else {
+            rows
+        };
         if query.is_empty() {
             self.list.keyboard_active_connection_id = None;
         } else if query_changed || !rows.iter().any(|row| matches!(row,
@@ -532,19 +546,6 @@ impl ConnectionFeatureState {
         self.list_model.rows_key = Some(rows_key);
         self.list_model.snapshot = Some(snapshot.clone());
         snapshot
-    }
-
-    pub fn connections_reordered_into_group(
-        &self,
-        source_ids: &[String],
-        group_id: &Option<String>,
-    ) -> Vec<SavedConnection> {
-        self.catalog
-            .connections_reordered_into_group(source_ids, group_id)
-    }
-
-    pub fn group_is_descendant(&self, candidate_id: &str, ancestor_id: &str) -> bool {
-        self.catalog.group_is_descendant(candidate_id, ancestor_id)
     }
 
     fn retain_list_references_for_catalog(&mut self) {
@@ -714,16 +715,9 @@ impl ConnectionFeatureState {
         }
     }
 
+    #[cfg(test)]
     pub fn set_list_drop_target_if_changed(&mut self, target: ConnectionDropTarget) -> bool {
         self.list.set_drop_target_if_changed(target)
-    }
-
-    pub fn list_drop_position_for_target(
-        &self,
-        target_id: &str,
-        fallback: ConnectionDropPosition,
-    ) -> ConnectionDropPosition {
-        self.list.drop_position_for_target(target_id, fallback)
     }
 
     pub fn clear_list_drop_target(&mut self) {
@@ -2149,16 +2143,9 @@ impl ConnectionListState {
         )
     }
 
+    #[cfg(test)]
     pub fn set_drop_target_if_changed(&mut self, target: ConnectionDropTarget) -> bool {
         set_connection_drop_target_if_changed(&mut self.drop_target, target)
-    }
-
-    pub fn drop_position_for_target(
-        &self,
-        target_id: &str,
-        fallback: ConnectionDropPosition,
-    ) -> ConnectionDropPosition {
-        connection_drop_position_for_target(&self.drop_target, target_id, fallback)
     }
 
     pub fn clear_drop_target(&mut self) {

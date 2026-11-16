@@ -48,6 +48,10 @@ fn save_editor_connection(
         auth.password = original.and_then(|auth| auth.password.clone());
         auth.has_password = original.is_some_and(|auth| auth.has_password);
     }
+    persisted.tree_order = previous
+        .as_ref()
+        .filter(|old| old.group_id == persisted.group_id)
+        .and_then(|old| old.tree_order);
     persisted.sort_order = if let Some(previous) = previous.as_ref()
         && previous.group_id == persisted.group_id
     {
@@ -1498,6 +1502,7 @@ impl NyaTermApp {
             id: uuid(),
             name: name.clone(),
             parent_id: editor.pending_group_parent_id.clone(),
+            tree_order: None,
             sort_order: self.connection_state.groups().len() as i32,
             created_at_ms: None,
             updated_at_ms: None,

@@ -501,6 +501,7 @@ fn local_terminal_endpoint_uses_shell_and_working_dir() {
         },
         group_id: None,
         description: None,
+        tree_order: None,
         sort_order: 0,
         icon: None,
         icon_auto_detect: None,

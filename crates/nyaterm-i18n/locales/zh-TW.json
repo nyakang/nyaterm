@@ -2491,6 +2491,7 @@
     "usersMeaning": "系統記錄的登入工作階段，不代表所有 SSH 連線。"
   },
   "savedConnections": {
+    "dropRoot": "移至根層級",
     "sessionImportTitle": "匯入工作階段",
     "restoreBackupTitle": "還原 NyaTerm 備份",
     "restoreBackupDesc": "會取代目前設定及已儲存的連線。",

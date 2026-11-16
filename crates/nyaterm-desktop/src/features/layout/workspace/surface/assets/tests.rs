@@ -90,6 +90,7 @@ fn app(cx: &mut TestAppContext, root: &TestTempDir, mode: AssetViewMode) -> Enti
                 id: "destination".into(),
                 name: "Destination".into(),
                 parent_id: None,
+                tree_order: None,
                 sort_order: 0,
                 created_at_ms: None,
                 updated_at_ms: None,

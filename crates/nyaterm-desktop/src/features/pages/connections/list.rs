@@ -495,6 +495,7 @@ mod tests {
             },
             group_id: group_id.map(ToOwned::to_owned),
             description: None,
+            tree_order: None,
             sort_order,
             icon: None,
             icon_auto_detect: None,

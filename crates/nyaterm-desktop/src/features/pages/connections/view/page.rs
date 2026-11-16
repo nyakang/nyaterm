@@ -12,9 +12,7 @@ use nyaterm_ui::{
     NyaContextMenu, NyaDropdownMenu, NyaScrollable, NyaScrollbarAxis, NyaSearchInput,
 };
 
-use crate::features::connections::{
-    ConnectionDragKind, ConnectionDragPayload, ConnectionImportReportView,
-};
+use crate::features::connections::{ConnectionDragPayload, ConnectionImportReportView};
 use crate::models::ConnectionSortMode;
 use crate::theme::ThemePalette;
 
@@ -52,6 +50,8 @@ pub(in crate::features::pages::connections) fn connections_panel(
     let empty_group_label = t!("savedConnections.emptyGroup");
 
     let flat_rows = snapshot.rows.clone();
+    let dragging = panel.tree_drag.active();
+    let drag_rows = dragging.then(|| panel.drag_rows());
     let import_report = snapshot.import_report.clone();
     let store_is_empty = snapshot.store_is_empty;
     let nothing_matched = flat_rows.is_empty();
@@ -86,22 +86,19 @@ pub(in crate::features::pages::connections) fn connections_panel(
                 });
             }),
         )
-        .on_drop(
-            cx.listener(|panel, payload: &ConnectionDragPayload, _, cx| {
-                let payload = payload.clone();
-                panel.with_app(cx, |app, cx| {
-                    app.connection_state.clear_list_drop_target();
-                    match payload.kind {
-                        ConnectionDragKind::Connection => {
-                            app.move_connection_into_group(payload.id.clone(), None, cx);
-                        }
-                        ConnectionDragKind::Group => {
-                            app.move_group_into_group(payload.id.clone(), None, cx);
-                        }
-                    }
-                });
-            }),
-        );
+        .on_drag_move(cx.listener({
+            let scroll = list_scroll.clone();
+            move |panel, event: &gpui::DragMoveEvent<ConnectionDragPayload>, _, cx| {
+                let handle = scroll.0.borrow().base_handle.clone();
+                let bounds = handle.bounds();
+                let payload = event.drag(cx).clone();
+                panel.move_tree_drag(&payload, event.event.position, bounds, handle, cx);
+            }
+        }))
+        .on_drop(cx.listener(|panel, _: &ConnectionDragPayload, window, cx| {
+            panel.release_tree_drag(window.mouse_position(), cx);
+            cx.stop_propagation();
+        }));
     if store_is_empty {
         list = list.child(
             div()
@@ -135,7 +132,7 @@ pub(in crate::features::pages::connections) fn connections_panel(
                 .child(no_results_label),
         );
     } else {
-        let row_count = flat_rows.len();
+        let row_count = drag_rows.as_ref().map_or(flat_rows.len(), Vec::len);
         let row_actions =
             ConnectionRowActionsDecoration::new(flat_rows.clone(), cx.weak_entity(), palette);
         // `uniform_list` derives its scrollable width from one measured row, so
@@ -154,7 +151,21 @@ pub(in crate::features::pages::connections) fn connections_panel(
                         return items;
                     };
                     for index in range {
-                        let Some(row) = snapshot.rows.get(index).cloned() else {
+                        let Some(drag_row) = drag_rows
+                            .as_ref()
+                            .and_then(|rows| rows.get(index).cloned())
+                            .or_else(|| {
+                                (!dragging)
+                                    .then(|| {
+                                        snapshot
+                                            .rows
+                                            .get(index)
+                                            .cloned()
+                                            .map(super::super::drag::DragRow::Item)
+                                    })
+                                    .flatten()
+                            })
+                        else {
                             continue;
                         };
                         // A definite width here, so the rows inside can resolve
@@ -166,15 +177,64 @@ pub(in crate::features::pages::connections) fn connections_panel(
                             .flex_none()
                             .flex()
                             .items_center();
+                        let row = match drag_row {
+                            super::super::drag::DragRow::Item(row) => row,
+                            super::super::drag::DragRow::Slot { depth, label } => {
+                                items.push(
+                                    item.child(
+                                        div()
+                                            .ml(px(8. + depth as f32 * 16.))
+                                            .mr_2()
+                                            .flex_1()
+                                            .h(px(30.))
+                                            .rounded_sm()
+                                            .border_1()
+                                            .border_color(rgb(palette.link))
+                                            .bg(gpui::rgba((palette.primary << 8) | 0x18))
+                                            .px_2()
+                                            .text_xs()
+                                            .overflow_hidden()
+                                            .child(label),
+                                    ),
+                                );
+                                continue;
+                            }
+                            super::super::drag::DragRow::Root => {
+                                let item = item.when(panel.root_receives(), |item| {
+                                    item.bg(gpui::rgba((palette.primary << 8) | 0x18))
+                                });
+                                items.push(
+                                    item.child(
+                                        div()
+                                            .px_2()
+                                            .text_xs()
+                                            .child(t!("savedConnections.dropRoot")),
+                                    ),
+                                );
+                                continue;
+                            }
+                        };
+                        let shift = if cx.reduce_motion() {
+                            0.
+                        } else {
+                            panel.drag_row_shift(&row)
+                        };
+                        let item = item.relative().top(px(shift));
+                        let item = item.when(panel.drag_receives(&row), |item| {
+                            item.bg(gpui::rgba((palette.primary << 8) | 0x12))
+                        });
                         items.push(match row {
                             ConnectionListRow::Separator => {
                                 item.child(div().mx_2().h(px(1.)).w_full().bg(rgb(palette.border)))
                             }
-                            ConnectionListRow::GroupHeader(section) => item.child(
-                                div()
-                                    .w_full()
-                                    .child(connection_section(snapshot, section, cx)),
-                            ),
+                            ConnectionListRow::GroupHeader(section) => {
+                                item.child(div().w_full().child(connection_section(
+                                    snapshot,
+                                    section,
+                                    &hover_viewport,
+                                    cx,
+                                )))
+                            }
                             ConnectionListRow::InlineGroupEditor { parent_id, depth } => item
                                 .child(div().w_full().child(connection_inline_group_editor_row(
                                     snapshot, parent_id, depth, cx,
@@ -215,9 +275,9 @@ pub(in crate::features::pages::connections) fn connections_panel(
                 }),
             )
             .debug_selector(|| "connections-list-rows".to_string())
-            .with_decoration(row_actions)
+            .when(!dragging, |list| list.with_decoration(row_actions))
             .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-            .with_width_from_item(widest_row)
+            .with_width_from_item(if dragging { None } else { widest_row })
             .flex_1()
             .min_h_0()
             .track_scroll(&list_scroll),

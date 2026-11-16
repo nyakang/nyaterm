@@ -338,7 +338,7 @@ pub fn project_record(kind: &str, source: &Value) -> Result<Value, String> {
         return trust::project_record(kind, source);
     }
     let fields: &[&str] = match kind {
-        "connection_group" => &["name", "parent_id", "sort_order"],
+        "connection_group" => &["name", "parent_id", "sort_order", "tree_order"],
         "connection_icon" => &["name", "data_url"],
         "proxy_group" | "tunnel_group" => &["name", "sort_order"],
         "command_category" => &["name", "parent_id", "sort_order"],
@@ -397,7 +397,7 @@ fn pick(source: &Value, fields: &[&str]) -> Value {
 
 fn project_connection(source: &Value) -> Result<Value, String> {
     let mut result = pick(source, &["name", "description", "tags"]);
-    result["placement"] = pick(source, &["group_id", "sort_order"]);
+    result["placement"] = pick(source, &["group_id", "sort_order", "tree_order"]);
     // The discriminator is named `type` in released persisted connections.
     let kind = source
         .get("type")
@@ -721,7 +721,7 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
     match field {
         "endpoint" => &["type", "host", "port", "username", "domain", "device"],
         "android" => &["directory", "screen"],
-        "placement" => &["group_id", "sort_order"],
+        "placement" => &["group_id", "sort_order", "tree_order"],
         "terminal" => &[
             "encoding",
             "backspace_mode",

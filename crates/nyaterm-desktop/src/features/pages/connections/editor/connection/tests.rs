@@ -323,6 +323,7 @@ fn group(id: &str, name: &str, parent_id: Option<&str>, sort_order: i32) -> Grou
         id: id.to_string(),
         name: name.to_string(),
         parent_id: parent_id.map(ToOwned::to_owned),
+        tree_order: None,
         sort_order,
         created_at_ms: None,
         updated_at_ms: None,

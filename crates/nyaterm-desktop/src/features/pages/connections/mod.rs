@@ -1,3 +1,4 @@
+mod drag;
 pub(in crate::features) mod editor;
 mod flush;
 pub(in crate::features) mod list;

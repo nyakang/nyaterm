@@ -17,9 +17,9 @@ use rust_i18n::t;
 use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDragPayload,
     connections::ConnectionDragPreview, connections::ConnectionDropPosition,
-    connections::ConnectionDropTarget, text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX,
-    text_inputs::ordinary_input_focus_ring, text_inputs::ordinary_input_shell_border_color,
-    view_widgets::connection_type_icon, view_widgets::mono_icon,
+    text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::ordinary_input_focus_ring,
+    text_inputs::ordinary_input_shell_border_color, view_widgets::connection_type_icon,
+    view_widgets::mono_icon,
 };
 
 use super::super::list::{
@@ -193,6 +193,7 @@ impl RenderOnce for ConnectionDetailsHoverCard {
 pub(in crate::features::pages::connections) fn connection_section(
     snapshot: &ConnectionListSnapshot,
     section: ConnectionSectionHeader,
+    viewport: &gpui::ScrollHandle,
     cx: &mut Context<ConnectionPanel>,
 ) -> impl IntoElement {
     // The flat list only ever emits headers for real groups; root sections are
@@ -288,86 +289,28 @@ pub(in crate::features::pages::connections) fn connection_section(
                 .then_some(section.group_id.clone())
                 .flatten(),
             |this, drag_group_id| {
-                let drop_group_id = drag_group_id.clone();
                 let label = section.label.clone();
-                this.cursor_move()
-                    .on_drag(
-                        ConnectionDragPayload {
-                            kind: ConnectionDragKind::Group,
-                            id: drag_group_id.clone(),
-                            label,
-                        },
-                        |payload, position, _, cx| {
-                            cx.new(|_| ConnectionDragPreview::new(payload.clone(), position))
-                        },
-                    )
-                    .on_drag_move(cx.listener({
-                        let target_id = drop_group_id.clone();
-                        move |panel, event: &gpui::DragMoveEvent<ConnectionDragPayload>, _, cx| {
-                            panel.with_app(cx, |this, cx| {
-                                let _ = event.drag(cx);
-                                let y = event.event.position.y;
-                                let bounds = event.bounds;
-                                let rel = if bounds.size.height > px(0.) {
-                                    ((y - bounds.origin.y) / bounds.size.height).clamp(0., 1.)
-                                } else {
-                                    0.5
-                                };
-                                let position = if rel < 0.25 {
-                                    ConnectionDropPosition::Before
-                                } else if rel > 0.75 {
-                                    ConnectionDropPosition::After
-                                } else {
-                                    ConnectionDropPosition::Inside
-                                };
-                                let next = ConnectionDropTarget {
-                                    id: Some(target_id.clone()),
-                                    kind: ConnectionDragKind::Group,
-                                    position,
-                                };
-                                if this.connection_state.set_list_drop_target_if_changed(next) {
-                                    this.ensure_drop_hover_clock(cx);
-                                    cx.notify();
-                                }
-                            })
-                        }
-                    }))
-                    .on_drop(
-                        cx.listener(move |panel, payload: &ConnectionDragPayload, _, cx| {
-                            panel.with_app(cx, |this, cx| {
-                                let position = this.connection_state.list_drop_position_for_target(
-                                    &drop_group_id,
-                                    ConnectionDropPosition::Inside,
-                                );
-                                this.connection_state.clear_list_drop_target();
-                                match payload.kind {
-                                    ConnectionDragKind::Connection => {
-                                        this.move_connection_into_group(
-                                            payload.id.clone(),
-                                            Some(drop_group_id.clone()),
-                                            cx,
-                                        );
-                                    }
-                                    ConnectionDragKind::Group => match position {
-                                        ConnectionDropPosition::Inside => {
-                                            this.move_group_into_group(
-                                                payload.id.clone(),
-                                                Some(drop_group_id.clone()),
-                                                cx,
-                                            );
-                                        }
-                                        _ => {
-                                            this.move_group_before(
-                                                payload.id.clone(),
-                                                drop_group_id.clone(),
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                }
-                            })
-                        }),
-                    )
+                let drag_scroll = viewport.clone();
+                this.cursor_move().on_drag(
+                    ConnectionDragPayload {
+                        panel: cx.weak_entity(),
+                        kind: ConnectionDragKind::Group,
+                        id: drag_group_id.clone(),
+                        label,
+                    },
+                    move |payload, position, window, cx| {
+                        let _ = payload.panel.update(cx, |panel, cx| {
+                            panel.arm_tree_drag(
+                                payload,
+                                window.mouse_position(),
+                                drag_scroll.bounds(),
+                                drag_scroll.clone(),
+                                cx,
+                            )
+                        });
+                        cx.new(|_| ConnectionDragPreview::new(payload.clone(), position))
+                    },
+                )
             },
         )
         .on_click(cx.listener(move |panel, _, _, cx| {
@@ -542,6 +485,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
     hover_viewport: &gpui::ScrollHandle,
     cx: &mut Context<ConnectionPanel>,
 ) -> impl IntoElement {
+    let drag_scroll = hover_viewport.clone();
     let selected = snapshot.is_selected(&connection.id);
     // The arrow keys walk filtered results without disturbing the selection,
     // so the active row gets its own fainter wash plus a ring.
@@ -564,7 +508,6 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
     let show_before = drop_position == Some(ConnectionDropPosition::Before);
     let show_after = drop_position == Some(ConnectionDropPosition::After);
     let show_inside = drop_position == Some(ConnectionDropPosition::Inside);
-    let row_id = connection.id.clone();
     // Tauri ConnectionItem: py-1.5 single-line row (~34px) with hover actions.
     let palette = snapshot.chrome.palette;
     let row_selector = format!("connection-row-{}", connection.id);
@@ -602,84 +545,24 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
         .cursor_move()
         .on_drag(
             ConnectionDragPayload {
+                panel: cx.weak_entity(),
                 kind: ConnectionDragKind::Connection,
                 id: connection.id.clone(),
                 label: connection.name.clone(),
             },
-            |payload, position, _, cx| {
+            move |payload, position, window, cx| {
+                let _ = payload.panel.update(cx, |panel, cx| {
+                    panel.arm_tree_drag(
+                        payload,
+                        window.mouse_position(),
+                        drag_scroll.bounds(),
+                        drag_scroll.clone(),
+                        cx,
+                    )
+                });
                 cx.new(|_| ConnectionDragPreview::new(payload.clone(), position))
             },
         )
-        .on_drag_move(cx.listener({
-            let target_id = row_id.clone();
-            move |panel, event: &gpui::DragMoveEvent<ConnectionDragPayload>, _, cx| {
-                panel.with_app(cx, |this, cx| {
-                    let _payload = event.drag(cx);
-                    let y = event.event.position.y;
-                    let bounds = event.bounds;
-                    let rel = if bounds.size.height > px(0.) {
-                        ((y - bounds.origin.y) / bounds.size.height).clamp(0., 1.)
-                    } else {
-                        0.5
-                    };
-                    let position = if rel < 0.33 {
-                        ConnectionDropPosition::Before
-                    } else if rel > 0.66 {
-                        ConnectionDropPosition::After
-                    } else {
-                        // Mid band: treat as before for connections (reorder only).
-                        ConnectionDropPosition::Before
-                    };
-                    let next = ConnectionDropTarget {
-                        id: Some(target_id.clone()),
-                        kind: ConnectionDragKind::Connection,
-                        position,
-                    };
-                    if this.connection_state.set_list_drop_target_if_changed(next) {
-                        this.ensure_drop_hover_clock(cx);
-                        cx.notify();
-                    }
-                })
-            }
-        }))
-        .on_drop({
-            let target_id = connection.id.clone();
-            cx.listener(move |panel, payload: &ConnectionDragPayload, _, cx| {
-                panel.with_app(cx, |this, cx| {
-                    let position = this
-                        .connection_state
-                        .list_drop_position_for_target(&target_id, ConnectionDropPosition::Before);
-                    this.connection_state.clear_list_drop_target();
-                    match payload.kind {
-                        ConnectionDragKind::Connection => match position {
-                            ConnectionDropPosition::After => {
-                                this.move_connection_after(
-                                    payload.id.clone(),
-                                    target_id.clone(),
-                                    cx,
-                                );
-                            }
-                            _ => {
-                                this.move_connection_before(
-                                    payload.id.clone(),
-                                    target_id.clone(),
-                                    cx,
-                                );
-                            }
-                        },
-                        ConnectionDragKind::Group => {
-                            let parent = this
-                                .connection_state
-                                .connections()
-                                .iter()
-                                .find(|c| c.id == target_id)
-                                .and_then(|c| c.group_id.clone());
-                            this.move_group_into_group(payload.id.clone(), parent, cx);
-                        }
-                    }
-                })
-            })
-        })
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|_, _, _, cx| {

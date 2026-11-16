@@ -1,11 +1,10 @@
+#[cfg(test)]
+use crate::features::connections::ConnectionDropPosition;
 use std::collections::{BTreeSet, HashSet};
 
 use nyaterm_core::{Group, SavedConnection};
 
-use crate::features::{
-    connections::ConnectionDragKind, connections::ConnectionDropPosition,
-    connections::ConnectionDropTarget,
-};
+use crate::features::{connections::ConnectionDragKind, connections::ConnectionDropTarget};
 use crate::models::ConnectionSortMode;
 
 pub(super) fn selected_connections_for_list_state(
@@ -181,6 +180,7 @@ pub(super) fn set_connection_group_hover(
     false
 }
 
+#[cfg(test)]
 pub(super) fn set_connection_drop_target_if_changed(
     drop_target: &mut Option<ConnectionDropTarget>,
     target: ConnectionDropTarget,
@@ -192,6 +192,7 @@ pub(super) fn set_connection_drop_target_if_changed(
     true
 }
 
+#[cfg(test)]
 pub(super) fn connection_drop_position_for_target(
     drop_target: &Option<ConnectionDropTarget>,
     target_id: &str,

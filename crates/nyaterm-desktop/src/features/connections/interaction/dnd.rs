@@ -1,409 +1,103 @@
 use gpui::Context;
-use nyaterm_core::{Group, SavedConnection};
 use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
 
 impl NyaTermApp {
-    pub(in crate::features) fn move_connection_before(
+    pub(in crate::features) fn submit_connection_tree_move(
         &mut self,
-        source_id: String,
-        target_id: String,
+        request: nyaterm_core::connection_tree::MoveRequest,
+        panel: gpui::WeakEntity<crate::features::pages::connections::panel::ConnectionPanel>,
         cx: &mut Context<Self>,
     ) {
-        self.connection_state.clear_list_drop_target();
-        if source_id == target_id {
-            return;
-        }
-        let Some(source) = self
-            .connection_state
-            .connections()
-            .iter()
-            .find(|c| c.id == source_id)
-            .cloned()
-        else {
-            self.shell
-                .set_status("drag source connection missing".to_string());
-            cx.notify();
-            return;
-        };
-        let Some(target) = self
-            .connection_state
-            .connections()
-            .iter()
-            .find(|c| c.id == target_id)
-            .cloned()
-        else {
-            self.shell
-                .set_status("drop target connection missing".to_string());
-            cx.notify();
-            return;
-        };
-
-        let parent = target.group_id.clone();
-        let mut siblings = self
-            .connection_state
-            .connections()
-            .iter()
-            .filter(|c| c.group_id == parent && c.id != source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        siblings.sort_by(|a, b| {
-            a.sort_order.cmp(&b.sort_order).then_with(|| {
-                a.name
-                    .to_ascii_lowercase()
-                    .cmp(&b.name.to_ascii_lowercase())
-            })
-        });
-        let target_idx = siblings
-            .iter()
-            .position(|c| c.id == target_id)
-            .unwrap_or(siblings.len());
-        let mut moved = source;
-        moved.group_id = parent;
-        siblings.insert(target_idx, moved);
-
-        self.submit_connection_order_persistence(
-            siblings,
-            "reorder connection",
-            |this, _| this.shell.set_status("connection reordered".to_string()),
-            cx,
-        );
-        self.connection_state.clear_list_drop_target();
-        cx.notify();
-    }
-
-    pub(in crate::features) fn move_connection_after(
-        &mut self,
-        source_id: String,
-        target_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.clear_list_drop_target();
-        if source_id == target_id {
-            return;
-        }
-        let Some(source) = self
-            .connection_state
-            .connections()
-            .iter()
-            .find(|c| c.id == source_id)
-            .cloned()
-        else {
-            self.shell
-                .set_status("drag source connection missing".to_string());
-            cx.notify();
-            return;
-        };
-        let Some(target) = self
-            .connection_state
-            .connections()
-            .iter()
-            .find(|c| c.id == target_id)
-            .cloned()
-        else {
-            self.shell
-                .set_status("drop target connection missing".to_string());
-            cx.notify();
-            return;
-        };
-
-        let parent = target.group_id.clone();
-        let mut siblings = self
-            .connection_state
-            .connections()
-            .iter()
-            .filter(|c| c.group_id == parent && c.id != source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        siblings.sort_by(|a, b| {
-            a.sort_order.cmp(&b.sort_order).then_with(|| {
-                a.name
-                    .to_ascii_lowercase()
-                    .cmp(&b.name.to_ascii_lowercase())
-            })
-        });
-        let target_idx = siblings
-            .iter()
-            .position(|c| c.id == target_id)
-            .map(|idx| idx + 1)
-            .unwrap_or(siblings.len());
-        let mut moved = source;
-        moved.group_id = parent;
-        siblings.insert(target_idx.min(siblings.len()), moved);
-
-        self.submit_connection_order_persistence(
-            siblings,
-            "reorder connection",
-            |this, _| this.shell.set_status("connection reordered".to_string()),
-            cx,
-        );
-        self.connection_state.clear_list_drop_target();
-        cx.notify();
-    }
-
-    pub(in crate::features) fn move_connection_into_group(
-        &mut self,
-        source_id: String,
-        group_id: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.clear_list_drop_target();
-        let Some(source) = self
-            .connection_state
-            .connections()
-            .iter()
-            .find(|c| c.id == source_id)
-            .cloned()
-        else {
-            self.shell
-                .set_status("drag source connection missing".to_string());
-            cx.notify();
-            return;
-        };
-        if source.group_id == group_id {
-            // already there: append to end of group order
-        }
-        let mut siblings = self
-            .connection_state
-            .connections()
-            .iter()
-            .filter(|c| c.group_id == group_id && c.id != source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        siblings.sort_by_key(|connection| connection.sort_order);
-        let mut moved = source;
-        moved.group_id = group_id.clone();
-        siblings.push(moved);
-
-        self.submit_connection_order_persistence(
-            siblings,
-            "move connection",
-            move |this, _| {
-                if let Some(gid) = group_id {
-                    this.connection_state.expand_list_group(gid);
+        let parent = request.destination.parent.clone();
+        self.submit_store_request(
+            0,
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
+                store.move_connection_tree(&request)?;
+                store.load_sessions()
+            }),
+            move |this, event, cx| {
+                let success = event.outcome.is_ok();
+                match event.outcome {
+                    Ok(sessions) => {
+                        this.apply_loaded_sessions(sessions, cx);
+                        if let Some(parent) = parent {
+                            this.connection_state.expand_list_group(parent);
+                        }
+                    }
+                    Err(error) => {
+                        this.shell
+                            .set_status(format!("move connection tree failed: {error}"));
+                    }
                 }
-                this.shell.set_status("connection moved".to_string());
+                this.defer_connection_panel_snapshot_flush(cx);
+                cx.defer(move |cx| {
+                    let _ = panel.update(cx, |panel, cx| panel.finish_tree_move(success, cx));
+                });
+                cx.notify();
             },
             cx,
         );
-        cx.notify();
     }
 
-    /// Reparent several connections in one write.
-    ///
-    /// Looping [`Self::move_connection_into_group`] would re-read the list, persist
-    /// a fresh order and refresh the store once per connection; the old UI sent a
-    /// single reorder. One ordered write also means the list cannot be observed
-    /// half-moved.
     pub(in crate::features) fn move_connections_into_group(
         &mut self,
         source_ids: Vec<String>,
-        group_id: Option<String>,
+        parent: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        self.connection_state.clear_list_drop_target();
-        let moving = self
-            .connection_state
-            .connections()
+        use nyaterm_core::connection_tree::{
+            Destination, MoveRequest, NodeKind, catalog, plan_move,
+        };
+        let mut nodes = catalog(
+            self.connection_state.groups(),
+            self.connection_state.connections(),
+        );
+        let sources: Vec<_> = nodes
             .iter()
-            .filter(|connection| source_ids.contains(&connection.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        if moving.is_empty() {
-            self.shell.set_status("no connections to move".to_string());
-            cx.notify();
-            return;
-        }
-
-        let moved_count = moving.len();
-        let ordered = self
-            .connection_state
-            .connections_reordered_into_group(&source_ids, &group_id);
-
-        self.submit_connection_order_persistence(
-            ordered,
-            "move connections",
-            move |this, _| {
-                if let Some(group_id) = group_id {
-                    this.connection_state.expand_list_group(group_id);
+            .filter(|n| n.key.kind == NodeKind::Connection && source_ids.contains(&n.key.id))
+            .map(|n| n.key.clone())
+            .collect();
+        let mut requests = Vec::new();
+        for source in sources {
+            let request = MoveRequest {
+                source,
+                destination: Destination {
+                    parent: parent.clone(),
+                    before: None,
+                },
+                expected: nodes.clone(),
+            };
+            let Ok(changes) = plan_move(&nodes, &request) else {
+                return;
+            };
+            for change in changes {
+                if let Some(node) = nodes.iter_mut().find(|n| n.key == change.key) {
+                    *node = change;
                 }
-                this.shell
-                    .set_status(format!("moved {moved_count} connection(s)"));
-            },
-            cx,
-        );
-        cx.notify();
-    }
-
-    pub(in crate::features) fn move_group_before(
-        &mut self,
-        source_id: String,
-        target_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.clear_list_drop_target();
-        if source_id == target_id {
-            return;
+            }
+            requests.push(request);
         }
-        let Some(source) = self
-            .connection_state
-            .groups()
-            .iter()
-            .find(|g| g.id == source_id)
-            .cloned()
-        else {
-            return;
-        };
-        let Some(target) = self
-            .connection_state
-            .groups()
-            .iter()
-            .find(|g| g.id == target_id)
-            .cloned()
-        else {
-            return;
-        };
-        // Only reorder among same parent for now.
-        let parent = target.parent_id.clone();
-        let mut siblings = self
-            .connection_state
-            .groups()
-            .iter()
-            .filter(|g| g.parent_id == parent && g.id != source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        siblings.sort_by_key(|group| group.sort_order);
-        let target_idx = siblings
-            .iter()
-            .position(|g| g.id == target_id)
-            .unwrap_or(siblings.len());
-        let mut moved = source;
-        moved.parent_id = parent;
-        siblings.insert(target_idx, moved);
-        self.submit_group_order_persistence(
-            siblings,
-            "reorder group",
-            |this, _| this.shell.set_status("group reordered".to_string()),
-            cx,
-        );
-        cx.notify();
-    }
-
-    pub(in crate::features) fn move_group_into_group(
-        &mut self,
-        source_id: String,
-        parent_id: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.connection_state.clear_list_drop_target();
-        if parent_id.as_deref() == Some(source_id.as_str()) {
-            self.shell
-                .set_status("cannot nest group into itself".to_string());
-            cx.notify();
-            return;
-        }
-        // Prevent cycles: parent cannot be descendant of source.
-        if let Some(pid) = parent_id.as_ref()
-            && self.connection_state.group_is_descendant(pid, &source_id)
-        {
-            self.shell
-                .set_status("cannot create group cycle".to_string());
-            cx.notify();
-            return;
-        }
-        let Some(source) = self
-            .connection_state
-            .groups()
-            .iter()
-            .find(|g| g.id == source_id)
-            .cloned()
-        else {
-            return;
-        };
-        let mut siblings = self
-            .connection_state
-            .groups()
-            .iter()
-            .filter(|g| g.parent_id == parent_id && g.id != source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        siblings.sort_by_key(|group| group.sort_order);
-        let mut moved = source;
-        moved.parent_id = parent_id;
-        siblings.push(moved);
-        self.submit_group_order_persistence(
-            siblings,
-            "move group",
-            |this, _| this.shell.set_status("group moved".to_string()),
-            cx,
-        );
-        cx.notify();
-    }
-
-    fn submit_connection_order_persistence(
-        &mut self,
-        ordered: Vec<SavedConnection>,
-        error_action: &'static str,
-        on_success: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
         self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
-                for (index, connection) in ordered.iter().enumerate() {
-                    let mut updated = connection.clone();
-                    updated.sort_order = index as i32;
-                    store.save_connection(&updated)?;
-                }
+                store.move_connection_trees(&requests)?;
                 store.load_sessions()
             }),
-            move |this, event, cx| match event.outcome {
-                Ok(sessions) => {
-                    this.apply_loaded_sessions(sessions, cx);
-                    on_success(this, cx);
-                    cx.notify();
+            move |this, event, cx| {
+                match event.outcome {
+                    Ok(sessions) => {
+                        this.apply_loaded_sessions(sessions, cx);
+                        if let Some(parent) = parent {
+                            this.connection_state.expand_list_group(parent);
+                        }
+                    }
+                    Err(error) => this
+                        .shell
+                        .set_status(format!("move connections failed: {error}")),
                 }
-                Err(error) => {
-                    let message = format!("{error_action} failed: {error}");
-                    this.shell.set_status(message.clone());
-                    this.settings.update_store_status(message, false);
-                    cx.notify();
-                }
-            },
-            cx,
-        );
-    }
-
-    fn submit_group_order_persistence(
-        &mut self,
-        ordered: Vec<Group>,
-        error_action: &'static str,
-        on_success: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        self.submit_store_request(
-            0,
-            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
-                for (index, group) in ordered.iter().enumerate() {
-                    let mut updated = group.clone();
-                    updated.sort_order = index as i32;
-                    store.save_group(&updated)?;
-                }
-                store.load_sessions()
-            }),
-            move |this, event, cx| match event.outcome {
-                Ok(sessions) => {
-                    this.apply_loaded_sessions(sessions, cx);
-                    on_success(this, cx);
-                    cx.notify();
-                }
-                Err(error) => {
-                    let message = format!("{error_action} failed: {error}");
-                    this.shell.set_status(message.clone());
-                    this.settings.update_store_status(message, false);
-                    cx.notify();
-                }
+                cx.notify();
             },
             cx,
         );
@@ -432,6 +126,7 @@ mod tests {
             },
             group_id: group_id.map(ToOwned::to_owned),
             description: None,
+            tree_order: None,
             sort_order,
             icon: None,
             icon_auto_detect: None,

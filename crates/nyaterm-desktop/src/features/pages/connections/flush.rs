@@ -117,6 +117,10 @@ impl NyaTermApp {
             && self.connection_state.active_group_editor_draft().is_none();
 
         ConnectionListSnapshot {
+            tree_nodes: nyaterm_core::connection_tree::catalog(
+                self.connection_state.groups(),
+                connections,
+            ),
             custom_icons: self.connection_state.custom_icons.images.clone(),
             chrome: key.chrome(),
             rows: model.rows,

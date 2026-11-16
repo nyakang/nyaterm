@@ -39,6 +39,9 @@ pub struct SavedConnection {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub sort_order: i32,
+    /// Mixed sibling rank. None retains the released folder-first ordering;
+    /// a tree move assigns ranks without repurposing legacy `sort_order`.
+    pub tree_order: Option<i64>,
     pub icon: Option<String>,
     /// Whether `icon` may be replaced by one detected from the remote system.
     ///
@@ -84,6 +87,8 @@ struct SavedConnectionKnown {
     pub tags: Vec<String>,
     #[serde(default)]
     pub sort_order: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_order: Option<i64>,
     #[serde(default)]
     pub icon: Option<String>,
     /// Whether `icon` may be replaced by one detected from the remote system.
@@ -222,6 +227,9 @@ pub struct Group {
     pub parent_id: Option<String>,
     #[serde(default)]
     pub sort_order: i32,
+    /// Shares the parent's ordering domain with saved connections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_order: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -371,6 +379,7 @@ impl<'de> Deserialize<'de> for SavedConnection {
 fn omitted_fields(path: &str) -> &'static [&'static str] {
     match path {
         "" => &[
+            "tree_order",
             "tags",
             "icon_auto_detect",
             "recording",
