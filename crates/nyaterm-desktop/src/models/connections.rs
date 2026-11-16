@@ -401,6 +401,12 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) working_dir: String,
     pub(crate) serial_port: String,
     pub(crate) baud_rate: String,
+    /// Ask for the device when a serial session starts. The saved port becomes a
+    /// hint and may stay empty.
+    pub(crate) serial_prompt_port: bool,
+    /// Ask for the baud rate when a serial session starts. The saved rate becomes
+    /// the dialog default.
+    pub(crate) serial_prompt_baud_rate: bool,
     pub(crate) data_bits: String,
     pub(crate) parity: String,
     pub(crate) flow_control: nyaterm_core::models::connection::SerialFlowControl,

@@ -379,6 +379,8 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            serial_selection: _,
+            suppress_serial_prompt: _,
             request_id,
         } = options;
         let kind = session_kind_for_launch_config(&launch_config);
@@ -545,6 +547,8 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            serial_selection: _,
+            suppress_serial_prompt: _,
             request_id,
         } = options;
         config.deferred_pty = true;
@@ -682,6 +686,8 @@ impl NyaTermApp {
             reconnect_session_id,
             workspace_split,
             tab_placement,
+            serial_selection: _,
+            suppress_serial_prompt: _,
             request_id,
         } = options;
         config.deferred_pty = true;

@@ -312,10 +312,13 @@ impl NyaTermApp {
             serial_port: self
                 .connection_state
                 .serial_ports()
-                .first()
-                .cloned()
+                .iter()
+                .find(|port| !self.connection_state.serial_port_in_use(&port.port_name))
+                .map(|port| port.port_name.clone())
                 .unwrap_or_default(),
             baud_rate: "115200".to_string(),
+            serial_prompt_port: false,
+            serial_prompt_baud_rate: false,
             data_bits: "8".to_string(),
             parity: "none".to_string(),
             flow_control: Default::default(),

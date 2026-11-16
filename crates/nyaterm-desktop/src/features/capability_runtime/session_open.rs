@@ -391,6 +391,8 @@ impl NyaTermApp {
                 connection,
                 SavedConnectionStartOptions {
                     mcp_open_operation_id: Some(id),
+                    // An MCP caller cannot answer a port dialog.
+                    suppress_serial_prompt: true,
                     ..Default::default()
                 },
                 cx,

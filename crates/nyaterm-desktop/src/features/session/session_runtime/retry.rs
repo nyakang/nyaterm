@@ -107,6 +107,10 @@ impl NyaTermApp {
             reconnect_session_id: None,
             workspace_split: pending.workspace_split.clone(),
             tab_placement: pending.tab_placement,
+            // A retry reuses the configuration that already resolved, so a
+            // deferred serial port must not ask again.
+            serial_selection: None,
+            suppress_serial_prompt: true,
             request_id: Some(new_id.clone()),
         };
         pending.attempt = Default::default();

@@ -751,6 +751,9 @@ impl NyaTermApp {
                     android_view: nyaterm_core::models::android::AndroidViewKind::from_restore_type(
                         &session_type,
                     ),
+                    // Restoring must not stop on a modal; a deferred-port
+                    // connection reopens with its saved device or reports why.
+                    suppress_serial_prompt: true,
                     ..Default::default()
                 },
                 cx,

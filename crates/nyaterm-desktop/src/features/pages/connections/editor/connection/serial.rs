@@ -10,12 +10,12 @@ use gpui::{
 };
 use nyaterm_ui::{NyaPopover, NyaScrollable};
 
-use crate::features::NyaTermApp;
+use crate::features::{NyaTermApp, connections::ConnectionEditorToggle};
 use crate::models::{ConnectionEditorField, ConnectionEditorSelect};
 
 use super::super::super::list::{
-    ConnectionEditorRenderContext, connection_editor_select, connection_editor_select_on_open,
-    editor_stepper_field, required,
+    ConnectionEditorRenderContext, FieldLabel, connection_editor_select,
+    connection_editor_select_on_open, editor_stepper_field, editor_switch_row, required,
 };
 use super::{ConnectionEditorSectionContext, recording::connection_editor_recording_section};
 
@@ -250,11 +250,16 @@ fn serial_serial(
     let ConnectionEditorSectionContext {
         palette,
         fields,
+        editor,
         baud_popover_open,
         narrow,
-        ..
     } = section;
     let app = cx.weak_entity();
+    let port_label = if editor.serial_prompt_port {
+        FieldLabel::from(t!("dialog.serialPortDefault").to_string())
+    } else {
+        required(t!("dialog.serialPort"))
+    };
     div()
         .flex()
         .flex_col()
@@ -278,7 +283,7 @@ fn serial_serial(
                                 cx,
                             },
                             "connection-editor-serial-port",
-                            required(t!("dialog.serialPort")),
+                            port_label,
                             ConnectionEditorSelect::SerialPort,
                             move |_, cx| {
                                 let _ = app.update(cx, |app, cx| {
@@ -292,6 +297,38 @@ fn serial_serial(
                     baud_popover_open,
                     cx,
                 ))),
+        )
+        .child(editor_switch_row(
+            palette,
+            "connection-editor-serial-prompt-port",
+            t!("dialog.serialPromptPort"),
+            editor.serial_prompt_port,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(ConnectionEditorToggle::SerialPromptPort, cx);
+            }),
+        ))
+        .child(editor_switch_row(
+            palette,
+            "connection-editor-serial-prompt-baud",
+            t!("dialog.serialPromptBaudRate"),
+            editor.serial_prompt_baud_rate,
+            cx.listener(|this, _, _, cx| {
+                this.toggle_connection_editor_flag(
+                    ConnectionEditorToggle::SerialPromptBaudRate,
+                    cx,
+                );
+            }),
+        ))
+        .when(
+            editor.serial_prompt_port || editor.serial_prompt_baud_rate,
+            |this| {
+                this.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("dialog.serialPromptHint")),
+                )
+            },
         )
         .child(
             div()

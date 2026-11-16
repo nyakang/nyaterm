@@ -447,6 +447,7 @@ fn project_connection(source: &Value) -> Result<Value, String> {
                 "parity",
                 "stop_bits",
                 "flow_control",
+                "connect_prompt",
             ],
         );
     }

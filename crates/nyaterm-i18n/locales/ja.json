@@ -1175,6 +1175,11 @@
     "serialPortRequired": "シリアルポートは必須です",
     "serialPortUnavailable": "%{port}（利用不可）",
     "serialPortsLoadFailed": "ポートの読み込みに失敗しました",
+    "serialPortDefault": "シリアルポート（接続時に選択）",
+    "serialPortInUse": "使用中",
+    "serialPromptBaudRate": "接続時にボーレートを入力",
+    "serialPromptHint": "保存した値は接続ダイアログの既定値です。接続のたびに変更できます。",
+    "serialPromptPort": "接続時にポートを選択",
     "serverPlaceholder": "マイサーバー",
     "shellArgs": "シェル引数",
     "shellArgsPlaceholder": "例: --login -i または -NoLogo",
@@ -2706,6 +2711,20 @@
     "sshPassword": "SSH パスワード",
     "sshVerification": "SSH 検証",
     "submit": "続行"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "開いているシリアル選択を先に完了してください。",
+    "baudRateInvalid": "ボーレートは 1〜4000000 の範囲で指定してください。",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "シリアル接続をキャンセルしました。",
+    "connect": "接続",
+    "description": "「%{name}」に接続する前にデバイスとボーレートを指定してください。",
+    "manualPortHint": "一覧にないデバイスはパスを直接入力できます（例: /dev/serial/by-id/…）",
+    "noWindow": "シリアル選択を表示できるウィンドウがありません。",
+    "portPathPlaceholder": "COM1 または /dev/ttyUSB0",
+    "portRequired": "シリアルデバイスを選択または入力してください。",
+    "portRequiredUnattended": "「%{name}」は接続時にポートを選択する設定のため、この操作では接続できません。",
+    "title": "シリアルポート"
   },
   "serialSend": {
     "payloadEmpty": "ペイロードが空です",

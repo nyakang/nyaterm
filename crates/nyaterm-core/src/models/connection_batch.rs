@@ -1206,11 +1206,17 @@ pub fn apply_connection_batch_edit(
             parity,
             flow_control,
             stop_bits,
+            connect_prompt,
             ..
         } = &mut connection.config
     {
         if !edit.serial_port_name.is_unchanged() {
             *port_name = plain_string_value(&edit.serial_port_name);
+            // Clearing the device must not leave a record that cannot be opened:
+            // the port is now chosen when the session connects.
+            if port_name.is_empty() {
+                connect_prompt.port = true;
+            }
         }
         if !edit.serial_baud_rate.is_unchanged() {
             *baud_rate = match edit.serial_baud_rate {

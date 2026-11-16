@@ -710,6 +710,12 @@ pub(super) fn toggle_connection_editor_flag(
             editor.raw_tcp_cli = !editor.raw_tcp_cli;
         }
         ConnectionEditorToggle::LocalEcho => editor.local_echo = !editor.local_echo,
+        ConnectionEditorToggle::SerialPromptPort => {
+            editor.serial_prompt_port = !editor.serial_prompt_port;
+        }
+        ConnectionEditorToggle::SerialPromptBaudRate => {
+            editor.serial_prompt_baud_rate = !editor.serial_prompt_baud_rate;
+        }
         ConnectionEditorToggle::LocalLineEdit => {
             editor.local_line_edit = !editor.local_line_edit;
         }

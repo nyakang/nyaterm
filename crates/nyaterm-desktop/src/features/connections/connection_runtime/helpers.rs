@@ -15,7 +15,7 @@ use nyaterm_store::{StoreDomain, store_request};
 use crate::features::{NyaTermApp, runtime_jobs::await_blocking_job};
 use crate::models::{
     ConnectionEditorField, ConnectionEditorForwardingTab, ConnectionEditorPasswordSource,
-    ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionKindTab,
+    ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionKindTab, SessionLaunchConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,6 +270,8 @@ pub(super) fn connection_editor_from_saved(
         working_dir: String::new(),
         serial_port: String::new(),
         baud_rate: "115200".to_string(),
+        serial_prompt_port: false,
+        serial_prompt_baud_rate: false,
         data_bits: "8".to_string(),
         parity: "none".to_string(),
         flow_control: Default::default(),
@@ -414,12 +416,15 @@ pub(super) fn connection_editor_from_saved(
             parity,
             flow_control,
             stop_bits,
+            connect_prompt,
             backspace_mode,
             encoding,
             ..
         } => {
             editor.serial_port = port_name;
             editor.baud_rate = baud_rate.to_string();
+            editor.serial_prompt_port = connect_prompt.port;
+            editor.serial_prompt_baud_rate = connect_prompt.baud_rate;
             editor.data_bits = data_bits.to_string();
             editor.parity = parity;
             editor.flow_control = flow_control;
@@ -630,7 +635,9 @@ pub(super) fn build_saved_connection_from_editor(
         }
         ConnectionKindTab::Serial => {
             let port_name = editor.serial_port.trim().to_string();
-            if port_name.is_empty() {
+            // A deferred port is chosen at connect time; only a connection that
+            // never asks needs the device up front.
+            if port_name.is_empty() && !editor.serial_prompt_port {
                 return Err(ConnectionEditorValidationError::SerialPortRequired);
             }
             let baud_rate = editor
@@ -652,6 +659,10 @@ pub(super) fn build_saved_connection_from_editor(
                 parity: non_empty_or(editor.parity.clone(), "none"),
                 flow_control: editor.flow_control,
                 stop_bits: non_empty_or(editor.stop_bits.clone(), "1"),
+                connect_prompt: nyaterm_core::models::connection::SerialConnectPrompt {
+                    port: editor.serial_prompt_port,
+                    baud_rate: editor.serial_prompt_baud_rate,
+                },
                 ai_execution_profile: AiExecutionProfile::Auto,
                 backspace_mode: nyaterm_core::terminal::connection_input::BackspaceMode::parse(
                     &editor.backspace_mode,
@@ -2322,12 +2333,27 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn refresh_connection_serial_ports(&mut self) {
-        self.connection_state.replace_serial_ports(
-            self.session
-                .manager()
-                .list_serial_ports()
-                .unwrap_or_default(),
-        );
+        let ports = self
+            .session
+            .manager()
+            .list_serial_ports()
+            .unwrap_or_default();
+        let in_use = self.serial_ports_in_use();
+        self.connection_state.replace_serial_ports(ports, in_use);
+    }
+
+    /// Serial devices this process already holds: running sessions plus starts
+    /// that are still connecting. The port picker lists them but refuses to
+    /// select them, so a second tab cannot race for the same device.
+    pub(in crate::features) fn serial_ports_in_use(&self) -> std::collections::HashSet<String> {
+        self.session
+            .metadata_entries()
+            .filter_map(|(_, metadata)| match &metadata.launch_config {
+                SessionLaunchConfig::Serial(config) => Some(config.port_name.trim().to_string()),
+                _ => None,
+            })
+            .filter(|port_name| !port_name.is_empty())
+            .collect()
     }
 
     pub(in crate::features) fn request_connection_serial_ports_refresh(
@@ -2338,6 +2364,7 @@ impl NyaTermApp {
             return;
         }
         let manager = self.session.manager_handle();
+        let in_use = self.serial_ports_in_use();
         let scheduler = self.blocking_jobs.clone();
         cx.spawn(async move |this, cx| {
             let task = scheduler.submit_task("connection-serial-ports", move |_| {
@@ -2348,7 +2375,7 @@ impl NyaTermApp {
             let result = await_blocking_job(task).await.and_then(|result| result);
             let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(ports) => this.connection_state.replace_serial_ports(ports),
+                    Ok(ports) => this.connection_state.replace_serial_ports(ports, in_use),
                     Err(error) => this.connection_state.fail_serial_ports_refresh(error),
                 }
                 cx.notify();
@@ -2372,6 +2399,8 @@ pub(in crate::features) enum ConnectionEditorToggle {
     SshCompatibilityMode,
     RawTcp,
     LocalEcho,
+    SerialPromptPort,
+    SerialPromptBaudRate,
     LocalLineEdit,
     ForceCharacterAtATime,
     SendNaws,
@@ -2667,5 +2696,86 @@ mod account_edit_tests {
             assert_eq!(auth.saved_account_id(), Some("account"));
             assert!(auth.password.is_none());
         }
+    }
+
+    /// A serial connection may defer its device to connect time, and only then
+    /// may the saved port be empty.
+    #[test]
+    fn serial_editor_accepts_an_empty_port_only_while_the_device_is_asked_at_connect() {
+        let original: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"serial", "name":"Board", "type":"serial",
+            "port_name":"COM7", "baud_rate":115200
+        }))
+        .unwrap();
+        let mut editor = connection_editor_from_saved(original, false);
+        editor.serial_port.clear();
+        assert!(matches!(
+            build_saved_connection_from_editor(&editor),
+            Err(ConnectionEditorValidationError::SerialPortRequired)
+        ));
+
+        editor.serial_prompt_port = true;
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        let nyaterm_core::ConnectionType::Serial {
+            port_name,
+            baud_rate,
+            connect_prompt,
+            ..
+        } = &saved.config
+        else {
+            panic!("serial connection expected");
+        };
+        assert_eq!(port_name, "");
+        assert_eq!(*baud_rate, 115200);
+        assert_eq!(
+            *connect_prompt,
+            nyaterm_core::models::connection::SerialConnectPrompt {
+                port: true,
+                baud_rate: false,
+            }
+        );
+
+        // The intent has to survive being reopened, otherwise the connection
+        // silently loses its prompt on the next save.
+        let reopened = connection_editor_from_saved(saved, false);
+        assert!(reopened.serial_prompt_port);
+        assert!(!reopened.serial_prompt_baud_rate);
+        assert!(reopened.serial_port.is_empty());
+
+        // Asking only for the baud rate keeps the device mandatory.
+        let mut baud_only = connection_editor_from_saved(
+            serde_json::from_value(serde_json::json!({
+                "id":"serial", "name":"Board", "type":"serial",
+                "port_name":"", "baud_rate":9600, "connect_prompt":{"baud_rate":true}
+            }))
+            .unwrap(),
+            false,
+        );
+        assert!(baud_only.serial_prompt_baud_rate);
+        assert!(matches!(
+            build_saved_connection_from_editor(&baud_only),
+            Err(ConnectionEditorValidationError::SerialPortRequired)
+        ));
+        baud_only.serial_port = "COM3".into();
+        let saved = build_saved_connection_from_editor(&baud_only).unwrap();
+        let nyaterm_core::ConnectionType::Serial { connect_prompt, .. } = &saved.config else {
+            panic!("serial connection expected");
+        };
+        assert_eq!(
+            *connect_prompt,
+            nyaterm_core::models::connection::SerialConnectPrompt {
+                port: false,
+                baud_rate: true,
+            }
+        );
+
+        // Turning the prompts back off restores the device requirement, so the
+        // editor cannot save a connection that nothing can open.
+        baud_only.serial_port.clear();
+        baud_only.serial_prompt_baud_rate = false;
+        assert!(matches!(
+            build_saved_connection_from_editor(&baud_only),
+            Err(ConnectionEditorValidationError::SerialPortRequired)
+        ));
     }
 }

@@ -1175,6 +1175,11 @@
     "serialPortRequired": "Port série requis",
     "serialPortUnavailable": "%{port} (indisponible)",
     "serialPortsLoadFailed": "Échec du chargement des ports",
+    "serialPortDefault": "Port série (choisi à la connexion)",
+    "serialPortInUse": "utilisé",
+    "serialPromptBaudRate": "Demander le débit à la connexion",
+    "serialPromptHint": "Les valeurs enregistrées servent de valeurs par défaut ; elles peuvent être modifiées à chaque connexion.",
+    "serialPromptPort": "Demander le port à la connexion",
     "serverPlaceholder": "Mon serveur",
     "shellArgs": "Arguments du shell",
     "shellArgsPlaceholder": "ex. --login -i ou -NoLogo",
@@ -2706,6 +2711,20 @@
     "sshPassword": "Mot de passe SSH",
     "sshVerification": "Vérification SSH",
     "submit": "Continuer"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "Terminez d'abord la sélection de port en cours.",
+    "baudRateInvalid": "Le débit doit être compris entre 1 et 4000000.",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "Connexion série annulée.",
+    "connect": "Connecter",
+    "description": "Indiquez le périphérique et le débit avant de vous connecter à « %{name} ».",
+    "manualPortHint": "Les périphériques non listés peuvent être saisis, p. ex. /dev/serial/by-id/…",
+    "noWindow": "Aucune fenêtre disponible pour afficher la sélection de port.",
+    "portPathPlaceholder": "COM1 ou /dev/ttyUSB0",
+    "portRequired": "Choisissez ou saisissez un périphérique série.",
+    "portRequiredUnattended": "« %{name} » demande son port à la connexion, ce que cette requête ne permet pas.",
+    "title": "Port série"
   },
   "serialSend": {
     "payloadEmpty": "Le contenu est vide",

@@ -610,20 +610,42 @@ pub(in crate::features) fn ssh_algorithm_mode_choices(
     .collect()
 }
 
+/// Serial devices, listed by port name with the USB identity as a subtitle.
+///
+/// A saved port that is no longer enumerated stays first so the user can see
+/// what the connection points at before replacing it. Ports this process already
+/// holds are listed but disabled: two sessions cannot share one device.
 pub(in crate::features) fn serial_port_choices(
-    ports: &[String],
+    ports: &[nyaterm_transport::SerialPortInfo],
+    in_use: &std::collections::HashSet<String>,
     selected: &str,
 ) -> Vec<ConnectionEditorChoice> {
     let mut choices = Vec::new();
-    if !selected.is_empty() && !ports.iter().any(|port| port == selected) {
-        choices.push(ConnectionEditorChoice::new(
-            Some(selected.to_string()),
-            selected.to_string(),
-            true,
-        ));
+    if !selected.is_empty() && !ports.iter().any(|port| port.port_name == selected) {
+        let mut choice =
+            ConnectionEditorChoice::new(Some(selected.to_string()), selected.to_string(), true);
+        if in_use.contains(selected) {
+            choice.disabled = true;
+            choice.label = format!("{selected} · {}", t!("dialog.serialPortInUse"));
+        }
+        choices.push(choice);
     }
     choices.extend(ports.iter().map(|port| {
-        ConnectionEditorChoice::new(Some(port.clone()), port.clone(), selected == port)
+        let mut choice = ConnectionEditorChoice::new(
+            Some(port.port_name.clone()),
+            port.port_name.clone(),
+            selected == port.port_name,
+        );
+        if let Some(detail) = port.detail() {
+            choice = choice
+                .search_text(format!("{} {detail}", port.port_name))
+                .subtitle(detail);
+        }
+        if in_use.contains(&port.port_name) {
+            choice.disabled = true;
+            choice.label = format!("{} · {}", port.port_name, t!("dialog.serialPortInUse"));
+        }
+        choice
     }));
     choices
 }

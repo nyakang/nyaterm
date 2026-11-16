@@ -192,8 +192,12 @@ pub(super) fn recording_mode_select_options(selected: &str) -> Vec<NyaSelectOpti
     choice_options(options::recording_mode_choices(mode))
 }
 
-pub(super) fn serial_port_select_options(ports: &[String], selected: &str) -> Vec<NyaSelectOption> {
-    choice_options(options::serial_port_choices(ports, selected))
+pub(super) fn serial_port_select_options(
+    ports: &[nyaterm_transport::SerialPortInfo],
+    in_use: &std::collections::HashSet<String>,
+    selected: &str,
+) -> Vec<NyaSelectOption> {
+    choice_options(options::serial_port_choices(ports, in_use, selected))
 }
 
 pub(super) fn baud_rate_select_options(selected: &str) -> Vec<NyaSelectOption> {

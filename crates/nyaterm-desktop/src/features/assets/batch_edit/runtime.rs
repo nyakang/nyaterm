@@ -482,6 +482,7 @@ impl NyaTermApp {
                 BatchFieldId::SerialPort,
                 options::serial_port_select_options(
                     self.connection_state.serial_ports(),
+                    self.connection_state.serial_ports_in_use(),
                     &selected_value(BatchFieldId::SerialPort),
                 ),
             ),

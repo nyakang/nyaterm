@@ -490,6 +490,9 @@ impl NyaTermApp {
             "temporary-link-serial-port" => {
                 self.apply_temporary_serial_port_name(value.to_string(), cx);
             }
+            "serial-prompt.port" => {
+                self.select_serial_prompt_port(value.to_string(), cx);
+            }
             "cloud-provider-select" => self.update_cloud_sync_provider(value, cx),
             "cloud-conflict-branch" => {
                 self.cloud_sync.select_conflict_branch(value);

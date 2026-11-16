@@ -1,11 +1,14 @@
 //! session dialogs state and transitions.
 
 use super::SessionFeatureState;
-use super::start::{DEFAULT_DUPLICATE_STARTUP_DELAY_MS, StartTabActionSnapshot};
+use super::start::{
+    DEFAULT_DUPLICATE_STARTUP_DELAY_MS, SavedConnectionStartOptions, StartTabActionSnapshot,
+};
 use crate::features::shell::tab_mouse::TabActionTarget;
 use crate::models::{StartupCommandAction, StartupCommandRequest, TabActionsSubmenu};
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use gpui::{FocusHandle, ScrollHandle, point, px};
+use nyaterm_core::SavedConnection;
 
 /// Session-scoped overlays, confirmations and editing dialogs.
 pub(in crate::features::session) struct SessionDialogState {
@@ -38,6 +41,23 @@ pub(in crate::features::session) struct SessionDialogState {
     pub(super) temporary_serial_port_name: String,
     pub(super) temporary_serial_baud_rate: String,
     pub(super) temporary_ssh_link_error: Option<&'static str>,
+    /// A saved serial connection waiting for its device and framing.
+    pub(super) serial_connect_prompt: Option<SerialConnectPromptState>,
+}
+
+/// Connect-time questions for one saved serial connection.
+///
+/// The saved values are only defaults here: the pending start resumes with
+/// `SerialConnectSelection` built from this state, and the saved connection is
+/// never rewritten.
+pub(in crate::features) struct SerialConnectPromptState {
+    pub(in crate::features) connection: SavedConnection,
+    pub(in crate::features) options: SavedConnectionStartOptions,
+    pub(in crate::features) port_name: String,
+    pub(in crate::features) baud_rate: String,
+    pub(in crate::features) ask_port: bool,
+    pub(in crate::features) ask_baud_rate: bool,
+    pub(in crate::features) error: Option<&'static str>,
 }
 
 pub(in crate::features) enum RenameSessionSubmission {
@@ -408,6 +428,30 @@ impl SessionDialogState {
     pub(in crate::features) fn apply_temporary_serial_baud_rate(&mut self, text: String) {
         self.temporary_serial_baud_rate = text.chars().filter(|ch| ch.is_ascii_digit()).collect();
         self.temporary_ssh_link_error = None;
+    }
+
+    pub(in crate::features) fn begin_serial_connect_prompt(
+        &mut self,
+        state: SerialConnectPromptState,
+    ) {
+        self.serial_connect_prompt = Some(state);
+    }
+
+    pub(in crate::features) fn serial_connect_prompt(&self) -> Option<&SerialConnectPromptState> {
+        self.serial_connect_prompt.as_ref()
+    }
+
+    pub(in crate::features) fn serial_connect_prompt_mut(
+        &mut self,
+    ) -> Option<&mut SerialConnectPromptState> {
+        self.serial_connect_prompt.as_mut()
+    }
+
+    /// Remove the pending prompt together with everything it captured.
+    pub(in crate::features) fn take_serial_connect_prompt(
+        &mut self,
+    ) -> Option<SerialConnectPromptState> {
+        self.serial_connect_prompt.take()
     }
 
     pub(in crate::features) fn apply_text_input(&mut self, field: &str, text: String) -> bool {

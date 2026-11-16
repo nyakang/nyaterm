@@ -412,6 +412,8 @@ fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> Connectio
         working_dir: String::new(),
         serial_port: String::new(),
         baud_rate: "115200".to_string(),
+        serial_prompt_port: false,
+        serial_prompt_baud_rate: false,
         data_bits: "8".to_string(),
         parity: "none".to_string(),
         flow_control: Default::default(),

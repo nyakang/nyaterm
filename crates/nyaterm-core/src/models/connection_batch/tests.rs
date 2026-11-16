@@ -149,6 +149,7 @@ fn serial_connection() -> SavedConnection {
             parity: crate::models::default_parity(),
             flow_control: SerialFlowControl::default(),
             stop_bits: crate::models::default_stop_bits(),
+            connect_prompt: Default::default(),
             ai_execution_profile: AiExecutionProfile::default(),
             backspace_mode: crate::models::default_backspace_mode_serial(),
             encoding: String::new(),

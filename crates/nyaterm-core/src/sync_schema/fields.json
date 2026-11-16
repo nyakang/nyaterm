@@ -60,6 +60,7 @@
       "parity": "portable:serial",
       "flow_control": "portable:serial",
       "stop_bits": "portable:serial",
+      "connect_prompt": "portable:serial",
       "backend": "local",
       "security": "local",
       "display": "local",

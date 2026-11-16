@@ -1175,6 +1175,11 @@
     "serialPortRequired": "Serial port required",
     "serialPortUnavailable": "%{port} (Unavailable)",
     "serialPortsLoadFailed": "Failed to load ports",
+    "serialPortDefault": "Serial port (chosen on connect)",
+    "serialPortInUse": "in use",
+    "serialPromptBaudRate": "Ask for the baud rate when connecting",
+    "serialPromptHint": "Saved values are the defaults offered by the connect dialog; change them as often as you like.",
+    "serialPromptPort": "Ask for the port when connecting",
     "serverPlaceholder": "My Server",
     "shellArgs": "Shell Arguments",
     "shellArgsPlaceholder": "e.g. --login -i or -NoLogo",
@@ -2706,6 +2711,20 @@
     "sshPassword": "SSH Password",
     "sshVerification": "SSH Verification",
     "submit": "Continue"
+  },
+  "serialPrompt": {
+    "alreadyOpen": "Finish the open serial prompt first.",
+    "baudRateInvalid": "Baud rate must be between 1 and 4000000.",
+    "baudRatePlaceholder": "115200",
+    "cancelled": "Serial connection cancelled.",
+    "connect": "Connect",
+    "description": "Choose the device and baud rate before connecting to \"%{name}\".",
+    "manualPortHint": "Devices that are not listed can be typed in, e.g. /dev/serial/by-id/…",
+    "noWindow": "No window is available to show the serial prompt.",
+    "portPathPlaceholder": "COM1 or /dev/ttyUSB0",
+    "portRequired": "Choose or enter a serial device.",
+    "portRequiredUnattended": "\"%{name}\" asks for its serial port on connect, which this request cannot do.",
+    "title": "Serial port"
   },
   "serialSend": {
     "payloadEmpty": "Payload is empty",
