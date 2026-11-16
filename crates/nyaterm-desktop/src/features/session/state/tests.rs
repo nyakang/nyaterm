@@ -1562,6 +1562,8 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     source.set_custom_name("root".into(), "renamed".into());
     source.set_tab_color("root", Some(0x123456));
     source.set_tab_locked("root", true);
+    source.record_command_history("leaf", "ls");
+    source.record_command_history("leaf", "ls");
     source.notices.push(
         "root",
         crate::features::session::notices::SessionNoticeKind::Error("move fixture".into()),
@@ -1595,6 +1597,19 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     assert!(target.tab_is_locked("root"));
     assert_eq!(source.pending_event_count(), 0);
     assert_eq!(target.pending_event_count(), 2);
+    assert_eq!(target.command_history_for("leaf").unwrap(), &["ls", "ls"]);
+    for _ in 0..2 {
+        assert!(
+            target
+                .take_recorded_command_submission("leaf", "ls")
+                .is_some()
+        );
+    }
+    assert!(
+        target
+            .take_recorded_command_submission("leaf", "ls")
+            .is_none()
+    );
     assert!(source.notices.get("root").is_none());
     assert!(source.notices.get("leaf").is_none());
     assert!(!target.notices.push(
@@ -1614,6 +1629,68 @@ fn transferring_split_session_catalog_preserves_order_metadata_and_pending_event
     ));
     target.remove_session_catalog("leaf");
     assert!(target.notices.get("leaf").is_none());
+}
+
+#[test]
+fn command_history_pending_submissions_are_session_local_and_reset_on_reconnect() {
+    let dir = TestConfigDir::new("nyaterm-history-session-lifecycle");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, dir.path());
+    for id in ["first", "second"] {
+        sessions.register_session_metadata(id, session_metadata(id, None));
+        sessions.record_command_history(id, "  ls  ");
+    }
+    assert!(
+        sessions
+            .take_recorded_command_submission("first", "ls")
+            .is_some()
+    );
+    assert!(
+        sessions
+            .take_recorded_command_submission("first", "ls")
+            .is_none()
+    );
+    sessions.mark_session_disconnected("second").unwrap();
+    assert!(
+        sessions
+            .take_recorded_command_submission("second", "ls")
+            .is_none()
+    );
+    assert_eq!(sessions.command_history_for("second").unwrap(), &["ls"]);
+    sessions.record_command_history("first", "pwd");
+    sessions.migrate_command_history("first", "reconnected");
+    assert!(
+        sessions
+            .take_recorded_command_submission("reconnected", "pwd")
+            .is_none()
+    );
+    assert_eq!(
+        sessions.command_history_for("reconnected").unwrap(),
+        &["pwd", "ls"]
+    );
+    sessions.remove_session_catalog("second");
+    assert!(sessions.command_history_for("second").is_none());
+}
+
+#[test]
+fn deleting_history_keeps_late_reports_from_restoring_the_command() {
+    use super::CommandHistoryLearning;
+
+    let dir = TestConfigDir::new("nyaterm-history-delete-pending");
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut sessions = session_state(&cx, dir.path());
+    sessions.record_command_history("first", "ls");
+    sessions.remove_command_from_all_history("ls");
+    assert_eq!(
+        sessions.command_history_for("first").unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        sessions.take_recorded_command_submission("first", "ls"),
+        Some(CommandHistoryLearning::Deleted)
+    );
 }
 
 #[test]

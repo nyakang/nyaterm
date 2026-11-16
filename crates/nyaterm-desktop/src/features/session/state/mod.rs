@@ -1,6 +1,7 @@
 //! Authoritative session state and focused transition modules.
 
 use self::catalog::{ActiveSessionState, SessionTabDragState};
+use self::command_history::SessionCommandHistory;
 use self::dialogs::SessionDialogState;
 use self::events::SessionEventQueueState;
 use self::prompts::SessionPromptState;
@@ -18,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 mod catalog;
+mod command_history;
 mod dialogs;
 mod events;
 mod prompts;
@@ -26,6 +28,7 @@ mod restore;
 mod start;
 
 pub(crate) use catalog::SessionCatalogTransferBundle;
+pub(in crate::features) use command_history::CommandHistoryLearning;
 pub(in crate::features) use dialogs::RenameSessionSubmission;
 pub(in crate::features) use prompts::PromptResolution;
 pub(in crate::features) use start::{
@@ -45,7 +48,7 @@ pub(in crate::features) struct SessionFeatureState {
     events: SessionEventQueueState,
     pub(super) prompts: SessionPromptState,
     pub(super) dialogs: SessionDialogState,
-    command_history: HashMap<String, Vec<String>>,
+    command_history: HashMap<String, SessionCommandHistory>,
     active_search_draft: String,
     /// Shared by the active-sessions list and its scrollbar so both read one
     /// scroll position across re-renders.
