@@ -1,4 +1,5 @@
 mod bridge;
+mod terminal_start;
 
 use std::sync::Arc;
 
@@ -64,10 +65,12 @@ impl ServerHandler for NyaTermMcp {
         {
             return Ok(CallToolResult::structured_error(json!({"code":"unsupported_capability","message":"The connected NyaTerm Host does not support terminal jobs."})).into());
         }
-        let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let mut arguments = Value::Object(request.arguments.unwrap_or_default());
         if arguments.get("target").is_some() && !self.bridge.supports_connection_targets() {
             return Ok(CallToolResult::structured_error(json!({"code":"unsupported_capability","message":"The connected NyaTerm Host does not support execution targets."})).into());
         }
+        let wait = terminal_start::StartWait::take(&request.name, &mut arguments)
+            .map_err(|message| McpError::invalid_params(message, None))?;
         validate_tool_arguments(&request.name, &arguments)
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let result = match self
@@ -76,7 +79,17 @@ impl ServerHandler for NyaTermMcp {
             .await
         {
             Ok(value) => match validate_tool_result(&request.name, &value) {
-                Ok(()) => CallToolResult::structured(structured_content(&request.name, value)),
+                Ok(()) => {
+                    // Start and poll have different wire contracts. Validate each
+                    // response before allowing it to replace the last good result.
+                    let value = if request.name == tool::TERMINAL_START {
+                        wait.wait_for_result(&self.bridge, value, context.ct.clone())
+                            .await
+                    } else {
+                        value
+                    };
+                    CallToolResult::structured(structured_content(&request.name, value))
+                }
                 Err(error) => CallToolResult::structured_error(json!({
                     "code": "bridge_protocol_error",
                     "message": error.to_string()
@@ -115,17 +128,20 @@ impl ServerHandler for NyaTermMcp {
         let mut item = self.tools.iter().find(|item| item.name == name)?.clone();
         let targets = self.bridge.supports_connection_targets();
         item.input_schema = Arc::new(
-            nyaterm_mcp_protocol::tool_input_schema_for_features(name, targets)
+            terminal_start::input_schema(name, targets)
                 .ok()?
                 .as_object()?
                 .clone(),
         );
-        item.output_schema =
-            nyaterm_mcp_protocol::terminal_job_result_schema_for_features(name, targets)
-                .and_then(|schema| schema.as_object().cloned())
-                .map(Arc::new);
+        item.output_schema = terminal_start::result_schema(name, targets)
+            .and_then(|schema| schema.as_object().cloned())
+            .map(Arc::new);
         if !targets && name == tool::TERMINAL_START {
             item.description = Some("Start a job in an existing scoped terminal session. Defaults to inline_pty; ssh_exec uses an independent channel. Use an idempotencyKey for retries.".into());
+        }
+        if name == tool::TERMINAL_START {
+            let description = item.description.get_or_insert_with(Default::default);
+            *description = format!("{description} {}", terminal_start::WAIT_DESCRIPTION).into();
         }
         if !self.bridge.supports_lifecycle() {
             if matches!(
@@ -182,11 +198,11 @@ fn build_tools() -> Vec<Tool> {
     MCP_TOOL_REGISTRY
         .iter()
         .map(|definition| {
-            let schema = nyaterm_mcp_protocol::tool_input_schema(definition.tool)
+            let schema = terminal_start::input_schema(definition.tool, true)
                 .expect("registered tool schema");
             let object = schema.as_object().cloned().unwrap_or_else(Map::new);
             let mut item = Tool::new(definition.tool, definition.description, object);
-            item.output_schema = nyaterm_mcp_protocol::terminal_job_result_schema(definition.tool)
+            item.output_schema = terminal_start::result_schema(definition.tool, true)
                 .and_then(|schema| schema.as_object().cloned())
                 .map(std::sync::Arc::new);
             item.annotations = Some(
@@ -779,7 +795,8 @@ mod tests {
                     "params": { "name": "terminal_start", "arguments": {
                         "command": "echo hi",
                         "backend": "ssh_exec",
-                        "target": { "type": "connection", "connectionId": "c1" }
+                        "target": { "type": "connection", "connectionId": "c1" },
+                        "waitMs": 0
                     } } }"#,
         )
         .await;
