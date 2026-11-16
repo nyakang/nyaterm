@@ -2242,11 +2242,10 @@ impl ConnectionEditorFeatureState {
         self.password = EditorPasswordState::new(
             draft.existing_password.is_some() || draft.existing_password_locked,
         );
-        draft.section =
-            crate::models::ConnectionEditorSection::for_kind(draft.kind, draft.defaults_mode)
-                .first()
-                .copied()
-                .unwrap_or(crate::models::ConnectionEditorSection::Basic);
+        draft.section = crate::models::ConnectionEditorSection::initial_for_kind(
+            draft.kind,
+            draft.defaults_mode,
+        );
         self.scroll = gpui::ScrollHandle::new();
         self.anchors.clear();
         self.save_generation = self.save_generation.wrapping_add(1);

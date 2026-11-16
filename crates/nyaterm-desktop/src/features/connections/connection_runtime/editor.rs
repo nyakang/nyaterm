@@ -1063,10 +1063,7 @@ impl NyaTermApp {
                 next
             });
             next.section =
-                crate::models::ConnectionEditorSection::for_kind(kind, next.defaults_mode)
-                    .first()
-                    .copied()
-                    .unwrap_or(crate::models::ConnectionEditorSection::Basic);
+                crate::models::ConnectionEditorSection::initial_for_kind(kind, next.defaults_mode);
             self.connection_state.replace_editor_kind(next);
             self.connection_state.hide_editor_secrets(cx);
             self.dismiss_connection_editor_menus(cx);

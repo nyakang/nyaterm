@@ -74,7 +74,10 @@ impl ConnectionEditorSection {
     pub(crate) fn for_kind(kind: ConnectionKindTab, defaults_mode: bool) -> &'static [Self] {
         let sections = Self::for_kind_all_tabs(kind);
         if defaults_mode {
-            &sections[1..]
+            match kind {
+                ConnectionKindTab::Serial => &[Self::Serial, Self::Terminal],
+                _ => &sections[1..],
+            }
         } else {
             sections
         }
@@ -106,8 +109,19 @@ impl ConnectionEditorSection {
                 Self::Display,
                 Self::Session,
             ],
-            ConnectionKindTab::Serial => &[Self::Basic, Self::Serial, Self::Terminal],
+            ConnectionKindTab::Serial => &[Self::Serial, Self::Basic, Self::Terminal],
             ConnectionKindTab::Local => &[Self::Basic, Self::Terminal],
+        }
+    }
+
+    pub(crate) fn initial_for_kind(kind: ConnectionKindTab, defaults_mode: bool) -> Self {
+        if defaults_mode {
+            Self::for_kind(kind, true)
+                .first()
+                .copied()
+                .unwrap_or(Self::Basic)
+        } else {
+            Self::Basic
         }
     }
 
