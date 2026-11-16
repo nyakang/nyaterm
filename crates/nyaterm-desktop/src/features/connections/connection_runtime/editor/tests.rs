@@ -748,11 +748,9 @@ fn new_protocol_inherits_identity_once_and_preserves_each_protocol_draft() {
     });
 }
 
-/// A new serial connection is titled after the device and rate it picks, the
-/// name box shows that title, and the title does not follow the draft to
-/// another kind.
+/// Device and baud changes preserve the name in both the draft and input.
 #[test]
-fn a_new_serial_connection_is_titled_after_the_device_it_picks() {
+fn serial_device_and_baud_changes_preserve_the_name_input() {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::{ConnectionEditorField, ConnectionEditorSelect, ConnectionKindTab};
     use crate::test_support::TestAppCleanup;
@@ -765,6 +763,7 @@ fn a_new_serial_connection_is_titled_after_the_device_it_picks() {
         app.connection_state.begin_editor(draft);
         app.connection_state.build_editor_fields(cx);
         app.set_connection_editor_kind(ConnectionKindTab::Serial, cx);
+        let initial_name = app.connection_state.active_editor_draft().unwrap().name;
         app.set_connection_editor_select_value(
             ConnectionEditorSelect::SerialPort,
             Some("COM9"),
@@ -772,35 +771,26 @@ fn a_new_serial_connection_is_titled_after_the_device_it_picks() {
         );
         assert_eq!(
             app.connection_state.active_editor_draft().unwrap().name,
-            "COM9 @ 115200"
+            initial_name
         );
-        // The box has to show the title the draft took.
+        // The input retains the initial name.
         assert_eq!(
             app.connection_state.editor_fields()[&ConnectionEditorField::Name]
                 .read(cx)
                 .value(cx),
-            "COM9 @ 115200"
+            initial_name
         );
-        // A rate picked in the baud popover retitles the draft and the box too.
+        // The baud popover also preserves both values.
         app.set_connection_editor_baud_rate("921600".to_string(), cx);
         assert_eq!(
             app.connection_state.active_editor_draft().unwrap().name,
-            "COM9 @ 921600"
+            initial_name
         );
         assert_eq!(
             app.connection_state.editor_fields()[&ConnectionEditorField::Name]
                 .read(cx)
                 .value(cx),
-            "COM9 @ 921600"
-        );
-        // A device is not a name for an SSH draft.
-        app.set_connection_editor_kind(ConnectionKindTab::Ssh, cx);
-        assert!(
-            app.connection_state
-                .active_editor_draft()
-                .unwrap()
-                .name
-                .is_empty()
+            initial_name
         );
         app.connection_state.close_editor();
     });

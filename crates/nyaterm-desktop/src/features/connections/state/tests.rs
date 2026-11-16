@@ -3244,30 +3244,29 @@ fn new_serial_draft(port: &str) -> ConnectionEditorState {
     }
 }
 
-/// A new serial connection is titled after its device, so naming it is one
-/// field less to fill in before saving.
+/// Selecting a device leaves an empty connection name untouched.
 #[test]
-fn choosing_a_device_retitles_a_new_serial_connection() {
+fn choosing_a_device_preserves_an_empty_serial_connection_name() {
     let mut draft = Some(new_serial_draft("COM7"));
     assert!(set_connection_editor_select_value(
         &mut draft,
         ConnectionEditorSelect::SerialPort,
         Some("COM9".to_string()),
     ));
-    assert_eq!(draft.as_ref().unwrap().name, "COM9 @ 115200");
+    assert_eq!(draft.as_ref().unwrap().name, "");
 
-    // A device pasted as a path is titled after the device, not the path.
+    // Device paths also leave the name untouched.
     assert!(set_connection_editor_select_value(
         &mut draft,
         ConnectionEditorSelect::SerialPort,
         Some("/dev/serial/by-id/usb-FTDI-if00-port0".to_string()),
     ));
-    assert_eq!(draft.as_ref().unwrap().name, "usb-FTDI-if00-port0 @ 115200");
+    assert_eq!(draft.as_ref().unwrap().name, "");
 }
 
-/// A hand-typed device names the draft just like a listed one.
+/// A hand-typed device preserves the existing name.
 #[test]
-fn a_hand_typed_device_renames_the_draft() {
+fn a_hand_typed_device_preserves_the_draft_name() {
     let mut draft = new_serial_draft("COM7");
     set_connection_editor_field_text(
         &mut draft,
@@ -3275,11 +3274,10 @@ fn a_hand_typed_device_renames_the_draft() {
         r"\\.\COM10".into(),
     );
     assert_eq!(draft.serial_port, r"\\.\COM10");
-    assert_eq!(draft.name, "COM10 @ 115200");
+    assert_eq!(draft.name, "");
 }
 
-/// The device only gets a say while the name still says what it used to open;
-/// a name of the user's own survives.
+/// Custom names survive device changes.
 #[test]
 fn a_name_of_the_users_own_survives_the_next_device() {
     let mut draft = Some(new_serial_draft("COM7"));
@@ -3304,10 +3302,9 @@ fn a_name_of_the_users_own_survives_the_next_device() {
     assert_eq!(saved.as_ref().unwrap().name, "Board");
 }
 
-/// A saved connection titled after the device it was saved from is titled after
-/// the device it now holds, so the list and the tab agree on what is open.
+/// Saved names remain unchanged even when they match the previous device.
 #[test]
-fn a_saved_connection_titled_by_its_device_follows_the_new_one() {
+fn a_saved_serial_connection_preserves_its_device_name() {
     let mut saved = Some(ConnectionEditorState {
         id: Some("serial".to_string()),
         name: "COM7 @ 115200".to_string(),
@@ -3318,7 +3315,7 @@ fn a_saved_connection_titled_by_its_device_follows_the_new_one() {
         ConnectionEditorSelect::SerialPort,
         Some("COM9".to_string()),
     ));
-    assert_eq!(saved.as_ref().unwrap().name, "COM9 @ 115200");
+    assert_eq!(saved.as_ref().unwrap().name, "COM7 @ 115200");
 
     // Old titles named the device alone, without the rate.
     let mut older = Some(ConnectionEditorState {
@@ -3331,7 +3328,7 @@ fn a_saved_connection_titled_by_its_device_follows_the_new_one() {
         ConnectionEditorSelect::BaudRate,
         Some("57600".to_string()),
     ));
-    assert_eq!(older.as_ref().unwrap().name, "ttyUSB0 @ 57600");
+    assert_eq!(older.as_ref().unwrap().name, "ttyUSB0");
 }
 
 /// Asking for the device keeps the saved one as the connect-time default, so
@@ -3377,21 +3374,16 @@ fn opening_the_serial_tab_titles_the_draft_from_its_device() {
     assert_eq!(draft.name, "Stepper");
 }
 
-/// The rate is part of the title, so changing it retitles a new connection the
-/// same way picking another device does.
+/// Editing a baud rate preserves both generated and custom names.
 #[test]
-fn a_new_rate_retitles_a_new_serial_connection() {
+fn a_new_rate_preserves_a_new_serial_connection_name() {
     let mut draft = Some(new_serial_draft("COM7"));
-    set_connection_editor_select_value(
-        &mut draft,
-        ConnectionEditorSelect::SerialPort,
-        Some("COM7".to_string()),
-    );
+    draft.as_mut().unwrap().name = "COM7 @ 115200".into();
     assert_eq!(draft.as_ref().unwrap().name, "COM7 @ 115200");
 
     let editor = draft.as_mut().unwrap();
     set_connection_editor_field_text(editor, ConnectionEditorField::BaudRate, "921600".into());
-    assert_eq!(editor.name, "COM7 @ 921600");
+    assert_eq!(editor.name, "COM7 @ 115200");
 
     // A title the user typed is not up for revision.
     editor.name = "Stepper bench".to_string();

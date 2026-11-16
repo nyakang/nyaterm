@@ -81,48 +81,9 @@ pub(super) fn set_connection_editor_icon_auto_detect(
     true
 }
 
-/// Whether a name is the one the device and rate produce rather than one the
-/// user typed.
-///
-/// An empty box counts as the device's, so the first real value fills it in.
-/// The rule is the same one a session tab is titled by, so the name the editor
-/// saves and the tab it opens cannot disagree.
+/// Identify a device-derived name when switching away from the serial kind.
 fn name_restates_device(name: &str, port: &str, baud_rate: &str) -> bool {
     crate::models::serial_name_restates_device(name, port, baud_rate.parse().unwrap_or_default())
-}
-
-/// Whether a serial draft may take its title from the device it now shows.
-///
-/// The defaults editor has no title at all. Everywhere else the name is only
-/// free while it still says what the previous device and rate said — a name the
-/// user typed is never overwritten. Saved connections are no different: a name
-/// that merely restated `COM7 @ 115200` was the editor's default, so it follows
-/// the device the user picks over it, which is also what the tab will be called.
-fn serial_draft_takes_device_title(
-    editor: &ConnectionEditorState,
-    previous_port: &str,
-    previous_baud_rate: &str,
-) -> bool {
-    if editor.defaults_mode || editor.kind != ConnectionKindTab::Serial {
-        return false;
-    }
-    name_restates_device(&editor.name, previous_port, previous_baud_rate)
-}
-
-/// Retitle a serial connection after the device and rate that took over.
-///
-/// The previous values are what tells an auto-derived title apart from one the
-/// user typed.
-fn follow_serial_device_name(
-    editor: &mut ConnectionEditorState,
-    previous_port: &str,
-    previous_baud_rate: &str,
-) {
-    if !serial_draft_takes_device_title(editor, previous_port, previous_baud_rate) {
-        return;
-    }
-    editor.name = crate::models::serial_connection_name(&editor.serial_port, &editor.baud_rate)
-        .unwrap_or_default();
 }
 
 /// Forget a title that only restated the device, unless the user typed it.
@@ -327,8 +288,6 @@ pub(super) fn set_connection_editor_select_value(
             editor.shell_path = value.unwrap_or_else(|| "powershell.exe".to_string());
         }
         ConnectionEditorSelect::SerialPort => {
-            let previous_port = editor.serial_port.clone();
-            let previous_baud_rate = editor.baud_rate.clone();
             match value.as_deref() {
                 // The saved device stays as the connect-time default; the flag is
                 // what decides whether the user is asked at all.
@@ -340,14 +299,9 @@ pub(super) fn set_connection_editor_select_value(
                     editor.serial_port = port.unwrap_or_default().to_string();
                 }
             }
-            follow_serial_device_name(editor, &previous_port, &previous_baud_rate);
         }
         ConnectionEditorSelect::BaudRate => {
-            let previous_baud_rate = editor.baud_rate.clone();
             editor.baud_rate = value.unwrap_or_else(|| "115200".to_string());
-            // The rate is part of the title a new connection takes.
-            let port = editor.serial_port.clone();
-            follow_serial_device_name(editor, &port, &previous_baud_rate);
         }
         ConnectionEditorSelect::DataBits => {
             editor.data_bits = value.unwrap_or_else(|| "8".to_string());
@@ -1408,18 +1362,8 @@ pub(super) fn set_connection_editor_field_text(
                 .map(|v| (v * 1_000_000.0).round() as u32)
                 .unwrap_or(0)
         }
-        ConnectionEditorField::SerialPort => {
-            // A hand-typed device names the connection just like a listed one.
-            let previous_port = std::mem::replace(&mut draft.serial_port, text);
-            let previous_baud_rate = draft.baud_rate.clone();
-            follow_serial_device_name(draft, &previous_port, &previous_baud_rate);
-        }
-        ConnectionEditorField::BaudRate => {
-            // Typing the rate retitles a new connection the same way.
-            let previous_baud_rate = std::mem::replace(&mut draft.baud_rate, text);
-            let previous_port = draft.serial_port.clone();
-            follow_serial_device_name(draft, &previous_port, &previous_baud_rate);
-        }
+        ConnectionEditorField::SerialPort => draft.serial_port = text,
+        ConnectionEditorField::BaudRate => draft.baud_rate = text,
         ConnectionEditorField::PostLoginCommand => draft.post_login_command = text,
         ConnectionEditorField::PostLoginDelay => draft.post_login_delay_ms = text,
         ConnectionEditorField::SftpShellDetectionTimeout => {

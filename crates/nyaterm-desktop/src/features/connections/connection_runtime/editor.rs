@@ -635,8 +635,6 @@ impl NyaTermApp {
             .set_editor_field_text(ConnectionEditorField::BaudRate, value.clone());
         self.connection_state
             .reset_editor_field(ConnectionEditorField::BaudRate, &value, cx);
-        // The rate is part of a new serial connection's title.
-        self.sync_editor_serial_name(cx);
         // Choosing a rate is an explicit decision, so the deferred option and
         // the rate cannot both be in effect.
         self.connection_state
@@ -803,29 +801,7 @@ impl NyaTermApp {
             self.connection_state.sync_editor_password_input(cx);
         }
 
-        if matches!(
-            select,
-            ConnectionEditorSelect::SerialPort | ConnectionEditorSelect::BaudRate
-        ) {
-            self.sync_editor_serial_name(cx);
-        }
-
         cx.notify();
-    }
-
-    /// Keep the name box showing a title the serial device just produced.
-    ///
-    /// The box holds its own buffer, so a draft retitled behind it — by a picked
-    /// device, a typed path, or a new rate — has to be pushed into it.
-    fn sync_editor_serial_name(&mut self, cx: &mut Context<Self>) {
-        let name = self
-            .connection_state
-            .active_editor_draft()
-            .map(|editor| editor.name);
-        if let Some(name) = name {
-            self.connection_state
-                .reset_editor_field(ConnectionEditorField::Name, &name, cx);
-        }
     }
 
     pub(in crate::features) fn use_connection_editor_username(&mut self, cx: &mut Context<Self>) {
@@ -1058,14 +1034,6 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.connection_state.set_editor_field_text(field, text);
-        // The device and the rate both name a new serial connection, so typing
-        // either retitles the draft and the name box has to follow.
-        if matches!(
-            field,
-            ConnectionEditorField::SerialPort | ConnectionEditorField::BaudRate
-        ) {
-            self.sync_editor_serial_name(cx);
-        }
         cx.notify();
     }
 
