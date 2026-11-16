@@ -55,6 +55,9 @@ pub(in crate::features) struct SerialConnectPromptState {
     pub(in crate::features) options: SavedConnectionStartOptions,
     pub(in crate::features) port_name: String,
     pub(in crate::features) baud_rate: String,
+    /// The device is being typed rather than picked from the list, which is
+    /// also what decides whether the free-text field is on screen.
+    pub(in crate::features) custom_port: bool,
     pub(in crate::features) ask_port: bool,
     pub(in crate::features) ask_baud_rate: bool,
     pub(in crate::features) error: Option<&'static str>,

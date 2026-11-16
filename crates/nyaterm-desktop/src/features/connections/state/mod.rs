@@ -34,6 +34,9 @@ use nyaterm_ui::{
 };
 
 mod editor_logic;
+
+// Re-exported for the editor runtime, which switches kinds on the app side.
+pub(super) use self::editor_logic::{adopt_serial_device_name, drop_device_name};
 pub(in crate::features) mod import;
 mod list_logic;
 pub(in crate::features) mod list_model;
@@ -54,9 +57,9 @@ use self::editor_logic::{
     set_connection_editor_field_text, set_connection_editor_forwarding_endpoint_field,
     set_connection_editor_icon, set_connection_editor_icon_auto_detect, set_connection_editor_kind,
     set_connection_editor_password_source, set_connection_editor_select_value,
-    set_connection_editor_ssh_algorithm_enabled, set_connection_editor_ssh_algorithm_tab,
-    set_connection_group_editor_error, toggle_connection_editor_agent_allowlist_fingerprint,
-    toggle_connection_editor_flag,
+    set_connection_editor_serial_prompt_baud_rate, set_connection_editor_ssh_algorithm_enabled,
+    set_connection_editor_ssh_algorithm_tab, set_connection_group_editor_error,
+    toggle_connection_editor_agent_allowlist_fingerprint, toggle_connection_editor_flag,
 };
 use self::import::{ConnectionImportState, MobaImportSlot};
 use self::list_logic::{
@@ -947,6 +950,17 @@ impl ConnectionFeatureState {
         {
             entity.update(cx, |entity, cx| entity.set_disabled(draft.raw_tcp_cli, cx));
         }
+    }
+
+    /// Defer the baud rate to connect time, or take an explicit rate again.
+    ///
+    /// The saved rate is kept either way: the connect-time dialog uses it as
+    /// the default offer.
+    pub fn set_editor_serial_prompt_baud_rate(&mut self, ask: bool) -> bool {
+        if self.editor_save_in_flight() {
+            return false;
+        }
+        set_connection_editor_serial_prompt_baud_rate(&mut self.editor.draft, ask)
     }
 
     pub fn set_editor_field_text(&mut self, field: ConnectionEditorField, text: String) {

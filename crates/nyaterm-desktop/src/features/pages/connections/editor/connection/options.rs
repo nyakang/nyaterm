@@ -650,6 +650,26 @@ pub(in crate::features) fn serial_port_choices(
     choices
 }
 
+/// Editor port list: the device list plus the option that defers the choice.
+///
+/// Picking a device is an explicit decision, so the saved port is only shown as
+/// selected while nothing is deferred.
+pub(in crate::features) fn editor_serial_port_choices(
+    ports: &[nyaterm_transport::SerialPortInfo],
+    in_use: &std::collections::HashSet<String>,
+    selected: &str,
+    ask_at_connect: bool,
+) -> Vec<ConnectionEditorChoice> {
+    let mut choices = vec![ConnectionEditorChoice::new(
+        Some(crate::models::SERIAL_PORT_ASK_AT_CONNECT.to_string()),
+        t!("dialog.askAtConnect").to_string(),
+        ask_at_connect,
+    )];
+    let selected = if ask_at_connect { "" } else { selected };
+    choices.extend(serial_port_choices(ports, in_use, selected));
+    choices
+}
+
 pub(in crate::features) fn baud_rate_choices(selected: &str) -> Vec<ConnectionEditorChoice> {
     [
         "9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600",
@@ -813,4 +833,53 @@ pub(in crate::features) fn shell_choices(selected: &str) -> Vec<ConnectionEditor
         ConnectionEditorChoice::new(Some(value.to_string()), label, selected == value)
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use nyaterm_transport::SerialPortInfo;
+
+    use super::{editor_serial_port_choices, serial_port_choices};
+    use crate::models::SERIAL_PORT_ASK_AT_CONNECT;
+
+    fn port(name: &str) -> SerialPortInfo {
+        SerialPortInfo {
+            port_name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_device_dropdown_offers_deferring_ahead_of_the_enumerated_ports() {
+        let ports = [port("COM3"), port("COM4")];
+        let in_use = HashSet::from(["COM4".to_string()]);
+
+        let deferred = editor_serial_port_choices(&ports, &in_use, "COM3", true);
+        assert_eq!(
+            deferred[0].value.as_deref(),
+            Some(SERIAL_PORT_ASK_AT_CONNECT)
+        );
+        assert!(deferred[0].selected);
+        // Deferring wins the display: the saved device is only a default now.
+        assert!(deferred[1..].iter().all(|choice| !choice.selected));
+        assert!(!deferred[1].disabled);
+        assert!(
+            deferred[2].disabled,
+            "a busy port stays listed but unusable"
+        );
+
+        // Picking a device is an explicit choice, so the deferral loses the check.
+        let explicit = editor_serial_port_choices(&ports, &in_use, "COM3", false);
+        assert!(!explicit[0].selected);
+        assert!(explicit[1].selected);
+    }
+
+    #[test]
+    fn batch_editing_sets_a_device_and_never_defers_it() {
+        let choices = serial_port_choices(&[port("COM3")], &HashSet::new(), "COM3");
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].value.as_deref(), Some("COM3"));
+    }
 }

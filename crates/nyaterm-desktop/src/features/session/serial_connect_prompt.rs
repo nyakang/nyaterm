@@ -26,6 +26,18 @@ use crate::features::text_inputs::TextInputSetup;
 /// the prompt state.
 const SERIAL_PROMPT_TEXT_PREFIX: &str = "serial-prompt.";
 
+/// Dropdown value that stands for "I will type the device myself" instead of a
+/// port name. It only reveals the free-text field and is never used as a device.
+pub(in crate::features) const SERIAL_PROMPT_CUSTOM_PORT: &str = "__custom_port__";
+
+/// Whether the free-text device field belongs on screen.
+///
+/// Without a single enumerated device there is nothing to pick, so typing is the
+/// only way forward; otherwise the field appears once "custom" is chosen.
+fn manual_device_field_visible(device_count: usize, custom_port: bool) -> bool {
+    device_count == 0 || custom_port
+}
+
 impl NyaTermApp {
     /// Ask for the deferred serial parameters before starting `connection`.
     ///
@@ -57,6 +69,13 @@ impl NyaTermApp {
         } else {
             port_hint
         };
+        // A saved device that is not enumerated any more (or a hand-written path)
+        // opens straight into the free-text field instead of an empty dropdown.
+        let custom_port = !self
+            .connection_state
+            .serial_ports()
+            .iter()
+            .any(|port| port.port_name == port_name);
         self.session
             .dialogs
             .begin_serial_connect_prompt(SerialConnectPromptState {
@@ -64,6 +83,7 @@ impl NyaTermApp {
                 options,
                 port_name,
                 baud_rate: baud_hint.to_string(),
+                custom_port,
                 ask_port: prompt.port,
                 ask_baud_rate: prompt.baud_rate,
                 error: None,
@@ -182,15 +202,21 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    /// Selection from the enumerated device list; mirrors the text field.
+    /// Selection from the device dropdown, including the "custom" entry.
+    ///
+    /// Picking a device hides the text field; picking "custom" reveals it and
+    /// leaves the current value in place as the starting point to edit.
     pub(in crate::features) fn select_serial_prompt_port(
         &mut self,
-        port_name: String,
+        value: String,
         cx: &mut Context<Self>,
     ) {
         if let Some(state) = self.session.dialogs.serial_connect_prompt_mut() {
-            state.port_name = port_name;
             state.error = None;
+            state.custom_port = value == SERIAL_PROMPT_CUSTOM_PORT;
+            if !state.custom_port {
+                state.port_name = value;
+            }
         }
         self.forget_text_inputs("serial-prompt.port-path");
         cx.notify();
@@ -216,6 +242,7 @@ impl NyaTermApp {
         let connection_name = state.connection.name.clone();
         let ask_port = state.ask_port;
         let ask_baud_rate = state.ask_baud_rate;
+        let custom_port = state.custom_port;
         let port_name = state.port_name.clone();
         let baud_rate = state.baud_rate.clone();
         let error_key = state.error;
@@ -257,41 +284,49 @@ impl NyaTermApp {
         );
 
         if ask_port {
-            content = content.child(
+            let devices = device_options.len();
+            let mut group = div().flex().flex_col().gap_1().child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(palette.text_muted))
-                            .child(t!("dialog.serialPort")),
-                    )
-                    .child(if device_options.is_empty() {
-                        div()
-                            .h(px(32.))
-                            .w_full()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(rgb(palette.border))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .text_xs()
-                            .text_color(rgb(palette.text_dimmed))
-                            .child(t!("dialog.noSerialPortsFound"))
-                            .into_any_element()
-                    } else {
-                        self.form_select_control(
-                            "serial-prompt.port",
-                            device_options,
-                            (!port_name.is_empty()).then_some(port_name.clone()),
-                            false,
-                            cx,
-                        )
-                        .into_any_element()
-                    })
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("dialog.serialPort")),
+            );
+            if devices == 0 {
+                group = group.child(
+                    div()
+                        .h(px(32.))
+                        .w_full()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(rgb(palette.border))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .text_xs()
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(t!("dialog.noSerialPortsFound")),
+                );
+            } else {
+                let mut choices = device_options;
+                choices.push(NyaSelectOption::new(
+                    SERIAL_PROMPT_CUSTOM_PORT,
+                    t!("serialPrompt.customPort").to_string(),
+                ));
+                let selected = if custom_port {
+                    SERIAL_PROMPT_CUSTOM_PORT.to_string()
+                } else {
+                    port_name.clone()
+                };
+                group = group.child(self.form_select_control(
+                    "serial-prompt.port",
+                    choices,
+                    Some(selected),
+                    false,
+                    cx,
+                ));
+            }
+            if manual_device_field_visible(devices, custom_port) {
+                group = group
                     .child(
                         div()
                             .text_size(px(11.))
@@ -303,8 +338,9 @@ impl NyaTermApp {
                         &port_name,
                         TextInputSetup::placeholder(t!("serialPrompt.portPathPlaceholder")),
                         cx,
-                    )),
-            );
+                    ));
+            }
+            content = content.child(group);
         }
 
         if ask_baud_rate {
@@ -338,5 +374,19 @@ impl NyaTermApp {
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::manual_device_field_visible;
+
+    /// The free-text field is the fallback when nothing is enumerated, so a
+    /// machine without a single device is not a dead end.
+    #[test]
+    fn the_free_text_field_shows_whenever_there_is_nothing_to_pick() {
+        assert!(manual_device_field_visible(0, false));
+        assert!(!manual_device_field_visible(3, false));
+        assert!(manual_device_field_visible(3, true));
     }
 }

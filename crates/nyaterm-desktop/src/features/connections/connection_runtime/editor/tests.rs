@@ -748,6 +748,64 @@ fn new_protocol_inherits_identity_once_and_preserves_each_protocol_draft() {
     });
 }
 
+/// A new serial connection is titled after the device and rate it picks, the
+/// name box shows that title, and the title does not follow the draft to
+/// another kind.
+#[test]
+fn a_new_serial_connection_is_titled_after_the_device_it_picks() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{ConnectionEditorField, ConnectionEditorSelect, ConnectionKindTab};
+    use crate::test_support::TestAppCleanup;
+    let root = TestTempDir::new("nyaterm-serial-title");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let draft = app.new_connection_editor_state(None, false);
+        app.connection_state.begin_editor(draft);
+        app.connection_state.build_editor_fields(cx);
+        app.set_connection_editor_kind(ConnectionKindTab::Serial, cx);
+        app.set_connection_editor_select_value(
+            ConnectionEditorSelect::SerialPort,
+            Some("COM9"),
+            cx,
+        );
+        assert_eq!(
+            app.connection_state.active_editor_draft().unwrap().name,
+            "COM9 @ 115200"
+        );
+        // The box has to show the title the draft took.
+        assert_eq!(
+            app.connection_state.editor_fields()[&ConnectionEditorField::Name]
+                .read(cx)
+                .value(cx),
+            "COM9 @ 115200"
+        );
+        // A rate picked in the baud popover retitles the draft and the box too.
+        app.set_connection_editor_baud_rate("921600".to_string(), cx);
+        assert_eq!(
+            app.connection_state.active_editor_draft().unwrap().name,
+            "COM9 @ 921600"
+        );
+        assert_eq!(
+            app.connection_state.editor_fields()[&ConnectionEditorField::Name]
+                .read(cx)
+                .value(cx),
+            "COM9 @ 921600"
+        );
+        // A device is not a name for an SSH draft.
+        app.set_connection_editor_kind(ConnectionKindTab::Ssh, cx);
+        assert!(
+            app.connection_state
+                .active_editor_draft()
+                .unwrap()
+                .name
+                .is_empty()
+        );
+        app.connection_state.close_editor();
+    });
+}
+
 #[test]
 fn default_session_changes_ignore_navigation_and_freeze_while_saving() {
     use crate::features::test_support::app_with_visible_local_session;

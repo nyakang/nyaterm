@@ -840,7 +840,16 @@ pub(super) fn build_saved_connection_from_editor(
                 format!("{host}:{port}")
             }
             ConnectionType::LocalTerminal { .. } => "Local Terminal".to_string(),
-            ConnectionType::Serial { port_name, .. } => port_name.clone(),
+            // The device and rate name the connection, the same way a quick
+            // serial link is titled. A connection that asks for the device when
+            // connecting has none yet, and an empty title would leave the list
+            // showing a blank row.
+            ConnectionType::Serial {
+                port_name,
+                baud_rate,
+                ..
+            } => crate::models::serial_connection_name(port_name, &baud_rate.to_string())
+                .unwrap_or_else(|| crate::models::SERIAL_FALLBACK_NAME.to_string()),
             ConnectionType::Adb { device, .. } => device.serial(),
         }
     } else {
@@ -2399,8 +2408,6 @@ pub(in crate::features) enum ConnectionEditorToggle {
     SshCompatibilityMode,
     RawTcp,
     LocalEcho,
-    SerialPromptPort,
-    SerialPromptBaudRate,
     LocalLineEdit,
     ForceCharacterAtATime,
     SendNaws,
@@ -2777,5 +2784,44 @@ mod account_edit_tests {
             build_saved_connection_from_editor(&baud_only),
             Err(ConnectionEditorValidationError::SerialPortRequired)
         ));
+    }
+
+    /// An unnamed serial connection is titled the way a quick serial link is —
+    /// device and rate. A connection that picks the device later still gets a
+    /// title the list can show instead of a blank row.
+    #[test]
+    fn an_unnamed_serial_connection_is_titled_after_its_device() {
+        for (port_name, expected) in [
+            ("COM7", "COM7 @ 115200"),
+            (r"\\.\COM10", "COM10 @ 115200"),
+            ("/dev/ttyUSB0", "ttyUSB0 @ 115200"),
+        ] {
+            let editor = connection_editor_from_saved(
+                serde_json::from_value(serde_json::json!({
+                    "id":"serial", "name":"", "type":"serial",
+                    "port_name": port_name, "baud_rate":115200
+                }))
+                .unwrap(),
+                false,
+            );
+            assert_eq!(
+                build_saved_connection_from_editor(&editor).unwrap().name,
+                expected,
+                "{port_name}"
+            );
+        }
+
+        let deferred = connection_editor_from_saved(
+            serde_json::from_value(serde_json::json!({
+                "id":"serial", "name":"", "type":"serial",
+                "port_name":"", "baud_rate":115200, "connect_prompt":{"port":true}
+            }))
+            .unwrap(),
+            false,
+        );
+        assert_eq!(
+            build_saved_connection_from_editor(&deferred).unwrap().name,
+            "Serial"
+        );
     }
 }

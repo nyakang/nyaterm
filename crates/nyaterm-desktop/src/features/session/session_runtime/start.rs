@@ -644,10 +644,27 @@ impl NyaTermApp {
                 backspace_mode,
                 encoding,
             } => {
-                let (port_name, baud_rate) = match options.serial_selection.clone() {
-                    Some(selection) => (selection.port_name, selection.baud_rate),
-                    None => (port_name, baud_rate),
-                };
+                // The tab is named after the device this session opens, not the
+                // one saved with the connection: the connect prompt may have
+                // replaced it, and a board that came back as another port would
+                // otherwise leave a tab titled after a device nobody opened.
+                let selection = options.serial_selection.clone();
+                let (opened_port, opened_baud_rate) = selection
+                    .as_ref()
+                    .map_or((port_name.as_str(), baud_rate), |selection| {
+                        (selection.port_name.as_str(), selection.baud_rate)
+                    });
+                let session_title = crate::models::serial_session_title(
+                    &connection.name,
+                    &port_name,
+                    baud_rate,
+                    opened_port,
+                    opened_baud_rate,
+                );
+                let (port_name, baud_rate) = selection
+                    .map_or((port_name, baud_rate), |selection| {
+                        (selection.port_name, selection.baud_rate)
+                    });
                 if port_name.trim().is_empty() {
                     // Only reachable for non-interactive starts: the prompt is
                     // the interactive way to fill this in.
@@ -667,7 +684,7 @@ impl NyaTermApp {
                 }
                 let encoding = resolve_effective_connection_encoding(&encoding, self);
                 let config = SerialSessionConfig {
-                    name: connection.name.clone(),
+                    name: session_title.clone(),
                     port_name,
                     baud_rate,
                     data_bits,
@@ -678,7 +695,7 @@ impl NyaTermApp {
                     encoding,
                 };
                 self.begin_background_session_start(
-                    connection.name,
+                    session_title,
                     SessionLaunchConfig::Serial(config),
                     Some(connection.id),
                     ai_execution_profile,
