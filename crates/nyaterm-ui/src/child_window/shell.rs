@@ -255,8 +255,26 @@ fn child_window_target(
         handle
             .update(cx, |_, window, cx| {
                 let display = window.display(cx);
+                // `window_bounds()` is a *restore* descriptor: while the parent
+                // is fullscreen or maximised it reports the pre-fullscreen /
+                // pre-maximised rectangle (on Windows it is read back from
+                // `GetWindowPlacement`'s `rcNormalPosition`). Centring on that
+                // would drop the child at where the parent *used to be*, not
+                // where it is now, so those states read the live bounds
+                // instead. Windowed windows keep `window_bounds()`: for a
+                // minimised parent it still yields the sensible restored
+                // rectangle, whereas `bounds()` would return the minimised
+                // position.
+                let restored_state = window.is_fullscreen()
+                    || window.is_simple_fullscreen()
+                    || window.is_maximized();
+                let parent_bounds = if restored_state {
+                    window.bounds()
+                } else {
+                    window.window_bounds().get_bounds()
+                };
                 (
-                    window.window_bounds().get_bounds(),
+                    parent_bounds,
                     display.as_ref().map(|display| display.id()),
                     display.as_ref().map(|display| display.bounds()),
                 )
