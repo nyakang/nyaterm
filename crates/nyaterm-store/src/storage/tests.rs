@@ -2772,6 +2772,7 @@ fn load_decrypted_otp_entry_reads_legacy_otp_store() {
         otp_type: "totp".to_string(),
         issuer: "Example".to_string(),
         username: "deploy".to_string(),
+        prompt_regex: None,
         secret: Some(encrypt_for_test(b"JBSWY3DPEHPK3PXP", &master_key).into()),
         algorithm: "SHA1".to_string(),
         digits: 6,

@@ -3,12 +3,13 @@ use super::command_suggestions::{
     suggestion_overlay_desired_height,
 };
 use crate::features::NyaTermApp;
-use crate::models::credential_autofill_target_display_name;
+use crate::features::runtime_jobs::await_blocking_job;
 use crate::models::{
     CredentialAutofillAction, CredentialAutofillMatchEvent, CredentialAutofillMatchRequest,
     CredentialAutofillMatchRequestKey, CredentialAutofillTarget, CredentialSuggestionState,
-    PendingCredentialAutofill, credential_autofill_action,
+    PendingCredentialAutofill, credential_autofill_action, otp_prompt_target,
 };
+use crate::models::{credential_autofill_target_display_name, credential_autofill_target_subtitle};
 use futures::StreamExt as _;
 use gpui::{
     Context, FontWeight, IntoElement, KeyDownEvent, SharedString, div, prelude::*, px, rgb, rgba,
@@ -309,13 +310,19 @@ impl NyaTermApp {
         let Some(active_session_id) = self.session.active_id_owned() else {
             return false;
         };
-        let credentials: Vec<CredentialAutofillTarget> = self
+        let mut credentials: Vec<CredentialAutofillTarget> = self
             .security
             .credentials()
             .iter()
             .cloned()
             .map(CredentialAutofillTarget::Vault)
             .collect();
+        credentials.extend(
+            self.security
+                .otp_entries()
+                .iter()
+                .filter_map(otp_prompt_target),
+        );
         if credentials.is_empty() {
             return false;
         }
@@ -531,6 +538,8 @@ impl NyaTermApp {
                         .set_status(format!("filled username from '{credential_name}'"));
                 }
             }
+            // The matcher never offers an OTP entry for a username prompt.
+            (CredentialPromptKind::Username, CredentialAutofillTarget::Otp(_)) => {}
             (CredentialPromptKind::Password, CredentialAutofillTarget::Vault(credential)) => {
                 let credential_id = credential.id.clone();
                 let closure_name = credential_name.clone();
@@ -599,6 +608,66 @@ impl NyaTermApp {
                         .set_status(format!("loading password from '{credential_name}'"));
                 }
             }
+            (CredentialPromptKind::Password, CredentialAutofillTarget::Otp(otp)) => {
+                // The panel never holds a code: it is generated here, so what
+                // gets typed is always from the current step.
+                let otp_id = otp.id.clone();
+                let closure_name = credential_name.clone();
+                let session_id = session_id.to_string();
+                let provider = self.session.otp_provider();
+                let task = self
+                    .blocking_jobs
+                    .submit_task("credential-autofill-otp", move |_| {
+                        provider.preview_otp_code(&otp_id)
+                    });
+                self.shell
+                    .set_status(format!("generating code from '{credential_name}'"));
+                cx.spawn(async move |this, cx| {
+                    let result = await_blocking_job(task).await.and_then(|result| result);
+                    let _ = this.update(cx, |this, cx| {
+                        if !this.terminal.assist.credential_fill_is_current(
+                            this.credential_autofill_enabled(),
+                            generation,
+                        ) {
+                            return;
+                        }
+                        if this.session.active_id() != Some(session_id.as_str()) {
+                            this.shell.set_status(
+                                "credential fill cancelled because the active session changed"
+                                    .to_string(),
+                            );
+                            cx.notify();
+                            return;
+                        }
+                        if this.session.is_disconnected(&session_id) {
+                            this.shell.set_status(
+                                "session disconnected - reconnect before filling credentials"
+                                    .to_string(),
+                            );
+                            cx.notify();
+                            return;
+                        }
+                        match result {
+                            Ok(Some(preview)) => {
+                                let mut payload = preview.code.into_bytes();
+                                payload.push(b'\r');
+                                if this.send_credential_input(payload, cx) {
+                                    this.shell
+                                        .set_status(format!("filled code from '{closure_name}'"));
+                                }
+                            }
+                            Ok(None) => this
+                                .shell
+                                .set_status(format!("OTP entry '{closure_name}' was not found")),
+                            Err(error) => this.shell.set_status(format!(
+                                "failed to generate code from '{closure_name}': {error}"
+                            )),
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
         }
         cx.notify();
     }
@@ -644,12 +713,16 @@ impl NyaTermApp {
         self.terminal.assist.credential_autofill_sending = true;
         self.send_credential_value(&target, state.kind, &state.session_id, cx);
         if was_username {
-            let CredentialAutofillTarget::Vault(credential) = &target;
-            self.terminal.assist.credential_autofill_pending = Some(PendingCredentialAutofill {
-                session_id: state.session_id.clone(),
-                credential_id: credential.id.clone(),
-                expires_at_ms: Self::now_unix_ms().saturating_add(PENDING_PASSWORD_TTL_MS),
-            });
+            // Only a username suggestion enters the pending password flow, and
+            // the matcher never offers an OTP entry for a username prompt.
+            if let CredentialAutofillTarget::Vault(credential) = &target {
+                self.terminal.assist.credential_autofill_pending =
+                    Some(PendingCredentialAutofill {
+                        session_id: state.session_id.clone(),
+                        credential_id: credential.id.clone(),
+                        expires_at_ms: Self::now_unix_ms().saturating_add(PENDING_PASSWORD_TTL_MS),
+                    });
+            }
         } else {
             self.terminal.assist.credential_autofill_pending = None;
         }
@@ -838,18 +911,42 @@ impl NyaTermApp {
                             .flex_col()
                             .child(
                                 div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(palette.text))
-                                    .child(truncate_preview(
-                                        &credential_autofill_target_display_name(credential),
-                                        36,
-                                    )),
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(palette.text))
+                                            .child(truncate_preview(
+                                                &credential_autofill_target_display_name(
+                                                    credential,
+                                                ),
+                                                36,
+                                            )),
+                                    )
+                                    .when(credential.is_otp(), |row| {
+                                        row.child(
+                                            div()
+                                                .flex_none()
+                                                .px(px(4.))
+                                                .rounded(px(3.))
+                                                .bg(rgb(palette.hover))
+                                                .text_size(px(9.))
+                                                .text_color(rgb(palette.accent))
+                                                .child(t!("credentialAutofill.otpBadge")),
+                                        )
+                                    }),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.))
                                     .text_color(rgb(palette.text_dimmed))
-                                    .child(truncate_preview(&credential.credential().username, 40)),
+                                    .child(truncate_preview(
+                                        credential_autofill_target_subtitle(credential),
+                                        40,
+                                    )),
                             ),
                     ),
             );
@@ -1683,7 +1780,9 @@ mod tests {
 
         let root = TestConfigDir::new("nyaterm-credential-sensitive-wire");
         let store = ConnectionStore::open(root.path().join("config")).unwrap();
-        let CredentialAutofillTarget::Vault(mut vault) = test_credential_target("vault");
+        let CredentialAutofillTarget::Vault(mut vault) = test_credential_target("vault") else {
+            panic!("test target must be a vault credential");
+        };
         vault.username = "fixture-user".into();
         vault.password = Some(SecretString::from("vault-fixture"));
         store.save_credential(vault.clone()).unwrap();

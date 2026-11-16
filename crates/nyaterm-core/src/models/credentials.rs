@@ -242,6 +242,12 @@ pub struct OtpEntry {
     pub issuer: String,
     #[serde(default)]
     pub username: String,
+    /// Prompt pattern that offers this entry in the terminal, the same way a
+    /// saved credential's password pattern does. Empty means the entry is only
+    /// available through an explicit bind: a connection's `otp_id` and its
+    /// keyboard-interactive prompt.
+    #[serde(default)]
+    pub prompt_regex: Option<String>,
     #[serde(default)]
     pub secret: Option<SecretString>,
     #[serde(default = "default_otp_algorithm")]
@@ -262,6 +268,7 @@ pub struct DecryptedOtpEntry {
     pub otp_type: String,
     pub issuer: String,
     pub username: String,
+    pub prompt_regex: Option<String>,
     pub secret: Option<SecretString>,
     pub algorithm: String,
     pub digits: u8,
@@ -374,6 +381,7 @@ impl_redacted_debug!(
         otp_type,
         issuer,
         username,
+        prompt_regex,
         algorithm,
         digits,
         period,
@@ -389,6 +397,7 @@ impl_redacted_debug!(
         otp_type,
         issuer,
         username,
+        prompt_regex,
         algorithm,
         digits,
         period,

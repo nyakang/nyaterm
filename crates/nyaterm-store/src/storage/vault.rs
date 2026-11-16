@@ -113,6 +113,7 @@ impl ConnectionStore {
             otp_type: entry.otp_type,
             issuer: entry.issuer,
             username: entry.username,
+            prompt_regex: entry.prompt_regex,
             secret: decrypt_optional_secret(&crypto, master_key_token.as_deref(), &entry.secret)?,
             algorithm: entry.algorithm,
             digits: entry.digits,

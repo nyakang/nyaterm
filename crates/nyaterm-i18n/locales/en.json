@@ -838,6 +838,7 @@
     "dismiss": "Dismiss",
     "fill": "Fill",
     "passwordTitle": "Password",
+    "otpBadge": "OTP",
     "select": "Select",
     "usernameTitle": "Username"
   },
@@ -2106,6 +2107,8 @@
     "hideCodes": "Hide Codes",
     "issuerPlaceholder": "Issuer, e.g. GitHub",
     "issuerLabel": "Issuer",
+    "promptRegex": "Prompt pattern",
+    "promptRegexPlaceholder": "e.g. Verification code:",
     "newTitle": "New OTP",
     "noEntries": "No OTP entries",
     "noActiveTerminal": "No writable terminal is connected",

@@ -838,6 +838,7 @@
     "dismiss": "關閉",
     "fill": "填充",
     "passwordTitle": "密碼認證資訊",
+    "otpBadge": "OTP",
     "select": "選擇",
     "usernameTitle": "使用者名稱認證資訊"
   },
@@ -2106,6 +2107,8 @@
     "hideCodes": "隱藏驗證碼",
     "issuerPlaceholder": "發行方（如 GitHub）",
     "issuerLabel": "發行方",
+    "promptRegex": "提示詞正則",
+    "promptRegexPlaceholder": "例如 驗證碼：",
     "newTitle": "新建 OTP",
     "noEntries": "暫無 OTP 條目",
     "noActiveTerminal": "沒有活動終端",

@@ -838,6 +838,7 @@
     "dismiss": "닫기",
     "fill": "채우기",
     "passwordTitle": "비밀번호",
+    "otpBadge": "OTP",
     "select": "선택",
     "usernameTitle": "사용자 이름"
   },
@@ -2106,6 +2107,8 @@
     "hideCodes": "코드 숨기기",
     "issuerPlaceholder": "발급자, 예: GitHub",
     "issuerLabel": "발급자",
+    "promptRegex": "프롬프트 정규식",
+    "promptRegexPlaceholder": "예: 인증 코드:",
     "newTitle": "새 OTP",
     "noEntries": "OTP 항목이 없습니다",
     "noActiveTerminal": "활성 터미널이 없습니다",

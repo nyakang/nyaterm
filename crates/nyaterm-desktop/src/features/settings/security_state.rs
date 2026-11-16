@@ -1125,14 +1125,15 @@ impl SecurityFeatureState {
                 editor.error = None;
                 editor.error_field = None;
             }
-            "otp-issuer" | "otp-username" | "otp-secret" | "otp-digits" | "otp-period"
-            | "otp-counter" => {
+            "otp-issuer" | "otp-username" | "otp-prompt-regex" | "otp-secret" | "otp-digits"
+            | "otp-period" | "otp-counter" => {
                 let Some(editor) = self.otp_editor_mut() else {
                     return false;
                 };
                 match id {
                     "otp-issuer" => editor.issuer = text,
                     "otp-username" => editor.username = text,
+                    "otp-prompt-regex" => editor.prompt_regex = text,
                     "otp-secret" => editor.secret = text.into(),
                     "otp-digits" => editor.digits = digits_only(&text),
                     "otp-period" => editor.period = digits_only(&text),
@@ -1306,6 +1307,7 @@ mod tests {
                 otp_type: "totp".into(),
                 issuer: "fixture".into(),
                 username: "user".into(),
+                prompt_regex: String::new(),
                 secret: Default::default(),
                 algorithm: "SHA1".into(),
                 digits: "6".into(),
@@ -1352,6 +1354,7 @@ mod tests {
                 otp_type: "totp".to_string(),
                 issuer: String::new(),
                 username: String::new(),
+                prompt_regex: None,
                 secret: None,
                 algorithm: "SHA1".to_string(),
                 digits: 6,
@@ -1534,6 +1537,7 @@ mod tests {
                 otp_type: "totp".to_string(),
                 issuer: String::new(),
                 username: String::new(),
+                prompt_regex: None,
                 secret: None,
                 algorithm: "SHA1".to_string(),
                 digits: 6,
