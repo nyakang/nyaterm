@@ -197,5 +197,5 @@ mod tests {
 mod render;
 pub use render::{
     activity_icon, color_icon, connection_spinner, connection_type_icon, mono_icon,
-    nyaterm_app_icon, nyaterm_logo_mark, themed_icon, transfer_entry_icon,
+    nyaterm_app_icon, nyaterm_logo_mark, saved_connection_icon, themed_icon, transfer_entry_icon,
 };

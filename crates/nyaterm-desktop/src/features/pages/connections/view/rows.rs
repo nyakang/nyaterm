@@ -1,4 +1,4 @@
-use nyaterm_ui::icons::resolve_connection_icon;
+use nyaterm_ui::icons::{resolve_connection_icon, saved_connection_icon};
 use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use std::{sync::Arc, time::Duration};
 
@@ -18,8 +18,7 @@ use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDragPayload,
     connections::ConnectionDragPreview, connections::ConnectionDropPosition,
     text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX, text_inputs::ordinary_input_focus_ring,
-    text_inputs::ordinary_input_shell_border_color, view_widgets::connection_type_icon,
-    view_widgets::mono_icon,
+    text_inputs::ordinary_input_shell_border_color, view_widgets::mono_icon,
 };
 
 use super::super::list::{
@@ -293,6 +292,9 @@ pub(in crate::features::pages::connections) fn connection_section(
                 let drag_scroll = viewport.clone();
                 this.cursor_move().on_drag(
                     ConnectionDragPayload {
+                        icon: None,
+                        custom_icon: None,
+                        palette,
                         panel: cx.weak_entity(),
                         kind: ConnectionDragKind::Group,
                         id: drag_group_id.clone(),
@@ -545,6 +547,9 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
         .cursor_move()
         .on_drag(
             ConnectionDragPayload {
+                icon: Some(icon_def),
+                custom_icon: custom_icon.clone(),
+                palette,
                 panel: cx.weak_entity(),
                 kind: ConnectionDragKind::Connection,
                 id: connection.id.clone(),
@@ -612,11 +617,13 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                     // Match Tauri's `pr-14`: at maximum horizontal scroll the
                     // final glyph can move clear of the viewport-fixed actions.
                     .pr(px(CONNECTION_ACTION_CLEARANCE_PX))
-                    .child(if let Some(image) = custom_icon {
-                        gpui::img(image).size(px(16.)).into_any_element()
-                    } else {
-                        connection_type_icon(palette, icon_def, selected, 16.).into_any_element()
-                    })
+                    .child(saved_connection_icon(
+                        palette,
+                        icon_def,
+                        custom_icon,
+                        selected,
+                        16.,
+                    ))
                     .child(
                         div()
                             .text_size(px(12.))

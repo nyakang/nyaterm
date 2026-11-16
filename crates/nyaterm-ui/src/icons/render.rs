@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
@@ -144,6 +145,21 @@ pub fn themed_icon(
 }
 
 /// Connection / OS icon for saved connection rows, tabs and the session header.
+pub fn saved_connection_icon(
+    palette: ThemePalette,
+    def: IconDef,
+    custom: Option<Arc<gpui::RenderImage>>,
+    selected: bool,
+    size_px: f32,
+) -> AnyElement {
+    if let Some(image) = custom {
+        img(image).size(px(size_px)).flex_none().into_any_element()
+    } else {
+        connection_type_icon(palette, def, selected, size_px)
+    }
+}
+
+/// Paint a built-in connection icon with its original color or theme tint.
 pub fn connection_type_icon(
     palette: ThemePalette,
     def: IconDef,

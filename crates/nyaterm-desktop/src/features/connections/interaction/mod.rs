@@ -2,11 +2,14 @@ use gpui::prelude::*;
 use gpui::{Context, FontWeight, IntoElement, Render, Window, div, px, rgb, rgba};
 use nyaterm_core::truncate_preview;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(in crate::features) struct ConnectionDragPayload {
     pub kind: ConnectionDragKind,
     pub id: String,
     pub label: String,
+    pub icon: Option<nyaterm_ui::icons::IconDef>,
+    pub custom_icon: Option<std::sync::Arc<gpui::RenderImage>>,
+    pub palette: crate::theme::ThemePalette,
     pub panel: gpui::WeakEntity<crate::features::pages::connections::panel::ConnectionPanel>,
 }
 
@@ -51,9 +54,20 @@ impl Render for ConnectionDragPreview {
             .panel
             .upgrade()
             .and_then(|panel| panel.read(cx).drag_preview_label());
-        let (icon, accent) = match self.payload.kind {
-            ConnectionDragKind::Connection => ("icons/brand/server.svg", rgb(0x3fb950)),
-            ConnectionDragKind::Group => ("icons/conn/folder.svg", rgb(0x58a6ff)),
+        let icon = match self.payload.icon {
+            Some(def) => nyaterm_ui::icons::saved_connection_icon(
+                self.payload.palette,
+                def,
+                self.payload.custom_icon.clone(),
+                false,
+                16.,
+            ),
+            None => crate::features::view_widgets::mono_icon(
+                "icons/conn/folder.svg",
+                rgb(0x58a6ff).into(),
+                13.,
+            )
+            .into_any_element(),
         };
         div()
             .pl(self.position.x - px(90.))
@@ -71,11 +85,7 @@ impl Render for ConnectionDragPreview {
                     .border_color(rgb(0x388bfd))
                     .bg(rgba(0x0d1117ee))
                     .shadow_lg()
-                    .child(crate::features::view_widgets::mono_icon(
-                        icon,
-                        accent.into(),
-                        13.,
-                    ))
+                    .child(icon)
                     .child(
                         div()
                             .min_w_0()
