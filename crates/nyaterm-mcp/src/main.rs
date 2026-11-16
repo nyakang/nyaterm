@@ -13,6 +13,19 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Map, Value, json};
+use tokio_util::sync::CancellationToken;
+
+/// Upper bound for the client-supplied waitMs so a single call cannot stall a
+/// client indefinitely; longer jobs fall back to the regular poll flow.
+const MAX_WAIT_MS: u64 = 30_000;
+
+/// Default bounded wait for terminal_start when the client does not specify
+/// one: a plain call returns the command's outcome directly, so models need
+/// no polling loop and no prior knowledge. Clients opt out with waitMs: 0.
+const DEFAULT_WAIT_MS: u64 = 15_000;
+
+/// Job statuses that can still transition; only these keep a waitMs loop going.
+const TRANSIENT_JOB_STATUSES: &[&str] = &["starting", "running", "cancelling"];
 
 #[derive(Clone)]
 struct NyaTermMcp {
@@ -21,6 +34,49 @@ struct NyaTermMcp {
 }
 
 impl NyaTermMcp {
+    /// Wait for a started job to reach a terminal state so clients can fetch a
+    /// command's outcome in one call instead of busy-polling terminal_poll.
+    /// On timeout or a polling error the last known result is returned and the
+    /// client can keep polling; the job itself keeps running on the host.
+    async fn await_job_result(
+        &self,
+        start: Value,
+        wait_ms: u64,
+        cancellation: CancellationToken,
+    ) -> Value {
+        let budget = std::time::Duration::from_millis(wait_ms.min(MAX_WAIT_MS));
+        let mut waited = std::time::Duration::ZERO;
+        let mut backoff = std::time::Duration::from_millis(150);
+        let mut latest = start;
+        loop {
+            let transient = matches!(
+                latest.get("status").and_then(Value::as_str),
+                Some(status) if TRANSIENT_JOB_STATUSES.contains(&status)
+            );
+            let Some(job_id) = latest.get("jobId").and_then(Value::as_str) else {
+                return latest;
+            };
+            if !transient || waited >= budget || cancellation.is_cancelled() {
+                return latest;
+            }
+            tokio::time::sleep(backoff).await;
+            waited += backoff;
+            backoff = (backoff * 2).min(std::time::Duration::from_millis(1200));
+            match self
+                .bridge
+                .call(
+                    tool::TERMINAL_POLL,
+                    json!({ "jobId": job_id }),
+                    cancellation.clone(),
+                )
+                .await
+            {
+                Ok(value) => latest = value,
+                Err(_) => return latest,
+            }
+        }
+    }
+
     fn new(endpoint: BridgeEndpoint) -> Self {
         Self {
             bridge: BridgeClient::new(endpoint),
@@ -59,10 +115,11 @@ impl ServerHandler for NyaTermMcp {
         {
             return Ok(CallToolResult::structured_error(json!({"code":"unsupported_capability","message":"The connected NyaTerm Host does not support terminal jobs."})).into());
         }
-        let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let mut arguments = Value::Object(request.arguments.unwrap_or_default());
         if arguments.get("target").is_some() && !self.bridge.supports_connection_targets() {
             return Ok(CallToolResult::structured_error(json!({"code":"unsupported_capability","message":"The connected NyaTerm Host does not support execution targets."})).into());
         }
+        let wait_ms = resolved_wait_ms(&request.name, &mut arguments);
         validate_tool_arguments(&request.name, &arguments)
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let result = match self
@@ -70,13 +127,26 @@ impl ServerHandler for NyaTermMcp {
             .call(&request.name, arguments, context.ct.clone())
             .await
         {
-            Ok(value) => match validate_tool_result(&request.name, &value) {
-                Ok(()) => CallToolResult::structured(structured_content(&request.name, value)),
-                Err(error) => CallToolResult::structured_error(json!({
-                    "code": "bridge_protocol_error",
-                    "message": error.to_string()
-                })),
-            },
+            Ok(value) => {
+                let value = if wait_ms > 0 {
+                    self.await_job_result(value, wait_ms, context.ct.clone())
+                        .await
+                } else {
+                    value
+                };
+                let validated_name = if wait_ms > 0 {
+                    tool::TERMINAL_POLL
+                } else {
+                    request.name.as_ref()
+                };
+                match validate_tool_result(validated_name, &value) {
+                    Ok(()) => CallToolResult::structured(structured_content(&request.name, value)),
+                    Err(error) => CallToolResult::structured_error(json!({
+                        "code": "bridge_protocol_error",
+                        "message": error.to_string()
+                    })),
+                }
+            }
             Err(error) => CallToolResult::structured_error(
                 json!({ "code": error.code, "message": error.message }),
             ),
@@ -166,6 +236,37 @@ impl ServerHandler for NyaTermMcp {
 /// MCP requires `structuredContent` to be an object. `sftp_list` returns a bare array of
 /// entries over the bridge, so it is wrapped as `{ "items": [...] }`; other results pass
 /// through unchanged.
+/// Resolve the forwarder-local wait for terminal_start. The default is
+/// context-aware, mirroring `TerminalStartArgs::backend()`: a noninteractive
+/// ssh_exec job completes on its own and returns its outcome directly, while
+/// an interactive inline_pty session never completes, so waiting by default
+/// would only stall the call. waitMs: 0 opts out and longer values are
+/// capped. The option is consumed here and never forwarded, so hosts of any
+/// version keep working unchanged.
+fn resolved_wait_ms(name: &str, arguments: &mut Value) -> u64 {
+    if name != tool::TERMINAL_START {
+        return 0;
+    }
+    let requested = arguments
+        .as_object_mut()
+        .and_then(|object| object.remove("waitMs"))
+        .and_then(|value| value.as_u64());
+    let noninteractive = match arguments.get("backend").and_then(Value::as_str) {
+        Some("ssh_exec") => true,
+        Some("inline_pty") => false,
+        _ => arguments
+            .get("target")
+            .and_then(|target| target.get("connectionId"))
+            .is_some(),
+    };
+    match requested {
+        Some(0) => 0,
+        Some(wait_ms) => wait_ms.min(MAX_WAIT_MS),
+        None if noninteractive => DEFAULT_WAIT_MS,
+        None => 0,
+    }
+}
+
 fn structured_content(tool_name: &str, value: Value) -> Value {
     match value {
         Value::Array(items) if tool_name == tool::SFTP_LIST => json!({ "items": items }),
@@ -767,7 +868,8 @@ mod tests {
                     "params": { "name": "terminal_start", "arguments": {
                         "command": "echo hi",
                         "backend": "ssh_exec",
-                        "target": { "type": "connection", "connectionId": "c1" }
+                        "target": { "type": "connection", "connectionId": "c1" },
+                        "waitMs": 0
                     } } }"#,
         )
         .await;
@@ -790,5 +892,289 @@ mod tests {
             .await
             .expect("mock host shuts down")
             .expect("mock host did not panic");
+    }
+    #[tokio::test]
+    async fn terminal_start_wait_ms_returns_completed_in_one_call() {
+        // waitMs is consumed by the forwarder: the client makes a single
+        // tools/call and receives the job's final state, while the forwarder
+        // polls the bridge internally. The host never sees the option.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bridge_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let mut polls = 0;
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: RpcRequest = serde_json::from_str(&line).unwrap();
+                let result = match request.method.as_str() {
+                    "auth" => json!({
+                        "authenticated": true,
+                        "features": ["mcp_lifecycle", "connection_targets"]
+                    }),
+                    "client.identify" => json!({ "identified": true }),
+                    "capability.execute" => match request.params["tool"].as_str().unwrap() {
+                        tool::TERMINAL_START => {
+                            assert!(
+                                request.params["arguments"].get("waitMs").is_none(),
+                                "waitMs must not be forwarded to the host"
+                            );
+                            json!({
+                                "backend": "ssh_exec",
+                                "jobId": "job-1",
+                                "status": "starting",
+                                "target": { "type": "connection", "connectionId": "c1" }
+                            })
+                        }
+                        tool::TERMINAL_POLL => {
+                            polls += 1;
+                            if polls == 1 {
+                                json!({
+                                    "backend": "ssh_exec", "jobId": "job-1",
+                                    "status": "running",
+                                    "target": { "type": "connection", "connectionId": "c1" },
+                                    "offset": 0, "baseOffset": 0, "nextOffset": 0,
+                                    "output": "", "eof": false, "outputComplete": false,
+                                    "sourceTruncated": false, "droppedBeforeOffset": false,
+                                    "totalBytes": 0, "processState": "running",
+                                    "stopState": "not_requested", "startedAtMs": 1
+                                })
+                            } else {
+                                json!({
+                                    "backend": "ssh_exec", "jobId": "job-1",
+                                    "status": "completed", "exitCode": 0,
+                                    "target": { "type": "connection", "connectionId": "c1" },
+                                    "offset": 0, "baseOffset": 0, "nextOffset": 5,
+                                    "output": "done!", "eof": true, "outputComplete": true,
+                                    "sourceTruncated": false, "droppedBeforeOffset": false,
+                                    "totalBytes": 5, "processState": "exit_confirmed",
+                                    "stopState": "not_requested", "startedAtMs": 1, "endedAtMs": 2
+                                })
+                            }
+                        }
+                        other => panic!("unexpected tool: {other}"),
+                    },
+                    other => panic!("unexpected bridge method: {other}"),
+                };
+                let response = RpcResponse {
+                    id: request.id,
+                    result: Some(result),
+                    error: None,
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                writer.write_all(&bytes).await.unwrap();
+            }
+        });
+
+        let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            let service = NyaTermMcp::new(BridgeEndpoint::for_test(port))
+                .serve(server_transport)
+                .await
+                .unwrap();
+            service.waiting().await.unwrap();
+        });
+        let (client_reader, mut client_writer) = tokio::io::split(client_transport);
+        let mut client_lines = BufReader::new(client_reader).lines();
+
+        send_client_message(
+            &mut client_writer,
+            r#"{
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": { "name": "waitms-test", "version": "1.0.0" }
+                    }
+                }"#,
+        )
+        .await;
+        receive_response(&mut client_lines, 1).await;
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "method": "notifications/initialized" }"#,
+        )
+        .await;
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": { "name": "terminal_start", "arguments": {
+                        "command": "echo done!",
+                        "backend": "ssh_exec",
+                        "target": { "type": "connection", "connectionId": "c1" },
+                        "waitMs": 5000
+                    } } }"#,
+        )
+        .await;
+        let completed = receive_response(&mut client_lines, 2).await;
+        let structured = &completed["result"]["structuredContent"];
+        assert_eq!(structured["status"], "completed");
+        assert_eq!(structured["exitCode"], 0);
+        assert_eq!(structured["output"], "done!");
+
+        drop(client_writer);
+        drop(client_lines);
+        server_task.abort();
+        bridge_task.abort();
+    }
+
+    #[tokio::test]
+    async fn terminal_start_waits_by_default_and_wait_ms_zero_opts_out() {
+        // A plain terminal_start must return the command's outcome directly
+        // (zero-decision design: models need no polling loop and no prior
+        // knowledge), while waitMs: 0 restores the immediate async result.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bridge_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let mut starts = 0;
+            while let Some(line) = lines.next_line().await.unwrap() {
+                let request: RpcRequest = serde_json::from_str(&line).unwrap();
+                let result = match request.method.as_str() {
+                    "auth" => json!({
+                        "authenticated": true,
+                        "features": ["mcp_lifecycle", "connection_targets"]
+                    }),
+                    "client.identify" => json!({ "identified": true }),
+                    "capability.execute" => match request.params["tool"].as_str().unwrap() {
+                        tool::TERMINAL_START => {
+                            assert!(
+                                request.params["arguments"].get("waitMs").is_none(),
+                                "waitMs must not be forwarded to the host"
+                            );
+                            starts += 1;
+                            json!({
+                                "backend": "ssh_exec",
+                                "jobId": format!("job-{starts}"),
+                                "status": "starting",
+                                "target": { "type": "connection", "connectionId": "c1" }
+                            })
+                        }
+                        tool::TERMINAL_POLL => {
+                            json!({
+                                "backend": "ssh_exec", "jobId": request.params["arguments"]["jobId"],
+                                "status": "completed", "exitCode": 0,
+                                "target": { "type": "connection", "connectionId": "c1" },
+                                "offset": 0, "baseOffset": 0, "nextOffset": 0,
+                                "output": "ok", "eof": true, "outputComplete": true,
+                                "sourceTruncated": false, "droppedBeforeOffset": false,
+                                "totalBytes": 2, "processState": "exit_confirmed",
+                                "stopState": "not_requested", "startedAtMs": 1, "endedAtMs": 2
+                            })
+                        }
+                        other => panic!("unexpected tool: {other}"),
+                    },
+                    other => panic!("unexpected bridge method: {other}"),
+                };
+                let response = RpcResponse {
+                    id: request.id,
+                    result: Some(result),
+                    error: None,
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                writer.write_all(&bytes).await.unwrap();
+            }
+        });
+
+        let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+        let server_task = tokio::spawn(async move {
+            let service = NyaTermMcp::new(BridgeEndpoint::for_test(port))
+                .serve(server_transport)
+                .await
+                .unwrap();
+            service.waiting().await.unwrap();
+        });
+        let (client_reader, mut client_writer) = tokio::io::split(client_transport);
+        let mut client_lines = BufReader::new(client_reader).lines();
+
+        send_client_message(
+            &mut client_writer,
+            r#"{
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": { "name": "default-wait-test", "version": "1.0.0" }
+                    }
+                }"#,
+        )
+        .await;
+        receive_response(&mut client_lines, 1).await;
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "method": "notifications/initialized" }"#,
+        )
+        .await;
+
+        // Plain call: no waitMs, outcome must arrive without any poll from
+        // the client (the forwarder waits internally).
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": { "name": "terminal_start", "arguments": {
+                        "command": "echo ok",
+                        "backend": "ssh_exec",
+                        "target": { "type": "connection", "connectionId": "c1" }
+                    } } }"#,
+        )
+        .await;
+        let defaulted = receive_response(&mut client_lines, 2).await;
+        assert_eq!(
+            defaulted["result"]["structuredContent"]["status"],
+            "completed"
+        );
+        assert_eq!(defaulted["result"]["structuredContent"]["output"], "ok");
+
+        // Explicit opt-out: the immediate async result must come back without
+        // the forwarder polling (the mock's poll answer would otherwise turn
+        // this into completed).
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                    "params": { "name": "terminal_start", "arguments": {
+                        "command": "sleep 300",
+                        "backend": "ssh_exec",
+                        "target": { "type": "connection", "connectionId": "c1" },
+                        "waitMs": 0
+                    } } }"#,
+        )
+        .await;
+        let opted_out = receive_response(&mut client_lines, 3).await;
+        assert_eq!(
+            opted_out["result"]["structuredContent"]["status"],
+            "starting"
+        );
+        assert_eq!(opted_out["result"]["structuredContent"]["jobId"], "job-2");
+
+        // Interactive session start (inline_pty) never completes, so the
+        // context-aware default must not wait: the result returns immediately.
+        send_client_message(
+            &mut client_writer,
+            r#"{ "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                    "params": { "name": "terminal_start", "arguments": {
+                        "command": "top",
+                        "sessionId": "session-1"
+                    } } }"#,
+        )
+        .await;
+        let interactive = receive_response(&mut client_lines, 4).await;
+        assert_eq!(
+            interactive["result"]["structuredContent"]["status"],
+            "starting"
+        );
+        assert_eq!(interactive["result"]["structuredContent"]["jobId"], "job-3");
+
+        drop(client_writer);
+        drop(client_lines);
+        server_task.abort();
+        bridge_task.abort();
     }
 }
