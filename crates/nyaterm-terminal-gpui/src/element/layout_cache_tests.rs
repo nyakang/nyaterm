@@ -1682,6 +1682,60 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
 }
 
 #[test]
+fn folded_paint_reuses_ready_highlights_from_before_the_fold() {
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    let highlighter = compile_terminal_keyword_highlighter(
+        &nyaterm_core::get_builtin_keyword_rules(true),
+        Default::default(),
+    );
+    let mut screen = TerminalScreen::new(100, 12);
+    screen.advance(b"https://docs.ubuntu.com\r\nLast login: Mon Nov 16 10:01:53 2026 from 172.16.0.46\r\nCodeSetup-stable-3.29.9.exe\r\n\x1b]133;A\x07$ \x1b]133;B\x07ls\r\n\x1b]133;C\x07hidden output\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+    let original = screen.snapshot();
+    let highlights = Arc::new(precompute_terminal_keyword_highlights(
+        &original,
+        &highlighter,
+        palette,
+        None,
+    ));
+    screen.set_collapsed_commands([original.command_blocks[0].id].into());
+    let folded = Arc::new(screen.snapshot());
+    let layout = crate::unwrapped::TerminalUnwrappedLayout::new(&folded, 0, 12, 0.0)
+        .expect("folded viewport uses segment painting");
+    assert!(!layout.unwrapped);
+    let visible = crate::keywords::terminal_keyword_highlight_expanded_ranges(
+        &folded,
+        std::slice::from_ref(&(0..folded.row_count())),
+    );
+    // The scheduler correctly considers the existing row results ready, so
+    // painting must accept them without requiring a new worker/frame identity.
+    assert!(highlights.matches_snapshot_ranges(&folded, palette, &visible));
+    let element = NyaTerminalElement::new(
+        folded,
+        Arc::new(Vec::new()),
+        Vec::new(),
+        false,
+        "block",
+        8.0,
+        16.0,
+        palette,
+        "monospace".into(),
+        14.0,
+        400.0,
+        700.0,
+    )
+    .with_unwrapped_layout(Some(Arc::new(layout)))
+    .with_keyword_highlights(highlights.clone());
+    for row in 0..3 {
+        let expected = highlights.lookup(row, &original).unwrap();
+        assert!(expected.ranges().is_some());
+        let painted = element
+            .keyword_highlight_lookup(row, None)
+            .expect("ready pre-fold highlights must remain paintable");
+        assert_eq!(painted.ranges(), expected.ranges());
+    }
+}
+
+#[test]
 fn no_wrap_does_not_reuse_output_colors_after_its_wrapped_context_changes() {
     let palette = nyaterm_ui::theme_palette("github-dark");
     let rules = vec![ResolvedKeywordHighlightRule {

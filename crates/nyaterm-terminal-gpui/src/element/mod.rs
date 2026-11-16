@@ -610,6 +610,16 @@ impl NyaTerminalElement {
     ) -> Option<TerminalKeywordHighlightLookup<'_>> {
         // One snapshot holds every row, including the live input row.
         self.keyword_highlights.as_ref().and_then(|highlights| {
+            // A folded physical-row layout also uses segments, but its ready
+            // highlights may come from before the projection changed. Resolve
+            // the row context instead of requiring an identical worker frame.
+            // Logical lines retain their frame fast path to avoid rescanning
+            // long wrapped groups during painting.
+            let reuse_key = reuse_key.or_else(|| {
+                (self.unwrapped.is_some() && self.snapshot.logical_lines.is_none())
+                    .then(|| terminal_keyword_row_reuse_key(&self.snapshot, row))
+                    .flatten()
+            });
             highlights
                 .lookup_with_reuse_key(row, &self.snapshot, reuse_key)
                 .or_else(|| highlights.stale_lookup_with_reuse_key(row, &self.snapshot, reuse_key))
