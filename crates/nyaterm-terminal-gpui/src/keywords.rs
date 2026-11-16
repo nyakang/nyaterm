@@ -295,7 +295,10 @@ impl TerminalKeywordHighlightSnapshot {
         reuse_key: Option<TerminalKeywordRowReuseKey>,
     ) -> Option<TerminalKeywordHighlightLookup<'_>> {
         snapshot.row(row)?;
-        let reuse_key = if snapshot.logical_lines.is_some() {
+        // Fold projections also use segment-based painting, which supplies no
+        // per-row key. Recover the worker's key for the exact projected frame,
+        // including ordinary wrapped snapshots without a logical-line index.
+        let reuse_key = if snapshot.logical_lines.is_some() || snapshot.display_rows.is_some() {
             self.frame_row_reuse_key(row, snapshot).or(reuse_key)
         } else {
             reuse_key
@@ -3163,6 +3166,40 @@ mod configuration_tests {
         let started = std::time::Instant::now();
         let snapshot = screen.viewport_snapshot_with_window(0, hidden_rows + 10, 0);
         (snapshot, started.elapsed())
+    }
+
+    #[test]
+    fn folded_paint_lookup_retains_highlights_without_a_caller_row_key() {
+        let rules = [nyaterm_core::ResolvedKeywordHighlightRule {
+            id: "error".into(),
+            name: "error".into(),
+            patterns: vec!["ERROR".into()],
+            color: "#ff2244".into(),
+            enabled: true,
+        }];
+        let highlighter = compile_terminal_keyword_highlighter(&rules, Default::default());
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        for logical in [false, true] {
+            let mut screen = TerminalScreen::new(40, 12);
+            screen.set_logical_line_snapshots(logical);
+            screen.advance(b"visible ERROR\r\n\x1b]133;A\x07$ \x1b]133;B\x07run\r\n\x1b]133;C\x07hidden ERROR\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+            let id = screen.snapshot().command_blocks[0].id;
+            screen.set_collapsed_commands([id].into());
+            let snapshot = screen.snapshot();
+            assert!(snapshot.display_rows.is_some());
+            let row = snapshot
+                .rows()
+                .iter()
+                .position(|row| row.text.contains("visible ERROR"))
+                .unwrap();
+            let result =
+                precompute_terminal_keyword_highlights(&snapshot, &highlighter, palette, None);
+            // Segment-based painting omits the caller key in both wrap modes.
+            let lookup = result
+                .lookup_with_reuse_key(row, &snapshot, None)
+                .expect("folded paint must find the precomputed row");
+            assert!(lookup.ranges().is_some(), "logical={logical}");
+        }
     }
 
     #[test]
