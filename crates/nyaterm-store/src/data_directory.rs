@@ -292,19 +292,8 @@ pub fn open_startup(
     if committed_journal {
         let _ = finish_migration(&configured);
     }
-    let initial = existing.is_none()
-        && configured == default_dir
-        && !configured.join(DATABASE_FILE_NAME).exists()
-        && !configured.join(DATA_MARKER_FILE_NAME).exists()
-        && !configured.join(PLUGINS_DIR_NAME).exists()
-        && !configured.join(RECORDINGS_DIR_NAME).exists();
-    let opened = if initial {
-        crate::ConnectionStore::open(&configured)
-            .map_err(|_| DataDirectoryError::InvalidDatabase(configured.clone()))
-    } else {
-        validate_directory(&configured, flavor, committed_journal)
-            .and_then(|()| open_existing(&configured))
-    };
+    let first_run = existing.is_none() && configured == default_dir;
+    let opened = open_configured(&configured, flavor, committed_journal, first_run);
     match opened {
         Ok(store) => {
             ensure_data_marker(&configured, flavor)?;
@@ -323,12 +312,80 @@ pub fn open_startup(
     }
 }
 
+/// Opens the configured data directory, creating an empty database in place
+/// when the existing one is missing, empty, or unreadable.
+///
+/// The directory comes from `location.json` (or the debug override); callers
+/// must never fall back to the default directory here.
+fn open_configured(
+    path: &Path,
+    flavor: AppFlavor,
+    committed: bool,
+    allow_missing_directory: bool,
+) -> Result<crate::ConnectionStore, DataDirectoryError> {
+    if !path.is_absolute() {
+        return Err(DataDirectoryError::RelativePath(path.to_path_buf()));
+    }
+    // A configured directory that disappeared may be an unmounted drive or a
+    // moved folder; only the default directory's first run may be created.
+    if !path.exists() {
+        if !allow_missing_directory {
+            return Err(DataDirectoryError::RecoveryRequired(path.into()));
+        }
+        fs::create_dir_all(path)
+            .map_err(|source| io_error("create data directory", path, source))?;
+    }
+    // Reject network locations before opening or creating anything in them.
+    if is_network_location(path)? {
+        return Err(DataDirectoryError::NetworkPath(path.to_path_buf()));
+    }
+    validate_directory(path, flavor, committed, false)?;
+    match open_existing(path) {
+        Ok(store) => Ok(store),
+        Err(DataDirectoryError::InvalidDatabase(_)) => {
+            archive_database_file(path)?;
+            crate::ConnectionStore::open(path).map_err(|source| DataDirectoryError::Io {
+                action: "create database",
+                path: path.to_path_buf(),
+                source: std::io::Error::other(source),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Keeps a damaged database beside the new one instead of overwriting it.
+fn archive_database_file(path: &Path) -> Result<(), DataDirectoryError> {
+    let database = path.join(DATABASE_FILE_NAME);
+    match fs::symlink_metadata(&database) {
+        Ok(_) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(io_error("inspect database", &database, source)),
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let mut archive = path.join(format!("{DATABASE_FILE_NAME}.corrupt-{stamp}"));
+    let mut suffix = 1u32;
+    while archive.exists() {
+        archive = path.join(format!("{DATABASE_FILE_NAME}.corrupt-{stamp}-{suffix}"));
+        suffix += 1;
+    }
+    fs::rename(&database, &archive)
+        .map_err(|source| io_error("archive damaged database", &database, source))
+}
+
 fn open_existing(path: &Path) -> Result<crate::ConnectionStore, DataDirectoryError> {
     crate::ConnectionStore::open_existing(path).map_err(|e| match e {
         crate::StorageError::Open {
             source: redb::DatabaseError::DatabaseAlreadyOpen,
             ..
         } => DataDirectoryError::InUse(path.into()),
+        crate::StorageError::Open {
+            source: redb::DatabaseError::UpgradeRequired(_),
+            ..
+        } => DataDirectoryError::DatabaseUpgradeRequired(path.into()),
         _ => DataDirectoryError::InvalidDatabase(path.into()),
     })
 }
@@ -549,13 +606,14 @@ pub fn validate_usable_directory(
     data_dir: &Path,
     flavor: AppFlavor,
 ) -> Result<(), DataDirectoryError> {
-    validate_directory(data_dir, flavor, false)
+    validate_directory(data_dir, flavor, false, true)
 }
 
 fn validate_directory(
     data_dir: &Path,
     flavor: AppFlavor,
     committed: bool,
+    require_database: bool,
 ) -> Result<(), DataDirectoryError> {
     if !data_dir.is_absolute() {
         return Err(DataDirectoryError::RelativePath(data_dir.to_path_buf()));
@@ -563,9 +621,10 @@ fn validate_directory(
     if data_dir.exists() && !data_dir.is_dir() {
         return Err(DataDirectoryError::NotADirectory(data_dir.to_path_buf()));
     }
-    if !data_dir.is_dir()
-        || !fs::symlink_metadata(data_dir.join(DATABASE_FILE_NAME))
-            .is_ok_and(|m| m.is_file() && m.len() > 0)
+    if require_database
+        && (!data_dir.is_dir()
+            || !fs::symlink_metadata(data_dir.join(DATABASE_FILE_NAME))
+                .is_ok_and(|m| m.is_file() && m.len() > 0))
     {
         return Err(DataDirectoryError::RecoveryRequired(data_dir.into()));
     }

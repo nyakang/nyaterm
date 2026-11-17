@@ -3047,6 +3047,8 @@
     "dataDirectoryAutoHint": "Choisissez un dossier parent ; NyaTerm utilise ou crée automatiquement le sous-dossier %{dir}. Le chemin ci-dessus est le dossier réellement utilisé.",
     "dataDirectoryRestartRequired": "Le changement de dossier est enregistré. NyaTerm redémarre.",
     "dataDirectoryNotice": "Avis au démarrage :",
+    "dataDirectoryRecreatedDatabase": "Aucune base de données exploitable n'a été trouvée. Une base vide a été créée dans %{path} ; le fichier précédent est conservé sous %{archive}.",
+    "dataDirectoryCreateDatabaseFailed": "Impossible de créer une base de données dans %{path} : %{reason}. Vérifiez les droits du dossier ou l'espace disque.",
     "dataDirectorySyncWarning": "Ce dossier est géré par %{client}. Les outils de synchronisation peuvent copier la base pendant que NyaTerm fonctionne et la corrompre ; fermez NyaTerm avant de synchroniser ou utilisez un instantané portable.",
     "dataDirectoryMigrateTitle": "Migrer vers le nouveau dossier",
     "dataDirectoryMigrateDesc": "Copie la base de données et les extensions actuelles vers %{path}. Le dossier source n'est pas supprimé. NyaTerm redémarre immédiatement après l'enregistrement et s'exécute ensuite dans le nouveau dossier.",

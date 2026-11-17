@@ -82,6 +82,102 @@ fn first_run_can_create_a_database_without_creating_configured_missing_roots() {
     assert!(!opened.selection.custom);
 }
 
+fn archived_databases(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let prefix = format!("{DATABASE_FILE_NAME}.corrupt-");
+    let mut archives = fs::read_dir(path)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        })
+        .collect::<Vec<_>>();
+    archives.sort();
+    archives
+}
+
+#[test]
+fn startup_creates_database_in_the_configured_directory_when_it_is_missing() {
+    let root = TestTempDir::new("nyaterm-data-directory-create-missing-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert_eq!(
+        fs::canonicalize(&opened.selection.data_dir).unwrap(),
+        fs::canonicalize(&custom).unwrap()
+    );
+    assert!(custom.join(DATABASE_FILE_NAME).exists());
+    assert!(!local.join(DATABASE_FILE_NAME).exists());
+}
+
+#[test]
+fn startup_replaces_an_empty_database_and_keeps_the_original() {
+    let root = TestTempDir::new("nyaterm-data-directory-empty-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(DATABASE_FILE_NAME), b"").unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert!(opened.store.list_connections().unwrap().is_empty());
+    let archives = archived_databases(&custom);
+    assert_eq!(archives.len(), 1);
+    assert!(fs::read(&archives[0]).unwrap().is_empty());
+}
+
+#[test]
+fn startup_recreates_a_corrupt_database_and_preserves_it() {
+    let root = TestTempDir::new("nyaterm-data-directory-corrupt-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(DATABASE_FILE_NAME), b"not a redb database").unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert!(opened.store.list_connections().unwrap().is_empty());
+    let archives = archived_databases(&custom);
+    assert_eq!(archives.len(), 1);
+    assert_eq!(fs::read(&archives[0]).unwrap(), b"not a redb database");
+    assert!(custom.join(DATABASE_FILE_NAME).exists());
+}
+
+#[test]
+fn startup_does_not_replace_a_database_held_by_another_process() {
+    let root = TestTempDir::new("nyaterm-data-directory-db-in-use");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    let held = ConnectionStore::open(&custom).unwrap();
+    let error = open_startup(&local, &local, AppFlavor::Stable)
+        .err()
+        .expect("startup must fail while the database is held");
+    assert_eq!(error.code(), "in_use");
+    assert!(archived_databases(&custom).is_empty());
+    drop(held);
+}
+
+#[test]
+fn startup_does_not_create_a_database_while_a_migration_journal_exists() {
+    let root = TestTempDir::new("nyaterm-data-directory-journal-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(JOURNAL_NAME), b"{}").unwrap();
+    let error = open_startup(&local, &local, AppFlavor::Stable)
+        .err()
+        .expect("startup must require recovery while a journal exists");
+    assert_eq!(error.code(), "recovery_required");
+    assert!(!custom.join(DATABASE_FILE_NAME).exists());
+    assert!(archived_databases(&custom).is_empty());
+}
+
 #[test]
 fn complete_migration_preserves_credentials_unknown_fields_plugins_and_recordings() {
     let root = TestTempDir::new("nyaterm-data-directory-complete");

@@ -3047,6 +3047,8 @@
     "dataDirectoryAutoHint": "Pick a parent folder; NyaTerm automatically uses or creates the %{dir} child inside it. The path above is the effective directory.",
     "dataDirectoryRestartRequired": "The directory change is saved. NyaTerm is restarting.",
     "dataDirectoryNotice": "Startup notice:",
+    "dataDirectoryRecreatedDatabase": "The database was missing or unreadable. A new empty database was created at %{path}; the previous file is kept as %{archive}.",
+    "dataDirectoryCreateDatabaseFailed": "NyaTerm could not create a database at %{path}: %{reason}. Check folder permissions or free disk space.",
     "dataDirectorySyncWarning": "This folder is managed by %{client}. Sync tools can copy the database while NyaTerm is running and corrupt it; quit NyaTerm before syncing or use a portable snapshot instead.",
     "dataDirectoryMigrateTitle": "Migrate to the new directory",
     "dataDirectoryMigrateDesc": "Copies the current database and plugins to %{path}. The source directory is not deleted. NyaTerm restarts immediately after you save and then runs in the new directory.",

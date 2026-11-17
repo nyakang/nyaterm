@@ -3047,6 +3047,8 @@
     "dataDirectoryAutoHint": "親フォルダーを選択してください。NyaTerm はその中の %{dir} 子フォルダーを自動的に使用または作成します。上のパスが実際に使用される場所です。",
     "dataDirectoryRestartRequired": "ディレクトリの変更を保存しました。NyaTerm を再起動します。",
     "dataDirectoryNotice": "起動時の通知：",
+    "dataDirectoryRecreatedDatabase": "使用可能なデータベースが見つからないため、%{path} に新しい空のデータベースを作成しました。元のファイルは %{archive} として保持されています。",
+    "dataDirectoryCreateDatabaseFailed": "%{path} にデータベースを作成できませんでした：%{reason}。フォルダの権限または空き容量を確認してください。",
     "dataDirectorySyncWarning": "同期フォルダー（%{client}）を検出しました。NyaTerm の実行中に同期ツールがデータベースをコピーすると破損する可能性があります。同期の前に NyaTerm を終了するか、ポータブルスナップショットを使用してください。",
     "dataDirectoryMigrateTitle": "新しいディレクトリへ移行",
     "dataDirectoryMigrateDesc": "現在のデータベースとプラグインを %{path} にコピーします。元のディレクトリは削除されません。保存後、NyaTerm はすぐに再起動して新しいディレクトリで動作します。",

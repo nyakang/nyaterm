@@ -58,6 +58,8 @@ pub enum DataDirectoryError {
     RecoveryRequired(PathBuf),
     #[error("invalid or unsupported NyaTerm database: {0}")]
     InvalidDatabase(PathBuf),
+    #[error("NyaTerm database was created by a newer version: {0}")]
+    DatabaseUpgradeRequired(PathBuf),
     #[error("unsupported migration entry: {0}")]
     UnsupportedEntry(PathBuf),
 }
@@ -80,6 +82,7 @@ impl DataDirectoryError {
             Self::CopyMismatch(_) => "copy_mismatch",
             Self::RecoveryRequired(_) => "recovery_required",
             Self::InvalidDatabase(_) => "invalid_database",
+            Self::DatabaseUpgradeRequired(_) => "database_upgrade_required",
             Self::UnsupportedEntry(_) => "unsupported_entry",
         }
     }

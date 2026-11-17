@@ -3047,6 +3047,8 @@
     "dataDirectoryAutoHint": "상위 폴더를 선택하면 NyaTerm이 그 안의 %{dir} 하위 폴더를 자동으로 사용하거나 만듭니다. 위 경로가 실제 적용되는 위치입니다.",
     "dataDirectoryRestartRequired": "디렉터리 변경이 저장되었습니다. NyaTerm이 곧 다시 시작됩니다.",
     "dataDirectoryNotice": "시작 알림:",
+    "dataDirectoryRecreatedDatabase": "사용 가능한 데이터베이스가 없어 %{path}에 새 빈 데이터베이스를 만들었습니다. 기존 파일은 %{archive}로 보관되었습니다.",
+    "dataDirectoryCreateDatabaseFailed": "%{path}에 데이터베이스를 만들 수 없습니다: %{reason}. 폴더 권한 또는 디스크 공간을 확인하세요.",
     "dataDirectorySyncWarning": "동기화 폴더(%{client})가 감지되었습니다. NyaTerm 실행 중에 동기화 도구가 데이터베이스를 복사하면 손상될 수 있습니다. 동기화 전에 NyaTerm을 종료하거나 포터블 스냅샷을 사용하세요.",
     "dataDirectoryMigrateTitle": "새 디렉터리로 마이그레이션",
     "dataDirectoryMigrateDesc": "현재 데이터베이스와 플러그인을 %{path}(으)로 복사합니다. 원본 디렉터리는 삭제되지 않습니다. 저장하면 NyaTerm이 즉시 다시 시작되어 새 디렉터리에서 실행됩니다.",

@@ -3047,6 +3047,8 @@
     "dataDirectoryAutoHint": "選擇上層資料夾即可；NyaTerm 會自動使用或建立其下的 %{dir} 子資料夾。上方顯示的是實際生效的完整路徑。",
     "dataDirectoryRestartRequired": "目錄變更已儲存，NyaTerm 即將重新啟動。",
     "dataDirectoryNotice": "啟動提示：",
+    "dataDirectoryRecreatedDatabase": "找不到可用的資料庫，已在 %{path} 建立新的空白資料庫。原檔案已保留為 %{archive}。",
+    "dataDirectoryCreateDatabaseFailed": "無法在 %{path} 建立資料庫：%{reason}。請檢查目錄權限或磁碟空間。",
     "dataDirectorySyncWarning": "偵測到同步目錄（%{client}）。同步軟體可能在 NyaTerm 執行期間複製資料庫造成損毀，請結束 NyaTerm 後再同步，或改用可攜快照備份。",
     "dataDirectoryMigrateTitle": "遷移到新目錄",
     "dataDirectoryMigrateDesc": "將目前資料庫與外掛複製到 %{path}，來源目錄不會被刪除。儲存後 NyaTerm 會立即重新啟動並在新目錄執行。",

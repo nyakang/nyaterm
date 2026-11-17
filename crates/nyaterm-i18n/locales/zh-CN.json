@@ -3047,6 +3047,8 @@
     "dataDirectoryAutoHint": "选择父目录即可；NyaTerm 会自动使用或创建其下的 %{dir} 子目录。上方显示的是实际生效的完整路径。",
     "dataDirectoryRestartRequired": "目录变更已保存，NyaTerm 即将重启。",
     "dataDirectoryNotice": "启动提示：",
+    "dataDirectoryRecreatedDatabase": "未找到可用的数据库，已在 %{path} 创建新的空数据库。原文件已保留为 %{archive}。",
+    "dataDirectoryCreateDatabaseFailed": "无法在 %{path} 创建数据库：%{reason}。请检查目录权限或磁盘空间。",
     "dataDirectorySyncWarning": "检测到同步目录（%{client}）。同步软件可能在 NyaTerm 运行期间复制数据库造成损坏，请退出 NyaTerm 后再同步，或使用便携快照备份。",
     "dataDirectoryMigrateTitle": "迁移到新目录",
     "dataDirectoryMigrateDesc": "将当前数据库和插件复制到 %{path}，源目录不会被删除。保存后 NyaTerm 会立即重启并在新目录上运行。",
