@@ -77,14 +77,38 @@ fn system_appearance_changes_only_runtime_palettes_and_respects_explicit_termina
     let preferences = state.summary().clone();
     assert_eq!(state.effective_theme_id(), "github-light");
     assert_eq!(state.terminal_palette(), state.theme_palette());
+    assert_eq!(
+        state.terminal_color_palette().background,
+        state.theme_palette().terminal_bg
+    );
+    assert_eq!(
+        SettingsFeatureState::resolve_terminal_color_palette(
+            state.summary(),
+            SystemAppearance::Light
+        ),
+        state.terminal_color_palette()
+    );
     state.set_system_appearance(SystemAppearance::Dark);
     assert_eq!(state.effective_theme_id(), "nord");
     assert_eq!(state.summary(), &preferences);
     assert_eq!(state.terminal_palette(), state.theme_palette());
+    assert_eq!(
+        state.terminal_color_palette().background,
+        state.theme_palette().terminal_bg
+    );
+    assert_eq!(
+        SettingsFeatureState::resolve_terminal_color_palette(
+            state.summary(),
+            SystemAppearance::Dark
+        ),
+        state.terminal_color_palette()
+    );
     state.set_terminal_theme(Some("dracula".into()));
     let terminal = state.terminal_palette();
+    let terminal_colors = state.terminal_color_palette();
     state.set_system_appearance(SystemAppearance::Light);
     assert_eq!(state.terminal_palette(), terminal);
+    assert_eq!(state.terminal_color_palette(), terminal_colors);
     assert_ne!(state.terminal_palette(), state.theme_palette());
     state.set_theme_mode(ThemeMode::Manual);
     assert_eq!(state.effective_theme_id(), "dracula");
@@ -101,6 +125,40 @@ fn reloading_preferences_and_canceling_a_draft_keep_the_latest_system_appearance
     state.replace_summary(snapshot);
     assert_eq!(state.system_appearance(), SystemAppearance::Light);
     assert_eq!(state.effective_theme_id(), "github-light");
+}
+
+#[test]
+fn terminal_color_query_palette_follows_terminal_theme_and_custom_colors() {
+    let mut state = settings_state();
+    state.set_appearance_theme("github-light".into());
+    assert_eq!(state.terminal_color_palette().background, 0xffffff);
+    assert_eq!(
+        SettingsFeatureState::resolve_terminal_color_palette(
+            state.summary(),
+            state.system_appearance()
+        ),
+        state.terminal_color_palette()
+    );
+    state.set_terminal_theme(Some("dracula".into()));
+    assert_eq!(state.terminal_color_palette().background, 0x282a36);
+    state.set_appearance_theme("nya-high-contrast-white".into());
+    assert_eq!(state.terminal_color_palette().background, 0x282a36);
+    state.set_terminal_theme(Some("missing-theme".into()));
+    assert_eq!(state.terminal_color_palette().background, 0xffffff);
+
+    let mut theme =
+        nyaterm_core::themes::resolve_theme("github-light", &state.summary.custom_themes);
+    theme.id = "custom:query-colors".into();
+    theme.colors.terminal.background = "#faf0e0".into();
+    theme.colors.terminal.foreground = "#112233".into();
+    theme.colors.terminal.foreground_intense = Some("#445566".into());
+    let id = theme.id.clone();
+    state.summary.custom_themes.upsert(theme).unwrap();
+    state.set_terminal_theme(Some(id));
+    let colors = state.terminal_color_palette();
+    assert_eq!(colors.background, 0xfaf0e0);
+    assert_eq!(colors.foreground, 0x112233);
+    assert_eq!(colors.foreground_intense, Some(0x445566));
 }
 
 #[test]

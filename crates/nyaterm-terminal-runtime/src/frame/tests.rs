@@ -30,6 +30,7 @@ use super::{
 };
 use nyaterm_core::ActionLinksMatcherSettings;
 use nyaterm_recording::pipeline::RecordingWritePipeline;
+use nyaterm_terminal::colors::TerminalColorPalette;
 use nyaterm_terminal::output::terminal_screen_from_output;
 
 use nyaterm_terminal::{
@@ -45,6 +46,98 @@ use nyaterm_terminal::snapshot_window::{
     terminal_frame_scroll_window_extra_rows, terminal_frame_snapshot_with_scroll_window,
     terminal_snapshot_matches_grid_geometry,
 };
+
+fn frame_color_query_replies(pipeline: &TerminalFramePipeline, session_id: &str) -> String {
+    pipeline.submit_output(session_id, b"\x1b]11;?\x07".to_vec(), "UTF-8", 100);
+    pipeline.finish_pending_output().unwrap();
+    let replies: Vec<u8> = pipeline
+        .take_events_for_transfer(&[session_id.into()])
+        .into_iter()
+        .filter_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => Some(frame.effects.pty_write.concat()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    String::from_utf8(replies).unwrap()
+}
+
+#[test]
+fn frame_color_palette_reaches_existing_background_new_and_seeded_sessions() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.ensure_session("existing", "UTF-8", 100);
+    pipeline.set_snapshot_priority(Vec::new());
+    pipeline.set_color_palette(TerminalColorPalette {
+        background: 0xffffff,
+        ..TerminalColorPalette::default()
+    });
+    pipeline.ensure_session("new", "UTF-8", 100);
+    pipeline.seed_session("seeded", "\x1b]11;?\x07", "UTF-8", 100);
+    for id in ["existing", "new", "seeded", "from-output"] {
+        let reply = frame_color_query_replies(&pipeline, id);
+        let expected = "\x1b]11;rgb:ffff/ffff/ffff\x07";
+        assert_eq!(
+            reply,
+            expected.repeat(if id == "seeded" { 2 } else { 1 }),
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn frame_color_palette_updates_are_ordered_with_queries() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.set_color_palette(TerminalColorPalette {
+        background: 0xffffff,
+        ..TerminalColorPalette::default()
+    });
+    pipeline.submit_output("s1", b"\x1b]11;?\x07".to_vec(), "UTF-8", 100);
+    pipeline.set_color_palette(TerminalColorPalette {
+        background: 0x102030,
+        ..TerminalColorPalette::default()
+    });
+    assert_eq!(
+        frame_color_query_replies(&pipeline, "s1"),
+        "\x1b]11;rgb:ffff/ffff/ffff\x07\x1b]11;rgb:1010/2020/3030\x07"
+    );
+}
+
+#[test]
+fn transferred_and_rekeyed_sessions_use_destination_palette_without_losing_overrides() {
+    let source = TerminalFramePipeline::default();
+    source.seed_session("plain", "hello", "UTF-8", 100);
+    source.seed_session("override", "\x1b]11;#abcdef\x07", "UTF-8", 100);
+    let plain = source.take_session_for_transfer("plain").unwrap().unwrap();
+    let overridden = source
+        .take_session_for_transfer("override")
+        .unwrap()
+        .unwrap();
+    let target = TerminalFramePipeline::default();
+    target.set_color_palette(TerminalColorPalette {
+        background: 0xfafafa,
+        ..TerminalColorPalette::default()
+    });
+    target
+        .insert_sessions_from_transfer(vec![
+            ("plain".into(), plain),
+            ("override".into(), overridden),
+        ])
+        .unwrap();
+    assert_eq!(
+        frame_color_query_replies(&target, "plain"),
+        "\x1b]11;rgb:fafa/fafa/fafa\x07"
+    );
+    assert_eq!(
+        frame_color_query_replies(&target, "override"),
+        "\x1b]11;rgb:abab/cdcd/efef\x07"
+    );
+    assert!(target.rekey_session("plain", "reconnected", "UTF-8", 100));
+    assert_eq!(
+        frame_color_query_replies(&target, "reconnected"),
+        "\x1b]11;rgb:fafa/fafa/fafa\x07"
+    );
+}
+
 #[test]
 fn frame_worker_wrap_preference_applies_to_created_seeded_and_transferred_sessions() {
     let pipeline = TerminalFramePipeline::default();

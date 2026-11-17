@@ -233,6 +233,13 @@ impl NyaTermApp {
             tracing::warn!(%error, "terminal encoding configuration rejected");
         }
         let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer.clone());
+        let system_appearance =
+            crate::features::shell::system_theme::system_appearance(cx.window_appearance());
+        let terminal_colors =
+            SettingsFeatureState::resolve_terminal_color_palette(&settings, system_appearance);
+        terminal_screen.set_color_palette(terminal_colors);
+        // Configure the worker before the bridge can enqueue the first color query.
+        terminal_frame_pipeline.set_color_palette(terminal_colors);
         let session_event_bridge = SessionEventBridge::spawn(
             Arc::clone(&session_manager),
             terminal_frame_pipeline.clone(),
@@ -437,9 +444,7 @@ impl NyaTermApp {
             sync_input: SyncInputFeatureState::new(cx.focus_handle()),
             settings: SettingsFeatureState::new(
                 SettingsFeatureInit {
-                    system_appearance: crate::features::shell::system_theme::system_appearance(
-                        cx.window_appearance(),
-                    ),
+                    system_appearance,
                     summary: settings,
                     keyword_config: keyword_highlights,
                     store_path: store_status.0,

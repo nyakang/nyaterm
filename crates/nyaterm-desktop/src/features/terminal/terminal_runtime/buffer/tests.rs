@@ -644,3 +644,87 @@ fn in_place_output_cannot_suppress_scroll_requests_or_live_prefetch() {
         }
     }
 }
+
+#[test]
+fn terminal_color_queries_follow_theme_preview_and_draft_cancellation_without_visible_panes() {
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::test_support::TestConfigDir;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
+    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use nyaterm_terminal_runtime::frame::TerminalFrameEvent;
+
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let dir = TestConfigDir::new("nyaterm-terminal-color-query");
+    let runtime = AppRuntime::from_parts_for_test(
+        RuntimeMode::Portable,
+        dir.path().into(),
+        dir.path().join("config"),
+        dir.path().join("logs"),
+        dir.path().join("cache"),
+        None,
+    );
+    let stores = UiStoreHandles {
+        startup_restore: cx.new(|_| StartupRestoreStore::default()),
+        overlays: cx.new(|_| OverlayStore::default()),
+    };
+    let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+    let pipeline = app.update(&mut cx, |app, _| {
+        assert!(app.terminal.view.surfaces.is_empty());
+        app.terminal.view.frame_pipeline.clone()
+    });
+    let ask = || {
+        pipeline.submit_output("color-query", b"\x1b]11;?\x07".to_vec(), "UTF-8", 100);
+        pipeline.flush_for_test();
+        let replies: Vec<u8> = pipeline
+            .take_events_for_transfer(&["color-query".into()])
+            .into_iter()
+            .filter_map(|event| match event {
+                TerminalFrameEvent::Output(frame) => Some(frame.effects.pty_write.concat()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        String::from_utf8(replies).unwrap()
+    };
+    let background = app.update(&mut cx, |app, _| app.terminal_theme_palette().terminal_bg);
+    let initial = format!(
+        "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
+        (background >> 16) & 0xff,
+        (background >> 8) & 0xff,
+        background & 0xff
+    );
+    assert_eq!(ask(), initial);
+    app.update(&mut cx, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.update_theme_mode(ThemeMode::System, cx);
+        app.system_appearance_changed(SystemAppearance::Dark, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:0d0d/1111/1717\x07");
+    app.update(&mut cx, |app, cx| {
+        app.system_appearance_changed(SystemAppearance::Light, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:ffff/ffff/ffff\x07");
+    app.update(&mut cx, |app, cx| {
+        app.set_terminal_theme(Some("dracula"), cx);
+        app.system_appearance_changed(SystemAppearance::Dark, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:2828/2a2a/3636\x07");
+    app.update(&mut cx, |app, cx| app.cancel_settings(cx));
+    assert_eq!(ask(), initial);
+    app.update(&mut cx, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.set_terminal_theme(None, cx);
+        app.update_appearance_theme("github-light", cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:ffff/ffff/ffff\x07");
+    app.update(&mut cx, |app, cx| {
+        app.set_terminal_theme(Some("dracula"), cx);
+        app.update_appearance_theme("nya-high-contrast-white", cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:2828/2a2a/3636\x07");
+    app.update(&mut cx, |app, cx| app.cancel_settings(cx));
+    assert_eq!(ask(), initial);
+}

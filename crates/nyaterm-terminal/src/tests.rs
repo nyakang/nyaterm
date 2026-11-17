@@ -1,3 +1,4 @@
+use crate::colors::TerminalColorPalette;
 use std::sync::{Arc, Weak};
 
 use super::{
@@ -2889,6 +2890,72 @@ fn color_request_emits_rgb_reply() {
     let reply = String::from_utf8(effects.pty_write[0].clone()).unwrap();
     assert!(reply.starts_with("\x1b]10;rgb:"));
     assert!(reply.contains("cccc"));
+}
+
+fn color_query_replies(screen: &mut TerminalScreen, query: &[u8]) -> String {
+    screen.advance(query);
+    String::from_utf8(screen.take_effects().pty_write.concat()).unwrap()
+}
+
+#[test]
+fn color_queries_follow_host_palette_and_preserve_extended_ansi_colors() {
+    let mut screen = TerminalScreen::new(20, 2);
+    screen.set_color_palette(TerminalColorPalette {
+        foreground: 0x102030,
+        background: 0xfafafa,
+        cursor: 0x405060,
+        ansi: [0x123456; 16],
+        foreground_intense: None,
+    });
+    assert_eq!(
+        color_query_replies(&mut screen, b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x07"),
+        "\x1b]10;rgb:1010/2020/3030\x07\x1b]11;rgb:fafa/fafa/fafa\x1b\\\x1b]12;rgb:4040/5050/6060\x07"
+    );
+    assert_eq!(
+        color_query_replies(&mut screen, b"\x1b]4;0;?;15;?;16;?;236;?\x07"),
+        "\x1b]4;0;rgb:1212/3434/5656\x07\x1b]4;15;rgb:1212/3434/5656\x07\x1b]4;16;rgb:0000/0000/0000\x07\x1b]4;236;rgb:3030/3030/3030\x07"
+    );
+}
+
+#[test]
+fn osc_color_overrides_survive_theme_changes_and_reset_to_current_palette() {
+    let mut screen = TerminalScreen::new(20, 2);
+    screen
+        .advance(b"\x1b]10;#112233\x07\x1b]11;#445566\x07\x1b]12;#778899\x07\x1b]4;1;#aabbcc\x07");
+    screen.set_color_palette(TerminalColorPalette {
+        foreground: 0x010203,
+        background: 0xfdfdfd,
+        cursor: 0x040506,
+        ansi: [0x070809; 16],
+        foreground_intense: None,
+    });
+    let query = b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07\x1b]4;1;?\x07";
+    assert_eq!(
+        color_query_replies(&mut screen, query),
+        "\x1b]10;rgb:1111/2222/3333\x07\x1b]11;rgb:4444/5555/6666\x07\x1b]12;rgb:7777/8888/9999\x07\x1b]4;1;rgb:aaaa/bbbb/cccc\x07"
+    );
+    screen.advance(b"\x1b]110\x07\x1b]111\x07\x1b]112\x07\x1b]104;1\x07");
+    assert_eq!(
+        color_query_replies(&mut screen, query),
+        "\x1b]10;rgb:0101/0202/0303\x07\x1b]11;rgb:fdfd/fdfd/fdfd\x07\x1b]12;rgb:0404/0505/0606\x07\x1b]4;1;rgb:0707/0808/0909\x07"
+    );
+}
+
+#[test]
+fn host_background_survives_clear_stream_reset_and_terminal_reset() {
+    let mut screen = TerminalScreen::new(20, 2);
+    screen.set_color_palette(TerminalColorPalette {
+        background: 0xffffff,
+        ..TerminalColorPalette::default()
+    });
+    screen.advance(b"\x1b]11;#123456\x07text");
+    screen.clear();
+    screen.reset_stream_state();
+    screen.advance(b"\x1bc");
+    assert_eq!(
+        color_query_replies(&mut screen, b"\x1b]11;?\x07"),
+        "\x1b]11;rgb:ffff/ffff/ffff\x07"
+    );
 }
 
 #[test]
