@@ -61,6 +61,7 @@ impl NyaTermApp {
             id.clone(),
         );
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: Some(session_id),
             kind: TransferJobKind::ListTree {

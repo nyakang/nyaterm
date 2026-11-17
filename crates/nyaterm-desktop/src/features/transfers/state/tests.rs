@@ -275,35 +275,47 @@ fn cut_clipboard_only_settles_successful_jobs_from_the_current_generation() {
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut transfer = transfer_state(&cx);
     transfer.set_file_clipboard(
-        "session-a".into(),
+        crate::features::transfers::file_operations::FileOperationEndpoint::Session(
+            "session-a".into(),
+        ),
         vec![file_entry("/old")],
         true,
-        Vec::new(),
+        None,
+        None,
     );
     let old_generation = transfer.file_clipboard().unwrap().generation;
     transfer.track_cut_job("old".into(), old_generation, "/old".into());
     transfer.set_file_clipboard(
-        "session-b".into(),
+        crate::features::transfers::file_operations::FileOperationEndpoint::Session(
+            "session-b".into(),
+        ),
         vec![file_entry("/new")],
         true,
-        Vec::new(),
+        None,
+        None,
     );
     transfer.settle_cut_job("old", true);
     assert_eq!(transfer.file_clipboard().unwrap().entries[0].path, "/new");
 
     let generation = transfer.file_clipboard().unwrap().generation;
     transfer.track_cut_job("failed".into(), generation, "/new".into());
+    assert!(transfer.cut_path_in_flight(generation, "/new"));
+    assert!(!transfer.cut_path_in_flight(old_generation, "/new"));
     transfer.settle_cut_job("failed", false);
+    assert!(!transfer.cut_path_in_flight(generation, "/new"));
     assert!(transfer.file_clipboard().is_some());
     transfer.track_cut_job("succeeded".into(), generation, "/new".into());
     transfer.settle_cut_job("succeeded", true);
     assert!(transfer.file_clipboard().is_none());
 
     transfer.set_file_clipboard(
-        "session-a".into(),
+        crate::features::transfers::file_operations::FileOperationEndpoint::Session(
+            "session-a".into(),
+        ),
         vec![file_entry("/stale")],
         false,
-        Vec::new(),
+        None,
+        None,
     );
     transfer.clear_file_clipboard_for_session("session-b");
     assert!(transfer.file_clipboard().is_some());
@@ -830,6 +842,7 @@ fn transfer_session_id_migration_preserves_reconnected_sftp_state() {
         },
     );
     transfer.enqueue_transfer_job(TransferJobState {
+        source_type: None,
         id: "download".to_string(),
         session_id: Some("old-session".to_string()),
         kind: TransferJobKind::Download {
@@ -848,6 +861,7 @@ fn transfer_session_id_migration_preserves_reconnected_sftp_state() {
         speed: Default::default(),
     });
     transfer.enqueue_transfer_job(TransferJobState {
+        source_type: None,
         id: "upload".to_string(),
         session_id: Some("old-session".to_string()),
         kind: TransferJobKind::Upload {
@@ -865,6 +879,7 @@ fn transfer_session_id_migration_preserves_reconnected_sftp_state() {
         speed: Default::default(),
     });
     transfer.enqueue_transfer_job(TransferJobState {
+        source_type: None,
         id: "list".to_string(),
         session_id: Some("old-session".to_string()),
         kind: TransferJobKind::ListDir {
@@ -955,6 +970,7 @@ fn transfer_job(
     controlled: bool,
 ) -> TransferJobState {
     TransferJobState {
+        source_type: None,
         id: id.to_string(),
         session_id: Some(session_id.to_string()),
         kind: TransferJobKind::Download {

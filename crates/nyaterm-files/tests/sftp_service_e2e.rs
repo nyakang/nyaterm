@@ -221,6 +221,32 @@ fn shared_copy_engine_preserves_raw_targets_across_source_combinations() -> anyh
             anyhow::ensure!(summary.copied && summary.bytes == 7);
         }
         anyhow::ensure!(fs::read(local.join("downloaded/目录/文件.txt"))? == b"payload");
+        let operation_target = local.join("operation-download");
+        fs::create_dir_all(&operation_target)?;
+        let source_entry = other_session
+            .list_dir_path(&remote_root)?
+            .into_iter()
+            .find(|entry| entry.name == "other-session")
+            .expect("copied directory exists");
+        nyaterm_files::operations::execute_file_operation(
+            nyaterm_files::operations::FileOperationRequest::Transfer(
+                nyaterm_files::operations::FileTransferRequest {
+                    entry: source_entry,
+                    target_directory: RemoteFilePath::new(operation_target.to_string_lossy()),
+                    operation: nyaterm_files::operations::FileTransferOperation::Copy,
+                    same_endpoint: false,
+                },
+            ),
+            other_session.clone(),
+            local_service.clone(),
+            SftpTransferControl::new(),
+            SftpPathTransferOptions::new(SftpDuplicatePolicy::Skip, None, Default::default()),
+            |_| {},
+        )?;
+        anyhow::ensure!(
+            fs::read(operation_target.join("other-session/目录/文件.txt"))? == b"payload"
+        );
+
         let skipped = FileCopyRequest {
             source: local_service.transfer_endpoint(&source),
             destination: origin.transfer_endpoint(&uploaded),

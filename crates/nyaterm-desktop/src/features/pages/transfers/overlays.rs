@@ -50,7 +50,14 @@ impl NyaTermApp {
                 TransferJobStatus::Queued | TransferJobStatus::Running | TransferJobStatus::Paused
             ) && (job.control.is_some() || matches!(job.kind, TransferJobKind::RdpClipboard { .. }))
         });
-        let can_retry = job.as_ref().is_some_and(transfer_job_can_retry);
+        let can_retry = job.as_ref().is_some_and(|job| {
+            transfer_job_can_retry(job)
+                || self.transfer.file_operation(&job.id).is_some()
+                    && matches!(
+                        job.status,
+                        TransferJobStatus::Failed | TransferJobStatus::Cancelled
+                    )
+        });
         let can_open_target = job.as_ref().is_some_and(transfer_job_has_local_target);
         let can_delete = self.can_delete_transfer_job(&state.job_id);
         let pause_id = state.job_id.clone();

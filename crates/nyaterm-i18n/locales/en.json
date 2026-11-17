@@ -1454,6 +1454,9 @@
     "zoomOut": "Zoom Out"
   },
   "fileExplorer": {
+    "clipboardEmpty": "The file clipboard is empty or has been replaced",
+    "clipboardMoving": "The cut items are already being moved; wait for completion",
+
     "transferSourceUnavailable": "The source connection is unavailable. Reconnect and try again.",
     "transferBackendUnsupported": "This connection does not support file transfer.",
     "transferInvalidDestination": "The transfer destination is invalid or cannot represent the filename.",

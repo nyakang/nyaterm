@@ -1454,6 +1454,9 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "clipboardEmpty": "檔案剪貼簿為空或已被取代",
+    "clipboardMoving": "選取的剪下項目正在移動，請等待完成",
+
     "transferSourceUnavailable": "來源連線無法使用，請重新連線後重試。",
     "transferBackendUnsupported": "此連線不支援檔案傳輸。",
     "transferInvalidDestination": "傳輸目的地無效或無法表示檔案名稱。",

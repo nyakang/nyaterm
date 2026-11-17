@@ -349,6 +349,7 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                             transfer_browser_entry_row(
                                 TransferBrowserEntryRowPresentation {
                                     palette,
+                                    cut: browser.cut_paths.contains(&entry.identity_key()),
                                     entry,
                                     selected_remote_path: selected_remote_path.clone(),
                                     selected_remote_paths: &selected_remote_paths,

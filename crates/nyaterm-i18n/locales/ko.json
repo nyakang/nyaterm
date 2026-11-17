@@ -1454,6 +1454,9 @@
     "zoomOut": "축소"
   },
   "fileExplorer": {
+    "clipboardEmpty": "파일 클립보드가 비어 있거나 다른 내용으로 바뀌었습니다",
+    "clipboardMoving": "잘라낸 항목을 이동 중입니다. 완료될 때까지 기다려 주세요",
+
     "transferSourceUnavailable": "원본 연결을 사용할 수 없습니다. 다시 연결한 후 시도하세요.",
     "transferBackendUnsupported": "이 연결은 파일 전송을 지원하지 않습니다.",
     "transferInvalidDestination": "전송 대상이 잘못되었거나 파일 이름을 표현할 수 없습니다.",

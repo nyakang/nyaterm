@@ -132,6 +132,7 @@ impl NyaTermApp {
         };
         let id = self.transfer.next_transfer_job_id("sftp-symlink");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::Symlink {
@@ -406,6 +407,7 @@ impl NyaTermApp {
         let parent_path = file_browser_parent(backend, &old_display_path);
         let id = self.transfer.next_transfer_job_id("sftp-rename");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::Rename {

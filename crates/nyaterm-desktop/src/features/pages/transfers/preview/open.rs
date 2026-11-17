@@ -273,6 +273,7 @@ impl NyaTermApp {
         let max_bytes = category.max_bytes();
         let id = self.transfer.next_transfer_job_id("sftp-preview");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id,
             kind: TransferJobKind::LoadPreview {
@@ -338,6 +339,7 @@ impl NyaTermApp {
         } = request;
         let id = self.transfer.next_transfer_job_id("pdf-page");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id,
             kind: TransferJobKind::RasterizePdfPage {

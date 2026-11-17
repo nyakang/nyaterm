@@ -120,7 +120,9 @@ impl FileManagerWorkspace {
             }
             return;
         }
-        if primary && key == "a" {
+        if primary && !modifiers.alt && !modifiers.shift && matches!(key, "c" | "x" | "v") {
+            self.clipboard_action(key, window, cx);
+        } else if primary && key == "a" {
             let visible = self.current_visible(self.active, cx);
             self.pane_mut(self.active).select_all(&visible);
         } else if primary && key == "f" {
@@ -184,6 +186,19 @@ impl FileManagerWorkspace {
         }
         cx.stop_propagation();
         cx.notify();
+    }
+
+    pub(super) fn clipboard_action(&self, key: &str, window: &Window, cx: &mut Context<Self>) {
+        let selection = self.selection(self.active);
+        let paste = key == "v";
+        let cut = key == "x";
+        self.dispatch_app(window, cx, move |app, _, cx| {
+            if paste {
+                app.paste_file_clipboard(selection.endpoint, selection.directory, cx);
+            } else {
+                app.capture_file_clipboard(selection.endpoint, selection.entries, cut, cx);
+            }
+        });
     }
 
     pub(super) fn current_visible(

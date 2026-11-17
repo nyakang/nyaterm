@@ -132,6 +132,7 @@ pub(super) fn transfer_browser_entry_row(
     cx: &mut Context<TransferPanel>,
 ) -> impl IntoElement {
     let TransferBrowserEntryRowPresentation {
+        cut,
         palette,
         entry,
         selected_remote_path,
@@ -232,6 +233,7 @@ pub(super) fn transfer_browser_entry_row(
             },
         ));
     div()
+        .opacity(if cut { 0.5 } else { 1.0 })
         .id(SharedString::from(format!(
             "transfer-browser-entry-{entry_identity}"
         )))
@@ -497,6 +499,7 @@ pub(super) fn transfer_browser_entry_row(
 }
 
 pub(super) struct TransferBrowserEntryRowPresentation<'a> {
+    pub cut: bool,
     pub palette: ThemePalette,
     pub entry: SftpFileEntry,
     pub selected_remote_path: Option<String>,

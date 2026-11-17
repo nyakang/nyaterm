@@ -128,6 +128,7 @@ fn refresh_and_home_metadata_completion_preserve_an_existing_tree_selection() {
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 app.transfer.enqueue_transfer_job(TransferJobState {
+                    source_type: None,
                     id: "home-metadata".into(),
                     session_id: Some(SESSION.into()),
                     kind: TransferJobKind::ResolveHome,
@@ -345,6 +346,7 @@ fn home_metadata_success_and_failure_do_not_settle_an_inflight_directory_navigat
                 app.update(cx, |app, cx| {
                     app.transfer.browser.home_dir_pending = true;
                     app.transfer.enqueue_transfer_job(TransferJobState {
+                        source_type: None,
                         id: "home-metadata".into(),
                         session_id: Some(SESSION.into()),
                         kind: TransferJobKind::ResolveHome,

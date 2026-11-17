@@ -11,6 +11,7 @@ use std::time::Duration;
 
 fn job(id: &str, upload: bool) -> TransferJobState {
     TransferJobState {
+        source_type: None,
         id: id.into(),
         session_id: Some(id.into()),
         kind: if upload {

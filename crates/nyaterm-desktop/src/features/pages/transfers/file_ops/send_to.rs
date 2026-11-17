@@ -154,6 +154,7 @@ impl NyaTermApp {
         let control = SftpTransferControl::new();
 
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             // Scope the row to the *source* session so it shows in that session's
             // queue; the target session is recorded in the job kind.

@@ -176,6 +176,7 @@ pub(crate) enum TransferJobStatus {
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransferJobState {
+    pub(crate) source_type: Option<nyaterm_files::sftp::SftpFileType>,
     pub(crate) id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) kind: TransferJobKind,
@@ -199,6 +200,8 @@ pub(crate) struct TransferJobState {
 /// costs a handful of small clones instead of the catalog.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TransferJobRowSnapshot {
+    pub(crate) operation_label: Option<String>,
+    pub(crate) source_type: Option<nyaterm_files::sftp::SftpFileType>,
     pub(crate) id: String,
     pub(crate) kind: TransferJobKind,
     pub(crate) status: TransferJobStatus,
@@ -214,6 +217,8 @@ impl TransferJobState {
     /// The row projection, dropping `entries`, `session_id` and the control handle.
     pub(crate) fn row_snapshot(&self) -> TransferJobRowSnapshot {
         TransferJobRowSnapshot {
+            operation_label: None,
+            source_type: self.source_type,
             id: self.id.clone(),
             kind: self.kind.clone(),
             status: self.status,
@@ -339,6 +344,7 @@ mod transfer_job_state_tests {
 
     fn job(kind: TransferJobKind, session_id: Option<&str>) -> TransferJobState {
         TransferJobState {
+            source_type: None,
             id: "job-1".to_string(),
             session_id: session_id.map(ToString::to_string),
             kind,
@@ -511,6 +517,7 @@ pub(crate) struct PromisedDownloadDestination {
 
 #[derive(Debug)]
 pub(crate) enum TransferJobEvent {
+    SourceType(nyaterm_files::sftp::SftpFileType),
     DragExportOpened {
         session_id: String,
         remote_path: String,

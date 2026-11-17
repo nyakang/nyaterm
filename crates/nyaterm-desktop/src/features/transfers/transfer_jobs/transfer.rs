@@ -69,6 +69,7 @@ impl NyaTermApp {
         let control = SftpTransferControl::new();
         let display_path = remote_path.display_path.clone();
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: session.session_id,
             kind: TransferJobKind::Download {
@@ -100,6 +101,12 @@ impl NyaTermApp {
             id.clone(),
             finished_tx.clone(),
             move || {
+                if let Ok(properties) = session.service.remote_file_properties(&remote_path) {
+                    let _ = finished_tx.unbounded_send(TransferJobResult {
+                        id: id.clone(),
+                        event: TransferJobEvent::SourceType(properties.file_type),
+                    });
+                }
                 let mut progress_sender = TransferProgressEventSender::new(id.clone(), progress_tx);
                 let result = session
                     .service
@@ -147,6 +154,7 @@ impl NyaTermApp {
         let id = self.transfer.next_transfer_job_id("sftp-upload");
         let control = SftpTransferControl::new();
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: session.session_id,
             kind: TransferJobKind::Upload {
@@ -181,6 +189,19 @@ impl NyaTermApp {
             // target lock through conflict resolution and the upload itself.
             let mut progress_sender = TransferProgressEventSender::new(id.clone(), progress_tx);
             let service = session.service;
+            if let Ok(metadata) = std::fs::symlink_metadata(&local_path) {
+                let source_type = if metadata.is_dir() {
+                    nyaterm_files::sftp::SftpFileType::Directory
+                } else if metadata.is_symlink() {
+                    nyaterm_files::sftp::SftpFileType::Symlink
+                } else {
+                    nyaterm_files::sftp::SftpFileType::File
+                };
+                let _ = finished_tx.unbounded_send(TransferJobResult {
+                    id: id.clone(),
+                    event: TransferJobEvent::SourceType(source_type),
+                });
+            }
             let result = (|| {
                 let _target_guard = lock_upload_target(&target_lock, &control)?;
                 service
@@ -870,6 +891,7 @@ mod xymodem_cancel_tests {
 
     fn job(id: &str, session_id: &str, kind: TransferJobKind) -> TransferJobState {
         TransferJobState {
+            source_type: None,
             id: id.into(),
             session_id: Some(session_id.into()),
             kind,

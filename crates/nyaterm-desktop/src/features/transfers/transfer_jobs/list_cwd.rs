@@ -50,6 +50,7 @@ impl NyaTermApp {
         self.transfer.begin_browser_directory_load("/".to_string());
         self.transfer.set_remote_path("/");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: Some(session_id),
             kind: TransferJobKind::InitialDirectory,
@@ -145,6 +146,7 @@ impl NyaTermApp {
             return;
         }
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::ListChildren {
@@ -251,6 +253,7 @@ impl NyaTermApp {
                 .begin_tree_navigation(session_id, backend, id.clone());
         }
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: job_session_id,
             kind: cwd_reason.map_or_else(
@@ -352,6 +355,7 @@ impl NyaTermApp {
         self.transfer.browser.home_dir_pending = true;
         let id = self.transfer.next_transfer_job_id("sftp-home");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::ResolveHome,

@@ -49,6 +49,11 @@ pub(in crate::features::pages::transfers) fn transfer_job_row(
     let icon_path = transfer_job_icon_path(&job.kind, &job);
     let direction_color = transfer_job_direction_color(&job.kind);
     let detail = transfer_job_detail(&job, directory_progress, &labels);
+    let detail = job
+        .operation_label
+        .as_ref()
+        .map(|operation| format!("{operation} · {detail}"))
+        .unwrap_or(detail);
     let progress_label = transfer_job_right_label(&job, &labels);
     let progress_percent = transfer_job_progress_percent(&job);
     let indeterminate = matches!(
@@ -103,6 +108,13 @@ pub(in crate::features::pages::transfers) fn transfer_job_row(
                 .flex()
                 .items_center()
                 .gap_2()
+                .child(nyaterm_ui::icons::transfer_entry_icon(
+                    palette,
+                    &file_name,
+                    transfer_job_is_directory(&job),
+                    job.source_type == Some(nyaterm_files::sftp::SftpFileType::Symlink),
+                    job_selected,
+                ))
                 .child(
                     svg()
                         .size(px(14.))
@@ -334,10 +346,7 @@ fn format_transfer_row_time(created_at_ms: u128) -> String {
         .unwrap_or_else(|_| "--:--:--".to_string())
 }
 
-fn transfer_job_icon_path(kind: &TransferJobKind, job: &TransferJobRowSnapshot) -> &'static str {
-    if transfer_job_is_directory(job) {
-        return "icons/conn/folder.svg";
-    }
+fn transfer_job_icon_path(kind: &TransferJobKind, _job: &TransferJobRowSnapshot) -> &'static str {
     match kind {
         TransferJobKind::Upload { .. }
         | TransferJobKind::ZmodemUpload { .. }
@@ -350,9 +359,7 @@ fn transfer_job_icon_path(kind: &TransferJobKind, job: &TransferJobRowSnapshot) 
 }
 
 fn transfer_job_is_directory(job: &TransferJobRowSnapshot) -> bool {
-    job.progress
-        .as_ref()
-        .is_some_and(|progress| progress.item_count_total.is_some())
+    job.source_type == Some(nyaterm_files::sftp::SftpFileType::Directory)
 }
 
 fn transfer_job_direction_color(kind: &TransferJobKind) -> gpui::Rgba {
@@ -432,6 +439,7 @@ mod tests {
             local_path: PathBuf::from("/local/file.bin"),
         };
         crate::models::TransferJobState {
+            source_type: None,
             id: "job-1".to_string(),
             session_id: Some("session-a".to_string()),
             display_name: crate::models::TransferJobState::display_name_for_kind(&kind),
@@ -545,6 +553,7 @@ mod tests {
             local_path: PathBuf::from("/downloads/project"),
         };
         let job = crate::models::TransferJobState {
+            source_type: Some(nyaterm_files::sftp::SftpFileType::Directory),
             id: "job-1".to_string(),
             session_id: Some("session-a".to_string()),
             display_name: crate::models::TransferJobState::display_name_for_kind(&kind),
@@ -569,8 +578,23 @@ mod tests {
         assert_eq!(transfer_job_file_name(&job), "project");
         assert_eq!(
             transfer_job_icon_path(&job.kind, &job),
-            "icons/conn/folder.svg"
+            "icons/fe/download.svg"
         );
+    }
+
+    #[test]
+    fn item_counts_do_not_change_file_type() {
+        let mut row = job(TransferJobStatus::Running);
+        row.source_type = Some(nyaterm_files::sftp::SftpFileType::File);
+        row.progress = Some(progress("/file", 0, Some(0), Some(0), Some(1)));
+        assert!(!super::transfer_job_is_directory(&row));
+        row.source_type = None;
+        assert!(!super::transfer_job_is_directory(&row));
+        row.source_type = Some(nyaterm_files::sftp::SftpFileType::Directory);
+        row.progress = None;
+        assert!(super::transfer_job_is_directory(&row));
+        row.status = TransferJobStatus::Completed;
+        assert!(super::transfer_job_is_directory(&row));
     }
 
     #[test]

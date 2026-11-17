@@ -646,3 +646,100 @@ fn system_file_drop_on_a_directory_row_uses_its_local_identity_and_actual_destin
         b"external drop content"
     );
 }
+
+#[gpui::test]
+fn clipboard_internal_cut_to_local_runs_once_and_refreshes_the_target(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-clipboard-local-move");
+    std::fs::create_dir_all(root.join("source")).unwrap();
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::write(root.join("source/clipboard.txt"), b"clipboard content").unwrap();
+    let app = app_with_visible_local_session(cx, root.path(), "clipboard-test");
+    let target = RemoteFilePath::new(root.join("target").to_string_lossy());
+    let entries = nyaterm_files::file_browser::FileBrowserService::local()
+        .list_dir_path(&RemoteFilePath::new(root.join("source").to_string_lossy()))
+        .unwrap();
+    let cx = session_focus_test_window(cx, &app);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.start_transfer_event_drain(cx);
+            app.capture_file_clipboard(PaneEndpoint::Local, entries, true, cx);
+            app.paste_file_clipboard(PaneEndpoint::Local, target.clone(), cx);
+            app.paste_file_clipboard(PaneEndpoint::Local, target.clone(), cx);
+            assert_eq!(
+                app.transfer
+                    .transfer_jobs()
+                    .iter()
+                    .filter(|job| app.transfer.file_operation(&job.id).is_some())
+                    .count(),
+                1
+            );
+        });
+    });
+    wait_for(cx, "clipboard move", |cx| {
+        app.read(cx)
+            .transfer
+            .transfer_jobs()
+            .iter()
+            .any(|job| job.status == crate::models::TransferJobStatus::Completed)
+    });
+    assert!(!root.join("source/clipboard.txt").exists());
+    assert_eq!(
+        std::fs::read(root.join("target/clipboard.txt")).unwrap(),
+        b"clipboard content"
+    );
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert!(app.transfer.file_clipboard().is_none());
+        let job = app
+            .transfer
+            .transfer_jobs()
+            .iter()
+            .find(|job| app.transfer.file_operation(&job.id).is_some())
+            .unwrap();
+        assert_eq!(
+            job.source_type,
+            Some(nyaterm_files::sftp::SftpFileType::File)
+        );
+        assert_eq!(
+            job.summary.as_ref().unwrap().local_path,
+            root.join("target/clipboard.txt")
+        );
+    });
+}
+
+#[gpui::test]
+fn replacing_file_clipboard_with_text_prevents_stale_file_paste(cx: &mut TestAppContext) {
+    let root = TestTempDir::new("nyaterm-clipboard-replaced");
+    let app = app_with_visible_local_session(cx, root.path(), "clipboard-test");
+    std::fs::write(root.join("source.txt"), b"source").unwrap();
+    let service = nyaterm_files::file_browser::FileBrowserService::local();
+    let path = RemoteFilePath::new(root.path().to_string_lossy());
+    let entries = service
+        .list_dir_path(&path)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.name == "source.txt")
+        .collect();
+    let cx = session_focus_test_window(cx, &app);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.capture_file_clipboard(PaneEndpoint::Local, entries, false, cx);
+            assert!(
+                app.transfer.file_clipboard().is_some(),
+                "capture must populate internal clipboard"
+            );
+            assert!(app.can_paste_transfer_file_clipboard(cx));
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("ordinary text".into()));
+            assert!(!app.can_paste_transfer_file_clipboard(cx));
+            app.paste_file_clipboard(PaneEndpoint::Local, path, cx);
+            assert!(
+                app.transfer
+                    .transfer_jobs()
+                    .iter()
+                    .all(|job| app.transfer.file_operation(&job.id).is_none())
+            );
+        });
+    });
+    assert_eq!(std::fs::read(root.join("source.txt")).unwrap(), b"source");
+}

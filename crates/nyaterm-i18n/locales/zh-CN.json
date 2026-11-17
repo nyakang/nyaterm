@@ -1454,6 +1454,9 @@
     "zoomOut": "缩小"
   },
   "fileExplorer": {
+    "clipboardEmpty": "文件剪贴板为空或已被替换",
+    "clipboardMoving": "选中的剪切项正在移动，请等待完成",
+
     "transferSourceUnavailable": "来源连接不可用，请重新连接后重试。",
     "transferBackendUnsupported": "此连接不支持文件传输。",
     "transferInvalidDestination": "传输目标无效或无法表示文件名。",
