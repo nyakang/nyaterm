@@ -90,6 +90,7 @@ impl NyaTermApp {
         let max_bytes = self.ai.settings_config().max_ai_file_size_bytes;
         let id = self.transfer.next_transfer_job_id("sftp-ai-file");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::AiFileAction {
@@ -470,6 +471,7 @@ impl NyaTermApp {
         let id = self.transfer.next_transfer_job_id("sftp-open-external");
         let control = SftpTransferControl::new();
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id,
             kind: TransferJobKind::OpenExternal {

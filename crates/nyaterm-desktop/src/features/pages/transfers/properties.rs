@@ -186,6 +186,7 @@ impl NyaTermApp {
         let remote_display_path = remote_path.display_path.clone();
         let id = self.transfer.next_transfer_job_id("sftp-properties");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::LoadProperties {
@@ -350,6 +351,7 @@ impl NyaTermApp {
         let remote_display_path = remote_path.display_path.clone();
         let id = self.transfer.next_transfer_job_id("sftp-update-properties");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::UpdateProperties {

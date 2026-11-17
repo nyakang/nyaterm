@@ -54,6 +54,12 @@ pub(in crate::features::pages::transfers) fn queue_action_button(
 pub(in crate::features::pages::transfers) fn transfer_job_has_local_target(
     job: &TransferJobState,
 ) -> bool {
+    if matches!(job.kind, TransferJobKind::SendTo { .. }) {
+        return job.status == TransferJobStatus::Completed
+            && job.summary.as_ref().is_some_and(|summary| {
+                !summary.skipped && !summary.local_path.as_os_str().is_empty()
+            });
+    }
     let download_like = matches!(
         job.kind,
         TransferJobKind::Download { .. }
@@ -104,6 +110,7 @@ mod tests {
     #[test]
     fn drag_export_never_offers_an_invented_local_target_or_retry() {
         let mut job = crate::models::TransferJobState {
+            source_type: None,
             id: "export".into(),
             session_id: Some("session".into()),
             kind: crate::models::TransferJobKind::DragExport {

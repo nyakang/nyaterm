@@ -244,8 +244,7 @@ impl NyaTermApp {
 
 pub(in crate::features) use remote_text_editor::RemoteTextEditor;
 pub(in crate::features) use state::{
-    PdfPageRequest, TransferFeatureFocus, TransferFeatureState, TransferFileClipboard,
-    TransferPreviewCloseOutcome,
+    PdfPageRequest, TransferFeatureFocus, TransferFeatureState, TransferPreviewCloseOutcome,
 };
 pub(in crate::features) use transfer_widgets::{
     duplicate_decision_label, duplicate_policy_label, format_file_size,

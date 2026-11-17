@@ -16,7 +16,8 @@ impl NyaTermApp {
             return;
         }
         // The path field owns all editing keys, including clipboard shortcuts.
-        if self.transfer.browser_view().path_editing {
+        if self.transfer.browser_view().path_editing || self.transfer.browser_view().search_expanded
+        {
             return;
         }
         let keystroke = &event.keystroke;

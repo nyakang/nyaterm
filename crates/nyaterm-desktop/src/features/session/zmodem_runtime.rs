@@ -194,6 +194,7 @@ impl NyaTermApp {
         let resolver = self.session.prompts.duplicate_broker();
         let id = self.transfer.next_transfer_job_id("zmodem-probe");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: Some(session_id.clone()),
             kind: TransferJobKind::ZmodemConflictProbe {
@@ -768,6 +769,7 @@ impl NyaTermApp {
                 }
             });
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id,
             session_id: Some(session_id.to_string()),
             kind,

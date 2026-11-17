@@ -67,12 +67,12 @@ impl NyaTermApp {
     /// refcount bump plus a handful of small clones. Comparing a key would mean
     /// hashing or cloning the very things the memo exists to avoid touching.
     pub(in crate::features) fn flush_transfer_panel_snapshot(&mut self, cx: &mut Context<Self>) {
-        let snapshot = self.build_transfer_snapshot();
+        let snapshot = self.build_transfer_snapshot(cx);
         let panel = self.transfer_panel.clone();
         panel.update(cx, |panel, cx| panel.set_snapshot(snapshot, cx));
     }
 
-    fn build_transfer_snapshot(&mut self) -> TransferSnapshot {
+    fn build_transfer_snapshot(&mut self, cx: &gpui::App) -> TransferSnapshot {
         let chrome = self.transfer_chrome();
         let active_session_id = self.session.active_id().map(str::to_string);
         let availability = transfer_browser_availability(
@@ -112,7 +112,13 @@ impl NyaTermApp {
             .tree_presentation(active_session_id.as_deref(), show_hidden_files);
         let tree_focus = self.transfer.tree_focus().clone();
         let browser = self.transfer.browser_view();
+        let cut_paths = self.transfer.file_clipboard().filter(|clipboard| {
+            clipboard.cut && clipboard.matches_system_clipboard(cx)
+                && (clipboard.source.session_id() == active_session_id.as_deref()
+                    || clipboard.source == crate::features::transfers::file_operations::FileOperationEndpoint::Local && self.session.active_file_browser_backend() == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local))
+        }).map(|clipboard| clipboard.entries.iter().map(|entry| entry.identity_key()).collect()).unwrap_or_default();
         let browser = TransferBrowserPresentation {
+            cut_paths,
             view_mode,
             tree,
             tree_focus,
@@ -233,7 +239,18 @@ impl NyaTermApp {
         let mut ordered = visible
             .iter()
             .enumerate()
-            .map(|(index, job)| (index, job.row_snapshot()))
+            .map(|(index, job)| {
+                let mut row = job.row_snapshot();
+                if let Some(operation) = self.transfer.file_operation(&job.id) {
+                    row.operation_label = Some(format!(
+                        "{} · {} → {}",
+                        rust_i18n::t!(operation.action_key()),
+                        operation.source_label,
+                        operation.target_label
+                    ));
+                }
+                (index, row)
+            })
             .collect::<Vec<_>>();
         ordered.sort_by(|(left_index, left), (right_index, right)| {
             transfer_job_display_rank(left.status)

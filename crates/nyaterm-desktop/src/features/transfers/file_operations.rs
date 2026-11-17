@@ -147,6 +147,15 @@ impl NyaTermApp {
             target_directory,
             operation,
         } = intent;
+        if entries.is_empty() {
+            self.report_transfer_entry_error(
+                "file-operation",
+                source.kind(),
+                &nyaterm_files::file_browser::FileTransferEntryError::NoSelection.into(),
+                cx,
+            );
+            return;
+        }
         for entry in entries {
             let item = FileTransferIntent {
                 source: source.clone(),
@@ -198,9 +207,7 @@ impl NyaTermApp {
         let (source_service, target_service) = match services {
             Ok(services) => services,
             Err(error) => {
-                self.shell
-                    .set_status(crate::features::android::labels::file_error_message(&error));
-                cx.notify();
+                self.report_transfer_entry_error("file-operation", source.kind(), &error, cx);
                 return;
             }
         };
@@ -266,6 +273,12 @@ impl NyaTermApp {
             job.detail = t!("fileTransfer.transferring").to_string();
         } else {
             self.transfer.enqueue_transfer_job(TransferJobState {
+                source_type: match &context.request {
+                    FileOperationRequest::Transfer(intent) => {
+                        intent.entries.first().map(|entry| entry.file_type)
+                    }
+                    _ => None,
+                },
                 id: id.clone(),
                 session_id: source.session_id().map(str::to_string),
                 kind,
@@ -279,6 +292,20 @@ impl NyaTermApp {
                 control: Some(control.clone()),
                 speed: Default::default(),
             });
+        }
+        if let FileOperationRequest::Transfer(intent) = &context.request
+            && intent.operation == FileTransferOperation::Move
+            && let Some(entry) = intent.entries.first()
+            && let Some(clipboard) = self.transfer.file_clipboard()
+            && clipboard.cut
+            && clipboard.source == intent.source
+            && clipboard
+                .entries
+                .iter()
+                .any(|item| item.identity_key() == entry.identity_key())
+        {
+            self.transfer
+                .track_cut_job(id.clone(), clipboard.generation, entry.identity_key());
         }
         self.transfer
             .track_file_operation(id.clone(), context.clone());
@@ -309,6 +336,15 @@ impl NyaTermApp {
                 target_service.kind()
             };
             let cancelled = control.clone();
+            if let FileOperationRequest::Transfer(intent) = &context.request
+                && let Some(entry) = intent.entries.first()
+                && let Ok(properties) = source_service.remote_file_properties(&entry.remote_path())
+            {
+                let _ = tx.unbounded_send(TransferJobResult {
+                    id: id.clone(),
+                    event: TransferJobEvent::SourceType(properties.file_type),
+                });
+            }
             let result = context
                 .request
                 .into_service_request()

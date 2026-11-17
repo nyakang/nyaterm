@@ -1053,6 +1053,7 @@ impl NyaTermApp {
                 }
             });
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id,
             session_id: Some(session_id.to_string()),
             kind: TransferJobKind::TrzszDownload {
@@ -1151,6 +1152,7 @@ impl NyaTermApp {
                 }
             });
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id,
             session_id: Some(session_id.to_string()),
             kind: TransferJobKind::TrzszUpload {

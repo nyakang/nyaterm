@@ -32,6 +32,7 @@ impl NyaTermApp {
         let id = self.transfer.next_transfer_job_id("clipboard-image");
         if !local {
             self.transfer.enqueue_transfer_job(TransferJobState {
+                source_type: None,
                 id: id.clone(),
                 session_id: Some(session_id.clone()),
                 kind: TransferJobKind::Upload {

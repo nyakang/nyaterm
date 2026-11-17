@@ -128,6 +128,7 @@ mod tests {
         use std::path::PathBuf;
 
         let mut job = TransferJobState {
+            source_type: None,
             id: "external".into(),
             session_id: None,
             kind: TransferJobKind::OpenExternal {

@@ -1020,6 +1020,7 @@ mod tests {
             app.transfer.open_editor_tab(file);
             app.open_workspace_editor_tab(&id, cx);
             app.transfer.enqueue_transfer_job(TransferJobState {
+                source_type: None,
                 id: "loading-job".into(),
                 session_id: Some("local".into()),
                 kind: TransferJobKind::Download {

@@ -274,6 +274,7 @@ impl NyaTermApp {
         let parent_path = file_browser_parent(backend, &old_display_path);
         let id = self.transfer.next_transfer_job_id("sftp-move");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::Move {
@@ -424,6 +425,7 @@ impl NyaTermApp {
             let service = service.clone();
             let remote_display_path = remote_path.display_path.clone();
             self.transfer.enqueue_transfer_job(TransferJobState {
+                source_type: None,
                 id: id.clone(),
                 session_id: self.session.active_id_owned(),
                 kind: TransferJobKind::Delete {

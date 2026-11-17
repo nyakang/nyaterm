@@ -127,6 +127,7 @@ impl NyaTermApp {
         };
         let id = self.transfer.next_transfer_job_id("sftp-mkdir");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::Mkdir {
@@ -291,6 +292,7 @@ impl NyaTermApp {
         };
         let id = self.transfer.next_transfer_job_id("sftp-create-file");
         self.transfer.enqueue_transfer_job(TransferJobState {
+            source_type: None,
             id: id.clone(),
             session_id: self.session.active_id_owned(),
             kind: TransferJobKind::CreateFile {

@@ -54,6 +54,7 @@ impl FileDelivery {
 }
 
 struct RootDelivery {
+    source_type: nyaterm_files::sftp::SftpFileType,
     id: String,
     path: String,
     control: SftpTransferControl,
@@ -89,6 +90,7 @@ impl DragAggregate {
                 roots: entries
                     .iter()
                     .map(|entry| RootDelivery {
+                        source_type: entry.file_type,
                         id: format!("drag-export-{}", nyaterm_core::uuid()),
                         path: entry.path.clone(),
                         control: SftpTransferControl::new(),
@@ -307,6 +309,7 @@ impl NativeFileDragObserver for DragAggregate {
                             destination: None,
                         },
                     );
+                    self.send(root, TransferJobEvent::SourceType(root.source_type));
                 }
             }
             NativeFileDragEvent::Finished(outcome) if state.outcome.is_none() => {

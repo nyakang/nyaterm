@@ -120,6 +120,7 @@ fn active_queued_paused_and_cancelling_file_jobs_block_privilege_changes(cx: &mu
     cx.update(|_, cx| {
         app.update(cx, |app, _| {
             app.transfer.enqueue_transfer_job(TransferJobState {
+                source_type: None,
                 id: "active".into(),
                 session_id: Some("sudo-test".into()),
                 kind: TransferJobKind::Download {

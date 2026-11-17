@@ -1454,6 +1454,9 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "clipboardEmpty": "ファイルのクリップボードは空か、置き換えられています",
+    "clipboardMoving": "切り取った項目を移動中です。完了するまでお待ちください",
+
     "transferSourceUnavailable": "接続元を利用できません。再接続して再試行してください。",
     "transferBackendUnsupported": "この接続はファイル転送に対応していません。",
     "transferInvalidDestination": "転送先が無効か、ファイル名を表現できません。",

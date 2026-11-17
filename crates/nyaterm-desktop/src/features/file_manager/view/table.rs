@@ -402,7 +402,21 @@ impl FileManagerWorkspace {
         let visible = visible.clone();
         let width: f32 = columns.iter().map(|(_, width)| f32::from(*width)).sum();
         let row_selector = format!("file-manager-row-{}-{}", pane.as_str(), entry.name);
+        let cut = self.read_app(cx, |app| {
+            app.transfer.file_clipboard().is_some_and(|clipboard| {
+                clipboard.cut
+                    && clipboard
+                        .os_revision
+                        .is_none_or(|revision| cx.clipboard_revision() == Some(revision))
+                    && clipboard.source == state.endpoint
+                    && clipboard
+                        .entries
+                        .iter()
+                        .any(|item| item.identity_key() == identity)
+            })
+        });
         let mut row = div()
+            .opacity(if cut { 0.5 } else { 1.0 })
             .debug_selector(move || row_selector.clone())
             .id(SharedString::from(format!(
                 "fm-row-{}-{identity}",
@@ -603,6 +617,24 @@ impl FileManagerWorkspace {
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
         let mut items = Vec::new();
+        for (key, label) in [
+            ("c", t!("menu.copy")),
+            ("x", t!("menu.cut")),
+            ("v", t!("menu.paste")),
+        ] {
+            let disabled = if key == "v" {
+                !self.read_app(cx, |app| app.can_paste_transfer_file_clipboard(cx))
+            } else {
+                self.pane(pane).selected_paths.is_empty()
+            };
+            items.push(
+                NyaMenuItem::action(label)
+                    .disabled(disabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.clipboard_action(key, window, cx);
+                    })),
+            );
+        }
         for (operation, label) in [
             (FileTransferOperation::Copy, t!("fileManager.copyToOther")),
             (FileTransferOperation::Move, t!("fileManager.moveToOther")),

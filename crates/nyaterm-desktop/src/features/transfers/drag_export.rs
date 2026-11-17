@@ -436,6 +436,36 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    pub(in crate::features) fn publish_file_clipboard(
+        &mut self,
+        endpoint: &super::file_operations::FileOperationEndpoint,
+        entries: &[SftpFileEntry],
+        cx: &gpui::App,
+    ) -> anyhow::Result<()> {
+        let service = self.file_browser_service_for_endpoint(endpoint)?;
+        let selection = TransferSelection {
+            access_generation: endpoint
+                .session_id()
+                .and_then(|id| self.file_access_generation(id)),
+            session_id: endpoint.session_id().unwrap_or("local").to_string(),
+            backend: service.kind(),
+            entries: entries.to_vec(),
+            transfer_options: self.sftp_transfer_options(),
+            source_service: service.downgrade(),
+        };
+        TransferDragExportService::sources(&selection)?;
+        let sender = self.transfer.transfer_event_sender();
+        cx.write_file_clipboard(Arc::new(move || {
+            TransferDragExportService::resolve(
+                &selection,
+                selection.source_service.clone(),
+                sender.clone(),
+                true,
+                false,
+            )
+        }))
+    }
+
     pub(in crate::features) fn resolve_transfer_drag(
         &mut self,
         drag: &DraggedSelection,

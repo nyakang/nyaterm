@@ -1454,6 +1454,9 @@
     "zoomOut": "Zoom arrière"
   },
   "fileExplorer": {
+    "clipboardEmpty": "Le presse-papiers de fichiers est vide ou a été remplacé",
+    "clipboardMoving": "Les éléments coupés sont déjà en cours de déplacement ; attendez la fin",
+
     "transferSourceUnavailable": "La connexion source est indisponible. Reconnectez-vous et réessayez.",
     "transferBackendUnsupported": "Cette connexion ne prend pas en charge le transfert de fichiers.",
     "transferInvalidDestination": "La destination est invalide ou ne peut pas représenter le nom du fichier.",

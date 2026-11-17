@@ -1,15 +1,24 @@
 use super::TransferFeatureState;
 use crate::models::{TransferJobKind, TransferJobStatus};
 use nyaterm_files::sftp::SftpFileEntry;
-use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(in crate::features) struct TransferFileClipboard {
-    pub source_session_id: String,
+    pub source: super::super::file_operations::FileOperationEndpoint,
+    pub os_item: Option<gpui::ClipboardItem>,
+    pub os_revision: Option<u64>,
     pub entries: Vec<SftpFileEntry>,
     pub cut: bool,
     pub generation: u64,
-    pub os_paths_at_capture: Vec<PathBuf>,
+}
+
+impl TransferFileClipboard {
+    pub(in crate::features) fn matches_system_clipboard(&self, cx: &gpui::App) -> bool {
+        if let Some(revision) = self.os_revision {
+            return cx.clipboard_revision() == Some(revision);
+        }
+        self.os_item.is_some() && self.os_item == cx.read_from_clipboard()
+    }
 }
 
 impl TransferFeatureState {
@@ -34,7 +43,7 @@ impl TransferFeatureState {
         if self
             .clipboard
             .as_ref()
-            .is_some_and(|clipboard| clipboard.source_session_id == session_id)
+            .is_some_and(|clipboard| clipboard.source.session_id() == Some(session_id))
         {
             self.clipboard = None;
         }
@@ -42,19 +51,27 @@ impl TransferFeatureState {
 
     pub(in crate::features) fn set_file_clipboard(
         &mut self,
-        source_session_id: String,
+        source: super::super::file_operations::FileOperationEndpoint,
         entries: Vec<SftpFileEntry>,
         cut: bool,
-        os_paths_at_capture: Vec<PathBuf>,
+        item: Option<gpui::ClipboardItem>,
+        revision: Option<u64>,
     ) {
         self.clipboard_generation = self.clipboard_generation.wrapping_add(1);
         self.clipboard = Some(TransferFileClipboard {
-            source_session_id,
+            source,
+            os_item: item,
+            os_revision: revision,
             entries,
             cut,
             generation: self.clipboard_generation,
-            os_paths_at_capture,
         });
+    }
+
+    pub(in crate::features) fn cut_path_in_flight(&self, generation: u64, path: &str) -> bool {
+        self.cut_jobs
+            .values()
+            .any(|(value, item)| *value == generation && item == path)
     }
 
     pub(in crate::features) fn track_cut_job(
@@ -79,7 +96,9 @@ impl TransferFeatureState {
         if clipboard.generation != generation {
             return;
         }
-        clipboard.entries.retain(|entry| entry.path != path);
+        clipboard
+            .entries
+            .retain(|entry| entry.identity_key() != path);
         if clipboard.entries.is_empty() {
             self.clipboard = None;
         }
