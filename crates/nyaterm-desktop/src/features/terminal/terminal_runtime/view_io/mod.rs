@@ -69,14 +69,14 @@ fn terminal_paint_snapshot_for_view(
         .or(retained_surface_snapshot)
 }
 
-/// A cached scroll snapshot may only paint while its shared rows still match
-/// the live frame; in-place output keeps history coordinates unchanged.
-fn terminal_cached_snapshot_is_current(
+/// Cached and retained scroll snapshots may only be reused while their shared
+/// rows still match the live frame; in-place output keeps history coordinates unchanged.
+pub(super) fn terminal_cached_snapshot_is_current(
     view: &TerminalViewState,
-    snapshot: &std::sync::Arc<TerminalSnapshot>,
+    snapshot: &TerminalSnapshot,
 ) -> bool {
     view.frame_snapshot.as_ref().is_none_or(|live| {
-        std::sync::Arc::ptr_eq(live, snapshot) || snapshot.content_agrees_with(live)
+        std::ptr::eq(live.as_ref(), snapshot) || snapshot.content_agrees_with(live)
     })
 }
 
@@ -123,6 +123,7 @@ fn terminal_retained_snapshot_matches_view(
     let scrollback_len = view.scrollback_len_for_ui();
     view.history_state()
         .preserves_coordinates_from(snapshot.history)
+        && terminal_cached_snapshot_is_current(view, snapshot)
         // Folding changes presentation without changing VT history or row text.
         // Once the worker publishes the new layout, a retained surface frame
         // must not take precedence over its replacement scroll snapshot.

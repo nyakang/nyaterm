@@ -2221,3 +2221,60 @@ fn cached_scrollback_snapshot_stops_matching_after_in_place_output() {
     view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot_with_window(0, 2, 2)));
     assert!(!super::terminal_cached_snapshot_is_current(&view, &cached));
 }
+
+#[test]
+fn in_place_output_replaces_stale_retained_surface_with_fresh_scroll_snapshot() {
+    for cached_offset in [1, 2] {
+        let mut view = TerminalViewState::new();
+        view.screen = TerminalScreen::new(20, 6);
+        view.screen.advance(b"old\r\nold\r\n\x1b[2J\x1b[Hroot# ");
+        let retained = Arc::new(
+            view.screen
+                .viewport_snapshot_with_window(cached_offset, 8, 8),
+        );
+        view.scrollback_snapshots
+            .insert(cached_offset, retained.clone());
+
+        view.screen.advance(b"ls 2\r\n");
+        view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+        assert_eq!(retained.history, view.history_state());
+        assert!(!terminal_retained_snapshot_matches_view(
+            &retained, &view, 1, 6
+        ));
+        // Reject both copies of the old frame while the worker fetches text.
+        assert!(
+            terminal_paint_window_snapshot_for_view(Some(&view), 1, 6, Some(retained.clone()))
+                .is_none()
+        );
+
+        let fresh = Arc::new(
+            view.screen
+                .viewport_snapshot_with_window(cached_offset, 8, 8),
+        );
+        view.scrollback_snapshots
+            .insert(cached_offset, fresh.clone());
+        let painted =
+            terminal_paint_window_snapshot_for_view(Some(&view), 1, 6, Some(retained)).unwrap();
+        assert!(Arc::ptr_eq(&painted, &fresh));
+        assert!(painted.rows().iter().any(|row| row.text == "root# ls 2"));
+    }
+}
+
+#[test]
+fn in_place_output_keeps_retained_immutable_history_available() {
+    let mut view = TerminalViewState::new();
+    view.screen = TerminalScreen::new(20, 6);
+    for _ in 0..50 {
+        view.screen.advance(b"history\r\n");
+    }
+    view.screen.advance(b"\x1b[Hroot# ");
+    let retained = Arc::new(view.screen.viewport_snapshot_with_window(20, 2, 2));
+    view.screen.advance(b"ls 2\r\n");
+    view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+    assert_eq!(retained.history, view.history_state());
+
+    let painted =
+        terminal_paint_window_snapshot_for_view(Some(&view), 20, 6, Some(retained.clone()))
+            .unwrap();
+    assert!(Arc::ptr_eq(&painted, &retained));
+}
