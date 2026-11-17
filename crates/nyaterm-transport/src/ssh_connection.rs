@@ -453,6 +453,11 @@ pub(crate) fn ssh_client_config(
             _ => russh::client::KeepaliveMode::Compatible,
         },
         preferred,
+        // Legacy network appliances answer SSH2 with sub-1024-bit RSA host
+        // keys (Huawei VRP serves 768 bits and cannot be made to change it).
+        // The network-device profile opts into the fork's relaxed modulus
+        // floor; the signature itself is still fully verified.
+        allow_short_rsa_host_keys: config.is_network_device(),
         ..Default::default()
     }))
 }

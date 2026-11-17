@@ -2261,6 +2261,26 @@ fn ssh_client_config_disables_idle_timeout_and_maps_keepalive() {
 }
 
 #[test]
+fn ssh_client_config_relaxes_short_rsa_host_keys_only_for_network_devices() {
+    let standard = SshSessionConfig::default();
+    let standard_config = ssh_client_config(&standard).expect("standard client config");
+    assert!(
+        !standard_config.allow_short_rsa_host_keys,
+        "standard sessions must keep the default 1024-bit RSA floor"
+    );
+
+    let network_device = SshSessionConfig {
+        profile: crate::SshSessionProfile::NetworkDevice,
+        ..Default::default()
+    };
+    let device_config = ssh_client_config(&network_device).expect("network device client config");
+    assert!(
+        device_config.allow_short_rsa_host_keys,
+        "network-device sessions must accept legacy sub-1024-bit RSA host keys"
+    );
+}
+
+#[test]
 fn ssh_client_config_maps_custom_algorithm_preferences() {
     let preferences = SshAlgorithmPreferences {
         mode: SshAlgorithmMode::Custom,
