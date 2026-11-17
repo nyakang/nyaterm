@@ -10,6 +10,9 @@ use nyaterm_core::connection_tree::{
 
 use super::list::ConnectionListRow;
 use super::panel::ConnectionPanel;
+use crate::features::connections::state::list_model::{
+    apply_mixed_order, connection_sections, flatten_connection_rows,
+};
 use crate::features::connections::{ConnectionDragKind, ConnectionDragPayload};
 use crate::models::ConnectionSortMode;
 
@@ -22,6 +25,7 @@ pub(super) struct TreeDragState {
     ticking: bool,
     pending_opened: HashSet<String>,
     pending_parent: Option<String>,
+    pending_rows: Option<Vec<ConnectionListRow>>,
     shifts: HashMap<NodeId, f32>,
     shifted_at: Option<Instant>,
 }
@@ -51,6 +55,10 @@ pub(super) enum DragRow {
 impl TreeDragState {
     pub fn active(&self) -> bool {
         self.active.is_some()
+    }
+
+    pub fn has_preview(&self) -> bool {
+        self.active() || self.pending_rows.is_some()
     }
 }
 
@@ -100,6 +108,7 @@ impl ConnectionPanel {
 
     pub(in crate::features) fn finish_tree_move(&mut self, success: bool, cx: &mut Context<Self>) {
         self.tree_drag.busy = false;
+        self.tree_drag.pending_rows = None;
         let opened = std::mem::take(&mut self.tree_drag.pending_opened);
         let mut keep = HashSet::new();
         if success && let Some(snapshot) = self.snapshot() {
@@ -149,6 +158,9 @@ impl ConnectionPanel {
     }
 
     pub(super) fn drag_rows(&self) -> Vec<DragRow> {
+        if let Some(rows) = &self.tree_drag.pending_rows {
+            return rows.iter().cloned().map(DragRow::Item).collect();
+        }
         let mut rows: Vec<_> = self.drag_items().into_iter().map(DragRow::Item).collect();
         if let Some(drag) = &self.tree_drag.active {
             if drag.reorder
@@ -568,10 +580,58 @@ impl ConnectionPanel {
             destination: projection.destination.clone(),
             expected: drag.expected.clone(),
         };
-        if plan_move(&request.expected, &request).is_ok_and(|changes| changes.is_empty()) {
+        let Ok(changes) = plan_move(&request.expected, &request) else {
+            self.cancel_tree_drag(cx);
+            return;
+        };
+        if changes.is_empty() {
             self.cancel_tree_drag(cx);
             return;
         }
+        // Project through the normal list builder so subtree depths, empty groups,
+        // search and name sorting agree with the eventual persisted snapshot.
+        let snapshot = self.snapshot().expect("drag requires a snapshot");
+        let mut nodes = request.expected.clone();
+        for change in changes {
+            if let Some(node) = nodes.iter_mut().find(|node| node.key == change.key) {
+                *node = change;
+            }
+        }
+        let groups: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.key.kind == NodeKind::Group)
+            .map(|n| nyaterm_core::Group {
+                id: n.key.id.clone(),
+                name: n.name.clone(),
+                parent_id: n.parent.clone(),
+                sort_order: n.sort_order,
+                tree_order: n.tree_order,
+                ..Default::default()
+            })
+            .collect();
+        let connections: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.key.kind == NodeKind::Connection)
+            .filter_map(|n| {
+                let mut connection = snapshot.connection(&n.key.id)?.clone();
+                connection.group_id = n.parent.clone();
+                connection.sort_order = n.sort_order;
+                connection.tree_order = n.tree_order;
+                Some(connection)
+            })
+            .collect();
+        let query = snapshot.search_field.read(cx).value(cx);
+        let sections = connection_sections(&connections, &groups, &query, snapshot.sort_mode);
+        let mut expanded = snapshot.expanded_groups.as_ref().clone();
+        if let Some(parent) = &request.destination.parent {
+            expanded.insert(parent.clone());
+        }
+        let rows = flatten_connection_rows(&sections, &expanded, None);
+        self.tree_drag.pending_rows = Some(if drag.reorder {
+            apply_mixed_order(rows, &nodes)
+        } else {
+            rows
+        });
         self.tree_drag.pending_parent = request.destination.parent.clone();
         self.tree_drag.shifts.clear();
         if let Some(drag) = self.tree_drag.active.take() {

@@ -31,9 +31,14 @@ impl NyaTermApp {
                             .set_status(format!("move connection tree failed: {error}"));
                     }
                 }
-                this.defer_connection_panel_snapshot_flush(cx);
-                cx.defer(move |cx| {
-                    let _ = panel.update(cx, |panel, cx| panel.finish_tree_move(success, cx));
+                this.defer_app_update(cx, move |this, cx| {
+                    // Install authoritative rows before removing the pending preview.
+                    this.flush_connection_panel_snapshot(cx);
+                    // Finishing can restore temporarily expanded groups through the
+                    // app, so release its entity lease before updating the panel.
+                    cx.defer(move |cx| {
+                        let _ = panel.update(cx, |panel, cx| panel.finish_tree_move(success, cx));
+                    });
                 });
                 cx.notify();
             },
