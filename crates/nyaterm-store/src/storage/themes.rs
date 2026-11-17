@@ -34,7 +34,11 @@ impl ConnectionStore {
                 "unsupported appearance document".into(),
             ));
         }
+        let (mode, light, dark) = super::app_settings::read_theme_preferences(&value)?;
         let current = ThemeSettings {
+            mode,
+            light,
+            dark,
             catalog: json_path(&value, &["appearance", "custom_themes"])
                 .cloned()
                 .map(ThemeCatalog)
@@ -83,6 +87,31 @@ impl ConnectionStore {
                 &["appearance", "terminal_theme"],
                 serde_json::json!(commit.settings.terminal),
             );
+        }
+        for (key, changed, field_value) in [
+            (
+                "theme_mode",
+                commit.fields.mode,
+                commit.settings.mode.as_str(),
+            ),
+            (
+                "light_theme",
+                commit.fields.light,
+                commit.settings.light.as_str(),
+            ),
+            (
+                "dark_theme",
+                commit.fields.dark,
+                commit.settings.dark.as_str(),
+            ),
+        ] {
+            if changed {
+                set_nested_json_value(
+                    &mut value,
+                    &["appearance", key],
+                    serde_json::json!(field_value),
+                );
+            }
         }
         write_json_in_txn(&txn, SETTINGS_TABLE, SETTINGS_DEFAULT, &value)?;
         txn.commit()?;

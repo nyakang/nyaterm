@@ -3,6 +3,7 @@ mod data_directory;
 mod general;
 mod interaction;
 mod keybindings;
+mod system_theme;
 mod window_background;
 #[cfg(any(target_os = "linux", test))]
 mod window_decorations;

@@ -10,6 +10,135 @@ use nyaterm_core::{
 };
 
 #[test]
+fn system_theme_preferences_load_legacy_settings_and_round_trip_future_modes() {
+    use nyaterm_core::themes::appearance::ThemeMode;
+    let dir = unique_temp_dir("system-theme-compatibility");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store
+        .save_settings_value(&serde_json::json!({"appearance":{"theme":"nord", "future":42}}))
+        .unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert_eq!(settings.theme_mode, ThemeMode::Manual);
+    assert_eq!(settings.theme, "nord");
+    assert_eq!(settings.light_theme, "github-light");
+    assert_eq!(settings.dark_theme, "github-dark");
+    settings.theme_mode = ThemeMode::System;
+    settings.light_theme = "nord-light".into();
+    settings.dark_theme = "dracula".into();
+    let saved = store.save_appearance_settings(&settings).unwrap();
+    assert_eq!(saved.theme_mode, ThemeMode::System);
+    assert_eq!(saved.light_theme, "nord-light");
+    assert_eq!(saved.dark_theme, "dracula");
+    assert_eq!(saved.theme, "nord");
+    settings.theme_mode = ThemeMode::Unknown("scheduled".into());
+    store.save_appearance_settings(&settings).unwrap();
+    let mut reloaded = store.load_app_settings_summary().unwrap();
+    reloaded.ui_font_size += 1;
+    store.save_appearance_settings(&reloaded).unwrap();
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["appearance"]["theme_mode"], "scheduled");
+    assert_eq!(raw["appearance"]["future"], 42);
+}
+
+#[test]
+fn malformed_system_theme_preferences_cannot_be_overwritten_by_unrelated_saves() {
+    let dir = unique_temp_dir("system-theme-malformed");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let settings = store.load_app_settings_summary().unwrap();
+    for field in ["theme_mode", "light_theme", "dark_theme"] {
+        let raw = serde_json::json!({"appearance":{field:{"future":true}}});
+        store.save_settings_value(&raw).unwrap();
+        assert!(store.load_app_settings_summary().is_err());
+        assert!(store.save_appearance_settings(&settings).is_err());
+        assert_eq!(store.load_settings_value().unwrap(), raw);
+    }
+}
+
+#[test]
+fn theme_only_commits_preserve_system_pairs_and_detect_concurrent_preference_changes() {
+    use crate::storage::ThemeCommitOutcome;
+    use nyaterm_core::themes::appearance::ThemeMode;
+    use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let dir = unique_temp_dir("system-theme-commits");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    settings.theme_mode = ThemeMode::System;
+    settings.light_theme = "nord-light".into();
+    settings.dark_theme = "nord".into();
+    settings = store.save_appearance_settings(&settings).unwrap();
+    let apply = |target| ThemeMutation::Apply {
+        id: "dracula".into(),
+        target,
+    };
+    let ThemeCommitOutcome::Committed(commit) = store
+        .commit_theme_mutation(
+            &ThemeSettings::from(&settings),
+            &apply(ThemeApplyTarget::Terminal),
+        )
+        .unwrap()
+    else {
+        panic!("unexpected conflict")
+    };
+    assert_eq!(commit.settings.mode, ThemeMode::System);
+    let ThemeCommitOutcome::Committed(commit) = store
+        .commit_theme_mutation(&commit.settings, &apply(ThemeApplyTarget::Ui))
+        .unwrap()
+    else {
+        panic!("unexpected conflict")
+    };
+    assert_eq!(commit.settings.mode, ThemeMode::Manual);
+    assert_eq!(commit.settings.light, "nord-light");
+    assert_eq!(commit.settings.dark, "nord");
+    let mut concurrent = store.load_app_settings_summary().unwrap();
+    concurrent.light_theme = "github-light".into();
+    store.save_appearance_settings(&concurrent).unwrap();
+    assert!(matches!(
+        store
+            .commit_theme_mutation(&commit.settings, &apply(ThemeApplyTarget::Ui))
+            .unwrap(),
+        ThemeCommitOutcome::Conflict
+    ));
+    assert_eq!(
+        store.load_app_settings_summary().unwrap().light_theme,
+        "github-light"
+    );
+}
+
+#[test]
+fn system_theme_preferences_survive_portable_and_native_backups() {
+    use nyaterm_core::themes::appearance::ThemeMode;
+    let source_dir = unique_temp_dir("system-theme-source");
+    let portable_dir = unique_temp_dir("system-theme-portable");
+    let native_dir = unique_temp_dir("system-theme-native");
+    let backup_dir = unique_temp_dir("system-theme-backup");
+    let backup_path = backup_dir.join("settings.redb");
+    let source = ConnectionStore::open(&source_dir).unwrap();
+    let mut settings = source.load_app_settings_summary().unwrap();
+    settings.theme_mode = ThemeMode::System;
+    settings.light_theme = "nord-light".into();
+    settings.dark_theme = "nord".into();
+    source.save_appearance_settings(&settings).unwrap();
+    let mut snapshot = source
+        .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "device", "test")
+        .unwrap();
+    snapshot.recalculate_hash().unwrap();
+    let target = ConnectionStore::open(&portable_dir).unwrap();
+    target.apply_raw_portable_snapshot(&snapshot).unwrap();
+    let assert_preferences = |store: &ConnectionStore| {
+        let restored = store.load_app_settings_summary().unwrap();
+        assert_eq!(restored.theme_mode, ThemeMode::System);
+        assert_eq!(restored.light_theme, "nord-light");
+        assert_eq!(restored.dark_theme, "nord");
+        assert_eq!(restored.theme, "github-dark");
+    };
+    assert_preferences(&target);
+    drop(source);
+    ConnectionStore::export_config_database(&source_dir, None, &backup_path).unwrap();
+    ConnectionStore::import_config_database(&native_dir, None, &backup_path).unwrap();
+    assert_preferences(&ConnectionStore::open(&native_dir).unwrap());
+}
+
+#[test]
 fn theme_commits_are_atomic_and_preserve_unrelated_settings_and_unknown_fields() {
     use crate::storage::ThemeCommitOutcome;
     use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};

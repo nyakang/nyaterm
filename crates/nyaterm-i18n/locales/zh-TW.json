@@ -2823,6 +2823,12 @@
     "unread": "未讀"
   },
   "settings": {
+    "themeMode": "主題模式",
+    "themeModeManual": "手動選擇",
+    "themeModeSystem": "跟隨系統",
+    "systemLightTheme": "系統淺色時",
+    "systemDarkTheme": "系統深色時",
+    "themeInUse": "使用中",
     "configurationSessionInAnotherWindow": "其他視窗有遠端連線正在執行或啟動，請先中斷再取代設定。",
     "configurationReplacementInProgress": "正在取代設定，請在完成後重試連線。",
     "configurationRefreshRequired": "設定重新整理尚未完成。請重試連線或匯入/同步操作，以先重新整理設定。",

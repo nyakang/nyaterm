@@ -139,6 +139,37 @@ fn saving_and_deleting_an_active_theme_repairs_references_without_losing_unknown
 }
 
 #[test]
+fn theme_manager_repairs_automatic_references_and_explicit_ui_application_is_manual() {
+    use crate::models::settings::AppSettingsSummary;
+    use crate::themes::appearance::ThemeMode;
+    use crate::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let theme = builtins()[0].copy_as_custom();
+    let id = theme.id.clone();
+    let mut summary = AppSettingsSummary {
+        theme_mode: ThemeMode::System,
+        light_theme: id.clone(),
+        dark_theme: id.clone(),
+        ..Default::default()
+    };
+    summary.custom_themes.upsert(theme).unwrap();
+    let base = ThemeSettings::from(&summary);
+    let deleted = ThemeMutation::Delete { id }.prepare(&base).unwrap();
+    deleted.merge_into(&mut summary);
+    assert_eq!(summary.theme_mode, ThemeMode::System);
+    assert_eq!(summary.light_theme, "github-light");
+    assert_eq!(summary.dark_theme, "github-dark");
+    let applied = ThemeMutation::Apply {
+        id: "nord".into(),
+        target: ThemeApplyTarget::Ui,
+    }
+    .prepare(&base)
+    .unwrap();
+    applied.merge_into(&mut summary);
+    assert_eq!(summary.theme_mode, ThemeMode::Manual);
+    assert_eq!(summary.theme, "nord");
+}
+
+#[test]
 fn tauri_builtins_and_optional_intense_foreground_round_trip() {
     for original in builtins() {
         assert!(

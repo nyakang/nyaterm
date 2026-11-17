@@ -47,6 +47,8 @@ impl NyaTermApp {
             settings: SettingsPresentation {
                 summary: Arc::new(self.settings.summary().clone()),
                 theme_options: self.settings.theme_options(),
+                system_appearance: self.settings.system_appearance(),
+                effective_theme: self.settings.effective_theme_id().to_owned().into(),
                 theme_diagnostics: self.settings.theme_diagnostics(),
                 theme_designer: self.settings.theme_designer().clone(),
                 keyword_config: Arc::new(self.settings.keyword_config().clone()),

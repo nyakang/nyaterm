@@ -437,6 +437,9 @@ impl NyaTermApp {
             sync_input: SyncInputFeatureState::new(cx.focus_handle()),
             settings: SettingsFeatureState::new(
                 SettingsFeatureInit {
+                    system_appearance: crate::features::shell::system_theme::system_appearance(
+                        cx.window_appearance(),
+                    ),
                     summary: settings,
                     keyword_config: keyword_highlights,
                     store_path: store_status.0,

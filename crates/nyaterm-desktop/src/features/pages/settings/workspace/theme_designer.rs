@@ -1163,7 +1163,7 @@ impl SettingsPanel {
 
     fn theme_usage(&self, id: &str) -> ThemeUsage {
         let summary = self.settings.summary();
-        let ui = summary.theme == id;
+        let ui = self.settings.effective_theme == id;
         let terminal_follows_ui = summary
             .terminal_theme
             .as_deref()

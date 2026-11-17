@@ -2823,6 +2823,12 @@
     "unread": "Unread"
   },
   "settings": {
+    "themeMode": "Theme mode",
+    "themeModeManual": "Manual",
+    "themeModeSystem": "Follow system",
+    "systemLightTheme": "When the system is light",
+    "systemDarkTheme": "When the system is dark",
+    "themeInUse": "In use",
     "configurationSessionInAnotherWindow": "Another window has a remote connection running or starting. Disconnect it before replacing configuration.",
     "configurationReplacementInProgress": "Configuration replacement is in progress. Try connecting again after it finishes.",
     "configurationRefreshRequired": "Configuration refresh did not finish. Retry the connection or import/sync action to refresh configuration first.",

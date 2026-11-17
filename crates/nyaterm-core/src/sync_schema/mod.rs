@@ -219,6 +219,9 @@ pub const SECRET_KINDS: &[&str] = &[
 ];
 pub const PREFERENCE_FIELDS: &[(&str, &str)] = &[
     ("appearance", "theme"),
+    ("appearance", "theme_mode"),
+    ("appearance", "light_theme"),
+    ("appearance", "dark_theme"),
     ("appearance", "font_family"),
     ("appearance", "font_size"),
     ("appearance", "font_weight"),
@@ -246,7 +249,11 @@ pub fn valid_preference(id: &str, value: &Value) -> bool {
             .as_f64()
             .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
             .is_some_and(|ratio| [1.0, 3.0, 4.5, 7.0, 21.0].contains(&ratio)),
-        "appearance/theme" | "appearance/font_family" => value.is_string(),
+        "appearance/theme"
+        | "appearance/theme_mode"
+        | "appearance/light_theme"
+        | "appearance/dark_theme"
+        | "appearance/font_family" => value.is_string(),
         _ => false,
     }
 }

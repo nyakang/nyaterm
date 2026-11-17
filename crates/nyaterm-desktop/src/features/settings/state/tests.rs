@@ -25,6 +25,7 @@ fn settings_state() -> SettingsFeatureState {
     SettingsFeatureState::new(
         SettingsFeatureInit {
             summary: AppSettingsSummary::default(),
+            system_appearance: Default::default(),
             keyword_config: KeywordHighlightConfig::default(),
             store_path: String::new(),
             store_message: String::new(),
@@ -59,6 +60,47 @@ fn minimum_contrast_updates_render_policy_without_recoloring_the_palette() {
         assert_eq!(palette.terminal_fg_intense, original.terminal_fg_intense);
         assert_eq!(palette.terminal_ansi, original.terminal_ansi);
     }
+}
+
+#[test]
+fn system_appearance_changes_only_runtime_palettes_and_respects_explicit_terminal_themes() {
+    use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
+    let mut state = settings_state();
+    state.set_appearance_theme("dracula".into());
+    state.set_system_theme(SystemAppearance::Light, "github-light".into());
+    state.set_system_theme(SystemAppearance::Dark, "nord".into());
+    let manual = state.summary().clone();
+    state.set_system_appearance(SystemAppearance::Light);
+    assert_eq!(state.effective_theme_id(), "dracula");
+    assert_eq!(state.summary(), &manual);
+    state.set_theme_mode(ThemeMode::System);
+    let preferences = state.summary().clone();
+    assert_eq!(state.effective_theme_id(), "github-light");
+    assert_eq!(state.terminal_palette(), state.theme_palette());
+    state.set_system_appearance(SystemAppearance::Dark);
+    assert_eq!(state.effective_theme_id(), "nord");
+    assert_eq!(state.summary(), &preferences);
+    assert_eq!(state.terminal_palette(), state.theme_palette());
+    state.set_terminal_theme(Some("dracula".into()));
+    let terminal = state.terminal_palette();
+    state.set_system_appearance(SystemAppearance::Light);
+    assert_eq!(state.terminal_palette(), terminal);
+    assert_ne!(state.terminal_palette(), state.theme_palette());
+    state.set_theme_mode(ThemeMode::Manual);
+    assert_eq!(state.effective_theme_id(), "dracula");
+}
+
+#[test]
+fn reloading_preferences_and_canceling_a_draft_keep_the_latest_system_appearance() {
+    use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
+    let mut state = settings_state();
+    state.set_theme_mode(ThemeMode::System);
+    let snapshot = state.summary().clone();
+    state.set_system_theme(SystemAppearance::Light, "nord-light".into());
+    state.set_system_appearance(SystemAppearance::Light);
+    state.replace_summary(snapshot);
+    assert_eq!(state.system_appearance(), SystemAppearance::Light);
+    assert_eq!(state.effective_theme_id(), "github-light");
 }
 
 #[test]

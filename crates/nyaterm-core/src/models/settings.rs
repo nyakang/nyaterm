@@ -413,6 +413,12 @@ pub struct AppSettingsSummary {
     pub android_adb_path: String,
     pub theme: String,
     #[serde(default)]
+    pub theme_mode: crate::themes::appearance::ThemeMode,
+    #[serde(default = "crate::themes::appearance::default_light_theme")]
+    pub light_theme: String,
+    #[serde(default = "crate::themes::appearance::default_dark_theme")]
+    pub dark_theme: String,
+    #[serde(default)]
     pub custom_themes: crate::themes::ThemeCatalog,
     #[serde(default)]
     pub background_image_path: Option<String>,
@@ -745,6 +751,9 @@ impl Default for AppSettingsSummary {
     fn default() -> Self {
         Self {
             theme: "github-dark".to_string(),
+            theme_mode: Default::default(),
+            light_theme: crate::themes::appearance::default_light_theme(),
+            dark_theme: crate::themes::appearance::default_dark_theme(),
             background_image_path: None,
             background_image_fit: default_background_image_fit(),
             background_image_opacity: default_background_image_opacity(),

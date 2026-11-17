@@ -283,6 +283,7 @@ impl NyaTermApp {
             self.shell.remember_main_window(handle);
         }
         self.sync_native_window_material(cx);
+        self.observe_system_appearance(window, cx);
         self.sync_component_theme(cx);
         // The connections panel renders from a snapshot, so it needs one before its
         // first paint. Later ones come from store replies and panel interactions.

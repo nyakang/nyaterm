@@ -5,6 +5,41 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 #[test]
+fn system_theme_preferences_sync_without_device_appearance_state() {
+    let settings = json!({"appearance":{
+        "theme":"dracula", "theme_mode":"system", "light_theme":"github-light", "dark_theme":"nord"
+    }});
+    let entities = BTreeMap::from([("settings".into(), settings.to_string())]);
+    let projection = project_entities(
+        &entities,
+        &SyncScope {
+            preferences: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for (key, expected) in [
+        ("theme_mode", "system"),
+        ("light_theme", "github-light"),
+        ("dark_theme", "nord"),
+    ] {
+        let resource = SyncResourceId::new("preference", format!("appearance/{key}"));
+        let field = SyncFieldId::new(resource, "value");
+        assert_eq!(
+            projection.values[&field.key()].decode().unwrap(),
+            json!(expected)
+        );
+    }
+    assert!(projection.values.keys().all(|key| {
+        !SyncFieldId::from_key(key)
+            .unwrap()
+            .resource
+            .id
+            .contains("system_appearance")
+    }));
+}
+
+#[test]
 fn ai_scope_excludes_keys_headers_permissions_paths_and_discovery() {
     let mut ai = serde_json::to_value(crate::ai::AiSettings::default()).unwrap();
     ai["provider_credentials"] = json!([{"id":"custom","name":"Provider","provider_kind":"openai","base_url":"https://example.com/v1/","api_key":"private-key-fixture","extra_headers":[{"name":"Authorization","value":"private-header-fixture"}],"enabled":true,"future_secret":"future-fixture"}]);

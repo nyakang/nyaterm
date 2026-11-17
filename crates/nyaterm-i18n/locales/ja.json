@@ -2823,6 +2823,12 @@
     "unread": "未読"
   },
   "settings": {
+    "themeMode": "テーマモード",
+    "themeModeManual": "手動で選択",
+    "themeModeSystem": "システムに従う",
+    "systemLightTheme": "システムがライトのとき",
+    "systemDarkTheme": "システムがダークのとき",
+    "themeInUse": "使用中",
     "configurationSessionInAnotherWindow": "別のウィンドウでリモート接続が実行中または開始中です。設定を置き換える前に切断してください。",
     "configurationReplacementInProgress": "設定を置き換えています。完了後に接続を再試行してください。",
     "configurationRefreshRequired": "設定の再読み込みが完了していません。接続またはインポート・同期を再試行して設定を再読み込みしてください。",

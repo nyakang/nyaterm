@@ -2357,6 +2357,9 @@ fn default_settings_value() -> serde_json::Value {
         },
         "appearance": {
             "theme": "github-dark",
+            "theme_mode": "manual",
+            "light_theme": "github-light",
+            "dark_theme": "github-dark",
             "font_family": "JetBrains Mono",
             "font_size": 16.0
         },

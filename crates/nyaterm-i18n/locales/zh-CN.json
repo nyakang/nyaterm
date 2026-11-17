@@ -2823,6 +2823,12 @@
     "unread": "未读"
   },
   "settings": {
+    "themeMode": "主题模式",
+    "themeModeManual": "手动选择",
+    "themeModeSystem": "跟随系统",
+    "systemLightTheme": "系统浅色时",
+    "systemDarkTheme": "系统深色时",
+    "themeInUse": "使用中",
     "configurationSessionInAnotherWindow": "其他窗口有远程连接正在运行或启动，请先断开再替换配置。",
     "configurationReplacementInProgress": "正在替换配置，请在完成后重试连接。",
     "configurationRefreshRequired": "配置刷新尚未完成。请重试连接或导入/同步操作，以先重新刷新配置。",
