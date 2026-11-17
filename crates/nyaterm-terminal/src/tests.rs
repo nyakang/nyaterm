@@ -2550,6 +2550,25 @@ fn clear_preserves_scrollback_limit() {
 }
 
 #[test]
+fn cached_snapshot_detects_in_place_output_without_history_change() {
+    let mut screen = TerminalScreen::new(20, 6);
+    // Clear archives the old screen, then the prompt lands on the fresh screen.
+    screen.advance(b"old\r\nold\r\n\x1b[2J\x1b[Hroot# ");
+    let cached = screen.viewport_snapshot_with_window(0, 2, 2);
+    let history_before = screen.history_state();
+
+    // New output repaints the live viewport without moving history at all.
+    screen.advance(b"ls 2\r\n");
+    let live = screen.viewport_snapshot_with_window(0, 2, 2);
+    assert_eq!(screen.history_state(), history_before);
+    assert!(!cached.content_agrees_with(&live));
+    assert!(live.content_agrees_with(&live));
+
+    let same = screen.viewport_snapshot_with_window(0, 2, 2);
+    assert!(same.content_agrees_with(&live));
+}
+
+#[test]
 fn clear_except_input_preserves_prompt_edit_and_cursor_but_removes_history() {
     let mut screen = TerminalScreen::new(20, 4);
     screen.advance(b"old one\r\nold two\r\nold three\r\nold four\r\n");

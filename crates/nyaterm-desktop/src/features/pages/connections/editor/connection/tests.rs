@@ -2259,6 +2259,8 @@ fn android_save_focuses_invalid_screen_setting_from_basic_page(cx: &mut TestAppC
 
 #[gpui::test]
 fn android_select_escape_closes_popup_before_editor(cx: &mut TestAppContext) {
+    // Selecting Android starts discovery on the real blocking worker pool.
+    cx.executor().allow_parking();
     let test_dir = TestConfigDir::new("nyaterm-android-select-escape");
     let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
     vcx.update(|_, cx| {

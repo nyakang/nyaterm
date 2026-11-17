@@ -497,6 +497,15 @@ mod tests {
 
     #[test]
     fn tree_drag_preview_and_persisted_mixed_order_agree() {
+        tree_drag_pending_preview(true);
+    }
+
+    #[test]
+    fn tree_drag_failed_save_restores_original_order() {
+        tree_drag_pending_preview(false);
+    }
+
+    fn tree_drag_pending_preview(success: bool) {
         use gpui::MouseButton;
         use std::time::{Duration, Instant};
         let directory = TestConfigDir::new("nyaterm-tree-drag");
@@ -505,6 +514,12 @@ mod tests {
         store.save_connection(&connection("a", "A", None)).unwrap();
         store.save_connection(&connection("b", "B", None)).unwrap();
         let saved = store.load_sessions().unwrap();
+        if !success {
+            // Make the store differ from the drag's expected catalog.
+            store
+                .save_connection(&connection("extra", "Extra", None))
+                .unwrap();
+        }
         drop(store);
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -528,6 +543,25 @@ mod tests {
             assert_eq!(p.destination.parent, None);
             assert_eq!(p.destination.before.as_ref().unwrap().id, "g");
         });
+        let panel = cx.read(|cx| app.read(cx).connection_panel.clone());
+        panel.update(cx, |panel, cx| {
+            panel.release_tree_drag(target, cx);
+            assert!(panel.tree_drag.busy);
+            assert!(!panel.tree_drag.active());
+            assert!(panel.tree_drag.has_preview());
+            // The persisted snapshot is still old while the displayed rows have
+            // already moved. Ending the GPUI drag must not cancel this preview.
+            assert_eq!(
+                panel.snapshot().unwrap().rows[0].tree_key().unwrap().id,
+                "g"
+            );
+            panel.cancel_tree_drag(cx);
+            let rows = panel.drag_rows();
+            let super::super::drag::DragRow::Item(first) = &rows[0] else {
+                panic!("pending preview must display the actual item");
+            };
+            assert_eq!(first.tree_key().unwrap().id, "b");
+        });
         cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -540,6 +574,18 @@ mod tests {
         }
         cx.read(|cx| {
             let app = app.read(cx);
+            assert!(!app.connection_panel.read(cx).tree_drag.has_preview());
+            if !success {
+                let rows = &app.connection_panel.read(cx).snapshot().unwrap().rows;
+                assert_eq!(rows[0].tree_key().unwrap().id, "g");
+                assert!(
+                    app.connection_state
+                        .connections()
+                        .iter()
+                        .all(|c| c.tree_order.is_none())
+                );
+                return;
+            }
             assert_eq!(
                 app.connection_state
                     .connections()

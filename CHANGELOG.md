@@ -28,6 +28,7 @@ in `docs-site/src/data/changelogData.ts`; update both locations when preparing a
 - **assets:** Scope batch edits to applicable fields, preserve connection protocols, commit updates atomically, and report saved, skipped, and unchanged results on the main window.
 - **terminal:** Restore full-command suggestions and fuzzy filling, and route multiline suggestions through paste review.
 - **highlighting:** Persist command-output highlighting when applying settings, show all built-in rules, and restore the v2.0.2 preset colors while preserving custom colors.
+- **terminal:** Stop reusing cached or retained scroll snapshots that predate in-place output, and refresh stale scroll windows so scrolling after a screen clear no longer hides the newest rows or repeats the previous prompt.
 - **security:** Deliver password-unlock results to the window that initiated the request.
 - **ssh:** Keep zsh shell-integration injection out of persistent command history.
 

@@ -24,7 +24,7 @@ use crate::models::{
 };
 
 use super::TerminalScrollVisualState;
-use super::view_io::terminal_visual_display_offset;
+use super::view_io::{terminal_cached_snapshot_is_current, terminal_visual_display_offset};
 
 const MAX_OSC52_REPLY_CHARS: usize = 1_048_576;
 const TERMINAL_LIVE_PREFETCH_IDLE_DELAY: Duration = Duration::from_millis(80);
@@ -78,6 +78,7 @@ fn terminal_view_has_cached_scrollback_snapshot_covering_offset(
         .is_some_and(|snapshot| {
             view.history_state()
                 .preserves_coordinates_from(snapshot.history)
+                && terminal_cached_snapshot_is_current(view, snapshot)
         })
     {
         return true;
@@ -87,6 +88,7 @@ fn terminal_view_has_cached_scrollback_snapshot_covering_offset(
     view.scrollback_snapshots.values().any(|snapshot| {
         view.history_state()
             .preserves_coordinates_from(snapshot.history)
+            && terminal_cached_snapshot_is_current(view, snapshot)
             && terminal_snapshot_covers_display_offset(
                 snapshot.as_ref(),
                 offset,
@@ -155,6 +157,7 @@ fn terminal_view_has_cached_scroll_snapshot_ready_for_user_scroll(
     view.scrollback_snapshots.values().any(|snapshot| {
         view.history_state()
             .preserves_coordinates_from(snapshot.history)
+            && terminal_cached_snapshot_is_current(view, snapshot)
             && terminal_snapshot_covers_display_offset_with_margin(
                 snapshot.as_ref(),
                 offset,

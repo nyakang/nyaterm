@@ -34,6 +34,7 @@
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/browser/view.rs", "max_count": 1, "reason": "Browser uses a caller-owned horizontal scrollbar."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/path_bar.rs", "max_count": 1, "reason": "Transfer path menu uses a caller-owned ScrollHandle and attaches an explicit vertical scrollbar to the scrolling child."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/overlays_favorites.rs", "max_count": 1, "reason": "The favorites menu tracks its caller-owned ScrollHandle for keyboard reveal and attaches vertical_scrollbar to the non-scrolling parent inside the positioned popup shell."},
+    {"path": "crates/nyaterm-ui/src/hover_card.rs", "max_count": 1, "reason": "The hover-card viewport test owns its horizontal ScrollHandle to simulate scrolling and check anchoring; the non-scrolling parent attaches horizontal_scrollbar to the same handle."},
     {"path": "crates/nyaterm-ui/src/settings.rs", "max_count": 1, "reason": "Settings content tracks an explicit scroll handle and attaches a visible vertical scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-ui/src/widgets.rs", "max_count": 2, "reason": "Reusable widgets own caller-positioned scrollbar overlays."}
   ]

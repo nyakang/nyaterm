@@ -50,7 +50,7 @@ pub(in crate::features::pages::connections) fn connections_panel(
     let empty_group_label = t!("savedConnections.emptyGroup");
 
     let flat_rows = snapshot.rows.clone();
-    let dragging = panel.tree_drag.active();
+    let dragging = panel.tree_drag.has_preview();
     let drag_rows = dragging.then(|| panel.drag_rows());
     let import_report = snapshot.import_report.clone();
     let store_is_empty = snapshot.store_is_empty;

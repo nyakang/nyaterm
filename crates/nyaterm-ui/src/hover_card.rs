@@ -514,7 +514,7 @@ mod tests {
     };
 
     use super::NyaHoverCard;
-    use crate::{NyaPopoverAlign, NyaPopoverPlacement};
+    use crate::{NyaPopoverAlign, NyaPopoverPlacement, NyaScrollable as _};
 
     fn activate_and_draw(cx: &mut gpui::VisualTestContext) {
         cx.update(|window, _| window.activate_window());
@@ -831,31 +831,39 @@ mod tests {
                 .when(self.right, |this| this.justify_end())
                 .child(
                     div()
-                        .id("viewport")
-                        .debug_selector(|| "viewport".into())
+                        .relative()
                         .w(px(280.))
                         .h(px(36.))
-                        .overflow_x_scroll()
-                        .track_scroll(&self.scroll)
                         .child(
-                            NyaHoverCard::new(
-                                "viewport-card",
-                                div()
-                                    .debug_selector(|| "viewport-trigger".into())
-                                    .w(px(self.width))
-                                    .h(px(36.)),
-                                div()
-                                    .debug_selector(|| "viewport-content".into())
-                                    .w(px(100.))
-                                    .h(px(96.)),
-                            )
-                            .horizontal_viewport(&self.scroll)
-                            .placement(NyaPopoverPlacement::Right)
-                            .offset(px(6.))
-                            .appearance(false)
-                            .open_delay(Duration::from_millis(10))
-                            .close_delay(Duration::from_millis(100)),
-                        ),
+                            div()
+                                .id("viewport")
+                                .debug_selector(|| "viewport".into())
+                                .size_full()
+                                .flex()
+                                .overflow_x_scroll()
+                                .track_scroll(&self.scroll)
+                                .child(
+                                    NyaHoverCard::new(
+                                        "viewport-card",
+                                        div()
+                                            .debug_selector(|| "viewport-trigger".into())
+                                            .flex_none()
+                                            .w(px(self.width))
+                                            .h(px(36.)),
+                                        div()
+                                            .debug_selector(|| "viewport-content".into())
+                                            .w(px(100.))
+                                            .h(px(96.)),
+                                    )
+                                    .horizontal_viewport(&self.scroll)
+                                    .placement(NyaPopoverPlacement::Right)
+                                    .offset(px(6.))
+                                    .appearance(false)
+                                    .open_delay(Duration::from_millis(10))
+                                    .close_delay(Duration::from_millis(100)),
+                                ),
+                        )
+                        .horizontal_scrollbar(&self.scroll),
                 )
         }
     }
@@ -864,6 +872,7 @@ mod tests {
     fn viewport_anchor_ignores_label_width_and_scroll_and_keeps_crossing_open(
         cx: &mut TestAppContext,
     ) {
+        cx.update(gpui_kit::init);
         for right in [false, true] {
             for width in [118., 500.] {
                 let scroll = gpui::ScrollHandle::new();
@@ -876,6 +885,7 @@ mod tests {
                 if width > 280. {
                     scroll.set_offset(point(px(-80.), px(0.)));
                     cx.update(|window, cx| window.draw(cx).clear(cx));
+                    assert_eq!(scroll.offset().x, px(-80.));
                 }
                 let viewport = cx.debug_bounds("viewport").unwrap();
                 cx.simulate_mouse_move(

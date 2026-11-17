@@ -575,3 +575,72 @@ fn rotated_history_cache_cannot_suppress_a_priority_scroll_snapshot() {
         &mut view, 3, true
     ));
 }
+
+#[test]
+fn in_place_output_cannot_suppress_scroll_requests_or_live_prefetch() {
+    for exact_cache_key in [true, false] {
+        let mut view = TerminalViewState::new();
+        view.screen = nyaterm_terminal::TerminalScreen::new(20, 6);
+        view.screen.advance(b"old\r\nold\r\n\x1b[2J\x1b[Hroot# ");
+        view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+        let offset = super::terminal_live_scrollback_prefetch_request_offset(&view).unwrap();
+        let cached_offset = if exact_cache_key { offset } else { 1 };
+        assert!(exact_cache_key || offset != cached_offset);
+        let cached = Arc::new(
+            view.screen
+                .viewport_snapshot_with_window(cached_offset, 64, 64),
+        );
+        view.scrollback_snapshots
+            .insert(cached_offset, cached.clone());
+        assert!(super::terminal_view_has_cached_scrollback_snapshot_covering_offset(&view, offset));
+        assert!(
+            super::terminal_view_has_cached_scroll_snapshot_ready_for_user_scroll(&view, offset)
+        );
+        assert_eq!(
+            super::terminal_live_scrollback_prefetch_request_offset(&view),
+            None
+        );
+
+        view.screen.advance(b"ls 2\r\n");
+        view.frame_snapshot = Some(Arc::new(view.screen.viewport_snapshot(0)));
+        assert_eq!(cached.history, view.history_state());
+        assert!(
+            !super::terminal_view_has_cached_scrollback_snapshot_covering_offset(&view, offset)
+        );
+        assert!(
+            !super::terminal_view_has_cached_scroll_snapshot_ready_for_user_scroll(&view, offset)
+        );
+        assert_eq!(
+            super::terminal_live_scrollback_prefetch_request_offset(&view),
+            Some(offset)
+        );
+        for priority in [false, true] {
+            assert!(super::terminal_scroll_snapshot_request_should_enqueue(
+                &mut view, offset, priority
+            ));
+            assert!(!super::terminal_scroll_snapshot_request_should_enqueue(
+                &mut view, offset, priority
+            ));
+            view.pending_snapshot_offsets.clear();
+            view.priority_pending_snapshot_offsets.clear();
+        }
+
+        view.scrollback_snapshots.insert(
+            cached_offset,
+            Arc::new(
+                view.screen
+                    .viewport_snapshot_with_window(cached_offset, 64, 64),
+            ),
+        );
+        assert!(super::terminal_view_has_cached_scrollback_snapshot_covering_offset(&view, offset));
+        assert_eq!(
+            super::terminal_live_scrollback_prefetch_request_offset(&view),
+            None
+        );
+        for priority in [false, true] {
+            assert!(!super::terminal_scroll_snapshot_request_should_enqueue(
+                &mut view, offset, priority
+            ));
+        }
+    }
+}

@@ -53,7 +53,18 @@ impl Host {
                         connections.spawn(async move {
                             let (reader, mut writer) = stream.into_split();
                             let mut lines = BufReader::new(reader).lines();
-                            while let Some(line) = lines.next_line().await.unwrap() {
+                            loop {
+                                let line = match lines.next_line().await {
+                                    Ok(Some(line)) => line,
+                                    Ok(None) => break,
+                                    // Deadline/cancellation closes the abandoned socket. Windows
+                                    // may report an abort/reset instead of EOF after a late write.
+                                    Err(error) if matches!(error.kind(),
+                                        std::io::ErrorKind::ConnectionAborted
+                                            | std::io::ErrorKind::ConnectionReset
+                                    ) => break,
+                                    Err(error) => panic!("mock request read failed: {error}"),
+                                };
                                 let request: RpcRequest = serde_json::from_str(&line).unwrap();
                                 let reply = match request.method.as_str() {
                                     "auth" => Reply::Value(json!({"authenticated":true,
