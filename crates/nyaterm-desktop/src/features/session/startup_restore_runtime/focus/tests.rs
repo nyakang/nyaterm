@@ -80,7 +80,7 @@ fn focus_window<'a>(
 fn begin_restore(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>) {
     app.sync_component_theme(cx);
     let mut settings = app.settings.summary().clone();
-    settings.startup_restore = true;
+    settings.startup_mode = nyaterm_core::models::startup::StartupMode::LastSession;
     settings.startup_restore_window_layout = true;
     app.settings.replace_summary(settings);
     app.stores.startup_restore.update(cx, |store, _| {
@@ -533,7 +533,11 @@ fn empty_disabled_and_failed_restores_do_not_assign_terminal_focus() {
         let app = app_with_visible_ssh_session(&mut cx, root.path(), "ssh");
         app.update(&mut cx, |app, cx| {
             let mut settings = app.settings.summary().clone();
-            settings.startup_restore = scenario != "disabled";
+            settings.startup_mode = if scenario != "disabled" {
+                nyaterm_core::models::startup::StartupMode::LastSession
+            } else {
+                nyaterm_core::models::startup::StartupMode::None
+            };
             app.settings.replace_summary(settings);
             app.session.remove_session_catalog("ssh");
             app.stores.startup_restore.update(cx, |store, _| {

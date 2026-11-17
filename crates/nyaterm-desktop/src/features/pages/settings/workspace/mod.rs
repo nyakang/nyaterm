@@ -8,3 +8,5 @@ mod window_background;
 mod window_decorations;
 
 pub(in crate::features::pages::settings) mod theme_designer;
+
+pub(super) mod startup;

@@ -213,7 +213,8 @@ impl DesktopController {
         if initial_activation.has_conflicting_window_options() {
             return Err(ActivationParseError::ConflictingWindowOptions.into());
         }
-        let new_window = initial_activation.open_behavior == ActivationOpenBehavior::NewWindow
+        let new_window = self.startup.startup_mode.restores_last_session()
+            && initial_activation.open_behavior == ActivationOpenBehavior::NewWindow
             && self.startup.recovery.is_none()
             && !self.startup.saved_workspace_ids().is_empty();
         let mut ids = self.startup.restored_workspace_ids();
@@ -223,7 +224,8 @@ impl DesktopController {
             ids.swap(0, index);
         }
         for workspace_id in ids {
-            let startup = self.startup.for_workspace(workspace_id);
+            let mut startup = self.startup.for_workspace(workspace_id);
+            startup.run_specified_startup = startup.allows_specified_startup(&initial_activation);
             self.open_workspace_with_startup(startup, None, false, None, cx)?;
         }
         self.deduplicate_connections(&mut initial_activation);

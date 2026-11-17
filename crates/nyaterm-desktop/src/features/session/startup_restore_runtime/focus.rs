@@ -23,7 +23,8 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        !self.settings.summary().startup_restore
+        (!self.settings.summary().startup_mode.restores_last_session()
+            && !self.stores.startup_restore.read(cx).specified_started())
             || self.root_overlay_visibility(cx).blocks_workspace_focus()
             || self.floating_panel_dismissal_is_blocked(window, cx)
             || self.has_pending_focus_request()

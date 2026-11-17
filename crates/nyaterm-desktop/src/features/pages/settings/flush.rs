@@ -46,6 +46,11 @@ impl NyaTermApp {
             active_tab,
             settings: SettingsPresentation {
                 summary: Arc::new(self.settings.summary().clone()),
+                startup_options: super::workspace::startup::startup_options(
+                    self.connection_state.groups(),
+                    self.connection_state.connections(),
+                )
+                .into(),
                 theme_options: self.settings.theme_options(),
                 theme_diagnostics: self.settings.theme_diagnostics(),
                 theme_designer: self.settings.theme_designer().clone(),

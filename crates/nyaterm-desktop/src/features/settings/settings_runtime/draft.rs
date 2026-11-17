@@ -991,6 +991,51 @@ mod tests {
     }
 
     #[test]
+    fn startup_draft_cancel_and_apply_preserve_ordered_targets() {
+        use nyaterm_core::models::startup::{StartupMode, StartupTarget};
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_startup_mode(StartupMode::Specified, cx);
+            app.set_startup_target(0, "group:g", cx);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert_eq!(app.settings.summary().startup_mode, StartupMode::None);
+            assert!(app.settings.summary().startup_targets.is_empty());
+            app.begin_settings_draft(cx);
+            app.set_startup_mode(StartupMode::Specified, cx);
+            app.set_startup_target(0, "connection:c", cx);
+            app.set_startup_target(1, "group:g", cx);
+            app.move_startup_target(1, 0, cx);
+        });
+        let before = app.update(&mut cx, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+        });
+        assert_eq!(before.startup_mode, StartupMode::None);
+        assert!(before.startup_targets.is_empty());
+        app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+        cx.run_until_parked();
+        let saved = app.update(&mut cx, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+        });
+        assert_eq!(saved.startup_mode, StartupMode::Specified);
+        assert_eq!(
+            saved.startup_targets,
+            [StartupTarget::group("g"), StartupTarget::connection("c")]
+        );
+    }
+
+    #[test]
     fn terminal_wrapping_draft_cancel_and_save_preserve_committed_preferences() {
         use nyaterm_core::models::settings::TerminalWrapMode;
         let mut cx = TestAppContext::single();

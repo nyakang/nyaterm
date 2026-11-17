@@ -266,6 +266,12 @@ impl NyaTermApp {
             return;
         }
 
+        if let Some(index) = id.strip_prefix("settings.startup.target.") {
+            if let Ok(index) = index.parse::<usize>() {
+                self.set_startup_target(index, value, cx);
+            }
+            return;
+        }
         if id == "connection-editor-kind" {
             if let Some(kind) = [
                 crate::models::ConnectionKindTab::Ssh,

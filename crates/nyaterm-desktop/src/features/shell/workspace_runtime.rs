@@ -477,7 +477,7 @@ impl NyaTermApp {
     }
     pub(in crate::features) fn persist_workspace_pane_layout(&mut self) {
         self.workspace_revision = self.workspace_revision.saturating_add(1);
-        if !self.settings.summary().startup_restore
+        if !self.settings.summary().startup_mode.restores_last_session()
             || !self.settings.summary().startup_restore_window_layout
         {
             return;
@@ -545,7 +545,7 @@ impl NyaTermApp {
         if self.shell.workspace.pane_layout_restored {
             return;
         }
-        if !self.settings.summary().startup_restore
+        if !self.settings.summary().startup_mode.restores_last_session()
             || !self.settings.summary().startup_restore_window_layout
         {
             self.shell.workspace.pane_layout_restored = true;

@@ -132,6 +132,7 @@ impl SettingsSnapshot {
 #[derive(Clone, PartialEq)]
 pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) summary: Arc<AppSettingsSummary>,
+    pub(in crate::features) startup_options: Arc<[NyaSelectOption]>,
     pub(in crate::features) theme_options: Arc<[(String, String)]>,
     pub(in crate::features) theme_diagnostics: Arc<[String]>,
     pub(in crate::features) theme_designer:
@@ -164,6 +165,7 @@ impl SettingsPresentation {
     fn empty(cx: &mut Context<SettingsPanel>) -> Self {
         Self {
             summary: Arc::new(AppSettingsSummary::default()),
+            startup_options: Arc::from([]),
             theme_options: nyaterm_ui::available_themes(&Default::default()).into(),
             theme_diagnostics: Arc::from([]),
             theme_designer: Default::default(),
@@ -2004,7 +2006,6 @@ forward_app_action!(
     toggle_idle_lock_enabled,
     toggle_settings_master_password,
     toggle_remote_stats_show_users,
-    toggle_startup_restore,
     toggle_startup_restore_window_layout,
     toggle_terminal_action_links,
     toggle_terminal_line_numbers,
@@ -2785,7 +2786,8 @@ mod tests {
                     .expect("hosted panel has an initial snapshot")
                     .settings
                     .summary()
-                    .startup_restore;
+                    .startup_mode
+                    .restores_last_session();
                 panel.with_app(cx, |app, cx| {
                     app.toggle_startup_restore(cx);
                 });
@@ -2795,7 +2797,8 @@ mod tests {
                         .expect("snapshot remains available")
                         .settings
                         .summary()
-                        .startup_restore,
+                        .startup_mode
+                        .restores_last_session(),
                     before,
                     "the panel snapshot must not be flushed while the panel is leased"
                 );
@@ -2811,11 +2814,63 @@ mod tests {
                     .expect("deferred flush ran")
                     .settings
                     .summary()
-                    .startup_restore,
+                    .startup_mode
+                    .restores_last_session(),
                 before,
                 "the deferred refresh must publish the app mutation"
             );
         });
+    }
+
+    #[test]
+    fn startup_settings_render_long_lists_and_publish_reordered_selections() {
+        use nyaterm_core::models::startup::StartupMode;
+        let root = TestConfigDir::new("nyaterm-startup-settings-view");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, root.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.set_startup_mode(StartupMode::Specified, cx);
+                for index in 0..12 {
+                    app.set_startup_target(index, &format!("connection:missing-{index}"), cx);
+                }
+            })
+        });
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            let panel = main_panel(&app, cx);
+            let field = panel
+                .read(cx)
+                .selects
+                .field(&"settings.startup.target.0".into())
+                .unwrap();
+            assert_eq!(
+                field.read(cx).selected_value(),
+                Some("connection:missing-0")
+            );
+            app.update(cx, |app, cx| app.move_startup_target(1, 0, cx));
+        });
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            let panel = main_panel(&app, cx);
+            let field = panel
+                .read(cx)
+                .selects
+                .field(&"settings.startup.target.0".into())
+                .unwrap();
+            assert_eq!(
+                field.read(cx).selected_value(),
+                Some("connection:missing-1")
+            );
+            app.update(cx, |app, cx| {
+                app.set_startup_mode(StartupMode::LastSession, cx)
+            });
+        });
+        draw(&app, vcx);
+        vcx.update(|_, cx| app.update(cx, |app, cx| app.set_startup_mode(StartupMode::None, cx)));
+        draw(&app, vcx);
+        assert!(vcx.update(|_, cx| paints(&app, cx)) > 0);
     }
 
     #[test]

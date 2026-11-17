@@ -672,7 +672,10 @@ pub struct AppSettingsSummary {
     /// back to the 10 MiB default; the log layer clamps it to a supported range.
     #[serde(default = "default_diagnostics_log_shard_bytes")]
     pub diagnostics_log_shard_bytes: u64,
-    pub startup_restore: bool,
+    #[serde(default, alias = "startup_restore")]
+    pub startup_mode: crate::models::startup::StartupMode,
+    #[serde(default)]
+    pub startup_targets: Vec<crate::models::startup::StartupTarget>,
     /// When true (default), restore multi-leaf tab window layout with sessions.
     #[serde(default = "default_true")]
     pub startup_restore_window_layout: bool,
@@ -879,7 +882,8 @@ impl Default for AppSettingsSummary {
             diagnostics_level: "info".to_string(),
             diagnostics_retention_days: 7,
             diagnostics_log_shard_bytes: default_diagnostics_log_shard_bytes(),
-            startup_restore: false,
+            startup_mode: Default::default(),
+            startup_targets: Vec::new(),
             startup_restore_window_layout: true,
             minimize_to_tray: false,
             confirm_on_close: true,

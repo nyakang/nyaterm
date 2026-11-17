@@ -33,6 +33,18 @@ use nyaterm_core::{
 pub struct WorkspaceStartupRestore {
     pub manifest: WorkspaceRestoreManifest,
     pub is_default_workspace: bool,
+    pub startup_mode: nyaterm_core::models::startup::StartupMode,
+}
+
+fn startup_mode_from_document(
+    value: &serde_json::Value,
+) -> nyaterm_core::models::startup::StartupMode {
+    json_path(value, &["general", "startup_mode"])
+        .cloned()
+        .unwrap_or_else(|| {
+            serde_json::Value::Bool(json_bool(value, &["general", "startup_restore"], false))
+        })
+        .into()
 }
 
 // Reject malformed known fields before an unrelated save can replace their data.
@@ -640,7 +652,13 @@ impl ConnectionStore {
                     nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
                 ),
             ),
-            startup_restore: json_bool(&value, &["general", "startup_restore"], false),
+            startup_mode: startup_mode_from_document(&value),
+            startup_targets: match json_path(&value, &["general", "startup_targets"]) {
+                None => Vec::new(),
+                Some(targets) => serde_json::from_value(targets.clone()).map_err(|_| {
+                    StorageError::InvalidData("startup targets must be an array".into())
+                })?,
+            },
             startup_restore_window_layout: json_bool(
                 &value,
                 &["general", "startup_restore_window_layout"],
@@ -1640,8 +1658,18 @@ impl ConnectionStore {
         );
         set_nested_json_value(
             &mut value,
+            &["general", "startup_mode"],
+            serde_json::to_value(&settings.startup_mode)?,
+        );
+        set_nested_json_value(
+            &mut value,
+            &["general", "startup_targets"],
+            serde_json::to_value(&settings.startup_targets)?,
+        );
+        set_nested_json_value(
+            &mut value,
             &["general", "startup_restore"],
-            serde_json::Value::Bool(settings.startup_restore),
+            serde_json::Value::Bool(settings.startup_mode.restores_last_session()),
         );
         set_nested_json_value(
             &mut value,
@@ -1875,6 +1903,7 @@ impl ConnectionStore {
                     })
                 });
         Ok(WorkspaceStartupRestore {
+            startup_mode: startup_mode_from_document(&value),
             manifest,
             is_default_workspace: !saved_restore && !saved_window,
         })

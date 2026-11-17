@@ -15,6 +15,7 @@ use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
 use crate::models::{SessionLaunchConfig, WorkspacePaneNode, WorkspaceSplitDirection};
 
 mod focus;
+mod specified;
 
 impl NyaTermApp {
     fn mark_startup_restore_complete(&mut self) {
@@ -27,7 +28,7 @@ impl NyaTermApp {
     /// the UI thread — that path was a major connect-time freeze source.
     pub(in crate::features) fn persist_open_tabs(&mut self) {
         self.workspace_revision = self.workspace_revision.saturating_add(1);
-        if !self.settings.summary().startup_restore {
+        if !self.settings.summary().startup_mode.restores_last_session() {
             return;
         }
         self.shell.mark_open_tabs_persist_dirty();
@@ -37,7 +38,7 @@ impl NyaTermApp {
 
     /// Force a durable open-tabs write (window close / explicit quit paths).
     pub(in crate::features) fn flush_open_tabs_now(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.summary().startup_restore {
+        if !self.settings.summary().startup_mode.restores_last_session() {
             self.shell.clear_session_persistence_dirty();
             return;
         }
@@ -54,7 +55,7 @@ impl NyaTermApp {
         &mut self,
         cx: &mut Context<Self>,
     ) {
-        if !self.settings.summary().startup_restore {
+        if !self.settings.summary().startup_mode.restores_last_session() {
             self.shell.clear_session_persistence_dirty();
             return;
         }
@@ -364,7 +365,15 @@ impl NyaTermApp {
         if !should_restore {
             return;
         }
-        if !self.settings.summary().startup_restore {
+        if self.settings.summary().startup_mode
+            == nyaterm_core::models::startup::StartupMode::Specified
+            && self.stores.startup_restore.read(cx).specified_allowed()
+            && self.session.ordered_sessions().is_empty()
+        {
+            self.start_specified_sessions(window, cx);
+            return;
+        }
+        if !self.settings.summary().startup_mode.restores_last_session() {
             self.mark_startup_restore_complete();
             return;
         }
@@ -487,21 +496,28 @@ impl NyaTermApp {
         {
             return;
         }
-        let Some(tab) = self
-            .stores
-            .startup_restore
-            .update(cx, |store, _| store.pop_next_tab())
-        else {
-            if !self.session.start_is_busy() {
-                self.finish_startup_restore(cx);
-            }
+        if self.security.screen_locked() {
             return;
-        };
-
-        let started = self.start_restorable_open_tab(&tab, window, cx);
-        if !started {
-            // Keep draining sync failures until pending async work or queue empty.
-            self.pump_startup_restore_queue(window, cx);
+        }
+        loop {
+            let tab = self
+                .stores
+                .startup_restore
+                .update(cx, |store, _| store.pop_next_tab());
+            let Some(tab) = tab else {
+                if !self.session.start_is_busy() {
+                    self.finish_startup_restore(cx);
+                }
+                return;
+            };
+            if self.start_restorable_open_tab(&tab, window, cx) {
+                return;
+            }
+            self.stores.startup_restore.update(cx, |store, _| {
+                if store.specified_started() {
+                    store.note_specified_skip();
+                }
+            });
         }
     }
 
@@ -510,6 +526,18 @@ impl NyaTermApp {
             return;
         }
         self.mark_startup_restore_complete();
+        if self.stores.startup_restore.read(cx).specified_started() {
+            self.shell.complete_terminal_windows_restore();
+            self.shell.set_workspace_pane_layout_restored(true);
+            let skipped = self.stores.startup_restore.read(cx).specified_skipped();
+            self.shell.set_status(if skipped == 0 {
+                rust_i18n::t!("settings.startupOpened").to_string()
+            } else {
+                rust_i18n::t!("settings.startupSkipped", count = skipped).to_string()
+            });
+            cx.notify();
+            return;
+        }
         // After all tabs reconnect, attempt multi-leaf then global pane layout restore.
         self.shell.mark_terminal_windows_restore_pending();
         self.shell.set_workspace_pane_layout_restored(false);
@@ -958,7 +986,7 @@ mod tests {
         let source = app_with_visible_ssh_session(&mut cx, source_root.path(), "before-left");
         let workspace = source.update(&mut cx, |app, cx| {
             let mut settings = app.settings.summary().clone();
-            settings.startup_restore = true;
+            settings.startup_mode = nyaterm_core::models::startup::StartupMode::LastSession;
             settings.startup_restore_window_layout = true;
             app.settings.replace_summary(settings);
             app.session.mark_restore_complete();
@@ -992,7 +1020,7 @@ mod tests {
         {
             let store = ConnectionStore::open(&config_dir).unwrap();
             let mut settings = store.load_app_settings_summary().unwrap();
-            settings.startup_restore = true;
+            settings.startup_mode = nyaterm_core::models::startup::StartupMode::LastSession;
             settings.startup_restore_window_layout = true;
             store.save_general_settings(&settings).unwrap();
             store
@@ -1151,6 +1179,101 @@ mod tests {
                 assert!(!app.remote_desktop.has_sessions());
                 assert!(!app.session.start_has_pending());
             });
+        });
+    }
+    #[test]
+    fn specified_startup_waits_for_unlock_skips_unavailable_targets_and_never_replays() {
+        use nyaterm_core::models::startup::{StartupMode, StartupTarget};
+        let root = TestConfigDir::new("nyaterm-specified-startup");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        app.update(&mut cx, |app, cx| {
+            app.session.remove_session_catalog("existing");
+            let mut settings = app.settings.summary().clone();
+            settings.startup_mode = StartupMode::Specified;
+            settings.startup_targets = vec![
+                StartupTarget::connection("missing"),
+                StartupTarget::connection("board"),
+            ];
+            app.settings.replace_summary(settings);
+            let serial: SavedConnection = serde_json::from_value(serde_json::json!({
+                "id":"board", "name":"Board", "type":"serial", "connect_prompt":{"port":true}
+            }))
+            .unwrap();
+            app.connection_state
+                .replace_loaded(vec![serial], Vec::new());
+            app.security.activate_screen_lock(String::new());
+            app.stores.startup_restore.update(cx, |store, _| {
+                store.configure_specified_startup(true);
+                store.set_loaded_open_tabs(vec![RestorableOpenTab::with_leaf_root(
+                    "old shell",
+                    "Local",
+                    None,
+                    None,
+                    None,
+                )]);
+            });
+        });
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let submitted = app.blocking_jobs.metrics().submitted;
+                app.resume_startup_restore_if_unlocked(window, cx);
+                assert!(!app.stores.startup_restore.read(cx).open_tabs_restored());
+                app.security.deactivate_screen_lock();
+                app.resume_startup_restore_if_unlocked(window, cx);
+                assert!(app.session.restore_is_complete());
+                assert!(app.session.ordered_sessions().is_empty());
+                assert!(app.shell.terminal_windows_restore_is_complete());
+                assert!(app.shell.workspace_layout_restore_is_settled());
+                app.stores.startup_restore.update(cx, |store, _| {
+                    assert!(store.specified_started());
+                    assert_eq!(store.specified_skipped(), 2);
+                    assert!(store.take_loaded_open_tabs().is_none());
+                    assert_eq!(store.take_loaded_terminal_window_layout(), Some(None));
+                });
+                app.resume_startup_restore_if_unlocked(window, cx);
+                assert!(!app.pump_startup_restore_queue_if_ready(window, cx));
+                assert_eq!(app.blocking_jobs.metrics().submitted, submitted);
+                assert!(app.session.dialogs.serial_connect_prompt().is_none());
+            })
+        });
+    }
+
+    #[test]
+    fn startup_queue_drains_many_missing_connections_without_recursive_calls() {
+        let root = TestConfigDir::new("nyaterm-startup-missing-batch");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        let cx = session_focus_test_window(&mut cx, &app);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.stores.startup_restore.update(cx, |store, _| {
+                    store.begin_specified(0);
+                    store.set_queue(
+                        (0..2048)
+                            .map(|index| {
+                                RestorableOpenTab::with_leaf_root(
+                                    "missing",
+                                    "SSH",
+                                    Some(format!("missing-{index}")),
+                                    None,
+                                    None,
+                                )
+                            })
+                            .collect(),
+                    );
+                });
+                app.pump_startup_restore_queue(window, cx);
+                assert!(app.session.restore_is_complete());
+                assert!(app.stores.startup_restore.read(cx).queue_empty());
+                assert_eq!(
+                    app.stores.startup_restore.read(cx).specified_skipped(),
+                    2048
+                );
+            })
         });
     }
 }

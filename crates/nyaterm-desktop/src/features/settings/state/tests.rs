@@ -657,3 +657,27 @@ fn quit_prompt_retains_one_request_and_can_be_retried_after_cancel() {
     assert!(state.begin_quit_confirmation(0));
     assert_eq!(state.take_quit_confirmation(), Some(0));
 }
+
+#[test]
+fn startup_list_survives_mode_changes_and_supports_ordered_edits() {
+    use nyaterm_core::models::startup::{StartupMode, StartupTarget};
+    let mut state = settings_state();
+    state.set_startup_target(0, StartupTarget::connection("a"));
+    state.set_startup_target(1, StartupTarget::group("g"));
+    state.set_startup_mode(StartupMode::Specified);
+    state.move_startup_target(1, 0);
+    state.set_startup_mode(StartupMode::None);
+    state.set_startup_mode(StartupMode::Specified);
+    assert_eq!(
+        state.summary().startup_targets,
+        [StartupTarget::group("g"), StartupTarget::connection("a")]
+    );
+    state.remove_startup_target(0);
+    state.set_startup_target(0, StartupTarget::connection("b"));
+    state.move_startup_target(0, 99);
+    state.remove_startup_target(99);
+    assert_eq!(
+        state.summary().startup_targets,
+        [StartupTarget::connection("b")]
+    );
+}

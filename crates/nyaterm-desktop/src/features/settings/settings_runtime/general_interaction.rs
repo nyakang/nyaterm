@@ -85,6 +85,49 @@ impl NyaTermApp {
         self.save_general_settings(cx);
     }
 
+    pub(in crate::features) fn set_startup_mode(
+        &mut self,
+        mode: nyaterm_core::models::startup::StartupMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.set_startup_mode(mode);
+        self.save_general_settings(cx);
+    }
+    pub(in crate::features) fn set_startup_target(
+        &mut self,
+        index: usize,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((kind, id)) = value.split_once(':') else {
+            return;
+        };
+        let target = match kind {
+            "connection" => nyaterm_core::models::startup::StartupTarget::connection(id),
+            "group" => nyaterm_core::models::startup::StartupTarget::group(id),
+            _ => return,
+        };
+        self.settings.set_startup_target(index, target);
+        self.save_general_settings(cx);
+    }
+    pub(in crate::features) fn remove_startup_target(
+        &mut self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.remove_startup_target(index);
+        self.save_general_settings(cx);
+    }
+    pub(in crate::features) fn move_startup_target(
+        &mut self,
+        index: usize,
+        destination: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.move_startup_target(index, destination);
+        self.save_general_settings(cx);
+    }
+    #[cfg(test)]
     pub(in crate::features) fn toggle_startup_restore(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_startup_restore();
         self.save_general_settings(cx);

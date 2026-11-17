@@ -17,8 +17,42 @@ impl SettingsFeatureState {
         self.summary.language = language.to_string();
         crate::i18n::apply_locale(&self.summary.language);
     }
+    pub(in crate::features) fn set_startup_mode(
+        &mut self,
+        mode: nyaterm_core::models::startup::StartupMode,
+    ) {
+        self.summary.startup_mode = mode;
+    }
+    pub(in crate::features) fn set_startup_target(
+        &mut self,
+        index: usize,
+        target: nyaterm_core::models::startup::StartupTarget,
+    ) {
+        if index < self.summary.startup_targets.len() {
+            self.summary.startup_targets[index] = target;
+        } else if index == self.summary.startup_targets.len() {
+            self.summary.startup_targets.push(target);
+        }
+    }
+    pub(in crate::features) fn remove_startup_target(&mut self, index: usize) {
+        if index < self.summary.startup_targets.len() {
+            self.summary.startup_targets.remove(index);
+        }
+    }
+    pub(in crate::features) fn move_startup_target(&mut self, index: usize, destination: usize) {
+        if index < self.summary.startup_targets.len()
+            && destination < self.summary.startup_targets.len()
+        {
+            self.summary.startup_targets.swap(index, destination);
+        }
+    }
+    #[cfg(test)]
     pub(in crate::features) fn toggle_startup_restore(&mut self) {
-        self.summary.startup_restore = !self.summary.startup_restore;
+        self.summary.startup_mode = if self.summary.startup_mode.restores_last_session() {
+            nyaterm_core::models::startup::StartupMode::None
+        } else {
+            nyaterm_core::models::startup::StartupMode::LastSession
+        };
     }
     pub(in crate::features) fn toggle_startup_restore_window_layout(&mut self) -> bool {
         self.summary.startup_restore_window_layout = !self.summary.startup_restore_window_layout;
