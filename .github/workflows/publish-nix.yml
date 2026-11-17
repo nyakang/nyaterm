@@ -1,0 +1,56 @@
+name: Publish Nix update
+
+on:
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published stable version to validate before updating the latest Nix pin
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: nix-nyaterm-update
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Trigger Nix package update
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve published release receipt
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python scripts/release/release_receipt.py resolve --channel nix
+
+      - name: Skip non-stable release
+        if: steps.release.outputs.publish != 'true'
+        run: echo 'No stable Nix release to publish.'
+
+      - name: Trigger Nix updater
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NIX_UPDATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN:-}" ]] || { echo 'NIX_UPDATE_TOKEN is required (Actions write on nyakang/nix-nyaterm)' >&2; exit 1; }
+          gh workflow run update.yml --repo nyakang/nix-nyaterm --ref main
+          echo 'Nix update requested: https://github.com/nyakang/nix-nyaterm/actions/workflows/update.yml' >> "$GITHUB_STEP_SUMMARY"
