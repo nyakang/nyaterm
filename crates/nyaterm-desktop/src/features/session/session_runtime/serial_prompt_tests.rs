@@ -808,6 +808,10 @@ fn cancelling_serial_reconnect_keeps_the_actual_serial_backend_open() {
         app.update(cx, |app, cx| {
             let config = nyaterm_transport::SerialSessionConfig {
                 port_name: path.clone(),
+                // serialport uses zero to skip IOSSIOSPEED, which macOS PTYs
+                // reject with ENOTTY. The fixture has no physical baud rate.
+                #[cfg(target_os = "macos")]
+                baud_rate: 0,
                 ..Default::default()
             };
             backend_id = app

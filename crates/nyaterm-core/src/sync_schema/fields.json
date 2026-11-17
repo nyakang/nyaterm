@@ -9,6 +9,7 @@
       "description": "portable:description",
       "tags": "portable:tags",
       "sort_order": "portable:placement",
+      "tree_order": "portable:placement",
       "icon": "conditional:icon",
       "icon_auto_detect": "conditional:icon",
       "auth": "split",
@@ -177,6 +178,7 @@
       "name": "portable:name",
       "parent_id": "portable:parent_id",
       "sort_order": "portable:sort_order",
+      "tree_order": "portable:tree_order",
       "created_at_ms": "local",
       "updated_at_ms": "local"
     }
