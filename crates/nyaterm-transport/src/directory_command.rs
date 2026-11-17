@@ -23,13 +23,29 @@ pub fn local_directory_shell(shell_path: Option<&str>, windows: bool) -> Option<
     match executable.as_str() {
         "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => Some(DirectoryShell::PowerShell),
         "cmd" | "cmd.exe" => Some(DirectoryShell::Cmd),
-        "bash" | "bash.exe" | "sh" | "sh.exe" | "zsh" | "zsh.exe" => Some(DirectoryShell::Posix),
+        "bash" | "bash.exe" | "sh" | "sh.exe" | "zsh" | "zsh.exe" | "wsl" | "wsl.exe" => {
+            Some(DirectoryShell::Posix)
+        }
         _ => None,
     }
 }
 
 pub fn valid_terminal_directory_path(path: &str) -> bool {
     !path.trim().is_empty() && !path.chars().any(char::is_control)
+}
+
+/// Quote a single literal path argument, including a bare filename. Reject
+/// control characters and CMD expansions that quoting cannot make literal.
+pub fn quote_path_for_shell(path: &str, shell: DirectoryShell) -> Option<String> {
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return None;
+    }
+    match shell {
+        DirectoryShell::Posix => Some(format!("'{}'", path.replace('\'', "'\\''"))),
+        DirectoryShell::PowerShell => Some(format!("'{}'", path.replace('\'', "''"))),
+        DirectoryShell::Cmd if !path.contains(['"', '%', '!']) => Some(format!("\"{path}\"")),
+        DirectoryShell::Cmd => None,
+    }
 }
 
 pub fn build_directory_change_command(
@@ -42,15 +58,10 @@ pub fn build_directory_change_command(
     }
     match shell {
         DirectoryShell::PowerShell => Some(format!(
-            "Set-Location -LiteralPath '{}'",
-            path.replace('\'', "''")
+            "Set-Location -LiteralPath {}",
+            quote_path_for_shell(path, shell)?
         )),
-        DirectoryShell::Cmd => {
-            if path.contains(['"', '%', '!']) {
-                return None;
-            }
-            Some(format!("cd /d \"{path}\""))
-        }
+        DirectoryShell::Cmd => Some(format!("cd /d {}", quote_path_for_shell(path, shell)?)),
         DirectoryShell::Posix => {
             let path = if windows_posix {
                 let bytes = path.as_bytes();
@@ -67,7 +78,7 @@ pub fn build_directory_change_command(
             } else {
                 path.to_string()
             };
-            Some(format!("cd '{}'", path.replace('\'', "'\\''")))
+            Some(format!("cd {}", quote_path_for_shell(&path, shell)?))
         }
     }
 }
@@ -76,7 +87,7 @@ pub fn build_directory_change_command(
 mod tests {
     use super::{
         DirectoryShell, build_directory_change_command, local_directory_shell,
-        valid_terminal_directory_path,
+        quote_path_for_shell, valid_terminal_directory_path,
     };
 
     #[test]
@@ -118,6 +129,38 @@ mod tests {
         assert_eq!(
             local_directory_shell(Some("pwsh.exe"), true),
             Some(DirectoryShell::PowerShell)
+        );
+    }
+
+    #[test]
+    fn literal_path_arguments_quote_metacharacters_and_preserve_whitespace() {
+        assert_eq!(
+            quote_path_for_shell(" O'Brien $(echo x); & \\ ", DirectoryShell::Posix),
+            Some("' O'\\''Brien $(echo x); & \\ '".into())
+        );
+        assert_eq!(
+            quote_path_for_shell("O'Brien $env:USERPROFILE", DirectoryShell::PowerShell),
+            Some("'O''Brien $env:USERPROFILE'".into())
+        );
+        assert_eq!(
+            quote_path_for_shell("a & b", DirectoryShell::Cmd),
+            Some("\"a & b\"".into())
+        );
+        for shell in [
+            DirectoryShell::Posix,
+            DirectoryShell::PowerShell,
+            DirectoryShell::Cmd,
+        ] {
+            for path in ["", "x\nexit", "x\rexit", "x\0", "x\u{1b}"] {
+                assert!(quote_path_for_shell(path, shell).is_none());
+            }
+        }
+        for path in ["%TEMP%", "!TEMP!", "a\"b"] {
+            assert!(quote_path_for_shell(path, DirectoryShell::Cmd).is_none());
+        }
+        assert_eq!(
+            local_directory_shell(Some("wsl.exe"), true),
+            Some(DirectoryShell::Posix)
         );
     }
 }

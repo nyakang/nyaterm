@@ -1,6 +1,6 @@
 use super::helpers::{normalized_transfer_browser_path, remote_child_path};
 use super::panel::TransferPanel;
-use super::transfer_menu_position;
+use super::{TransferPathPart, transfer_menu_position};
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::models::{
     TransferBrowserBreadcrumbSegment, TransferBrowserChildrenMenuStatus,
@@ -568,8 +568,14 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        let path = normalized_transfer_browser_path(self.transfer.browser_view().path);
-        if self.send_terminal_input(path.clone().into_bytes(), cx) {
+        let path = self.transfer.browser_view().path.to_string();
+        let Some(quoted) = self.quoted_transfer_terminal_path(&path, TransferPathPart::Full) else {
+            self.shell
+                .set_status(t!("fileExplorer.directoryTerminalInvalidPath").to_string());
+            cx.notify();
+            return;
+        };
+        if self.send_terminal_input(quoted.into_bytes(), cx) {
             self.shell
                 .set_status("sent current remote directory to terminal".to_string());
             self.transfer
