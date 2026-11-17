@@ -395,6 +395,9 @@ fn connection_import_report_banner(
             .to_string(),
         );
     }
+    if let Some(quick_commands) = &report.quick_command_summary {
+        parts.push(quick_commands.clone());
+    }
     let mut summary = parts.join(" · ");
     if let Some(state) = report.one_key_state {
         match state {

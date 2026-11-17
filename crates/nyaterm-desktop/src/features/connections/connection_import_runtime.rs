@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use nyaterm_core::SecretString;
+use nyaterm_core::quick_command_import::merge_import;
 use nyaterm_core::session_import::mobaxterm::{
     MobaXtermCredentialDiagnosticKind, MobaXtermImportReport, prepare_mobaxterm_import,
 };
@@ -12,10 +13,13 @@ use nyaterm_core::session_import::{
     prepare_session_import_with_options, prepare_windterm_import_with_decisions,
     prepare_windterm_preview,
 };
-use nyaterm_core::{PreparedSessionImport, WindtermImportReport, WindtermPreview};
+use nyaterm_core::{
+    PreparedSessionImport, WindtermImportReport, WindtermPreview, WindtermQuickbarConfig,
+    WindtermQuickbarSkip, WindtermQuickbarSkipReason, WindtermQuickbarState, WindtermUnmappedIcon,
+};
 
 use gpui::{Context, IntoElement, PathPromptOptions, SharedString, Window};
-use nyaterm_store::StoreDomain;
+use nyaterm_store::{StorageError, StoreDomain};
 use nyaterm_ui::NyaDialogWindowExt as _;
 use zeroize::Zeroize as _;
 
@@ -40,12 +44,25 @@ enum ConnectionImportReport {
     Mobaxterm(MobaXtermImportReport),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QuickCommandImportOutcome {
+    state: WindtermQuickbarState,
+    total_entries: usize,
+    imported_commands: usize,
+    updated_commands: usize,
+    imported_categories: usize,
+    skipped: Vec<WindtermQuickbarSkip>,
+    unmapped_icons: Vec<WindtermUnmappedIcon>,
+    failed: bool,
+}
+
 enum ConnectionImportResult {
     Imported {
         count: usize,
         incomplete: usize,
         report: Option<ConnectionImportReport>,
         notices: Vec<SessionImportNotice>,
+        quick_commands: Option<QuickCommandImportOutcome>,
     },
     NeedsWindtermPassword(PathBuf),
     NeedsMobaxtermPassword(MobaXtermPasswordContext),
@@ -69,6 +86,7 @@ enum PreparedConnectionImport {
     Commit {
         prepared: PreparedSessionImport,
         report: Option<ConnectionImportReport>,
+        quick_commands: Option<WindtermQuickbarConfig>,
     },
     WindtermAccounts(WindtermPreview),
 }
@@ -451,6 +469,7 @@ impl NyaTermApp {
                         .map(|outcome| PreparedConnectionImport::Commit {
                             prepared: outcome.prepared,
                             report: Some(ConnectionImportReport::Mobaxterm(outcome.report)),
+                            quick_commands: None,
                         })
                 } else {
                     prepare_connection_source(
@@ -462,11 +481,16 @@ impl NyaTermApp {
                     .map(|prepared| PreparedConnectionImport::Commit {
                         prepared,
                         report: None,
+                        quick_commands: None,
                     })
                 };
                 drop(master_password);
                 match prepared {
-                    Ok(PreparedConnectionImport::Commit { prepared, report }) => {
+                    Ok(PreparedConnectionImport::Commit {
+                        prepared,
+                        report,
+                        quick_commands,
+                    }) => {
                         let incomplete = prepared.incomplete_credentials_count();
                         let notices = prepared.notices.clone();
                         match store.request_mutation_fn(StoreDomain::Connections, move |database| {
@@ -477,6 +501,10 @@ impl NyaTermApp {
                                 incomplete,
                                 report,
                                 notices,
+                                quick_commands: import_windterm_quick_commands(
+                                    &store,
+                                    quick_commands,
+                                ),
                             },
                             Err(error) => ConnectionImportResult::Failed {
                                 source,
@@ -714,7 +742,11 @@ impl NyaTermApp {
                     }
                 };
                 drop(master_password);
-                let nyaterm_core::WindtermImportOutcome { prepared, report } = outcome;
+                let nyaterm_core::WindtermImportOutcome {
+                    prepared,
+                    report,
+                    quickbar,
+                } = outcome;
                 match store.request_mutation_fn(StoreDomain::Connections, move |database| {
                     database.commit_session_import(prepared)
                 }) {
@@ -723,6 +755,7 @@ impl NyaTermApp {
                         incomplete: report.credential_warning_sessions,
                         report: Some(ConnectionImportReport::Windterm(report)),
                         notices: Vec::new(),
+                        quick_commands: import_windterm_quick_commands(&store, quickbar),
                     },
                     Err(error) => ConnectionImportResult::Failed {
                         source: ConnectionImportSource::WindTerm,
@@ -872,8 +905,19 @@ impl NyaTermApp {
                 incomplete,
                 report,
                 notices,
+                quick_commands,
             } => {
                 self.refresh_store_from_runtime_and_sync_theme(cx);
+                if quick_commands
+                    .as_ref()
+                    .is_some_and(|quick| quick.imported_commands > 0 || quick.updated_commands > 0)
+                {
+                    self.refresh_quick_commands(cx);
+                    self.request_shared_state_refresh(
+                        crate::app_shell::SharedStateDomain::Commands,
+                        cx,
+                    );
+                }
                 self.connection_state.expand_all_catalog_groups();
                 let base = if incomplete == 0 {
                     t!("savedConnections.importSuccess", count = count)
@@ -930,7 +974,7 @@ impl NyaTermApp {
                         t!(key, count = diagnostic.count).to_string()
                     }));
                 }
-                let report_view = match &report {
+                let mut report_view = match &report {
                     Some(ConnectionImportReport::Windterm(report)) => {
                         ConnectionImportReportView::from_windterm(report)
                     }
@@ -941,6 +985,12 @@ impl NyaTermApp {
                         notice_messages,
                     ),
                 };
+                let quick_summary = quick_commands.map(|quick_commands| {
+                    let (summary, details) = quick_command_import_messages(quick_commands);
+                    report_view.quick_command_summary = Some(summary.clone());
+                    report_view.notice_messages.extend(details);
+                    summary
+                });
                 let missing = report_view.missing_one_key.len();
                 let one_key_notice = report_view.one_key_state.map(|state| match state {
                     nyaterm_core::WindtermOneKeyConfigState::Absent => {
@@ -964,6 +1014,10 @@ impl NyaTermApp {
                             None => format!("{base}；{missing_message}"),
                         }
                     }
+                };
+                let message = match quick_summary {
+                    Some(summary) => format!("{message}；{summary}"),
+                    None => message,
                 };
                 self.connection_state.set_import_report(report_view);
                 self.shell.set_status(message.clone());
@@ -1004,6 +1058,125 @@ impl NyaTermApp {
     }
 }
 
+/// Merge a sibling `quickbar.config` after the sessions were committed.
+///
+/// Connections and quick commands live in different store domains, so a
+/// quick-command failure must not roll back already imported sessions. The
+/// outcome is reported alongside them instead.
+fn import_windterm_quick_commands(
+    store: &nyaterm_store::StoreBlockingClient,
+    quickbar: Option<WindtermQuickbarConfig>,
+) -> Option<QuickCommandImportOutcome> {
+    let WindtermQuickbarConfig {
+        state,
+        commands,
+        total_entries,
+        skipped,
+        unmapped_icons,
+    } = quickbar?;
+    let mut outcome = QuickCommandImportOutcome {
+        state,
+        total_entries,
+        imported_commands: 0,
+        updated_commands: 0,
+        imported_categories: 0,
+        skipped,
+        unmapped_icons,
+        failed: false,
+    };
+    if state != WindtermQuickbarState::Readable || commands.is_empty() {
+        return Some(outcome);
+    }
+    match store.request_mutation_fn(StoreDomain::Commands, move |database| {
+        let mut config = database.load_quick_commands()?;
+        let summary = merge_import(&mut config, commands).map_err(StorageError::InvalidData)?;
+        database.save_quick_commands(config)?;
+        Ok(summary)
+    }) {
+        Ok(summary) => {
+            outcome.imported_commands = summary.imported_commands;
+            outcome.updated_commands = summary.updated_commands;
+            outcome.imported_categories = summary.imported_categories;
+        }
+        Err(_) => outcome.failed = true,
+    }
+    Some(outcome)
+}
+
+/// Build the banner summary and the per-entry detail lines shown after import.
+/// Skipped entries and icons without a NyaTerm equivalent stay visible here
+/// instead of disappearing silently.
+fn quick_command_import_messages(outcome: QuickCommandImportOutcome) -> (String, Vec<String>) {
+    let mut details = Vec::new();
+    for skip in &outcome.skipped {
+        let reason = match skip.reason {
+            WindtermQuickbarSkipReason::MissingLabel => {
+                t!("savedConnections.windtermQuickCommandsSkipMissingLabel").to_string()
+            }
+            WindtermQuickbarSkipReason::MissingCommand => {
+                t!("savedConnections.windtermQuickCommandsSkipMissingCommand").to_string()
+            }
+        };
+        details.push(
+            t!(
+                "savedConnections.windtermQuickCommandsSkipEntry",
+                index = skip.index + 1,
+                label = skip.label.as_deref().unwrap_or("-"),
+                reason = reason
+            )
+            .to_string(),
+        );
+    }
+    details.extend(outcome.unmapped_icons.iter().map(|icon| {
+        t!(
+            "savedConnections.windtermQuickCommandsIconEntry",
+            label = icon.command_label,
+            icon = icon.icon
+        )
+        .to_string()
+    }));
+
+    let mut parts = Vec::new();
+    match outcome.state {
+        WindtermQuickbarState::Unreadable => {
+            parts.push(t!("savedConnections.windtermQuickCommandsUnreadable").to_string());
+        }
+        WindtermQuickbarState::Absent => {}
+        WindtermQuickbarState::Readable if outcome.failed => {
+            parts.push(t!("savedConnections.windtermQuickCommandsFailed").to_string());
+        }
+        WindtermQuickbarState::Readable => parts.push(
+            t!(
+                "savedConnections.windtermQuickCommandsImported",
+                total = outcome.total_entries,
+                imported = outcome.imported_commands,
+                updated = outcome.updated_commands,
+                categories = outcome.imported_categories
+            )
+            .to_string(),
+        ),
+    }
+    if !outcome.skipped.is_empty() {
+        parts.push(
+            t!(
+                "savedConnections.windtermQuickCommandsSkippedSummary",
+                count = outcome.skipped.len()
+            )
+            .to_string(),
+        );
+    }
+    if !outcome.unmapped_icons.is_empty() {
+        parts.push(
+            t!(
+                "savedConnections.windtermQuickCommandsUnmappedIconSummary",
+                count = outcome.unmapped_icons.len()
+            )
+            .to_string(),
+        );
+    }
+    (parts.join(" · "), details)
+}
+
 fn connection_import_notice_reason(kind: SessionImportNoticeKind) -> String {
     match kind {
         SessionImportNoticeKind::SkippedUnsupportedType => {
@@ -1036,11 +1209,13 @@ fn prepare_windterm_source(
     })?;
     let preview = prepare_windterm_preview(path, master_password)?;
     if preview.accounts.is_empty() {
-        // No referenced OneKey account (missing/unreadable config included):
+        // No supported OneKey account (missing/unreadable config included):
         // keep the single-step import, but carry the diagnostics with it.
+        let report = preview.report();
         Ok(PreparedConnectionImport::Commit {
-            report: Some(ConnectionImportReport::Windterm(preview.report())),
+            report: Some(ConnectionImportReport::Windterm(report)),
             prepared: preview.prepared,
+            quick_commands: preview.quickbar,
         })
     } else {
         Ok(PreparedConnectionImport::WindtermAccounts(preview))
@@ -1115,7 +1290,60 @@ fn load_termius_local_key_secret() -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ConnectionImportSource;
+    use nyaterm_core::{
+        WindtermQuickbarSkip, WindtermQuickbarSkipReason, WindtermQuickbarState,
+        WindtermUnmappedIcon,
+    };
+
+    use super::{ConnectionImportSource, QuickCommandImportOutcome, quick_command_import_messages};
+
+    #[test]
+    fn quick_command_messages_expose_skipped_entries_and_unmapped_icons() {
+        let outcome = QuickCommandImportOutcome {
+            state: WindtermQuickbarState::Readable,
+            total_entries: 3,
+            imported_commands: 1,
+            updated_commands: 0,
+            imported_categories: 1,
+            skipped: vec![WindtermQuickbarSkip {
+                index: 1,
+                label: Some("Broken".into()),
+                reason: WindtermQuickbarSkipReason::MissingCommand,
+            }],
+            unmapped_icons: vec![WindtermUnmappedIcon {
+                command_label: "test_dyq".into(),
+                icon: "session::star-coral".into(),
+            }],
+            failed: false,
+        };
+
+        let (summary, details) = quick_command_import_messages(outcome);
+
+        assert!(!summary.is_empty());
+        assert_eq!(details.len(), 2);
+        assert!(details[0].contains("Broken"));
+        assert!(details[1].contains("test_dyq"));
+        assert!(details[1].contains("session::star-coral"));
+    }
+
+    #[test]
+    fn unreadable_quickbar_produces_a_visible_warning() {
+        let outcome = QuickCommandImportOutcome {
+            state: WindtermQuickbarState::Unreadable,
+            total_entries: 0,
+            imported_commands: 0,
+            updated_commands: 0,
+            imported_categories: 0,
+            skipped: Vec::new(),
+            unmapped_icons: Vec::new(),
+            failed: false,
+        };
+
+        let (summary, details) = quick_command_import_messages(outcome);
+
+        assert!(!summary.is_empty());
+        assert!(details.is_empty());
+    }
 
     #[test]
     fn connection_import_sources_choose_expected_picker_kind() {

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+﻿use std::collections::{HashMap, HashSet};
 
 use nyaterm_core::{
     Group, PreparedSessionImport, SavedConnection, SavedPassword, SecretString, SshKey,
@@ -492,6 +492,44 @@ mod tests {
         assert_ne!(stored_key.key.as_deref(), Some("synthetic-private-key\n"));
         assert_ne!(stored_key.passphrase.as_deref(), Some(" key-passphrase "));
         assert_eq!(sessions.groups.len(), 2);
+    }
+
+    #[test]
+    fn windterm_quickbar_import_merges_into_saved_quick_commands() {
+        let dir = crate::storage::tests::unique_temp_dir("windterm-quickbar-roundtrip");
+        let path = windterm_fixture(&dir);
+        std::fs::write(
+            path.parent().unwrap().join("quickbar.config"),
+            serde_json::json!([{
+                "quick.label": "test_dyq",
+                "quick.text": "test\rdyq\r",
+                "quick.group": "快速",
+                "quick.type": "Send Text",
+                "quick.uuid": "b129c656-5f02-4aa6-a53a-7f6fadcca377",
+            }])
+            .to_string(),
+        )
+        .unwrap();
+        let preview = nyaterm_core::session_import::prepare_windterm_preview(&path, None).unwrap();
+        let quickbar = preview.quickbar.expect("quickbar is parsed");
+        assert_eq!(quickbar.total_entries, 1);
+
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert_eq!(store.commit_session_import(preview.prepared).unwrap(), 2);
+        let mut config = store.load_quick_commands().unwrap();
+        let summary =
+            nyaterm_core::quick_command_import::merge_import(&mut config, quickbar.commands)
+                .unwrap();
+        store.save_quick_commands(config).unwrap();
+        assert_eq!(summary.imported_commands, 1);
+        drop(store);
+
+        let store = ConnectionStore::open(&dir).unwrap();
+        let config = store.load_quick_commands().unwrap();
+        assert_eq!(config.commands.len(), 1);
+        assert_eq!(config.commands[0].label, "test_dyq");
+        assert_eq!(config.commands[0].command, "test\\rdyq");
+        assert_eq!(config.categories[0].name, "快速");
     }
 
     #[test]

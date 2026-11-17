@@ -23,11 +23,14 @@ use mobaxterm::parse_mobaxterm;
 use windterm::parse_windterm;
 use xshell::parse_xshell;
 
+pub use crate::quick_command_import::{
+    WindtermQuickbarSkip, WindtermQuickbarSkipReason, WindtermUnmappedIcon,
+};
 pub use windterm::{
     WindtermAccountAction, WindtermAccountDecision, WindtermAccountPreview, WindtermImportOutcome,
     WindtermImportReport, WindtermMissingOneKey, WindtermOneKeyConfigState, WindtermPreview,
-    WindtermUnlinkedReason, WindtermUnlinkedSession, prepare_windterm_import_with_decisions,
-    prepare_windterm_preview,
+    WindtermQuickbarConfig, WindtermQuickbarState, WindtermUnlinkedReason, WindtermUnlinkedSession,
+    prepare_windterm_import_with_decisions, prepare_windterm_preview,
 };
 
 const SESSION_IMPORT_MAX_BYTES: u64 = 16 * 1024 * 1024;

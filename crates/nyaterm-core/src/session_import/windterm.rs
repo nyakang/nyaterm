@@ -12,6 +12,10 @@ use serde_json::value::RawValue;
 use sha3::Sha3_512;
 use zeroize::Zeroizing;
 
+use crate::quick_command_import::{
+    ImportConfig, MAX_QUICK_COMMAND_IMPORT_BYTES, WindtermQuickbarImport, WindtermQuickbarSkip,
+    WindtermUnmappedIcon, decode_text, parse_windterm_quickbar_import,
+};
 use crate::{
     AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
     ConnectionUsernameSource, SavedPassword, SecretString, SshKey,
@@ -19,7 +23,7 @@ use crate::{
 
 use super::{
     AppError, AppResult, PreparedSessionConnection, PreparedSessionImport, SessionImportWarning,
-    SessionImportWarningKind, read_text_file_limited,
+    SessionImportWarningKind, read_file_limited, read_text_file_limited,
 };
 
 const PBKDF2_ITERATIONS: u32 = 100_000;
@@ -27,12 +31,40 @@ const PBKDF2_ITERATIONS: u32 = 100_000;
 /// variants like `OneKeys.config` on Windows still resolve, but this spelling is
 /// what diagnostics and the UI report.
 const ONE_KEYS_CONFIG_FILE: &str = "onekeys.config";
+/// WindTerm quick commands live next to the sessions file. They are imported as
+/// part of the same session import so users do not have to run it twice.
+const QUICKBAR_CONFIG_FILE: &str = "quickbar.config";
 
 struct WindtermCrypto(Zeroizing<[u8; 48]>);
 
 enum ProfileCrypto {
-    Ready(WindtermCrypto),
+    Ready {
+        primary: WindtermCrypto,
+        /// WindTerm profiles whose master-password flag is off normally use an
+        /// empty master. If onekeys/session payloads were nevertheless written
+        /// with a master password, allow the password supplied by the import
+        /// challenge to decrypt them without changing the primary derivation.
+        master_fallback: Option<WindtermCrypto>,
+    },
     Unavailable(SessionImportWarningKind),
+}
+
+impl ProfileCrypto {
+    fn decrypt(&self, raw: &str) -> Option<Zeroizing<Vec<u8>>> {
+        let (primary, fallback) = match self {
+            Self::Ready {
+                primary,
+                master_fallback,
+            } => (primary, master_fallback.as_ref()),
+            Self::Unavailable(_) => return None,
+        };
+        decrypt_windterm_payload(raw, primary)
+            .or_else(|| fallback.and_then(|crypto| decrypt_windterm_payload(raw, crypto)))
+    }
+
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
 }
 
 #[derive(Deserialize)]
@@ -71,6 +103,18 @@ struct WindtermSession {
         default
     )]
     identity_path: Option<String>,
+    #[serde(
+        deserialize_with = "default_field",
+        rename = "process.arguments",
+        default
+    )]
+    process_arguments: Option<String>,
+    #[serde(
+        deserialize_with = "default_field",
+        rename = "process.workingDirectory",
+        default
+    )]
+    working_directory: Option<String>,
 }
 
 /// One entry of WindTerm's `onekeys.config`: a reusable one-key login account.
@@ -100,6 +144,9 @@ struct OneKeyAccount {
     username: String,
     password: Option<SecretString>,
     password_readable: bool,
+    /// The entry carries an encrypted `auth` payload. Used to decide whether a
+    /// master-password challenge can unlock it.
+    auth_encrypted: bool,
     insert_password: bool,
 }
 
@@ -137,6 +184,48 @@ pub enum WindtermOneKeyConfigState {
     Absent,
     Readable,
     Unreadable,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindtermQuickbarState {
+    #[default]
+    Absent,
+    Readable,
+    Unreadable,
+}
+
+/// Sibling `quickbar.config` parsed alongside the sessions file. `commands`
+/// always exists so the commit path can move it into the quick-command store,
+/// even when the file was absent or unreadable.
+#[derive(Debug)]
+pub struct WindtermQuickbarConfig {
+    pub state: WindtermQuickbarState,
+    pub commands: ImportConfig,
+    pub total_entries: usize,
+    pub skipped: Vec<WindtermQuickbarSkip>,
+    pub unmapped_icons: Vec<WindtermUnmappedIcon>,
+}
+
+impl WindtermQuickbarConfig {
+    fn unreadable() -> Self {
+        Self {
+            state: WindtermQuickbarState::Unreadable,
+            commands: ImportConfig::default(),
+            total_entries: 0,
+            skipped: Vec::new(),
+            unmapped_icons: Vec::new(),
+        }
+    }
+
+    fn readable(import: WindtermQuickbarImport) -> Self {
+        Self {
+            state: WindtermQuickbarState::Readable,
+            commands: import.config,
+            total_entries: import.total_entries,
+            skipped: import.skipped,
+            unmapped_icons: import.unmapped_icons,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +285,7 @@ pub struct WindtermAccountDecision {
 pub struct WindtermImportOutcome {
     pub prepared: PreparedSessionImport,
     pub report: WindtermImportReport,
+    pub quickbar: Option<WindtermQuickbarConfig>,
 }
 
 /// Parsed WindTerm import preview: sessions are already linked to the account
@@ -214,6 +304,7 @@ pub struct WindtermPreview {
     pub unreadable_account_count: usize,
     pub skipped_session_count: usize,
     pub total_session_count: usize,
+    pub quickbar: Option<WindtermQuickbarConfig>,
 }
 
 impl WindtermPreview {
@@ -296,8 +387,10 @@ pub(super) fn parse_windterm(
 ///
 /// Sessions that carry a `session.oneKey` uuid are linked to a generated
 /// `SavedPassword` id, so `commit_session_import` persists accounts and
-/// connections atomically. This default preview creates every referenced
-/// account; the interactive flow must submit decisions instead.
+/// connections atomically. Every account defined in `onekeys.config` is
+/// created, even when no session references it, because WindTerm treats those
+/// entries as reusable logins. The interactive flow must submit decisions
+/// instead.
 pub fn prepare_windterm_preview(
     path: &Path,
     master_password: Option<&str>,
@@ -305,6 +398,8 @@ pub fn prepare_windterm_preview(
     let content = Zeroizing::new(read_text_file_limited(path, "WindTerm session file")?);
     let crypto = load_crypto(path, master_password)?;
     let config = parse_one_key_config(path, &crypto)?;
+    ensure_one_key_master_password(&config.accounts, &crypto, master_password)?;
+    let quickbar = parse_quickbar_config(path);
     let skipped_uuids = HashSet::new();
     let mut parsed = parse_content_full(
         &content,
@@ -315,17 +410,8 @@ pub fn prepare_windterm_preview(
         &skipped_uuids,
     )?;
 
-    let referenced = parsed
-        .session_counts
-        .keys()
-        .cloned()
-        .collect::<HashSet<_>>();
-    let accounts = config
-        .accounts
-        .iter()
-        .filter(|account| referenced.contains(&account.one_key_uuid))
-        .collect::<Vec<_>>();
-    parsed.prepared.passwords = build_password_entries(&accounts, &parsed.session_counts);
+    let accounts = config.accounts.iter().collect::<Vec<_>>();
+    parsed.prepared.passwords = build_password_entries(&accounts);
 
     let accounts_preview = accounts
         .iter()
@@ -362,6 +448,7 @@ pub fn prepare_windterm_preview(
         unreadable_account_count,
         skipped_session_count: parsed.skipped_sessions,
         total_session_count: parsed.total_sessions,
+        quickbar,
     })
 }
 
@@ -378,6 +465,8 @@ pub fn prepare_windterm_import_with_decisions(
     let content = Zeroizing::new(read_text_file_limited(path, "WindTerm session file")?);
     let crypto = load_crypto(path, master_password)?;
     let config = parse_one_key_config(path, &crypto)?;
+    ensure_one_key_master_password(&config.accounts, &crypto, master_password)?;
+    let quickbar = parse_quickbar_config(path);
 
     let decision_map = decisions
         .iter()
@@ -423,17 +512,9 @@ pub fn prepare_windterm_import_with_decisions(
         &config.unsupported_uuids,
         &skipped_uuids,
     )?;
-    let referenced = parsed
-        .session_counts
-        .keys()
-        .cloned()
-        .collect::<HashSet<_>>();
-    let insert_accounts = accounts
-        .iter()
-        .filter(|account| referenced.contains(&account.one_key_uuid))
-        .collect::<Vec<_>>();
+    let insert_accounts = accounts.iter().collect::<Vec<_>>();
     let mut prepared = parsed.prepared;
-    prepared.passwords = build_password_entries(&insert_accounts, &parsed.session_counts);
+    prepared.passwords = build_password_entries(&insert_accounts);
 
     let report = WindtermImportReport {
         imported_sessions: prepared.connections.len(),
@@ -446,23 +527,17 @@ pub fn prepare_windterm_import_with_decisions(
         duplicate_one_key_uuid_count: config.duplicate_uuid_count,
         one_key_state: config.state,
     };
-    Ok(WindtermImportOutcome { prepared, report })
+    Ok(WindtermImportOutcome {
+        prepared,
+        report,
+        quickbar,
+    })
 }
 
-fn build_password_entries(
-    accounts: &[&OneKeyAccount],
-    session_counts: &HashMap<String, usize>,
-) -> Vec<SavedPassword> {
+fn build_password_entries(accounts: &[&OneKeyAccount]) -> Vec<SavedPassword> {
     accounts
         .iter()
-        .filter(|account| {
-            account.insert_password
-                && session_counts
-                    .get(&account.one_key_uuid)
-                    .copied()
-                    .unwrap_or(0)
-                    > 0
-        })
+        .filter(|account| account.insert_password)
         .enumerate()
         .map(|(index, account)| SavedPassword {
             id: account.id.clone(),
@@ -529,6 +604,23 @@ fn parse_content_full(
             skipped_sessions += 1;
             continue;
         };
+        // WindTerm models local terminals as `Shell` sessions whose `target` is
+        // the shell executable and whose `process.*` fields carry the command
+        // line and working directory.
+        if entry.protocol.eq_ignore_ascii_case("Shell") {
+            match local_shell_connection(&entry) {
+                Some(connection) => {
+                    if let Some(path) = connection.group_path.clone()
+                        && !prepared.groups.contains(&path)
+                    {
+                        prepared.groups.push(path);
+                    }
+                    prepared.connections.push(connection);
+                }
+                None => skipped_sessions += 1,
+            }
+            continue;
+        }
         if !entry.protocol.eq_ignore_ascii_case("SSH") {
             skipped_sessions += 1;
             continue;
@@ -652,14 +744,7 @@ fn parse_content_full(
                 (username, auth)
             }
         };
-        let group_path = entry.group.as_deref().and_then(|group| {
-            let segments: Vec<_> = group
-                .split('>')
-                .filter_map(|part| normalized(Some(part)))
-                .map(str::to_owned)
-                .collect();
-            (!segments.is_empty()).then_some(segments)
-        });
+        let group_path = windterm_group_path(entry.group.as_deref());
         if let Some(path) = &group_path
             && !prepared.groups.contains(path)
         {
@@ -704,6 +789,58 @@ fn parse_content_full(
     })
 }
 
+/// Convert a WindTerm `Shell` session into a NyaTerm local terminal.
+///
+/// `session.target` is the shell executable, `process.arguments` the raw
+/// command line and `process.workingDirectory` the start directory. WindTerm
+/// placeholders are resolved where NyaTerm has an equivalent (`${HomeDir}`);
+/// `session.target` may be empty, which selects NyaTerm's default shell.
+fn local_shell_connection(entry: &WindtermSession) -> Option<PreparedSessionConnection> {
+    let target = normalized(Some(entry.target.as_str()));
+    let name = normalized(entry.label.as_deref()).or(target)?;
+    Some(PreparedSessionConnection {
+        saved: None,
+        name: name.to_owned(),
+        config: ConnectionType::LocalTerminal {
+            shell_path: target.map(expand_windterm_variables).unwrap_or_default(),
+            shell_args: normalized(entry.process_arguments.as_deref())
+                .map(expand_windterm_variables)
+                .unwrap_or_default(),
+            working_dir: normalized(entry.working_directory.as_deref())
+                .map(expand_windterm_variables),
+            ai_execution_profile: AiExecutionProfile::Auto,
+            encoding: String::new(),
+            dynamic_tab_title: false,
+        },
+        group_path: windterm_group_path(entry.group.as_deref()),
+        description: normalized(entry.description.as_deref()).map(str::to_owned),
+        sort_order: 0,
+        icon: normalized(entry.icon.as_deref()).map(str::to_owned),
+        auth: None,
+    })
+}
+
+fn windterm_group_path(group: Option<&str>) -> Option<Vec<String>> {
+    let segments: Vec<_> = group?
+        .split('>')
+        .filter_map(|part| normalized(Some(part)))
+        .map(str::to_owned)
+        .collect();
+    (!segments.is_empty()).then_some(segments)
+}
+
+/// Resolve WindTerm's home placeholders. Other WindTerm variables such as
+/// `${AppDir}` point at the WindTerm installation and are kept verbatim.
+fn expand_windterm_variables(value: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return value.to_owned();
+    };
+    let home = home.to_string_lossy();
+    value
+        .replace("$(HomeDir)", &home)
+        .replace("${HomeDir}", &home)
+}
+
 struct ParsedOneKeyConfig {
     state: WindtermOneKeyConfigState,
     accounts: Vec<OneKeyAccount>,
@@ -728,10 +865,10 @@ impl ParsedOneKeyConfig {
     }
 }
 
-/// Find `onekeys.config` in the sessions directory, accepting case variants
-/// such as `OneKeys.config` since WindTerm users are not consistent about case.
-fn find_one_keys_config(directory: &Path) -> Option<PathBuf> {
-    let exact = directory.join(ONE_KEYS_CONFIG_FILE);
+/// Find a WindTerm profile file in the sessions directory, accepting case
+/// variants since WindTerm users are not consistent about case.
+fn find_sibling_file(directory: &Path, expected: &str) -> Option<PathBuf> {
+    let exact = directory.join(expected);
     if exact.is_file() {
         return Some(exact);
     }
@@ -741,7 +878,43 @@ fn find_one_keys_config(directory: &Path) -> Option<PathBuf> {
             && path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.eq_ignore_ascii_case(ONE_KEYS_CONFIG_FILE))
+                .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+    })
+}
+
+fn find_one_keys_config(directory: &Path) -> Option<PathBuf> {
+    find_sibling_file(directory, ONE_KEYS_CONFIG_FILE)
+}
+
+/// Read the optional sibling `quickbar.config`.
+///
+/// A malformed file must not fail the session import; it becomes an
+/// `Unreadable` state that the result view reports. Unmappable entries and
+/// icons are carried in the parse result so the UI can list them.
+fn parse_quickbar_config(path: &Path) -> Option<WindtermQuickbarConfig> {
+    let config_path = path
+        .parent()
+        .and_then(|directory| find_sibling_file(directory, QUICKBAR_CONFIG_FILE))?;
+    let raw = match read_file_limited(
+        &config_path,
+        "WindTerm quickbar.config",
+        MAX_QUICK_COMMAND_IMPORT_BYTES,
+    ) {
+        Ok(raw) => raw,
+        Err(_) => return Some(WindtermQuickbarConfig::unreadable()),
+    };
+    match parse_windterm_quickbar_import(&decode_text(&raw)) {
+        Ok(import) => Some(WindtermQuickbarConfig::readable(import)),
+        Err(_) => Some(WindtermQuickbarConfig::unreadable()),
+    }
+}
+
+/// `SshOneKey` is protocol-specific, while `AccountOneKey` is a reusable login
+/// account that SSH sessions can reference as well. OneKey types that describe
+/// other protocols stay unsupported because this importer creates SSH sessions.
+fn supported_one_key_kind(kind: Option<&str>) -> bool {
+    normalized(kind).is_none_or(|kind| {
+        kind.eq_ignore_ascii_case("SshOneKey") || kind.eq_ignore_ascii_case("AccountOneKey")
     })
 }
 
@@ -780,12 +953,7 @@ fn parse_one_key_config(path: &Path, crypto: &ProfileCrypto) -> AppResult<Parsed
             parsed.invalid_count += 1;
             continue;
         };
-        let supported = entry
-            .kind
-            .as_deref()
-            .map(str::trim)
-            .filter(|kind| !kind.is_empty())
-            .is_none_or(|kind| kind.eq_ignore_ascii_case("SshOneKey"));
+        let supported = supported_one_key_kind(entry.kind.as_deref());
         let uuid = normalized(entry.uuid.as_deref()).map(str::to_owned);
         if !supported {
             parsed.unsupported_count += 1;
@@ -804,6 +972,10 @@ fn parse_one_key_config(path: &Path, crypto: &ProfileCrypto) -> AppResult<Parsed
         }
         let (username, password, password_readable) =
             parse_one_key_auth(entry.auth.as_deref(), crypto);
+        let auth_encrypted =
+            entry.auth.as_deref().map(str::trim).is_some_and(|raw| {
+                !raw.is_empty() && !raw.starts_with('{') && !raw.starts_with('"')
+            });
         let requested_name = normalized(entry.name.as_deref())
             .unwrap_or(uuid.as_str())
             .to_owned();
@@ -822,11 +994,36 @@ fn parse_one_key_config(path: &Path, crypto: &ProfileCrypto) -> AppResult<Parsed
             username: username.unwrap_or_default(),
             password,
             password_readable,
+            auth_encrypted,
             insert_password: true,
         });
     }
 
     Ok(parsed)
+}
+
+/// Ask for the WindTerm master password when the accounts that will be
+/// imported carry encrypted credentials that the current derivation could not
+/// read.
+///
+/// The challenge must not depend on whether a session references the account:
+/// all supported accounts are imported, so an unreferenced encrypted account
+/// still needs its password decrypted.
+fn ensure_one_key_master_password(
+    accounts: &[OneKeyAccount],
+    crypto: &ProfileCrypto,
+    master_password: Option<&str>,
+) -> AppResult<()> {
+    if master_password.is_some_and(|value| !value.is_empty()) || !crypto.is_ready() {
+        return Ok(());
+    }
+    if accounts
+        .iter()
+        .any(|account| account.auth_encrypted && !account.password_readable)
+    {
+        return Err(AppError::WindTermMasterPasswordRequired);
+    }
+    Ok(())
 }
 
 /// Decrypt a `onekeys.config` `auth` payload and extract username/password.
@@ -844,16 +1041,11 @@ fn parse_one_key_auth(
     let payload = if raw.starts_with('{') || raw.starts_with('"') {
         parse_one_key_payload(raw)
     } else {
-        match crypto {
-            ProfileCrypto::Ready(crypto) => {
-                decrypt_windterm_payload(raw, crypto).and_then(|plaintext| {
-                    std::str::from_utf8(&plaintext)
-                        .ok()
-                        .and_then(parse_one_key_payload)
-                })
-            }
-            ProfileCrypto::Unavailable(_) => None,
-        }
+        crypto.decrypt(raw).and_then(|plaintext| {
+            std::str::from_utf8(&plaintext)
+                .ok()
+                .and_then(parse_one_key_payload)
+        })
     };
     let Some(payload) = payload else {
         return (None, None, false);
@@ -986,14 +1178,25 @@ fn load_crypto(path: &Path, master_password: Option<&str>) -> AppResult<ProfileC
             SessionImportWarningKind::UnreadableProfileConfig,
         ));
     };
-    Ok(ProfileCrypto::Ready(derive_crypto(
+    let primary = derive_crypto(
         fingerprint,
         if master_enabled {
             master_password.unwrap_or_default()
         } else {
             ""
         },
-    )))
+    );
+    // With the master-password flag off, the primary derivation stays empty so
+    // ordinary profiles keep working. A typed password is only tried when the
+    // primary derivation cannot decrypt an account payload.
+    let master_fallback = (!master_enabled)
+        .then(|| master_password.filter(|value| !value.is_empty()))
+        .flatten()
+        .map(|master_password| derive_crypto(fingerprint, master_password));
+    Ok(ProfileCrypto::Ready {
+        primary,
+        master_fallback,
+    })
 }
 
 fn derive_crypto(fingerprint: &str, master_password: &str) -> WindtermCrypto {
@@ -1018,11 +1221,11 @@ fn parse_auto_login(
         return serde_json::from_str(raw)
             .map_err(|_| SessionImportWarningKind::UnreadableAutoLogin);
     }
-    let crypto = match crypto {
-        ProfileCrypto::Ready(crypto) => crypto,
-        ProfileCrypto::Unavailable(kind) => return Err(*kind),
-    };
-    let plaintext = decrypt_windterm_payload(raw, crypto)
+    if let ProfileCrypto::Unavailable(kind) = crypto {
+        return Err(*kind);
+    }
+    let plaintext = crypto
+        .decrypt(raw)
         .ok_or(SessionImportWarningKind::UnreadableAutoLogin)?;
     serde_json::from_slice(plaintext.as_slice())
         .map_err(|_| SessionImportWarningKind::UnreadableAutoLogin)

@@ -205,10 +205,11 @@ pub use secret::{SecretBytes, SecretString};
 pub use session_import::{
     PreparedSessionConnection, PreparedSessionImport, SessionImportError, WindtermAccountAction,
     WindtermAccountDecision, WindtermAccountPreview, WindtermImportOutcome, WindtermImportReport,
-    WindtermMissingOneKey, WindtermOneKeyConfigState, WindtermPreview, WindtermUnlinkedReason,
-    WindtermUnlinkedSession, prepare_session_import, prepare_ssh_config_import,
-    prepare_termius_session_import, prepare_windterm_import_with_decisions,
-    prepare_windterm_preview,
+    WindtermMissingOneKey, WindtermOneKeyConfigState, WindtermPreview, WindtermQuickbarConfig,
+    WindtermQuickbarSkip, WindtermQuickbarSkipReason, WindtermQuickbarState,
+    WindtermUnlinkedReason, WindtermUnlinkedSession, WindtermUnmappedIcon, prepare_session_import,
+    prepare_ssh_config_import, prepare_termius_session_import,
+    prepare_windterm_import_with_decisions, prepare_windterm_preview,
 };
 pub use terminal::file_drop::{
     format_local_terminal_drop_input, quote_local_path, terminal_drop_overlay_copy,

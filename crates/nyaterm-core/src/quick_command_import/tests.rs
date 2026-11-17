@@ -1,9 +1,10 @@
-use crate::QuickCommandsConfig;
+﻿use crate::QuickCommandsConfig;
 
 use super::merge::merge_import;
 use super::sources::{
-    MAX_QUICK_COMMAND_IMPORT_BYTES, decode_text, ensure_quick_command_import_size,
-    parse_nyaterm_import, parse_windterm_quickbar, parse_xshell_quick_buttons_content,
+    MAX_QUICK_COMMAND_IMPORT_BYTES, WindtermQuickbarSkip, WindtermQuickbarSkipReason,
+    WindtermUnmappedIcon, decode_text, ensure_quick_command_import_size, parse_nyaterm_import,
+    parse_windterm_quickbar, parse_windterm_quickbar_import, parse_xshell_quick_buttons_content,
 };
 use crate::quick_command_script::plan_quick_command;
 
@@ -117,6 +118,58 @@ fn imports_windterm_quickbar_json() {
     assert_eq!(config.commands[0].source.as_deref(), Some("manual"));
     assert_eq!(config.commands[0].icon_tag.as_deref(), Some("docker"));
     assert_eq!(config.commands[0].pinned, Some(false));
+}
+
+#[test]
+fn windterm_detailed_import_reports_unmapped_icons_and_skipped_entries() {
+    // Real sample shape: one command whose icon has no NyaTerm equivalent and
+    // two entries that cannot become commands.
+    let import = parse_windterm_quickbar_import(
+        r#"[
+            {
+                "quick.group" : "快速",
+                "quick.icon" : "session::star-coral",
+                "quick.label" : "test_dyq",
+                "quick.text" : "test\rdyq\r",
+                "quick.type" : "Send Text",
+                "quick.uuid" : "b129c656-5f02-4aa6-a53a-7f6fadcca377"
+            },
+            {"quick.label":"","quick.text":"echo no"},
+            {"quick.label":"No text"}
+        ]"#,
+    )
+    .expect("windterm quickbar parses");
+
+    assert_eq!(import.total_entries, 3);
+    assert_eq!(import.config.commands.len(), 1);
+    let command = &import.config.commands[0];
+    assert_eq!(command.label, "test_dyq");
+    assert_eq!(command.command, "test\\rdyq");
+    assert_eq!(command.execution_mode.as_deref(), Some("execute"));
+    assert_eq!(command.category.as_deref(), Some("快速"));
+    assert_eq!(command.icon_tag, None);
+    assert_eq!(
+        import.unmapped_icons,
+        vec![WindtermUnmappedIcon {
+            command_label: "test_dyq".into(),
+            icon: "session::star-coral".into(),
+        }]
+    );
+    assert_eq!(
+        import.skipped,
+        vec![
+            WindtermQuickbarSkip {
+                index: 1,
+                label: None,
+                reason: WindtermQuickbarSkipReason::MissingLabel,
+            },
+            WindtermQuickbarSkip {
+                index: 2,
+                label: Some("No text".into()),
+                reason: WindtermQuickbarSkipReason::MissingCommand,
+            },
+        ]
+    );
 }
 
 #[test]
