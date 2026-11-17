@@ -436,14 +436,25 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn publish_file_clipboard(
+    fn file_clipboard_selection(
         &mut self,
         endpoint: &super::file_operations::FileOperationEndpoint,
         entries: &[SftpFileEntry],
-        cx: &gpui::App,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<TransferSelection> {
         let service = self.file_browser_service_for_endpoint(endpoint)?;
-        let selection = TransferSelection {
+        // Remote FileBrowserService values wrap a temporary service snapshot.
+        // Deferred reads must follow the session's authoritative Arc instead:
+        // the snapshot is dropped when this copy command returns.
+        let source_service = if service.kind() == FileBrowserBackendKind::Remote {
+            endpoint.session_id().and_then(|id| {
+                self.session
+                    .weak_remote_file_service(&self.ssh_scoped_session_id(id))
+                    .map(Into::into)
+            })
+        } else {
+            service.downgrade()
+        };
+        Ok(TransferSelection {
             access_generation: endpoint
                 .session_id()
                 .and_then(|id| self.file_access_generation(id)),
@@ -451,8 +462,17 @@ impl NyaTermApp {
             backend: service.kind(),
             entries: entries.to_vec(),
             transfer_options: self.sftp_transfer_options(),
-            source_service: service.downgrade(),
-        };
+            source_service,
+        })
+    }
+
+    pub(in crate::features) fn publish_file_clipboard(
+        &mut self,
+        endpoint: &super::file_operations::FileOperationEndpoint,
+        entries: &[SftpFileEntry],
+        cx: &gpui::App,
+    ) -> anyhow::Result<()> {
+        let selection = self.file_clipboard_selection(endpoint, entries)?;
         TransferDragExportService::sources(&selection)?;
         let sender = self.transfer.transfer_event_sender();
         cx.write_file_clipboard(Arc::new(move || {
@@ -574,6 +594,57 @@ mod tests {
             symlink_target_is_directory: false,
         }
     }
+
+    #[gpui::test]
+    fn clipboard_source_survives_copy_command_until_session_disconnects(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::features::test_support::app_with_visible_ssh_session;
+        use crate::features::transfers::file_operations::FileOperationEndpoint;
+        use nyaterm_core::test_support::TestTempDir;
+        use nyaterm_files::file_browser::WeakFileBrowserService;
+
+        let root = TestTempDir::new("nyaterm-clipboard-source");
+        let app = app_with_visible_ssh_session(cx, root.path(), "clipboard-session");
+        let selection = app.update(cx, |app, _| {
+            app.file_clipboard_selection(
+                &FileOperationEndpoint::Session("clipboard-session".into()),
+                &[entry("file.txt", SftpFileType::File)],
+            )
+            .unwrap()
+        });
+        let Some(WeakFileBrowserService::Remote(source)) = &selection.source_service else {
+            panic!("SSH clipboard requires the session's remote source");
+        };
+        assert!(source.upgrade().is_some());
+        app.read_with(cx, |app, _| {
+            let owner = app
+                .session
+                .weak_remote_file_service("clipboard-session")
+                .unwrap();
+            assert!(source.ptr_eq(&owner));
+        });
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let (sender, _) = futures::channel::mpsc::unbounded();
+            assert!(
+                TransferDragExportService::resolve(
+                    &selection,
+                    selection.source_service.clone(),
+                    sender,
+                    true,
+                    false,
+                )
+                .is_ok()
+            );
+        }
+        app.update(cx, |app, _| {
+            app.session.mark_session_disconnected("clipboard-session");
+        });
+        assert!(source.upgrade().is_none());
+    }
+
     #[test]
     fn list_and_tree_capability_keep_local_drags_and_disable_linux_remote_drags() {
         assert!(super::transfer_drag_supported(true, false, false));
