@@ -1,3 +1,5 @@
+mod startup;
+
 use aes_gcm::{Aes256Gcm, Key, KeyInit, aead::Aead};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use nyaterm_core::test_support::TestTempDir;
@@ -3326,13 +3328,13 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     let dir = unique_temp_dir("settings-general-diag");
     let store = ConnectionStore::open(&dir).expect("store");
     let mut summary = store.load_app_settings_summary().expect("load");
-    summary.startup_restore = true;
+    summary.startup_mode = nyaterm_core::models::startup::StartupMode::LastSession;
     summary.startup_restore_window_layout = false;
     summary.minimize_to_tray = true;
     summary.confirm_on_close = false;
     summary.language = "zh-CN".to_string();
     let saved = store.save_general_settings(&summary).expect("save general");
-    assert!(saved.startup_restore);
+    assert!(saved.startup_mode.restores_last_session());
     assert!(!saved.startup_restore_window_layout);
     assert!(saved.minimize_to_tray);
     assert!(!saved.confirm_on_close);
@@ -4087,7 +4089,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         nyaterm_core::diagnostics::DEFAULT_LOG_SHARD_BYTES,
         "legacy documents without diagnostics.shard_bytes keep the 10 MiB default"
     );
-    assert!(summary.startup_restore);
+    assert!(summary.startup_mode.restores_last_session());
     assert!(summary.minimize_to_tray);
     assert!(!summary.confirm_on_close);
     assert!(summary.enable_screen_lock);

@@ -82,7 +82,7 @@ impl NyaTermApp {
 
     pub(crate) fn capture_workspace_close_snapshot(&mut self) -> WorkspaceCloseSnapshot {
         let settings = self.settings.summary().clone();
-        let sessions = if settings.startup_restore {
+        let sessions = if settings.startup_mode.restores_last_session() {
             let open_tabs = self.serialize_open_tabs();
             let ordered = self
                 .ordered_tab_sessions()

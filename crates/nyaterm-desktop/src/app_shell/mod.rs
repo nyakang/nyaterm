@@ -115,7 +115,11 @@ impl AppShell {
         session_hub: Entity<SessionHub>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let startup_restore = cx.new(|_| StartupRestoreStore::default());
+        let startup_restore = cx.new(|_| {
+            let mut store = StartupRestoreStore::default();
+            store.configure_specified_startup(startup.run_specified_startup);
+            store
+        });
         let overlays = cx.new(|_| OverlayStore::default());
 
         // Do not observe UI stores for parent notify: AppShell only hosts the

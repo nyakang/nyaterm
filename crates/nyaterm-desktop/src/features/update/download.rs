@@ -193,7 +193,7 @@ mod tests {
             let mut settings = app.settings.summary().clone();
             settings.minimize_to_tray = true;
             settings.confirm_on_close = true;
-            settings.startup_restore = false;
+            settings.startup_mode = nyaterm_core::models::startup::StartupMode::None;
             app.settings.replace_summary(settings);
             app.sync_component_theme(cx);
             app.update.update(cx, |update, _| {
@@ -439,7 +439,7 @@ mod tests {
             app.set_desktop_controller(controller.downgrade());
             let mut settings = app.settings.summary().clone();
             settings.confirm_on_close = false;
-            settings.startup_restore = false;
+            settings.startup_mode = nyaterm_core::models::startup::StartupMode::None;
             app.settings.replace_summary(settings);
             app.update.update(cx, |update, _| {
                 update.install_requested = true;

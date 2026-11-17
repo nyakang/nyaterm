@@ -1,6 +1,6 @@
 use rust_i18n::t;
 
-use gpui::{Context, IntoElement, SharedString, div, prelude::*, rgb};
+use gpui::{Context, IntoElement, SharedString, div, prelude::*};
 use nyaterm_ui::NyaSelectOption;
 
 use crate::features::pages::settings::panel::SettingsPanel;
@@ -109,43 +109,6 @@ impl SettingsPanel {
                     .gap_3()
                     .child(settings_form_row(
                         palette,
-                        t!("settings.startupRestore"),
-                        Some(SharedString::from(t!("settings.startupRestoreDesc"))),
-                        settings_switch(
-                            palette,
-                            "general-startup-restore",
-                            self.settings.summary().startup_restore,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_startup_restore(cx);
-                            }),
-                        ),
-                    ))
-                    .when(self.settings.summary().startup_restore, |this| {
-                        this.child(
-                            div()
-                                .pl_3()
-                                .ml_1()
-                                .border_l_1()
-                                .border_color(rgb(palette.border))
-                                .child(settings_form_row(
-                                    palette,
-                                    t!("settings.startupRestoreWindowLayout"),
-                                    Some(SharedString::from(t!(
-                                        "settings.startupRestoreWindowLayoutDesc"
-                                    ))),
-                                    settings_switch(
-                                        palette,
-                                        "general-startup-restore-window-layout",
-                                        self.settings.summary().startup_restore_window_layout,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.toggle_startup_restore_window_layout(cx);
-                                        }),
-                                    ),
-                                )),
-                        )
-                    })
-                    .child(settings_form_row(
-                        palette,
                         t!("settings.minimizeToTray"),
                         Some(SharedString::from(t!("settings.minimizeToTrayDesc"))),
                         settings_switch(
@@ -171,6 +134,7 @@ impl SettingsPanel {
                         ),
                     )),
             ))
+            .child(self.startup_settings_section(cx))
             .child(self.data_directory_section(cx))
             .child(settings_form_section(
                 palette,

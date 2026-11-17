@@ -412,7 +412,7 @@ impl NyaTermApp {
             return;
         }
         // Persist workspace before exit when startup restore is enabled.
-        if self.settings.summary().startup_restore {
+        if self.settings.summary().startup_mode.restores_last_session() {
             self.flush_open_tabs_now(cx);
         }
         if self.prepare_native_update_exit(cx) {
@@ -599,7 +599,7 @@ mod tests {
             let mut summary = app.settings.summary().clone();
             summary.minimize_to_tray = minimize_to_tray;
             summary.confirm_on_close = confirm_on_close;
-            summary.startup_restore = false;
+            summary.startup_mode = nyaterm_core::models::startup::StartupMode::None;
             app.settings.replace_summary(summary);
             app.sync_component_theme(cx);
         });

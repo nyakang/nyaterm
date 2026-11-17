@@ -20,6 +20,9 @@ pub(crate) enum StartupRestoreFocusHandoff {
 
 #[derive(Debug, Default)]
 pub struct StartupRestoreStore {
+    specified_allowed: bool,
+    specified_started: bool,
+    specified_skipped: usize,
     started_after_window_open: bool,
     open_tabs_restored: bool,
     queue: Vec<RestorableOpenTab>,
@@ -32,6 +35,31 @@ pub struct StartupRestoreStore {
 }
 
 impl StartupRestoreStore {
+    pub(crate) fn configure_specified_startup(&mut self, allowed: bool) {
+        self.specified_allowed = allowed;
+    }
+
+    pub(crate) fn specified_allowed(&self) -> bool {
+        self.specified_allowed
+    }
+    pub(crate) fn specified_started(&self) -> bool {
+        self.specified_started
+    }
+    pub(crate) fn specified_skipped(&self) -> usize {
+        self.specified_skipped
+    }
+    pub(crate) fn note_specified_skip(&mut self) {
+        self.specified_skipped += 1;
+    }
+    pub(crate) fn begin_specified(&mut self, skipped: usize) {
+        self.specified_started = true;
+        self.specified_allowed = false;
+        self.specified_skipped = skipped;
+        self.clear_pending_layouts();
+        self.loaded_open_tabs = None;
+        self.set_loaded_window_layouts(None, None);
+    }
+
     pub(crate) fn request_focus_handoff(&mut self) {
         if !self.queue.is_empty()
             && matches!(self.focus_handoff, StartupRestoreFocusHandoff::Unrequested)
