@@ -55,7 +55,10 @@ fn translate_local_browser_cwd(
 }
 
 impl NyaTermApp {
-    fn local_shell_path_style_for_cwd(&self, session_id: &str) -> LocalShellPathStyle {
+    pub(in crate::features) fn local_shell_path_style_for_session(
+        &self,
+        session_id: &str,
+    ) -> LocalShellPathStyle {
         self.session
             .manager()
             .local_shell_path_style(session_id)
@@ -73,14 +76,11 @@ impl NyaTermApp {
             .unwrap_or_default()
     }
 
-    pub(in crate::features) fn transfer_browser_cwd_for_session(
+    pub(in crate::features) fn local_wsl_distro_for_session(
         &self,
         session_id: &str,
     ) -> Option<String> {
-        let backend = self.session.file_browser_backend_for_session(session_id)?;
-        let style = self.local_shell_path_style_for_cwd(session_id);
-        let wsl_distro = self
-            .session
+        self.session
             .manager()
             .local_wsl_distro(session_id)
             .or_else(|| {
@@ -93,7 +93,16 @@ impl NyaTermApp {
                         _ => None,
                     }
                 })
-            });
+            })
+    }
+
+    pub(in crate::features) fn transfer_browser_cwd_for_session(
+        &self,
+        session_id: &str,
+    ) -> Option<String> {
+        let backend = self.session.file_browser_backend_for_session(session_id)?;
+        let style = self.local_shell_path_style_for_session(session_id);
+        let wsl_distro = self.local_wsl_distro_for_session(session_id);
         let cwd = self.session.cwd(session_id)?;
         let cwd = if backend == FileBrowserBackendKind::Local && style == LocalShellPathStyle::Wsl {
             cwd
@@ -132,7 +141,7 @@ impl NyaTermApp {
                 .zip(self.session.cwd(session_id))
                 .is_some_and(|(backend, previous)| {
                     if backend == FileBrowserBackendKind::Local
-                        && self.local_shell_path_style_for_cwd(session_id)
+                        && self.local_shell_path_style_for_session(session_id)
                             == LocalShellPathStyle::Wsl
                         && previous.starts_with('/')
                         && cwd.starts_with('/')

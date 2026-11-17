@@ -69,7 +69,7 @@ pub mod ssh_services;
 #[cfg(test)]
 use russh::{cipher, kex, mac};
 
-mod directory_command;
+pub mod directory_command;
 mod environment;
 mod http_proxy;
 pub mod local_shell;
