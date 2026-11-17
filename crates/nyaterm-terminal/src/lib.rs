@@ -430,6 +430,44 @@ impl TerminalSnapshot {
         Some(snapshot)
     }
 
+    /// Shared rows must describe the same content.
+    ///
+    /// History coordinates and absolute row keys do not move when output
+    /// repaints the live viewport in place: a cleared screen followed by a new
+    /// prompt keeps `scrollback_len`, `scroll_count` and `total_rows` intact.
+    /// A cached snapshot can therefore still look current while its rows
+    /// predate the latest output. Rows outside either window are not
+    /// comparable; rows both snapshots carry must match.
+    pub fn content_agrees_with(&self, live: &TerminalSnapshot) -> bool {
+        if self.cols != live.cols {
+            return false;
+        }
+        let Some((self_start, self_end)) = snapshot_window::terminal_snapshot_absolute_window(self)
+        else {
+            return true;
+        };
+        let Some((live_start, live_end)) = snapshot_window::terminal_snapshot_absolute_window(live)
+        else {
+            return true;
+        };
+        let start = self_start.max(live_start);
+        let end = self_end.min(live_end);
+        if start >= end {
+            return true;
+        }
+        (start..end).all(|absolute| {
+            match (
+                self.row(absolute - self_start),
+                live.row(absolute - live_start),
+            ) {
+                (Some(ours), Some(theirs)) => {
+                    ours.revision == theirs.revision && ours.signature == theirs.signature
+                }
+                _ => false,
+            }
+        })
+    }
+
     /// Presentation-only displacement; protocol and selection coordinates stay intact.
     pub fn leading_cleared_rows(&self, viewport_anchor_row: usize) -> usize {
         let count = self

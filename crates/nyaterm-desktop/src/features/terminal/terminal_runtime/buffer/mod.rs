@@ -155,6 +155,9 @@ fn terminal_view_has_cached_scroll_snapshot_ready_for_user_scroll(
     view.scrollback_snapshots.values().any(|snapshot| {
         view.history_state()
             .preserves_coordinates_from(snapshot.history)
+            && view.frame_snapshot.as_ref().is_none_or(|live| {
+                std::sync::Arc::ptr_eq(live, snapshot) || snapshot.content_agrees_with(live)
+            })
             && terminal_snapshot_covers_display_offset_with_margin(
                 snapshot.as_ref(),
                 offset,
