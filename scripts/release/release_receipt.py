@@ -109,7 +109,7 @@ def main() -> None:
     build.add_argument("--run-id", required=True)
     build.add_argument("--output", type=Path, default=Path("release-receipt.json"))
     read = sub.add_parser("resolve")
-    read.add_argument("--channel", choices=("homebrew", "aur", "gitee"), required=True)
+    read.add_argument("--channel", choices=("homebrew", "aur", "gitee", "nix"), required=True)
     args = parser.parse_args()
     if args.operation == "create":
         create(args.dist, args.version, args.source_sha, args.run_id, args.output)

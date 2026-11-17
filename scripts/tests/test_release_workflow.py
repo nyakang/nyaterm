@@ -141,7 +141,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(publication.index("release_channel.py commit"), publication.index("release_receipt.py create"))
         self.assertLess(publication.index("release_receipt.py create"), publication.index("name: published-release"))
         self.assertIn("name: published-release-tag", publication)
-        for filename, channel in (("homebrew", "homebrew"), ("aur", "aur"), ("gitee-release", "gitee")):
+        for filename, channel in (("homebrew", "homebrew"), ("aur", "aur"), ("gitee-release", "gitee"), ("nix", "nix")):
             workflow = WORKFLOW.with_name(f"publish-{filename}.yml").read_text(encoding="utf-8")
             self.assertIn(f"release_receipt.py resolve --channel {channel}", workflow)
             self.assertIn("ref: ${{ github.workflow_sha }}", workflow)

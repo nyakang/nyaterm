@@ -283,7 +283,7 @@ class ReceiptTests(unittest.TestCase):
                 with patch.object(release_receipt, "api", side_effect=api), patch.object(release_receipt, "gh", side_effect=gh), \
                         patch.object(release_receipt, "tag_sha", return_value="a" * 40), \
                         patch.object(release_receipt, "release", return_value={"tagName": "v2.1.0", "isDraft": False, "isPrerelease": False}):
-                    for channel in ("homebrew", "aur", "gitee"):
+                    for channel in ("homebrew", "aur", "gitee", "nix"):
                         for _ in range(2):
                             self.assertEqual(release_receipt.resolve(channel, run_id="123")["tag"], "v2.1.0")
                     if structured:
@@ -314,6 +314,7 @@ class ReceiptTests(unittest.TestCase):
         info = {"tagName": "v2.1.0-beta.1", "isDraft": False, "isPrerelease": True}
         with patch.object(release_receipt, "release", return_value=info), patch.object(release_receipt, "gh"):
             self.assertEqual(release_receipt.resolve("aur", version="2.1.0-beta.1")["publish"], "false")
+            self.assertEqual(release_receipt.resolve("nix", version="2.1.0-beta.1")["publish"], "false")
             self.assertEqual(release_receipt.resolve("gitee", version="2.1.0-beta.1")["publish"], "true")
             info["isDraft"] = True
             with self.assertRaises(ValueError):

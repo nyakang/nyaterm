@@ -622,24 +622,56 @@ fn concurrent_serial_starts_reserve_the_port_before_the_worker_finishes() {
 
 #[test]
 fn serial_discovery_seeds_empty_fields_without_overwriting_user_input() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
     let root = TestConfigDir::new("nyaterm-serial-discovery-input");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let (release_tx, release_rx) = mpsc::channel();
+    // Reserve discovery before opening the dialog so it never enumerates the
+    // host's devices, and release the fixture only after the empty prompt opens.
+    app.update(&mut cx, |app, cx| {
+        app.request_connection_serial_ports_refresh_with_loader(
+            move || {
+                release_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .map_err(|error| error.to_string())?;
+                Ok(vec![nyaterm_transport::SerialPortInfo {
+                    port_name: "COM9".into(),
+                    ..Default::default()
+                }])
+            },
+            cx,
+        );
+    });
     let mut cx = open_dialog(
         &mut cx,
         &app,
         serial("", 115200, serde_json::json!({"port": true})),
         Default::default(),
     );
+    app.read_with(&cx, |app, _| {
+        assert!(app.connection_state.serial_ports_loading());
+        assert!(
+            app.session
+                .dialogs
+                .serial_connect_prompt()
+                .unwrap()
+                .port_name
+                .is_empty()
+        );
+    });
+    release_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.read_with(&cx, |app, _| app.connection_state.serial_ports_loading()) {
+        cx.run_until_parked();
+        assert!(Instant::now() < deadline, "serial discovery did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.connection_state
-                .replace_serial_ports(vec![nyaterm_transport::SerialPortInfo {
-                    port_name: "COM9".into(),
-                    ..Default::default()
-                }]);
-            app.seed_serial_connect_prompt_device(cx);
             assert_eq!(
                 app.session
                     .dialogs

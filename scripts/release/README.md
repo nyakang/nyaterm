@@ -214,14 +214,25 @@ GitHub concurrency does not guarantee FIFO and can replace a pending job; rerun
 an affected candidate explicitly. The version guard still prevents regression.
 
 A successful run uploads `published-release/release-receipt.json` with schema,
-tag, frozen source SHA, channel, run ID and `SHA256SUMS` digest. Homebrew, AUR and
-Gitee use the shared resolver and verify the actual published release. During
+tag, frozen source SHA, channel, run ID and `SHA256SUMS` digest. Homebrew, AUR, Nix
+and Gitee use the shared resolver and verify the actual published release. During
 migration the resolver also accepts the old `published-release-tag` artifact.
 Signing rehearsals and build-only runs have no publication receipt and cannot
-start distribution. Homebrew/AUR accept stable versions; Gitee also accepts
+start distribution. Homebrew/AUR/Nix accept stable versions; Gitee also accepts
 previews. Each channel retains its manual retry input; no package rebuild is
 needed when just one distributor fails. Gitee's `upload_small_assets=false`
 remains false on manual runs.
+
+`Publish Nix update` dispatches `update.yml` on `nyakang/nix-nyaterm`'s `main`
+branch after a stable publication. Configure the source repository secret
+`NIX_UPDATE_TOKEN` with a fine-grained token granting **Actions: write** on
+`nyakang/nix-nyaterm`; the source repository's `GITHUB_TOKEN` cannot dispatch
+workflows in another repository. For retries, run `Publish Nix update` manually
+with the published version. The downstream updater selects the latest stable
+release in its supported major line, builds both Linux architectures and opens
+or refreshes an update PR. Follow that workflow for build results; dispatch
+success means the update was requested, and the PR still needs review and merge.
+Its weekly schedule remains a fallback.
 
 ## Channel interruption and recovery
 
