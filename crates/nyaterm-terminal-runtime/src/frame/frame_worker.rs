@@ -27,11 +27,12 @@ use nyaterm_recording::pipeline::RecordingWriteHandle;
 use nyaterm_terminal::action_links::{
     TerminalActionLinkBuildStats, prepare_terminal_frame_action_links,
 };
+use nyaterm_terminal::colors::TerminalColorPalette;
+use nyaterm_terminal::search::TerminalBufferMatch;
 use nyaterm_terminal::{
     TerminalEffects, TerminalOutputDecoder, TerminalScreen, TerminalSearchDirection,
     TerminalSearchQuery, TerminalSearchRangeMode, TerminalSnapshotBuildStats,
 };
-use nyaterm_terminal::{output::terminal_screen_from_output, search::TerminalBufferMatch};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -105,7 +106,10 @@ impl TerminalFrameSession {
     }
 
     pub(super) fn seed(&mut self, output: String, encoding: &str, scrollback_limit: usize) {
-        self.screen = terminal_screen_from_output(&output);
+        let palette = self.screen.color_palette();
+        self.screen = TerminalScreen::default();
+        self.screen.set_color_palette(palette);
+        self.screen.advance(output.as_bytes());
         if let Err(error) = self.screen.set_encoding(encoding) {
             tracing::warn!(%error, "terminal encoding configuration rejected");
         }
@@ -450,6 +454,7 @@ pub(super) fn run_terminal_frame_processor(
     recording_writer: RecordingWriteHandle,
 ) {
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
+    let mut color_palette = TerminalColorPalette::default();
     let mut logical_line_snapshots = false;
     let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
     let mut rekeyed_old_order = VecDeque::new();
@@ -488,6 +493,14 @@ pub(super) fn run_terminal_frame_processor(
             push_terminal_frame_worker_event(queue, event);
         };
         match command {
+            TerminalFrameCommand::SetColorPalette { palette } => {
+                if color_palette != palette {
+                    color_palette = palette;
+                    for session in sessions.values_mut() {
+                        session.screen.set_color_palette(palette);
+                    }
+                }
+            }
             TerminalFrameCommand::SetCollapsedCommands { session_id, ids } => {
                 if let Some(session) = sessions.get_mut(&session_id) {
                     session.screen.set_collapsed_commands(ids);
@@ -535,6 +548,7 @@ pub(super) fn run_terminal_frame_processor(
                     .entry(session_id)
                     .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
                 session.set_encoding_and_limit(&encoding, scrollback_limit);
+                session.screen.set_color_palette(color_palette);
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
@@ -559,6 +573,7 @@ pub(super) fn run_terminal_frame_processor(
                 let session = sessions
                     .entry(session_id.clone())
                     .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
+                session.screen.set_color_palette(color_palette);
                 session.seed(output, &encoding, scrollback_limit);
                 session
                     .screen
@@ -765,6 +780,7 @@ pub(super) fn run_terminal_frame_processor(
                 sessions: transferred,
             } => {
                 for (session_id, mut session) in transferred {
+                    session.screen.set_color_palette(color_palette);
                     session
                         .screen
                         .set_logical_line_snapshots(logical_line_snapshots);
@@ -815,6 +831,7 @@ pub(super) fn run_terminal_frame_processor(
                 let session = sessions
                     .entry(session_id.clone())
                     .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
+                session.screen.set_color_palette(color_palette);
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);

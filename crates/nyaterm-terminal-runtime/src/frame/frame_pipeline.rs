@@ -66,6 +66,14 @@ pub(super) fn terminal_frame_output_commands(
 }
 
 impl TerminalFramePipeline {
+    /// Update every session and the default for future or transferred sessions.
+    /// The command is ordered with output so queries cannot cross a theme change.
+    pub fn set_color_palette(&self, palette: nyaterm_terminal::colors::TerminalColorPalette) {
+        let _ = self
+            .command_tx
+            .send(TerminalFrameCommand::SetColorPalette { palette });
+    }
+
     pub fn set_collapsed_commands(
         &self,
         session_id: String,

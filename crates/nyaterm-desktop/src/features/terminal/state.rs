@@ -327,6 +327,17 @@ pub(in crate::features) struct TerminalOverlayVisibility {
 }
 
 impl TerminalFeatureState {
+    pub(in crate::features) fn set_color_palette(
+        &mut self,
+        palette: nyaterm_terminal::colors::TerminalColorPalette,
+    ) {
+        self.view.screen.set_color_palette(palette);
+        for view in self.view.views.values_mut() {
+            view.screen.set_color_palette(palette);
+        }
+        self.view.frame_pipeline.set_color_palette(palette);
+    }
+
     /// Push the line-role highlight setting to every open terminal surface.
     ///
     /// Each surface compiles the flag into its highlighter, so a settings
