@@ -116,13 +116,6 @@ pub(in crate::features::pages::transfers) fn transfer_job_row(
                     job_selected,
                 ))
                 .child(
-                    svg()
-                        .size(px(14.))
-                        .flex_none()
-                        .path(icon_path)
-                        .text_color(direction_color),
-                )
-                .child(
                     div()
                         .min_w_0()
                         .flex_1()
@@ -150,10 +143,19 @@ pub(in crate::features::pages::transfers) fn transfer_job_row(
                             div()
                                 .debug_selector(|| format!("transfer-job-detail-{}", job.id))
                                 .min_w_0()
-                                .truncate()
+                                .flex()
+                                .items_center()
+                                .gap_1()
                                 .text_size(px(10.))
                                 .text_color(rgb(palette.text_muted))
-                                .child(detail),
+                                .child(
+                                    svg()
+                                        .size(px(12.))
+                                        .flex_none()
+                                        .path(icon_path)
+                                        .text_color(direction_color),
+                                )
+                                .child(div().min_w_0().truncate().child(detail)),
                         ),
                 )
                 .child(
