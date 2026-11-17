@@ -106,6 +106,11 @@ pub struct NyaHorizontalScrollbar {
 }
 
 impl NyaHorizontalScrollbar {
+    /// Height to reserve when the scrollbar must not cover content.
+    pub fn height() -> Pixels {
+        Scrollbar::width()
+    }
+
     pub fn new(id: impl Into<SharedString>, handle: &ScrollHandle) -> Self {
         Self {
             id: id.into(),

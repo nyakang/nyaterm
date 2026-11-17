@@ -105,7 +105,10 @@ impl TerminalSurface {
         false
     }
 
-    pub(super) fn horizontal_scroll_layer(&self) -> (Option<AnyElement>, Option<AnyElement>) {
+    pub(super) fn horizontal_scroll_layer(
+        &self,
+        gutter_width: f32,
+    ) -> (Option<AnyElement>, Option<AnyElement>) {
         let Some(layout) = self.painted_unwrapped.as_ref() else {
             return (None, None);
         };
@@ -128,6 +131,11 @@ impl TerminalSurface {
         let bar = div()
             .absolute()
             .inset_0()
+            .left(px(gutter_width))
+            .when(self.show_wrap_markers, |this| {
+                this.right(px(self.cell_width))
+            })
+            .debug_selector(|| "terminal-horizontal-scrollbar-layer".into())
             .child(NyaHorizontalScrollbar::new(
                 "terminal-horizontal-scrollbar",
                 &self.horizontal_scroll,

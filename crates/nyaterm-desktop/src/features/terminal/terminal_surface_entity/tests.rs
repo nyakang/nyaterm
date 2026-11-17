@@ -450,6 +450,8 @@ fn unwrapped_wheel_input_scrolls_only_the_requested_axis_once() {
     let surface = cx.new(|_| TerminalSurface::new("scroll-axes"));
     surface.update(&mut cx, |surface, _| {
         surface.wrap_mode = TerminalWrapMode::None;
+        surface.show_line_numbers = true;
+        surface.show_wrap_markers = true;
         surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
             snapshot,
             TerminalScrollVisualState {
@@ -479,6 +481,19 @@ fn unwrapped_wheel_input_scrolls_only_the_requested_axis_once() {
         assert!(surface.painted_unwrapped.is_some());
         assert!(surface.horizontal_scroll.max_offset().x > px(0.));
     });
+    let overlay = vcx
+        .debug_bounds("terminal-horizontal-scrollbar-layer")
+        .expect("horizontal scrollbar overlay");
+    let content = vcx.update(|_, cx| surface.read(cx).horizontal_scroll.bounds());
+    assert_eq!(overlay.left(), content.left());
+    assert_eq!(overlay.right(), content.right());
+    assert_eq!(overlay.top(), content.top(), "hover covers the content");
+    assert_eq!(overlay.bottom(), px(64.));
+    assert_eq!(
+        content.bottom(),
+        overlay.bottom() - nyaterm_ui::NyaHorizontalScrollbar::height(),
+        "the scrollbar track must sit below the last terminal row"
+    );
     let mut scroll = |delta, shift| {
         let before = vcx.update(|_, cx| {
             let surface = surface.read(cx);
@@ -541,7 +556,10 @@ fn painted_hit_test_grid_bounds_match_the_rendered_grid_layout() {
 
     let rail = nyaterm_terminal_gpui::command_blocks::COMMAND_RAIL_WIDTH;
     assert_eq!(grid_bounds.origin, point(px(rail), px(0.0)));
-    assert_eq!(grid_bounds.size.height, px(240.0));
+    assert_eq!(
+        grid_bounds.size.height,
+        px(240.0) - nyaterm_ui::NyaHorizontalScrollbar::height()
+    );
 }
 
 #[test]
@@ -553,7 +571,10 @@ fn painted_hit_test_grid_bounds_start_after_the_rendered_gutter() {
     let grid_bounds = rendered_terminal_grid_bounds(true);
 
     assert_eq!(grid_bounds.origin, point(px(expected_gutter), px(0.0)));
-    assert_eq!(grid_bounds.size.height, px(240.0));
+    assert_eq!(
+        grid_bounds.size.height,
+        px(240.0) - nyaterm_ui::NyaHorizontalScrollbar::height()
+    );
 }
 
 #[test]

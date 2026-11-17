@@ -3343,6 +3343,7 @@ impl Render for TerminalSurface {
             grid = grid.with_keyword_highlights(highlights);
         }
 
+        let mut gutter_width = 0.0;
         let gutter = if gutter_enabled {
             let gutter_metrics = terminal_gutter_metrics(
                 cell_w,
@@ -3359,6 +3360,7 @@ impl Render for TerminalSurface {
             let ts_w = gutter_metrics.timestamp_width;
             let ln_w = gutter_metrics.line_number_width;
             let gutter_viewport_width = gutter_metrics.total_width();
+            gutter_width = gutter_viewport_width;
             let abs_start = snapshot
                 .total_rows
                 .saturating_sub(snapshot.display_offset)
@@ -3471,51 +3473,36 @@ impl Render for TerminalSurface {
         };
 
         let wrap_markers = self.wrap_marker_gutter(&snapshot, visual_y_offset, cell_h);
-        let (horizontal, horizontal_bar) = self.horizontal_scroll_layer();
-        let body = if let Some(gutter) = gutter {
-            div()
-                .flex()
-                .flex_row()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .child(gutter)
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .children(horizontal)
-                        .overflow_hidden()
-                        .child(grid)
-                        .children(self.command_summaries(&snapshot, cell_h))
-                        .children(horizontal_bar)
-                        .child(terminal_surface_grid_bounds_tracker(surface.clone())),
-                )
-                .children(wrap_markers)
-        } else {
-            div()
-                .flex()
-                .flex_row()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .children(horizontal)
-                        .overflow_hidden()
-                        .child(grid)
-                        .children(self.command_summaries(&snapshot, cell_h))
-                        .children(horizontal_bar)
-                        .child(terminal_surface_grid_bounds_tracker(surface)),
-                )
-                .children(wrap_markers)
-        };
+        let (horizontal, horizontal_bar) = self.horizontal_scroll_layer(gutter_width);
+        let body = div()
+            .relative()
+            .flex()
+            .flex_row()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .children(gutter)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .children(horizontal)
+                    .overflow_hidden()
+                    .child(grid)
+                    .children(self.command_summaries(&snapshot, cell_h))
+                    .child(terminal_surface_grid_bounds_tracker(surface)),
+            )
+            .children(wrap_markers)
+            .when_some(app, |this, app| {
+                this.child(terminal_bounds_tracker_with_exclusion(
+                    app,
+                    Some(session_id.clone()),
+                    is_active,
+                    composition_exclusion,
+                ))
+            });
 
         let scrollbar = self.scrollbar_element(cx).into_any_element();
 
@@ -3554,6 +3541,17 @@ impl Render for TerminalSurface {
                     .relative()
                     .overflow_hidden()
                     .child(body)
+                    // Keep this lane in every wrap mode, even while the bar is
+                    // hidden, so its visibility never resizes the remote grid.
+                    // Both bounds trackers above measure only the content area.
+                    .child(
+                        div()
+                            .h(nyaterm_ui::NyaHorizontalScrollbar::height())
+                            .flex_none(),
+                    )
+                    // The overlay spans the viewport for hover reveal, while
+                    // its bottom track paints entirely inside the reserved lane.
+                    .children(horizontal_bar)
                     .when(
                         self.wrap_mode == nyaterm_core::models::settings::TerminalWrapMode::None
                             && self.painted_unwrapped.is_none()
@@ -3573,14 +3571,6 @@ impl Render for TerminalSurface {
                             )
                         },
                     )
-                    .when_some(app, |this, app| {
-                        this.child(terminal_bounds_tracker_with_exclusion(
-                            app,
-                            Some(session_id.clone()),
-                            is_active,
-                            composition_exclusion,
-                        ))
-                    })
                     .when_some(performance_overlay, |this, overlay| {
                         this.child(
                             div()
