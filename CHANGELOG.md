@@ -12,6 +12,12 @@ are preserved from the original changelog and may retain historical release date
 The documentation site publishes the same releases in English and Simplified Chinese
 in `docs-site/src/data/changelogData.ts`; update both locations when preparing a release.
 
+## [Unreleased]
+
+### Fixed
+
+- **android:** Restart a stopped ADB server when the device tracker or a shell handshake finds it gone, instead of failing with a generic I/O error until something else starts ADB.
+
 ## [2.0.6] - 2026-11-17
 
 ### Added

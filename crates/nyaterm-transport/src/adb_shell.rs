@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use crate::session_event_queue::SessionEventQueue;
 use crate::session_types::{SessionEvent, SessionInfo, TerminalTransport};
-use nyaterm_android::adb::client::DeviceBinding;
+use nyaterm_android::adb::client::{AdbClient, DeviceBinding, server_unreachable};
 use nyaterm_android::adb::shell::{
     CLOSE_STDIN, EXIT, MAX_SHELL_PACKET, STDERR, STDIN, STDOUT, ShellDecoder, WINDOW_SIZE,
     open_shell_with_cancel, window_size, write_packet,
 };
+use nyaterm_android::error::{AdbError, AdbResult};
 
 const INPUT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -38,6 +39,26 @@ pub(crate) struct AdbTerminalTransport {
     workers: Vec<JoinHandle<()>>,
 }
 
+/// Opens the interactive shell channel, restarting a stopped adb server once.
+///
+/// A restored or reconnected tab keeps the binding it was resolved with, and
+/// nothing on that path re-runs `adb start-server`. Once the daemon is gone the
+/// handshake fails with a bare I/O error, so bring the server back and retry
+/// before reporting that the device cannot be reached.
+fn open_android_shell(
+    binding: &DeviceBinding,
+    mut check: impl FnMut() -> AdbResult<()>,
+) -> AdbResult<TcpStream> {
+    match open_shell_with_cancel(binding, b"", true, &mut check) {
+        Ok(stream) => Ok(stream),
+        Err(AdbError::Io(error)) if server_unreachable(&error) => {
+            AdbClient::local(None)?.ensure_server()?;
+            open_shell_with_cancel(binding, b"", true, &mut check)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 impl AdbTerminalTransport {
     pub(crate) fn open(
         info: SessionInfo,
@@ -45,7 +66,7 @@ impl AdbTerminalTransport {
         events: SessionEventQueue,
         mut check: impl FnMut() -> nyaterm_android::error::AdbResult<()>,
     ) -> anyhow::Result<Self> {
-        let mut stream = open_shell_with_cancel(binding, b"", true, &mut check)?;
+        let mut stream = open_android_shell(binding, &mut check)?;
         check()?;
         write_packet(
             &mut stream,
