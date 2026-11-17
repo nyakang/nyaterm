@@ -62,6 +62,37 @@ fn minimum_contrast_updates_render_policy_without_recoloring_the_palette() {
 }
 
 #[test]
+fn terminal_color_query_palette_follows_terminal_theme_and_custom_colors() {
+    let mut state = settings_state();
+    state.set_appearance_theme("github-light".into());
+    assert_eq!(state.terminal_color_palette().background, 0xffffff);
+    assert_eq!(
+        SettingsFeatureState::resolve_terminal_color_palette(state.summary()),
+        state.terminal_color_palette()
+    );
+    state.set_terminal_theme(Some("dracula".into()));
+    assert_eq!(state.terminal_color_palette().background, 0x282a36);
+    state.set_appearance_theme("nya-high-contrast-white".into());
+    assert_eq!(state.terminal_color_palette().background, 0x282a36);
+    state.set_terminal_theme(Some("missing-theme".into()));
+    assert_eq!(state.terminal_color_palette().background, 0xffffff);
+
+    let mut theme =
+        nyaterm_core::themes::resolve_theme("github-light", &state.summary.custom_themes);
+    theme.id = "custom:query-colors".into();
+    theme.colors.terminal.background = "#faf0e0".into();
+    theme.colors.terminal.foreground = "#112233".into();
+    theme.colors.terminal.foreground_intense = Some("#445566".into());
+    let id = theme.id.clone();
+    state.summary.custom_themes.upsert(theme).unwrap();
+    state.set_terminal_theme(Some(id));
+    let colors = state.terminal_color_palette();
+    assert_eq!(colors.background, 0xfaf0e0);
+    assert_eq!(colors.foreground, 0x112233);
+    assert_eq!(colors.foreground_intense, Some(0x445566));
+}
+
+#[test]
 fn settings_owner_normalizes_general_and_interaction_transitions() {
     let mut state = settings_state();
     state.summary.diagnostics_level = "info".to_string();

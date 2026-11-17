@@ -426,12 +426,20 @@ impl NyaTermApp {
 
     pub(in crate::features) fn invalidate_paint_theme_caches(&mut self) {
         self.terminal.invalidate_paint_caches();
+        self.sync_terminal_color_palette();
+    }
+
+    fn sync_terminal_color_palette(&mut self) {
+        let palette = self.settings.terminal_color_palette();
+        self.terminal.set_color_palette(palette);
     }
 
     pub(in crate::features) fn refresh_visible_terminal_surfaces(
         &mut self,
         cx: &mut Context<Self>,
     ) {
+        // Background sessions must answer with the new theme even when no pane is visible.
+        self.sync_terminal_color_palette();
         let ids = self
             .visible_terminal_session_ids()
             .into_iter()

@@ -6,6 +6,7 @@ use crate::features::{
     FontResolutionStatus,
 };
 use nyaterm_core::AppSettingsSummary;
+use nyaterm_terminal::colors::TerminalColorPalette;
 use std::sync::Arc;
 
 pub(super) struct AppearanceSettingsState {
@@ -18,6 +19,16 @@ pub(super) struct AppearanceSettingsState {
 }
 
 impl SettingsFeatureState {
+    pub(in crate::features) fn resolve_terminal_color_palette(
+        summary: &AppSettingsSummary,
+    ) -> TerminalColorPalette {
+        terminal_color_palette(Self::resolve_terminal_palette(summary))
+    }
+
+    pub(in crate::features) fn terminal_color_palette(&self) -> TerminalColorPalette {
+        terminal_color_palette(self.appearance.terminal_palette)
+    }
+
     pub(super) fn resolve_terminal_palette(
         summary: &AppSettingsSummary,
     ) -> nyaterm_ui::ThemePalette {
@@ -286,5 +297,15 @@ impl SettingsFeatureState {
     }
     pub(in crate::features) fn fail_font_options_load(&mut self, generation: u64) -> bool {
         self.appearance.font_catalog.fail(generation)
+    }
+}
+
+fn terminal_color_palette(palette: nyaterm_ui::ThemePalette) -> TerminalColorPalette {
+    TerminalColorPalette {
+        foreground: palette.terminal_fg,
+        background: palette.terminal_bg,
+        cursor: palette.terminal_cursor,
+        ansi: palette.terminal_ansi,
+        foreground_intense: palette.terminal_fg_intense,
     }
 }
