@@ -1,7 +1,8 @@
 # Changelog
 
-Notable changes are grouped by release tag. Unreleased entries cover changes after
-the latest tag, v2.0.3; release dates follow the tagged commits.
+Notable changes are grouped by release tag. Unreleased entries, when present,
+cover changes after the latest tag, v2.0.6. Dates follow tagged commits;
+a tag may exist before its GitHub Release is published.
 
 Version 2.x is the native GPUI desktop application. Version 1.x entries describe
 the earlier Tauri/WebView application, including its historical web beta. The
@@ -11,26 +12,94 @@ are preserved from the original changelog and may retain historical release date
 The documentation site publishes the same releases in English and Simplified Chinese
 in `docs-site/src/data/changelogData.ts`; update both locations when preparing a release.
 
-## [Unreleased]
+## [2.0.6] - 2026-11-17
 
 ### Added
 
-- **assets:** Add multi-select batch editing for saved connections and full MobaXterm session import.
+- **completion:** Complete supported Shell paths, load custom JSON completion specs, and progressively show command, history, and path suggestions.
+- **settings:** Switch application data directories with validation and recovery, and set per-protocol defaults for new connections.
+- **sessions:** Choose no startup restoration, the previous session, or an ordered set of saved connections and groups.
+- **serial:** Ask for the device or baud rate at connect time and reflect the selected device in the tab title.
+- **connections:** Search saved-connection tags, share connection summaries, and improve connection-tree drag-and-drop ordering.
+- **monitoring:** Add network traffic history and per-interface monitoring.
+- **mcp:** Configure terminal execution modes and use bounded waits for eligible background SSH commands.
 
 ### Changed
 
-- **cloud-sync:** Compress local replica storage, reclaim free database pages, and remove the sync-version selector.
-- **ui:** Apply theme colors to the lock screen, input surfaces, and sync-group controls; refresh security icons and distinguish default RDP/VNC icons.
-- **tunnels:** Move tunnel-group batch actions into the overflow menu.
+- **android:** Refresh screen controls and introduce a GPU planar-image rendering path.
+- **ui:** Correct binary capacity/rate units and refine network cards, child-window centering, and hover-card placement.
 
 ### Fixed
 
-- **assets:** Scope batch edits to applicable fields, preserve connection protocols, commit updates atomically, and report saved, skipped, and unchanged results on the main window.
-- **terminal:** Restore full-command suggestions and fuzzy filling, and route multiline suggestions through paste review.
-- **highlighting:** Persist command-output highlighting when applying settings, show all built-in rules, and restore the v2.0.2 preset colors while preserving custom colors.
-- **terminal:** Stop reusing cached or retained scroll snapshots that predate in-place output, and refresh stale scroll windows so scrolling after a screen clear no longer hides the newest rows or repeats the previous prompt.
-- **security:** Deliver password-unlock results to the window that initiated the request.
-- **ssh:** Keep zsh shell-integration injection out of persistent command history.
+- **terminal:** Reject stale scroll snapshots after screen clears and in-place output, avoiding missing recent lines and repeated old prompts.
+- **completion:** Preserve Tab-completed command history without duplicates; improve Shell path quoting and context checks.
+- **terminal:** Preserve highlighting and suggestion positioning when folding output; fix scrollbar space and active-theme color queries.
+- **cloud-sync:** Retry selected transient S3 failures and improve conflict feedback and data-directory recovery, including macOS file locks.
+- **assets:** Apply bulk actions to all selected entries, make deletion atomic, and fix file clipboard and drag-transfer icons.
+- **mcp:** Wait for bridge negotiation, refresh discovery on reconnect, and preserve session ownership.
+- **ai:** Preserve the next draft when an Agent run finishes.
+
+### Performance
+
+- **completion:** Bound local and SFTP directory enumeration and cache work to keep suggestions responsive.
+- **remote-desktop:** Reduce unnecessary texture uploads for hidden windows and narrow dirty regions.
+
+## [2.0.5] - 2026-11-13
+
+### Added
+
+- **android:** Add ADB Shell sessions, device file browsing/transfers, and interactive screen tabs.
+- **monitoring:** Add local and SSH host port/service panels with filtering, details, logs, and confirmed actions.
+- **terminal:** Show command-block rails and fold completed command output when Shell markers are available.
+- **files:** Offer temporary sudo authorization for supported manual SFTP operations.
+- **mcp:** Run authorized operations on saved SSH targets without first opening a terminal tab.
+- **import:** Read encrypted MobaXterm credentials with an optional master password.
+- **completion:** Rank global command-history suggestions by usage.
+
+### Changed
+
+- **ai:** Allow composer resizing and restore reasoning-effort selection styling.
+- **connections:** Refine relevance sorting, quick-command categories, protocol icons, and related menus.
+
+### Fixed
+
+- **completion:** Stabilize suggestions across su-user changes, pagination, and cursor movement; separate navigation from acceptance.
+- **tmux:** Fix control-mode handoff and pane writes, zsh directory escapes, and lrzsz finish trailers.
+- **files:** Fix multiselection and path menus, restore preview highlighting, and retain conflict choices during SFTP retries.
+- **backup:** Prevent master-password unlock failures after backup import.
+- **settings:** Correct false unsaved-change prompts, cancel behavior, recovered session focus, and tab positions.
+- **input:** Avoid Shift+Enter submitting multiline text; allow Enter to create an unmatched quick-command category.
+
+### Performance
+
+- **android:** Harden disconnect/reconnect, transfer cleanup, and background screen updates.
+- **monitoring:** Bound host-management tasks and privilege waits outside UI rendering.
+- **completion:** Reduce embedded catalog size and history-matching overhead.
+
+## [2.0.4] - 2026-11-09
+
+### Added
+
+- **connections:** Multi-select saved connections and batch-edit applicable protocol settings with keep/set/clear choices.
+- **import:** Import MobaXterm SSH, RDP, Telnet, VNC, and Serial sessions with bookmark groups and ordering.
+
+### Changed
+
+- **cloud-sync:** Compress local replica storage and reclaim free database pages without changing cloud sync or backup formats.
+- **ui:** Refresh themed inputs and lock screen, security and RDP/VNC icons, connection selection, and tunnel menus.
+
+### Fixed
+
+- **completion:** Restore full-command and fuzzy suggestions, reviewing multiline candidates before sending.
+- **telnet:** Negotiate NAWS before sending window dimensions; correct quick-command newlines after login pauses.
+- **highlighting:** Persist output-highlighting settings and built-in rules, restoring v2.0.2 presets without overwriting custom colors.
+- **ssh:** Keep zsh integration injection out of persistent command history.
+- **security:** Return unlock results to the initiating window.
+- **connections:** Commit batch edits atomically and distinguish saved, skipped, and unchanged results.
+
+### Performance
+
+- **cloud-sync:** Defer replica migration, journal cleanup, and space reclamation until startup is idle.
 
 ## [2.0.3] - 2026-11-08
 

@@ -10,30 +10,123 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
-    version: '[Unreleased]',
+    version: '[2.0.6] - 2026-11-17',
     sections: [
       {
         title: 'Added',
         items: [
-          '**assets:** Add multi-select batch editing for saved connections and full MobaXterm session import.',
+          '**completion:** Complete supported Shell paths, load custom JSON completion specs, and progressively show command, history, and path suggestions.',
+          '**settings:** Switch application data directories with validation and recovery, and set per-protocol defaults for new connections.',
+          '**sessions:** Choose no startup restoration, the previous session, or an ordered set of saved connections and groups.',
+          '**serial:** Ask for the device or baud rate at connect time and reflect the selected device in the tab title.',
+          '**connections:** Search saved-connection tags, share connection summaries, and improve connection-tree drag-and-drop ordering.',
+          '**monitoring:** Add network traffic history and per-interface monitoring.',
+          '**mcp:** Configure terminal execution modes and use bounded waits for eligible background SSH commands.',
         ],
       },
       {
         title: 'Changed',
         items: [
-          '**cloud-sync:** Compress local replica storage, reclaim free database pages, and remove the sync-version selector.',
-          '**ui:** Apply theme colors to the lock screen, input surfaces, and sync-group controls; refresh security icons and distinguish default RDP/VNC icons.',
-          '**tunnels:** Move tunnel-group batch actions into the overflow menu.',
+          '**android:** Refresh screen controls and introduce a GPU planar-image rendering path.',
+          '**ui:** Correct binary capacity/rate units and refine network cards, child-window centering, and hover-card placement.',
         ],
       },
       {
         title: 'Fixed',
         items: [
-          '**assets:** Scope batch edits to applicable fields, preserve connection protocols, commit updates atomically, and report saved, skipped, and unchanged results on the main window.',
-          '**terminal:** Restore full-command suggestions and fuzzy filling, and route multiline suggestions through paste review.',
-          '**highlighting:** Persist command-output highlighting when applying settings, show all built-in rules, and restore the v2.0.2 preset colors while preserving custom colors.',
-          '**security:** Deliver password-unlock results to the window that initiated the request.',
-          '**ssh:** Keep zsh shell-integration injection out of persistent command history.',
+          '**terminal:** Reject stale scroll snapshots after screen clears and in-place output, avoiding missing recent lines and repeated old prompts.',
+          '**completion:** Preserve Tab-completed command history without duplicates; improve Shell path quoting and context checks.',
+          '**terminal:** Preserve highlighting and suggestion positioning when folding output; fix scrollbar space and active-theme color queries.',
+          '**cloud-sync:** Retry selected transient S3 failures and improve conflict feedback and data-directory recovery, including macOS file locks.',
+          '**assets:** Apply bulk actions to all selected entries, make deletion atomic, and fix file clipboard and drag-transfer icons.',
+          '**mcp:** Wait for bridge negotiation, refresh discovery on reconnect, and preserve session ownership.',
+          '**ai:** Preserve the next draft when an Agent run finishes.',
+        ],
+      },
+      {
+        title: 'Performance',
+        items: [
+          '**completion:** Bound local and SFTP directory enumeration and cache work to keep suggestions responsive.',
+          '**remote-desktop:** Reduce unnecessary texture uploads for hidden windows and narrow dirty regions.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '[2.0.5] - 2026-11-13',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**android:** Add ADB Shell sessions, device file browsing/transfers, and interactive screen tabs.',
+          '**monitoring:** Add local and SSH host port/service panels with filtering, details, logs, and confirmed actions.',
+          '**terminal:** Show command-block rails and fold completed command output when Shell markers are available.',
+          '**files:** Offer temporary sudo authorization for supported manual SFTP operations.',
+          '**mcp:** Run authorized operations on saved SSH targets without first opening a terminal tab.',
+          '**import:** Read encrypted MobaXterm credentials with an optional master password.',
+          '**completion:** Rank global command-history suggestions by usage.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: [
+          '**ai:** Allow composer resizing and restore reasoning-effort selection styling.',
+          '**connections:** Refine relevance sorting, quick-command categories, protocol icons, and related menus.',
+        ],
+      },
+      {
+        title: 'Fixed',
+        items: [
+          '**completion:** Stabilize suggestions across su-user changes, pagination, and cursor movement; separate navigation from acceptance.',
+          '**tmux:** Fix control-mode handoff and pane writes, zsh directory escapes, and lrzsz finish trailers.',
+          '**files:** Fix multiselection and path menus, restore preview highlighting, and retain conflict choices during SFTP retries.',
+          '**backup:** Prevent master-password unlock failures after backup import.',
+          '**settings:** Correct false unsaved-change prompts, cancel behavior, recovered session focus, and tab positions.',
+          '**input:** Avoid Shift+Enter submitting multiline text; allow Enter to create an unmatched quick-command category.',
+        ],
+      },
+      {
+        title: 'Performance',
+        items: [
+          '**android:** Harden disconnect/reconnect, transfer cleanup, and background screen updates.',
+          '**monitoring:** Bound host-management tasks and privilege waits outside UI rendering.',
+          '**completion:** Reduce embedded catalog size and history-matching overhead.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '[2.0.4] - 2026-11-09',
+    sections: [
+      {
+        title: 'Added',
+        items: [
+          '**connections:** Multi-select saved connections and batch-edit applicable protocol settings with keep/set/clear choices.',
+          '**import:** Import MobaXterm SSH, RDP, Telnet, VNC, and Serial sessions with bookmark groups and ordering.',
+        ],
+      },
+      {
+        title: 'Changed',
+        items: [
+          '**cloud-sync:** Compress local replica storage and reclaim free database pages without changing cloud sync or backup formats.',
+          '**ui:** Refresh themed inputs and lock screen, security and RDP/VNC icons, connection selection, and tunnel menus.',
+        ],
+      },
+      {
+        title: 'Fixed',
+        items: [
+          '**completion:** Restore full-command and fuzzy suggestions, reviewing multiline candidates before sending.',
+          '**telnet:** Negotiate NAWS before sending window dimensions; correct quick-command newlines after login pauses.',
+          '**highlighting:** Persist output-highlighting settings and built-in rules, restoring v2.0.2 presets without overwriting custom colors.',
+          '**ssh:** Keep zsh integration injection out of persistent command history.',
+          '**security:** Return unlock results to the initiating window.',
+          '**connections:** Commit batch edits atomically and distinguish saved, skipped, and unchanged results.',
+        ],
+      },
+      {
+        title: 'Performance',
+        items: [
+          '**cloud-sync:** Defer replica migration, journal cleanup, and space reclamation until startup is idle.',
         ],
       },
     ],
@@ -2711,30 +2804,123 @@ const changelogReleasesEn: ChangelogRelease[] = [
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
   {
-    version: '[未发布]',
+    version: '[2.0.6] - 2026-11-17',
     sections: [
       {
         title: '新增',
         items: [
-          '**assets:** 新增已保存连接的多选批量编辑，以及完整的 MobaXterm 会话导入支持。',
+          '**补全:** 支持 Shell 路径补全、自定义 JSON 补全规范，以及命令、历史和路径候选的渐进展示。',
+          '**设置:** 支持校验和恢复的数据目录切换，并可按协议配置新建连接的默认参数。',
+          '**会话:** 启动时可选择不恢复、恢复上次会话，或按顺序打开指定连接和连接分组。',
+          '**串口:** 可在连接时询问设备或波特率，并在标签标题显示实际设备。',
+          '**连接:** 增加标签搜索和连接摘要分享，并改进连接树拖放排序。',
+          '**监控:** 增加网络流量历史和按网卡监控。',
+          '**MCP:** 支持终端执行模式配置，并对适用的后台 SSH 命令有限等待结果。',
         ],
       },
       {
         title: '变更',
         items: [
-          '**cloud-sync:** 压缩本地副本存储、回收数据库空闲页，并移除同步版本选择器。',
-          '**ui:** 为锁屏、输入框和同步组控件应用主题颜色，更新安全功能图标，并区分默认 RDP/VNC 图标。',
-          '**tunnels:** 将隧道分组的批量操作移入更多菜单。',
+          '**Android:** 更新屏幕操作控件，并引入 GPU 平面图像渲染路径。',
+          '**界面:** 修正容量和速率的二进制单位，并优化网络卡片、子窗口居中及悬停卡片定位。',
         ],
       },
       {
         title: '修复',
         items: [
-          '**assets:** 批量编辑仅修改适用字段，保留连接协议并原子提交更新，在主窗口分别报告保存、跳过和未更改的结果。',
-          '**terminal:** 恢复完整命令建议和模糊补全，多行建议经由粘贴审查处理。',
-          '**highlighting:** 应用设置时保存命令输出高亮，显示全部内置规则，并在保留自定义颜色的同时恢复 v2.0.2 的预设配色。',
-          '**security:** 将密码解锁结果返回发起请求的窗口。',
-          '**ssh:** 防止 zsh Shell 集成注入内容写入持久命令历史。',
+          '**终端:** 修复清屏和原位输出后复用旧滚动快照，导致最新内容缺失或旧提示符重复的问题。',
+          '**补全:** 正确保留 Tab 补全后的命令历史，避免重复，并修正 Shell 路径引用及上下文校验。',
+          '**终端:** 修复折叠输出后的高亮、建议定位，以及滚动条空间和活动主题颜色查询。',
+          '**云同步:** 对部分 S3 临时故障增加重试，改进冲突反馈与数据目录恢复，包括 macOS 文件锁兼容性。',
+          '**资产:** 批量操作应用到全部选中项目，原子化删除，并修复文件剪贴板、拖放传输及图标。',
+          '**MCP:** 等待桥接协商、重连后刷新工具发现信息，并保留会话所有权。',
+          '**AI:** 修复 Agent 任务完成后下一条输入草稿丢失的问题。',
+        ],
+      },
+      {
+        title: '性能',
+        items: [
+          '**补全:** 限制本地与 SFTP 目录枚举及缓存工作，避免补全更新被慢速目录阻塞。',
+          '**远程桌面:** 减少隐藏窗口及狭窄脏区域的无效纹理上传。',
+        ],
+      },
+    ],
+  },
+  {
+    version: '[2.0.5] - 2026-11-13',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**Android:** 新增 ADB Shell 会话、设备文件浏览和传输，以及可交互的屏幕标签页。',
+          '**监控:** 新增本机与 SSH 主机端口、服务面板，支持筛选、详情、日志和确认操作。',
+          '**终端:** Shell 提供命令边界时，显示命令区块辅助线并支持折叠已完成命令输出。',
+          '**文件:** 为受支持的手动 SFTP 操作提供临时 sudo 授权。',
+          '**MCP:** 经授权后可使用已保存 SSH 连接执行后台操作，无需先打开终端标签。',
+          '**导入:** 支持通过可选主密码读取 MobaXterm 加密凭据。',
+          '**补全:** 根据历史使用情况优化全局命令建议排序。',
+        ],
+      },
+      {
+        title: '变更',
+        items: [
+          '**AI:** 支持调整输入区高度，恢复推理强度选项的正确选中样式。',
+          '**连接:** 优化相关性排序、快捷命令分类、协议图标与相关菜单。',
+        ],
+      },
+      {
+        title: '修复',
+        items: [
+          '**补全:** 修复切换 su 用户、分页和光标移动时的候选异常，区分导航与确认。',
+          '**tmux:** 修复控制模式切换与窗格写入、zsh 工作目录转义以及 lrzsz 结束标记。',
+          '**文件:** 修复多选和路径菜单，恢复预览高亮，SFTP 重试时保留冲突处理选择。',
+          '**备份:** 修复导入备份后可能无法通过主密码解锁的问题。',
+          '**设置:** 修复误报未保存更改、取消行为、恢复会话焦点及标签页位置。',
+          '**输入:** 避免 Shift+Enter 提交多行文本，支持按 Enter 创建未匹配的快捷命令分类。',
+        ],
+      },
+      {
+        title: '性能',
+        items: [
+          '**Android:** 改善断连重连、传输清理及隐藏屏幕刷新。',
+          '**监控:** 限制后台主机管理任务和提权等待，避免阻塞界面。',
+          '**补全:** 缩减内置补全目录并降低历史命令匹配开销。',
+        ],
+      },
+    ],
+  },
+  {
+    version: '[2.0.4] - 2026-11-09',
+    sections: [
+      {
+        title: '新增',
+        items: [
+          '**连接:** 支持已保存连接多选，以及按协议适用字段批量编辑并选择保持、设置或清空。',
+          '**导入:** 支持导入 MobaXterm 的 SSH、RDP、Telnet、VNC 和 Serial 会话，保留书签分组与顺序。',
+        ],
+      },
+      {
+        title: '变更',
+        items: [
+          '**云同步:** 压缩本地副本、回收数据库空闲页，不改变云端同步或备份格式。',
+          '**界面:** 优化锁屏与输入控件主题、安全及 RDP/VNC 图标、连接多选和隧道菜单。',
+        ],
+      },
+      {
+        title: '修复',
+        items: [
+          '**补全:** 恢复完整命令及模糊建议，多行候选发送前经过粘贴预览。',
+          '**Telnet:** NAWS 协商成功后才发送窗口尺寸，并修复登录暂停后的快捷命令换行。',
+          '**高亮:** 修复命令输出高亮设置和内置规则保存，在保留自定义颜色时恢复 v2.0.2 预设。',
+          '**SSH:** 避免 zsh 集成注入进入持久命令历史。',
+          '**安全:** 将解锁结果返回发起操作的窗口。',
+          '**连接:** 原子提交批量编辑，并分别报告已保存、跳过和未更改的结果。',
+        ],
+      },
+      {
+        title: '性能',
+        items: [
+          '**云同步:** 将本地副本迁移、日志清理及空间回收安排在启动后的空闲阶段。',
         ],
       },
     ],
