@@ -12,7 +12,7 @@ fn cold_start_restores_workspaces_and_adds_only_an_explicit_new_window() {
     use gpui::{AppContext as _, TestAppContext};
     use nyaterm_core::{
         ActivationRequest, AppRuntime, RuntimeMode, WorkspaceRestoreManifest,
-        WorkspaceRestoreState, test_support::TestTempDir,
+        WorkspaceRestoreState, models::startup::StartupMode, test_support::TestTempDir,
     };
     use nyaterm_store::ConnectionStore;
 
@@ -31,6 +31,9 @@ fn cold_start_restores_workspaces_and_adds_only_an_explicit_new_window() {
             .collect::<Vec<_>>();
         if !saved_ids.is_empty() {
             let store = ConnectionStore::open(root.join("config")).unwrap();
+            let mut settings = store.load_app_settings_summary().unwrap();
+            settings.startup_mode = StartupMode::LastSession;
+            store.save_general_settings(&settings).unwrap();
             store
                 .save_workspace_restore_manifest(&WorkspaceRestoreManifest {
                     version: nyaterm_core::WORKSPACE_RESTORE_MANIFEST_VERSION,
