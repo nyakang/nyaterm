@@ -97,7 +97,9 @@ impl NyaTermApp {
             cx,
         );
         self.refresh_terminal_search_state(cx);
-        field.update(cx, |field, cx| field.select_all_with_cursor_at_end(window, cx));
+        field.update(cx, |field, cx| {
+            field.select_all_with_cursor_at_end(window, cx)
+        });
     }
 
     pub(in crate::features) fn switch_terminal_find_pane(
