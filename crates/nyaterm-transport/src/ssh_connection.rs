@@ -453,6 +453,7 @@ pub(crate) fn ssh_client_config(
             _ => russh::client::KeepaliveMode::Compatible,
         },
         preferred,
+        allow_short_rsa_host_keys: config.allow_short_rsa_host_keys,
         ..Default::default()
     }))
 }

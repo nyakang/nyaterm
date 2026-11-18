@@ -270,6 +270,312 @@ fn oversized_profile_and_key_files_are_rejected_without_losing_connections() {
     );
 }
 
+// Real WindTerm shape: local shell sessions use protocol "Shell", a command in
+// `session.target`, and `process.*` fields instead of host/port.
+const SAMPLE_SESSIONS: &str = r#"[
+    {
+        "process.arguments" : "/s /k \"${AppDir}/vendors/clink/clink_x64.exe\" inject",
+        "process.workingDirectory" : "${HomeDir}",
+        "session.group" : "Shell sessions",
+        "session.icon" : "session::cmd",
+        "session.label" : "cmd",
+        "session.protocol" : "Shell",
+        "session.system" : "cmd",
+        "session.target" : "C:/Windows/system32/cmd.exe",
+        "session.uuid" : "d103cfa4-52cd-45b8-a3e0-c86146ec23f7"
+    },
+    {
+        "process.workingDirectory" : "${HomeDir}",
+        "session.group" : "Shell sessions",
+        "session.icon" : "session::powershell",
+        "session.label" : "powershell",
+        "session.protocol" : "Shell",
+        "session.system" : "powershell",
+        "session.target" : "C:/Windows/system32/WindowsPowerShell/v1.0/powershell.exe",
+        "session.uuid" : "7826ad2d-c51b-43c7-b14a-ec952daff40d"
+    },
+    {
+        "process.arguments" : "--login -i",
+        "process.workingDirectory" : "${HomeDir}",
+        "session.group" : "Shell sessions",
+        "session.icon" : "session::gitbash",
+        "session.label" : "gitbash",
+        "session.protocol" : "Shell",
+        "session.system" : "linux",
+        "session.target" : "C:/Program Files/Git/bin/bash.exe",
+        "session.uuid" : "4b1ed317-0284-4dec-8ed5-6e702bac8973"
+    },
+    {
+        "session.icon" : "session::square-forestgreen",
+        "session.port" : 22,
+        "session.protocol" : "SSH",
+        "session.target" : "10.11.1.193",
+        "session.uuid" : "109515ed-5cf0-4397-8349-dfb436c8b1cd",
+        "ssh.sftp" : false
+    }
+]"#;
+
+// Real onekeys.config shape: both SshOneKey and AccountOneKey entries carry a
+// reusable login, and sessions need not reference either of them.
+const SAMPLE_ONE_KEYS: &str = r#"[
+    {
+        "auth" : "wVt1NDam+ABKuTyVLY6mfzgdLJzKSO1zZMsbR4HGojQXi0m/z/otpCVKhpVOxoBeGfUqVG9/jOGycemJpxCOs5+ixtWtJLrA9C4lm+rNCOLX6sS2b+lQVXhuE1nk1wSZBCzNEEcpt6xLTgrNR0AyA3tYAfT+jb/KIpaoS+5EcIPvidHQNzN1sirahOVkBifA",
+        "expect.password" : "{\"text.matchRegex\":true,\"text.pattern\":\"password:|password for \\\\S+:\"}",
+        "expect.username" : "{\"text.matchRegex\":true,\"text.pattern\":\"username:|login:\"}",
+        "name" : "test_dyq",
+        "type" : "SshOneKey",
+        "uuid" : "52ca3407-a3d9-4ccf-b7b1-2d5b9de08cf4"
+    },
+    {
+        "auth" : "wVt1NDam+ABKuTyVLY6mf4VBLlwOLakGTTqgzu/nFs8DQpegNFQEN+RumhGDp4YSLIfyaL9IZbaz0yN8A+ptLw1buuD69FZaGrUkfAvpxTy0FkSC/FcS1AZ8LHYQXR2PEFr/M7IWyN2ycQUNJu168V/49TSZllXE851b9KeJNRs=",
+        "expect.password" : "{\"text.matchCase\":false,\"text.matchRegex\":true,\"text.matchWholeWord\":false,\"text.pattern\":\"password:|password for \\\\S+:\"}",
+        "expect.username" : "{\"text.matchCase\":false,\"text.matchRegex\":true,\"text.matchWholeWord\":false,\"text.pattern\":\"username:|login:\"}",
+        "name" : "test_dyq1",
+        "type" : "AccountOneKey",
+        "uuid" : "be763a70-d56b-4210-a52c-558f025357c8"
+    }
+]"#;
+
+const SAMPLE_QUICKBAR: &str = r#"[
+    {
+        "quick.group" : "快速",
+        "quick.icon" : "session::star-coral",
+        "quick.label" : "test_dyq",
+        "quick.text" : "test\rdyq\r",
+        "quick.type" : "Send Text",
+        "quick.uuid" : "b129c656-5f02-4aa6-a53a-7f6fadcca377"
+    }
+]"#;
+
+fn sample_profile(root: &TestTempDir) -> PathBuf {
+    fs::create_dir_all(root.join("terminal")).unwrap();
+    fs::write(
+        root.join("user.config"),
+        serde_json::json!({
+            "application.fingerprint": "fingerprint-1", "application.masterPassword": false,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let path = root.join("terminal/user.sessions");
+    fs::write(&path, SAMPLE_SESSIONS).unwrap();
+    path
+}
+
+#[test]
+fn shell_sessions_import_as_local_terminals_with_arguments_and_expanded_home() {
+    let dir = TestTempDir::new("nyaterm-windterm-shell");
+    let path = sample_profile(&dir);
+    let prepared = prepare_session_import(&path).unwrap();
+
+    assert_eq!(prepared.connections.len(), 4);
+    assert!(prepared.notices.is_empty());
+    let home = dirs::home_dir().unwrap().to_string_lossy().into_owned();
+    let names = prepared
+        .connections
+        .iter()
+        .map(|connection| connection.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["cmd", "powershell", "gitbash", "10.11.1.193"]);
+    assert_eq!(
+        prepared.connections[0].group_path.as_deref(),
+        Some(["Shell sessions".to_string()].as_slice())
+    );
+    for connection in &prepared.connections[..3] {
+        assert!(connection.auth.is_none());
+    }
+    assert!(
+        matches!(
+            &prepared.connections[0].config,
+            ConnectionType::LocalTerminal { shell_path, shell_args, working_dir, .. }
+                if shell_path == "C:/Windows/system32/cmd.exe"
+                    && shell_args.contains("/s /k")
+                    && shell_args.contains("clink_x64.exe")
+                    && working_dir.as_deref() == Some(home.as_str())
+        ),
+        "cmd shell session must keep its command line and resolved home directory"
+    );
+    assert!(matches!(
+        &prepared.connections[1].config,
+        ConnectionType::LocalTerminal { shell_path, shell_args, working_dir, .. }
+            if shell_path == "C:/Windows/system32/WindowsPowerShell/v1.0/powershell.exe"
+                && shell_args.is_empty()
+                && working_dir.as_deref() == Some(home.as_str())
+    ));
+    assert!(matches!(
+        &prepared.connections[2].config,
+        ConnectionType::LocalTerminal { shell_path, shell_args, working_dir, .. }
+            if shell_path == "C:/Program Files/Git/bin/bash.exe"
+                && shell_args == "--login -i"
+                && working_dir.as_deref() == Some(home.as_str())
+    ));
+    assert!(matches!(
+        &prepared.connections[3].config,
+        ConnectionType::Ssh { host, port: 22, .. } if host == "10.11.1.193"
+    ));
+}
+
+#[test]
+fn sample_one_key_accounts_import_without_session_references() {
+    let dir = TestTempDir::new("nyaterm-windterm-sample-accounts");
+    let path = sample_profile(&dir);
+    fs::write(dir.join("terminal/onekeys.config"), SAMPLE_ONE_KEYS).unwrap();
+
+    // The sample accounts carry encrypted auth but no session references them.
+    // They still need decrypting, so the import must ask for the master password.
+    assert!(matches!(
+        prepare_windterm_preview(&path, None),
+        Err(SessionImportError::WindTermMasterPasswordRequired)
+    ));
+    let preview = prepare_windterm_preview(&path, Some("unused")).unwrap();
+    assert_eq!(preview.one_key_state, WindtermOneKeyConfigState::Readable);
+    assert_eq!(preview.unsupported_one_key_count, 0);
+    assert_eq!(
+        preview
+            .accounts
+            .iter()
+            .map(|account| (account.name.as_str(), account.session_count))
+            .collect::<Vec<_>>(),
+        [("test_dyq", 0), ("test_dyq1", 0)]
+    );
+    // Without the profile fingerprint the sample payloads cannot be decrypted,
+    // but both accounts must still exist for the user to complete.
+    assert!(
+        preview
+            .accounts
+            .iter()
+            .all(|account| !account.password_readable)
+    );
+    assert_eq!(preview.prepared.passwords.len(), 2);
+    assert_eq!(preview.prepared.connections.len(), 4);
+
+    let decisions = preview
+        .accounts
+        .iter()
+        .map(|account| WindtermAccountDecision {
+            one_key_uuid: account.one_key_uuid.clone(),
+            action: WindtermAccountAction::Create {
+                username: account.name.clone(),
+                password: Some("typed-secret".into()),
+            },
+        })
+        .collect::<Vec<_>>();
+    let outcome =
+        prepare_windterm_import_with_decisions(&path, Some("unused"), &decisions).unwrap();
+    assert_eq!(outcome.prepared.passwords.len(), 2);
+    assert_eq!(
+        outcome
+            .prepared
+            .passwords
+            .iter()
+            .map(|password| password.name.as_str())
+            .collect::<Vec<_>>(),
+        ["test_dyq", "test_dyq1"]
+    );
+    assert_eq!(outcome.prepared.connections.len(), 4);
+    assert_eq!(outcome.report.imported_sessions, 4);
+    assert_eq!(outcome.report.skipped_sessions, 0);
+}
+
+#[test]
+fn unreferenced_encrypted_accounts_require_and_use_the_master_password() {
+    use base64::Engine;
+    use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+
+    let dir = TestTempDir::new("nyaterm-windterm-unreferenced-master");
+    // The profile flag is off and the only session has no `session.oneKey`.
+    let path = profile(&dir, false, "");
+    let crypto = super::derive_crypto("fingerprint-1", " master-secret ");
+    let payload = serde_json::to_string(r#"{"userName":"deploy","Password":" secret "}"#).unwrap();
+    let mut buffer = zeroize::Zeroizing::new(vec![0u8; payload.len() + 16]);
+    buffer[..payload.len()].copy_from_slice(payload.as_bytes());
+    let ciphertext =
+        cbc::Encryptor::<aes::Aes256>::new_from_slices(&crypto.0[..32], &crypto.0[32..])
+            .unwrap()
+            .encrypt_padded_mut::<Pkcs7>(&mut buffer, payload.len())
+            .unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(ciphertext);
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([{
+            "name": "unlinked", "type": "SshOneKey",
+            "uuid": "unlinked-account", "auth": encoded,
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        prepare_windterm_preview(&path, None),
+        Err(SessionImportError::WindTermMasterPasswordRequired)
+    ));
+    let preview = prepare_windterm_preview(&path, Some(" master-secret ")).unwrap();
+    assert_eq!(preview.accounts.len(), 1);
+    assert_eq!(preview.accounts[0].session_count, 0);
+    assert!(preview.accounts[0].password_readable);
+    assert_eq!(preview.accounts[0].username, "deploy");
+    assert_eq!(preview.accounts[0].password.as_deref(), Some(" secret "));
+    // The decrypted password reaches the account that will be committed even
+    // though no session references it.
+    assert_eq!(preview.prepared.passwords.len(), 1);
+    assert_eq!(
+        preview.prepared.passwords[0].password.as_deref(),
+        Some(" secret ")
+    );
+}
+
+#[test]
+fn sibling_quickbar_does_not_participate_in_session_import() {
+    for content in [SAMPLE_QUICKBAR, "{not json"] {
+        let dir = TestTempDir::new("nyaterm-windterm-ignored-quickbar");
+        let sessions = profile(&dir, false, "");
+        let path = dir.join("terminal/quickbar.config");
+        fs::write(&path, content).unwrap();
+        let before = fs::read(&path).unwrap();
+        let preview = prepare_windterm_preview(&sessions, None).unwrap();
+        assert!(!preview.prepared.connections.is_empty());
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn account_one_key_entries_can_link_ssh_sessions() {
+    let dir = TestTempDir::new("nyaterm-windterm-account-onekey-link");
+    let path = profile(&dir, false, "");
+    fs::write(
+        dir.join("terminal/onekeys.config"),
+        serde_json::json!([{
+            "name": "shared-login", "type": "AccountOneKey", "uuid": "account-key",
+            "auth": EMPTY_MASTER,
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &path,
+        serde_json::json!([{
+            "session.protocol": "SSH", "session.target": "10.11.1.193",
+            "session.oneKey": "account-key",
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    let preview = prepare_windterm_preview(&path, None).unwrap();
+    assert_eq!(preview.unsupported_one_key_count, 0);
+    assert_eq!(preview.accounts.len(), 1);
+    assert_eq!(preview.accounts[0].session_count, 1);
+    assert_eq!(
+        preview.prepared.connections[0]
+            .auth
+            .as_ref()
+            .unwrap()
+            .account_id
+            .as_deref(),
+        Some(preview.accounts[0].id.as_str())
+    );
+}
+
 #[test]
 fn invalid_ports_and_non_ssh_sessions_are_skipped_without_truncation() {
     let mut entries =
@@ -469,10 +775,11 @@ fn duplicate_one_key_names_are_suffixed_and_unmatched_references_are_counted() {
     .unwrap();
 
     let preview = prepare_windterm_preview(&path, None).unwrap();
-    // Only the referenced, supported definition becomes an account candidate.
-    assert_eq!(preview.accounts.len(), 1);
+    // Every supported definition becomes an account candidate, referenced or not.
+    assert_eq!(preview.accounts.len(), 2);
     assert_eq!(preview.duplicate_account_name_count, 1);
     assert_eq!(preview.accounts[0].name, "same");
+    assert_eq!(preview.accounts[1].name, "same (2)");
     assert_eq!(preview.missing_one_keys.len(), 1);
     assert_eq!(preview.missing_one_keys[0].session_name, "two");
     assert_eq!(preview.missing_one_keys[0].one_key_uuid, "missing");
@@ -885,12 +1192,18 @@ fn encrypted_one_key_auth_handles_nested_json_wrong_password_and_corruption() {
             .encrypt_padded_mut::<Pkcs7>(&mut buffer, payload.len())
             .unwrap();
     let encoded = base64::engine::general_purpose::STANDARD.encode(ciphertext);
-    let ready = super::ProfileCrypto::Ready(crypto);
+    let ready = super::ProfileCrypto::Ready {
+        primary: crypto,
+        master_fallback: None,
+    };
     let (user, password, readable) = super::parse_one_key_auth(Some(&encoded), &ready);
     assert!(readable);
     assert_eq!(user.as_deref(), Some("deploy"));
     assert_eq!(password.as_deref(), Some("sensitive-value"));
-    let wrong = super::ProfileCrypto::Ready(super::derive_crypto("fingerprint-1", "wrong"));
+    let wrong = super::ProfileCrypto::Ready {
+        primary: super::derive_crypto("fingerprint-1", "wrong"),
+        master_fallback: None,
+    };
     assert!(!super::parse_one_key_auth(Some(&encoded), &wrong).2);
     assert!(!super::parse_one_key_auth(Some(&encoded[..encoded.len() - 4]), &ready).2);
 }

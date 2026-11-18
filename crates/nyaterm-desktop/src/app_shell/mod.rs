@@ -175,7 +175,9 @@ impl AppShell {
             let subscription = cx.observe_self(|_, cx| native_menu::request_refresh(cx));
             self._subscriptions.push(subscription);
         }
-        self.start_main_window_state_persistence(window, cx);
+        if self.store_runtime.is_some() {
+            self.start_main_window_state_persistence(window, cx);
+        }
         // A pending data-directory switch that could not be applied falls back
         // to the previous directory. Surface that once per window instead of
         // retrying the switch on every launch.

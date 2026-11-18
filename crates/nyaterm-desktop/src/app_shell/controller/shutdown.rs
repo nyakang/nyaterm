@@ -21,6 +21,15 @@ impl DesktopController {
         state: MainWindowState,
         generation: u64,
     ) -> Result<StoreTask<()>, StoreSubmitError> {
+        // Recovery and loading shells have no store runtime; window state is
+        // not persisted until the workspace is ready.
+        let Some(store) = self
+            .startup
+            .shared_store_runtime()
+            .map(|runtime| runtime.ui_client())
+        else {
+            return Err(StoreSubmitError::ShuttingDown);
+        };
         if let Some(existing) = self
             .device_windows
             .windows
@@ -39,11 +48,6 @@ impl DesktopController {
             self.device_windows.window_order.push(workspace_id);
         }
         self.device_windows.most_recent_workspace_id = self.most_recent_workspace_id;
-        let store = self
-            .startup
-            .shared_store_runtime()
-            .expect("desktop controller requires a store runtime")
-            .ui_client();
         let device_windows = self.device_windows.clone();
         let recent = self.most_recent_workspace_id;
         store.try_submit(
@@ -168,11 +172,13 @@ impl DesktopController {
             |id| self.windows.contains_key(&id),
         );
         device_windows.most_recent_workspace_id = next_recent;
-        let store = self
+        let Some(store) = self
             .startup
             .shared_store_runtime()
-            .expect("desktop controller requires a store runtime")
-            .ui_client();
+            .map(|runtime| runtime.ui_client())
+        else {
+            return Err(StoreSubmitError::ShuttingDown);
+        };
         let persisted_device_windows = device_windows.clone();
         let task = store.try_submit(
             0,

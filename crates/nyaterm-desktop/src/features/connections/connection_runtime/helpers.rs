@@ -249,6 +249,7 @@ pub(super) fn connection_editor_from_saved(
         agent_preview_loading: false,
         backspace_mode: "del".to_string(),
         encoding: String::new(),
+        allow_short_rsa_host_keys: connection.allow_short_rsa_host_keys,
         ssh_compatibility_mode: connection.ssh_compatibility_mode,
         ssh_profile: connection.ssh_profile,
         terminal_type: connection.terminal_type,
@@ -1085,6 +1086,8 @@ pub(super) fn build_saved_connection_from_editor(
         // remains part of the compatibility-sensitive saved connection.
         recording: editor.recording.clone(),
         ssh_algorithms,
+        allow_short_rsa_host_keys: editor.kind == ConnectionKindTab::Ssh
+            && editor.allow_short_rsa_host_keys,
         ssh_compatibility_mode: editor.kind == ConnectionKindTab::Ssh
             && editor.ssh_compatibility_mode,
         ssh_profile: if editor.kind == ConnectionKindTab::Ssh {
@@ -1140,6 +1143,7 @@ pub(super) fn build_default_session_settings(
     let mut built = build_saved_connection_from_editor(&draft)?;
     built.id = editor.id.clone().unwrap_or_else(uuid);
     built.name = String::new();
+    built.allow_short_rsa_host_keys = false;
     built.group_id = None;
     built.description = None;
     built.tags = Vec::new();
@@ -1176,6 +1180,8 @@ pub(super) fn apply_session_defaults(
     editor.terminal_type = defaults.terminal_type;
     editor.ssh_compatibility_mode = defaults.ssh_compatibility_mode;
     editor.ssh_profile = defaults.ssh_profile;
+    // A template must not opt every new connection into weak host keys.
+    editor.allow_short_rsa_host_keys = false;
     editor.sftp_enabled = defaults.sftp_enabled;
     editor.sftp_compatibility_mode = defaults.sftp_compatibility_mode;
     editor.sftp_cwd_follow_mode = defaults.sftp_cwd_follow_mode.clone();
@@ -1390,6 +1396,7 @@ mod tests {
             auth: None,
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -1441,6 +1448,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -1647,6 +1655,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -1706,6 +1715,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -1766,6 +1776,7 @@ mod tests {
                 macs: vec!["hmac-sha2-256".to_string()],
                 host_keys: vec!["ssh-ed25519".to_string()],
             }),
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: SshProfile::NetworkDevice,
             terminal_type: Some(SshTerminalType::Vt220),
@@ -1837,6 +1848,33 @@ mod tests {
     }
 
     #[test]
+    fn short_rsa_opt_in_survives_editor_save_and_can_be_disabled() {
+        let saved: SavedConnection = serde_json::from_value(serde_json::json!({
+            "name":"legacy", "type":"ssh", "host":"example.invalid", "ssh_profile":"network_device",
+            "allow_short_rsa_host_keys":true, "future_field":{"v":7}
+        }))
+        .unwrap();
+        let mut editor = connection_editor_from_saved(saved, false);
+        assert!(editor.allow_short_rsa_host_keys);
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        assert!(saved.allow_short_rsa_host_keys);
+        assert!(
+            !build_default_session_settings(&editor)
+                .unwrap()
+                .allow_short_rsa_host_keys
+        );
+        editor.allow_short_rsa_host_keys = false;
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        assert!(!saved.allow_short_rsa_host_keys);
+        assert!(
+            serde_json::to_value(saved)
+                .unwrap()
+                .get("allow_short_rsa_host_keys")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn connection_editor_round_trip_preserves_telnet_behavior() {
         let connection = SavedConnection {
             extensions: Default::default(),
@@ -1869,6 +1907,7 @@ mod tests {
             auth: None,
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -2029,6 +2068,7 @@ mod tests {
             }),
             recording: Some(expected_recording.clone()),
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -2143,6 +2183,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -2262,6 +2303,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -2422,6 +2464,7 @@ pub(in crate::features) enum ConnectionEditorToggle {
     SftpEnabled,
     SftpCompatibilityMode,
     SshCompatibilityMode,
+    AllowShortRsaHostKeys,
     RawTcp,
     LocalEcho,
     LocalLineEdit,

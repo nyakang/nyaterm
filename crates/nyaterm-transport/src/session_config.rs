@@ -362,6 +362,8 @@ pub struct SshSessionConfig {
     pub allow_none_auth: bool,
     pub backspace_mode: String,
     pub profile: SshSessionProfile,
+    /// Explicit opt-in for insecure 512–1023-bit RSA host keys; defaults off.
+    pub allow_short_rsa_host_keys: bool,
     /// Only resource-management services enforce this flag; SSH channels remain available.
     pub ssh_compatibility_mode: bool,
     pub term: String,
@@ -837,6 +839,7 @@ impl Default for SshSessionConfig {
             allow_none_auth: false,
             backspace_mode: "del".to_string(),
             profile: SshSessionProfile::Standard,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             term: "xterm-256color".to_string(),
             x11_forwarding: false,
@@ -1029,6 +1032,7 @@ mod tests {
                 assert!(!original.ssh_compatibility_mode);
                 assert!(original.ensure_remote_resource_probes_allowed().is_ok());
                 let compatible = SshSessionConfig {
+                    allow_short_rsa_host_keys: false,
                     ssh_compatibility_mode: true,
                     ..original.clone()
                 };

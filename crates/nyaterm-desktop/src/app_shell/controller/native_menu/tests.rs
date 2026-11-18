@@ -189,6 +189,7 @@ fn secondary_windows_disable_workspace_commands_and_keep_application_commands_av
         TitleMenuCommand::TerminalPaste,
         TitleMenuCommand::RefitTerminals,
         TitleMenuCommand::TogglePadding,
+        TitleMenuCommand::ToggleWrapMarkers,
     ] {
         assert!(native_item(&menus, &command).is_disabled());
     }
@@ -215,6 +216,7 @@ fn locked_and_unready_menu_projections_reject_business_commands() {
         TitleMenuCommand::NewWindow,
         TitleMenuCommand::ImportConfig,
         TitleMenuCommand::ToggleBroadcast,
+        TitleMenuCommand::ToggleWrapMarkers,
     ] {
         assert!(!snapshot.command_enabled(&command));
     }
@@ -235,6 +237,7 @@ fn locked_and_unready_menu_projections_reject_business_commands() {
         "locked Edit entries must not reach Cocoa's responder selectors"
     );
     assert!(native_item(&menus, &TitleMenuCommand::NewSession).is_disabled());
+    assert!(native_item(&menus, &TitleMenuCommand::ToggleWrapMarkers).is_disabled());
     assert!(!native_item(&menus, &TitleMenuCommand::About).is_disabled());
     snapshot.ready = false;
     assert!(!snapshot.command_enabled(&TitleMenuCommand::About));

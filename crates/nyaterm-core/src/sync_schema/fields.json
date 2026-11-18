@@ -19,6 +19,7 @@
       "ssh_algorithms": "portable:ssh_algorithms",
       "ssh_profile": "portable:terminal",
       "ssh_compatibility_mode": "portable:terminal",
+      "allow_short_rsa_host_keys": "portable:terminal",
       "terminal_type": "portable:terminal",
       "sftp": "split",
       "asset": "split",

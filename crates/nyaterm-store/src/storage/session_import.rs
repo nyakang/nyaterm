@@ -85,6 +85,7 @@ impl ConnectionStore {
                 post_login: None,
                 recording: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -495,6 +496,37 @@ mod tests {
     }
 
     #[test]
+    fn session_import_preserves_edited_quick_commands_with_conflicting_quickbar_ids() {
+        for raw in [
+            r#"[{"quick.label":"Original","quick.text":"original","quick.uuid":"existing"}]"#,
+            "{invalid",
+        ] {
+            let dir = crate::storage::tests::unique_temp_dir("windterm-independent-commands");
+            let path = windterm_fixture(&dir);
+            std::fs::write(path.parent().unwrap().join("quickbar.config"), raw).unwrap();
+            let store = ConnectionStore::open(&dir).unwrap();
+            let mut config = nyaterm_core::QuickCommandsConfig::default();
+            nyaterm_core::quick_command_import::merge_import(
+                &mut config,
+                nyaterm_core::quick_command_import::parse_nyaterm_import(
+                    r#"[{"id":"existing","label":"Edited","command":"edited script"}]"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let before = serde_json::to_value(&config).unwrap();
+            store.save_quick_commands(config).unwrap();
+            let preview =
+                nyaterm_core::session_import::prepare_windterm_preview(&path, None).unwrap();
+            assert_eq!(store.commit_session_import(preview.prepared).unwrap(), 2);
+            assert_eq!(
+                serde_json::to_value(store.load_quick_commands().unwrap()).unwrap(),
+                before
+            );
+        }
+    }
+
+    #[test]
     fn windterm_import_does_not_write_connections_groups_or_keys_when_encryption_fails() {
         let dir = crate::storage::tests::unique_temp_dir("windterm-import-failure");
         let path = windterm_fixture(&dir);
@@ -783,6 +815,7 @@ mod tests {
             post_login: None,
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,

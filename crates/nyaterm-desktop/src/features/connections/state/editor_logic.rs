@@ -724,6 +724,9 @@ pub(super) fn toggle_connection_editor_flag(
         ConnectionEditorToggle::DynamicTabTitle => {
             editor.dynamic_tab_title = !editor.dynamic_tab_title;
         }
+        ConnectionEditorToggle::AllowShortRsaHostKeys => {
+            editor.allow_short_rsa_host_keys = !editor.allow_short_rsa_host_keys;
+        }
         ConnectionEditorToggle::SshCompatibilityMode => {
             editor.ssh_compatibility_mode = !editor.ssh_compatibility_mode;
         }

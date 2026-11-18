@@ -39,6 +39,7 @@ pub(crate) enum TitleMenuCommand {
     ResetPanelLayout,
     TogglePanelVisibility(String),
     TogglePadding,
+    ToggleWrapMarkers,
     ToggleLineNumbers,
     ToggleTimestamps,
     SmartSplit(SmartSplitMode),

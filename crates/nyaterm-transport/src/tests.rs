@@ -2261,6 +2261,28 @@ fn ssh_client_config_disables_idle_timeout_and_maps_keepalive() {
 }
 
 #[test]
+fn short_rsa_host_keys_require_explicit_opt_in_for_every_profile() {
+    for profile in [
+        crate::SshSessionProfile::Standard,
+        crate::SshSessionProfile::NetworkDevice,
+    ] {
+        for allow in [false, true] {
+            let config = SshSessionConfig {
+                profile,
+                allow_short_rsa_host_keys: allow,
+                ..Default::default()
+            };
+            assert_eq!(
+                ssh_client_config(&config)
+                    .unwrap()
+                    .allow_short_rsa_host_keys,
+                allow
+            );
+        }
+    }
+}
+
+#[test]
 fn ssh_client_config_maps_custom_algorithm_preferences() {
     let preferences = SshAlgorithmPreferences {
         mode: SshAlgorithmMode::Custom,

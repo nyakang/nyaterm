@@ -4,15 +4,22 @@ use gpui::{
     div, prelude::FluentBuilder, px, rgb,
 };
 use nyaterm_core::app_identity::AppFlavor;
-use nyaterm_core::data_directory::{DataDirectoryRecovery, PreparedSwitch};
+use nyaterm_core::data_directory::{
+    DataDirectoryRecovery, PreparedDatabaseRebuild, PreparedSwitch,
+};
 use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
 use super::{AppShell, AppShellLifecycle};
 
+enum DirectoryRecoveryChoice {
+    Existing(PreparedSwitch),
+    Rebuild(PreparedDatabaseRebuild),
+}
+
 pub(super) struct DirectoryRecoveryState {
     context: DataDirectoryRecovery,
-    choice: Option<PreparedSwitch>,
+    choice: Option<DirectoryRecoveryChoice>,
     busy: bool,
 }
 
@@ -51,19 +58,22 @@ impl AppShell {
         if state.busy {
             return;
         }
-        let choice = if use_choice {
-            let Some(choice) = state.choice.clone() else {
+        let (choice, rebuild) = if use_choice {
+            let Some(choice) = state.choice.as_ref() else {
                 return;
             };
-            Some(choice)
+            match choice {
+                DirectoryRecoveryChoice::Existing(choice) => (Some(choice.clone()), None),
+                DirectoryRecoveryChoice::Rebuild(choice) => (None, Some(choice.clone())),
+            }
         } else {
-            None
+            (None, None)
         };
         state.busy = true;
         let controller = self.controller.clone();
         cx.defer(move |cx| {
             controller.update(cx, |controller, cx| {
-                controller.restart_from_recovery(choice, cx)
+                controller.restart_from_recovery(choice, rebuild, cx)
             })
         });
         cx.notify();
@@ -94,7 +104,45 @@ impl AppShell {
                 };
                 state.busy = false;
                 match result {
-                    Ok(choice) => state.choice = Some(choice),
+                    Ok(choice) => state.choice = Some(DirectoryRecoveryChoice::Existing(choice)),
+                    Err(error) => shell.recovery_restart_failed(error.to_string(), cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn prepare_database_rebuild(&mut self, cx: &mut Context<Self>) {
+        let local = self.runtime.local_dir().to_path_buf();
+        let default_dir = self.runtime.data_dir().to_path_buf();
+        let Some(state) = self.directory_recovery_mut() else {
+            return;
+        };
+        if state.busy || !state.context.can_rebuild {
+            return;
+        }
+        state.busy = true;
+        state.choice = None;
+        let data_dir = state.context.configured.clone();
+        let task = cx.background_spawn(async move {
+            nyaterm_store::data_directory::prepare_database_rebuild(
+                &local,
+                &default_dir,
+                &data_dir,
+                AppFlavor::current(),
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |shell, cx| {
+                let Some(state) = shell.directory_recovery_mut() else {
+                    return;
+                };
+                state.busy = false;
+                match result {
+                    Ok(choice) => state.choice = Some(DirectoryRecoveryChoice::Rebuild(choice)),
                     Err(error) => shell.recovery_restart_failed(error.to_string(), cx),
                 }
                 cx.notify();
@@ -137,6 +185,24 @@ impl AppShell {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| state.context.configured.clone());
         let can_select = state.context.can_select && !state.busy;
+        let message = if recovery.message == state.context.message {
+            match state.context.code.as_str() {
+                "database_missing" => t!("settings.dataDirectoryErrorDatabaseMissing").to_string(),
+                "database_corrupt" => t!("settings.dataDirectoryErrorDatabaseCorrupt").to_string(),
+                "database_data_invalid" => {
+                    t!("settings.dataDirectoryErrorDatabaseDataInvalid").to_string()
+                }
+                "database_upgrade_required" => {
+                    t!("settings.dataDirectoryErrorDatabaseUpgrade").to_string()
+                }
+                "database_initialization_failed" => {
+                    t!("settings.dataDirectoryErrorDatabaseInitialization").to_string()
+                }
+                _ => recovery.message.clone(),
+            }
+        } else {
+            recovery.message.clone()
+        };
         div()
             .size_full()
             .flex()
@@ -159,7 +225,7 @@ impl AppShell {
                     )
                     .child(t!("settings.dataDirectoryRecoveryDesc"))
                     .child(state.context.configured.display().to_string())
-                    .child(recovery.message.clone())
+                    .child(message)
                     .when(state.busy, |view| view.child(t!("common.loading")))
                     .child(
                         div()
@@ -177,6 +243,31 @@ impl AppShell {
                                     |shell, _, _, cx| shell.restart_directory_recovery(false, cx),
                                 )),
                             )
+                            .child(
+                                NyaButton::new(
+                                    "directory-open",
+                                    t!("settings.dataDirectoryRecoveryOpen"),
+                                )
+                                .on_click(cx.listener(
+                                    |shell, _, _, cx| {
+                                        if let Some(state) = shell.directory_recovery_mut() {
+                                            cx.reveal_path(&state.context.configured);
+                                        }
+                                    },
+                                )),
+                            )
+                            .when(state.context.can_rebuild, |view| {
+                                view.child(
+                                    NyaButton::new(
+                                        "directory-rebuild",
+                                        t!("settings.dataDirectoryRecoveryRebuild"),
+                                    )
+                                    .disabled(state.busy)
+                                    .on_click(cx.listener(
+                                        |shell, _, _, cx| shell.prepare_database_rebuild(cx),
+                                    )),
+                                )
+                            })
                             .when(state.context.can_select, |view| {
                                 view.child(
                                     NyaButton::new(
@@ -243,13 +334,18 @@ impl AppShell {
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .child(
-                                    t!(
+                                .child(match choice {
+                                    DirectoryRecoveryChoice::Existing(choice) => t!(
                                         "settings.dataDirectoryRecoveryConfirm",
                                         path = choice.target.display().to_string()
                                     )
                                     .to_string(),
-                                )
+                                    DirectoryRecoveryChoice::Rebuild(choice) => t!(
+                                        "settings.dataDirectoryRecoveryRebuildConfirm",
+                                        path = choice.data_dir.display().to_string()
+                                    )
+                                    .to_string(),
+                                })
                                 .child(
                                     NyaButton::new(
                                         "directory-confirm",

@@ -8211,7 +8211,7 @@ dependencies = [
 [[package]]
 name = "pageant"
 version = "0.2.5"
-source = "git+https://github.com/nyakang/russh?rev=f02221071224eb53501a620464e572c0559a91bd#f02221071224eb53501a620464e572c0559a91bd"
+source = "git+https://github.com/nyakang/russh?rev=25446652f68d69fc78037fadb6b645885da64e35#25446652f68d69fc78037fadb6b645885da64e35"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -10048,7 +10048,7 @@ dependencies = [
 [[package]]
 name = "russh"
 version = "0.65.1"
-source = "git+https://github.com/nyakang/russh?rev=f02221071224eb53501a620464e572c0559a91bd#f02221071224eb53501a620464e572c0559a91bd"
+source = "git+https://github.com/nyakang/russh?rev=25446652f68d69fc78037fadb6b645885da64e35#25446652f68d69fc78037fadb6b645885da64e35"
 dependencies = [
  "aes 0.9.3",
  "aws-lc-rs",
@@ -10119,7 +10119,7 @@ dependencies = [
 [[package]]
 name = "russh-cryptovec"
 version = "0.62.0"
-source = "git+https://github.com/nyakang/russh?rev=f02221071224eb53501a620464e572c0559a91bd#f02221071224eb53501a620464e572c0559a91bd"
+source = "git+https://github.com/nyakang/russh?rev=25446652f68d69fc78037fadb6b645885da64e35#25446652f68d69fc78037fadb6b645885da64e35"
 dependencies = [
  "log",
  "nix 0.31.3",
@@ -10149,7 +10149,7 @@ dependencies = [
 [[package]]
 name = "russh-util"
 version = "0.52.0"
-source = "git+https://github.com/nyakang/russh?rev=f02221071224eb53501a620464e572c0559a91bd#f02221071224eb53501a620464e572c0559a91bd"
+source = "git+https://github.com/nyakang/russh?rev=25446652f68d69fc78037fadb6b645885da64e35#25446652f68d69fc78037fadb6b645885da64e35"
 dependencies = [
  "chrono",
  "tokio",

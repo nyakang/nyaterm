@@ -141,19 +141,6 @@ impl SettingsPanel {
                     )
                     .child(settings_form_row(
                         palette,
-                        t!("settings.showWorkspacePadding"),
-                        Some(SharedString::from(t!("settings.showWorkspacePaddingDesc"))),
-                        settings_switch(
-                            palette,
-                            "terminal-workspace-padding",
-                            self.settings.summary().terminal_show_workspace_padding,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_terminal_workspace_padding(cx);
-                            }),
-                        ),
-                    ))
-                    .child(settings_form_row(
-                        palette,
                         t!("settings.terminalWrapMode"),
                         Some(SharedString::from(t!("settings.terminalWrapModeDesc"))),
                         self.settings_select_control(
@@ -174,61 +161,20 @@ impl SettingsPanel {
                             cx,
                         ),
                     ))
-                    .child(settings_form_row(
-                        palette,
-                        t!("settings.showWrapMarkers"),
-                        Some(SharedString::from(t!("settings.showWrapMarkersDesc"))),
-                        settings_switch(
-                            palette,
-                            "terminal-wrap-markers",
-                            self.settings.summary().terminal_show_wrap_markers,
-                            cx.listener(|this, _, _, cx| this.toggle_terminal_wrap_markers(cx)),
-                        ),
-                    ))
-                    .child(settings_form_row(
-                        palette,
-                        t!("settings.showLineNumbers"),
-                        None,
-                        settings_switch(
-                            palette,
-                            "terminal-line-numbers",
-                            self.settings.summary().terminal_show_line_numbers,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_terminal_line_numbers(cx);
-                            }),
-                        ),
-                    ))
-                    .child(settings_form_row(
-                        palette,
-                        t!("settings.showTimestamps"),
-                        None,
-                        settings_switch(
-                            palette,
-                            "terminal-timestamps",
-                            self.settings.summary().terminal_show_timestamps,
-                            cx.listener(|this, _, _, cx| {
-                                this.toggle_terminal_timestamps(cx);
-                            }),
-                        ),
-                    ))
-                    .when(self.settings.summary().terminal_show_timestamps, |this| {
-                        this.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(terminal_settings_field_meta(
-                                    palette,
-                                    "settings-timestamp-format-help",
-                                    t!("settings.timestampFormat"),
-                                    t!("settings.timestampFormatDesc"),
-                                    t!("settings.timestampFormatHelp"),
-                                ))
-                                .child(
-                                    div().w_full().max_w(px(520.)).child(timestamp_format_input),
-                                ),
-                        )
-                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(terminal_settings_field_meta(
+                                palette,
+                                "settings-timestamp-format-help",
+                                t!("settings.timestampFormat"),
+                                t!("settings.timestampFormatDesc"),
+                                t!("settings.timestampFormatHelp"),
+                            ))
+                            .child(div().w_full().max_w(px(520.)).child(timestamp_format_input)),
+                    )
                     .child(settings_form_row(
                         palette,
                         t!("terminal.showMultiLinePasteDialog"),

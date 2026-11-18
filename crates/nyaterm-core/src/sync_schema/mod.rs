@@ -728,6 +728,7 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
             "terminal_type",
             "ssh_profile",
             "ssh_compatibility_mode",
+            "allow_short_rsa_host_keys",
             "ai_execution_profile",
             "dynamic_tab_title",
         ],
