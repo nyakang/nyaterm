@@ -23,8 +23,7 @@ use super::terminal_surface_entity::TerminalSurface;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
 use crate::models::recording::ExecutionRecordingEvent;
 use crate::models::{
-    ActionLinkMenuState, ActionLinkTooltipState, RecordingHistorySearchEvent,
-    RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
+    ActionLinkMenuState, ActionLinkTooltipState, TerminalFrameEvent, TerminalFramePipeline,
     TerminalSelection, TerminalSelectionTextError, TerminalViewState,
 };
 
@@ -47,20 +46,21 @@ pub(in crate::features) struct TerminalFeatureFocus {
     pub terminal: FocusHandle,
 }
 
-/// In-terminal find bar and recording history search.
+/// In-terminal find bar. Inactive panes retain their query when switching tabs.
 pub(super) struct TerminalSearchState {
     pub(super) open: bool,
     pub(super) query: String,
-    pub(super) mode: TerminalSearchMode,
     pub(super) case_sensitive: bool,
     pub(super) regex: bool,
     pub(super) whole_word: bool,
     /// Runtime-only per-session preference; missing sessions use the default `true`.
     pub(super) wrap_around_by_session: HashMap<String, bool>,
     pub(super) active_index: usize,
+    pub(super) inactive_queries: HashMap<String, String>,
+    pub(super) refresh_task: Option<Task<()>>,
+    pub(super) generation: u64,
+    pub(super) initial_anchor: Option<(usize, usize)>,
     pub(super) full_search_ready_at: Instant,
-    pub(super) history_pending_key: Option<RecordingHistorySearchKey>,
-    pub(super) history_result: Option<RecordingHistorySearchEvent>,
 }
 
 /// Live terminal views, their surfaces, and the frame/scroll pipeline.
@@ -405,15 +405,16 @@ impl TerminalFeatureState {
             search: TerminalSearchState {
                 open: false,
                 query: String::new(),
-                mode: TerminalSearchMode::Buffer,
                 case_sensitive: false,
                 regex: false,
                 whole_word: false,
                 wrap_around_by_session: HashMap::new(),
                 active_index: 0,
+                inactive_queries: HashMap::new(),
+                refresh_task: None,
+                generation: 0,
+                initial_anchor: None,
                 full_search_ready_at: Instant::now(),
-                history_pending_key: None,
-                history_result: None,
             },
             view: TerminalViewRuntimeState {
                 views: HashMap::new(),
@@ -488,10 +489,6 @@ impl TerminalFeatureState {
         }
     }
 
-    pub(in crate::features) fn set_search_mode(&mut self, mode: TerminalSearchMode) {
-        self.search.mode = mode;
-    }
-
     pub(in crate::features) fn search_wrap_around(&self, session_id: Option<&str>) -> bool {
         session_id
             .filter(|session_id| !session_id.is_empty())
@@ -508,6 +505,7 @@ impl TerminalFeatureState {
         };
         let enabled = !self.search_wrap_around(Some(session_id));
         if enabled {
+            self.search.inactive_queries.remove(session_id);
             self.search.wrap_around_by_session.remove(session_id);
         } else {
             self.search
@@ -518,6 +516,9 @@ impl TerminalFeatureState {
     }
 
     pub(in crate::features) fn move_search_session_state(&mut self, from: &str, to: &str) {
+        if let Some(query) = self.search.inactive_queries.remove(from) {
+            self.search.inactive_queries.insert(to.into(), query);
+        }
         if let Some(wrap_around) = self.search.wrap_around_by_session.remove(from) {
             self.search
                 .wrap_around_by_session
@@ -535,14 +536,7 @@ impl TerminalFeatureState {
 
     #[cfg(test)]
     pub(in crate::features) fn buffer_search_is_open(&self) -> bool {
-        self.search.open && self.search.mode == TerminalSearchMode::Buffer
-    }
-
-    /// Raise the find-bar flag without the focus and text-input choreography
-    /// `NyaTermApp::open_terminal_search` performs, which needs a `Window`.
-    #[cfg(test)]
-    pub(in crate::features) fn open_search_for_test(&mut self) {
-        self.search.open = true;
+        self.search.open
     }
 
     pub(in crate::features) fn input_focus(&self) -> &FocusHandle {
@@ -771,7 +765,7 @@ mod tests {
     use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 
     use super::{LostTerminalSelectionRecovery, TerminalFeatureFocus, TerminalFeatureState};
-    use crate::models::{TerminalFramePipeline, TerminalSearchMode};
+    use crate::models::TerminalFramePipeline;
 
     fn terminal_state() -> TerminalFeatureState {
         let cx = TestAppContext::single();
@@ -796,14 +790,10 @@ mod tests {
         let mut state = terminal_state();
         state.menus.actions_open = true;
         state.search.open = true;
-        state.set_search_mode(TerminalSearchMode::History);
 
         let overlays = state.overlay_visibility();
         assert!(!overlays.paste_review);
         assert!(overlays.actions);
-        assert!(!state.buffer_search_is_open());
-
-        state.set_search_mode(TerminalSearchMode::Buffer);
         assert!(state.buffer_search_is_open());
     }
 

@@ -17,8 +17,8 @@ use crate::models::{
     TerminalFrameOutputEvent, TerminalFrameOutputSubmission, TerminalFrameParts,
     TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
     TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose, TerminalPresentation,
-    TerminalSearchMode, TerminalViewState, TerminalWindowNode, TerminalWorkPolicy,
-    WorkspacePaneNode, terminal_action_link_matcher_key, terminal_frame_scroll_window_extra_rows,
+    TerminalViewState, TerminalWindowNode, TerminalWorkPolicy, WorkspacePaneNode,
+    terminal_action_link_matcher_key, terminal_frame_scroll_window_extra_rows,
     terminal_frame_search_result_is_current, terminal_geometry_diagnostics_enabled,
     terminal_snapshot_matches_grid_geometry,
 };
@@ -32,14 +32,13 @@ const TERMINAL_FIND_REQUEST_RETRY: Duration = Duration::from_millis(500);
 
 fn terminal_find_request_still_pending(
     pending_key: Option<&TerminalFrameSearchKey>,
-    pending_revision: u64,
+    _pending_revision: u64,
     pending_at: Option<Instant>,
     key: &TerminalFrameSearchKey,
-    revision: u64,
+    _revision: u64,
     now: Instant,
 ) -> bool {
     pending_key == Some(key)
-        && pending_revision == revision
         && pending_at
             .is_some_and(|at| now.saturating_duration_since(at) < TERMINAL_FIND_REQUEST_RETRY)
 }
@@ -584,7 +583,12 @@ impl NyaTermApp {
         match purpose {
             TerminalFrameSearchPurpose::Find => {
                 if view.search_result.as_ref().is_some_and(|result| {
-                    terminal_frame_search_result_is_current(result, &key, view.screen_revision)
+                    !result.partial
+                        && terminal_frame_search_result_is_current(
+                            result,
+                            &key,
+                            view.screen_revision,
+                        )
                 }) || terminal_find_request_still_pending(
                     view.pending_search_key.as_ref(),
                     view.pending_search_revision,
@@ -953,7 +957,7 @@ impl NyaTermApp {
                 self.clear_terminal_scroll_residual_for_session(Some(&snapshot.session_id));
                 self.apply_terminal_snapshot_frame(snapshot, cx)
             }
-            TerminalFrameEvent::Search(search) => self.apply_terminal_search_frame(search),
+            TerminalFrameEvent::Search(search) => self.apply_terminal_search_frame(search, cx),
         }
     }
 
@@ -1475,13 +1479,15 @@ impl NyaTermApp {
     fn apply_terminal_search_frame(
         &mut self,
         frame: TerminalFrameSearchEvent,
+        cx: &mut Context<Self>,
     ) -> TerminalFrameApplyResult {
         let session_id = frame.session_id.clone();
         let result_key = frame.result.key.clone();
         if matches!(
             frame.purpose,
             TerminalFrameSearchPurpose::Find | TerminalFrameSearchPurpose::FindVisible { .. }
-        ) && (self.session.active_id() != Some(session_id.as_str())
+        ) && (!self.terminal.search.open
+            || self.session.active_id() != Some(session_id.as_str())
             || self.terminal_search_key().as_ref() != Some(&result_key))
         {
             return TerminalFrameApplyResult::default();
@@ -1558,12 +1564,28 @@ impl NyaTermApp {
         if !result_applied {
             return TerminalFrameApplyResult::default();
         }
-        if frame.purpose == TerminalFrameSearchPurpose::Find {
+        if matches!(
+            frame.purpose,
+            TerminalFrameSearchPurpose::Find | TerminalFrameSearchPurpose::FindVisible { .. }
+        ) {
             let matches = self.terminal_buffer_matches().unwrap_or_default();
             let occurrences = self.terminal_buffer_occurrence_ranges();
-            self.terminal.search.active_index = previous_position.map_or(0, |position| {
-                terminal_search_index_for_position(&matches, &occurrences, position)
-            });
+            if let Some(position) = self.terminal.search.initial_anchor.or(previous_position)
+                && !occurrences.is_empty()
+            {
+                self.terminal.search.active_index =
+                    terminal_search_index_for_position(&matches, &occurrences, position);
+                if self.terminal.search.initial_anchor.take().is_some() {
+                    let hit = &matches[occurrences[self.terminal.search.active_index].start];
+                    let view = &self.terminal.view.views[&session_id];
+                    let bottom = view.total_rows_for_ui().saturating_sub(view.scroll_offset);
+                    if !(bottom.saturating_sub(view.viewport_rows_for_ui())..bottom)
+                        .contains(&hit.line_index)
+                    {
+                        self.reveal_terminal_absolute_line(hit.line_index, cx);
+                    }
+                }
+            }
         }
         let is_visible = self.terminal_session_has_visible_surface(&session_id);
         if matches!(
@@ -1577,7 +1599,6 @@ impl NyaTermApp {
                 is_visible,
                 self.session.active_id(),
                 self.terminal.search.open,
-                self.terminal.search.mode,
                 TerminalFrameSearchKeys {
                     current: current_search_key.as_ref(),
                     result: &result_key,
@@ -3177,13 +3198,11 @@ fn terminal_search_frame_apply_result(
     is_visible: bool,
     active_session_id: Option<&str>,
     search_open: bool,
-    search_mode: TerminalSearchMode,
     keys: TerminalFrameSearchKeys<'_>,
 ) -> TerminalFrameApplyResult {
     let updates_active_buffer_search = is_current_revision
         && is_visible
         && search_open
-        && search_mode == TerminalSearchMode::Buffer
         && active_session_id == Some(session_id.as_str())
         && keys.current == Some(keys.result);
     TerminalFrameApplyResult {
@@ -3255,6 +3274,14 @@ fn terminal_apply_search_result_to_view(
                 view.pending_selected_occurrence_key = None;
             }
         }
+    }
+    if purpose == TerminalFrameSearchPurpose::Find && result.revision < view.screen_revision {
+        let mut retained = result.clone();
+        if !retained.retain_stable_history(view.history_state(), view.screen_revision) {
+            return false;
+        }
+        view.search_result = Some(retained);
+        return true;
     }
     if result.revision != view.screen_revision
         || (matches!(

@@ -290,21 +290,6 @@ impl QuickSwitchItem {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum TerminalSearchMode {
-    Buffer,
-    History,
-}
-
-impl TerminalSearchMode {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Buffer => "Buffer",
-            Self::History => "History",
-        }
-    }
-}
-
 pub(crate) fn normalize_paste_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }

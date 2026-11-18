@@ -911,11 +911,8 @@ fn terminal_frame_set_snapshot_priority_compacts_to_latest() {
 #[test]
 fn terminal_frame_visible_text_event_keeps_only_tail_for_ui() {
     let mut session = TerminalFrameSession::new("UTF-8", 1000);
-    let mut recording_pipeline =
+    let recording_pipeline =
         RecordingWritePipeline::spawn(nyaterm_recording::recording::DEFAULT_MEMORY_LIMIT_BYTES);
-    let mut recording_events = recording_pipeline
-        .take_event_receiver()
-        .expect("recording events should be available");
     let input = format!(
         "{}tail",
         "x".repeat(TERMINAL_FRAME_VISIBLE_TEXT_TAIL_CAP + 1024)
@@ -935,31 +932,24 @@ fn terminal_frame_visible_text_event_keeps_only_tail_for_ui() {
         event.recording_text_bytes,
         TERMINAL_FRAME_VISIBLE_TEXT_TAIL_CAP + 1028
     );
-    recording_pipeline.request_history_search(
-        nyaterm_recording::pipeline::RecordingHistorySearchKey {
-            session_id: "s1".to_string(),
-            query: "tail".to_string(),
-            case_sensitive: false,
-            regex: false,
-            whole_word: false,
-            limit: Some(10),
-            context_before: Some(0),
-            context_after: Some(0),
-            max_lines: None,
-        },
+    let dir = nyaterm_core::test_support::TestTempDir::new("nyaterm-frame-tail");
+    let path = dir.path().join("capture.log");
+    recording_pipeline
+        .writer()
+        .save_transcript(
+            "s1".into(),
+            path.to_string_lossy().into_owned(),
+            false,
+            false,
+            1024 * 1024,
+        )
+        .unwrap();
+    assert!(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .trim_end()
+            .ends_with("tail")
     );
-    recording_pipeline.writer().flush();
-    let recorded = loop {
-        let event = recording_events
-            .try_recv()
-            .expect("recording search result should be available");
-        if let nyaterm_recording::pipeline::RecordingWriteEvent::HistorySearch(event) = event {
-            break event
-                .result
-                .expect("recording history search should succeed");
-        }
-    };
-    assert_eq!(recorded.total, 1);
 }
 
 #[test]
@@ -2010,19 +2000,55 @@ fn terminal_frame_command_pressure_can_drop_a_find_request() {
 }
 
 #[test]
-fn find_search_cancels_when_output_changes_the_screen_revision() {
+fn find_search_finishes_while_output_rotates_and_rechecks_the_live_tail() {
     let mut session = selected_occurrence_test_session(80, 600, "plain");
+    session.screen.advance(b"needle\r\n");
+    session.screen.advance("plain\r\n".repeat(700).as_bytes());
+    session.screen.advance(b"needle");
     let job = FindSearchJob::new(
-        "s1".to_string(),
-        selected_occurrence_test_key("needle", 1000, 0),
+        "s1".into(),
+        selected_occurrence_test_key("needle", 1000, 1),
         &session,
     );
-    session.revision += 1;
     let mut jobs = VecDeque::from([job]);
-    let sessions = HashMap::from([("s1".to_string(), session)]);
-    let event = process_next_find_search_chunk(&mut jobs, &sessions).unwrap();
-    assert!(event.result.matches.is_err());
-    assert!(jobs.is_empty());
+    let mut sessions = HashMap::from([("s1".into(), session)]);
+    for _ in 0..10 {
+        let session = sessions.get_mut("s1").unwrap();
+        session.screen.advance(b"\r\x1b[2Knew\r\n");
+        session.revision += 1;
+        if let Some(event) = process_next_find_search_chunk(&mut jobs, &sessions) {
+            assert_eq!(event.result.occurrences.len(), 1);
+            assert!(event.result.partial);
+            return;
+        }
+    }
+    panic!("continuous output starved find");
+}
+
+#[test]
+fn dense_find_keeps_the_viewport_match_after_full_scan() {
+    let session = selected_occurrence_test_session(80, 2200, "needle");
+    let anchor = session.screen.total_rows() - 5;
+    let job = FindSearchJob::from_anchor(
+        "s1".into(),
+        selected_occurrence_test_key("needle", 1000, 1),
+        &session,
+        anchor,
+    );
+    let mut jobs = VecDeque::from([job]);
+    let sessions = HashMap::from([("s1".into(), session)]);
+    loop {
+        if let Some(event) = process_next_find_search_chunk(&mut jobs, &sessions) {
+            assert!(event.result.truncated);
+            let hits = event.result.matches.unwrap();
+            assert!(hits.iter().any(|m| m.line_index == anchor));
+            assert!(
+                hits.windows(2)
+                    .all(|pair| pair[0].line_index <= pair[1].line_index)
+            );
+            break;
+        }
+    }
 }
 
 #[test]

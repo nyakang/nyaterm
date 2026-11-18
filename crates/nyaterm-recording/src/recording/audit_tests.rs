@@ -1,7 +1,6 @@
 use super::{
     ExistingFileBehavior, RecordingContext, RecordingManager, RecordingMode, RecordingProfile,
-    RecordingRotationPolicy, TerminalHistorySearchRequest, append_numbered_suffix,
-    input_recording_path, lock_recover,
+    RecordingRotationPolicy, append_numbered_suffix, input_recording_path, lock_recover,
 };
 use nyaterm_core::test_support::TestTempDir;
 use std::fs;
@@ -152,20 +151,7 @@ fn unterminated_lines_and_input_stay_within_aggregate_budget() {
     }
     manager.stop("audit").unwrap();
     assert!(fs::metadata(path).unwrap().len() > 64 * 4096 * 3);
-    let search = manager
-        .search_history(TerminalHistorySearchRequest {
-            session_id: "audit".into(),
-            query: "红".into(),
-            case_sensitive: true,
-            regex: false,
-            whole_word: false,
-            limit: None,
-            context_before: None,
-            context_after: None,
-            max_lines: None,
-        })
-        .unwrap();
-    assert!(search.truncated);
+    assert!(lock_recover(&manager.sessions)["audit"].record_bytes <= 1024);
 }
 
 #[test]

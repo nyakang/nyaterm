@@ -772,6 +772,9 @@ impl NyaTermApp {
     }
 
     fn mark_terminal_user_scroll_activity(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self.session.active_id() == Some(session_id) {
+            self.terminal.search.initial_anchor = None;
+        }
         if session_id.is_empty() {
             return;
         }

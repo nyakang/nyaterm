@@ -2096,13 +2096,32 @@ impl TerminalCore {
         self.search_grid_in_absolute_range(query, 0..self.total_rows())
     }
 
+    /// Line identity for a retained absolute row on the current screen.
+    pub fn search_line_id(&self, row: usize) -> Option<TerminalLineId> {
+        if row >= self.total_rows() {
+            return None;
+        }
+        let state = self.active_line_state();
+        Some(TerminalLineId {
+            epoch: state.epoch,
+            logical_line: state.logical_origin + row as i64 - self.scrollback_len() as i64,
+        })
+    }
+
+    /// Start of the first logical line that can be rewritten by live output.
+    pub fn search_mutable_start(&self) -> usize {
+        let first = self.term.line_search_left(Point::new(Line(0), Column(0)));
+        self.scrollback_len()
+            .saturating_add_signed(first.line.0 as isize)
+    }
+
     pub fn search_grid_occurrences_in_absolute_range(
         &self,
         query: &TerminalSearchQuery,
         absolute_lines: Range<usize>,
         mode: TerminalSearchRangeMode,
     ) -> Result<Vec<TerminalGridOccurrence>, TerminalSearchError> {
-        if query.pattern.trim().is_empty() || query.limit == 0 {
+        if query.pattern.is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
         let total_rows = self.total_rows();
@@ -2180,7 +2199,7 @@ impl TerminalCore {
         query: &TerminalSearchQuery,
         absolute_lines: Range<usize>,
     ) -> Result<Vec<TerminalGridMatch>, TerminalSearchError> {
-        if query.pattern.trim().is_empty() || query.limit == 0 {
+        if query.pattern.is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
 

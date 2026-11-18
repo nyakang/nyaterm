@@ -2,8 +2,6 @@ use nyaterm_core::terminal::input_tracker::{TerminalInputState, resync_from_term
 use nyaterm_terminal::recording_sanitizer::{
     RecordingEvent, RecordingLineEditor, RecordingSanitizer,
 };
-use regex::RegexBuilder;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, File, OpenOptions};
@@ -11,7 +9,6 @@ use std::io::{BufWriter, Write};
 use std::mem;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
 use thiserror::Error;
 use time::OffsetDateTime;
 
@@ -19,9 +16,6 @@ pub const DEFAULT_MEMORY_LIMIT_BYTES: usize = 5 * 1024 * 1024;
 
 #[cfg(test)]
 mod audit_tests;
-pub const DEFAULT_HISTORY_SEARCH_LINES: usize = 30_000;
-pub const MAX_HISTORY_SEARCH_LINES: usize = 100_000;
-pub const DEFAULT_HISTORY_SEARCH_LIMIT: usize = 100;
 pub const DEFAULT_RECORDING_PATH_TEMPLATE: &str =
     "{group}/{session}/{yyyy}-{MM}-{dd}/{HH}-{mm}-{ss}-{SSS}-{session_short_id}.log";
 
@@ -113,8 +107,6 @@ pub struct RecordingStatus {
 pub enum RecordingError {
     #[error("{0}")]
     Config(String),
-    #[error("invalid regular expression: {0}")]
-    Regex(#[from] regex::Error),
     #[error("recording runtime failure: {0}")]
     Runtime(String),
     #[error(transparent)]
@@ -123,7 +115,6 @@ pub enum RecordingError {
 
 #[derive(Clone, Debug)]
 struct TranscriptRecord {
-    line_id: u64,
     timestamp: String,
     label: &'static str,
     data: String,
@@ -131,14 +122,13 @@ struct TranscriptRecord {
 }
 
 impl TranscriptRecord {
-    fn new(line_id: u64, label: &'static str, data: String) -> Self {
-        Self::at_timestamp(line_id, label, data, chrono_timestamp())
+    fn new(label: &'static str, data: String) -> Self {
+        Self::at_timestamp(label, data, chrono_timestamp())
     }
 
-    fn at_timestamp(line_id: u64, label: &'static str, data: String, timestamp: String) -> Self {
+    fn at_timestamp(label: &'static str, data: String, timestamp: String) -> Self {
         let size_bytes = timestamp.len() + label.len() + data.len() + 7;
         Self {
-            line_id,
             timestamp,
             label,
             data,
@@ -155,45 +145,6 @@ impl TranscriptRecord {
             include_timestamps,
         )
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalHistorySearchRequest {
-    pub session_id: String,
-    pub query: String,
-    #[serde(default)]
-    pub case_sensitive: bool,
-    #[serde(default)]
-    pub regex: bool,
-    #[serde(default)]
-    pub whole_word: bool,
-    pub limit: Option<usize>,
-    pub context_before: Option<usize>,
-    pub context_after: Option<usize>,
-    pub max_lines: Option<usize>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalHistorySearchResponse {
-    pub total: usize,
-    pub elapsed_ms: u128,
-    pub truncated: bool,
-    pub results: Vec<TerminalHistorySearchResult>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalHistorySearchResult {
-    pub line_id: u64,
-    pub line_number: usize,
-    pub column_start: usize,
-    pub column_end: usize,
-    pub preview: String,
-    pub before: Vec<String>,
-    pub after: Vec<String>,
-    pub source: String,
 }
 
 /// Final paths remain available even when writing or flushing failed.
@@ -496,14 +447,12 @@ struct SessionCaptureState {
     input_echo_observed: bool,
     submitted_echo_start: Option<usize>,
     suppress_next_newline: bool,
-    next_line_id: u64,
     // Separate streaming parsers and editable rows for interactive and
     // background output; neither stream can consume the other's control bytes.
     sanitizer: RecordingSanitizer,
     execution_sanitizer: RecordingSanitizer,
     output_edit: RecordingLineEditor,
     execution_edit: RecordingLineEditor,
-    history_truncated: bool,
     history_include_input: bool,
     batch_timestamp: String,
 }
@@ -533,12 +482,10 @@ impl SessionCaptureState {
             input_echo_observed: false,
             submitted_echo_start: None,
             suppress_next_newline: false,
-            next_line_id: 1,
             sanitizer: RecordingSanitizer::default(),
             execution_sanitizer: RecordingSanitizer::default(),
             output_edit: RecordingLineEditor::default(),
             execution_edit: RecordingLineEditor::default(),
-            history_truncated: false,
             history_include_input: false,
             batch_timestamp: chrono_timestamp(),
         }
@@ -625,7 +572,6 @@ impl SessionCaptureState {
         self.submitted_echo_start = None;
         self.input_echo_start = None;
         self.input_echo_observed = false;
-        self.history_truncated = true;
         if self.recording_state != RecordingStatusState::Failed {
             self.recording_state = RecordingStatusState::Degraded;
             self.last_error = Some("recording writer queue overflowed".to_string());
@@ -979,9 +925,7 @@ impl SessionCaptureState {
         {
             self.mark_failed(error.to_string());
         }
-        for mut record in early.records {
-            record.line_id = self.next_line_id;
-            self.next_line_id = self.next_line_id.saturating_add(1);
+        for record in early.records {
             if let Some(recording) = self.recording.as_mut()
                 && let Err(error) = recording.write_record(&record)
             {
@@ -995,28 +939,17 @@ impl SessionCaptureState {
 
     fn snapshot_records(&self) -> Vec<TranscriptRecord> {
         let mut records: Vec<_> = self.records.iter().cloned().collect();
-        let mut next_line_id = self.next_line_id;
         let mut tail = self.output_buffer.clone();
         tail.push_str(&self.suppressed_pending_output_tail());
         if !tail.is_empty() {
-            records.push(TranscriptRecord::new(next_line_id, "OUTPUT", tail));
-            next_line_id += 1;
+            records.push(TranscriptRecord::new("OUTPUT", tail));
         }
         let execution_tail = self.execution_edit.pending().trim_end_matches(' ');
         if !execution_tail.is_empty() {
-            records.push(TranscriptRecord::new(
-                next_line_id,
-                "OUTPUT",
-                execution_tail.to_string(),
-            ));
-            next_line_id += 1;
+            records.push(TranscriptRecord::new("OUTPUT", execution_tail.to_string()));
         }
         if self.includes_input() && !self.input_buffer.trim().is_empty() {
-            records.push(TranscriptRecord::new(
-                next_line_id,
-                "INPUT",
-                self.input_buffer.clone(),
-            ));
+            records.push(TranscriptRecord::new("INPUT", self.input_buffer.clone()));
         }
         records
     }
@@ -1051,10 +984,7 @@ impl SessionCaptureState {
             return;
         }
 
-        let line_id = self.next_line_id;
-        self.next_line_id = self.next_line_id.saturating_add(1);
-        let record =
-            TranscriptRecord::at_timestamp(line_id, label, data, self.batch_timestamp.clone());
+        let record = TranscriptRecord::at_timestamp(label, data, self.batch_timestamp.clone());
         if self.recording_state != RecordingStatusState::Failed
             && let Some(recording) = self.recording.as_mut()
             && let Err(error) = recording.write_record(&record)
@@ -1087,7 +1017,6 @@ impl SessionCaptureState {
         while self.record_bytes + self.buffered_bytes() > self.memory_limit_bytes {
             if let Some(record) = self.records.pop_front() {
                 self.record_bytes = self.record_bytes.saturating_sub(record.size_bytes);
-                self.history_truncated = true;
                 continue;
             }
             if !self.provisional_raw_output.is_empty() {
@@ -1114,7 +1043,6 @@ impl SessionCaptureState {
             } else {
                 break;
             }
-            self.history_truncated = true;
         }
     }
 
@@ -1507,77 +1435,6 @@ impl RecordingManager {
         Err(RecordingError::Config(
             "too many transcript file collisions".into(),
         ))
-    }
-
-    pub fn search_history(
-        &self,
-        request: TerminalHistorySearchRequest,
-    ) -> Result<TerminalHistorySearchResponse, RecordingError> {
-        let started = Instant::now();
-        let query = request.query;
-        if query.is_empty() {
-            return Ok(TerminalHistorySearchResponse {
-                total: 0,
-                elapsed_ms: started.elapsed().as_millis(),
-                truncated: false,
-                results: Vec::new(),
-            });
-        }
-
-        let limit = request.limit.unwrap_or(DEFAULT_HISTORY_SEARCH_LIMIT).max(1);
-        let context_before = request.context_before.unwrap_or(0).min(20);
-        let context_after = request.context_after.unwrap_or(0).min(20);
-        let max_lines = request
-            .max_lines
-            .unwrap_or(DEFAULT_HISTORY_SEARCH_LINES)
-            .clamp(1, MAX_HISTORY_SEARCH_LINES);
-        let records = {
-            let sessions = lock_recover(&self.sessions);
-            sessions
-                .get(&request.session_id)
-                .map(SessionCaptureState::snapshot_records)
-                .unwrap_or_default()
-        };
-        let start_index = records.len().saturating_sub(max_lines);
-        let searched_records = &records[start_index..];
-        let matcher = HistoryMatcher::new(
-            &query,
-            request.case_sensitive,
-            request.regex,
-            request.whole_word,
-        )?;
-        let mut total = 0usize;
-        let mut results = Vec::new();
-
-        for (relative_index, record) in searched_records.iter().enumerate() {
-            if let Some((column_start, column_end)) = matcher.find(&record.data) {
-                total += 1;
-                if results.len() < limit {
-                    let absolute_index = start_index + relative_index;
-                    results.push(TerminalHistorySearchResult {
-                        line_id: record.line_id,
-                        line_number: absolute_index + 1,
-                        column_start,
-                        column_end,
-                        preview: record.data.clone(),
-                        before: context_records(&records, absolute_index, context_before, true),
-                        after: context_records(&records, absolute_index, context_after, false),
-                        source: record.label.to_ascii_lowercase(),
-                    });
-                }
-            }
-        }
-
-        Ok(TerminalHistorySearchResponse {
-            total,
-            elapsed_ms: started.elapsed().as_millis(),
-            truncated: total > results.len()
-                || records.len() > max_lines
-                || lock_recover(&self.sessions)
-                    .get(&request.session_id)
-                    .is_some_and(|state| state.history_truncated),
-            results,
-        })
     }
 
     pub fn set_memory_limit(&self, max_bytes: usize) {
@@ -2288,126 +2145,6 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-enum HistoryMatcher {
-    Literal {
-        needle: String,
-        case_sensitive: bool,
-        whole_word: bool,
-    },
-    Regex(regex::Regex),
-}
-
-impl HistoryMatcher {
-    fn new(
-        query: &str,
-        case_sensitive: bool,
-        regex: bool,
-        whole_word: bool,
-    ) -> Result<Self, RecordingError> {
-        if regex {
-            let pattern = if whole_word {
-                format!(r"\b(?:{query})\b")
-            } else {
-                query.to_string()
-            };
-            let compiled = RegexBuilder::new(&pattern)
-                .case_insensitive(!case_sensitive)
-                .build()?;
-            return Ok(Self::Regex(compiled));
-        }
-
-        let needle = if case_sensitive {
-            query.to_string()
-        } else {
-            query.to_lowercase()
-        };
-
-        Ok(Self::Literal {
-            needle,
-            case_sensitive,
-            whole_word,
-        })
-    }
-
-    fn find(&self, haystack: &str) -> Option<(usize, usize)> {
-        match self {
-            Self::Literal {
-                needle,
-                case_sensitive,
-                whole_word,
-            } => {
-                let searchable = if *case_sensitive {
-                    haystack.to_string()
-                } else {
-                    haystack.to_lowercase()
-                };
-                find_literal_match(&searchable, needle, *whole_word)
-            }
-            Self::Regex(regex) => regex
-                .find(haystack)
-                .map(|found| (found.start(), found.end())),
-        }
-    }
-}
-
-fn find_literal_match(haystack: &str, needle: &str, whole_word: bool) -> Option<(usize, usize)> {
-    if needle.is_empty() {
-        return None;
-    }
-
-    let mut offset = 0;
-    while offset <= haystack.len() {
-        let relative = haystack[offset..].find(needle)?;
-        let start = offset + relative;
-        let end = start + needle.len();
-
-        if !whole_word || is_word_boundary_match(haystack, start, end) {
-            return Some((start, end));
-        }
-
-        offset = end;
-    }
-
-    None
-}
-
-fn is_word_boundary_match(text: &str, start: usize, end: usize) -> bool {
-    let before = text[..start].chars().next_back();
-    let after = text[end..].chars().next();
-
-    before.is_none_or(|ch| !is_word_char(ch)) && after.is_none_or(|ch| !is_word_char(ch))
-}
-
-fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
-fn context_records(
-    records: &[TranscriptRecord],
-    index: usize,
-    count: usize,
-    before: bool,
-) -> Vec<String> {
-    if count == 0 {
-        return Vec::new();
-    }
-
-    if before {
-        let start = index.saturating_sub(count);
-        return records[start..index]
-            .iter()
-            .map(|record| record.data.clone())
-            .collect();
-    }
-
-    let start = index.saturating_add(1);
-    let end = start.saturating_add(count).min(records.len());
-    records[start..end]
-        .iter()
-        .map(|record| record.data.clone())
-        .collect()
-}
-
 #[cfg(test)]
 fn strip_terminal_control_sequences(text: &str) -> String {
     RecordingSanitizer::default().feed(text)
@@ -3002,95 +2739,6 @@ mod tests {
         assert!(saved.contains("third line"));
 
         let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn terminal_history_search_finds_literal_matches() {
-        let manager = input_enabled_manager();
-        manager.write_output("s1", "alpha\nbeta install\nbeta done\n");
-
-        let result = manager
-            .search_history(super::TerminalHistorySearchRequest {
-                session_id: "s1".to_string(),
-                query: "beta".to_string(),
-                case_sensitive: false,
-                regex: false,
-                whole_word: false,
-                limit: Some(100),
-                context_before: Some(1),
-                context_after: Some(1),
-                max_lines: None,
-            })
-            .unwrap();
-
-        assert_eq!(result.total, 2);
-        assert_eq!(result.results.len(), 2);
-        assert_eq!(result.results[0].line_number, 2);
-        assert_eq!(result.results[0].before, vec!["alpha"]);
-        assert_eq!(result.results[0].after, vec!["beta done"]);
-        assert_eq!(result.results[0].source, "output");
-    }
-
-    #[test]
-    fn terminal_history_search_honors_case_and_whole_word() {
-        let manager = input_enabled_manager();
-        manager.write_output("s1", "install\nInstall\ninstaller\n");
-
-        let case_sensitive = manager
-            .search_history(super::TerminalHistorySearchRequest {
-                session_id: "s1".to_string(),
-                query: "Install".to_string(),
-                case_sensitive: true,
-                regex: false,
-                whole_word: false,
-                limit: Some(100),
-                context_before: Some(0),
-                context_after: Some(0),
-                max_lines: None,
-            })
-            .unwrap();
-        assert_eq!(case_sensitive.total, 1);
-        assert_eq!(case_sensitive.results[0].preview, "Install");
-
-        let whole_word = manager
-            .search_history(super::TerminalHistorySearchRequest {
-                session_id: "s1".to_string(),
-                query: "install".to_string(),
-                case_sensitive: false,
-                regex: false,
-                whole_word: true,
-                limit: Some(100),
-                context_before: Some(0),
-                context_after: Some(0),
-                max_lines: None,
-            })
-            .unwrap();
-        assert_eq!(whole_word.total, 2);
-    }
-
-    #[test]
-    fn terminal_history_search_supports_regex_limit_and_truncation() {
-        let manager = input_enabled_manager();
-        manager.write_output("s1", "error 100\nerror 200\nok\n");
-
-        let result = manager
-            .search_history(super::TerminalHistorySearchRequest {
-                session_id: "s1".to_string(),
-                query: r"error \d+".to_string(),
-                case_sensitive: false,
-                regex: true,
-                whole_word: false,
-                limit: Some(1),
-                context_before: Some(0),
-                context_after: Some(0),
-                max_lines: None,
-            })
-            .unwrap();
-
-        assert_eq!(result.total, 2);
-        assert_eq!(result.results.len(), 1);
-        assert!(result.truncated);
-        assert_eq!(result.results[0].preview, "error 100");
     }
 
     #[test]

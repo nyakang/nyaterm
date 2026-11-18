@@ -23,7 +23,7 @@ use crate::features::terminal::{
     TERMINAL_KEY_CONTEXT, TerminalControlC, TerminalShiftTab, TerminalTab,
 };
 use crate::models::{
-    SessionLaunchConfig, TerminalPerformanceMode, TerminalPerformanceOverlay, TerminalSearchMode,
+    SessionLaunchConfig, TerminalPerformanceMode, TerminalPerformanceOverlay,
     terminal_action_link_matcher_key, terminal_expensive_interactions_enabled,
 };
 use crate::terminal::{NyaTerminalElement, TerminalGridSelection, TerminalLineDecorations};
@@ -369,7 +369,6 @@ impl NyaTermApp {
             let search_matches = if render_profile.enhanced_decorations_enabled()
                 && is_active
                 && self.terminal.search.open
-                && self.terminal.search.mode == TerminalSearchMode::Buffer
             {
                 self.terminal_buffer_matches().unwrap_or_default()
             } else {
@@ -404,25 +403,22 @@ impl NyaTermApp {
                         .push((search_match.start_col, search_match.end_col));
                 }
             }
-            for (match_index, search_match) in search_matches.iter().enumerate() {
-                let abs = search_match.line_index;
-                if abs < abs_start || abs >= abs_end {
-                    continue;
-                }
-                let view_row = abs - abs_start;
-                let range = (search_match.start_col, search_match.end_col);
-                search_ranges_by_line
-                    .entry(view_row)
-                    .or_default()
-                    .push(range);
-                if active_range
-                    .as_ref()
-                    .is_some_and(|range| range.contains(&match_index))
-                {
-                    active_search_ranges_by_line
-                        .entry(view_row)
-                        .or_default()
-                        .push(range);
+            if is_active
+                && self.terminal.search.open
+                && render_profile.enhanced_decorations_enabled()
+            {
+                let highlights = self.terminal_find_highlights();
+                for hit in crate::features::terminal::terminal_search_runtime::terminal_matches_in_absolute_range(&highlights,abs_start..abs_end) {search_ranges_by_line.entry(hit.line_index-abs_start).or_default().push((hit.start_col,hit.end_col));}
+                if let Some(active) = active_range.and_then(|range| search_matches.get(range)) {
+                    for hit in active
+                        .iter()
+                        .filter(|hit| (abs_start..abs_end).contains(&hit.line_index))
+                    {
+                        active_search_ranges_by_line
+                            .entry(hit.line_index - abs_start)
+                            .or_default()
+                            .push((hit.start_col, hit.end_col));
+                    }
                 }
             }
             let search_mapping_duration = search_stage_started_at.elapsed();

@@ -11,7 +11,7 @@ use futures::{
 
 use crate::recording::{
     RecordingCapturePolicy, RecordingCompletion, RecordingContext, RecordingManager, RecordingMode,
-    RecordingProfile, RecordingStatus, TerminalHistorySearchRequest, TerminalHistorySearchResponse,
+    RecordingProfile, RecordingStatus,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -52,8 +52,6 @@ impl ExecutionRecordingEvent {
     }
 }
 
-type SearchMailbox = Arc<Mutex<HashMap<String, RecordingHistorySearchEvent>>>;
-
 type StatusMailbox = Arc<Mutex<HashMap<(String, u8), RecordingStatus>>>;
 
 #[derive(Default)]
@@ -76,8 +74,6 @@ pub struct RecordingWriteHandle {
     dropped: Arc<Mutex<DroppedPayloads>>,
     policies: Arc<Mutex<HashMap<String, RecordingCapturePolicy>>>,
     history_input: Arc<AtomicBool>,
-    searches: Arc<Mutex<HashMap<String, RecordingHistorySearchKey>>>,
-    search_results: SearchMailbox,
 }
 
 impl std::fmt::Debug for RecordingWriteHandle {
@@ -101,18 +97,11 @@ struct DroppedPayloadState {
 pub struct RecordingEventReceiver {
     receiver: UnboundedReceiver<RecordingWriteEvent>,
     statuses: StatusMailbox,
-    search_results: SearchMailbox,
 }
 
 impl RecordingEventReceiver {
     fn resolve(&self, event: RecordingWriteEvent) -> Option<RecordingWriteEvent> {
         match event {
-            RecordingWriteEvent::PendingHistorySearch { session_id } => self
-                .search_results
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .remove(&session_id)
-                .map(RecordingWriteEvent::HistorySearch),
             RecordingWriteEvent::PendingStatus { session_id, state } => self
                 .statuses
                 .lock()
@@ -163,8 +152,6 @@ impl RecordingWritePipeline {
             dropped: Arc::new(Mutex::new(DroppedPayloads::default())),
             policies: Arc::new(Mutex::new(HashMap::new())),
             history_input: Arc::new(AtomicBool::new(false)),
-            searches: Arc::new(Mutex::new(HashMap::new())),
-            search_results: Arc::new(Mutex::new(HashMap::new())),
         };
         let worker_handle = handle.clone();
         let worker_statuses = Arc::clone(&statuses);
@@ -180,14 +167,12 @@ impl RecordingWritePipeline {
                 )
             })
             .expect("failed to spawn recording writer");
-        let search_results = Arc::clone(&handle.search_results);
         Self {
             handle,
             worker: Some(worker),
             event_rx: Some(RecordingEventReceiver {
                 receiver: event_rx,
                 statuses,
-                search_results,
             }),
         }
     }
@@ -262,23 +247,6 @@ impl RecordingWritePipeline {
             .handle
             .command_tx
             .send(RecordingWriteCommand::SetHistoryInput { enabled });
-    }
-    pub fn request_history_search(&self, key: RecordingHistorySearchKey) {
-        if key.query.trim().is_empty() {
-            return;
-        }
-        let id = key.session_id.clone();
-        let mut searches = self
-            .handle
-            .searches
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if searches.insert(id.clone(), key).is_none() {
-            let _ = self
-                .handle
-                .command_tx
-                .send(RecordingWriteCommand::HistorySearch { session_id: id });
-        }
     }
     pub fn take_event_receiver(&mut self) -> Option<RecordingEventReceiver> {
         self.event_rx.take()
@@ -670,44 +638,10 @@ impl RecordingWriteHandle {
 
 #[derive(Clone, Debug)]
 pub enum RecordingWriteEvent {
-    HistorySearch(RecordingHistorySearchEvent),
-    PendingHistorySearch { session_id: String },
     Status(RecordingStatus),
     StatusRemoved { session_id: String },
     PendingStatus { session_id: String, state: u8 },
     ShutdownError(String),
-}
-#[derive(Clone, Debug)]
-pub struct RecordingHistorySearchEvent {
-    pub key: RecordingHistorySearchKey,
-    pub result: Result<TerminalHistorySearchResponse, String>,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordingHistorySearchKey {
-    pub session_id: String,
-    pub query: String,
-    pub case_sensitive: bool,
-    pub regex: bool,
-    pub whole_word: bool,
-    pub limit: Option<usize>,
-    pub context_before: Option<usize>,
-    pub context_after: Option<usize>,
-    pub max_lines: Option<usize>,
-}
-impl RecordingHistorySearchKey {
-    pub fn request(&self) -> TerminalHistorySearchRequest {
-        TerminalHistorySearchRequest {
-            session_id: self.session_id.clone(),
-            query: self.query.clone(),
-            case_sensitive: self.case_sensitive,
-            regex: self.regex,
-            whole_word: self.whole_word,
-            limit: self.limit,
-            context_before: self.context_before,
-            context_after: self.context_after,
-            max_lines: self.max_lines,
-        }
-    }
 }
 #[derive(Debug)]
 enum RecordingWriteCommand {
@@ -780,9 +714,6 @@ enum RecordingWriteCommand {
     RekeySession {
         old_session_id: String,
         new_session_id: String,
-    },
-    HistorySearch {
-        session_id: String,
     },
     #[cfg(any(test, feature = "test-support"))]
     Flush {
@@ -1071,16 +1002,6 @@ fn run_recording_writer(
                         .unbounded_send(RecordingWriteEvent::ShutdownError(error.to_string()));
                 }
                 manager.cleanup_session(&id);
-                handle
-                    .searches
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&id);
-                handle
-                    .search_results
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&id);
                 if !matches!(rekeyed.get(&id), Some(Some(_))) {
                     rekeyed.insert(id.clone(), None);
                 }
@@ -1098,16 +1019,6 @@ fn run_recording_writer(
                 new_session_id,
             } => {
                 manager.rekey_session(&old_session_id, &new_session_id);
-                handle
-                    .searches
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&old_session_id);
-                handle
-                    .search_results
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&old_session_id);
                 rekeyed.insert(old_session_id.clone(), Some(new_session_id.clone()));
                 let bytes = take_dropped_payloads(&handle.dropped, &old_session_id);
                 if bytes > 0 {
@@ -1119,33 +1030,6 @@ fn run_recording_writer(
                 remove_dropped_payloads(&handle.dropped, &old_session_id);
                 publisher.removed(&old_session_id);
                 publisher.status(&manager, &handle, &new_session_id, true);
-            }
-            RecordingWriteCommand::HistorySearch { session_id } => {
-                let key = handle
-                    .searches
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&session_id);
-                if let Some(key) = key {
-                    let result = manager
-                        .search_history(key.request())
-                        .map_err(|error| error.to_string());
-                    let mut results = handle
-                        .search_results
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    if results
-                        .insert(
-                            session_id.clone(),
-                            RecordingHistorySearchEvent { key, result },
-                        )
-                        .is_none()
-                    {
-                        let _ = publisher.sender.unbounded_send(
-                            RecordingWriteEvent::PendingHistorySearch { session_id },
-                        );
-                    }
-                }
             }
             #[cfg(any(test, feature = "test-support"))]
             RecordingWriteCommand::Flush { ack_tx } => {
@@ -1202,10 +1086,7 @@ fn remove_dropped_payloads(dropped: &Mutex<DroppedPayloads>, id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        RECORDING_WRITE_QUEUE_BYTE_LIMIT, RecordingHistorySearchKey, RecordingWriteEvent,
-        RecordingWritePipeline,
-    };
+    use super::{RECORDING_WRITE_QUEUE_BYTE_LIMIT, RecordingWriteEvent, RecordingWritePipeline};
     use crate::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
         RecordingRotationPolicy, RecordingStatusState,
@@ -1217,36 +1098,21 @@ mod tests {
 
     #[test]
     fn recording_pipeline_preserves_write_order_before_flush() {
-        let mut pipeline = RecordingWritePipeline::spawn(1024 * 1024);
+        let pipeline = RecordingWritePipeline::spawn(1024 * 1024);
         pipeline.set_history_include_input(true);
-        let mut event_rx = pipeline
-            .take_event_receiver()
-            .expect("recording events should be available");
         let session_id = "session-a";
         pipeline.write_input(session_id, b"echo hello\r".to_vec());
         pipeline.write_output(session_id, "hello\n");
-        pipeline.request_history_search(RecordingHistorySearchKey {
-            session_id: session_id.to_string(),
-            query: "hello".to_string(),
-            case_sensitive: false,
-            regex: false,
-            whole_word: false,
-            limit: Some(10),
-            context_before: Some(0),
-            context_after: Some(0),
-            max_lines: None,
-        });
-        pipeline.writer().flush();
-
-        let results = loop {
-            let event = event_rx.try_recv().expect("search result should be queued");
-            if let RecordingWriteEvent::HistorySearch(event) = event {
-                break event.result.expect("search should succeed");
-            }
-        };
-        assert_eq!(results.total, 2);
-        assert_eq!(results.results[0].source, "input");
-        assert_eq!(results.results[1].source, "output");
+        let path = unique_recording_path("capture-order");
+        pipeline
+            .writer()
+            .save_transcript(session_id.into(), path.clone(), true, false, 1024 * 1024)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[INPUT] echo hello\n[OUTPUT] hello\n"
+        );
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -1546,39 +1412,6 @@ mod tests {
     }
 
     #[test]
-    fn recording_pipeline_search_runs_after_queued_writes() {
-        let mut pipeline = RecordingWritePipeline::spawn(1024 * 1024);
-        pipeline.set_history_include_input(true);
-        let session_id = "session-c";
-        let key = RecordingHistorySearchKey {
-            session_id: session_id.to_string(),
-            query: "queued".to_string(),
-            case_sensitive: false,
-            regex: false,
-            whole_word: false,
-            limit: Some(8),
-            context_before: Some(0),
-            context_after: Some(0),
-            max_lines: Some(30_000),
-        };
-
-        pipeline.write_output(session_id, "queued history line\n");
-        pipeline.request_history_search(key.clone());
-        pipeline.writer().flush();
-
-        let event = pipeline
-            .take_event_receiver()
-            .expect("the pipeline holds its receiver until the drain starts")
-            .try_recv()
-            .expect("search event should be queued");
-        let RecordingWriteEvent::HistorySearch(event) = event else {
-            panic!("expected history search event");
-        };
-        assert_eq!(event.key, key);
-        assert_eq!(event.result.expect("search should succeed").total, 1);
-    }
-
-    #[test]
     fn default_input_capture_does_not_enqueue_payloads() {
         let mut pipeline = RecordingWritePipeline::spawn(1024);
         let writer = pipeline.writer();
@@ -1832,30 +1665,5 @@ mod tests {
             .join(format!("nyaterm-{name}-{nanos}.log"))
             .to_string_lossy()
             .to_string()
-    }
-    #[test]
-    fn completed_history_replies_are_coalesced_per_session() {
-        let mut pipeline = RecordingWritePipeline::spawn(4096);
-        let mut events = pipeline.take_event_receiver().unwrap();
-        for index in 0..64 {
-            pipeline.request_history_search(RecordingHistorySearchKey {
-                session_id: "s".into(),
-                query: format!("query-{index}"),
-                case_sensitive: false,
-                regex: false,
-                whole_word: false,
-                limit: None,
-                context_before: None,
-                context_after: None,
-                max_lines: None,
-            });
-            pipeline.writer().flush();
-        }
-        assert_eq!(pipeline.handle.search_results.lock().unwrap().len(), 1);
-        let RecordingWriteEvent::HistorySearch(result) = events.try_recv().unwrap() else {
-            panic!("history reply");
-        };
-        assert_eq!(result.key.query, "query-63");
-        assert!(events.try_recv().is_err());
     }
 }
