@@ -1,4 +1,4 @@
-use crate::features::NyaTermApp;
+use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus, TransferNewFileState, TransferNewFolderState,
@@ -33,6 +33,12 @@ impl NyaTermApp {
         // The box owns its text, so it has to be dropped for the next dialog to
         // open empty.
         self.forget_text_inputs("transfer.new-folder.");
+        let name_input = self.text_input(
+            "transfer.new-folder.name",
+            "",
+            TextInputSetup::placeholder(t!("fileExplorer.newFolderNamePlaceholder")),
+            cx,
+        );
         self.shell
             .set_status("remote folder creation opened".to_string());
         self.open_form_dialog(
@@ -47,6 +53,8 @@ impl NyaTermApp {
             window,
             cx,
         );
+        // Open the modal first so closing it restores the caller's focus.
+        name_input.update(cx, |input, cx| input.focus_with_cursor_at_end(window, cx));
         cx.notify();
     }
 
@@ -200,6 +208,12 @@ impl NyaTermApp {
             open_after_create: false,
         });
         self.forget_text_inputs("transfer.new-file.");
+        let name_input = self.text_input(
+            "transfer.new-file.name",
+            "",
+            TextInputSetup::placeholder(t!("fileExplorer.newFileNamePlaceholder")),
+            cx,
+        );
         self.shell
             .set_status("remote file creation opened".to_string());
         self.open_form_dialog(
@@ -214,6 +228,7 @@ impl NyaTermApp {
             window,
             cx,
         );
+        name_input.update(cx, |input, cx| input.focus_with_cursor_at_end(window, cx));
         cx.notify();
     }
 

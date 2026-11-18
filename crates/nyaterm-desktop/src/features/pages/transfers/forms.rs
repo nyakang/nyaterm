@@ -14,6 +14,10 @@ use super::{
     format_permissions_octal, parse_transfer_mode, symlink_input_row, valid_remote_child_name,
 };
 
+mod create_permissions;
+#[cfg(test)]
+mod tests;
+
 impl NyaTermApp {
     pub(in crate::features) fn transfer_new_folder_dialog_content(
         &mut self,
@@ -36,7 +40,7 @@ impl NyaTermApp {
             .text_input_box(
                 "transfer.new-folder.name",
                 &state.value,
-                TextInputSetup::placeholder(t!("fileExplorer.newFolderName")),
+                TextInputSetup::placeholder(t!("fileExplorer.newFolderNamePlaceholder")),
                 cx,
             )
             .into_any_element();
@@ -52,26 +56,24 @@ impl NyaTermApp {
                 name_invalid,
                 name_input,
             ))
-            .child(create_permissions_row(
+            .child(self.transfer_create_permissions(
                 palette,
-                t!("fileExplorer.permissions"),
-                self.transfer_permission_grid(
-                    palette,
-                    state.mode,
-                    TransferPermissionTarget::NewFolder,
-                    cx,
-                ),
+                state.mode,
+                TransferPermissionTarget::NewFolder,
+                cx,
             ))
             .child(
-                NyaCheckbox::new("transfer-new-folder-open-after")
-                    .checked(state.open_after_create)
-                    .label(t!("fileExplorer.openAfterCreateFolder"))
-                    .on_click(move |_, _, cx| {
-                        let _ = app.update(cx, |app, cx| {
-                            app.transfer.toggle_new_folder_open_after_create();
-                            cx.notify();
-                        });
-                    }),
+                create_option_section(palette).child(
+                    NyaCheckbox::new("transfer-new-folder-open-after")
+                        .checked(state.open_after_create)
+                        .label(t!("fileExplorer.openAfterCreateFolder"))
+                        .on_click(move |_, _, cx| {
+                            let _ = app.update(cx, |app, cx| {
+                                app.transfer.toggle_new_folder_open_after_create();
+                                cx.notify();
+                            });
+                        }),
+                ),
             )
             .into_any_element()
     }
@@ -97,7 +99,7 @@ impl NyaTermApp {
             .text_input_box(
                 "transfer.new-file.name",
                 &state.value,
-                TextInputSetup::placeholder(t!("fileExplorer.newFileName")),
+                TextInputSetup::placeholder(t!("fileExplorer.newFileNamePlaceholder")),
                 cx,
             )
             .into_any_element();
@@ -113,26 +115,24 @@ impl NyaTermApp {
                 name_invalid,
                 name_input,
             ))
-            .child(create_permissions_row(
+            .child(self.transfer_create_permissions(
                 palette,
-                t!("fileExplorer.permissions"),
-                self.transfer_permission_grid(
-                    palette,
-                    state.mode,
-                    TransferPermissionTarget::NewFile,
-                    cx,
-                ),
+                state.mode,
+                TransferPermissionTarget::NewFile,
+                cx,
             ))
             .child(
-                NyaCheckbox::new("transfer-new-file-open-after")
-                    .checked(state.open_after_create)
-                    .label(t!("fileExplorer.openAfterCreateFile"))
-                    .on_click(move |_, _, cx| {
-                        let _ = app.update(cx, |app, cx| {
-                            app.transfer.toggle_new_file_open_after_create();
-                            cx.notify();
-                        });
-                    }),
+                create_option_section(palette).child(
+                    NyaCheckbox::new("transfer-new-file-open-after")
+                        .checked(state.open_after_create)
+                        .label(t!("fileExplorer.openAfterCreateFile"))
+                        .on_click(move |_, _, cx| {
+                            let _ = app.update(cx, |app, cx| {
+                                app.transfer.toggle_new_file_open_after_create();
+                                cx.notify();
+                            });
+                        }),
+                ),
             )
             .into_any_element()
     }
@@ -300,14 +300,14 @@ fn create_name_row(
     input: impl IntoElement,
 ) -> impl IntoElement {
     div()
+        .w_full()
+        .min_w_0()
         .flex()
-        .items_center()
-        .gap_3()
+        .flex_col()
+        .gap_2()
         .child(
             div()
-                .w(px(88.))
-                .flex_none()
-                .text_xs()
+                .text_sm()
                 .text_color(rgb(if invalid {
                     palette.danger
                 } else {
@@ -315,28 +315,15 @@ fn create_name_row(
                 }))
                 .child(label),
         )
-        .child(div().flex_1().min_w_0().child(input))
+        .child(div().w_full().min_w_0().child(input))
 }
 
-fn create_permissions_row(
-    palette: ThemePalette,
-    label: impl IntoElement,
-    grid: impl IntoElement,
-) -> impl IntoElement {
+fn create_option_section(palette: ThemePalette) -> gpui::Div {
     div()
-        .flex()
-        .items_start()
-        .gap_3()
-        .child(
-            div()
-                .w(px(88.))
-                .flex_none()
-                .mt_1()
-                .text_xs()
-                .text_color(rgb(palette.text_muted))
-                .child(label),
-        )
-        .child(div().flex_1().min_w_0().child(grid))
+        .w_full()
+        .pt_4()
+        .border_t_1()
+        .border_color(rgb(palette.border))
 }
 
 fn permission_header(palette: ThemePalette, special: impl IntoElement) -> impl IntoElement {
