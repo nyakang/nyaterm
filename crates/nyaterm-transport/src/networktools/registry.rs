@@ -82,15 +82,6 @@ impl NetworkToolKind {
         }
     }
 
-    /// Tracing target for this service's lifecycle events. It stays inside the
-    /// `nyaterm` namespace and ends with the service's log name, which lets the
-    /// application route each service into its own `nyaterm-<service>` file.
-    pub const fn log_target(self) -> &'static str {
-        match self {
-            Self::Tftp => "nyaterm::networktools::tftp",
-        }
-    }
-
     pub const fn capabilities(self) -> NetworkToolCapabilities {
         match self {
             Self::Tftp => NetworkToolCapabilities {

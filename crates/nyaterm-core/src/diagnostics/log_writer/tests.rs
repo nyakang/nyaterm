@@ -5,18 +5,9 @@ use std::sync::{Arc, Mutex};
 use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use super::{
-    DEFAULT_LOG_SHARD_BYTES, LOG_FILE_PREFIX, MAX_LOG_SHARD_BYTES, MIN_LOG_SHARD_BYTES,
-    RotatingLogWriter, log_file_name_with_prefix, normalize_log_shard_bytes,
-    parse_log_file_name_with_prefix, prune_log_files_at,
+    DEFAULT_LOG_SHARD_BYTES, MAX_LOG_SHARD_BYTES, MIN_LOG_SHARD_BYTES, RotatingLogWriter,
+    log_file_name, normalize_log_shard_bytes, parse_log_file_name, prune_log_files_at,
 };
-
-fn log_file_name(date: Date, shard: u32) -> String {
-    log_file_name_with_prefix(LOG_FILE_PREFIX, date, shard)
-}
-
-fn parse_log_file_name(name: &str) -> Option<(Date, u32)> {
-    parse_log_file_name_with_prefix(LOG_FILE_PREFIX, name)
-}
 
 const SHARD_BUDGET: u64 = 64;
 
@@ -33,28 +24,6 @@ fn local_time(year: i32, month: Month, day: u8) -> OffsetDateTime {
 
 fn temp_dir(name: &str) -> crate::test_support::TestTempDir {
     crate::test_support::TestTempDir::new(&format!("nyaterm-log-writer-{name}"))
-}
-
-#[test]
-fn service_prefix_shares_the_date_and_shard_layout() {
-    let day = Date::from_calendar_date(2026, Month::November, 18).expect("date");
-    assert_eq!(
-        log_file_name_with_prefix("nyaterm-tftp", day, 0),
-        "nyaterm-tftp.2026-11-18.jsonl"
-    );
-    assert_eq!(
-        log_file_name_with_prefix("nyaterm-tftp", day, 3),
-        "nyaterm-tftp.2026-11-18_003.jsonl"
-    );
-    assert_eq!(
-        parse_log_file_name_with_prefix("nyaterm-tftp", "nyaterm-tftp.2026-11-18_003.jsonl"),
-        Some((day, 3))
-    );
-    assert_eq!(
-        parse_log_file_name_with_prefix("nyaterm-tftp", "nyaterm-diagnostics.2026-11-18.jsonl"),
-        None
-    );
-    assert_eq!(parse_log_file_name("nyaterm-tftp.2026-11-18.jsonl"), None);
 }
 
 fn writer(dir: &Path, clock: Arc<Mutex<OffsetDateTime>>) -> RotatingLogWriter {
@@ -252,12 +221,11 @@ fn prune_keeps_files_inside_the_retention_window() {
         "nyaterm-diagnostics.2026-10-30.jsonl",
         "nyaterm-diagnostics.2026-10-30_001.jsonl",
         "nyaterm-diagnostics.notes.jsonl",
-        "nyaterm-tftp.2026-10-01.jsonl",
     ] {
         std::fs::write(dir.path().join(name), b"{}\n").expect("write");
     }
     let today = Date::from_calendar_date(2026, Month::November, 4).expect("date");
-    let removed = prune_log_files_at(dir.path(), LOG_FILE_PREFIX, 7, today).expect("prune");
+    let removed = prune_log_files_at(dir.path(), 7, today).expect("prune");
     assert_eq!(removed, 2, "both 2026-10-01 shards expire");
     assert!(
         dir.path()
@@ -270,10 +238,6 @@ fn prune_keeps_files_inside_the_retention_window() {
             .exists()
     );
     assert!(dir.path().join("nyaterm-diagnostics.notes.jsonl").exists());
-    assert!(
-        dir.path().join("nyaterm-tftp.2026-10-01.jsonl").exists(),
-        "pruning one prefix must not delete another sink's files"
-    );
 }
 
 #[test]

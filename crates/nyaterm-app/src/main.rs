@@ -4,8 +4,6 @@ mod single_instance;
 #[cfg(windows)]
 mod url_protocols;
 
-use std::collections::HashMap;
-
 use anyhow::Context as _;
 use gpui::{App, AppContext};
 use nyaterm_app::{assets, crash_report};
@@ -13,12 +11,8 @@ use nyaterm_core::app_identity::AppFlavor;
 use nyaterm_core::diagnostics::RotatingLogWriter;
 use nyaterm_core::{ActivationRequest, AppRuntime};
 use nyaterm_desktop::{AppShellStartup, DesktopController, DesktopControllerGlobal};
-use nyaterm_transport::networktools::NetworkToolKind;
-use tracing::Metadata;
-use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
-use tracing_subscriber::{
-    EnvFilter, Layer, filter::filter_fn, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use single_instance::{SingleInstanceOutcome, acquire};
 
@@ -226,57 +220,7 @@ fn format_local_stamp(local: time::OffsetDateTime) -> Result<String, time::error
     local.format(&time::format_description::well_known::Rfc3339)
 }
 
-/// Keeps every non-blocking log worker alive for the process lifetime. The
-/// guards are never read; dropping them early would stop the writer threads.
-#[allow(dead_code)]
-struct LogGuards(Vec<WorkerGuard>);
-
-/// Routes network-tool events into one JSONL sink per service. Sinks are keyed
-/// by each service's tracing target, so a new service only adds a map entry and
-/// never a `tftp`-specific branch here.
-struct NetworkToolsLogWriter {
-    writers: HashMap<&'static str, NonBlocking>,
-}
-
-struct NetworkToolsLogSink {
-    writer: Option<NonBlocking>,
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for NetworkToolsLogWriter {
-    type Writer = NetworkToolsLogSink;
-
-    fn make_writer_for(&'a self, metadata: &Metadata<'_>) -> Self::Writer {
-        NetworkToolsLogSink {
-            writer: self.writers.get(metadata.target()).cloned(),
-        }
-    }
-
-    fn make_writer(&'a self) -> Self::Writer {
-        NetworkToolsLogSink { writer: None }
-    }
-}
-
-impl std::io::Write for NetworkToolsLogSink {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self.writer.as_mut() {
-            Some(writer) => writer.write(buf),
-            None => Ok(buf.len()),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self.writer.as_mut() {
-            Some(writer) => writer.flush(),
-            None => Ok(()),
-        }
-    }
-}
-
-fn is_networktools_target(target: &str) -> bool {
-    target == "nyaterm::networktools" || target.starts_with("nyaterm::networktools::")
-}
-
-fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<LogGuards>> {
+fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
             "nyaterm=info,nyaterm_core=info,nyaterm_transport=info,nyaterm_windows_rdp=info,warn",
@@ -285,27 +229,13 @@ fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<LogGuards>> {
     // Daily files keep the historical `nyaterm-diagnostics.<local-date>.jsonl`
     // name; the writer adds `<local-date>.<NNN>.jsonl` shards once the configured
     // byte budget is reached. File IO stays on the non-blocking appender thread.
-    let log_dir = runtime.log_dir();
-    let file_appender = RotatingLogWriter::new(log_dir);
+    let file_appender = RotatingLogWriter::new(runtime.log_dir());
 
     if let Ok(file_appender) = file_appender {
         let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
-        let mut guards = vec![guard];
-        let mut service_writers = HashMap::new();
-        // Same level, shard budget and retention as the diagnostics sink; only
-        // the file stem differs. Naming comes from the service, not this loop.
-        for kind in NetworkToolKind::ALL {
-            if let Ok(writer) =
-                RotatingLogWriter::with_prefix(log_dir, format!("nyaterm-{}", kind.log_name()))
-            {
-                let (writer, guard) = tracing_appender::non_blocking(writer);
-                guards.push(guard);
-                service_writers.insert(kind.log_target(), writer);
-            }
-        }
         tracing_subscriber::registry()
             .with(filter)
-            .with(filter_fn(ai_log_target_allowed))
+            .with(tracing_subscriber::filter::filter_fn(ai_log_target_allowed))
             .with(
                 tracing_subscriber::fmt::layer()
                     .compact()
@@ -315,30 +245,15 @@ fn init_tracing(runtime: &AppRuntime) -> anyhow::Result<Option<LogGuards>> {
                 tracing_subscriber::fmt::layer()
                     .json()
                     .with_timer(LocalLogTimer)
-                    .with_writer(file_writer)
-                    // Service events live in their own files only.
-                    .with_filter(filter_fn(|metadata: &Metadata<'_>| {
-                        !is_networktools_target(metadata.target())
-                    })),
-            )
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .json()
-                    .with_timer(LocalLogTimer)
-                    .with_writer(NetworkToolsLogWriter {
-                        writers: service_writers,
-                    })
-                    .with_filter(filter_fn(|metadata: &Metadata<'_>| {
-                        is_networktools_target(metadata.target())
-                    })),
+                    .with_writer(file_writer),
             )
             .try_init()
             .context("initialize tracing subscriber and log bridge")?;
-        Ok(Some(LogGuards(guards)))
+        Ok(Some(guard))
     } else {
         tracing_subscriber::registry()
             .with(filter)
-            .with(filter_fn(ai_log_target_allowed))
+            .with(tracing_subscriber::filter::filter_fn(ai_log_target_allowed))
             .with(tracing_subscriber::fmt::layer())
             .try_init()
             .context("initialize tracing subscriber and log bridge")?;
@@ -410,10 +325,15 @@ mod tests {
         log::error!(target: "nyaterm", "error-log-marker");
         tracing::error!(target: "genai::adapter", "secret-body-marker");
         log::error!(target: "reqwest::connect", "secret-body-marker");
+        tracing::info!(
+            target: "nyaterm::networktools::tftp",
+            service = "tftp",
+            "service-start-marker"
+        );
         tracing::error!(
             target: "nyaterm::networktools::tftp",
             service = "tftp",
-            "service-lifecycle-marker"
+            "service-failure-marker"
         );
         drop(guard);
     }
@@ -423,6 +343,7 @@ mod tests {
         for (filter, fallback) in [
             ("nyaterm=trace", false),
             ("nyaterm=debug", false),
+            ("nyaterm=info", false),
             ("nyaterm=error", false),
             ("nyaterm=trace", true),
         ] {
@@ -444,49 +365,49 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
             let console = String::from_utf8_lossy(&output.stdout);
-            let (jsonl, files) = if fallback {
-                (String::new(), Vec::new())
+            let jsonl = if fallback {
+                String::new()
             } else {
-                let files: Vec<(String, String)> = std::fs::read_dir(root.join("logs"))
+                std::fs::read_dir(root.join("logs"))
                     .unwrap()
                     .map(|entry| {
                         let entry = entry.unwrap();
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let text = std::fs::read_to_string(entry.path()).unwrap();
-                        (name, text)
+                        assert!(
+                            entry
+                                .file_name()
+                                .to_string_lossy()
+                                .starts_with("nyaterm-diagnostics."),
+                            "all services share the diagnostics log"
+                        );
+                        std::fs::read_to_string(entry.path()).unwrap()
                     })
-                    .collect();
-                let jsonl = files
-                    .iter()
-                    .map(|(_, text)| text.as_str())
-                    .collect::<String>();
-                (jsonl, files)
+                    .collect::<String>()
             };
-            if !fallback {
-                let service: String = files
-                    .iter()
-                    .filter(|(name, _)| name.starts_with("nyaterm-tftp."))
-                    .map(|(_, text)| text.as_str())
-                    .collect();
-                let diagnostics: String = files
-                    .iter()
-                    .filter(|(name, _)| name.starts_with("nyaterm-diagnostics."))
-                    .map(|(_, text)| text.as_str())
-                    .collect();
-                assert!(
-                    service.contains("service-lifecycle-marker"),
-                    "service events must land in their own file"
-                );
-                assert!(
-                    !diagnostics.contains("service-lifecycle-marker"),
-                    "service events must not be duplicated in the diagnostics file"
-                );
-            }
             assert!(!console.contains("secret-body-marker"));
             assert!(!jsonl.contains("secret-body-marker"));
+            for (marker, expected) in [
+                ("service-start-marker", !filter.ends_with("error")),
+                ("service-failure-marker", true),
+            ] {
+                assert_eq!(console.matches(marker).count(), usize::from(expected));
+                if !fallback {
+                    let event = jsonl
+                        .lines()
+                        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                        .find(|event| event["fields"]["message"] == marker);
+                    assert_eq!(event.is_some(), expected, "{filter}: {marker}");
+                    if let Some(event) = event {
+                        assert_eq!(event["target"], "nyaterm::networktools::tftp");
+                        assert_eq!(event["fields"]["service"], "tftp");
+                    }
+                }
+            }
             for (level, expected) in [
                 ("trace", filter.ends_with("trace")),
-                ("debug", !filter.ends_with("error")),
+                (
+                    "debug",
+                    filter.ends_with("trace") || filter.ends_with("debug"),
+                ),
                 ("error", true),
             ] {
                 for source in ["event", "log"] {
