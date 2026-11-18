@@ -124,6 +124,15 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
+        self.reveal_transfer_local_path(target_path, true, cx);
+    }
+
+    pub(in crate::features) fn reveal_transfer_local_path(
+        &mut self,
+        target_path: std::path::PathBuf,
+        report_status: bool,
+        cx: &mut Context<Self>,
+    ) {
         // Keep filesystem checks and file-manager requests off the UI thread.
         let request = cx.background_executor().spawn(async move {
             let mut target_path = std::path::absolute(target_path)?;
@@ -196,14 +205,21 @@ impl NyaTermApp {
                                 cx.reveal_path(&target_path);
                             }
                         }
-                        this.shell
-                            .set_status("requested transfer location in file manager".to_string());
+                        if report_status {
+                            this.shell.set_status(
+                                "requested transfer location in file manager".to_string(),
+                            );
+                        }
                     }
-                    Err(error) => this
+                    Err(error) if report_status => this
                         .shell
                         .set_status(format!("cannot show transfer location: {error}")),
+                    // Automatic reveal is best effort and must preserve transfer success.
+                    Err(_) => {}
                 }
-                cx.notify();
+                if report_status {
+                    cx.notify();
+                }
             });
         })
         .detach();
