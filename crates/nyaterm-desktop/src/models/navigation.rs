@@ -60,6 +60,7 @@ pub(crate) enum NavItem {
     Docker,
     Ports,
     Services,
+    NetworkTools,
     Transfers,
     Notes,
     Settings,
@@ -84,6 +85,7 @@ impl NavItem {
             NavItem::Docker => "panel.dockerManager",
             NavItem::Ports => "hostTools.portsTitle",
             NavItem::Services => "hostTools.servicesTitle",
+            NavItem::NetworkTools => "panel.networktools",
             NavItem::Transfers => "panel.fileExplorer",
             NavItem::Notes => "panel.notes",
             NavItem::Settings => "settings.title",
@@ -110,6 +112,7 @@ impl NavItem {
             NavItem::Docker => "Docker",
             NavItem::Ports => "Ports",
             NavItem::Services => "Services",
+            NavItem::NetworkTools => "Network Tools",
             NavItem::Transfers => "File Explorer",
             NavItem::Notes => "Notes",
             NavItem::Settings => "Settings",
@@ -140,6 +143,7 @@ impl NavItem {
             NavItem::Docker => "Docker",
             NavItem::Ports => "Ports",
             NavItem::Services => "Services",
+            NavItem::NetworkTools => "Network Tools",
             NavItem::SyncBackupHistory => "Cloud Sync",
             NavItem::SecurityAuth => "Security",
             NavItem::Recording => "Recording",
@@ -171,6 +175,7 @@ impl NavItem {
             NavItem::Docker => "icons/docker.svg",
             NavItem::Ports => "icons/ports.svg",
             NavItem::Services => "icons/services.svg",
+            NavItem::NetworkTools => "icons/networktools.svg",
             NavItem::Recording => "icons/record.svg",
             NavItem::Workspace => "icons/workspace.svg",
         }
@@ -182,6 +187,7 @@ impl NavItem {
             NavItem::Transfers
                 | NavItem::Notes
                 | NavItem::Tunnels
+                | NavItem::NetworkTools
                 | NavItem::SecurityAuth
                 | NavItem::SyncBackupHistory
                 | NavItem::Plugins
@@ -224,6 +230,7 @@ impl NavItem {
             NavItem::Docker => "dockerManager",
             NavItem::Ports => "portsManager",
             NavItem::Services => "servicesManager",
+            NavItem::NetworkTools => "networktools",
             NavItem::Transfers => "fileExplorer",
             NavItem::Notes => "notes",
             NavItem::Settings => "settings",
@@ -249,6 +256,7 @@ impl NavItem {
             "docker" | "dockerManager" => Some(NavItem::Docker),
             "ports" | "portsManager" => Some(NavItem::Ports),
             "services" | "servicesManager" => Some(NavItem::Services),
+            "networktools" | "networkToolsManager" => Some(NavItem::NetworkTools),
             "fileExplorer" | "fileTransfer" | "transfers" => Some(NavItem::Transfers),
             "notes" => Some(NavItem::Notes),
             "settings" => Some(NavItem::Settings),
@@ -476,20 +484,21 @@ impl ActivityBarLayoutState {
                 _ => {}
             }
         }
-        for (id, anchor) in [
-            ("portsManager", "dockerManager"),
-            ("servicesManager", "portsManager"),
+        for (id, zone, anchor) in [
+            ("portsManager", ActivityBarZone::RightTop, "dockerManager"),
+            ("servicesManager", ActivityBarZone::RightTop, "portsManager"),
+            ("networktools", ActivityBarZone::LeftTop, "network"),
         ] {
             if self.find_entry(id).is_some() {
                 continue;
             }
-            let insert_at = self
-                .right_top
+            let entries = self.zone_mut(zone);
+            let insert_at = entries
                 .iter()
                 .position(|entry| entry == anchor)
                 .map(|index| index + 1)
-                .unwrap_or(self.right_top.len());
-            self.right_top.insert(insert_at, id.into());
+                .unwrap_or(entries.len());
+            entries.insert(insert_at, id.into());
             self.hide_entry(id);
         }
     }
@@ -897,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn ports_and_services_panels_have_stable_ids_and_sit_on_the_right() {
+    fn optional_tools_have_stable_ids_and_default_panel_sides() {
         assert_eq!(NavItem::Ports.persistence_id(), "portsManager");
         assert_eq!(NavItem::Services.persistence_id(), "servicesManager");
         assert_eq!(
@@ -910,6 +919,21 @@ mod tests {
             ActivityBarLayoutState::default().side_for_entry("portsManager"),
             Some(PanelSide::Right)
         );
+        assert_eq!(NavItem::NetworkTools.persistence_id(), "networktools");
+        assert!(NavItem::NetworkTools.is_left_panel());
+        assert!(!NavItem::NetworkTools.is_right_panel());
+        let layout = ActivityBarLayoutState::default();
+        assert_eq!(
+            layout.left_top,
+            [
+                "fileExplorer",
+                "notes",
+                "network",
+                "networktools",
+                "securityAuth"
+            ]
+        );
+        assert!(layout.is_hidden("networktools"));
     }
 
     #[test]
@@ -963,6 +987,7 @@ mod tests {
             layout.hidden_entries_ordered(),
             vec![
                 "fileExplorer".to_string(),
+                "networktools".to_string(),
                 "gpuMonitor".to_string(),
                 "ascendNpuMonitor".to_string(),
                 "portsManager".to_string(),
@@ -1046,7 +1071,11 @@ mod tests {
     #[test]
     fn optional_host_tools_are_hidden_on_first_registration_and_keep_saved_choices() {
         let mut layout = ActivityBarLayoutState {
-            left_top: vec!["futureEntry".into()],
+            left_top: vec![
+                "network".into(),
+                "securityAuth".into(),
+                "futureEntry".into(),
+            ],
             left_bottom: Vec::new(),
             right_top: vec!["dockerManager".into(), "after".into()],
             right_bottom: Vec::new(),
@@ -1059,16 +1088,33 @@ mod tests {
             ["dockerManager", "portsManager", "servicesManager", "after"]
         );
         assert_eq!(
+            layout.left_top,
+            ["network", "networktools", "securityAuth", "futureEntry"]
+        );
+        assert_eq!(
             layout.hidden_items,
-            ["futureEntry", "portsManager", "servicesManager"]
+            [
+                "futureEntry",
+                "portsManager",
+                "servicesManager",
+                "networktools"
+            ]
         );
         assert!(layout.show_entry("portsManager"));
         layout.right_top.retain(|id| id != "portsManager");
         layout.left_top.insert(0, "portsManager".into());
+        assert!(layout.show_entry("networktools"));
+        layout.left_top.retain(|id| id != "networktools");
+        layout.right_top.insert(0, "networktools".into());
         let saved = layout.clone();
         layout.ensure_host_tool_entries();
         assert_eq!(layout, saved);
         assert!(!layout.is_hidden("portsManager"));
+        assert!(!layout.is_hidden("networktools"));
+        assert_eq!(
+            layout.side_for_entry("networktools"),
+            Some(PanelSide::Right)
+        );
         assert!(layout.is_hidden("servicesManager"));
     }
 
@@ -1083,10 +1129,16 @@ mod tests {
             show_labels: false,
         };
         layout.ensure_host_tool_entries();
-        assert_eq!(layout.left_top, ["portsManager", "futureEntry"]);
+        assert_eq!(
+            layout.left_top,
+            ["portsManager", "futureEntry", "networktools"]
+        );
         assert_eq!(layout.right_bottom, ["servicesManager"]);
         assert!(layout.right_top.is_empty());
-        assert_eq!(layout.hidden_items, ["servicesManager", "futureEntry"]);
+        assert_eq!(
+            layout.hidden_items,
+            ["servicesManager", "futureEntry", "networktools"]
+        );
         let saved = layout.clone();
         layout.ensure_host_tool_entries();
         assert_eq!(layout, saved);
@@ -1104,7 +1156,12 @@ mod tests {
         };
         layout.ensure_host_tool_entries();
         assert_eq!(layout.right_top, ["portsManager", "servicesManager"]);
-        assert_eq!(layout.hidden_items, layout.right_top);
+        assert_eq!(layout.left_top, ["networktools"]);
+        assert_eq!(
+            layout.hidden_items,
+            ["portsManager", "servicesManager", "networktools"]
+        );
+        assert_eq!(layout.first_panel_on_side(PanelSide::Left), None);
         assert_eq!(layout.first_panel_on_side(PanelSide::Right), None);
     }
 }

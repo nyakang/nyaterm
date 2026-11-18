@@ -3,6 +3,7 @@ pub mod connection;
 pub mod connection_batch;
 pub mod credentials;
 pub mod network;
+pub mod networktools;
 pub mod notes;
 pub mod quick_commands;
 pub mod sessions;

@@ -1458,7 +1458,6 @@
   "fileExplorer": {
     "clipboardEmpty": "파일 클립보드가 비어 있거나 다른 내용으로 바뀌었습니다",
     "clipboardMoving": "잘라낸 항목을 이동 중입니다. 완료될 때까지 기다려 주세요",
-
     "transferSourceUnavailable": "원본 연결을 사용할 수 없습니다. 다시 연결한 후 시도하세요.",
     "transferBackendUnsupported": "이 연결은 파일 전송을 지원하지 않습니다.",
     "transferInvalidDestination": "전송 대상이 잘못되었거나 파일 이름을 표현할 수 없습니다.",
@@ -1943,6 +1942,81 @@
     "ungrouped": "그룹 없음",
     "ungroupedConnections": "그룹 없음"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "%{addr}에서 수신 중",
+        "notRunning": "실행 중 아님",
+        "configure": "설정",
+        "start": "서버 시작",
+        "stop": "서버 중지"
+      },
+      "action": {
+        "reset": "초기화",
+        "browse": "찾아보기"
+      },
+      "bind": {
+        "allInterfaces": "모든 인터페이스",
+        "loopback": "루프백",
+        "savedUnavailable": "저장된 값, 이 컴퓨터에서 감지되지 않음"
+      },
+      "field": {
+        "bindAddress": "바인드 주소",
+        "port": "포트",
+        "rootDir": "서비스 디렉터리",
+        "timeout": "시간 제한(초)",
+        "concurrency": "최대 동시 전송"
+      },
+      "section": {
+        "basic": "기본 설정",
+        "limits": "전송 제한",
+        "permissions": "권한"
+      },
+      "hint": {
+        "firewall": "다른 컴퓨터에서 접속하려면 시스템 방화벽에서 이 UDP 포트를 허용하세요.",
+        "security": "선택한 디렉터리만 공유합니다. 신뢰할 수 있는 네트워크에서 사용하세요."
+      },
+      "error": {
+        "bind": "유효한 IP 주소를 입력하세요",
+        "port": "포트는 1~65535 범위여야 합니다",
+        "timeout": "시간 제한은 1~255초 범위여야 합니다",
+        "concurrency": "동시 전송 수는 1~%{max} 범위여야 합니다",
+        "rootDirRequired": "서비스 디렉터리를 선택하세요",
+        "rootDirUnreadable": "디렉터리가 없거나 읽을 수 없습니다",
+        "invalid": "잘못된 설정: %{message}"
+      },
+      "status": {
+        "saveHint": "변경 사항은 다음에 서비스를 시작할 때 적용됩니다.",
+        "saveAndRestart": "저장 후 서비스 다시 시작",
+        "restartFailed": "저장했지만 %{service} 서비스 다시 시작에 실패했습니다: %{message}",
+        "saveFailed": "네트워크 도구 설정을 저장할 수 없습니다",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 전송 시작: %{file}",
+        "finished": "%{service} · 전송 완료: %{file}(%{bytes}바이트)",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "알 수 없는 오류"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 서버",
+      "shortName": "TFTP",
+      "description": "이 컴퓨터에서 TFTP로 파일을 공유하고 받습니다.",
+      "field": {
+        "blockSize": "협상 블록 크기 상한",
+        "allowUpload": "업로드 허용",
+        "allowOverwrite": "파일 덮어쓰기 허용"
+      },
+      "hint": {
+        "blockSize": "클라이언트가 blksize를 요청할 때 허용되는 최대 DATA 페이로드(8–65464바이트)입니다.\n요청값과 이 상한 중 작은 값을 사용합니다.\nblksize 요청이 없으면 항상 512바이트를 사용합니다.",
+        "upload": "클라이언트가 서비스 디렉터리에 쓸 수 있습니다"
+      },
+      "error": {
+        "blockSize": "블록 크기는 8~65464 범위여야 합니다"
+      }
+    }
+  },
   "otp": {
     "cancel": "취소",
     "cancelled": "인증이 취소되었습니다",
@@ -2049,6 +2123,7 @@
     "fileTransfer": "전송",
     "gpuMonitor": "GPU",
     "network": "네트워크",
+    "networktools": "네트워크 도구",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "활성 세션이 없습니다",
     "noCommandsYet": "아직 명령이 없습니다",

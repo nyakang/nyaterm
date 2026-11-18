@@ -191,7 +191,7 @@ impl NyaTermApp {
     /// Capture the initiating window before deferring across entity leases.
     pub(in crate::features) fn notify_operation(
         &self,
-        key: &'static str,
+        key: impl Into<gpui::SharedString>,
         kind: nyaterm_ui::notification::NyaNotificationKind,
         message: String,
         cx: &mut Context<Self>,
@@ -204,7 +204,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn notify_background_operation(
         &self,
-        key: &'static str,
+        key: impl Into<gpui::SharedString>,
         kind: nyaterm_ui::notification::NyaNotificationKind,
         message: String,
         cx: &mut Context<Self>,
@@ -221,11 +221,12 @@ impl NyaTermApp {
     pub(in crate::features) fn notify_operation_at(
         &self,
         target: Option<gpui::AnyWindowHandle>,
-        key: &'static str,
+        key: impl Into<gpui::SharedString>,
         kind: nyaterm_ui::notification::NyaNotificationKind,
         message: String,
         cx: &mut Context<Self>,
     ) {
+        let key = key.into();
         if let Some(target) = target {
             cx.defer(move |cx| {
                 let _ = target.update(cx, |_, window, cx| {

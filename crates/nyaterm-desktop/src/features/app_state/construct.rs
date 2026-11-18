@@ -11,6 +11,7 @@ use crate::features::commands::{
 use crate::features::connections::{ConnectionFeatureFocus, ConnectionFeatureState};
 use crate::features::file_manager::FileManagerFeatureState;
 use crate::features::mcp::McpHostFeatureState;
+use crate::features::networktools::NetworkToolsFeatureState;
 use crate::features::notes::{NotesFeatureState, NotesPanel};
 use crate::features::pages::connections::panel::ConnectionPanel;
 use crate::features::pages::settings::panel::SettingsPanel;
@@ -272,6 +273,12 @@ impl NyaTermApp {
             blocking_jobs.clone(),
             cx,
         );
+        let networktools_settings = store_blocking
+            .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                store.load_networktools_settings()
+            })
+            .unwrap_or_default();
+        let networktools = NetworkToolsFeatureState::new(networktools_settings);
         let send_command = SendCommandFeatureState::new(cx);
         cx.observe(&send_command.presentation(cx).hex, |_, _, cx| cx.notify())
             .detach();
@@ -388,6 +395,7 @@ impl NyaTermApp {
             remote_ops: RemoteOpsFeatureState::new(RemoteOpsFeatureFocus {}),
             remote_panels,
             host_tool_panels,
+            networktools,
             remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
             android: crate::features::android::AndroidFeatureState::new(android_devices),
             translation: TranslationFeatureState::new(translation_settings),
@@ -467,6 +475,7 @@ impl NyaTermApp {
             _test_config_dir: None,
         };
         app.update_custom_icons(custom_icons, cx);
+        app.ensure_networktools_pump(cx);
         // The cached settings panel starts on General, even before navigation
         // opens it. Build that tab's input before publishing its first snapshot.
         app.ensure_settings_tab_inputs(crate::models::SettingsTab::General, cx);

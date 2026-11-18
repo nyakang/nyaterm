@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use nyaterm_core::models::networktools::NetworkToolsSettings;
 use nyaterm_core::{
     AiSettings, AssetMetadata, ConnectionType, CredentialCrypto, CredentialCryptoError, Group,
     KeywordHighlightConfig, KeywordHighlightImportResult, KeywordHighlightRule,
@@ -88,6 +89,7 @@ const LEGACY_TEXT_KNOWN_HOSTS: &str = "known_hosts";
 const SETTINGS_DEFAULT: &str = "settings/default";
 const SETTINGS_AI_FIELD: &str = "ai";
 const SETTINGS_TRANSLATION_FIELD: &str = "translation";
+const SETTINGS_NETWORKTOOLS_FIELD: &str = "networktools";
 const SETTINGS_AI_HISTORY: &str = "settings/doc/ai-history";
 const SETTINGS_AI_AUDIT: &str = "settings/doc/ai-audit";
 const SETTINGS_TUNNEL_GROUPS: &str = "settings/doc/tunnel-groups";
@@ -1122,6 +1124,42 @@ impl ConnectionStore {
         );
         self.save_settings_value(&value)?;
         Ok(merged)
+    }
+
+    pub fn load_networktools_settings(&self) -> Result<NetworkToolsSettings, StorageError> {
+        let value = self.load_settings_value()?;
+        let settings = value
+            .get(SETTINGS_NETWORKTOOLS_FIELD)
+            .cloned()
+            .map(serde_json::from_value::<NetworkToolsSettings>)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(settings)
+    }
+
+    /// Merge only the known `networktools` fields, leaving unknown keys inside
+    /// the subtree (and every other settings key) untouched.
+    pub fn save_networktools_settings(
+        &self,
+        next: NetworkToolsSettings,
+    ) -> Result<NetworkToolsSettings, StorageError> {
+        next.validate()
+            .map_err(|error| StorageError::InvalidData(error.to_string()))?;
+        let mut value = self.load_settings_value()?;
+        let object = value.as_object_mut().ok_or_else(|| {
+            StorageError::InvalidData("settings document must be an object".into())
+        })?;
+        let subtree = object
+            .entry(SETTINGS_NETWORKTOOLS_FIELD)
+            .or_insert_with(|| serde_json::json!({}));
+        if !subtree.is_object() || subtree.get("tftp").is_some_and(|tftp| !tftp.is_object()) {
+            return Err(StorageError::InvalidData(
+                "unsupported networktools settings format".into(),
+            ));
+        }
+        merge_json_objects(subtree, serde_json::to_value(&next)?);
+        self.save_settings_value(&value)?;
+        Ok(next)
     }
 
     pub fn load_keyword_highlights(&self) -> Result<KeywordHighlightConfig, StorageError> {
@@ -2498,6 +2536,26 @@ fn set_nested_json_value(
     }
     if let Some(key) = path.last() {
         current[*key] = new_value;
+    }
+}
+
+/// Recursively overlay `source` onto `target`. Known fields from the typed
+/// settings replace their values; keys the current build does not know about
+/// survive so a newer build's data is never silently discarded.
+fn merge_json_objects(target: &mut serde_json::Value, source: serde_json::Value) {
+    let (serde_json::Value::Object(target), serde_json::Value::Object(source)) = (target, source)
+    else {
+        return;
+    };
+    for (key, value) in source {
+        match (target.get_mut(&key), value) {
+            (Some(existing), value) if existing.is_object() && value.is_object() => {
+                merge_json_objects(existing, value);
+            }
+            (_, value) => {
+                target.insert(key, value);
+            }
+        }
     }
 }
 

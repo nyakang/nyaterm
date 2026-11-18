@@ -1458,7 +1458,6 @@
   "fileExplorer": {
     "clipboardEmpty": "ファイルのクリップボードは空か、置き換えられています",
     "clipboardMoving": "切り取った項目を移動中です。完了するまでお待ちください",
-
     "transferSourceUnavailable": "接続元を利用できません。再接続して再試行してください。",
     "transferBackendUnsupported": "この接続はファイル転送に対応していません。",
     "transferInvalidDestination": "転送先が無効か、ファイル名を表現できません。",
@@ -1943,6 +1942,81 @@
     "ungrouped": "グループなし",
     "ungroupedConnections": "グループなし"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "%{addr} で待機中",
+        "notRunning": "停止中",
+        "configure": "設定",
+        "start": "サーバーを開始",
+        "stop": "サーバーを停止"
+      },
+      "action": {
+        "reset": "リセット",
+        "browse": "参照"
+      },
+      "bind": {
+        "allInterfaces": "すべてのインターフェース",
+        "loopback": "ループバック",
+        "savedUnavailable": "保存値（このマシンでは未検出）"
+      },
+      "field": {
+        "bindAddress": "バインドアドレス",
+        "port": "ポート",
+        "rootDir": "サービスディレクトリ",
+        "timeout": "タイムアウト（秒）",
+        "concurrency": "最大同時転送数"
+      },
+      "section": {
+        "basic": "基本設定",
+        "limits": "転送制限",
+        "permissions": "権限"
+      },
+      "hint": {
+        "firewall": "他のマシンから接続するには、システムファイアウォールでこの UDP ポートを許可してください。",
+        "security": "選択したディレクトリのみを共有します。信頼できるネットワークで使用してください。"
+      },
+      "error": {
+        "bind": "有効な IP アドレスを入力してください",
+        "port": "ポートは 1～65535 の範囲で指定してください",
+        "timeout": "タイムアウトは 1～255 秒の範囲で指定してください",
+        "concurrency": "同時実行数は 1～%{max} の範囲で指定してください",
+        "rootDirRequired": "サービスディレクトリを選択してください",
+        "rootDirUnreadable": "ディレクトリが存在しないか、読み取れません",
+        "invalid": "設定が無効です: %{message}"
+      },
+      "status": {
+        "saveHint": "変更は次回サービスの起動時に反映されます。",
+        "saveAndRestart": "保存してサービスを再起動",
+        "restartFailed": "保存しましたが、%{service} サービスの再起動に失敗しました: %{message}",
+        "saveFailed": "ネットワークツールの設定を保存できませんでした",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 転送を開始: %{file}",
+        "finished": "%{service} · 転送完了: %{file}（%{bytes} バイト）",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "不明なエラー"
+      }
+    },
+    "tftp": {
+      "title": "TFTP サーバー",
+      "shortName": "TFTP",
+      "description": "このマシンで TFTP によるファイル共有と受信を行います。",
+      "field": {
+        "blockSize": "ネゴシエーションの最大ブロックサイズ",
+        "allowUpload": "アップロードを許可",
+        "allowOverwrite": "ファイルの上書きを許可"
+      },
+      "hint": {
+        "blockSize": "クライアントが blksize を要求した場合の DATA ペイロード上限（8–65464 バイト）。\n要求値とこの上限の小さい方を使用します。\nblksize を要求しない場合は常に 512 バイトを使用します。",
+        "upload": "クライアントはサービスディレクトリに書き込めます"
+      },
+      "error": {
+        "blockSize": "ブロックサイズは 8～65464 の範囲で指定してください"
+      }
+    }
+  },
   "otp": {
     "cancel": "キャンセル",
     "cancelled": "認証をキャンセルしました",
@@ -2049,6 +2123,7 @@
     "fileTransfer": "転送",
     "gpuMonitor": "NVIDIA GPU",
     "network": "ネットワーク",
+    "networktools": "ネットワークツール",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "アクティブなセッションがありません",
     "noCommandsYet": "コマンドがまだありません",

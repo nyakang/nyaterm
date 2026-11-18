@@ -1458,7 +1458,6 @@
   "fileExplorer": {
     "clipboardEmpty": "The file clipboard is empty or has been replaced",
     "clipboardMoving": "The cut items are already being moved; wait for completion",
-
     "transferSourceUnavailable": "The source connection is unavailable. Reconnect and try again.",
     "transferBackendUnsupported": "This connection does not support file transfer.",
     "transferInvalidDestination": "The transfer destination is invalid or cannot represent the filename.",
@@ -1943,6 +1942,81 @@
     "ungrouped": "Ungrouped",
     "ungroupedConnections": "Ungrouped"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "Listening on %{addr}",
+        "notRunning": "Not running",
+        "configure": "Configure",
+        "start": "Start server",
+        "stop": "Stop server"
+      },
+      "action": {
+        "reset": "Reset",
+        "browse": "Browse"
+      },
+      "bind": {
+        "allInterfaces": "All interfaces",
+        "loopback": "Loopback",
+        "savedUnavailable": "Saved value, not detected on this machine"
+      },
+      "field": {
+        "bindAddress": "Bind address",
+        "port": "Port",
+        "rootDir": "Service directory",
+        "timeout": "Timeout (seconds)",
+        "concurrency": "Max concurrent transfers"
+      },
+      "section": {
+        "basic": "Basic settings",
+        "limits": "Transfer limits",
+        "permissions": "Permissions"
+      },
+      "hint": {
+        "firewall": "Allow the UDP port through the system firewall to reach other machines.",
+        "security": "The server only shares the selected directory. Run it on trusted networks."
+      },
+      "error": {
+        "bind": "Enter a valid IP address",
+        "port": "Port must be between 1 and 65535",
+        "timeout": "Timeout must be between 1 and 255 seconds",
+        "concurrency": "Concurrency must be between 1 and %{max}",
+        "rootDirRequired": "Choose a service directory",
+        "rootDirUnreadable": "Directory does not exist or is not readable",
+        "invalid": "Invalid settings: %{message}"
+      },
+      "status": {
+        "saveHint": "Changes apply the next time the service starts.",
+        "saveAndRestart": "Save and restart service",
+        "restartFailed": "Saved, but restarting the %{service} service failed: %{message}",
+        "saveFailed": "Could not save network tool settings",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · Transfer started: %{file}",
+        "finished": "%{service} · Transfer finished: %{file} (%{bytes} bytes)",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "Unknown error"
+      }
+    },
+    "tftp": {
+      "title": "TFTP server",
+      "shortName": "TFTP",
+      "description": "Serve and receive files over TFTP on this machine.",
+      "field": {
+        "blockSize": "Maximum negotiated block size",
+        "allowUpload": "Allow uploads",
+        "allowOverwrite": "Allow overwriting files"
+      },
+      "hint": {
+        "blockSize": "Maximum DATA payload accepted when a client requests blksize (8–65464 bytes).\nThe negotiated size is the smaller of the request and this limit.\nClients without blksize always use 512 bytes.",
+        "upload": "Clients can write to the service directory"
+      },
+      "error": {
+        "blockSize": "Block size must be between 8 and 65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "Cancel",
     "cancelled": "Verification cancelled",
@@ -2049,6 +2123,7 @@
     "fileTransfer": "Transfers",
     "gpuMonitor": "NVIDIA GPU",
     "network": "Network",
+    "networktools": "Network Tools",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "No active sessions",
     "noCommandsYet": "No commands yet",

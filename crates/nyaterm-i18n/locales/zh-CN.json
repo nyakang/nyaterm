@@ -1458,7 +1458,6 @@
   "fileExplorer": {
     "clipboardEmpty": "文件剪贴板为空或已被替换",
     "clipboardMoving": "选中的剪切项正在移动，请等待完成",
-
     "transferSourceUnavailable": "来源连接不可用，请重新连接后重试。",
     "transferBackendUnsupported": "此连接不支持文件传输。",
     "transferInvalidDestination": "传输目标无效或无法表示文件名。",
@@ -1943,6 +1942,81 @@
     "ungrouped": "未分类",
     "ungroupedConnections": "未分组"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "正在监听 %{addr}",
+        "notRunning": "未运行",
+        "configure": "配置",
+        "start": "启动服务",
+        "stop": "停止服务"
+      },
+      "action": {
+        "reset": "重置",
+        "browse": "浏览"
+      },
+      "bind": {
+        "allInterfaces": "所有网卡",
+        "loopback": "本机回环",
+        "savedUnavailable": "已保存，本机未检测到"
+      },
+      "field": {
+        "bindAddress": "监听地址",
+        "port": "端口",
+        "rootDir": "服务目录",
+        "timeout": "超时（秒）",
+        "concurrency": "最大并发传输"
+      },
+      "section": {
+        "basic": "基本设置",
+        "limits": "传输限制",
+        "permissions": "权限"
+      },
+      "hint": {
+        "firewall": "如需其他机器访问，请在系统防火墙中放行该 UDP 端口。",
+        "security": "服务仅共享所选目录，请在可信网络中使用。"
+      },
+      "error": {
+        "bind": "请输入有效的 IP 地址",
+        "port": "端口需为 1～65535",
+        "timeout": "超时需为 1～255 秒",
+        "concurrency": "并发需为 1～%{max}",
+        "rootDirRequired": "请选择服务目录",
+        "rootDirUnreadable": "目录不存在或不可读",
+        "invalid": "设置无效：%{message}"
+      },
+      "status": {
+        "saveHint": "更改将在下次启动服务时生效。",
+        "saveAndRestart": "保存并重启服务",
+        "restartFailed": "已保存，但重启 %{service} 服务失败：%{message}",
+        "saveFailed": "无法保存网络工具设置",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 开始传输：%{file}",
+        "finished": "%{service} · 传输完成：%{file}（%{bytes} 字节）",
+        "failed": "%{service} · %{file}：%{message}",
+        "failedUnknown": "未知错误"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 服务器",
+      "shortName": "TFTP",
+      "description": "在本机通过 TFTP 共享和接收文件。",
+      "field": {
+        "blockSize": "协商块大小上限",
+        "allowUpload": "允许上传",
+        "allowOverwrite": "允许覆盖文件"
+      },
+      "hint": {
+        "blockSize": "客户端请求 blksize 时允许的最大 DATA 载荷（8–65464 字节）。\n实际协商值取客户端请求与此上限的较小值。\n未请求 blksize 的客户端固定使用 512 字节。",
+        "upload": "客户端可以写入服务目录"
+      },
+      "error": {
+        "blockSize": "块大小需为 8～65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "取消",
     "cancelled": "身份验证已取消",
@@ -2049,6 +2123,7 @@
     "fileTransfer": "文件传输",
     "gpuMonitor": "NVIDIA GPU",
     "network": "网络",
+    "networktools": "网络工具",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "暂无活动会话",
     "noCommandsYet": "暂无命令记录",
