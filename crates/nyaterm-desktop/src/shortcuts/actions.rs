@@ -43,6 +43,8 @@ actions!(
         OpenChat,
         ShowAllCommands,
         RenameFile,
+        UploadFile,
+        DownloadFiles,
         CopySelectedConnections,
         LockScreen
     ]

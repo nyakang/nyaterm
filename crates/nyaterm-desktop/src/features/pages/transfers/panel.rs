@@ -42,6 +42,8 @@ pub(in crate::features) struct TransferBrowserPresentation {
     pub tree: crate::features::transfers::TransferTreePresentation,
     pub tree_focus: FocusHandle,
     pub local_backend: bool,
+    pub upload_shortcut: String,
+    pub download_shortcut: String,
     pub path: String,
     pub terminal_cwd: Option<String>,
     pub home_dir: String,

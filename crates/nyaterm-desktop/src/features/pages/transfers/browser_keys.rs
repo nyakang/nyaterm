@@ -4,6 +4,44 @@ use gpui::{Context, KeyDownEvent, Window};
 use crate::features::NyaTermApp;
 
 impl NyaTermApp {
+    fn transfer_browser_file_shortcuts_available(&self) -> bool {
+        let browser = self.transfer.browser_view();
+        self.session
+            .active_file_browser_backend()
+            .is_some_and(|backend| {
+                backend != nyaterm_files::file_browser::FileBrowserBackendKind::Local
+            })
+            && !browser.path_editing
+            && !browser.search_expanded
+            && !self.transfer.rename_dialog_is_open()
+            && !self.transfer.path_prompt_is_open()
+    }
+
+    pub(in crate::features) fn upload_transfer_browser_files_shortcut(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        if self.transfer_browser_file_shortcuts_available() {
+            self.close_transfer_browser_upload_menu(cx);
+            self.prompt_transfer_browser_upload_path(
+                crate::models::TransferPathPromptKind::UploadFile,
+                cx,
+            );
+        }
+    }
+
+    pub(in crate::features) fn download_transfer_browser_files_shortcut(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.transfer_browser_file_shortcuts_available()
+            && !self.selected_transfer_entries().is_empty()
+        {
+            self.start_selected_sftp_download_jobs(window, cx);
+        }
+    }
+
     pub(in crate::features::pages::transfers) fn handle_transfer_browser_key_down(
         &mut self,
         event: &KeyDownEvent,
