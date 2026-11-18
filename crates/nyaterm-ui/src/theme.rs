@@ -226,7 +226,7 @@ fn relative_luminance(rgb: u32) -> f32 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
-fn contrast_ratio(a: u32, b: u32) -> f32 {
+pub(crate) fn contrast_ratio(a: u32, b: u32) -> f32 {
     let la = relative_luminance(a);
     let lb = relative_luminance(b);
     let (lighter, darker) = if la > lb { (la, lb) } else { (lb, la) };

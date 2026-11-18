@@ -295,6 +295,11 @@ impl NyaTextStyle {
                 .with_selection(rgb(palette.terminal_selection).into())
                 .with_border(rgb(palette.border).into())
                 .with_code_background(rgb(palette.bg).into())
+                // The default style starts from the light palette, whose inline
+                // code keeps its own light background. Without one, inline code
+                // falls back to the code background above, like code blocks.
+                .with_inline_code(HighlightStyle::default())
+                .with_dark(palette.is_dark())
                 .with_paragraph_gap(rems(if answer { 0.5 } else { 0.25 }))
                 .with_heading(move |level| {
                     let size = text_size - 12.
