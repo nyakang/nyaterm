@@ -1269,6 +1269,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
         proxy,
         allow_none_auth,
         backspace_mode,
+        allow_short_rsa_host_keys: connection.allow_short_rsa_host_keys,
         ssh_compatibility_mode: connection.ssh_compatibility_mode,
         profile: match connection.ssh_profile {
             SshProfile::Standard => SshSessionProfile::Standard,
@@ -2039,6 +2040,7 @@ mod tests {
             }),
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -2095,6 +2097,7 @@ mod tests {
                 mode: SshAlgorithmMode::Secure,
                 ..Default::default()
             }),
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: SshProfile::NetworkDevice,
             terminal_type: None,

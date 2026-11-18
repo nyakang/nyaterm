@@ -112,6 +112,7 @@ fn check_blocked_services(config: SshSessionConfig, multiplex: Option<SshMultipl
 fn ssh_compatibility_returns_before_the_generic_ssh_executor_checks_shell_availability() {
     // Reaching run_ssh_command would return ShellUnavailable instead of this error.
     let config = SshSessionConfig {
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: true,
         runtime_mode: nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp,
         ..Default::default()
@@ -207,6 +208,7 @@ async fn ssh_compatibility_shared_connection_blocks_all_resource_execs_but_allow
                 username: "test".into(),
                 allow_none_auth: true,
                 host_key_verifier: Some(Arc::new(Verify(verifications.clone()))),
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: true,
                 ..Default::default()
             };

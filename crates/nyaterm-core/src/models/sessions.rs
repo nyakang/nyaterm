@@ -55,6 +55,8 @@ pub struct SavedConnection {
     pub post_login: Option<ConnectionPostLogin>,
     pub recording: Option<ConnectionRecordingSettings>,
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
+    /// Explicit opt-in for insecure 512–1023-bit RSA host keys; defaults off.
+    pub allow_short_rsa_host_keys: bool,
     /// Disable optional remote resource probes without restricting SSH channels.
     pub ssh_compatibility_mode: bool,
     pub ssh_profile: SshProfile,
@@ -109,6 +111,8 @@ struct SavedConnectionKnown {
     pub recording: Option<ConnectionRecordingSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_algorithms: Option<SshAlgorithmPreferences>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_short_rsa_host_keys: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub ssh_compatibility_mode: bool,
     #[serde(default, skip_serializing_if = "is_standard_ssh_profile")]
@@ -386,6 +390,7 @@ fn omitted_fields(path: &str) -> &'static [&'static str] {
             "ssh_algorithms",
             "ssh_profile",
             "ssh_compatibility_mode",
+            "allow_short_rsa_host_keys",
             "terminal_type",
             "sftp",
             "asset",

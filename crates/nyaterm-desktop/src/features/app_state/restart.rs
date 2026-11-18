@@ -30,7 +30,26 @@ impl NyaTermApp {
         self.notify_background_operation(
             "data-directory-startup-notice",
             nyaterm_ui::notification::NyaNotificationKind::Warning,
-            format!("{} {}", t!("settings.dataDirectoryNotice"), notice),
+            if notice == "database_repaired" {
+                t!("settings.dataDirectoryRepairedDatabase").to_string()
+            } else if let Some(archive) = notice.strip_prefix("database_recreated:") {
+                if archive.is_empty() {
+                    t!(
+                        "settings.dataDirectoryCreatedDatabase",
+                        path = self.runtime.data_dir().display().to_string()
+                    )
+                    .to_string()
+                } else {
+                    t!(
+                        "settings.dataDirectoryRecreatedDatabase",
+                        path = self.runtime.data_dir().display().to_string(),
+                        archive = archive
+                    )
+                    .to_string()
+                }
+            } else {
+                format!("{} {}", t!("settings.dataDirectoryNotice"), notice)
+            },
             cx,
         );
     }

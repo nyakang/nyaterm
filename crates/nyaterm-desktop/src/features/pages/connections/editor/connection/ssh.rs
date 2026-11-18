@@ -1426,6 +1426,26 @@ fn ssh_algorithms(
                         .text_color(rgb(palette.text_muted))
                         .child(mode_description),
                 )
+                .when(!editor.defaults_mode, |view| {
+                    view.child(editor_switch_row(
+                        palette,
+                        "connection-editor-short-rsa",
+                        t!("dialog.allowShortRsaHostKeys"),
+                        editor.allow_short_rsa_host_keys,
+                        cx.listener(|this, _, _, cx| {
+                            this.toggle_connection_editor_flag(
+                                ConnectionEditorToggle::AllowShortRsaHostKeys,
+                                cx,
+                            )
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette.warning))
+                            .child(t!("dialog.allowShortRsaHostKeysDesc")),
+                    )
+                })
                 .when(editor.ssh_algorithm_mode == "custom", |this| {
                     this.child(algorithm_tabs).child(ssh_algorithm_list(
                         palette,

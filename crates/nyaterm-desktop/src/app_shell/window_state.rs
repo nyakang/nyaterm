@@ -884,6 +884,7 @@ mod tests {
             default_dir: std::path::PathBuf::from("/default"),
             pending: None,
             can_select: true,
+            can_rebuild: false,
             code: "recovery_required".into(),
             message: "unavailable".into(),
         };

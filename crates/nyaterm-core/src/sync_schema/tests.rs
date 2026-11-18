@@ -376,3 +376,22 @@ fn default_session_settings_remain_local_in_the_existing_v4_projection() {
         );
     }
 }
+#[test]
+fn short_rsa_opt_in_syncs_per_connection_and_can_be_cleared() {
+    let original = json!({"type":"ssh", "name":"SSH", "host":"example.test",
+        "allow_short_rsa_host_keys":true, "ssh_profile":"standard", "future_local":"retained"});
+    let mut projection = project_record("connection", &original).unwrap();
+    assert_eq!(projection["terminal"]["allow_short_rsa_host_keys"], true);
+    for enabled in [false, true] {
+        projection["terminal"]["allow_short_rsa_host_keys"] = json!(enabled);
+        let applied = apply_record("connection", &original, &projection).unwrap();
+        assert_eq!(applied["allow_short_rsa_host_keys"], enabled);
+        assert_eq!(applied["future_local"], "retained");
+    }
+    projection["terminal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("allow_short_rsa_host_keys");
+    let applied = apply_record("connection", &original, &projection).unwrap();
+    assert!(applied.get("allow_short_rsa_host_keys").is_none());
+}
