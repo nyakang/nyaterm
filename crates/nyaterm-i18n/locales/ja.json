@@ -1997,11 +1997,6 @@
         "finished": "%{service} · 転送完了: %{file}（%{bytes} バイト）",
         "failed": "%{service} · %{file}: %{message}",
         "failedUnknown": "不明なエラー"
-      },
-      "log": {
-        "title": "ログ",
-        "todayHint": "当日のログのみ表示します。過去のログはログディレクトリにあります。",
-        "empty": "最近のアクティビティはありません"
       }
     },
     "tftp": {
@@ -2009,16 +2004,15 @@
       "shortName": "TFTP",
       "description": "このマシンで TFTP によるファイル共有と受信を行います。",
       "field": {
-        "blockSize": "ブロックサイズ",
+        "blockSize": "ネゴシエーションの最大ブロックサイズ",
         "allowUpload": "アップロードを許可",
         "allowOverwrite": "ファイルの上書きを許可"
       },
       "hint": {
-        "blockSize": "TFTP の DATA パケット 1 個が運ぶデータのバイト数です\n既定値は 512、範囲は 8～65464\n大きくするとスループットは上がりますが、経路の MTU を超えると分割されます\nこれはパケットのペイロード長であり、内部バッファのサイズではありません",
+        "blockSize": "クライアントが blksize を要求した場合の DATA ペイロード上限（8–65464 バイト）。\n要求値とこの上限の小さい方を使用します。\nblksize を要求しない場合は常に 512 バイトを使用します。",
         "upload": "クライアントはサービスディレクトリに書き込めます"
       },
       "error": {
-        "bindIpv6Unsupported": "現在の TFTP は IPv4 のみに対応しています。IPv4 アドレスを選択してください。",
         "blockSize": "ブロックサイズは 8～65464 の範囲で指定してください"
       }
     }

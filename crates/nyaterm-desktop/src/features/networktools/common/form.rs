@@ -1,9 +1,9 @@
 //! Service-neutral form widgets shared by every network tool window.
 
 use gpui::{AnyElement, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb};
-use nyaterm_core::DEFAULT_TFTP_BIND_ADDRESS;
+use nyaterm_core::models::networktools::DEFAULT_TFTP_BIND_ADDRESS;
 use nyaterm_remote_ops::local_network::LocalInterfaceAddress;
-use nyaterm_ui::{NyaIconButton, NyaScrollable, NyaSwitch, NyaTooltip};
+use nyaterm_ui::{NyaIconButton, NyaSwitch, NyaTooltip};
 use rust_i18n::t;
 
 use crate::theme::ThemePalette;
@@ -19,9 +19,9 @@ pub(in crate::features) struct BindOption {
 
 /// Build the bind-address options from one interface snapshot.
 ///
-/// The fixed wildcard and loopback entries stay first, loopback, unspecified,
-/// IPv6 and non-up addresses are skipped, and a saved address that is not
-/// detected on this machine is appended so the selector never blanks it or
+/// The fixed IPv4 and IPv6 wildcard and loopback entries stay first. Loopback,
+/// unspecified, unscoped link-local IPv6 and non-up addresses are skipped. A
+/// saved address not detected on this machine is appended so the selector never blanks it or
 /// silently rewrites the user's setting.
 ///
 /// Pure on purpose: the interface list is snapshotted at the window-open
@@ -39,10 +39,18 @@ pub(in crate::features) fn bind_options(
             value: "127.0.0.1".to_string(),
             subtitle: t!("networktools.common.bind.loopback").to_string(),
         },
+        BindOption {
+            value: "::".to_string(),
+            subtitle: t!("networktools.common.bind.allInterfaces").to_string(),
+        },
+        BindOption {
+            value: "::1".to_string(),
+            subtitle: t!("networktools.common.bind.loopback").to_string(),
+        },
     ];
     for interface in interfaces {
         if !interface.up
-            || interface.address.is_ipv6()
+            || matches!(interface.address, std::net::IpAddr::V6(address) if address.is_unicast_link_local())
             || interface.address.is_loopback()
             || interface.address.is_unspecified()
         {
@@ -72,42 +80,18 @@ pub(in crate::features) fn section(
     palette: ThemePalette,
     children: Vec<AnyElement>,
 ) -> AnyElement {
-    section_with_hint(title, None, palette, children)
-}
-
-/// A section whose heading may carry a muted one-line explanation, matching the
-/// secondary captions used by the individual fields.
-pub(in crate::features) fn section_with_hint(
-    title: String,
-    hint: Option<String>,
-    palette: ThemePalette,
-    children: Vec<AnyElement>,
-) -> AnyElement {
     div()
         .flex()
         .flex_col()
         .gap_2()
         .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight(600.))
-                        .text_color(rgb(palette.text))
-                        .child(title),
-                )
-                .when_some(hint, |this, hint| {
-                    this.child(
-                        div()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(rgb(palette.text_muted))
-                            .child(hint),
-                    )
-                }),
+            div().flex().items_center().gap_2().child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight(600.))
+                    .text_color(rgb(palette.text))
+                    .child(title),
+            ),
         )
         .children(children)
         .into_any_element()
@@ -224,58 +208,6 @@ pub(in crate::features) fn field_with_caption(
     )
 }
 
-/// The log is read once when the configuration window opens; there is no
-/// refresh control and no polling.
-pub(in crate::features) fn log_view(
-    lines: &[String],
-    id: String,
-    palette: ThemePalette,
-) -> AnyElement {
-    let rows = if lines.is_empty() {
-        vec![
-            div()
-                .text_xs()
-                .text_color(rgb(palette.text_dimmed))
-                .child(t!("networktools.common.log.empty").to_string()),
-        ]
-    } else {
-        lines
-            .iter()
-            .map(|line| {
-                div()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(line.clone())
-            })
-            .collect::<Vec<_>>()
-    };
-
-    // The border lives on a non-scrolling shell so it cannot clip the
-    // scrollbar; the padded child owns scrolling and overlay scrollbar.
-    div()
-        .h(px(190.))
-        .w_full()
-        .flex()
-        .flex_col()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .child(
-            div()
-                .id(id)
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .overflow_y_scrollbar()
-                .p_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .children(rows),
-        )
-        .into_any_element()
-}
-
 #[cfg(test)]
 mod bind_option_tests {
     use nyaterm_remote_ops::local_network::LocalInterfaceAddress;
@@ -305,8 +237,11 @@ mod bind_option_tests {
             interface_address("eth0", "192.168.1.10", true),
         ];
         let options = bind_options(&interfaces, "");
-        assert_eq!(values(&options), ["0.0.0.0", "127.0.0.1", "192.168.1.10"]);
-        assert_eq!(options[2].subtitle, "eth0");
+        assert_eq!(
+            values(&options),
+            ["0.0.0.0", "127.0.0.1", "::", "::1", "192.168.1.10"]
+        );
+        assert_eq!(options[4].subtitle, "eth0");
     }
 
     #[test]
@@ -319,14 +254,21 @@ mod bind_option_tests {
         let options = bind_options(&interfaces, "");
         assert_eq!(
             values(&options),
-            ["0.0.0.0", "127.0.0.1", "192.168.1.10", "10.0.0.10"]
+            [
+                "0.0.0.0",
+                "127.0.0.1",
+                "::",
+                "::1",
+                "192.168.1.10",
+                "10.0.0.10"
+            ]
         );
-        assert_eq!(options[2].subtitle, "eth0");
-        assert_eq!(options[3].subtitle, "eth0");
+        assert_eq!(options[4].subtitle, "eth0");
+        assert_eq!(options[5].subtitle, "eth0");
     }
 
     #[test]
-    fn ipv6_interfaces_and_unspecified_addresses_are_not_offered() {
+    fn global_ipv6_addresses_are_offered_without_unscoped_link_local_addresses() {
         let interfaces = vec![
             interface_address("lo", "::1", true),
             interface_address("any", "::", true),
@@ -335,7 +277,17 @@ mod bind_option_tests {
             interface_address("eth0", "192.168.1.10", true),
         ];
         let options = bind_options(&interfaces, "");
-        assert_eq!(values(&options), ["0.0.0.0", "127.0.0.1", "192.168.1.10"]);
+        assert_eq!(
+            values(&options),
+            [
+                "0.0.0.0",
+                "127.0.0.1",
+                "::",
+                "::1",
+                "2001:db8::1",
+                "192.168.1.10"
+            ]
+        );
     }
 
     #[test]
@@ -345,19 +297,28 @@ mod bind_option_tests {
         let missing = bind_options(&interfaces, " 192.168.50.7 ");
         assert_eq!(
             values(&missing),
-            ["0.0.0.0", "127.0.0.1", "192.168.1.10", "192.168.50.7"]
+            [
+                "0.0.0.0",
+                "127.0.0.1",
+                "::",
+                "::1",
+                "192.168.1.10",
+                "192.168.50.7"
+            ]
         );
-        assert!(!missing[3].subtitle.is_empty());
+        assert!(!missing[5].subtitle.is_empty());
 
         let present = bind_options(&interfaces, "192.168.1.10");
-        assert_eq!(values(&present), ["0.0.0.0", "127.0.0.1", "192.168.1.10"]);
+        assert_eq!(
+            values(&present),
+            ["0.0.0.0", "127.0.0.1", "::", "::1", "192.168.1.10"]
+        );
 
-        // A legacy saved IPv6 value stays visible (and selected) so it is not
-        // silently rewritten; the form validation flags it for the user.
+        // A saved IPv6 loopback value selects the fixed entry without duplication.
         let legacy_ipv6 = bind_options(&interfaces, "::1");
         assert_eq!(
             values(&legacy_ipv6),
-            ["0.0.0.0", "127.0.0.1", "192.168.1.10", "::1"]
+            ["0.0.0.0", "127.0.0.1", "::", "::1", "192.168.1.10"]
         );
     }
 }

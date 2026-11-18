@@ -1997,11 +1997,6 @@
         "finished": "%{service} · Transfer finished: %{file} (%{bytes} bytes)",
         "failed": "%{service} · %{file}: %{message}",
         "failedUnknown": "Unknown error"
-      },
-      "log": {
-        "title": "Log",
-        "todayHint": "Shows today's log only. Older logs are in the log directory.",
-        "empty": "No recent activity"
       }
     },
     "tftp": {
@@ -2009,16 +2004,15 @@
       "shortName": "TFTP",
       "description": "Serve and receive files over TFTP on this machine.",
       "field": {
-        "blockSize": "Block size",
+        "blockSize": "Maximum negotiated block size",
         "allowUpload": "Allow uploads",
         "allowOverwrite": "Allow overwriting files"
       },
       "hint": {
-        "blockSize": "Data bytes carried by each TFTP DATA packet\nDefault 512, range 8–65464\nLarger values raise throughput but fragment once they exceed the path MTU\nThis is the packet payload size, not an internal buffer size",
+        "blockSize": "Maximum DATA payload accepted when a client requests blksize (8–65464 bytes).\nThe negotiated size is the smaller of the request and this limit.\nClients without blksize always use 512 bytes.",
         "upload": "Clients can write to the service directory"
       },
       "error": {
-        "bindIpv6Unsupported": "TFTP currently listens on IPv4 only. Choose an IPv4 address.",
         "blockSize": "Block size must be between 8 and 65464"
       }
     }

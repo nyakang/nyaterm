@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use nyaterm_core::TftpSettings;
+use nyaterm_core::models::networktools::TftpSettings;
 
 use super::packet::{self, Mode, Request};
 use super::path::{self, TftpPathError};
@@ -22,6 +22,7 @@ const RETRIES: usize = 5;
 
 pub(super) struct SessionContext {
     pub kind: NetworkToolKind,
+    pub generation: u64,
     pub root: PathBuf,
     pub config: TftpSettings,
     pub bind_ip: IpAddr,
@@ -31,36 +32,14 @@ pub(super) struct SessionContext {
 }
 
 pub(super) fn run(request: Request, peer: SocketAddr, id: u64, ctx: SessionContext) {
-    let socket = match UdpSocket::bind(SocketAddr::new(ctx.bind_ip, 0)) {
-        Ok(socket) => socket,
-        Err(error) => {
-            emit(
-                &ctx,
-                NetworkToolEvent::Failed {
-                    kind: ctx.kind,
-                    message: format!("session socket: {error}"),
-                },
-            );
-            return;
-        }
-    };
-    let timeout = Duration::from_secs(u64::from(ctx.config.timeout_secs.max(1)));
-    let _ = socket.set_read_timeout(Some(timeout));
-
-    if request.mode == Mode::Mail {
-        let _ = socket.send_to(
-            &packet::write_error(packet::ERR_ILLEGAL_OPERATION, "mail mode is not supported"),
-            peer,
-        );
-        return;
-    }
-
     let direction = if request.write {
         TransferDirection::Upload
     } else {
         TransferDirection::Download
     };
-    let total = if request.write {
+    let total = if request.mode != Mode::Octet {
+        None
+    } else if request.write {
         request
             .options
             .iter()
@@ -72,12 +51,12 @@ pub(super) fn run(request: Request, peer: SocketAddr, id: u64, ctx: SessionConte
             .and_then(|path| std::fs::metadata(path).ok())
             .map(|metadata| metadata.len())
     };
-
     register_transfer(&ctx, id, direction, &request.file, total, peer);
     emit(
         &ctx,
         NetworkToolEvent::TransferStarted {
             kind: ctx.kind,
+            generation: ctx.generation,
             id,
             direction,
             file: request.file.clone(),
@@ -86,12 +65,18 @@ pub(super) fn run(request: Request, peer: SocketAddr, id: u64, ctx: SessionConte
         },
     );
 
-    let outcome = if request.write {
-        receive_file(&socket, peer, &request, &ctx, id, total, timeout)
-    } else {
-        send_file(&socket, peer, &request, &ctx, id, total, timeout)
+    let outcome = match UdpSocket::bind(SocketAddr::new(ctx.bind_ip, 0)) {
+        Err(error) => failed(format!("session socket: {error}")),
+        Ok(socket) if request.mode == Mode::Mail => {
+            let _ = socket.send_to(
+                &packet::write_error(packet::ERR_ILLEGAL_OPERATION, "mail mode is not supported"),
+                peer,
+            );
+            failed("mail mode is not supported")
+        }
+        Ok(socket) if request.write => receive_file(&socket, peer, &request, &ctx, id),
+        Ok(socket) => send_file(&socket, peer, &request, &ctx, id),
     };
-
     finish_transfer(&ctx, id, direction, &request.file, peer, outcome);
 }
 
@@ -101,14 +86,12 @@ fn send_file(
     request: &Request,
     ctx: &SessionContext,
     id: u64,
-    total: Option<u64>,
-    timeout: Duration,
 ) -> TransferOutcome {
     let path = match path::read_path(&ctx.root, &request.file) {
         Ok(path) => path,
         Err(error) => {
             send_path_error(socket, peer, &error);
-            return failed(format!("{}", error));
+            return failed(error.to_string());
         }
     };
     let file = match File::open(&path) {
@@ -120,21 +103,24 @@ fn send_file(
         }
     };
     let size = file.metadata().ok().map(|metadata| metadata.len());
-    let negotiated = packet::negotiate(request, size);
+    let negotiated = packet::negotiate(request, size, &ctx.config);
     let block_size = usize::from(negotiated.block_size);
-
-    if negotiated.has_options() {
-        let _ = socket.send_to(&packet::write_oack(&negotiated.accepted), peer);
-        if !matches!(wait_ack(socket, peer, 0, timeout), Ack::Matched) {
-            return failed("client did not acknowledge transfer options");
-        }
+    let timeout = Duration::from_secs(u64::from(negotiated.timeout_secs));
+    if negotiated.has_options()
+        && let Err(error) = send_until_ack(
+            socket,
+            peer,
+            &packet::write_oack(&negotiated.accepted),
+            0,
+            timeout,
+            &ctx.stop,
+        )
+    {
+        return failed(error.to_string());
     }
-
     let mut source = Source::new(file, request.mode);
     let mut block: u16 = 1;
     let mut done = 0u64;
-    let mut last_percent = None;
-
     loop {
         if ctx.stop.load(Ordering::Relaxed) {
             return failed("service stopped");
@@ -143,32 +129,24 @@ fn send_file(
             Ok(chunk) => chunk,
             Err(error) => {
                 let _ = socket.send_to(
-                    &packet::write_error(packet::ERR_NOT_DEFINED, &error.to_string()),
+                    &packet::write_error(packet::ERR_NOT_DEFINED, "file read failed"),
                     peer,
                 );
                 return failed(error.to_string());
             }
         };
-
-        let mut acknowledged = false;
-        for _ in 0..RETRIES {
-            let _ = socket.send_to(&packet::write_data(block, &chunk), peer);
-            match wait_ack(socket, peer, block, timeout) {
-                Ack::Matched => {
-                    acknowledged = true;
-                    break;
-                }
-                Ack::Error(message) => return failed(message),
-                Ack::Other => continue,
-                Ack::Timeout => continue,
-            }
+        if let Err(error) = send_until_ack(
+            socket,
+            peer,
+            &packet::write_data(block, &chunk),
+            block,
+            timeout,
+            &ctx.stop,
+        ) {
+            return failed(error.to_string());
         }
-        if !acknowledged {
-            return failed("acknowledgement timed out");
-        }
-
         done += chunk.len() as u64;
-        update_progress(ctx, id, done, total, &mut last_percent);
+        update_progress(ctx, id, done);
         if chunk.len() < block_size {
             return TransferOutcome::Completed { bytes: done };
         }
@@ -182,8 +160,6 @@ fn receive_file(
     request: &Request,
     ctx: &SessionContext,
     id: u64,
-    total: Option<u64>,
-    timeout: Duration,
 ) -> TransferOutcome {
     if !ctx.config.allow_upload {
         let _ = socket.send_to(
@@ -192,161 +168,235 @@ fn receive_file(
         );
         return failed("upload is disabled");
     }
-
-    let target = match path::write_target(&ctx.root, &request.file, ctx.config.allow_overwrite) {
+    let mut target = match path::write_target(&ctx.root, &request.file, ctx.config.allow_overwrite)
+    {
         Ok(target) => target,
         Err(error) => {
             send_path_error(socket, peer, &error);
-            return failed(format!("{error}"));
-        }
-    };
-    let mut file = match File::create(&target.temp) {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = socket.send_to(
-                &packet::write_error(packet::ERR_NOT_DEFINED, &error.to_string()),
-                peer,
-            );
             return failed(error.to_string());
         }
     };
-
-    let negotiated = packet::negotiate(request, None);
+    let negotiated = packet::negotiate(request, None, &ctx.config);
     let block_size = usize::from(negotiated.block_size);
-
-    if negotiated.has_options() {
-        let _ = socket.send_to(&packet::write_oack(&negotiated.accepted), peer);
+    let timeout = Duration::from_secs(u64::from(negotiated.timeout_secs));
+    let mut response = if negotiated.has_options() {
+        packet::write_oack(&negotiated.accepted)
     } else {
-        let _ = socket.send_to(&packet::write_ack(0), peer);
+        packet::write_ack(0).to_vec()
+    };
+    if let Err(error) = socket.send_to(&response, peer) {
+        return failed(error.to_string());
     }
-
     let mut expected: u16 = 1;
     let mut done = 0u64;
-    let mut last_percent = None;
     let mut retries = 0usize;
+    let mut deadline = Instant::now() + timeout;
     let mut netascii = NetAsciiDecoder::default();
-    let mut buffer = vec![0u8; usize::from(packet::MAX_BLOCK_SIZE) + 4];
-
+    // One full UDP datagram, including packets larger than the negotiated size.
+    let mut buffer = vec![0u8; 65536];
     loop {
-        if ctx.stop.load(Ordering::Relaxed) {
-            target.cleanup();
-            return failed("service stopped");
-        }
-        match recv_data(socket, peer, timeout, &mut buffer) {
-            Ok(Some((block, payload))) => {
+        match recv_data(socket, peer, deadline, &ctx.stop, &mut buffer) {
+            Ok(Received::Data(block, payload)) => {
+                if payload.len() > block_size {
+                    let _ = socket.send_to(
+                        &packet::write_error(
+                            packet::ERR_ILLEGAL_OPERATION,
+                            "DATA exceeds negotiated block size",
+                        ),
+                        peer,
+                    );
+                    return failed("DATA exceeds negotiated block size");
+                }
                 if block == expected {
-                    let received_len = payload.len() as u64;
+                    let received_len = payload.len();
+                    let final_block = received_len < block_size;
                     let bytes = if request.mode == Mode::NetAscii {
-                        netascii.push(payload, false)
+                        netascii.push(payload, final_block)
                     } else {
                         payload
                     };
-                    if let Err(error) = file.write_all(&bytes) {
-                        target.cleanup();
+                    if let Err(error) = target.temp.write_all(&bytes) {
                         let _ = socket.send_to(
-                            &packet::write_error(packet::ERR_DISK_FULL, &error.to_string()),
+                            &packet::write_error(packet::ERR_DISK_FULL, "file write failed"),
                             peer,
                         );
                         return failed(error.to_string());
                     }
-                    let _ = socket.send_to(&packet::write_ack(expected), peer);
-                    done += received_len;
-                    update_progress(ctx, id, done, total, &mut last_percent);
-                    retries = 0;
-                    if received_len < block_size as u64 {
-                        let tail = if request.mode == Mode::NetAscii {
-                            netascii.finish()
-                        } else {
-                            Vec::new()
-                        };
-                        if let Err(error) = file.write_all(&tail) {
-                            target.cleanup();
+                    done += received_len as u64;
+                    update_progress(ctx, id, done);
+                    response = packet::write_ack(block).to_vec();
+                    if final_block {
+                        if let Err(error) = target.temp.flush() {
+                            let _ = socket.send_to(
+                                &packet::write_error(packet::ERR_DISK_FULL, "file flush failed"),
+                                peer,
+                            );
                             return failed(error.to_string());
                         }
-                        return match target.commit() {
-                            Ok(()) => TransferOutcome::Completed { bytes: done },
-                            Err(error) => {
-                                target.cleanup();
-                                failed(error.to_string())
-                            }
-                        };
+                        if ctx.stop.load(Ordering::Relaxed) {
+                            return failed("service stopped");
+                        }
+                        if let Err(error) = target.commit() {
+                            let error = TftpPathError::from(error);
+                            send_path_error(socket, peer, &error);
+                            return failed(error.to_string());
+                        }
+                        // The upload is committed even if the ACK is lost. Keep
+                        // the TID alive briefly to acknowledge retransmissions.
+                        let _ = socket.send_to(&response, peer);
+                        dally(socket, peer, block, timeout, &ctx.stop, &mut buffer);
+                        return TransferOutcome::Completed { bytes: done };
+                    }
+                    if let Err(error) = socket.send_to(&response, peer) {
+                        return failed(error.to_string());
                     }
                     expected = expected.wrapping_add(1);
+                    retries = 0;
+                    deadline = Instant::now() + timeout;
                 } else if block == expected.wrapping_sub(1) {
-                    // Duplicate of the last accepted block: re-acknowledge it.
-                    let _ = socket.send_to(&packet::write_ack(block), peer);
+                    let _ = socket.send_to(&response, peer);
                 }
             }
-            Ok(None) => return failed("invalid data packet"),
+            Ok(Received::Ignored) => {}
+            Ok(Received::ClientError(message)) => return failed(message),
+            Ok(Received::Invalid) => {
+                let _ = socket.send_to(
+                    &packet::write_error(packet::ERR_ILLEGAL_OPERATION, "invalid data packet"),
+                    peer,
+                );
+                return failed("invalid data packet");
+            }
             Err(error) if error.kind() == io::ErrorKind::TimedOut => {
                 retries += 1;
-                if retries > RETRIES {
-                    target.cleanup();
+                if retries >= RETRIES {
                     return failed("transfer timed out");
                 }
-                let _ = socket.send_to(&packet::write_ack(expected.wrapping_sub(1)), peer);
+                if let Err(error) = socket.send_to(&response, peer) {
+                    return failed(error.to_string());
+                }
+                deadline = Instant::now() + timeout;
             }
-            Err(error) => {
-                target.cleanup();
-                return failed(error.to_string());
-            }
+            Err(error) => return failed(error.to_string()),
         }
     }
 }
 
-fn wait_ack(socket: &UdpSocket, peer: SocketAddr, expected: u16, timeout: Duration) -> Ack {
-    let mut buffer = [0u8; 64];
-    let _ = socket.set_read_timeout(Some(timeout));
-    match socket.recv_from(&mut buffer) {
-        Ok((size, from)) if from == peer => match packet::parse_ack(&buffer[..size]) {
-            Ok(block) if block == expected => Ack::Matched,
-            Ok(_) => Ack::Other,
-            Err(_) => match packet::parse_error(&buffer[..size]) {
-                Ok((code, message)) => Ack::Error(tftp_error_reason(code, &message)),
-                Err(_) => Ack::Other,
-            },
-        },
-        Ok((_, from)) => {
-            let _ = socket.send_to(
-                &packet::write_error(packet::ERR_UNKNOWN_TID, "unknown transfer ID"),
-                from,
-            );
-            Ack::Other
-        }
-        Err(error)
-            if error.kind() == io::ErrorKind::TimedOut
-                || error.kind() == io::ErrorKind::WouldBlock =>
+fn dally(
+    socket: &UdpSocket,
+    peer: SocketAddr,
+    final_block: u16,
+    timeout: Duration,
+    stop: &AtomicBool,
+    buffer: &mut [u8],
+) {
+    let deadline = Instant::now() + timeout;
+    while let Ok(received) = recv_data(socket, peer, deadline, stop, buffer) {
+        if let Received::Data(block, _) = received
+            && block == final_block
         {
-            Ack::Timeout
+            let _ = socket.send_to(&packet::write_ack(block), peer);
         }
-        Err(_) => Ack::Timeout,
     }
+}
+
+fn send_until_ack(
+    socket: &UdpSocket,
+    peer: SocketAddr,
+    response: &[u8],
+    expected: u16,
+    timeout: Duration,
+    stop: &AtomicBool,
+) -> io::Result<()> {
+    let mut buffer = [0u8; 65536];
+    for _ in 0..RETRIES {
+        if stop.load(Ordering::Relaxed) {
+            return Err(io::Error::other("service stopped"));
+        }
+        socket.send_to(response, peer)?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            match recv_packet(socket, peer, deadline, stop, &mut buffer) {
+                Ok(Some(size)) => {
+                    if packet::parse_ack(&buffer[..size]) == Ok(expected) {
+                        return Ok(());
+                    }
+                    if let Ok((code, message)) = packet::parse_error(&buffer[..size]) {
+                        return Err(io::Error::other(tftp_error_reason(code, &message)));
+                    }
+                }
+                Ok(None) => {}
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => break,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "acknowledgement timed out",
+    ))
+}
+
+/// Poll cancellation independently from the negotiated protocol deadline. An
+/// unrelated datagram never resets that deadline or consumes a retry.
+fn recv_packet(
+    socket: &UdpSocket,
+    peer: SocketAddr,
+    deadline: Instant,
+    stop: &AtomicBool,
+    buffer: &mut [u8],
+) -> io::Result<Option<usize>> {
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err(io::Error::other("service stopped"));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        socket.set_read_timeout(Some(remaining.min(Duration::from_millis(200))))?;
+        match socket.recv_from(buffer) {
+            Ok((size, from)) if from == peer => return Ok(Some(size)),
+            Ok((_, from)) => {
+                let _ = socket.send_to(
+                    &packet::write_error(packet::ERR_UNKNOWN_TID, "unknown transfer ID"),
+                    from,
+                );
+                return Ok(None);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+enum Received {
+    Data(u16, Vec<u8>),
+    Ignored,
+    ClientError(String),
+    Invalid,
 }
 
 fn recv_data(
     socket: &UdpSocket,
     peer: SocketAddr,
-    timeout: Duration,
+    deadline: Instant,
+    stop: &AtomicBool,
     buffer: &mut [u8],
-) -> io::Result<Option<(u16, Vec<u8>)>> {
-    let _ = socket.set_read_timeout(Some(timeout));
-    let (size, from) = socket.recv_from(buffer)?;
-    if from != peer {
-        let _ = socket.send_to(
-            &packet::write_error(packet::ERR_UNKNOWN_TID, "unknown transfer ID"),
-            from,
-        );
-        return Ok(Some((u16::MAX, Vec::new())));
-    }
-    match packet::parse_data(&buffer[..size]) {
-        Ok((block, payload)) => Ok(Some((block, payload.to_vec()))),
-        // A client can abort an upload by sending ERROR instead of DATA. Keep
-        // its reason instead of collapsing it into an "invalid data packet".
+) -> io::Result<Received> {
+    let Some(size) = recv_packet(socket, peer, deadline, stop, buffer)? else {
+        return Ok(Received::Ignored);
+    };
+    Ok(match packet::parse_data(&buffer[..size]) {
+        Ok((block, payload)) => Received::Data(block, payload.to_vec()),
         Err(_) => match packet::parse_error(&buffer[..size]) {
-            Ok((code, message)) => Err(io::Error::other(tftp_error_reason(code, &message))),
-            Err(_) => Ok(None),
+            Ok((code, message)) => Received::ClientError(tftp_error_reason(code, &message)),
+            Err(_) => Received::Invalid,
         },
-    }
+    })
 }
 
 /// TFTP ERROR packets are allowed to carry an empty text field; some clients
@@ -397,6 +447,7 @@ fn register_transfer(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     transfers.push(TransferSnapshot::new(
+        ctx.generation,
         id,
         direction,
         file.to_string(),
@@ -405,45 +456,13 @@ fn register_transfer(
     ));
 }
 
-fn update_progress(
-    ctx: &SessionContext,
-    id: u64,
-    done: u64,
-    total: Option<u64>,
-    last_percent: &mut Option<u64>,
-) {
+fn update_progress(ctx: &SessionContext, id: u64, done: u64) {
     let mut transfers = ctx
         .transfers
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(snapshot) = transfers.iter_mut().find(|snapshot| snapshot.id == id) {
         snapshot.advance(done);
-    }
-    drop(transfers);
-
-    // Coalesce progress at 1% boundaries (or every block when the size is
-    // unknown) so the bounded event channel is not saturated by ACK-sized steps.
-    let percent = total.map(|total| {
-        done.saturating_mul(100)
-            .checked_div(total)
-            .unwrap_or(100)
-            .min(100)
-    });
-    let should_emit = match percent {
-        Some(percent) => *last_percent != Some(percent),
-        None => last_percent.is_none(),
-    };
-    if should_emit {
-        *last_percent = percent;
-        emit(
-            ctx,
-            NetworkToolEvent::TransferProgress {
-                kind: ctx.kind,
-                id,
-                done,
-                total,
-            },
-        );
     }
 }
 
@@ -466,6 +485,7 @@ fn finish_transfer(
         ctx,
         NetworkToolEvent::TransferFinished {
             kind: ctx.kind,
+            generation: ctx.generation,
             id,
             direction,
             file: file.to_string(),
@@ -476,20 +496,13 @@ fn finish_transfer(
 }
 
 fn emit(ctx: &SessionContext, event: NetworkToolEvent) {
-    let _ = ctx.events.try_send(event);
+    let _ = ctx.events.send(event);
 }
 
 fn failed(message: impl Into<String>) -> TransferOutcome {
     TransferOutcome::Failed {
         message: message.into(),
     }
-}
-
-enum Ack {
-    Matched,
-    Other,
-    Error(String),
-    Timeout,
 }
 
 struct Source {
@@ -594,7 +607,7 @@ impl NetAsciiDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::NetAsciiDecoder;
 
     #[test]
     fn netascii_decoding_handles_crlf_nul_and_boundaries() {

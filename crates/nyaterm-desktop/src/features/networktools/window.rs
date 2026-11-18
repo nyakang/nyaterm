@@ -126,6 +126,10 @@ impl NyaTermApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.ensure_networktools_pump(cx);
+        if self.networktools.is_busy(kind) {
+            return;
+        }
         if self.activate_networktools_config_window(kind, cx) {
             return;
         }
@@ -136,11 +140,37 @@ impl NyaTermApp {
             return;
         }
         self.networktools.begin_config_edit(kind);
+        self.probe_networktools_config(kind, cx);
         self.forget_text_inputs(&ids::input_prefix(kind));
-        self.refresh_networktools_log(kind, cx);
         cx.notify();
         let app = cx.entity();
         cx.defer(move |cx| open_networktools_config_now(app, kind, cx));
+    }
+
+    fn probe_networktools_config(&mut self, kind: NetworkToolKind, cx: &mut Context<Self>) {
+        let revision = self.networktools.config_revision(kind);
+        let root = self.networktools.tftp_draft().root_dir;
+        let probe = cx.background_executor().spawn(async move {
+            let usable = std::fs::read_dir(&root).is_ok();
+            let interfaces = nyaterm_remote_ops::local_network::local_interface_addresses();
+            (root, usable, interfaces)
+        });
+        cx.spawn(async move |this, cx| {
+            let (root, usable, interfaces) = probe.await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.networktools.config_matches(kind, revision) {
+                    return;
+                }
+                let options = super::common::form::bind_options(
+                    &interfaces,
+                    &this.networktools.tftp_draft().bind_address,
+                );
+                this.networktools.set_bind_options(kind, options);
+                this.networktools.set_root_dir_probe(kind, root, usable);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// The single teardown path for one service: restore or discard its draft,
@@ -211,7 +241,7 @@ fn open_networktools_config_now(app: Entity<NyaTermApp>, kind: NetworkToolKind, 
     }
 
     let title = t!(kind.name_key()).to_string();
-    let spec = ChildWindowSpec::modal_editor(title, 900., 720.).min_size(760., 520.);
+    let spec = ChildWindowSpec::modal_editor(title, 900., 540.).min_size(760., 440.);
     let chrome = spec.chrome();
     let parent = app.read(cx).shell.main_window();
     let options = child_window_options(&spec, parent, cx);

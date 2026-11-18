@@ -44,6 +44,7 @@ impl NetworkToolStatus {
 /// A transfer in flight, as shown in the configuration window.
 #[derive(Debug, Clone)]
 pub struct TransferSnapshot {
+    pub generation: u64,
     pub id: u64,
     pub direction: TransferDirection,
     pub file: String,
@@ -56,6 +57,7 @@ pub struct TransferSnapshot {
 
 impl TransferSnapshot {
     pub fn new(
+        generation: u64,
         id: u64,
         direction: TransferDirection,
         file: String,
@@ -63,6 +65,7 @@ impl TransferSnapshot {
         total: Option<u64>,
     ) -> Self {
         Self {
+            generation,
             id,
             direction,
             file,

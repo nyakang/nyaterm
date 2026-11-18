@@ -1997,11 +1997,6 @@
         "finished": "%{service} · Transfert terminé : %{file} (%{bytes} octets)",
         "failed": "%{service} · %{file} : %{message}",
         "failedUnknown": "Erreur inconnue"
-      },
-      "log": {
-        "title": "Journal",
-        "todayHint": "Affiche uniquement le journal du jour. Les journaux plus anciens se trouvent dans le répertoire des journaux.",
-        "empty": "Aucune activité récente"
       }
     },
     "tftp": {
@@ -2009,16 +2004,15 @@
       "shortName": "TFTP",
       "description": "Partagez et recevez des fichiers en TFTP sur cette machine.",
       "field": {
-        "blockSize": "Taille de bloc",
+        "blockSize": "Taille maximale de bloc négociée",
         "allowUpload": "Autoriser les envois",
         "allowOverwrite": "Autoriser l'écrasement"
       },
       "hint": {
-        "blockSize": "Octets de données transportés par chaque paquet TFTP DATA\nValeur par défaut 512, plage 8–65464\nUne valeur plus élevée augmente le débit mais fragmente au-delà du MTU du chemin\nIl s'agit de la taille de charge utile du paquet, pas d'un tampon interne",
+        "blockSize": "Charge utile DATA maximale si le client demande blksize (8–65464 octets).\nLa taille négociée est le minimum de la demande et de cette limite.\nSans demande blksize, les blocs font toujours 512 octets.",
         "upload": "Les clients peuvent écrire dans le répertoire du serveur"
       },
       "error": {
-        "bindIpv6Unsupported": "TFTP ne prend actuellement en charge qu'IPv4. Choisissez une adresse IPv4.",
         "blockSize": "La taille de bloc doit être comprise entre 8 et 65464"
       }
     }

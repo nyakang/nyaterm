@@ -80,6 +80,7 @@ impl NyaTermApp {
                             .child(
                                 NyaSwitch::new(ids::panel_element(kind, "toggle"))
                                     .checked(running)
+                                    .disabled(self.networktools.is_busy(kind))
                                     .tooltip(toggle_tooltip)
                                     .on_click(cx.listener(move |this, _: &bool, _, cx| {
                                         this.toggle_networktools_service(kind, cx);
@@ -88,6 +89,7 @@ impl NyaTermApp {
                             .child(
                                 NyaButton::new(ids::panel_element(kind, "configure"), "")
                                     .icon("icons/settings.svg")
+                                    .disabled(self.networktools.is_busy(kind))
                                     .small()
                                     .compact()
                                     .tooltip(t!("networktools.common.panel.configure"))

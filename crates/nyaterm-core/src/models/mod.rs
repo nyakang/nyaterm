@@ -20,7 +20,6 @@ pub use connection::*;
 pub use connection_batch::*;
 pub use credentials::*;
 pub use network::*;
-pub use networktools::*;
 pub use notes::*;
 pub use quick_commands::*;
 pub use sessions::*;

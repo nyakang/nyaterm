@@ -1,8 +1,6 @@
 //! TFTP field rules: shared field checks plus the protocol-specific ones.
 
-use std::net::IpAddr;
-
-use nyaterm_core::{DEFAULT_TFTP_BIND_ADDRESS, TFTP_BLOCK_SIZE_MAX, TFTP_BLOCK_SIZE_MIN};
+use nyaterm_core::models::networktools::{TFTP_BLOCK_SIZE_MAX, TFTP_BLOCK_SIZE_MIN};
 use rust_i18n::t;
 
 use crate::features::networktools::common::validation::{
@@ -33,20 +31,7 @@ pub(in crate::features) fn field_errors(
     concurrency: &str,
     root_probe: Option<bool>,
 ) -> TftpFieldErrors {
-    let mut common = common_field_errors(bind, port, root, timeout, concurrency, root_probe);
-
-    // The shared check only rejects unparsable input; TFTP additionally refuses
-    // IPv6 because its session sockets rebind to `0.0.0.0`.
-    if common.bind.is_none() {
-        let value = if bind.trim().is_empty() {
-            DEFAULT_TFTP_BIND_ADDRESS
-        } else {
-            bind.trim()
-        };
-        if matches!(value.parse::<IpAddr>(), Ok(IpAddr::V6(_))) {
-            common.bind = Some(t!("networktools.tftp.error.bindIpv6Unsupported").to_string());
-        }
-    }
+    let common = common_field_errors(bind, port, root, timeout, concurrency, root_probe);
 
     let block = if (TFTP_BLOCK_SIZE_MIN..=TFTP_BLOCK_SIZE_MAX)
         .contains(&block.trim().parse::<u16>().unwrap_or(0))
@@ -64,9 +49,9 @@ mod tests {
     use super::field_errors;
 
     #[test]
-    fn ipv6_bind_addresses_are_rejected_while_ipv4_passes() {
+    fn ipv6_and_ipv4_bind_addresses_are_accepted() {
         let ipv6 = field_errors("::1", "69", "srv", "512", "3", "8", None);
-        assert!(ipv6.common.bind.is_some());
+        assert!(!ipv6.any());
         assert!(ipv6.common.port.is_none());
         assert!(ipv6.common.root.is_none());
         assert!(ipv6.block.is_none());
@@ -78,6 +63,7 @@ mod tests {
 
         let wildcard = field_errors("0.0.0.0", "69", "srv", "512", "3", "8", None);
         assert!(!wildcard.any());
+        assert!(!field_errors("::", "69", "srv", "512", "3", "8", None).any());
     }
 
     #[test]

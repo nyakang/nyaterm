@@ -4,12 +4,13 @@
 //! attributed with that service's short name, and each tracing event carries a
 //! `service` field so the shared log can be filtered per service.
 //!
-//! Shared form widgets, identifiers, field rules and the log reader live under
+//! Shared form widgets, identifiers and field rules live under
 //! `common`; each service keeps its layout, rules and save flow under its own
 //! module (`tftp`).
 
 mod common;
 mod panel;
+mod runtime;
 mod state;
 mod tftp;
 mod window;
@@ -23,19 +24,17 @@ use nyaterm_transport::networktools::{
 use nyaterm_ui::notification::NyaNotificationKind;
 use rust_i18n::t;
 
+use self::runtime::RuntimeCommand;
 use crate::features::NyaTermApp;
-use crate::features::networktools::common::{ids, log};
+use crate::features::networktools::common::ids;
 
 pub(in crate::features) use state::NetworkToolsFeatureState;
 
 const PUMP_INTERVAL: Duration = Duration::from_millis(200);
-/// Lines shown in the configuration window's log view. This is a display cap
-/// over the service's own log file, not a logging parameter.
-const LOG_TAIL_LINES: usize = 200;
-
 /// Tracing requires a constant target per callsite, so each service maps to its
-/// own target here. File names derive from `log_name()` in the app's routing
-/// writer, not from this macro, so a new service only adds one arm.
+/// own target here. Events use the shared diagnostics sink and retain a service
+/// field for filtering. Log only runtime identifiers and counters; filenames,
+/// peer addresses and free-form errors stay in the interactive UI.
 macro_rules! networktools_log {
     ($kind:expr, $level:expr, $($fields:tt)*) => {
         match $kind {
@@ -71,58 +70,77 @@ impl NyaTermApp {
     }
 
     fn drain_networktools_events(&mut self, cx: &mut Context<Self>) {
+        let snapshot_changed = self.networktools.refresh_runtime_snapshot();
         let events = self.networktools.take_events();
-        if events.is_empty() {
-            return;
-        }
+        let results = self.networktools.take_runtime_results();
+        let changed = snapshot_changed || !events.is_empty() || !results.is_empty();
         for event in events {
             self.apply_networktools_event(event, cx);
         }
-        cx.notify();
+        for result in results {
+            self.networktools.finish_operation(result.kind);
+            let close = self.networktools.take_close_on_restart(result.kind);
+            match result.result {
+                Ok(()) => {
+                    self.networktools.set_status_message(result.kind, None);
+                    if close {
+                        self.end_networktools_config_session(result.kind, false, cx);
+                    }
+                }
+                Err(message) => self.networktools_operation_failed(result.kind, message, cx),
+            }
+        }
+        if changed {
+            cx.notify();
+        }
     }
 
     fn apply_networktools_event(&mut self, event: NetworkToolEvent, cx: &mut Context<Self>) {
+        // Old instances still get lifecycle logs, but cannot mutate the current
+        // service's status or transfer rows after a restart.
+        let current = self.networktools.accept_event(&event);
         match event {
-            NetworkToolEvent::Started { kind, addr } => {
+            NetworkToolEvent::Started {
+                kind,
+                generation,
+                addr,
+            } => {
                 let status = self.networktools.status(kind);
-                self.networktools.set_status_message(kind, status.message);
+                if current {
+                    self.networktools.set_status_message(kind, status.message);
+                }
                 networktools_log!(
                     kind,
                     tracing::Level::INFO,
                     service = kind.log_name(),
-                    remote = %addr,
+                    generation,
+                    port = addr.port(),
+                    ipv6 = addr.is_ipv6(),
                     "listening"
                 );
             }
-            NetworkToolEvent::Stopped { kind } => {
+            NetworkToolEvent::Stopped { kind, generation } => {
                 let status = self.networktools.status(kind);
-                self.networktools.set_status_message(kind, status.message);
-                self.networktools.clear_transfers(kind);
+                if current {
+                    self.networktools.set_status_message(kind, status.message);
+                }
                 networktools_log!(
                     kind,
                     tracing::Level::INFO,
                     service = kind.log_name(),
+                    generation,
                     "stopped"
                 );
             }
             NetworkToolEvent::TransferStarted {
                 kind,
+                generation,
                 id,
                 direction,
                 file,
                 total,
-                remote,
+                ..
             } => {
-                self.networktools.push_transfer(
-                    kind,
-                    nyaterm_transport::networktools::TransferSnapshot::new(
-                        id,
-                        direction,
-                        file.clone(),
-                        remote.clone(),
-                        total,
-                    ),
-                );
                 let message = t!(
                     "networktools.common.transfer.started",
                     service = service_label(kind),
@@ -139,32 +157,21 @@ impl NyaTermApp {
                     kind,
                     tracing::Level::INFO,
                     service = kind.log_name(),
-                    file = %file,
-                    remote = %remote,
+                    generation,
+                    transfer_id = id,
                     total = ?total,
                     direction = direction_marker(direction),
                     "transfer started"
                 );
             }
-            NetworkToolEvent::TransferProgress {
-                kind,
-                id,
-                done,
-                total,
-            } => {
-                // Progress only drives the panel's live list. It is not logged:
-                // the log keeps lifecycle events (start, finish, failure) only.
-                self.networktools.update_transfer(kind, id, done, total);
-            }
             NetworkToolEvent::TransferFinished {
                 kind,
+                generation,
                 id,
-                direction: _,
                 file,
-                remote,
                 outcome,
+                ..
             } => {
-                self.networktools.remove_transfer(kind, id);
                 match outcome {
                     TransferOutcome::Completed { bytes } => {
                         let message = t!(
@@ -184,15 +191,15 @@ impl NyaTermApp {
                             kind,
                             tracing::Level::INFO,
                             service = kind.log_name(),
-                            file = %file,
-                            remote = %remote,
+                            generation,
+                            transfer_id = id,
                             bytes,
                             "transfer finished"
                         );
                     }
                     TransferOutcome::Failed { message } => {
-                        // The reason must survive to both the toast and the log;
-                        // an empty reason would leave a dangling separator.
+                        // Keep detailed errors in the notification: peer-provided
+                        // messages can contain user data and must not enter diagnostics.
                         let reason = if message.trim().is_empty() {
                             t!("networktools.common.transfer.failedUnknown").to_string()
                         } else {
@@ -215,34 +222,41 @@ impl NyaTermApp {
                             kind,
                             tracing::Level::ERROR,
                             service = kind.log_name(),
-                            file = %file,
-                            remote = %remote,
-                            error = %reason,
+                            generation,
+                            transfer_id = id,
                             "transfer failed"
                         );
                     }
                 }
             }
-            NetworkToolEvent::Failed { kind, message } => {
-                self.networktools
-                    .set_status_message(kind, Some(message.clone()));
+            NetworkToolEvent::Failed {
+                kind,
+                generation,
+                message,
+            } => {
+                if current {
+                    self.networktools
+                        .set_status_message(kind, Some(message.clone()));
+                }
                 let text = t!(
                     "networktools.common.status.serviceFailed",
                     service = service_label(kind),
                     message = message.clone()
                 )
                 .to_string();
-                self.notify_background_operation(
-                    ids::status_notification(kind),
-                    NyaNotificationKind::Error,
-                    text,
-                    cx,
-                );
+                if current && !self.networktools.is_busy(kind) {
+                    self.notify_background_operation(
+                        ids::status_notification(kind),
+                        NyaNotificationKind::Error,
+                        text,
+                        cx,
+                    );
+                }
                 networktools_log!(
                     kind,
                     tracing::Level::ERROR,
                     service = kind.log_name(),
-                    error = %message,
+                    generation,
                     "service failed"
                 );
             }
@@ -293,97 +307,61 @@ pub(in crate::features) fn default_networktools_share_dir() -> Option<std::path:
 }
 
 impl NyaTermApp {
-    /// Start or stop exactly one service. A failure only touches that service's
-    /// status message and transfer list.
+    /// Runtime commands are serialized by the background owner. Repeated clicks
+    /// stay disabled until the matching result has been consumed.
     pub(in crate::features) fn toggle_networktools_service(
         &mut self,
         kind: NetworkToolKind,
         cx: &mut Context<Self>,
     ) {
-        if self.networktools.is_running(kind) {
-            self.networktools.registry.stop(kind);
-            self.networktools.clear_transfers(kind);
-            self.networktools.set_status_message(kind, None);
-            cx.notify();
+        self.ensure_networktools_pump(cx);
+        if !self.networktools.begin_operation(kind) {
             return;
         }
-
-        match self.start_networktools_service(kind) {
-            Ok(()) => self.networktools.set_status_message(kind, None),
-            Err(message) => {
-                self.networktools
-                    .set_status_message(kind, Some(message.clone()));
-                let text = t!(
-                    "networktools.common.status.serviceFailed",
-                    service = service_label(kind),
-                    message = message
-                )
-                .to_string();
-                self.notify_background_operation(
-                    ids::status_notification(kind),
-                    NyaNotificationKind::Error,
-                    text,
-                    cx,
-                );
-            }
+        let command = if self.networktools.is_running(kind) {
+            RuntimeCommand::Stop(kind)
+        } else {
+            RuntimeCommand::Start(kind, self.networktools_runtime_settings())
+        };
+        if let Err(message) = self.networktools.submit(command) {
+            self.networktools.finish_operation(kind);
+            self.networktools_operation_failed(kind, message, cx);
         }
         cx.notify();
     }
 
-    /// Bind and start exactly one service from the committed settings.
-    ///
-    /// The registry binds on this thread and joins the listener thread when it
-    /// stops, so a failure leaves neither a half-started runtime nor a previous
-    /// listener behind. Callers surface the returned message.
-    fn start_networktools_service(&mut self, kind: NetworkToolKind) -> Result<(), String> {
+    fn networktools_runtime_settings(
+        &self,
+    ) -> nyaterm_core::models::networktools::NetworkToolsSettings {
         let mut settings = self.networktools.settings().clone();
-        if kind.capabilities().needs_root_dir {
-            match kind {
-                NetworkToolKind::Tftp => {
-                    if settings.tftp.root_dir.trim().is_empty()
-                        && let Some(directory) = default_networktools_share_dir()
-                    {
-                        settings.tftp.root_dir = directory.display().to_string();
-                    }
-                }
-            }
+        if settings.tftp.root_dir.trim().is_empty()
+            && let Some(directory) = default_networktools_share_dir()
+        {
+            settings.tftp.root_dir = directory.display().to_string();
         }
-
-        self.networktools
-            .registry
-            .start(kind, &settings)
-            .map_err(|error| {
-                let message = error.to_string();
-                networktools_log!(
-                    kind,
-                    tracing::Level::ERROR,
-                    service = kind.log_name(),
-                    error = %message,
-                    "start failed"
-                );
-                message
-            })
+        settings
     }
 
-    /// Read today's log tail for this feature. Called when a configuration
-    /// window opens, never from a render path.
-    pub(in crate::features) fn refresh_networktools_log(
+    fn networktools_operation_failed(
         &mut self,
         kind: NetworkToolKind,
+        message: String,
         cx: &mut Context<Self>,
     ) {
-        let dir = self.networktools.log_dir().to_path_buf();
-        let read = cx
-            .background_executor()
-            .spawn(async move { log::read_today(&dir, kind, LOG_TAIL_LINES) });
-        cx.spawn(async move |this, cx| {
-            let lines = read.await;
-            let _ = this.update(cx, |app, cx| {
-                app.networktools.set_log_lines(kind, lines);
-                cx.notify();
-            });
-        })
-        .detach();
+        self.networktools
+            .set_status_message(kind, Some(message.clone()));
+        let text = t!(
+            "networktools.common.status.serviceFailed",
+            service = service_label(kind),
+            message = message
+        )
+        .to_string();
+        self.notify_background_operation(
+            ids::status_notification(kind),
+            NyaNotificationKind::Error,
+            text,
+            cx,
+        );
     }
 }
 

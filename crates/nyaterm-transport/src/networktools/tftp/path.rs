@@ -8,9 +8,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+use tempfile::NamedTempFile;
 
 #[derive(Debug)]
 pub enum TftpPathError {
@@ -41,6 +39,7 @@ impl From<io::Error> for TftpPathError {
     fn from(error: io::Error) -> Self {
         match error.kind() {
             io::ErrorKind::NotFound => Self::NotFound,
+            io::ErrorKind::AlreadyExists => Self::AlreadyExists,
             _ => Self::Io(error),
         }
     }
@@ -59,7 +58,9 @@ pub(crate) fn canonical_root(root: &Path) -> io::Result<PathBuf> {
 }
 
 fn relative_path(name: &str) -> Result<PathBuf, TftpPathError> {
-    if name.is_empty() || name.contains('\0') {
+    // Apply the same wire-name policy on every platform, including Windows
+    // drive-relative names, UNC paths and alternate data streams.
+    if name.is_empty() || name.contains(['\0', '\\', ':']) {
         return Err(TftpPathError::InvalidName);
     }
     let mut relative = PathBuf::new();
@@ -89,19 +90,25 @@ pub(crate) fn read_path(root: &Path, name: &str) -> Result<PathBuf, TftpPathErro
 }
 
 /// A pending upload: bytes go to a temporary file next to the target and are
-/// renamed into place only after the last block is acknowledged.
+/// committed before the final ACK. The temporary file is removed on every
+/// uncommitted exit, including Windows where open handles prevent deletion.
 pub(crate) struct WriteTarget {
     pub path: PathBuf,
-    pub temp: PathBuf,
+    pub temp: NamedTempFile,
+    allow_overwrite: bool,
 }
 
 impl WriteTarget {
-    pub fn commit(&self) -> io::Result<()> {
-        fs::rename(&self.temp, &self.path)
-    }
-
-    pub fn cleanup(&self) {
-        let _ = fs::remove_file(&self.temp);
+    pub fn commit(self) -> io::Result<()> {
+        // Close the writer before renaming on Windows. TempPath retains RAII
+        // cleanup if persistence fails. Noclobber checks at commit, not WRQ.
+        let temp = self.temp.into_temp_path();
+        let result = if self.allow_overwrite {
+            temp.persist(&self.path)
+        } else {
+            temp.persist_noclobber(&self.path)
+        };
+        result.map_err(|error| error.error)
     }
 }
 
@@ -123,26 +130,29 @@ pub(crate) fn write_target(
         .ok_or(TftpPathError::InvalidName)?
         .to_owned();
     let path = canonical_parent.join(&file_name);
-    if let Ok(metadata) = fs::metadata(&path) {
-        if metadata.is_dir() {
-            return Err(TftpPathError::IsDirectory);
-        }
-        if !allow_overwrite {
-            return Err(TftpPathError::AlreadyExists);
-        }
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => return Err(TftpPathError::IsDirectory),
+        Ok(_) if !allow_overwrite => return Err(TftpPathError::AlreadyExists),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = canonical_parent.join(format!(
-        "{}.nyaterm-networktools-part-{}-{counter}",
-        file_name.to_string_lossy(),
-        std::process::id()
-    ));
-    Ok(WriteTarget { path, temp })
+    let temp = tempfile::Builder::new()
+        .prefix(".nyaterm-tftp-")
+        .tempfile_in(&canonical_parent)?;
+    Ok(WriteTarget {
+        path,
+        temp,
+        allow_overwrite,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::{TftpPathError, read_path, write_target};
 
     fn root() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -170,6 +180,9 @@ mod tests {
             ".",
             "",
             "C:\\Windows\\win.ini",
+            "C:relative.txt",
+            "C:/Windows/win.ini",
+            "file.txt:stream",
             "\\\\server\\share\\file",
         ] {
             assert!(
@@ -202,7 +215,7 @@ mod tests {
             Err(TftpPathError::AlreadyExists)
         ));
         let target = write_target(&root, "config.bak", true).unwrap();
-        fs::write(&target.temp, b"new").unwrap();
+        fs::write(target.temp.path(), b"new").unwrap();
         target.commit().unwrap();
         assert_eq!(fs::read(root.join("config.bak")).unwrap(), b"new");
     }
@@ -214,5 +227,31 @@ mod tests {
         let target = write_target(&root, "backups/router.cfg", false).unwrap();
         assert!(target.path.starts_with(&root));
         assert_eq!(target.path.file_name().unwrap(), "router.cfg");
+    }
+
+    #[test]
+    fn dropping_an_uncommitted_upload_removes_its_temporary_file() {
+        let (_dir, root) = root();
+        let target = write_target(&root, "cancel.bin", false).unwrap();
+        let temporary = target.temp.path().to_path_buf();
+        assert!(temporary.exists());
+        drop(target);
+        assert!(!temporary.exists());
+        assert!(!root.join("cancel.bin").exists());
+    }
+
+    #[test]
+    fn commit_refuses_a_file_created_after_the_initial_check() {
+        let (_dir, root) = root();
+        let target = write_target(&root, "race.bin", false).unwrap();
+        let temporary = target.temp.path().to_path_buf();
+        fs::write(target.temp.path(), b"new").unwrap();
+        fs::write(&target.path, b"existing").unwrap();
+        assert_eq!(
+            target.commit().unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(root.join("race.bin")).unwrap(), b"existing");
+        assert!(!temporary.exists());
     }
 }

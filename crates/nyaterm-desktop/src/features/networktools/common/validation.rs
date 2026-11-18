@@ -1,9 +1,9 @@
 //! Field rules shared by every network tool form.
 //!
-//! Services add protocol-specific checks on top (TFTP block size, IPv6
-//! rejection) and call this for the fields they all expose.
+//! Services add protocol-specific checks on top (such as TFTP block size)
+//! and call this for the fields they all expose.
 
-use nyaterm_core::TFTP_MAX_CONCURRENCY_LIMIT;
+use nyaterm_core::models::networktools::TFTP_MAX_CONCURRENCY_LIMIT;
 use rust_i18n::t;
 
 /// Per-field validation messages. `None` means the field is valid.

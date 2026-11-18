@@ -278,8 +278,7 @@ impl NyaTermApp {
                 store.load_networktools_settings()
             })
             .unwrap_or_default();
-        let networktools =
-            NetworkToolsFeatureState::new(networktools_settings, runtime.log_dir().to_path_buf());
+        let networktools = NetworkToolsFeatureState::new(networktools_settings);
         let send_command = SendCommandFeatureState::new(cx);
         cx.observe(&send_command.presentation(cx).hex, |_, _, cx| cx.notify())
             .detach();

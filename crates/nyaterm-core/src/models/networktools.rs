@@ -36,8 +36,7 @@ impl NetworkToolsSettings {
 
 /// TFTP server configuration.
 ///
-/// Defaults encode the security posture: not listening on all interfaces and
-/// read-only. Uploads and overwrites need an explicit opt-in.
+/// The default listener is read-only. Uploads and overwrites need an explicit opt-in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TftpSettings {
     #[serde(default = "default_bind_address")]
@@ -48,6 +47,7 @@ pub struct TftpSettings {
     /// service starts, so moving the settings between machines stays neutral.
     #[serde(default)]
     pub root_dir: String,
+    /// Upper limit for client-requested blksize; clients without the option use 512.
     #[serde(default = "default_block_size")]
     pub block_size: u16,
     #[serde(default = "default_timeout_secs")]
@@ -76,7 +76,7 @@ impl Default for TftpSettings {
 }
 
 impl TftpSettings {
-    /// A blank bind address falls back to the loopback default instead of
+    /// A blank bind address falls back to the wildcard default instead of
     /// failing validation, which matches what the settings form shows.
     pub fn effective_bind_address(&self) -> String {
         let trimmed = self.bind_address.trim();
@@ -165,7 +165,9 @@ fn default_max_concurrency() -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        DEFAULT_TFTP_BLOCK_SIZE, NetworkToolsSettings, NetworkToolsSettingsError, TftpSettings,
+    };
 
     #[test]
     fn defaults_listen_on_all_interfaces_but_stay_read_only() {

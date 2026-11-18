@@ -10,14 +10,17 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
-use nyaterm_core::NetworkToolsSettings;
+use nyaterm_core::models::networktools::NetworkToolsSettings;
 
 use super::event::NetworkToolEvent;
 use super::status::{NetworkToolStatus, TransferSnapshot};
 use super::tftp::TftpServer;
+
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NetworkToolKind {
@@ -165,6 +168,12 @@ enum ToolRuntime {
 }
 
 impl ToolRuntime {
+    fn is_running(&self) -> bool {
+        match self {
+            Self::Tftp(server) => server.is_running(),
+        }
+    }
+
     fn stop(&mut self) {
         match self {
             Self::Tftp(server) => server.stop(),
@@ -175,16 +184,21 @@ impl ToolRuntime {
 pub struct NetworkToolRegistry {
     events: SyncSender<NetworkToolEvent>,
     services: HashMap<NetworkToolKind, RunningService>,
+    generations: HashMap<NetworkToolKind, u64>,
     /// Last status including a failed start. Running entries mirror the live
     /// socket; stopped entries are removed.
     statuses: HashMap<NetworkToolKind, NetworkToolStatus>,
 }
 
 impl NetworkToolRegistry {
+    /// Lifecycle sends can wait for channel capacity. Keep the receiver draining
+    /// during operations, or disconnect it before shutdown. Run registry
+    /// operations and destruction off the UI thread.
     pub fn new(events: SyncSender<NetworkToolEvent>) -> Self {
         Self {
             events,
             services: HashMap::new(),
+            generations: HashMap::new(),
             statuses: HashMap::new(),
         }
     }
@@ -201,6 +215,9 @@ impl NetworkToolRegistry {
         if self.is_running(kind) {
             return Err(NetworkToolError::AlreadyRunning);
         }
+        self.stop(kind);
+        let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+        self.generations.insert(kind, generation);
         settings
             .validate()
             .map_err(|error| NetworkToolError::InvalidSettings(error.to_string()))?;
@@ -212,6 +229,7 @@ impl NetworkToolRegistry {
                 settings.tftp.clone(),
                 self.events.clone(),
                 Arc::clone(&transfers),
+                generation,
             )
             .map(|server| {
                 let addr = server.local_addr();
@@ -228,8 +246,9 @@ impl NetworkToolRegistry {
             Err(error) => {
                 self.statuses
                     .insert(kind, NetworkToolStatus::failed(error.to_string()));
-                let _ = self.events.try_send(NetworkToolEvent::Failed {
+                let _ = self.events.send(NetworkToolEvent::Failed {
                     kind,
+                    generation,
                     message: error.to_string(),
                 });
                 Err(error)
@@ -251,10 +270,19 @@ impl NetworkToolRegistry {
     }
 
     pub fn is_running(&self, kind: NetworkToolKind) -> bool {
-        self.services.contains_key(&kind)
+        self.services
+            .get(&kind)
+            .is_some_and(|service| service.runtime.is_running())
+    }
+
+    pub fn generation(&self, kind: NetworkToolKind) -> Option<u64> {
+        self.generations.get(&kind).copied()
     }
 
     pub fn status(&self, kind: NetworkToolKind) -> NetworkToolStatus {
+        if self.services.contains_key(&kind) && !self.is_running(kind) {
+            return NetworkToolStatus::failed("listener stopped unexpectedly");
+        }
         self.statuses.get(&kind).cloned().unwrap_or_default()
     }
 
@@ -282,7 +310,7 @@ impl Drop for NetworkToolRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{NetworkToolKind, NetworkToolRegistry, NetworkToolTransport};
 
     #[test]
     fn tftp_capabilities_describe_a_udp_file_service() {

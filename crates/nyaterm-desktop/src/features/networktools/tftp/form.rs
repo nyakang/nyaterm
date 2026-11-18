@@ -4,14 +4,13 @@
 //! picker (in the parent module) and the store save submitted on confirmation.
 
 use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px, rgb};
-use nyaterm_core::DEFAULT_TFTP_BIND_ADDRESS;
+use nyaterm_core::models::networktools::DEFAULT_TFTP_BIND_ADDRESS;
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable, NyaSelectOption, NyaSwitch};
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 use crate::features::networktools::common::form::{
-    caption_row, field_with_caption, field_with_error, log_view, plain_caption, section,
-    section_with_hint, switch_row,
+    caption_row, field_with_caption, field_with_error, plain_caption, section, switch_row,
 };
 use crate::features::networktools::common::ids;
 use crate::features::text_inputs::TextInputSetup;
@@ -26,7 +25,6 @@ impl NyaTermApp {
         let palette = self.theme_palette();
         let draft = self.networktools.tftp_draft();
         let status_message = self.networktools.status_message(KIND).map(str::to_string);
-        let log_lines = self.networktools.log_lines(KIND).to_vec();
         let port_value = self
             .config_input_value("port", cx)
             .unwrap_or_else(|| draft.port.to_string());
@@ -257,17 +255,6 @@ impl NyaTermApp {
             vec![upload_row, overwrite_row],
         );
 
-        let log_section = section_with_hint(
-            t!("networktools.common.log.title").to_string(),
-            Some(t!("networktools.common.log.todayHint").to_string()),
-            palette,
-            vec![log_view(
-                &log_lines,
-                ids::config_element(KIND, "log"),
-                palette,
-            )],
-        );
-
         // The running state lives in the panel only; this window shows edits and
         // any validation or start error for this service.
         let mut body = Vec::new();
@@ -283,7 +270,6 @@ impl NyaTermApp {
         body.push(basic_section);
         body.push(limits_section);
         body.push(permissions_section);
-        body.push(log_section);
 
         let footer = div()
             .flex_none()
@@ -330,7 +316,7 @@ impl NyaTermApp {
                 )
                 .form_control()
                 .variant(NyaButtonVariant::Primary)
-                .disabled(errors.any())
+                .disabled(errors.any() || self.networktools.is_busy(KIND))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.save_networktools_config(KIND, cx);
                 })),

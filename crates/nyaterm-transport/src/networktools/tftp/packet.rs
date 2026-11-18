@@ -74,13 +74,16 @@ pub fn opcode(buf: &[u8]) -> Option<u16> {
 }
 
 pub fn parse_request(buf: &[u8]) -> Result<Request, PacketError> {
+    if buf.len() > 512 || buf.last() != Some(&0) {
+        return Err(PacketError::Malformed);
+    }
     let opcode = opcode(buf).ok_or(PacketError::TooShort)?;
     let write = match opcode {
         OP_RRQ => false,
         OP_WRQ => true,
         other => return Err(PacketError::UnsupportedOpcode(other)),
     };
-    let mut fields = buf[2..].split(|byte| *byte == 0);
+    let mut fields = buf[2..buf.len() - 1].split(|byte| *byte == 0);
     let file = fields
         .next()
         .and_then(|value| std::str::from_utf8(value).ok())
@@ -94,15 +97,22 @@ pub fn parse_request(buf: &[u8]) -> Result<Request, PacketError> {
     let mut options = Vec::new();
     while let Some(name) = fields.next() {
         if name.is_empty() {
-            break;
+            return Err(PacketError::Malformed);
         }
         let Some(value) = fields.next() else {
             return Err(PacketError::Malformed);
         };
+        if value.is_empty() {
+            return Err(PacketError::Malformed);
+        }
         let (Ok(name), Ok(value)) = (std::str::from_utf8(name), std::str::from_utf8(value)) else {
             return Err(PacketError::Malformed);
         };
-        options.push((name.to_ascii_lowercase(), value.to_string()));
+        let name = name.to_ascii_lowercase();
+        if options.iter().any(|(existing, _)| existing == &name) {
+            return Err(PacketError::Malformed);
+        }
+        options.push((name, value.to_string()));
     }
     Ok(Request {
         write,
@@ -193,10 +203,14 @@ impl Negotiated {
 
 /// Accept only options the client actually asked for, clamping out-of-range
 /// values instead of failing the transfer.
-pub fn negotiate(request: &Request, file_size: Option<u64>) -> Negotiated {
+pub fn negotiate(
+    request: &Request,
+    file_size: Option<u64>,
+    settings: &nyaterm_core::models::networktools::TftpSettings,
+) -> Negotiated {
     let mut negotiated = Negotiated {
         block_size: DEFAULT_BLOCK_SIZE,
-        timeout_secs: 0,
+        timeout_secs: settings.timeout_secs,
         tsize: None,
         accepted: Vec::new(),
     };
@@ -209,7 +223,9 @@ pub fn negotiate(request: &Request, file_size: Option<u64>) -> Negotiated {
                 if requested < u32::from(MIN_BLOCK_SIZE) {
                     continue;
                 }
-                let clamped = requested.min(u32::from(MAX_BLOCK_SIZE)) as u16;
+                let clamped = requested.min(u32::from(
+                    settings.block_size.clamp(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE),
+                )) as u16;
                 negotiated.block_size = clamped;
                 negotiated
                     .accepted
@@ -232,9 +248,12 @@ pub fn negotiate(request: &Request, file_size: Option<u64>) -> Negotiated {
                     continue;
                 }
                 let value = match (request.write, file_size) {
-                    (false, Some(size)) => size,
-                    (true, _) => value.parse::<u64>().unwrap_or(0),
-                    (false, None) => continue,
+                    (false, Some(size)) if value == "0" => size,
+                    (true, _) => match value.parse::<u64>() {
+                        Ok(size) => size,
+                        Err(_) => continue,
+                    },
+                    (false, _) => continue,
                 };
                 negotiated.tsize = Some(value);
                 negotiated.accepted.push((name.clone(), value.to_string()));
@@ -247,7 +266,12 @@ pub fn negotiate(request: &Request, file_size: Option<u64>) -> Negotiated {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        DEFAULT_BLOCK_SIZE, ERR_ACCESS_VIOLATION, Mode, OP_OACK, OP_RRQ, PacketError, Request,
+        negotiate, parse_ack, parse_data, parse_error, parse_request, write_ack, write_data,
+        write_error, write_oack,
+    };
+    use nyaterm_core::models::networktools::TftpSettings;
 
     #[test]
     fn parses_request_with_options() {
@@ -330,7 +354,7 @@ mod tests {
                 ("windowsize".into(), "8".into()),
             ],
         };
-        let negotiated = negotiate(&request, Some(2048));
+        let negotiated = negotiate(&request, Some(2048), &TftpSettings::default());
         // 4 is below the minimum, so the default stays and no OACK entry is sent.
         assert_eq!(negotiated.block_size, DEFAULT_BLOCK_SIZE);
         assert_eq!(negotiated.timeout_secs, 5);
@@ -352,6 +376,56 @@ mod tests {
             mode: Mode::NetAscii,
             options: vec![("tsize".into(), "99".into())],
         };
-        assert_eq!(negotiate(&request, None).tsize, None);
+        assert_eq!(
+            negotiate(&request, None, &TftpSettings::default()).tsize,
+            None
+        );
+    }
+
+    #[test]
+    fn configured_limit_applies_only_to_requested_block_sizes() {
+        let settings = TftpSettings {
+            block_size: 16,
+            timeout_secs: 7,
+            ..TftpSettings::default()
+        };
+        let mut request = Request {
+            write: true,
+            file: "a".into(),
+            mode: Mode::Octet,
+            options: Vec::new(),
+        };
+        let plain = negotiate(&request, None, &settings);
+        assert_eq!(plain.block_size, 512);
+        assert_eq!(plain.timeout_secs, 7);
+        assert!(!plain.has_options());
+        for (requested, expected) in [("64", 16), ("8", 8)] {
+            request.options = vec![("blksize".into(), requested.into())];
+            let negotiated = negotiate(&request, None, &settings);
+            assert_eq!(negotiated.block_size, expected);
+            assert_eq!(
+                negotiated.accepted,
+                vec![("blksize".into(), expected.to_string())]
+            );
+        }
+        request.options = vec![
+            ("timeout".into(), "2".into()),
+            ("tsize".into(), "bad".into()),
+        ];
+        let negotiated = negotiate(&request, None, &settings);
+        assert_eq!(negotiated.timeout_secs, 2);
+        assert_eq!(negotiated.tsize, None);
+        assert_eq!(negotiated.accepted, vec![("timeout".into(), "2".into())]);
+    }
+
+    #[test]
+    fn rejects_unterminated_and_duplicate_option_fields() {
+        for bytes in [
+            &b"\0\x01a\0octet"[..],
+            &b"\0\x01a\0octet\0blksize\0"[..],
+            &b"\0\x01a\0octet\0blksize\x0016\0BLKSIZE\x0032\0"[..],
+        ] {
+            assert_eq!(parse_request(bytes), Err(PacketError::Malformed));
+        }
     }
 }

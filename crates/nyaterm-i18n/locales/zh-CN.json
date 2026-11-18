@@ -1997,11 +1997,6 @@
         "finished": "%{service} · 传输完成：%{file}（%{bytes} 字节）",
         "failed": "%{service} · %{file}：%{message}",
         "failedUnknown": "未知错误"
-      },
-      "log": {
-        "title": "日志",
-        "todayHint": "仅显示当日日志，更多日志请到日志目录查看。",
-        "empty": "暂无最近活动"
       }
     },
     "tftp": {
@@ -2009,16 +2004,15 @@
       "shortName": "TFTP",
       "description": "在本机通过 TFTP 共享和接收文件。",
       "field": {
-        "blockSize": "块大小",
+        "blockSize": "协商块大小上限",
         "allowUpload": "允许上传",
         "allowOverwrite": "允许覆盖文件"
       },
       "hint": {
-        "blockSize": "TFTP 每个 DATA 包可承载的数据字节数\n默认 512，可选范围 8～65464\n值越大吞吐越高，但超过路径 MTU 时会分片\n它只影响分包大小，不是内部缓冲区大小",
+        "blockSize": "客户端请求 blksize 时允许的最大 DATA 载荷（8–65464 字节）。\n实际协商值取客户端请求与此上限的较小值。\n未请求 blksize 的客户端固定使用 512 字节。",
         "upload": "客户端可以写入服务目录"
       },
       "error": {
-        "bindIpv6Unsupported": "当前 TFTP 仅支持 IPv4，请选择 IPv4 地址。",
         "blockSize": "块大小需为 8～65464"
       }
     }

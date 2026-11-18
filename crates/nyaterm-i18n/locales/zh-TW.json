@@ -1997,11 +1997,6 @@
         "finished": "%{service} · 傳輸完成：%{file}（%{bytes} 位元組）",
         "failed": "%{service} · %{file}：%{message}",
         "failedUnknown": "未知錯誤"
-      },
-      "log": {
-        "title": "日誌",
-        "todayHint": "僅顯示當日日誌，更多日誌請到日誌目錄查看。",
-        "empty": "暫無最近活動"
       }
     },
     "tftp": {
@@ -2009,16 +2004,15 @@
       "shortName": "TFTP",
       "description": "在本機透過 TFTP 分享與接收檔案。",
       "field": {
-        "blockSize": "區塊大小",
+        "blockSize": "協商區塊大小上限",
         "allowUpload": "允許上傳",
         "allowOverwrite": "允許覆寫檔案"
       },
       "hint": {
-        "blockSize": "TFTP 每個 DATA 封包可承載的資料位元組數\n預設 512，可選 8～65464\n數值越大吞吐越高，但超過路徑 MTU 時會分段\n它只影響封包大小，不是內部緩衝區大小",
+        "blockSize": "用戶端請求 blksize 時允許的最大 DATA 酬載（8–65464 位元組）。\n實際協商值取用戶端請求與此上限的較小值。\n未請求 blksize 的用戶端固定使用 512 位元組。",
         "upload": "用戶端可以寫入服務目錄"
       },
       "error": {
-        "bindIpv6Unsupported": "目前 TFTP 僅支援 IPv4，請選擇 IPv4 位址。",
         "blockSize": "區塊大小需為 8～65464"
       }
     }
