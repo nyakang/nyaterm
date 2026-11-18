@@ -310,7 +310,7 @@ JSON 顶层字段：
 
 - `version`：当前为 `1`
 - `groups`：要预先创建的会话分组，使用 `path` 表示层级
-- `passwords`：可复用的已保存密码条目，使用 `ref` 在本文件内引用
+- `passwords`：可复用的已保存账号条目，包含 `name`、`password` 和可选的 `username`，使用 `ref` 在本文件内引用；为兼容旧格式，字段名仍为 `passwords`
 - `ssh_keys`：可复用的已保存私钥条目，使用 `ref` 在本文件内引用
 - `sessions`：要导入的会话列表
 
@@ -320,17 +320,25 @@ JSON 顶层字段：
 - `local_terminal`
 - `telnet`
 - `serial`
-- `rdp`
+
+当前 JSON 导入不支持 `rdp`、`vnc` 或 `adb`。
 
 SSH 认证支持：
 
 - 直接密码：`"auth": { "mode": "password", "password": "replace-me" }`
-- 已保存密码：`"auth": { "mode": "password", "password_ref": "prod-root-password" }`
+- 已保存账号的用户名和密码：`"auth": { "mode": "password", "account_ref": "prod-root-password", "password_source": "account" }`
+- 已保存账号的用户名、连接独立密码：`"auth": { "mode": "password", "account_ref": "prod-root-password", "password_source": "connection", "password": "replace-me" }`
+- 旧版已保存密码引用（仍兼容）：`"auth": { "mode": "password", "password_ref": "prod-root-password" }`
 - 已保存密钥：`"auth": { "mode": "key", "key_ref": "ops-ed25519" }`
-- SSH Agent：`"auth": { "mode": "agent" }`
 - 无认证：`"auth": { "mode": "none" }`
 
-`password` 与 `password_ref` 二选一；`key` 模式必须提供 `key_ref`。`agent` 模式不会导入私钥，只会在连接时使用当前设备可用的 SSH Agent。`ref` 只在当前 JSON 文件内有效，导入后 NyaTerm 会生成真实的本地 ID。
+省略 `password_source` 时，密码认证要求 `password` 与 `password_ref` 二选一。设为 `account` 时，必须提供 `account_ref`，不能同时提供 `password` 或 `password_ref`；设为 `connection` 时，不能提供 `password_ref`，可用 `password` 保存连接独立密码，省略则连接时输入。账号引用指向本文件 `passwords` 中的 `ref`；账号的 `username` 非空时使用该用户名，否则使用会话的 `username`。旧版 `password_ref` 同样遵循此用户名规则。Telnet 也支持这些账号和密码配置。
+
+`key` 模式必须提供 `key_ref`。当前 JSON 导入不接受 `auth.mode: "agent"`；如需 SSH Agent，请在导入后通过连接设置配置。所有 `ref` 只在当前 JSON 文件内有效，导入后 NyaTerm 会生成真实的本地 ID。
+
+样例还展示了会话说明 `description`、标签 `tags`、本地终端参数 `shell_args`、Telnet 保活间隔 `keep_alive_interval_secs`（单位为秒，`0` 表示禁用）和串口流控 `flow_control`（`none`、`software` 或 `hardware`）。这些字段均可省略。SSH 默认端口为 `22`、用户名为 `root`，Telnet 默认端口为 `23`。
+
+私钥内容中的 `...`、密码及本地路径均为占位值，使用前请替换为实际值；未使用密钥认证时可删除对应会话和 `ssh_keys` 条目。
 
 :::warning
 JSON 文件中的密码和私钥是明文。导入后请删除该文件，或至少按敏感文件方式保存。

@@ -8,6 +8,10 @@ use super::{
 };
 use crate::{ConnectionPasswordSource, ConnectionUsernameSource, SerialFlowControl};
 
+const PUBLIC_SAMPLE_JSON: &str =
+    include_str!("../../../../docs-site/static/examples/session-import-sample.json");
+
+// Keep the original sample to verify compatibility independently of documentation updates.
 const SAMPLE_JSON: &str = r#"
 {
   "version": 1,
@@ -518,6 +522,63 @@ fn limited_reader_rejects_oversized_files() {
 
     assert!(error.to_string().contains("exceeds"));
     std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn published_nyaterm_json_sample_imports_accounts_and_optional_settings() {
+    let prepared = parse_nyaterm_json_content(PUBLIC_SAMPLE_JSON).expect("parse published sample");
+
+    assert_eq!(prepared.connections.len(), 8);
+    assert_eq!(prepared.passwords.len(), 1);
+    let account = &prepared.passwords[0];
+    assert_eq!(account.username, "root");
+
+    let legacy_auth = prepared.connections[1].auth.as_ref().unwrap();
+    assert_eq!(
+        legacy_auth.password_id.as_deref(),
+        Some(account.id.as_str())
+    );
+
+    for (index, source, password) in [
+        (6, ConnectionPasswordSource::Account, None),
+        (
+            7,
+            ConnectionPasswordSource::Connection,
+            Some("replace-with-connection-password"),
+        ),
+    ] {
+        let connection = &prepared.connections[index];
+        let auth = connection.auth.as_ref().unwrap();
+        assert_eq!(auth.account_id.as_deref(), Some(account.id.as_str()));
+        assert_eq!(auth.password_source, Some(source));
+        assert_eq!(auth.password.as_deref(), password);
+        assert_eq!(connection.saved.as_ref().unwrap().auth.as_ref(), Some(auth));
+    }
+
+    let web = prepared.connections[0].saved.as_ref().unwrap();
+    assert_eq!(web.tags, ["production", "web"]);
+    assert_eq!(
+        web.description.as_deref(),
+        Some("Direct connection password without a saved account")
+    );
+    assert!(matches!(
+        &prepared.connections[3].saved.as_ref().unwrap().config,
+        ConnectionType::Telnet {
+            keep_alive_interval_secs: 30,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &prepared.connections[4].saved.as_ref().unwrap().config,
+        ConnectionType::Serial {
+            flow_control: SerialFlowControl::None,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &prepared.connections[5].saved.as_ref().unwrap().config,
+        ConnectionType::LocalTerminal { shell_args, .. } if shell_args == "-NoLogo"
+    ));
 }
 
 #[test]
