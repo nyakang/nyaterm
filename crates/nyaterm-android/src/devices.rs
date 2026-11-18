@@ -138,12 +138,34 @@ impl DeviceService {
                 if worker_stop.load(Ordering::Acquire) {
                     break;
                 }
+                let session_error = result.err();
+                // The track stream only breaks when the server stops answering:
+                // either it exited or the socket path went away. Nothing else in
+                // the application re-runs `start-server` once a tracker exists,
+                // so a daemon that was stopped (by another tool, an update, a
+                // crash) would otherwise leave discovery dead and every session
+                // open failing with a bare "cannot communicate" I/O error.
+                let server_unreachable = matches!(
+                    session_error.as_ref(),
+                    Some(AdbError::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::WouldBlock
+                        )
+                );
                 let mut state = worker_state.lock().unwrap_or_else(|p| p.into_inner());
                 update_snapshot(&mut state, Vec::new());
                 state.server_generation = state.server_generation.wrapping_add(1);
-                state.error = result.err().map(|e| e.to_string());
+                state.error = session_error.map(|e| e.to_string());
                 invalidate_changed(&worker_runtimes, &[]);
                 drop(state);
+                if server_unreachable {
+                    // Best effort: the next loop iteration reconnects either way,
+                    // and the error stays published when the server cannot start.
+                    let _ = client.ensure_server();
+                }
                 for _ in 0..10 {
                     if worker_stop.load(Ordering::Acquire) {
                         break;

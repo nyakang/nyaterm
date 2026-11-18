@@ -66,7 +66,9 @@ impl AdbClient {
         match self.version() {
             Ok(SERVER_PROTOCOL_VERSION) => return Ok(()),
             Ok(_) => return Err(AdbError::IncompatibleServer),
-            Err(AdbError::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+            // See `server_unreachable`: a refused, timed-out or blocked connect
+            // all mean nothing is answering, so `start-server` is the next step.
+            Err(AdbError::Io(error)) if server_unreachable(&error) => {}
             Err(error) => return Err(error),
         }
         // Never invoke start-server against an existing incompatible server:
@@ -238,6 +240,20 @@ impl AdbClient {
         all.extend_from_slice(args);
         self.command_with_control(&all, control)
     }
+}
+
+/// Whether a failed local connect means "nothing is listening on the ADB port".
+///
+/// A closed port usually refuses at once, but on hosts where a socket filter
+/// delays the refusal the 2s connect deadline expires first and surfaces as
+/// `TimedOut`, so both kinds have to lead to `start-server`.
+pub fn server_unreachable(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::WouldBlock
+    )
 }
 
 pub fn resolve_executable(custom: Option<&Path>) -> AdbResult<PathBuf> {
@@ -429,10 +445,36 @@ pub fn parse_devices(data: &[u8]) -> AdbResult<Vec<AdbDevice>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::adb::client::{AdbClient, DeviceStatus, parse_devices, resolve_executable};
+    use crate::adb::client::{
+        AdbClient, DeviceStatus, parse_devices, resolve_executable, server_unreachable,
+    };
     use crate::error::AdbError;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn a_slow_refusal_counts_as_no_server() {
+        // Some hosts take longer than the connect deadline to refuse a closed
+        // loopback port, so the same "nothing is listening" state arrives as
+        // `TimedOut`. Treating only `ConnectionRefused` as unreachable left
+        // `ensure_server` returning the I/O error without ever running
+        // `start-server`, which is what kept a stopped daemon stopped.
+        for kind in [
+            std::io::ErrorKind::ConnectionRefused,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::WouldBlock,
+        ] {
+            assert!(server_unreachable(&std::io::Error::from(kind)), "{kind:?}");
+        }
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::AddrNotAvailable,
+        ] {
+            assert!(!server_unreachable(&std::io::Error::from(kind)), "{kind:?}");
+        }
+    }
 
     #[test]
     fn incompatible_shared_server_is_rejected_without_invoking_an_executable() {
