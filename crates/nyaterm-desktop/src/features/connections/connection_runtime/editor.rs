@@ -294,6 +294,7 @@ impl NyaTermApp {
             agent_preview_loading: false,
             backspace_mode: "del".to_string(),
             encoding: String::new(),
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,

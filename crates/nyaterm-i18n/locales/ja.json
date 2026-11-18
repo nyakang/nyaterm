@@ -1275,6 +1275,8 @@
     "workingDirectorySelected": "作業ディレクトリ: %{path}",
     "workingDirectorySelectionCancelled": "作業ディレクトリの選択をキャンセルしました。",
     "x11Forwarding": "X11 転送",
+    "allowShortRsaHostKeys": "短い RSA ホスト鍵を許可",
+    "allowShortRsaHostKeysDesc": "512～1023 ビットの RSA ホスト鍵を許可します。安全性が低いため、旧式の機器でのみ有効にしてください。ホストの識別と署名は検証します。",
     "sshCompatibilityMode": "互換モード",
     "sshCompatibilityModeDesc": "この接続のリモートリソース監視、プロセス管理、Docker などのバックグラウンド検出を無効にし、追加コマンドによる古い SSH サーバーの切断を防ぎます。ターミナル、SFTP、SSH トンネルには影響しません。",
     "dynamicTabTitle": "動的タブタイトル",

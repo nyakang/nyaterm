@@ -253,6 +253,7 @@ fn same_config(a: &SshSessionConfig, b: &SshSessionConfig) -> bool {
         && a.proxy == b.proxy
         && a.allow_none_auth == b.allow_none_auth
         && a.ssh_algorithms == b.ssh_algorithms
+        && a.allow_short_rsa_host_keys == b.allow_short_rsa_host_keys
         && a.runtime_mode == b.runtime_mode
         && a.profile == b.profile
         && a.sftp == b.sftp
@@ -305,6 +306,23 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn short_rsa_policy_and_jump_policy_changes_prevent_connection_reuse() {
+        let strict = SshSessionConfig::default();
+        let mut legacy = strict.clone();
+        legacy.allow_short_rsa_host_keys = true;
+        assert!(!super::same_config(&strict, &legacy));
+        let strict_jump = SshSessionConfig {
+            proxy_jump: Some(Box::new(strict)),
+            ..Default::default()
+        };
+        let legacy_jump = SshSessionConfig {
+            proxy_jump: Some(Box::new(legacy)),
+            ..Default::default()
+        };
+        assert!(!super::same_config(&strict_jump, &legacy_jump));
     }
 
     #[test]

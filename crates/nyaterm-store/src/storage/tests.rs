@@ -677,6 +677,7 @@ fn round_trips_sessions_in_redb_compatible_tables() {
                 ..Default::default()
             }),
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -753,6 +754,7 @@ fn exports_and_imports_native_redb_backup() {
             icon_auto_detect: None,
             auth: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -852,6 +854,7 @@ fn exports_and_imports_portable_snapshot() {
                     ..Default::default()
                 }),
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -1129,6 +1132,7 @@ fn encrypted_portable_snapshot_requires_master_password() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -1185,6 +1189,7 @@ fn encrypted_portable_snapshot_requires_master_password() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -2174,6 +2179,7 @@ fn rejects_invalid_backup_without_replacing_current_database() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -2254,6 +2260,7 @@ fn save_and_delete_connection_updates_store() {
         icon_auto_detect: None,
         auth: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -2309,6 +2316,7 @@ fn save_group_and_connection_persists_both_records() {
         icon_auto_detect: None,
         auth: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -2391,6 +2399,7 @@ fn deleting_group_removes_descendants_and_grouped_connections() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -2446,6 +2455,7 @@ fn load_sessions_decrypts_legacy_connection_password_record() {
             ..Default::default()
         }),
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -6664,6 +6674,7 @@ fn sync_snapshot_strips_device_local_ssh_agent_settings() {
             post_login: None,
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -7371,6 +7382,7 @@ fn ssh_connection_for_asset(id: &str) -> SavedConnection {
         post_login: None,
         recording: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -9403,4 +9415,40 @@ fn default_session_batch_commits_all_protocols_or_preserves_the_entire_catalog()
     assert_eq!(after["ssh"]["encoding"], "GBK");
     assert_eq!(after["ssh"]["future"]["version"], 8);
     assert_eq!(after["telnet"], before.unwrap()["telnet"]);
+}
+
+#[test]
+fn short_rsa_opt_in_survives_portable_backup_and_clears_after_restore() {
+    let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-short-rsa-backup");
+    let source = root.join("source");
+    let target = root.join("restored");
+    let backup = root.join("backup.nya");
+    let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "name":"legacy", "type":"ssh", "host":"example.invalid", "ssh_profile":"network_device",
+        "allow_short_rsa_host_keys":true, "future_field":{"v":7}
+    })).unwrap();
+    let store = ConnectionStore::open(&source).unwrap();
+    store.save_connection(&connection).unwrap();
+    drop(store);
+    ConnectionStore::export_portable_snapshot(&source, None, &backup, "fixture", "2.0.6").unwrap();
+    ConnectionStore::import_portable_snapshot(&target, None, &backup).unwrap();
+    let store = ConnectionStore::open_existing(&target).unwrap();
+    connection = store.list_connections().unwrap().remove(0);
+    assert!(connection.allow_short_rsa_host_keys);
+    assert_eq!(
+        serde_json::to_value(&connection).unwrap()["future_field"]["v"],
+        7
+    );
+    connection.allow_short_rsa_host_keys = false;
+    store.save_connection(&connection).unwrap();
+    drop(store);
+    let store = ConnectionStore::open_existing(&target).unwrap();
+    let connection = store.list_connections().unwrap().remove(0);
+    assert!(!connection.allow_short_rsa_host_keys);
+    assert!(
+        serde_json::to_value(connection)
+            .unwrap()
+            .get("allow_short_rsa_host_keys")
+            .is_none()
+    );
 }

@@ -1275,6 +1275,8 @@
     "workingDirectorySelected": "Répertoire de travail : %{path}",
     "workingDirectorySelectionCancelled": "Sélection du répertoire de travail annulée.",
     "x11Forwarding": "Transfert X11",
+    "allowShortRsaHostKeys": "Autoriser les clés hôte RSA courtes",
+    "allowShortRsaHostKeysDesc": "Autorise les clés hôte RSA de 512 à 1023 bits. Ces clés sont peu sûres : activez uniquement pour les anciens équipements. L’identité de l’hôte et les signatures restent vérifiées.",
     "sshCompatibilityMode": "Mode de compatibilité",
     "sshCompatibilityModeDesc": "Désactive la surveillance des ressources distantes, la gestion des processus, Docker et les sondes en arrière-plan pour cette connexion afin d’éviter les déconnexions des anciens serveurs SSH dues aux commandes supplémentaires. Le terminal, SFTP et les tunnels SSH restent disponibles.",
     "dynamicTabTitle": "Titre d’onglet dynamique",

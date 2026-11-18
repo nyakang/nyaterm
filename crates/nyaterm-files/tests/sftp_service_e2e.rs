@@ -60,6 +60,7 @@ fn test_config() -> SshSessionConfig {
         proxy: None,
         allow_none_auth: false,
         profile: Default::default(),
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         backspace_mode: "del".to_string(),
         term: "xterm-256color".to_string(),

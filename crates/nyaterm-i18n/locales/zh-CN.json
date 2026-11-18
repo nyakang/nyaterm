@@ -1275,6 +1275,8 @@
     "workingDirectorySelected": "工作目录：%{path}",
     "workingDirectorySelectionCancelled": "已取消选择工作目录。",
     "x11Forwarding": "X11 转发",
+    "allowShortRsaHostKeys": "允许短 RSA 主机密钥",
+    "allowShortRsaHostKeysDesc": "允许 512～1023 位 RSA 主机密钥。这些密钥安全性不足，仅应为旧设备启用；仍会验证主机身份和签名。",
     "sshCompatibilityMode": "兼容模式",
     "sshCompatibilityModeDesc": "禁用当前连接的远程资源监控、进程管理、Docker 等后台探测，避免旧版 SSH 服务器因额外命令而异常断开。不影响终端、SFTP 和 SSH 隧道。",
     "dynamicTabTitle": "动态标签标题",

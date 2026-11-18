@@ -1275,6 +1275,8 @@
     "workingDirectorySelected": "工作目錄：%{path}",
     "workingDirectorySelectionCancelled": "已取消選擇工作目錄。",
     "x11Forwarding": "X11 轉發",
+    "allowShortRsaHostKeys": "允許短 RSA 主機金鑰",
+    "allowShortRsaHostKeysDesc": "允許 512～1023 位 RSA 主機金鑰。這些金鑰安全性不足，僅應為舊裝置啟用；仍會驗證主機身分和簽章。",
     "sshCompatibilityMode": "相容模式",
     "sshCompatibilityModeDesc": "停用目前連線的遠端資源監控、程序管理、Docker 等背景探測，避免舊版 SSH 伺服器因額外命令而異常中斷。不影響終端、SFTP 和 SSH 通道。",
     "dynamicTabTitle": "動態分頁標題",

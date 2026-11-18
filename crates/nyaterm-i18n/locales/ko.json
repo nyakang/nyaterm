@@ -1275,6 +1275,8 @@
     "workingDirectorySelected": "작업 디렉터리: %{path}",
     "workingDirectorySelectionCancelled": "작업 디렉터리 선택이 취소되었습니다.",
     "x11Forwarding": "X11 포워딩",
+    "allowShortRsaHostKeys": "짧은 RSA 호스트 키 허용",
+    "allowShortRsaHostKeysDesc": "512~1023비트 RSA 호스트 키를 허용합니다. 안전하지 않은 키이므로 구형 장치에만 사용하세요. 호스트 신원과 서명은 계속 검증합니다.",
     "sshCompatibilityMode": "호환 모드",
     "sshCompatibilityModeDesc": "이 연결의 원격 리소스 모니터링, 프로세스 관리, Docker 등의 백그라운드 탐지를 비활성화하여 추가 명령으로 인한 구형 SSH 서버의 연결 끊김을 방지합니다. 터미널, SFTP 및 SSH 터널에는 영향을 주지 않습니다.",
     "dynamicTabTitle": "동적 탭 제목",

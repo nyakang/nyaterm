@@ -507,6 +507,7 @@ fn local_terminal_endpoint_uses_shell_and_working_dir() {
         icon_auto_detect: None,
         auth: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -1607,5 +1608,33 @@ fn ssh_compatibility_mode_defaults_and_round_trips_without_resurrecting_cleared_
             .unwrap()
             .get("ssh_compatibility_mode")
             .is_none()
+    );
+}
+
+#[test]
+fn short_rsa_opt_in_defaults_off_and_clears_without_resurrecting_extensions() {
+    let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "name":"old device", "type":"ssh", "host":"example.invalid", "ssh_profile":"network_device", "future_field":{"v":7}
+    })).unwrap();
+    assert!(!connection.allow_short_rsa_host_keys);
+    assert!(
+        serde_json::to_value(&connection)
+            .unwrap()
+            .get("allow_short_rsa_host_keys")
+            .is_none()
+    );
+    connection.allow_short_rsa_host_keys = true;
+    let value = serde_json::to_value(&connection).unwrap();
+    assert_eq!(value["allow_short_rsa_host_keys"], true);
+    connection = serde_json::from_value(value).unwrap();
+    assert!(connection.allow_short_rsa_host_keys);
+    connection.allow_short_rsa_host_keys = false;
+    let value = serde_json::to_value(&connection).unwrap();
+    assert!(value.get("allow_short_rsa_host_keys").is_none());
+    assert_eq!(value["future_field"]["v"], 7);
+    assert!(
+        !serde_json::from_value::<SavedConnection>(value)
+            .unwrap()
+            .allow_short_rsa_host_keys
     );
 }
