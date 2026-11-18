@@ -60,6 +60,14 @@ pub enum DataDirectoryError {
     InvalidDatabase(PathBuf),
     #[error("NyaTerm database was created by a newer version: {0}")]
     DatabaseUpgradeRequired(PathBuf),
+    #[error("database is missing: {0}")]
+    DatabaseMissing(PathBuf),
+    #[error("database file is corrupted: {0}")]
+    DatabaseCorrupt(PathBuf),
+    #[error("saved database records could not be decoded: {0}")]
+    DatabaseDataInvalid(PathBuf),
+    #[error("database initialization failed: {0}")]
+    DatabaseInitializationFailed(PathBuf),
     #[error("unsupported migration entry: {0}")]
     UnsupportedEntry(PathBuf),
 }
@@ -83,6 +91,10 @@ impl DataDirectoryError {
             Self::RecoveryRequired(_) => "recovery_required",
             Self::InvalidDatabase(_) => "invalid_database",
             Self::DatabaseUpgradeRequired(_) => "database_upgrade_required",
+            Self::DatabaseMissing(_) => "database_missing",
+            Self::DatabaseCorrupt(_) => "database_corrupt",
+            Self::DatabaseDataInvalid(_) => "database_data_invalid",
+            Self::DatabaseInitializationFailed(_) => "database_initialization_failed",
             Self::UnsupportedEntry(_) => "unsupported_entry",
         }
     }
@@ -161,8 +173,16 @@ pub struct DataDirectoryRecovery {
     pub default_dir: PathBuf,
     pub pending: Option<PendingSwitch>,
     pub can_select: bool,
+    pub can_rebuild: bool,
     pub code: String,
     pub message: String,
+}
+
+/// Confirmation is bound to one directory and its exact database contents.
+#[derive(Debug, Clone)]
+pub struct PreparedDatabaseRebuild {
+    pub data_dir: PathBuf,
+    pub database_digest: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone)]

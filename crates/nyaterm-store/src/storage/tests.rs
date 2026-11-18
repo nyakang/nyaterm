@@ -9452,3 +9452,48 @@ fn short_rsa_opt_in_survives_portable_backup_and_clears_after_restore() {
             .is_none()
     );
 }
+
+#[test]
+fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
+    use std::io::{Read as _, Seek as _, Write as _};
+    let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-repaired-database");
+    let store = ConnectionStore::open(root.path()).unwrap();
+    let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"retained", "name":"retained", "type":"ssh", "host":"example.invalid"
+    }))
+    .unwrap();
+    store.save_connection(&connection).unwrap();
+    // Both committed header slots contain the same user data.
+    store.save_connection(&connection).unwrap();
+    drop(store);
+    let path = root.join("nyaterm.redb");
+    let database = redb::Database::open(&path).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    file.seek(std::io::SeekFrom::Start(9)).unwrap();
+    let mut god_byte = [0u8; 1];
+    file.read_exact(&mut god_byte).unwrap();
+    // Simulate an interrupted commit that permits fallback to the other slot.
+    god_byte[0] = (god_byte[0] | 2) & !4;
+    file.seek(std::io::SeekFrom::Start(9)).unwrap();
+    file.write_all(&god_byte).unwrap();
+    // redb's supported file header has two 128-byte transaction slots.
+    // Damaging the primary checksum exercises check_integrity's repaired result.
+    let checksum_offset = if god_byte[0] & 1 == 0 {
+        64 + 112
+    } else {
+        192 + 112
+    };
+    file.seek(std::io::SeekFrom::Start(checksum_offset))
+        .unwrap();
+    file.write_all(&[0u8; 16]).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let (database, repaired) = ConnectionStore::validate_opened_database(database, &path).unwrap();
+    assert!(repaired);
+    let store = ConnectionStore::from_database(database, path, None).unwrap();
+    assert_eq!(store.list_connections().unwrap()[0].id, "retained");
+}
