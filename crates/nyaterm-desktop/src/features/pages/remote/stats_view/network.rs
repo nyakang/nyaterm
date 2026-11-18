@@ -287,13 +287,6 @@ fn network_history_chart(
                         ),
                 ),
         )
-        .child(
-            div()
-                .text_right()
-                .text_size(px(10.))
-                .text_color(rgb(palette.text_dimmed))
-                .child(t!("resourceMonitor.recentSeconds", count = 60).to_string()),
-        )
 }
 
 fn axis_number(value: f64) -> String {
@@ -319,31 +312,55 @@ fn network_interfaces(
         .gap_1()
         .child(
             div()
-                .debug_selector(|| "stats-network-interfaces-trigger".to_string())
+                .w_full()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_x_2()
+                .gap_y_1()
                 .child(
-                    NyaButton::new(
-                        "stats-network-interfaces-toggle",
-                        t!("resourceMonitor.interfaceRates", count = count).to_string(),
-                    )
-                    .variant(NyaButtonVariant::Ghost)
-                    .small()
-                    .compact()
-                    .height(px(24.))
-                    .full_width()
-                    .label_left()
-                    .text_size(px(11.))
-                    .icon(if state.network_interfaces_expanded {
-                        "icons/chevron-down.svg"
-                    } else {
-                        "icons/menu/chevron-right.svg"
-                    })
-                    .on_click(cx.listener(|panel, _, _, cx| {
-                        panel.with_app(cx, |app, _cx| {
-                            if let Some(id) = app.session.active_id().map(str::to_string) {
-                                app.remote_ops.toggle_stats_network_interfaces(&id);
-                            }
-                        });
-                    })),
+                    div()
+                        .debug_selector(|| "stats-network-interfaces-trigger".to_string())
+                        .flex()
+                        .flex_none()
+                        .child(
+                            NyaButton::new(
+                                "stats-network-interfaces-toggle",
+                                t!("resourceMonitor.interfaceRates", count = count).to_string(),
+                            )
+                            .variant(NyaButtonVariant::Ghost)
+                            .small()
+                            .compact()
+                            .height(px(24.))
+                            .text_size(px(11.))
+                            .icon(if state.network_interfaces_expanded {
+                                "icons/chevron-down.svg"
+                            } else {
+                                "icons/menu/chevron-right.svg"
+                            })
+                            .on_click(cx.listener(
+                                |panel, _, _, cx| {
+                                    panel.with_app(cx, |app, _cx| {
+                                        if let Some(id) =
+                                            app.session.active_id().map(str::to_string)
+                                        {
+                                            app.remote_ops.toggle_stats_network_interfaces(&id);
+                                        }
+                                    });
+                                },
+                            )),
+                        ),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "stats-network-recent-seconds".to_string())
+                        .flex_none()
+                        .ml_auto()
+                        .whitespace_nowrap()
+                        .text_right()
+                        .text_size(px(10.))
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(t!("resourceMonitor.recentSeconds", count = 60).to_string()),
                 ),
         )
         .when(state.network_interfaces_expanded, |collapsible| {
