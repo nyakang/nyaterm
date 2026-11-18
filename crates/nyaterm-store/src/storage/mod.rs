@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use nyaterm_core::models::networktools::NetworkToolsSettings;
 use nyaterm_core::{
     AiSettings, AssetMetadata, ConnectionType, CredentialCrypto, CredentialCryptoError, Group,
     KeywordHighlightConfig, KeywordHighlightImportResult, KeywordHighlightRule,
-    NetworkToolsSettings, PortableSnapshotError, ProxyConfig, ProxyGroup, ProxyGroupsConfig,
-    QuickCommand, QuickCommandCategory, QuickCommandsConfig, SavedConnection, SessionsConfig,
+    PortableSnapshotError, ProxyConfig, ProxyGroup, ProxyGroupsConfig, QuickCommand,
+    QuickCommandCategory, QuickCommandsConfig, SavedConnection, SessionsConfig,
     TranslationSettings, TunnelConfig, TunnelGroup, TunnelGroupsConfig, ai_settings_has_secret,
     merge_masked_ai_settings, merge_masked_translation_settings, migrate_legacy_ssh_agent_settings,
     normalize_ai_settings, translation_settings_has_secret, uuid,
@@ -1142,17 +1143,21 @@ impl ConnectionStore {
         &self,
         next: NetworkToolsSettings,
     ) -> Result<NetworkToolsSettings, StorageError> {
+        next.validate()
+            .map_err(|error| StorageError::InvalidData(error.to_string()))?;
         let mut value = self.load_settings_value()?;
-        if !value.is_object() {
-            value = serde_json::Value::Object(Default::default());
+        let object = value.as_object_mut().ok_or_else(|| {
+            StorageError::InvalidData("settings document must be an object".into())
+        })?;
+        let subtree = object
+            .entry(SETTINGS_NETWORKTOOLS_FIELD)
+            .or_insert_with(|| serde_json::json!({}));
+        if !subtree.is_object() || subtree.get("tftp").is_some_and(|tftp| !tftp.is_object()) {
+            return Err(StorageError::InvalidData(
+                "unsupported networktools settings format".into(),
+            ));
         }
-        let mut subtree = value
-            .get(SETTINGS_NETWORKTOOLS_FIELD)
-            .cloned()
-            .filter(serde_json::Value::is_object)
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-        merge_json_objects(&mut subtree, serde_json::to_value(&next)?);
-        set_nested_json_value(&mut value, &[SETTINGS_NETWORKTOOLS_FIELD], subtree);
+        merge_json_objects(subtree, serde_json::to_value(&next)?);
         self.save_settings_value(&value)?;
         Ok(next)
     }
