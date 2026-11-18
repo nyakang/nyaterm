@@ -109,7 +109,7 @@ impl NyaTermApp {
             .child(security_editor_field(
                 self,
                 "cred-pass-re",
-                t!("credentialManager.passwordRegexPlaceholder"),
+                t!("credentialManager.passwordRegexLabel"),
                 editor.password_prompt_regex.clone(),
                 TextInputSetup::default(),
                 cx,
