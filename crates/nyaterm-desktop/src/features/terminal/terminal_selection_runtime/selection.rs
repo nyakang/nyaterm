@@ -1199,10 +1199,14 @@ fn terminal_selection_autoscroll_delta(
     if !pointer_y.is_finite() || bottom <= top {
         return 0;
     }
+    // Only a pointer outside the text grid scrolls. Treating the first and
+    // last rows as edge bands makes a drag that reaches the first visible line
+    // jump a row into scrollback, and a drag that stops there scrolls away
+    // until the history runs out.
     let edge = cell_height.max(1.0).min((bottom - top) / 4.0);
-    let distance = if pointer_y < top + edge {
+    let distance = if pointer_y < top {
         top + edge - pointer_y
-    } else if pointer_y >= bottom - edge {
+    } else if pointer_y > bottom {
         bottom - edge - pointer_y
     } else {
         return 0;
@@ -1914,6 +1918,27 @@ mod tests {
         );
         assert_eq!(terminal_selection_line_after_scroll(42, 6, 8, 99), 40);
         assert_eq!(terminal_selection_line_after_scroll(0, 98, 99, 99), 0);
+    }
+
+    #[test]
+    fn drag_inside_the_visible_rows_selects_without_autoscrolling() {
+        // The first and last rows are text: a drag that reaches them selects
+        // them instead of scrolling the view.
+        for pointer_y in [0.0, 4.5, 9.9, 50.0, 90.0, 100.0] {
+            assert_eq!(
+                terminal_selection_autoscroll_delta(pointer_y, 0.0, 100.0, 10.0),
+                0
+            );
+        }
+        // Leaving the text grid still scrolls with the same ramp.
+        assert_eq!(
+            terminal_selection_autoscroll_delta(-1.0, 0.0, 100.0, 10.0),
+            2
+        );
+        assert_eq!(
+            terminal_selection_autoscroll_delta(100.1, 0.0, 100.0, 10.0),
+            -2
+        );
     }
 
     #[test]

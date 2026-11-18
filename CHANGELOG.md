@@ -17,6 +17,7 @@ in `docs-site/src/data/changelogData.ts`; update both locations when preparing a
 ### Fixed
 
 - **android:** Restart a stopped ADB server when the device tracker or a shell handshake finds it gone, instead of failing with a generic I/O error until something else starts ADB.
+- **terminal:** Select the first and last visible rows without autoscrolling the view; edge scrolling now starts only outside the text grid.
 
 ## [2.0.6] - 2026-11-17
 
