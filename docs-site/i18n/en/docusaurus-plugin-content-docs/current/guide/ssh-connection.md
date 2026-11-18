@@ -308,7 +308,7 @@ Top-level JSON fields:
 
 - `version`: currently `1`
 - `groups`: session groups to create in advance, using `path` to represent nesting
-- `passwords`: reusable saved-password entries, referenced within this file by `ref`
+- `passwords`: reusable saved accounts with `name`, `password`, and an optional `username`, referenced within this file by `ref`; the field name remains `passwords` for compatibility
 - `ssh_keys`: reusable saved-key entries, referenced within this file by `ref`
 - `sessions`: session definitions to import
 
@@ -318,17 +318,25 @@ Supported session types:
 - `local_terminal`
 - `telnet`
 - `serial`
-- `rdp`
+
+JSON import currently does not support `rdp`, `vnc`, or `adb`.
 
 Supported SSH authentication forms:
 
 - Direct password: `"auth": { "mode": "password", "password": "replace-me" }`
-- Saved password: `"auth": { "mode": "password", "password_ref": "prod-root-password" }`
+- Saved account username and password: `"auth": { "mode": "password", "account_ref": "prod-root-password", "password_source": "account" }`
+- Saved account username with a separate connection password: `"auth": { "mode": "password", "account_ref": "prod-root-password", "password_source": "connection", "password": "replace-me" }`
+- Legacy saved-password reference (still supported): `"auth": { "mode": "password", "password_ref": "prod-root-password" }`
 - Saved key: `"auth": { "mode": "key", "key_ref": "ops-ed25519" }`
-- SSH Agent: `"auth": { "mode": "agent" }`
 - No authentication: `"auth": { "mode": "none" }`
 
-Use either `password` or `password_ref`, but not both. `key` mode must provide `key_ref`. `agent` mode does not import private keys; it uses the current device's available SSH Agent when connecting. A `ref` is only valid inside the current JSON file; after import, NyaTerm generates real local IDs.
+When `password_source` is omitted, password authentication requires exactly one of `password` or `password_ref`. With `account`, provide `account_ref` and omit both `password` and `password_ref`. With `connection`, omit `password_ref`; use `password` to save a separate connection password, or omit it to enter the password when connecting. Account references point to a `ref` in this file's `passwords` list. A non-empty account `username` takes precedence over the session `username`; otherwise, the session username is used. Legacy `password_ref` follows the same username rule. Telnet also supports these account and password settings.
+
+`key` mode must provide `key_ref`. JSON import currently rejects `auth.mode: "agent"`; configure SSH Agent in the connection settings after importing if needed. All references are valid only within the current JSON file; after import, NyaTerm generates real local IDs.
+
+The sample also demonstrates session descriptions (`description`), tags (`tags`), local shell arguments (`shell_args`), Telnet keepalive intervals (`keep_alive_interval_secs`, in seconds, with `0` disabling keepalive), and serial flow control (`flow_control`: `none`, `software`, or `hardware`). All of these fields are optional. SSH defaults to port `22` and username `root`; Telnet defaults to port `23`.
+
+The `...` in the private key, passwords, and local paths are placeholders. Replace them before use; remove the corresponding session and `ssh_keys` entry if key authentication is not needed.
 
 :::warning
 Passwords and private keys in the JSON file are plaintext. Delete the file after importing, or at least treat it as a sensitive file.
