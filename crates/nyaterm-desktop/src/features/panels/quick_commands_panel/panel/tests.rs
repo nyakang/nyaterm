@@ -137,6 +137,104 @@ fn quick_command_editor_literal_toggle_preserves_the_editor_selection_and_undo_i
     }
 }
 
+#[test]
+fn quick_command_editor_segmented_select_shows_options_and_saves_profile() {
+    let root = TestTempDir::new("nyaterm-quick-command-editor-segmented");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app(&mut cx, &root);
+    app.update(&mut cx, |app, _| {
+        app.commands
+            .open_quick_editor(crate::models::QuickCommandEditorState::blank());
+    });
+    let fixture_app = app.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+        let fixture = cx.new(|_| QuickCommandEditorFixture {
+            app: fixture_app,
+            native: false,
+        });
+        nya_root(fixture, window, cx)
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("quick-command-editor-segmented-mode")
+            .is_none()
+    );
+
+    let select = app.read_with(cx, |app, _| {
+        app.selects
+            .field(&"quick-command-editor-execution-mode".into())
+            .unwrap()
+    });
+    select.update(cx, |_, cx| {
+        cx.emit(nyaterm_ui::NyaSelectEvent::Changed(Some(
+            "segmented".into(),
+        )));
+    });
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!(
+            app.commands.quick_editor().unwrap().execution_mode,
+            "segmented"
+        );
+        assert!(
+            app.number_input_fields_snapshot()
+                .contains_key("quick-command.editor.segmented-interval")
+        );
+    });
+    assert!(
+        cx.debug_bounds("quick-command-editor-segmented-mode")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("quick-command.editor.segmented-interval")
+            .is_some()
+    );
+
+    app.update(cx, |app, cx| {
+        app.commands.apply_quick_editor_input(
+            crate::models::QuickCommandEditorField::Label,
+            "Segmented".into(),
+        );
+        app.commands.apply_quick_editor_input(
+            crate::models::QuickCommandEditorField::Command,
+            "one\ntwo".into(),
+        );
+        app.set_quick_command_editor_segmented_mode(
+            nyaterm_core::QuickCommandSegmentedSendMode::Character,
+            cx,
+        );
+        app.commands.apply_quick_editor_input(
+            crate::models::QuickCommandEditorField::SegmentedInterval,
+            "0.25".into(),
+        );
+        app.save_quick_command_editor(cx);
+    });
+    for _ in 0..20 {
+        draw(cx);
+        if !app.read_with(cx, |app, _| app.commands.quick_editor_save_in_flight()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    app.read_with(cx, |app, _| {
+        let command = app
+            .commands
+            .quick_commands()
+            .iter()
+            .find(|command| command.label == "Segmented")
+            .unwrap();
+        assert_eq!(command.execution_mode.as_deref(), Some("append"));
+        let send = command.segmented_send.unwrap();
+        assert_eq!(
+            send.mode,
+            nyaterm_core::QuickCommandSegmentedSendMode::Character
+        );
+        assert_eq!(send.interval_ms, 250);
+    });
+}
+
 fn app(cx: &mut TestAppContext, root: &TestTempDir) -> Entity<NyaTermApp> {
     let runtime = AppRuntime::from_parts_for_test(
         RuntimeMode::Portable,
@@ -373,6 +471,7 @@ fn variable_prompt_state() -> crate::models::QuickCommandVariablePromptState {
         command: "ssh {{host}}".into(),
         execute: true,
         send_to_all: false,
+        segmented_send: None,
         variables: ["host", "user"]
             .into_iter()
             .map(|name| crate::models::QuickCommandVariableDef {
@@ -412,6 +511,7 @@ fn variable_prompt_with(
         command: "ssh {{host}}".into(),
         execute: true,
         send_to_all: false,
+        segmented_send: None,
         variables,
     }
 }

@@ -2,6 +2,58 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::RiskLevel;
 
+pub const QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS: u64 = 60_000;
+pub const QUICK_COMMAND_SEGMENTED_SEND_LINE_INTERVAL_MS: u64 = 1_000;
+pub const QUICK_COMMAND_SEGMENTED_SEND_CHARACTER_INTERVAL_MS: u64 = 20;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickCommandSegmentedSendMode {
+    #[default]
+    Line,
+    Character,
+}
+
+impl QuickCommandSegmentedSendMode {
+    pub const fn default_interval_ms(self) -> u64 {
+        match self {
+            Self::Line => QUICK_COMMAND_SEGMENTED_SEND_LINE_INTERVAL_MS,
+            Self::Character => QUICK_COMMAND_SEGMENTED_SEND_CHARACTER_INTERVAL_MS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuickCommandSegmentedSend {
+    #[serde(default)]
+    pub mode: QuickCommandSegmentedSendMode,
+    #[serde(deserialize_with = "deserialize_segmented_send_interval_ms")]
+    pub interval_ms: u64,
+}
+
+impl Default for QuickCommandSegmentedSend {
+    fn default() -> Self {
+        Self {
+            mode: QuickCommandSegmentedSendMode::Line,
+            interval_ms: QUICK_COMMAND_SEGMENTED_SEND_LINE_INTERVAL_MS,
+        }
+    }
+}
+
+fn deserialize_segmented_send_interval_ms<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let interval_ms = u64::deserialize(deserializer)?;
+    if interval_ms <= QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS {
+        Ok(interval_ms)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "interval_ms must be between 0 and {QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS}"
+        )))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QuickCommandCategory {
     pub id: String,
@@ -29,6 +81,9 @@ pub struct QuickCommand {
     pub pinned: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_mode: Option<String>,
+    /// Presence selects segmented delivery; legacy readers safely fall back to append.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmented_send: Option<QuickCommandSegmentedSend>,
     /// Missing, null and false retain the legacy script interpretation.
     #[serde(default, skip_serializing_if = "raw_send_disabled")]
     pub raw_send: Option<bool>,
@@ -416,6 +471,8 @@ pub struct QuickCommandExport {
     pub icon_tag: Option<String>,
     pub pinned: bool,
     pub execution_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segmented_send: Option<QuickCommandSegmentedSend>,
     #[serde(skip_serializing_if = "raw_send_disabled")]
     pub raw_send: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -451,9 +508,14 @@ impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
                     color_tag: command.color_tag,
                     icon_tag: command.icon_tag,
                     pinned: command.pinned.unwrap_or_default(),
-                    execution_mode: command
-                        .execution_mode
-                        .unwrap_or_else(|| "execute".to_string()),
+                    execution_mode: if command.segmented_send.is_some() {
+                        "append".to_string()
+                    } else {
+                        command
+                            .execution_mode
+                            .unwrap_or_else(|| "execute".to_string())
+                    },
+                    segmented_send: command.segmented_send,
                     raw_send: command.raw_send,
                     source: command.source,
                     risk_level: command
@@ -499,7 +561,7 @@ pub struct FuzzyResult {
 #[cfg(test)]
 mod tests {
     use crate::models::quick_commands::{
-        QuickCommand, QuickCommandsConfig, export_quick_commands_json,
+        QuickCommand, QuickCommandSegmentedSend, QuickCommandsConfig, export_quick_commands_json,
     };
 
     #[test]
@@ -529,6 +591,56 @@ mod tests {
             .unwrap();
             let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
             assert!(value["commands"][0].get("raw_send").is_none());
+        }
+    }
+
+    #[test]
+    fn segmented_options_round_trip_and_legacy_json_omits_them() {
+        let legacy: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "legacy", "label": "Legacy", "command": "pwd"
+        }))
+        .unwrap();
+        assert_eq!(legacy.segmented_send, None);
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("segmented_send")
+                .is_none()
+        );
+
+        let segmented: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "segmented",
+            "label": "Segmented",
+            "command": "one\ntwo",
+            "execution_mode": "append",
+            "segmented_send": {"mode": "character", "interval_ms": 20}
+        }))
+        .unwrap();
+        let serialized = serde_json::to_string(&segmented).unwrap();
+        assert_eq!(
+            serde_json::from_str::<QuickCommand>(&serialized).unwrap(),
+            segmented
+        );
+        let exported = export_quick_commands_json(QuickCommandsConfig {
+            commands: vec![segmented],
+            categories: Vec::new(),
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(value["commands"][0]["execution_mode"], "append");
+        assert_eq!(value["commands"][0]["segmented_send"]["interval_ms"], 20);
+    }
+
+    #[test]
+    fn segmented_options_reject_out_of_range_intervals() {
+        for interval_ms in [-1, 60_001] {
+            assert!(
+                serde_json::from_value::<QuickCommandSegmentedSend>(serde_json::json!({
+                    "mode": "line",
+                    "interval_ms": interval_ms
+                }))
+                .is_err()
+            );
         }
     }
 

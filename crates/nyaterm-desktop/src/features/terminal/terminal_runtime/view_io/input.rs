@@ -960,11 +960,20 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
         run_id: u64,
+        literal: bool,
     ) -> Result<(), String> {
         if !self.commands.owns_staged_quick_command(session_id, run_id) {
             return Err("quick command cancelled by newer input".into());
         }
-        self.write_guarded_terminal_input(session_id, bytes)
+        if literal {
+            if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+                state.suggestion_fill = None;
+            }
+            let encoded = self.encode_session_outgoing(session_id, bytes)?;
+            self.write_session_raw_input_recorded_guarded(session_id, &encoded)
+        } else {
+            self.write_guarded_terminal_input(session_id, bytes)
+        }
     }
 
     fn write_guarded_terminal_input(
@@ -1123,6 +1132,15 @@ impl NyaTermApp {
         bytes: &[u8],
     ) -> Result<(), String> {
         self.commands.cancel_staged_quick_command(session_id);
+        self.write_session_raw_input_recorded_guarded(session_id, bytes)
+    }
+
+    /// The staged writer has already checked ownership and must not cancel itself.
+    fn write_session_raw_input_recorded_guarded(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         if self
             .mcp
             .capabilities

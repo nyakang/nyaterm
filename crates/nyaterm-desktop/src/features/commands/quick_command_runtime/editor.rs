@@ -162,6 +162,18 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.commands.set_quick_editor_execution_mode(mode) {
+            self.sync_quick_command_editor_command_placeholder(cx);
+            cx.notify();
+        }
+    }
+
+    pub(in crate::features) fn set_quick_command_editor_segmented_mode(
+        &mut self,
+        mode: nyaterm_core::QuickCommandSegmentedSendMode,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(interval) = self.commands.set_quick_editor_segmented_mode(mode) {
+            self.reset_number_input("quick-command.editor.segmented-interval", &interval, cx);
             cx.notify();
         }
     }
@@ -173,19 +185,24 @@ impl NyaTermApp {
         if !self.commands.toggle_quick_editor_raw_send() {
             return;
         }
-        let raw_send = self
-            .commands
-            .quick_editor()
-            .is_some_and(|editor| editor.raw_send);
+        self.sync_quick_command_editor_command_placeholder(cx);
+        cx.notify();
+    }
+
+    fn sync_quick_command_editor_command_placeholder(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.commands.quick_editor() else {
+            return;
+        };
+        let placeholder = if editor.raw_send {
+            t!("quickCommands.rawCommandPlaceholder")
+        } else if editor.execution_mode == "segmented" {
+            t!("quickCommands.segmentedCommandPlaceholder")
+        } else {
+            t!("quickCommands.commandPlaceholder")
+        };
         if let Some(input) = self.existing_text_input("quick-command.editor.command") {
-            let placeholder = if raw_send {
-                t!("quickCommands.rawCommandPlaceholder")
-            } else {
-                t!("quickCommands.commandPlaceholder")
-            };
             input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
         }
-        cx.notify();
     }
 
     pub(in crate::features) fn save_quick_command_editor(&mut self, cx: &mut Context<Self>) {
@@ -207,6 +224,25 @@ impl NyaTermApp {
                 .set_quick_editor_error(command_required, Some(QuickCommandEditorField::Command));
             cx.notify();
             return;
+        };
+
+        let segmented_send = if editor.execution_mode == "segmented" {
+            let Some(interval_ms) = super::helpers::parse_segmented_send_interval(
+                &editor.segmented_send_interval_input,
+            ) else {
+                self.commands.set_quick_editor_error(
+                    t!("quickCommands.errorSegmentedIntervalInvalid").to_string(),
+                    Some(QuickCommandEditorField::SegmentedInterval),
+                );
+                cx.notify();
+                return;
+            };
+            Some(nyaterm_core::QuickCommandSegmentedSend {
+                mode: editor.segmented_send_mode,
+                interval_ms,
+            })
+        } else {
+            None
         };
 
         let now = unix_millis_now();
@@ -246,7 +282,12 @@ impl NyaTermApp {
             color_tag: editor.color_tag.clone(),
             icon_tag: editor.icon_tag.clone(),
             pinned: editor.pinned.then_some(true),
-            execution_mode: Some(editor.execution_mode.clone()),
+            execution_mode: Some(if segmented_send.is_some() {
+                "append".to_string()
+            } else {
+                editor.execution_mode.clone()
+            }),
+            segmented_send,
             raw_send: editor.raw_send.then_some(true),
             source: original.as_ref().and_then(|command| command.source.clone()),
             risk_level: original
@@ -343,6 +384,7 @@ impl NyaTermApp {
             "command" => QuickCommandEditorField::Command,
             "category" => QuickCommandEditorField::Category,
             "description" => QuickCommandEditorField::Description,
+            "segmented-interval" => QuickCommandEditorField::SegmentedInterval,
             _ => return,
         };
         if self.commands.apply_quick_editor_input(field, text) {

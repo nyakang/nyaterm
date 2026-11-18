@@ -219,10 +219,13 @@ fn available_locales_follow_the_canonical_menu_order() {
 
 /// Entries whose `{{..}}` is literal text rather than an i18n slot.
 ///
-/// `quickCommands.commandPlaceholder` documents NyaTerm's own quick-command
-/// variable syntax, which is handlebars-shaped and parsed by
-/// `parse_quick_command_variables`. It is never interpolated by `t!`.
-const HANDLEBARS_IS_LITERAL: &[&str] = &["quickCommands.commandPlaceholder"];
+/// The quick-command placeholders document NyaTerm's own variable syntax, which
+/// is handlebars-shaped and parsed by `parse_quick_command_variables`. They are
+/// never interpolated by `t!`.
+const HANDLEBARS_IS_LITERAL: &[&str] = &[
+    "quickCommands.commandPlaceholder",
+    "quickCommands.segmentedCommandPlaceholder",
+];
 
 #[test]
 fn every_shipped_locale_names_itself_for_the_language_pickers() {

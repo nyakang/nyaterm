@@ -106,6 +106,7 @@ pub(crate) enum QuickCommandEditorField {
     Command,
     Category,
     Description,
+    SegmentedInterval,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +122,8 @@ pub(crate) struct QuickCommandEditorState {
     pub(crate) icon_tag: Option<String>,
     pub(crate) pinned: bool,
     pub(crate) execution_mode: String,
+    pub(crate) segmented_send_mode: nyaterm_core::QuickCommandSegmentedSendMode,
+    pub(crate) segmented_send_interval_input: String,
     pub(crate) raw_send: bool,
     pub(crate) error: Option<String>,
     /// Which field the error belongs to. `None` is a general error, which the
@@ -179,6 +182,7 @@ pub(crate) struct QuickCommandVariablePromptState {
     pub(crate) command: String,
     pub(crate) execute: bool,
     pub(crate) send_to_all: bool,
+    pub(crate) segmented_send: Option<nyaterm_core::QuickCommandSegmentedSend>,
     pub(crate) variables: Vec<QuickCommandVariableDef>,
 }
 
@@ -196,6 +200,8 @@ impl QuickCommandEditorState {
             icon_tag: None,
             pinned: false,
             execution_mode: "execute".to_string(),
+            segmented_send_mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
+            segmented_send_interval_input: "1.00".to_string(),
             raw_send: false,
             error: None,
             error_field: None,
@@ -226,6 +232,19 @@ impl QuickCommandEditorState {
     }
 
     pub(crate) fn from_command(command: QuickCommand) -> Self {
+        let segmented_send = command.segmented_send;
+        let segmented_send_mode = segmented_send.map(|send| send.mode).unwrap_or_default();
+        let segmented_send_interval_input = segmented_send
+            .map(|send| format!("{:.2}", send.interval_ms as f64 / 1_000.0))
+            .unwrap_or_else(|| "1.00".to_string());
+        let execution_mode = if segmented_send.is_some() {
+            "segmented"
+        } else if command.execution_mode.as_deref() == Some("append") {
+            "append"
+        } else {
+            "execute"
+        }
+        .to_string();
         Self {
             focused_field: QuickCommandEditorField::Label,
             label: command.label.clone(),
@@ -237,10 +256,9 @@ impl QuickCommandEditorState {
             icon_tag: command.icon_tag.clone(),
             pinned: command.pinned.unwrap_or_default(),
             raw_send: command.raw_send.unwrap_or_default(),
-            execution_mode: command
-                .execution_mode
-                .clone()
-                .unwrap_or_else(|| "execute".to_string()),
+            execution_mode,
+            segmented_send_mode,
+            segmented_send_interval_input,
             error: None,
             error_field: None,
             original: Some(command),

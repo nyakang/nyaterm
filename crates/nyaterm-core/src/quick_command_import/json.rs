@@ -68,11 +68,23 @@ pub(super) fn parse_import_command(value: Value) -> Result<ImportCommand, String
         icon_tag: optional_string_field(&object, "icon_tag")?,
         pinned: optional_bool_field(&object, "pinned")?,
         execution_mode: optional_string_field(&object, "execution_mode")?,
+        segmented_send: optional_segmented_send_field(&object)?,
         raw_send,
         source: optional_string_field(&object, "source")?,
         risk_level: optional_risk_field(&object, "risk_level")?,
         sort_order: optional_i32_field(&object, "sort_order")?,
     })
+}
+
+fn optional_segmented_send_field(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Option<crate::QuickCommandSegmentedSend>, String> {
+    match object.get("segmented_send") {
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| format!("segmented_send is invalid: {error}")),
+    }
 }
 
 pub(super) fn optional_i32_field(

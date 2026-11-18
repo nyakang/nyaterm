@@ -42,6 +42,7 @@ impl NyaTermApp {
                 command: String::new(),
                 execute: true,
                 send_to_all: false,
+                segmented_send: None,
                 variables: Vec::new(),
             },
         );

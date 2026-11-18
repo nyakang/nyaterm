@@ -12,6 +12,19 @@ pub(super) fn validated_quick_command_text(command: &str) -> Option<String> {
     }
 }
 
+pub(super) fn parse_segmented_send_interval(input: &str) -> Option<u64> {
+    let seconds = input.trim().parse::<f64>().ok()?;
+    if !seconds.is_finite()
+        || seconds < 0.0
+        || seconds > nyaterm_core::QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS as f64 / 1_000.0
+    {
+        return None;
+    }
+    let interval_ms = (seconds * 1_000.0).round();
+    (interval_ms <= nyaterm_core::QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS as f64)
+        .then_some(interval_ms as u64)
+}
+
 pub(super) fn unix_millis_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -132,6 +145,16 @@ mod tests {
                 validated_quick_command_text(command).as_deref(),
                 Some(command)
             );
+        }
+    }
+
+    #[test]
+    fn segmented_interval_accepts_seconds_and_converts_to_integer_milliseconds() {
+        for (input, expected) in [("0", 0), ("0.02", 20), ("1.00", 1000), ("60", 60000)] {
+            assert_eq!(super::parse_segmented_send_interval(input), Some(expected));
+        }
+        for input in ["", "abc", "-1", "60.01", "NaN", "inf"] {
+            assert_eq!(super::parse_segmented_send_interval(input), None);
         }
     }
 

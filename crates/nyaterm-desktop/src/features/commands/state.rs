@@ -800,6 +800,9 @@ impl CommandFeatureState {
             QuickCommandEditorField::Label => editor.label = text,
             QuickCommandEditorField::Command => editor.command = text,
             QuickCommandEditorField::Description => editor.description = text,
+            QuickCommandEditorField::SegmentedInterval => {
+                editor.segmented_send_interval_input = text
+            }
             QuickCommandEditorField::Category => unreachable!(),
         }
         editor.error = None;
@@ -875,15 +878,28 @@ impl CommandFeatureState {
         let Some(editor) = self.quick.editor.draft.as_mut() else {
             return false;
         };
-        editor.execution_mode = if mode == "append" {
-            "append"
-        } else {
-            "execute"
+        editor.execution_mode = match mode {
+            "append" => "append",
+            "segmented" => "segmented",
+            _ => "execute",
         }
         .to_string();
         editor.error = None;
         editor.error_field = None;
         true
+    }
+
+    pub(in crate::features) fn set_quick_editor_segmented_mode(
+        &mut self,
+        mode: nyaterm_core::QuickCommandSegmentedSendMode,
+    ) -> Option<String> {
+        let editor = self.quick.editor.draft.as_mut()?;
+        editor.segmented_send_mode = mode;
+        editor.segmented_send_interval_input =
+            format!("{:.2}", mode.default_interval_ms() as f64 / 1_000.0);
+        editor.error = None;
+        editor.error_field = None;
+        Some(editor.segmented_send_interval_input.clone())
     }
 
     pub(in crate::features) fn set_quick_editor_error(
@@ -1367,6 +1383,7 @@ mod tests {
             icon_tag: None,
             pinned: None,
             execution_mode: None,
+            segmented_send: None,
             raw_send: None,
             source: None,
             risk_level: None,
@@ -1557,6 +1574,52 @@ mod tests {
     }
 
     #[test]
+    fn quick_editor_segmented_options_restore_and_follow_unit_defaults() {
+        let test_dir = TestConfigDir::new("nyaterm-command-state-test");
+        let mut state = command_state(test_dir.path());
+        let mut saved = command("segmented");
+        saved.execution_mode = Some("append".to_string());
+        saved.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
+            interval_ms: 20,
+        });
+        let editor = QuickCommandEditorState::from_command(saved);
+        assert_eq!(editor.execution_mode, "segmented");
+        assert_eq!(
+            editor.segmented_send_mode,
+            nyaterm_core::QuickCommandSegmentedSendMode::Character
+        );
+        assert_eq!(editor.segmented_send_interval_input, "0.02");
+
+        state.open_quick_editor(editor);
+        assert_eq!(
+            state
+                .set_quick_editor_segmented_mode(nyaterm_core::QuickCommandSegmentedSendMode::Line),
+            Some("1.00".to_string())
+        );
+        assert_eq!(
+            state.set_quick_editor_segmented_mode(
+                nyaterm_core::QuickCommandSegmentedSendMode::Character
+            ),
+            Some("0.02".to_string())
+        );
+        assert!(state.apply_quick_editor_input(
+            crate::models::QuickCommandEditorField::SegmentedInterval,
+            "2.50".to_string()
+        ));
+        assert_eq!(
+            state.quick_editor().unwrap().segmented_send_interval_input,
+            "2.50"
+        );
+        assert!(state.set_quick_editor_execution_mode("append"));
+        assert!(state.set_quick_editor_execution_mode("segmented"));
+        assert_eq!(
+            state.quick_editor().unwrap().segmented_send_interval_input,
+            "2.50"
+        );
+    }
+
+    #[test]
     fn quick_editor_picker_state_is_exclusive_and_resets_on_close() {
         let test_dir = TestConfigDir::new("nyaterm-command-state-test");
         let mut state = command_state(test_dir.path());
@@ -1733,6 +1796,7 @@ mod tests {
             command: "{{host}} {{host}}".to_string(),
             execute: true,
             send_to_all: false,
+            segmented_send: None,
             variables: vec![
                 QuickCommandVariableDef {
                     raw: "{{host}}".to_string(),

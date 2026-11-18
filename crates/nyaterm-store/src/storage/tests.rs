@@ -6442,6 +6442,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(false),
                 execution_mode: Some("append".to_string()),
+                segmented_send: None,
                 raw_send: None,
                 source: Some("ai".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Low),
@@ -6475,6 +6476,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(true),
                 execution_mode: Some("append".to_string()),
+                segmented_send: None,
                 raw_send: None,
                 source: Some("manual".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Medium),
@@ -6519,14 +6521,15 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
 }
 
 #[test]
-fn quick_command_literal_mode_survives_storage_backup_and_sync_with_legacy_commands() {
-    let dir = unique_temp_dir("quick-command-literal");
+fn quick_command_options_survive_storage_backup_and_sync_with_legacy_commands() {
+    let dir = unique_temp_dir("quick-command-options");
     let store = ConnectionStore::open(&dir).unwrap();
     let config: QuickCommandsConfig = serde_json::from_value(serde_json::json!({
         "commands": [
             {"id":"legacy", "label":"Legacy", "command":"pwd"},
             {"id":"null", "label":"Null", "command":"pwd", "raw_send":null},
-            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true}
+            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true},
+            {"id":"segmented", "label":"Segmented", "command":"one\ntwo", "execution_mode":"append", "segmented_send":{"mode":"character","interval_ms":20}}
         ]
     })).unwrap();
     // Seed the legacy document as written by older versions, before a typed save.
@@ -6585,6 +6588,7 @@ fn quick_commands_export_matches_tauri_json_shape() {
             icon_tag: Some("terminal".to_string()),
             pinned: Some(true),
             execution_mode: Some("append".to_string()),
+            segmented_send: None,
             raw_send: None,
             source: Some("manual".to_string()),
             risk_level: Some(nyaterm_core::RiskLevel::Low),

@@ -362,6 +362,7 @@ pub fn project_record(kind: &str, source: &Value) -> Result<Value, String> {
             "icon_tag",
             "pinned",
             "execution_mode",
+            "segmented_send",
         ],
         "note" => &["title", "markdown", "parent_id", "sort_order"],
         "note_folder" => &["name", "parent_id", "sort_order"],

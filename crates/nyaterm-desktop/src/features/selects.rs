@@ -594,6 +594,22 @@ impl NyaTermApp {
                 }
                 _ => {}
             },
+            "quick-command-editor-execution-mode" => {
+                let mode = match value {
+                    "append" => "append",
+                    "segmented" => "segmented",
+                    _ => "execute",
+                };
+                self.set_quick_command_editor_execution_mode(mode, cx);
+            }
+            "quick-command-editor-segmented-mode" => {
+                let mode = if value == "character" {
+                    nyaterm_core::QuickCommandSegmentedSendMode::Character
+                } else {
+                    nyaterm_core::QuickCommandSegmentedSendMode::Line
+                };
+                self.set_quick_command_editor_segmented_mode(mode, cx);
+            }
             id if id.starts_with("quick-command.variable.") => {
                 if let Some(index) = id
                     .strip_prefix("quick-command.variable.")

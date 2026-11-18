@@ -23,6 +23,7 @@ fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
         icon_tag: None,
         pinned: None,
         execution_mode: execution_mode.map(ToOwned::to_owned),
+        segmented_send: None,
         raw_send: None,
         source: None,
         risk_level: None,
@@ -51,11 +52,11 @@ fn execute_and_legacy_modes_execute() {
 #[test]
 fn staged_delivery_reports_broadcast_reach() {
     assert_eq!(
-        quick_command_delivery_status("Login", true, true, 4, 0),
+        quick_command_delivery_status("Login", true, false, true, 4, 0),
         "sent quick command 'Login' to 4 session(s)"
     );
     assert_eq!(
-        quick_command_delivery_status("Login", true, true, 2, 1),
+        quick_command_delivery_status("Login", true, false, true, 2, 1),
         "sent quick command 'Login' to 2 session(s), 1 failed"
     );
 }
@@ -63,16 +64,82 @@ fn staged_delivery_reports_broadcast_reach() {
 #[test]
 fn staged_delivery_keeps_the_single_session_wording() {
     assert_eq!(
-        quick_command_delivery_status("Login", true, false, 1, 0),
+        quick_command_delivery_status("Login", true, false, false, 1, 0),
         "ran quick command 'Login'"
     );
     assert_eq!(
-        quick_command_delivery_status("Login", false, false, 1, 0),
+        quick_command_delivery_status("Login", false, false, false, 1, 0),
         "inserted quick command 'Login'"
     );
     assert_eq!(
-        quick_command_delivery_status("Login", true, false, 0, 1),
+        quick_command_delivery_status("Login", true, true, false, 1, 0),
+        "sent quick command 'Login' in segments"
+    );
+    assert_eq!(
+        quick_command_delivery_status("Login", true, false, false, 0, 1),
         "quick command 'Login' failed on 1 session(s)"
+    );
+}
+
+#[test]
+fn segmented_plan_splits_lines_and_applies_interval_only_between_units() {
+    let chunks = super::plan_segmented_quick_command(
+        "one\n\n三\n",
+        nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
+            interval_ms: 250,
+        },
+        Some(nyaterm_transport::SessionKind::Ssh),
+    )
+    .unwrap();
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk.bytes.as_slice())
+            .collect::<Vec<_>>(),
+        [
+            b"one\r".as_slice(),
+            b"\r".as_slice(),
+            "三\r".as_bytes(),
+            b"\r".as_slice()
+        ]
+    );
+    assert_eq!(chunks[0].delay, Duration::ZERO);
+    assert!(
+        chunks[1..]
+            .iter()
+            .all(|chunk| chunk.delay == Duration::from_millis(250))
+    );
+}
+
+#[test]
+fn segmented_plan_preserves_unicode_and_literal_script_escapes_by_character() {
+    let chunks = super::plan_segmented_quick_command(
+        "中a\\p\n",
+        nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
+            interval_ms: 20,
+        },
+        Some(nyaterm_transport::SessionKind::Telnet),
+    )
+    .unwrap();
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk.bytes.as_slice())
+            .collect::<Vec<_>>(),
+        [
+            "中".as_bytes(),
+            b"a".as_slice(),
+            b"\\".as_slice(),
+            b"p".as_slice(),
+            b"\r".as_slice()
+        ]
+    );
+    assert!(
+        chunks[1..]
+            .iter()
+            .all(|chunk| chunk.delay == Duration::from_millis(20))
     );
 }
 
@@ -274,6 +341,81 @@ fn disabling_literal_mode_restores_variable_prompts_and_escape_processing() {
     fixture.assert_wire(0, b"prod\t");
     fixture.advance();
     fixture.assert_wire(0, b"next");
+}
+
+#[test]
+fn segmented_lines_preserve_variable_paths_and_reach_all_targets_with_intervals() {
+    let mut fixture = WireFixture::new(2);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "cd {{path}}\nnext".into();
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
+            interval_ms: 1_000,
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", true, cx);
+        assert!(app.commands.quick_variable_prompt().is_some());
+        app.commands.set_quick_variable_value(0, "C:\\temp".into());
+        app.submit_quick_command_variable_prompt(cx);
+    });
+    fixture.cx.run_until_parked();
+    for index in 0..2 {
+        fixture.assert_wire(index, b"cd C:\\temp\r");
+    }
+    fixture.advance();
+    for index in 0..2 {
+        fixture.assert_wire(index, b"next\r");
+    }
+}
+
+#[test]
+fn segmented_raw_characters_preserve_unicode_and_pause_escape_literally() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "中\\p".into();
+        command.raw_send = Some(true);
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
+            interval_ms: 1_000,
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+        assert!(app.commands.quick_variable_prompt().is_none());
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, "中".as_bytes());
+    fixture.advance();
+    fixture.assert_wire(0, b"\\");
+    fixture.advance();
+    fixture.assert_wire(0, b"p");
+}
+
+#[test]
+fn segmented_lines_stop_after_competing_terminal_input() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "one\ntwo\nthree".into();
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
+            interval_ms: 1_000,
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"one\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(app.send_terminal_input(b"manual".to_vec(), cx));
+    });
+    fixture.advance();
+    fixture.advance();
+    fixture.assert_wire(0, b"manual");
 }
 
 #[test]
