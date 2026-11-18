@@ -754,7 +754,7 @@ pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str]
     if is_dark {
         &[
             "#f44747", "#cd9731", "#32cd32", "#6796e6", "#b267e6", "#FD971F", "#E6DB74", "#AE81FF",
-            "#ffb86c", "#A6E22E", "#8be9fd", "#A6E22E",
+            "#ffb86c", "#56d364", "#8be9fd", "#7ee787",
         ]
     } else {
         &[
