@@ -1277,16 +1277,40 @@ mod tests {
                 let frame = vcx.debug_bounds("stats-network-chart-frame").unwrap();
                 let plot = vcx.debug_bounds("stats-network-chart-plot").unwrap();
                 let ticks = vcx.debug_bounds("stats-network-chart-ticks").unwrap();
+                let trigger = vcx
+                    .debug_bounds("stats-network-interfaces-trigger")
+                    .unwrap();
+                let recent = vcx.debug_bounds("stats-network-recent-seconds").unwrap();
                 assert_eq!(frame.left(), metrics.left(), "{theme} at {width}px");
                 assert_eq!(frame.right(), metrics.right(), "{theme} at {width}px");
                 assert!(frame.right() <= gpui::px(width));
                 assert!(plot.size.width > frame.size.width * 0.8);
                 assert_eq!(plot.left(), ticks.left());
                 assert_eq!(plot.right(), ticks.right());
+                if trigger.size.width + recent.size.width + gpui::px(8.) <= frame.size.width {
+                    assert_eq!(
+                        trigger.center().y,
+                        recent.center().y,
+                        "{theme} at {width}px"
+                    );
+                    assert!(trigger.right() < recent.left(), "{theme} at {width}px");
+                } else {
+                    assert!(recent.top() >= trigger.bottom(), "{theme} at {width}px");
+                }
+                assert_eq!(trigger.left(), frame.left());
+                assert_eq!(recent.right(), frame.right());
+                assert!(trigger.top() >= ticks.bottom());
                 assert!(vcx.debug_bounds("stats-network-interface-list").is_none());
                 assert!(vcx.debug_bounds("stats-network-empty").is_none());
             }
         }
+        let recent = vcx.debug_bounds("stats-network-recent-seconds").unwrap();
+        vcx.simulate_click(recent.center(), gpui::Modifiers::default());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        assert!(vcx.debug_bounds("stats-network-interface-list").is_none());
         let toggle = |vcx: &mut VisualTestContext| {
             vcx.run_until_parked();
             vcx.update(|window, cx| {
