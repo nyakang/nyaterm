@@ -449,19 +449,34 @@ mod tests {
         assert!(attempt.is_cancelled());
         let count = Arc::new(AtomicUsize::new(0));
         let closed = Arc::new(AtomicUsize::new(0));
-        let retry = acquire(
-            &pool,
-            "saved",
-            SshSessionConfig::default(),
-            "policy",
-            &count,
-            &closed,
-        );
+        let connector = pool.clone();
+        let dial_count = count.clone();
+        let close_count = closed.clone();
+        let (cleanup, cleaned) = mpsc::channel();
+        let retry = pool
+            .acquire_with(
+                "saved",
+                SshSessionConfig::default(),
+                "policy".into(),
+                &CancellationToken::new(),
+                Instant::now() + Duration::from_secs(5),
+                move |_| {
+                    dial_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(connector.register_for_test("retry", move || {
+                        close_count.fetch_add(1, Ordering::SeqCst);
+                        cleanup.send(()).unwrap();
+                    }))
+                },
+            )
+            .unwrap();
         assert!(!retry.config().attempt.is_cancelled());
         assert_eq!(count.load(Ordering::SeqCst), 1);
         release.send(()).unwrap();
         drop(retry);
         pool.invalidate_background();
+        // The dial worker can still hold its Entry after notifying the waiter.
+        // Wait for lease release to enqueue cleanup before asserting its result.
+        cleaned.recv_timeout(Duration::from_secs(5)).unwrap();
         pool.finish_disconnects();
         assert_eq!(closed.load(Ordering::SeqCst), 1);
     }
