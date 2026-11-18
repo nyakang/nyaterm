@@ -110,9 +110,6 @@ pub(in crate::features) struct ConnectionImportReportView {
     pub skipped_account_sessions: Vec<String>,
     pub unsupported_one_key_sessions: Vec<String>,
     pub notice_messages: Vec<String>,
-    /// One-line summary appended to the banner when `quickbar.config` was
-    /// imported alongside the sessions.
-    pub quick_command_summary: Option<String>,
     pub one_key_state: Option<WindtermOneKeyConfigState>,
     pub expanded: bool,
 }
@@ -144,7 +141,6 @@ impl ConnectionImportReportView {
             skipped_account_sessions,
             unsupported_one_key_sessions,
             notice_messages: Vec::new(),
-            quick_command_summary: None,
             one_key_state: Some(report.one_key_state),
             expanded: false,
         }
@@ -697,7 +693,6 @@ mod tests {
             unreadable_account_count: 0,
             skipped_session_count: 0,
             total_session_count: 2,
-            quickbar: None,
         }
     }
 

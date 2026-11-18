@@ -8,59 +8,17 @@ use super::{ImportCommand, ImportConfig};
 
 pub const MAX_QUICK_COMMAND_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Why a WindTerm quickbar entry could not become a NyaTerm quick command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WindtermQuickbarSkipReason {
-    MissingLabel,
-    MissingCommand,
-}
-
-/// One quickbar entry that was dropped, kept so imports can report it instead
-/// of silently losing it. `index` is zero-based in the source array.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WindtermQuickbarSkip {
-    pub index: usize,
-    pub label: Option<String>,
-    pub reason: WindtermQuickbarSkipReason,
-}
-
-/// A WindTerm icon with no NyaTerm equivalent. The command itself still
-/// imports; only the icon is dropped.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WindtermUnmappedIcon {
-    pub command_label: String,
-    pub icon: String,
-}
-
-/// WindTerm quickbar parse result with the diagnostics the interactive session
-/// import shows after committing. The standalone quick-command importer only
-/// needs `config` and keeps using [`parse_windterm_quickbar`].
-#[derive(Debug)]
-pub struct WindtermQuickbarImport {
-    pub config: ImportConfig,
-    pub total_entries: usize,
-    pub skipped: Vec<WindtermQuickbarSkip>,
-    pub unmapped_icons: Vec<WindtermUnmappedIcon>,
-}
-
 pub fn parse_nyaterm_import(raw: &str) -> Result<ImportConfig, String> {
     let value = serde_json::from_str::<Value>(raw).map_err(|error| error.to_string())?;
     parse_import_value(value)
 }
 
 pub fn parse_windterm_quickbar(raw: &str) -> Result<ImportConfig, String> {
-    parse_windterm_quickbar_import(raw).map(|import| import.config)
-}
-
-pub fn parse_windterm_quickbar_import(raw: &str) -> Result<WindtermQuickbarImport, String> {
     let entries = serde_json::from_str::<Vec<Value>>(raw)
         .map_err(|error| format!("Invalid WindTerm quickbar JSON: {error}"))?;
-    let total_entries = entries.len();
     let mut commands = Vec::new();
-    let mut skipped = Vec::new();
-    let mut unmapped_icons = Vec::new();
 
-    for (index, entry) in entries.into_iter().enumerate() {
+    for entry in entries {
         let label = entry
             .get("quick.label")
             .and_then(Value::as_str)
@@ -71,15 +29,6 @@ pub fn parse_windterm_quickbar_import(raw: &str) -> Result<WindtermQuickbarImpor
             .and_then(Value::as_str)
             .unwrap_or("");
         if label.is_empty() || raw_command.trim().is_empty() {
-            skipped.push(WindtermQuickbarSkip {
-                index,
-                label: (!label.is_empty()).then(|| label.to_string()),
-                reason: if label.is_empty() {
-                    WindtermQuickbarSkipReason::MissingLabel
-                } else {
-                    WindtermQuickbarSkipReason::MissingCommand
-                },
-            });
             continue;
         }
         let (command, has_terminal_newline) = split_windterm_command(raw_command);
@@ -96,18 +45,10 @@ pub fn parse_windterm_quickbar_import(raw: &str) -> Result<WindtermQuickbarImpor
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
-        let raw_icon = entry
+        let icon_tag = entry
             .get("quick.icon")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let icon_tag = raw_icon.and_then(map_windterm_icon);
-        if let (Some(icon), None) = (raw_icon, icon_tag.as_deref()) {
-            unmapped_icons.push(WindtermUnmappedIcon {
-                command_label: label.to_string(),
-                icon: icon.to_string(),
-            });
-        }
+            .and_then(map_windterm_icon);
         let quick_type = entry
             .get("quick.type")
             .and_then(Value::as_str)
@@ -138,14 +79,9 @@ pub fn parse_windterm_quickbar_import(raw: &str) -> Result<WindtermQuickbarImpor
         });
     }
 
-    Ok(WindtermQuickbarImport {
-        config: ImportConfig {
-            commands,
-            categories: Vec::new(),
-        },
-        total_entries,
-        skipped,
-        unmapped_icons,
+    Ok(ImportConfig {
+        commands,
+        categories: Vec::new(),
     })
 }
 

@@ -12,10 +12,6 @@ use serde_json::value::RawValue;
 use sha3::Sha3_512;
 use zeroize::Zeroizing;
 
-use crate::quick_command_import::{
-    ImportConfig, MAX_QUICK_COMMAND_IMPORT_BYTES, WindtermQuickbarImport, WindtermQuickbarSkip,
-    WindtermUnmappedIcon, decode_text, parse_windterm_quickbar_import,
-};
 use crate::{
     AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
     ConnectionUsernameSource, SavedPassword, SecretString, SshKey,
@@ -23,7 +19,7 @@ use crate::{
 
 use super::{
     AppError, AppResult, PreparedSessionConnection, PreparedSessionImport, SessionImportWarning,
-    SessionImportWarningKind, read_file_limited, read_text_file_limited,
+    SessionImportWarningKind, read_text_file_limited,
 };
 
 const PBKDF2_ITERATIONS: u32 = 100_000;
@@ -31,10 +27,6 @@ const PBKDF2_ITERATIONS: u32 = 100_000;
 /// variants like `OneKeys.config` on Windows still resolve, but this spelling is
 /// what diagnostics and the UI report.
 const ONE_KEYS_CONFIG_FILE: &str = "onekeys.config";
-/// WindTerm quick commands live next to the sessions file. They are imported as
-/// part of the same session import so users do not have to run it twice.
-const QUICKBAR_CONFIG_FILE: &str = "quickbar.config";
-
 struct WindtermCrypto(Zeroizing<[u8; 48]>);
 
 enum ProfileCrypto {
@@ -186,48 +178,6 @@ pub enum WindtermOneKeyConfigState {
     Unreadable,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WindtermQuickbarState {
-    #[default]
-    Absent,
-    Readable,
-    Unreadable,
-}
-
-/// Sibling `quickbar.config` parsed alongside the sessions file. `commands`
-/// always exists so the commit path can move it into the quick-command store,
-/// even when the file was absent or unreadable.
-#[derive(Debug)]
-pub struct WindtermQuickbarConfig {
-    pub state: WindtermQuickbarState,
-    pub commands: ImportConfig,
-    pub total_entries: usize,
-    pub skipped: Vec<WindtermQuickbarSkip>,
-    pub unmapped_icons: Vec<WindtermUnmappedIcon>,
-}
-
-impl WindtermQuickbarConfig {
-    fn unreadable() -> Self {
-        Self {
-            state: WindtermQuickbarState::Unreadable,
-            commands: ImportConfig::default(),
-            total_entries: 0,
-            skipped: Vec::new(),
-            unmapped_icons: Vec::new(),
-        }
-    }
-
-    fn readable(import: WindtermQuickbarImport) -> Self {
-        Self {
-            state: WindtermQuickbarState::Readable,
-            commands: import.config,
-            total_entries: import.total_entries,
-            skipped: import.skipped,
-            unmapped_icons: import.unmapped_icons,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindtermMissingOneKey {
     pub session_name: String,
@@ -285,7 +235,6 @@ pub struct WindtermAccountDecision {
 pub struct WindtermImportOutcome {
     pub prepared: PreparedSessionImport,
     pub report: WindtermImportReport,
-    pub quickbar: Option<WindtermQuickbarConfig>,
 }
 
 /// Parsed WindTerm import preview: sessions are already linked to the account
@@ -304,7 +253,6 @@ pub struct WindtermPreview {
     pub unreadable_account_count: usize,
     pub skipped_session_count: usize,
     pub total_session_count: usize,
-    pub quickbar: Option<WindtermQuickbarConfig>,
 }
 
 impl WindtermPreview {
@@ -399,7 +347,6 @@ pub fn prepare_windterm_preview(
     let crypto = load_crypto(path, master_password)?;
     let config = parse_one_key_config(path, &crypto)?;
     ensure_one_key_master_password(&config.accounts, &crypto, master_password)?;
-    let quickbar = parse_quickbar_config(path);
     let skipped_uuids = HashSet::new();
     let mut parsed = parse_content_full(
         &content,
@@ -448,7 +395,6 @@ pub fn prepare_windterm_preview(
         unreadable_account_count,
         skipped_session_count: parsed.skipped_sessions,
         total_session_count: parsed.total_sessions,
-        quickbar,
     })
 }
 
@@ -466,7 +412,6 @@ pub fn prepare_windterm_import_with_decisions(
     let crypto = load_crypto(path, master_password)?;
     let config = parse_one_key_config(path, &crypto)?;
     ensure_one_key_master_password(&config.accounts, &crypto, master_password)?;
-    let quickbar = parse_quickbar_config(path);
 
     let decision_map = decisions
         .iter()
@@ -527,11 +472,7 @@ pub fn prepare_windterm_import_with_decisions(
         duplicate_one_key_uuid_count: config.duplicate_uuid_count,
         one_key_state: config.state,
     };
-    Ok(WindtermImportOutcome {
-        prepared,
-        report,
-        quickbar,
-    })
+    Ok(WindtermImportOutcome { prepared, report })
 }
 
 fn build_password_entries(accounts: &[&OneKeyAccount]) -> Vec<SavedPassword> {
@@ -884,29 +825,6 @@ fn find_sibling_file(directory: &Path, expected: &str) -> Option<PathBuf> {
 
 fn find_one_keys_config(directory: &Path) -> Option<PathBuf> {
     find_sibling_file(directory, ONE_KEYS_CONFIG_FILE)
-}
-
-/// Read the optional sibling `quickbar.config`.
-///
-/// A malformed file must not fail the session import; it becomes an
-/// `Unreadable` state that the result view reports. Unmappable entries and
-/// icons are carried in the parse result so the UI can list them.
-fn parse_quickbar_config(path: &Path) -> Option<WindtermQuickbarConfig> {
-    let config_path = path
-        .parent()
-        .and_then(|directory| find_sibling_file(directory, QUICKBAR_CONFIG_FILE))?;
-    let raw = match read_file_limited(
-        &config_path,
-        "WindTerm quickbar.config",
-        MAX_QUICK_COMMAND_IMPORT_BYTES,
-    ) {
-        Ok(raw) => raw,
-        Err(_) => return Some(WindtermQuickbarConfig::unreadable()),
-    };
-    match parse_windterm_quickbar_import(&decode_text(&raw)) {
-        Ok(import) => Some(WindtermQuickbarConfig::readable(import)),
-        Err(_) => Some(WindtermQuickbarConfig::unreadable()),
-    }
 }
 
 /// `SshOneKey` is protocol-specific, while `AccountOneKey` is a reusable login

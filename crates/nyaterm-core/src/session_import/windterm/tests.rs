@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ConnectionType;
@@ -10,8 +10,8 @@ use crate::test_support::TestTempDir;
 
 use super::{
     WindtermAccountAction, WindtermAccountDecision, WindtermOneKeyConfigState,
-    WindtermQuickbarState, WindtermUnlinkedReason, parse_windterm_content,
-    prepare_windterm_import_with_decisions, resolve_key_path,
+    WindtermUnlinkedReason, parse_windterm_content, prepare_windterm_import_with_decisions,
+    resolve_key_path,
 };
 
 // Independent vectors produced with Python hashlib.pbkdf2_hmac('sha3_512') and
@@ -525,61 +525,17 @@ fn unreferenced_encrypted_accounts_require_and_use_the_master_password() {
 }
 
 #[test]
-fn session_preview_carries_sibling_quickbar_and_its_diagnostics() {
-    let dir = TestTempDir::new("nyaterm-windterm-quickbar");
-    let path = sample_profile(&dir);
-    fs::write(dir.join("terminal/quickbar.config"), SAMPLE_QUICKBAR).unwrap();
-
-    let preview = prepare_windterm_preview(&path, None).unwrap();
-    let quickbar = preview
-        .quickbar
-        .as_ref()
-        .expect("quickbar.config is parsed alongside user.sessions");
-    assert_eq!(quickbar.state, WindtermQuickbarState::Readable);
-    assert_eq!(quickbar.total_entries, 1);
-    assert!(!quickbar.commands.is_empty());
-    assert!(quickbar.skipped.is_empty());
-    assert_eq!(
-        quickbar.unmapped_icons,
-        vec![crate::quick_command_import::WindtermUnmappedIcon {
-            command_label: "test_dyq".into(),
-            icon: "session::star-coral".into(),
-        }]
-    );
-
-    let outcome = prepare_windterm_import_with_decisions(&path, None, &[]).unwrap();
-    let quickbar = outcome
-        .quickbar
-        .as_ref()
-        .expect("decisions re-parse keeps the quickbar payload");
-    assert_eq!(quickbar.state, WindtermQuickbarState::Readable);
-    assert!(!quickbar.commands.is_empty());
-}
-
-#[test]
-fn unreadable_quickbar_is_reported_without_failing_session_import() {
-    let dir = TestTempDir::new("nyaterm-windterm-quickbar-broken");
-    let path = sample_profile(&dir);
-    fs::write(dir.join("terminal/quickbar.config"), "{not json").unwrap();
-
-    let preview = prepare_windterm_preview(&path, None).unwrap();
-    assert_eq!(preview.prepared.connections.len(), 4);
-    let quickbar = preview
-        .quickbar
-        .as_ref()
-        .expect("an unreadable quickbar file is still reported");
-    assert_eq!(quickbar.state, WindtermQuickbarState::Unreadable);
-    assert!(quickbar.commands.is_empty());
-    assert_eq!(quickbar.total_entries, 0);
-}
-
-#[test]
-fn missing_quickbar_keeps_the_preview_unaffected() {
-    let dir = TestTempDir::new("nyaterm-windterm-quickbar-absent");
-    let path = sample_profile(&dir);
-
-    let preview = prepare_windterm_preview(&path, None).unwrap();
-    assert!(preview.quickbar.is_none());
+fn sibling_quickbar_does_not_participate_in_session_import() {
+    for content in [SAMPLE_QUICKBAR, "{not json"] {
+        let dir = TestTempDir::new("nyaterm-windterm-ignored-quickbar");
+        let sessions = profile(&dir, false, "");
+        let path = dir.join("terminal/quickbar.config");
+        fs::write(&path, content).unwrap();
+        let before = fs::read(&path).unwrap();
+        let preview = prepare_windterm_preview(&sessions, None).unwrap();
+        assert!(!preview.prepared.connections.is_empty());
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
 }
 
 #[test]

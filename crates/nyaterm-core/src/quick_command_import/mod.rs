@@ -1,6 +1,4 @@
 //! Schema-neutral quick-command import preparation and merging.
-use std::fmt;
-
 use crate::RiskLevel;
 
 #[derive(Debug, Default)]
@@ -49,26 +47,14 @@ impl ImportConfig {
     }
 }
 
-impl fmt::Debug for ImportConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ImportConfig")
-            .field("command_count", &self.commands.len())
-            .field("category_count", &self.categories.len())
-            .finish()
-    }
-}
-
 mod helpers;
 mod json;
 mod merge;
 mod sources;
 pub use merge::merge_import;
 pub use sources::{
-    MAX_QUICK_COMMAND_IMPORT_BYTES, WindtermQuickbarImport, WindtermQuickbarSkip,
-    WindtermQuickbarSkipReason, WindtermUnmappedIcon, decode_text,
-    ensure_quick_command_import_size, parse_nyaterm_import, parse_windterm_quickbar,
-    parse_windterm_quickbar_import, parse_xshell_quick_buttons_content,
+    MAX_QUICK_COMMAND_IMPORT_BYTES, decode_text, ensure_quick_command_import_size,
+    parse_nyaterm_import, parse_windterm_quickbar, parse_xshell_quick_buttons_content,
 };
 #[cfg(test)]
 mod tests;
