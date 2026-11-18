@@ -214,6 +214,12 @@ debug = false
 inherits = "dev"
 debug = "full"
 
+# Work around the Rust 1.99.1 / LLVM SIGBUS in clearKillsForDef on macOS x64
+# while optimizing rust-i18n's large generated catalog initializer at level 3.
+# Revalidate on macOS x64 before removing this override (Actions job 134067038748).
+[profile.release.package.nyaterm-i18n]
+opt-level = 1
+
 [patch.crates-io]
 # Keep Picky and its ASN.1 types on the same stable-RSA fork revision.
 picky = { version = "=7.0.0-rc.29", git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
