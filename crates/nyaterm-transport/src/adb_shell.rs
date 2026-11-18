@@ -8,12 +8,11 @@ use std::time::Duration;
 
 use crate::session_event_queue::SessionEventQueue;
 use crate::session_types::{SessionEvent, SessionInfo, TerminalTransport};
-use nyaterm_android::adb::client::{AdbClient, DeviceBinding, server_unreachable};
+use nyaterm_android::adb::client::DeviceBinding;
 use nyaterm_android::adb::shell::{
     CLOSE_STDIN, EXIT, MAX_SHELL_PACKET, STDERR, STDIN, STDOUT, ShellDecoder, WINDOW_SIZE,
     open_shell_with_cancel, window_size, write_packet,
 };
-use nyaterm_android::error::{AdbError, AdbResult};
 
 const INPUT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -39,26 +38,6 @@ pub(crate) struct AdbTerminalTransport {
     workers: Vec<JoinHandle<()>>,
 }
 
-/// Opens the interactive shell channel, restarting a stopped adb server once.
-///
-/// A restored or reconnected tab keeps the binding it was resolved with, and
-/// nothing on that path re-runs `adb start-server`. Once the daemon is gone the
-/// handshake fails with a bare I/O error, so bring the server back and retry
-/// before reporting that the device cannot be reached.
-fn open_android_shell(
-    binding: &DeviceBinding,
-    mut check: impl FnMut() -> AdbResult<()>,
-) -> AdbResult<TcpStream> {
-    match open_shell_with_cancel(binding, b"", true, &mut check) {
-        Ok(stream) => Ok(stream),
-        Err(AdbError::Io(error)) if server_unreachable(&error) => {
-            AdbClient::local(None)?.ensure_server()?;
-            open_shell_with_cancel(binding, b"", true, &mut check)
-        }
-        Err(error) => Err(error),
-    }
-}
-
 impl AdbTerminalTransport {
     pub(crate) fn open(
         info: SessionInfo,
@@ -66,7 +45,10 @@ impl AdbTerminalTransport {
         events: SessionEventQueue,
         mut check: impl FnMut() -> nyaterm_android::error::AdbResult<()>,
     ) -> anyhow::Result<Self> {
-        let mut stream = open_android_shell(binding, &mut check)?;
+        // Discovery restarts the server with the configured client. Recovery
+        // must use the full session reconnect path to renew all device leases;
+        // silently rebinding just this channel would leave sibling views stale.
+        let mut stream = open_shell_with_cancel(binding, b"", true, &mut check)?;
         check()?;
         write_packet(
             &mut stream,
@@ -261,6 +243,87 @@ mod tests {
         socket.read_exact(&mut bytes).unwrap();
         socket.write_all(b"OKAY").unwrap();
         bytes
+    }
+    #[test]
+    fn restarted_server_requires_a_fresh_binding_before_registering_a_shell() {
+        use crate::SessionManager;
+        use crate::adb_shell::AdbShellConfig;
+        use nyaterm_android::adb::client::AdbClient;
+        use nyaterm_core::models::android::AdbDeviceSelector;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            // The restarted server now assigns transport 1 to the same serial.
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(request(&mut socket), b"host:tport:serial:fixture");
+            socket.write_all(&1u64.to_le_bytes()).unwrap();
+            assert_eq!(socket.read(&mut [0]).unwrap(), 0);
+
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(request(&mut socket), b"host:version");
+            socket.write_all(b"00040029").unwrap();
+
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(request(&mut socket), b"host:devices-l");
+            let devices = b"fixture\tdevice transport_id:1\n";
+            write!(socket, "{:04x}", devices.len()).unwrap();
+            socket.write_all(devices).unwrap();
+
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(request(&mut socket), b"host:tport:serial:fixture");
+            socket.write_all(&1u64.to_le_bytes()).unwrap();
+            assert_eq!(request(&mut socket), b"shell,v2,pty,TERM=xterm-256color:");
+            let mut resize = [0; 5];
+            socket.read_exact(&mut resize).unwrap();
+            assert_eq!(resize[0], WINDOW_SIZE);
+            let mut size = vec![0; u32::from_le_bytes(resize[1..].try_into().unwrap()) as usize];
+            socket.read_exact(&mut size).unwrap();
+            write_packet(&mut socket, EXIT, &[0]).unwrap();
+        });
+        let manager = SessionManager::new();
+        let mut config = AdbShellConfig {
+            name: "fixture".into(),
+            binding: DeviceBinding {
+                server,
+                serial: "fixture".into(),
+                transport_id: Some(7),
+                generation: 1,
+            },
+            cols: 80,
+            rows: 24,
+        };
+        assert!(manager.create_adb_session(config.clone()).is_err());
+        assert!(manager.list_sessions().unwrap().is_empty());
+        let client = AdbClient {
+            executable: "must-not-start-adb-during-shell-open".into(),
+            server,
+        };
+        config.binding = client
+            .bind(
+                &AdbDeviceSelector::Usb {
+                    serial: "fixture".into(),
+                },
+                2,
+            )
+            .unwrap();
+        assert_eq!(config.binding.transport_id, Some(1));
+        assert_eq!(config.binding.generation, 2);
+        let session = manager.create_adb_session(config).unwrap();
+        worker.join().unwrap();
+        manager.close(&session.id).unwrap();
     }
     #[test]
     fn cancelled_adb_handshake_does_not_register_or_leak_a_session() {
