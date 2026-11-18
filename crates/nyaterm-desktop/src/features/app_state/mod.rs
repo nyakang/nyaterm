@@ -7,6 +7,7 @@ use super::commands::CommandFeatureState;
 use super::connections::ConnectionFeatureState;
 use super::file_manager::FileManagerFeatureState;
 use super::mcp::McpHostFeatureState;
+use super::networktools::NetworkToolsFeatureState;
 use super::notes::{NotesCatalogEvent, NotesFeatureState, NotesPanel};
 use super::pages::connections::panel::ConnectionPanel;
 use super::pages::remote::RemotePanels;
@@ -104,6 +105,7 @@ pub struct NyaTermApp {
     pub(in crate::features) remote_panels: RemotePanels,
     /// Ports and Services: self-contained entities that own their data.
     pub(in crate::features) host_tool_panels: crate::features::remote::HostToolPanels,
+    pub(in crate::features) networktools: NetworkToolsFeatureState,
     pub(in crate::features) remote_desktop: RemoteDesktopFeatureState,
     pub(in crate::features) android: crate::features::android::AndroidFeatureState,
     pub(in crate::features) security: SecurityFeatureState,

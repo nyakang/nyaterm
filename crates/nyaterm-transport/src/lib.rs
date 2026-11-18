@@ -63,6 +63,7 @@ pub mod connection_attempt;
 #[cfg(windows)]
 pub mod local_conpty;
 pub mod network_route;
+pub mod networktools;
 pub mod protocol_transfer;
 pub mod ssh_channel;
 pub mod ssh_services;

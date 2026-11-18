@@ -1458,7 +1458,6 @@
   "fileExplorer": {
     "clipboardEmpty": "檔案剪貼簿為空或已被取代",
     "clipboardMoving": "選取的剪下項目正在移動，請等待完成",
-
     "transferSourceUnavailable": "來源連線無法使用，請重新連線後重試。",
     "transferBackendUnsupported": "此連線不支援檔案傳輸。",
     "transferInvalidDestination": "傳輸目的地無效或無法表示檔案名稱。",
@@ -1943,6 +1942,87 @@
     "ungrouped": "未分類",
     "ungroupedConnections": "未分組"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "正在監聽 %{addr}",
+        "notRunning": "未執行",
+        "configure": "設定",
+        "start": "啟動服務",
+        "stop": "停止服務"
+      },
+      "action": {
+        "reset": "重設",
+        "browse": "瀏覽"
+      },
+      "bind": {
+        "allInterfaces": "所有網卡",
+        "loopback": "本機回環",
+        "savedUnavailable": "已儲存，本機未偵測到"
+      },
+      "field": {
+        "bindAddress": "監聽位址",
+        "port": "連接埠",
+        "rootDir": "服務目錄",
+        "timeout": "逾時（秒）",
+        "concurrency": "最大並行傳輸"
+      },
+      "section": {
+        "basic": "基本設定",
+        "limits": "傳輸限制",
+        "permissions": "權限"
+      },
+      "hint": {
+        "firewall": "如需其他機器存取，請在系統防火牆放行此 UDP 連接埠。",
+        "security": "服務僅分享所選目錄，請在可信任網路中使用。"
+      },
+      "error": {
+        "bind": "請輸入有效的 IP 位址",
+        "port": "連接埠需為 1～65535",
+        "timeout": "逾時需為 1～255 秒",
+        "concurrency": "並行數需為 1～%{max}",
+        "rootDirRequired": "請選擇服務目錄",
+        "rootDirUnreadable": "目錄不存在或無法讀取",
+        "invalid": "設定無效：%{message}"
+      },
+      "status": {
+        "saveHint": "變更會在下次啟動服務時生效。",
+        "saveAndRestart": "儲存並重新啟動服務",
+        "restartFailed": "已儲存，但重新啟動 %{service} 服務失敗：%{message}",
+        "saveFailed": "無法儲存網路工具設定",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 開始傳輸：%{file}",
+        "finished": "%{service} · 傳輸完成：%{file}（%{bytes} 位元組）",
+        "failed": "%{service} · %{file}：%{message}",
+        "failedUnknown": "未知錯誤"
+      },
+      "log": {
+        "title": "日誌",
+        "todayHint": "僅顯示當日日誌，更多日誌請到日誌目錄查看。",
+        "empty": "暫無最近活動"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 伺服器",
+      "shortName": "TFTP",
+      "description": "在本機透過 TFTP 分享與接收檔案。",
+      "field": {
+        "blockSize": "區塊大小",
+        "allowUpload": "允許上傳",
+        "allowOverwrite": "允許覆寫檔案"
+      },
+      "hint": {
+        "blockSize": "TFTP 每個 DATA 封包可承載的資料位元組數\n預設 512，可選 8～65464\n數值越大吞吐越高，但超過路徑 MTU 時會分段\n它只影響封包大小，不是內部緩衝區大小",
+        "upload": "用戶端可以寫入服務目錄"
+      },
+      "error": {
+        "bindIpv6Unsupported": "目前 TFTP 僅支援 IPv4，請選擇 IPv4 位址。",
+        "blockSize": "區塊大小需為 8～65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "取消",
     "cancelled": "身分驗證已取消",
@@ -2049,6 +2129,7 @@
     "fileTransfer": "檔案傳輸",
     "gpuMonitor": "GPU",
     "network": "網路",
+    "networktools": "網路工具",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "暫無活動工作階段",
     "noCommandsYet": "暫無命令記錄",

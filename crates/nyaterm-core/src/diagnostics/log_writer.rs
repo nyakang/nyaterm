@@ -97,7 +97,12 @@ pub fn local_now() -> OffsetDateTime {
 /// so cloud-sync history and unrelated JSONL files survive. Returns the number
 /// of removed files. Failures are returned for a deferred retry by the writer;
 /// pruning errors never prevent logging.
-fn prune_log_files_at(log_dir: &Path, retention_days: u32, today: Date) -> io::Result<usize> {
+fn prune_log_files_at(
+    log_dir: &Path,
+    prefix: &str,
+    retention_days: u32,
+    today: Date,
+) -> io::Result<usize> {
     let cutoff = today - Duration::days(i64::from(normalize_retention_days(retention_days)));
     let entries = match fs::read_dir(log_dir) {
         Ok(entries) => entries,
@@ -114,7 +119,11 @@ fn prune_log_files_at(log_dir: &Path, retention_days: u32, today: Date) -> io::R
                 continue;
             }
         };
-        let Some((file_date, _)) = entry.file_name().to_str().and_then(parse_log_file_name) else {
+        let Some((file_date, _)) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| parse_log_file_name_with_prefix(prefix, name))
+        else {
             continue;
         };
         if file_date >= cutoff {
@@ -133,18 +142,20 @@ fn prune_log_files_at(log_dir: &Path, retention_days: u32, today: Date) -> io::R
 /// Shards use `_NNN` rather than `.NNN` because `.` sorts before the base
 /// file's `.jsonl` extension; `_` sorts after it, so plain lexicographic sorting
 /// yields base then `_001`, `_002`, ... and zero-padded dates keep days ordered.
-pub fn log_file_name(date: Date, shard: u32) -> String {
+/// File name for a custom log stem (`nyaterm-tftp`, ...), same date/shard
+/// layout as the diagnostics files.
+pub fn log_file_name_with_prefix(prefix: &str, date: Date, shard: u32) -> String {
     let date = format_date(date);
     if shard == 0 {
-        format!("{LOG_FILE_PREFIX}.{date}.{LOG_FILE_SUFFIX}")
+        format!("{prefix}.{date}.{LOG_FILE_SUFFIX}")
     } else {
-        format!("{LOG_FILE_PREFIX}.{date}_{shard:03}.{LOG_FILE_SUFFIX}")
+        format!("{prefix}.{date}_{shard:03}.{LOG_FILE_SUFFIX}")
     }
 }
 
-/// Parse a diagnostics log file name into its local date and shard index.
-pub fn parse_log_file_name(name: &str) -> Option<(Date, u32)> {
-    let rest = name.strip_prefix(LOG_FILE_PREFIX)?;
+/// Parse a file name belonging to a specific log stem.
+pub fn parse_log_file_name_with_prefix(prefix: &str, name: &str) -> Option<(Date, u32)> {
+    let rest = name.strip_prefix(prefix)?;
     let rest = rest.strip_prefix('.')?;
     let rest = rest.strip_suffix(&format!(".{LOG_FILE_SUFFIX}"))?;
     let (date, shard) = match rest.split_once('_') {
@@ -183,6 +194,7 @@ struct CurrentShard {
 /// file IO therefore never runs on the caller's thread.
 pub struct RotatingLogWriter {
     dir: PathBuf,
+    prefix: String,
     pending: Vec<u8>,
     current: Option<CurrentShard>,
     prune_due: bool,
@@ -201,12 +213,21 @@ struct TestLimits {
 
 impl RotatingLogWriter {
     pub fn new(dir: impl AsRef<Path>) -> io::Result<Self> {
+        Self::with_prefix(dir, LOG_FILE_PREFIX)
+    }
+
+    /// Open a writer whose files use `prefix` as their stem, e.g.
+    /// `nyaterm-tftp.2026-11-18.jsonl`. Sharding, rotation and retention are the
+    /// same global settings as the diagnostics writer; pruning only touches
+    /// files carrying this prefix.
+    pub fn with_prefix(dir: impl AsRef<Path>, prefix: impl Into<String>) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         // Retention pruning is deferred until persisted settings reach the log
         // layer, so the startup default cannot delete a longer-retained history.
         Ok(Self {
             dir,
+            prefix: prefix.into(),
             pending: Vec::new(),
             current: None,
             prune_due: true,
@@ -227,6 +248,7 @@ impl RotatingLogWriter {
         fs::create_dir_all(&dir)?;
         let writer = Self {
             dir,
+            prefix: LOG_FILE_PREFIX.to_string(),
             pending: Vec::new(),
             current: None,
             prune_due: true,
@@ -289,7 +311,7 @@ impl RotatingLogWriter {
         }
         if self.prune_due && settings_ready && self.prune_retry_at.is_none_or(|retry| now >= retry)
         {
-            match prune_log_files_at(&self.dir, self.retention_days(), today) {
+            match prune_log_files_at(&self.dir, &self.prefix, self.retention_days(), today) {
                 Ok(_) => {
                     self.prune_due = false;
                     self.prune_retry_at = None;
@@ -306,7 +328,7 @@ impl RotatingLogWriter {
             self.current = None;
         }
         let Some(current) = self.current.as_mut() else {
-            let mut shard = open_shard(&self.dir, today, limit)?;
+            let mut shard = open_shard(&self.dir, &self.prefix, today, limit)?;
             shard.file.write_all(chunk)?;
             shard.len += chunk.len() as u64;
             self.current = Some(shard);
@@ -344,11 +366,14 @@ impl Write for RotatingLogWriter {
     }
 }
 
-fn open_shard(dir: &Path, date: Date, limit: u64) -> io::Result<CurrentShard> {
+fn open_shard(dir: &Path, prefix: &str, date: Date, limit: u64) -> io::Result<CurrentShard> {
     let mut highest: Option<(u32, u64)> = None;
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
-            let Some((file_date, shard)) = entry.file_name().to_str().and_then(parse_log_file_name)
+            let Some((file_date, shard)) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| parse_log_file_name_with_prefix(prefix, name))
             else {
                 continue;
             };
@@ -369,7 +394,7 @@ fn open_shard(dir: &Path, date: Date, limit: u64) -> io::Result<CurrentShard> {
         Some((index, _)) => index,
         None => 0,
     };
-    let path = dir.join(log_file_name(date, shard));
+    let path = dir.join(log_file_name_with_prefix(prefix, date, shard));
     let file = OpenOptions::new().create(true).append(true).open(&path)?;
     let len = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
     Ok(CurrentShard { file, date, len })

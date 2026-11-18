@@ -30,6 +30,7 @@ impl NyaTermApp {
             self.ensure_idle_lock_clock(cx);
             self.forget_text_inputs("lock-screen.password");
             self.shell.set_status("screen unlocked".to_string());
+            self.networktools_resume_after_unlock(cx);
             if let Some(focus) = restore_focus {
                 window.focus(&focus, cx);
             }
@@ -38,6 +39,7 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.networktools_suspend_for_lock(cx);
         self.stop_mcp_background_operations(cx);
         self.cancel_file_sudo_prompt(cx);
         self.hide_secret_inputs(cx);
@@ -66,6 +68,7 @@ impl NyaTermApp {
         self.ensure_idle_lock_clock(cx);
         self.forget_text_inputs("lock-screen.password");
         self.shell.set_status("screen unlocked".to_string());
+        self.networktools_resume_after_unlock(cx);
         self.broadcast_screen_lock(false, cx);
         cx.spawn(async move |this, cx| {
             let _ = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {

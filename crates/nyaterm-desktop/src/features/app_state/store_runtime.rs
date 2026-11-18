@@ -146,6 +146,7 @@ impl NyaTermApp {
     }
 
     pub(crate) fn shutdown_blocking_jobs(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        self.networktools.registry.stop_all();
         self.stop_mcp_background_operations(cx);
         let mcp_shutdown = self
             .mcp

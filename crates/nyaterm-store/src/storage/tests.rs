@@ -9418,6 +9418,7 @@ fn default_session_batch_commits_all_protocols_or_preserves_the_entire_catalog()
 }
 
 #[test]
+<<<<<<< Updated upstream
 fn short_rsa_opt_in_survives_portable_backup_and_clears_after_restore() {
     let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-short-rsa-backup");
     let source = root.join("source");
@@ -9496,4 +9497,40 @@ fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
     assert!(repaired);
     let store = ConnectionStore::from_database(database, path, None).unwrap();
     assert_eq!(store.list_connections().unwrap()[0].id, "retained");
+=======
+fn networktools_settings_round_trip_preserves_unknown_subtree_keys() {
+    let dir = unique_temp_dir("networktools-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+
+    let mut raw = store.load_settings_value().unwrap();
+    raw["networktools"] = serde_json::json!({
+        "tftp": {"port": 1069, "future_flag": true},
+        "ftp": {"port": 2121}
+    });
+    store.save_settings_value(&raw).unwrap();
+
+    let mut settings = store.load_networktools_settings().unwrap();
+    assert_eq!(settings.tftp.port, 1069);
+    assert_eq!(settings.tftp.bind_address, "0.0.0.0");
+    assert!(!settings.tftp.allow_upload);
+
+    settings.tftp.allow_upload = true;
+    store.save_networktools_settings(settings.clone()).unwrap();
+    assert_eq!(store.load_networktools_settings().unwrap(), settings);
+
+    // Unknown fields written by a newer build must survive our save.
+    let saved = store.load_settings_value().unwrap();
+    assert_eq!(saved["networktools"]["tftp"]["future_flag"], true);
+    assert_eq!(saved["networktools"]["ftp"]["port"], 2121);
+}
+
+#[test]
+fn networktools_settings_default_when_absent() {
+    let dir = unique_temp_dir("networktools-settings-default");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let settings = store.load_networktools_settings().unwrap();
+    assert!(settings.tftp.root_dir.is_empty());
+    assert!(!settings.tftp.allow_overwrite);
+    assert_eq!(settings.tftp.port, nyaterm_core::DEFAULT_TFTP_PORT);
+>>>>>>> Stashed changes
 }

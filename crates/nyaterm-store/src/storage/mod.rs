@@ -14,8 +14,8 @@ use thiserror::Error;
 use nyaterm_core::{
     AiSettings, AssetMetadata, ConnectionType, CredentialCrypto, CredentialCryptoError, Group,
     KeywordHighlightConfig, KeywordHighlightImportResult, KeywordHighlightRule,
-    PortableSnapshotError, ProxyConfig, ProxyGroup, ProxyGroupsConfig, QuickCommand,
-    QuickCommandCategory, QuickCommandsConfig, SavedConnection, SessionsConfig,
+    NetworkToolsSettings, PortableSnapshotError, ProxyConfig, ProxyGroup, ProxyGroupsConfig,
+    QuickCommand, QuickCommandCategory, QuickCommandsConfig, SavedConnection, SessionsConfig,
     TranslationSettings, TunnelConfig, TunnelGroup, TunnelGroupsConfig, ai_settings_has_secret,
     merge_masked_ai_settings, merge_masked_translation_settings, migrate_legacy_ssh_agent_settings,
     normalize_ai_settings, translation_settings_has_secret, uuid,
@@ -88,6 +88,7 @@ const LEGACY_TEXT_KNOWN_HOSTS: &str = "known_hosts";
 const SETTINGS_DEFAULT: &str = "settings/default";
 const SETTINGS_AI_FIELD: &str = "ai";
 const SETTINGS_TRANSLATION_FIELD: &str = "translation";
+const SETTINGS_NETWORKTOOLS_FIELD: &str = "networktools";
 const SETTINGS_AI_HISTORY: &str = "settings/doc/ai-history";
 const SETTINGS_AI_AUDIT: &str = "settings/doc/ai-audit";
 const SETTINGS_TUNNEL_GROUPS: &str = "settings/doc/tunnel-groups";
@@ -1122,6 +1123,38 @@ impl ConnectionStore {
         );
         self.save_settings_value(&value)?;
         Ok(merged)
+    }
+
+    pub fn load_networktools_settings(&self) -> Result<NetworkToolsSettings, StorageError> {
+        let value = self.load_settings_value()?;
+        let settings = value
+            .get(SETTINGS_NETWORKTOOLS_FIELD)
+            .cloned()
+            .map(serde_json::from_value::<NetworkToolsSettings>)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(settings)
+    }
+
+    /// Merge only the known `networktools` fields, leaving unknown keys inside
+    /// the subtree (and every other settings key) untouched.
+    pub fn save_networktools_settings(
+        &self,
+        next: NetworkToolsSettings,
+    ) -> Result<NetworkToolsSettings, StorageError> {
+        let mut value = self.load_settings_value()?;
+        if !value.is_object() {
+            value = serde_json::Value::Object(Default::default());
+        }
+        let mut subtree = value
+            .get(SETTINGS_NETWORKTOOLS_FIELD)
+            .cloned()
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        merge_json_objects(&mut subtree, serde_json::to_value(&next)?);
+        set_nested_json_value(&mut value, &[SETTINGS_NETWORKTOOLS_FIELD], subtree);
+        self.save_settings_value(&value)?;
+        Ok(next)
     }
 
     pub fn load_keyword_highlights(&self) -> Result<KeywordHighlightConfig, StorageError> {
@@ -2498,6 +2531,26 @@ fn set_nested_json_value(
     }
     if let Some(key) = path.last() {
         current[*key] = new_value;
+    }
+}
+
+/// Recursively overlay `source` onto `target`. Known fields from the typed
+/// settings replace their values; keys the current build does not know about
+/// survive so a newer build's data is never silently discarded.
+fn merge_json_objects(target: &mut serde_json::Value, source: serde_json::Value) {
+    let (serde_json::Value::Object(target), serde_json::Value::Object(source)) = (target, source)
+    else {
+        return;
+    };
+    for (key, value) in source {
+        match (target.get_mut(&key), value) {
+            (Some(existing), value) if existing.is_object() && value.is_object() => {
+                merge_json_objects(existing, value);
+            }
+            (_, value) => {
+                target.insert(key, value);
+            }
+        }
     }
 }
 

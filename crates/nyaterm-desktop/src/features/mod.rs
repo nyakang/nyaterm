@@ -12,6 +12,7 @@ mod formatting;
 mod inspector;
 pub(crate) mod layout;
 mod mcp;
+mod networktools;
 mod notes;
 mod pages;
 mod panels;
