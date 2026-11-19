@@ -52,6 +52,7 @@ impl NyaInputKind {
 }
 
 type MaskToggleHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type EnterHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
 
 /// Application-owned text shared by all input presentations.
 pub struct NyaInputLabels {
@@ -847,6 +848,7 @@ pub struct NyaInput {
     state: Entity<NyaInputState>,
     font_size: Option<gpui::Pixels>,
     on_mask_toggle: Option<MaskToggleHandler>,
+    on_enter: Option<EnterHandler>,
 }
 
 impl NyaInput {
@@ -855,12 +857,20 @@ impl NyaInput {
             state: state.clone(),
             font_size: None,
             on_mask_toggle: None,
+            on_enter: None,
         }
     }
 
     /// Override the compact component size for fields that follow the UI font.
     pub fn text_size(mut self, font_size: gpui::Pixels) -> Self {
         self.font_size = Some(font_size);
+        self
+    }
+
+    /// Handle Enter and Shift+Enter instead of submitting. The flag is true for
+    /// Shift+Enter; IME confirmation retains priority over this callback.
+    pub fn on_enter(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_enter = Some(Box::new(handler));
         self
     }
 
@@ -963,7 +973,7 @@ impl RenderOnce for NyaInput {
                 .when_some(self.font_size, |this, font_size| this.text_size(font_size))
                 .into_any_element(),
         };
-        protect_input_composition(
+        let container = protect_input_composition(
             div()
                 .size_full()
                 .bg(input_surface_color(cx))
@@ -979,7 +989,23 @@ impl RenderOnce for NyaInput {
                 .child(input),
             composition_state,
             self.state,
-        )
+        );
+        if let Some(handler) = self.on_enter {
+            container.capture_action(move |action: &Enter, window, cx| {
+                let modifiers = window.modifiers();
+                if !action.secondary
+                    && !modifiers.platform
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && !modifiers.function
+                {
+                    cx.stop_propagation();
+                    handler(action.shift || modifiers.shift, window, cx);
+                }
+            })
+        } else {
+            container
+        }
     }
 }
 
@@ -2334,6 +2360,71 @@ mod tests {
                 })
                 .child(super::NyaInput::new(&self.field))
         }
+    }
+
+    #[gpui::test]
+    fn bare_input_enter_handler_preserves_ime_and_shift_navigation(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+
+        struct EnterFixture {
+            field: gpui::Entity<NyaInputState>,
+            position: Rc<Cell<isize>>,
+        }
+
+        impl Render for EnterFixture {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                let position = self.position.clone();
+                div()
+                    .w(px(300.))
+                    .h(px(24.))
+                    .child(
+                        super::NyaInput::new(&self.field).on_enter(move |shift, _, _| {
+                            position.set(position.get() + if shift { -1 } else { 1 });
+                        }),
+                    )
+            }
+        }
+
+        cx.update(gpui_kit::init);
+        let position = Rc::new(Cell::new(0));
+        let (fixture, cx) = cx.add_window_view({
+            let position = position.clone();
+            move |_, cx| EnterFixture {
+                field: cx.new(|cx| NyaInputState::new(cx, "")),
+                position,
+            }
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            window.focus(&field.read(cx).component_focus_handle(cx), cx);
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(position.get(), 1);
+        cx.simulate_keystrokes("shift-enter");
+        cx.run_until_parked();
+        assert_eq!(position.get(), 0);
+        cx.update(|window, cx| {
+            field
+                .read(cx)
+                .component_state()
+                .unwrap()
+                .update(cx, |state, cx| {
+                    state.replace_and_mark_text_in_range(None, "拼", Some(0..1), window, cx);
+                });
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(position.get(), 0, "Enter must confirm composition first");
+        assert_eq!(field.read_with(cx, |field, cx| field.value(cx)), "拼");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(position.get(), 1);
     }
 
     #[gpui::test]

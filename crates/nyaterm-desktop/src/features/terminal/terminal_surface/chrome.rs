@@ -1,7 +1,7 @@
 use gpui::{
     Context, IntoElement, KeyDownEvent, MouseButton, SharedString, div, prelude::*, px, rgb, rgba,
 };
-use nyaterm_ui::{NyaButton, NyaDropdownMenu, NyaIconButton, NyaInput, NyaMenuItem};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaInput};
 use rust_i18n::t;
 
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
@@ -181,6 +181,7 @@ impl NyaTermApp {
             TextInputSetup::placeholder(t!("terminalCtx.find")),
             cx,
         );
+        let search_app = cx.entity();
         let search_focus = search_input.read(cx).focus_handle();
         let search_focused = search_input.read(cx).has_focus();
         let buffer_matches = self.terminal_buffer_matches();
@@ -258,7 +259,8 @@ impl NyaTermApp {
                         palette.border
                     }))
                     .bg(rgb(palette.input_surface()))
-                    .px_2()
+                    .pl_2()
+                    .pr(px(2.))
                     .flex()
                     .items_center()
                     .cursor_text()
@@ -267,16 +269,58 @@ impl NyaTermApp {
                     .on_click(move |_, window, cx| {
                         window.focus(&search_focus, cx);
                     })
+                    .child(div().min_w_0().flex_1().h_full().child(
+                        NyaInput::new(&search_input).on_enter(move |shift, _, cx| {
+                            search_app.update(cx, |this, cx| {
+                                this.mark_user_activity();
+                                this.navigate_terminal_search(if shift { -1 } else { 1 }, cx);
+                            });
+                        }),
+                    ))
                     .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .h_full()
-                            .child(NyaInput::new(&search_input)),
+                        NyaButton::new("terminal-search-case", "Aa")
+                            .compact()
+                            .height(px(20.))
+                            .variant(NyaButtonVariant::Ghost)
+                            .selected(self.terminal.search.case_sensitive)
+                            .tooltip(t!("terminalCtx.searchCaseSensitive"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.terminal.search.case_sensitive =
+                                    !this.terminal.search.case_sensitive;
+                                this.terminal.search.active_index = 0;
+                                this.refresh_terminal_search_state(cx);
+                            })),
+                    )
+                    .child(
+                        NyaButton::new("terminal-search-word", "ab")
+                            .compact()
+                            .height(px(20.))
+                            .variant(NyaButtonVariant::Ghost)
+                            .selected(self.terminal.search.whole_word)
+                            .tooltip(t!("terminalCtx.searchWholeWord"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.terminal.search.whole_word = !this.terminal.search.whole_word;
+                                this.terminal.search.active_index = 0;
+                                this.refresh_terminal_search_state(cx);
+                            })),
+                    )
+                    .child(
+                        NyaButton::new("terminal-search-regex", ".*")
+                            .compact()
+                            .height(px(20.))
+                            .variant(NyaButtonVariant::Ghost)
+                            .selected(self.terminal.search.regex)
+                            .tooltip(t!("terminalCtx.searchRegex"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.terminal.search.regex = !this.terminal.search.regex;
+                                this.terminal.search.active_index = 0;
+                                this.refresh_terminal_search_state(cx);
+                            })),
                     ),
             )
             .child(
                 div()
+                    .flex_none()
                     .text_xs()
                     .text_color(rgb(if buffer_matches.is_err() {
                         palette.danger
@@ -284,39 +328,6 @@ impl NyaTermApp {
                         palette.text_muted
                     }))
                     .child(status),
-            )
-            .child(
-                NyaButton::new("terminal-search-case", "Aa")
-                    .compact()
-                    .selected(self.terminal.search.case_sensitive)
-                    .tooltip(t!("terminalCtx.searchCaseSensitive"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.terminal.search.case_sensitive = !this.terminal.search.case_sensitive;
-                        this.terminal.search.active_index = 0;
-                        this.refresh_terminal_search_state(cx);
-                    })),
-            )
-            .child(
-                NyaButton::new("terminal-search-word", "ab")
-                    .compact()
-                    .selected(self.terminal.search.whole_word)
-                    .tooltip(t!("terminalCtx.searchWholeWord"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.terminal.search.whole_word = !this.terminal.search.whole_word;
-                        this.terminal.search.active_index = 0;
-                        this.refresh_terminal_search_state(cx);
-                    })),
-            )
-            .child(
-                NyaButton::new("terminal-search-regex", ".*")
-                    .compact()
-                    .selected(self.terminal.search.regex)
-                    .tooltip(t!("terminalCtx.searchRegex"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.terminal.search.regex = !this.terminal.search.regex;
-                        this.terminal.search.active_index = 0;
-                        this.refresh_terminal_search_state(cx);
-                    })),
             )
             .child(
                 NyaIconButton::new("terminal-search-prev", "icons/chevron-up.svg")
@@ -331,18 +342,6 @@ impl NyaTermApp {
                     .disabled(disabled)
                     .tooltip(t!("terminalCtx.findNext"))
                     .on_click(cx.listener(|this, _, _, cx| this.navigate_terminal_search(1, cx))),
-            )
-            .child(
-                NyaDropdownMenu::new("terminal-search-options")
-                    .label("⋯")
-                    .tooltip(t!("common.more"))
-                    .items([NyaMenuItem::action(t!("terminalCtx.searchWrapAround"))
-                        .checked(self.terminal.search_wrap_around(self.session.active_id()))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let id = this.session.active_id_owned();
-                            this.terminal.toggle_search_wrap_around(id.as_deref());
-                            cx.notify();
-                        }))]),
             )
             .child(
                 NyaIconButton::new("terminal-search-close", "icons/window/close.svg")
