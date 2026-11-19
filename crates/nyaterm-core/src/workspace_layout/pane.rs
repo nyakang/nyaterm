@@ -447,17 +447,44 @@ impl WorkspacePaneNode {
 pub type WorkspaceSplitState = WorkspacePaneNode;
 
 pub fn uuid_v4_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
+    // Layout identity must not depend on clock resolution or wall-clock changes.
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkspacePaneNode, WorkspaceSplitDirection};
+    use super::{WorkspacePaneNode, WorkspaceSplitDirection, uuid_v4_like};
+    use crate::RestorableWorkspacePaneNode;
+    use std::collections::HashSet;
+
+    #[test]
+    fn rapidly_created_layout_ids_do_not_collide() {
+        let ids = (0..65_536).map(|_| uuid_v4_like()).collect::<Vec<_>>();
+        let unique = ids.iter().collect::<HashSet<_>>();
+        assert_eq!(unique.len(), ids.len());
+    }
+
+    #[test]
+    fn restoring_a_legacy_pane_layout_preserves_its_timestamp_id() {
+        let layout: RestorableWorkspacePaneNode = serde_json::from_str(
+            r#"{
+                "kind": "split",
+                "id": "pane-split-18a1f2e3d4c5b6a7",
+                "direction": "vertical",
+                "ratio": 0.5,
+                "first": { "kind": "leaf", "tab_index": 0 },
+                "second": { "kind": "leaf", "tab_index": 1 }
+            }"#,
+        )
+        .unwrap();
+        let ordered = vec!["a".to_string(), "b".to_string()];
+        let tree = WorkspacePaneNode::restore_layout(&layout, &ordered).unwrap();
+        assert!(matches!(
+            &tree,
+            WorkspacePaneNode::Split { id, .. } if id == "pane-split-18a1f2e3d4c5b6a7"
+        ));
+        assert_eq!(tree.serialize_layout(&ordered), Some(layout));
+    }
 
     fn split(id: &str, first: WorkspacePaneNode, second: WorkspacePaneNode) -> WorkspacePaneNode {
         WorkspacePaneNode::Split {

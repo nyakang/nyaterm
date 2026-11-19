@@ -238,6 +238,7 @@ mod tests {
         SmartSplitMode, WorkspacePaneNode, WorkspaceSplitDirection,
     };
     use crate::workspace_layout::tabs::{TabDockEdge, TabDockZone, TerminalWindowNode};
+    use std::collections::HashSet;
 
     #[test]
     fn dock_zone_keeps_edge_priority_at_equal_distances() {
@@ -307,6 +308,38 @@ mod tests {
 
     fn tabs(count: usize) -> Vec<String> {
         (0..count).map(|n| format!("session-{n}")).collect()
+    }
+
+    #[test]
+    fn closing_a_tiled_group_removes_only_its_identity() {
+        let tabs = tabs(3);
+        let mut seen = HashSet::new();
+        for _ in 0..128 {
+            let tree =
+                TerminalWindowNode::tile_in_bounds(&tabs, SmartSplitMode::Vertical, 1280., 800.)
+                    .unwrap();
+            let layout = tree.serialize_layout(&tabs).unwrap();
+            let restored = TerminalWindowNode::restore_layout(&layout, &tabs).unwrap();
+            for mut tree in [tree, restored] {
+                for id in tree.node_ids() {
+                    assert!(
+                        seen.insert(id),
+                        "layout nodes must have distinct identities"
+                    );
+                }
+                let original = tree.leaf_for_tab(&tabs[0]).unwrap().to_string();
+                let surviving_groups = tabs[1..]
+                    .iter()
+                    .map(|tab| tree.leaf_for_tab(tab).unwrap().to_string())
+                    .collect::<Vec<_>>();
+                let tree = tree.remove_tab(&tabs[0]).unwrap();
+                assert!(tree.leaf_tabs(&original).is_none());
+                assert_eq!(tree.collect_tab_ids(), tabs[1..]);
+                for (tab, group) in tabs[1..].iter().zip(surviving_groups) {
+                    assert_eq!(tree.leaf_for_tab(tab), Some(group.as_str()));
+                }
+            }
+        }
     }
 
     #[test]
