@@ -357,6 +357,32 @@ fn android_projection_includes_portable_device_and_screen_but_no_runtime_fields(
 }
 
 #[test]
+fn serial_reconnect_enter_remains_local_when_preferences_are_synced() {
+    let base = BTreeMap::from([("settings".into(), json!({"terminal": {}}).to_string())]);
+    for enabled in [true, false] {
+        let changed = BTreeMap::from([(
+            "settings".into(),
+            json!({
+                "terminal": {"serial_reconnect_send_enter": enabled}
+            })
+            .to_string(),
+        )]);
+        for scope in [
+            SyncScope::default(),
+            SyncScope {
+                preferences: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                project_entities(&base, &scope).unwrap(),
+                project_entities(&changed, &scope).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
 fn default_session_settings_remain_local_in_the_existing_v4_projection() {
     let settings = json!({"ui":{"language":"en"}});
     let base = BTreeMap::from([("settings".into(), settings.to_string())]);

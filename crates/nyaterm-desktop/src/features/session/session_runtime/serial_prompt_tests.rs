@@ -27,7 +27,7 @@ impl Render for Host {
 }
 
 /// A window that counts as the main window, which is what the dialog needs.
-fn hosted(cx: &mut TestAppContext, app: &Entity<NyaTermApp>) -> VisualTestContext {
+pub(super) fn hosted(cx: &mut TestAppContext, app: &Entity<NyaTermApp>) -> VisualTestContext {
     cx.update(nyaterm_ui::init_components);
     let app = app.clone();
     let handle = cx.add_window(|window, cx| {
@@ -95,7 +95,14 @@ fn deferring_the_device_waits_in_a_dialog_without_registering_a_start() {
                 .dialogs
                 .serial_connect_prompt()
                 .expect("prompt kept until answered");
-            assert_eq!(prompt.connection.id, "board");
+            let crate::features::session::state::SerialConnectContinuation::Start {
+                connection,
+                ..
+            } = &prompt.continuation
+            else {
+                panic!("expected saved start");
+            };
+            assert_eq!(connection.id, "board");
             assert!(prompt.ask_port);
             assert!(!prompt.ask_baud_rate);
             // Saved values only seed the fields; they are not a decision yet.
@@ -268,7 +275,14 @@ fn a_second_prompt_request_keeps_the_open_dialog() {
                 .serial_connect_prompt()
                 .expect("the first prompt survives");
             assert_eq!(prompt.port_name, "COM5");
-            let ConnectionType::Serial { port_name, .. } = &prompt.connection.config else {
+            let crate::features::session::state::SerialConnectContinuation::Start {
+                connection,
+                ..
+            } = &prompt.continuation
+            else {
+                panic!("saved start expected");
+            };
+            let ConnectionType::Serial { port_name, .. } = &connection.config else {
                 panic!("serial connection expected");
             };
             assert_eq!(port_name, "COM7");
@@ -424,7 +438,7 @@ fn picking_a_listed_device_leaves_the_custom_field_behind() {
 /// A saved connection that asks at connect, and a session that opened a
 /// different device and rate than the saved hint: what the session answered is
 /// the one a reconnect has to reuse.
-fn prepare_serial_reconnect(app: &mut NyaTermApp) {
+pub(super) fn prepare_serial_reconnect(app: &mut NyaTermApp) {
     let connection = serial(
         "COM7",
         115200,
@@ -439,22 +453,16 @@ fn prepare_serial_reconnect(app: &mut NyaTermApp) {
     metadata.source_connection_id = Some(connection.id.clone());
     app.connection_state
         .replace_loaded(vec![connection], vec![]);
-    // The probe finds COM9 alive, so the reconnect stays a direct one.
-    app.test_serial_ports = Some(vec![nyaterm_transport::SerialPortInfo {
-        port_name: "COM9".into(),
-        ..Default::default()
-    }]);
     app.session
         .set_custom_name("existing".into(), "My board".into());
     app.session.set_tab_color("existing", Some(0x123456));
     app.session.set_tab_locked("existing", true);
 }
 
-/// A board that came back under another name cannot be reopened blindly: the
-/// reconnect probes the enumeration and, finding the old device gone, asks
-/// where it went, prefilled with what the session actually had open.
+/// Enumeration is advisory: try the device first, then let a failed automatic
+/// reconnect offer another one without losing the previous runtime parameters.
 #[test]
-fn a_reconnect_whose_device_vanished_asks_where_the_board_went() {
+fn a_failed_automatic_serial_reconnect_offers_another_device() {
     let root = TestConfigDir::new("nyaterm-serial-reconnect-device-gone");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
@@ -463,48 +471,88 @@ fn a_reconnect_whose_device_vanished_asks_where_the_board_went() {
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             prepare_serial_reconnect(app);
-            // The session's COM9 is gone; only COM7 is enumerated now.
-            app.test_serial_ports = Some(vec![nyaterm_transport::SerialPortInfo {
-                port_name: "COM7".into(),
-                ..Default::default()
-            }]);
             app.reconnect_session("existing".into(), window, cx);
-            // No direct attempt: the prompt stands in for it.
-            assert_eq!(app.session.start.pending_count(), 0);
-            let state = app.session.dialogs.serial_connect_prompt().unwrap();
-            // Prefilled with the session's own answer, not the saved hint.
-            assert_eq!(state.port_name, "COM9");
-            assert_eq!(state.baud_rate, "57600");
-            // COM9 is not enumerated, so the free-text field is on screen.
-            assert!(state.custom_port);
-            assert_eq!(state.continuation.reconnect_session_id(), Some("existing"));
-
-            // The board came back on COM7.
-            app.select_serial_prompt_port("COM7".into(), cx);
-            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert!(app.session.dialogs.serial_connect_prompt().is_none());
+            assert_eq!(app.session.start.pending_count(), 1);
+            fail_serial_reconnect(app, cx);
         })
     });
     cx.run_until_parked();
-    app.read_with(&cx, |app, _| {
-        assert!(app.session.dialogs.serial_connect_prompt().is_none());
-        assert_eq!(app.session.start.pending_count(), 1);
-        let pending = app.session.start.pending_entries().next().unwrap().1;
-        let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
-            panic!("expected serial");
-        };
-        assert_eq!(config.port_name, "COM7");
-        // The rate the session had open, not the saved hint's 115200.
-        assert_eq!(config.baud_rate, 57600);
-        assert_eq!(pending.reconnect_session_id.as_deref(), Some("existing"));
-        assert_eq!(pending.custom_name.as_deref(), Some("My board"));
-        // The saved connection keeps its own hint untouched.
-        let ConnectionType::Serial { baud_rate, .. } =
-            &app.connection_state.connections()[0].config
-        else {
-            panic!("expected serial");
-        };
-        assert_eq!(*baud_rate, 115200);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let state = app.session.dialogs.serial_connect_prompt().unwrap();
+            assert_eq!(state.port_name, "COM9");
+            assert_eq!(state.baud_rate, "57600");
+            assert!(state.custom_port);
+            assert_eq!(state.continuation.reconnect_session_id(), Some("existing"));
+            app.apply_serial_prompt_port("COM7".into(), cx);
+        })
     });
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        app.update(cx, |app, cx| {
+            assert!(app.session.dialogs.serial_connect_prompt().is_none());
+            let pending = app.session.start.pending_entries().next().unwrap().1;
+            let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+                panic!("expected serial");
+            };
+            assert_eq!(config.port_name, "COM7");
+            assert_eq!(config.baud_rate, 57600);
+            assert_eq!(pending.custom_name.as_deref(), Some("My board"));
+            assert_eq!(pending.tab_color, Some(0x123456));
+            assert!(pending.locked);
+            assert!(!pending.offer_serial_reconnect_selection);
+            fail_serial_reconnect(app, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!window.has_active_nya_dialog(cx));
+        app.update(cx, |app, cx| {
+            assert!(app.session.dialogs.serial_connect_prompt().is_none());
+            app.reconnect_session("existing".into(), window, cx);
+            let pending = app.session.start.pending_entries().next().unwrap().1;
+            let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+                panic!("expected serial");
+            };
+            assert_eq!(config.port_name, "COM7");
+            assert_eq!(config.baud_rate, 57600);
+            let ConnectionType::Serial {
+                port_name,
+                baud_rate,
+                ..
+            } = &app.connection_state.connections()[0].config
+            else {
+                panic!("expected serial");
+            };
+            assert_eq!(port_name, "COM7");
+            assert_eq!(*baud_rate, 115200);
+        })
+    });
+}
+
+pub(super) fn fail_serial_reconnect(app: &mut NyaTermApp, cx: &mut Context<NyaTermApp>) {
+    let request_id = app
+        .session
+        .start
+        .pending_entries()
+        .next()
+        .unwrap()
+        .0
+        .clone();
+    let now = std::time::Instant::now();
+    app.apply_session_start_event(
+        crate::features::runtime_jobs::SessionStartResult {
+            request_id,
+            connection_name: "Board".into(),
+            kind: nyaterm_transport::SessionKind::Serial,
+            worker_started_at: now,
+            worker_finished_at: now,
+            result: Err("device unavailable".into()),
+        },
+        cx,
+    );
 }
 
 /// The device a session opened is the only answer a reconnect needs, so a board
@@ -618,9 +666,7 @@ fn reconnecting_onto_a_device_another_session_holds_is_refused() {
     });
 }
 
-#[test]
-/// Serial consoles say nothing until they are spoken to, so a successful
-/// reconnect sends one Enter to bring the prompt straight back.
+/// An opted-in idle reconnect writes exactly one CR to a real serial backend.
 #[cfg(unix)]
 #[test]
 fn a_successful_serial_reconnect_elicits_the_prompt_with_one_enter() {
@@ -678,6 +724,7 @@ fn a_successful_serial_reconnect_elicits_the_prompt_with_one_enter() {
             app.session.select_active_session(&backend_id);
             app.terminal
                 .seed_session_view(backend_id.clone(), "device> ".into(), "UTF-8");
+            app.settings.toggle_terminal_serial_reconnect_send_enter();
             app.schedule_serial_reconnect_enter(backend_id.clone(), cx);
         })
     });

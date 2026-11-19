@@ -2806,6 +2806,7 @@
     "submit": "계속"
   },
   "serialPrompt": {
+    "chooseDevice": "장치 선택…",
     "alreadyOpen": "열려 있는 시리얼 선택을 먼저 완료하세요.",
     "baudRateInvalid": "보드레이트는 1~4000000 사이여야 합니다.",
     "baudRatePlaceholder": "115200",

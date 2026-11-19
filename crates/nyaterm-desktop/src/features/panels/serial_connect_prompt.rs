@@ -23,7 +23,7 @@ impl NyaTermApp {
         let Some(state) = self.session.serial_connect_prompt() else {
             return div().into_any_element();
         };
-        let connection_name = state.connection.name.clone();
+        let connection_name = state.connection_name.clone();
         let ask_port = state.ask_port;
         let ask_baud_rate = state.ask_baud_rate;
         let custom_port = state.custom_port;
@@ -38,6 +38,11 @@ impl NyaTermApp {
         let load_error = self
             .connection_state
             .serial_ports_error()
+            .map(str::to_string);
+        let reconnect_error = state
+            .continuation
+            .reconnect_session_id()
+            .and_then(|id| self.session.start_reconnect_failure(id))
             .map(str::to_string);
         let serial_ports = self.connection_state.serial_ports().to_vec();
 
@@ -99,8 +104,8 @@ impl NyaTermApp {
                         .text_color(rgb(palette.text_dimmed))
                         .child(if loading {
                             t!("dialog.loadingSerialPorts").to_string()
-                        } else if let Some(error) = load_error.as_ref() {
-                            format!("{}: {error}", t!("dialog.serialPortsLoadFailed"))
+                        } else if load_error.is_some() {
+                            t!("dialog.serialPortsLoadFailed").to_string()
                         } else {
                             t!("dialog.noSerialPortsFound").to_string()
                         }),
@@ -164,6 +169,22 @@ impl NyaTermApp {
         }
 
         content
+            .when_some(load_error, |this, error| {
+                this.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.danger))
+                        .child(format!("{}: {error}", t!("dialog.serialPortsLoadFailed"))),
+                )
+            })
+            .when_some(reconnect_error, |this, error| {
+                this.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.danger))
+                        .child(error),
+                )
+            })
             .when_some(error_key, |this, key| {
                 this.child(
                     div()

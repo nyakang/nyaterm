@@ -2806,6 +2806,7 @@
     "submit": "Continuer"
   },
   "serialPrompt": {
+    "chooseDevice": "Choisir un périphérique…",
     "alreadyOpen": "Terminez d'abord la sélection de port en cours.",
     "baudRateInvalid": "Le débit doit être compris entre 1 et 4000000.",
     "baudRatePlaceholder": "115200",

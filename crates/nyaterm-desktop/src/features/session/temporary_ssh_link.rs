@@ -24,7 +24,6 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.refresh_connection_serial_ports();
         self.session.dialogs.open_temporary_ssh_link();
         self.forget_text_inputs("temporary-ssh.");
         self.shell.set_status("temporary link opened".to_string());
@@ -103,7 +102,7 @@ impl NyaTermApp {
             self.forget_text_inputs("temporary-ssh.link");
         }
         if protocol == TemporaryLinkProtocol::Serial {
-            self.refresh_connection_serial_ports();
+            self.request_connection_serial_ports_refresh(cx);
         }
         self.session.dialogs.set_temporary_link_protocol(protocol);
         cx.notify();

@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 
 use gpui::{Context, Window};
-use nyaterm_core::{ConnectionType, SerialConnectPrompt};
 
 use crate::features::formatting::short_id;
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
 use crate::models::{SessionLaunchConfig, StartupCommandRequest};
 
 use super::session_runtime::{MultiplexSshStartRequest, SessionStartFocusTarget};
-use super::state::{SerialConnectContinuation, SerialConnectSelection};
+use super::state::SerialConnectSelection;
 
 const RECONNECTING_BANNER: &str = "\r\n\x1b[36m[Reconnecting…]\x1b[0m\r\n";
 
@@ -334,6 +333,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.cancel_serial_reconnect_enter(session_id);
         self.cancel_file_sudo_for_sessions(&[session_id.to_owned()], cx);
         self.cancel_native_runs_for_disconnected_session(session_id, cx);
         self.commands.cancel_staged_quick_command(session_id);
@@ -404,23 +404,6 @@ impl NyaTermApp {
         self.reconnect_session_with_serial_selection(session_id, None, window, cx);
     }
 
-    /// The devices the OS offers right now, or the fixture's answer in tests.
-    ///
-    /// Enumeration never opens a port, so it cannot disturb a board that is
-    /// mid-replug; it only tells us whether the name still exists.
-    fn enumerated_serial_ports(&self) -> Vec<nyaterm_transport::SerialPortInfo> {
-        #[cfg(test)]
-        {
-            if let Some(ports) = &self.test_serial_ports {
-                return ports.clone();
-            }
-        }
-        self.session
-            .manager()
-            .list_serial_ports()
-            .unwrap_or_default()
-    }
-
     pub(in crate::features) fn reconnect_session_with_serial_selection(
         &mut self,
         session_id: String,
@@ -428,6 +411,7 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.cancel_serial_reconnect_enter(&session_id);
         if self.session.session_is_busy(&session_id) {
             self.shell
                 .set_status("session action already in progress".to_string());
@@ -491,67 +475,36 @@ impl NyaTermApp {
             self.retry_rdp_runtime(&session_id, cx);
             return;
         }
-        // A reconnect reuses the device the session already had open: the answer
-        // to the connect prompt belonged to that session, so asking again would
-        // stand between a replugged board and the tab that just lost it. An
-        // explicit selection still wins, which is how a retry on another device
-        // gets in.
-        // Whether the device came from this call (a retry on another device) or
-        // from the session itself. Only the latter is worth probing.
-        let reuses_saved_device = serial_selection.is_none();
-        let serial_selection = serial_selection.or_else(|| match &metadata.launch_config {
-            SessionLaunchConfig::Serial(config) => Some(SerialConnectSelection {
-                port_name: config.port_name.clone(),
-                baud_rate: config.baud_rate,
-            }),
-            _ => None,
-        });
-        // A board that came back under another name (or a dead driver that took
-        // its port with it) cannot be reopened: the direct attempt would fail
-        // with nowhere to say where the device went. When the session's device
-        // is no longer enumerated, let the prompt answer that, prefilled with
-        // what the session actually opened rather than the saved hint.
-        if reuses_saved_device
-            && let (Some(selection), Some(connection)) = (serial_selection.as_ref(), saved.as_ref())
-            && let ConnectionType::Serial { .. } = &connection.config
-        {
-            let ports = self.enumerated_serial_ports();
-            if !ports
-                .iter()
-                .any(|port| port.port_name == selection.port_name.trim())
-            {
-                self.connection_state.replace_serial_ports(ports);
-                self.open_serial_connect_prompt(
-                    connection.clone(),
-                    SerialConnectContinuation::Reconnect {
-                        session_id: session_id.clone(),
-                    },
-                    // Both fields: the session's own answer pre-fills each one,
-                    // so confirming as-is reconnects exactly what was open, and
-                    // a dead driver that also mangled the rate can be corrected
-                    // too.
-                    SerialConnectPrompt {
-                        port: true,
-                        baud_rate: true,
-                    },
-                    selection.port_name.clone(),
-                    selection.baud_rate,
-                    cx,
-                );
-                return;
+        // Enumeration cannot prove whether custom paths or symlinks can open.
+        // Retry the last resolved configuration on the worker before offering
+        // another device; a failed selection must survive the next retry.
+        let offer_serial_selection = serial_selection.is_none();
+        let serial_config = match &metadata.launch_config {
+            SessionLaunchConfig::Serial(config) => {
+                let mut config = self
+                    .session
+                    .start
+                    .serial_reconnect_config(&session_id)
+                    .unwrap_or(config)
+                    .clone();
+                if let Some(selection) = serial_selection {
+                    config.port_name = selection.port_name;
+                    config.baud_rate = selection.baud_rate;
+                }
+                if self
+                    .session
+                    .serial_ports_in_use(Some(&session_id), None)
+                    .contains(config.port_name.trim())
+                {
+                    self.shell
+                        .set_status(rust_i18n::t!("dialog.serialPortInUse"));
+                    cx.notify();
+                    return;
+                }
+                Some(config)
             }
-        }
-        if let Some(selection) = serial_selection.as_ref()
-            && self
-                .session
-                .serial_ports_in_use(Some(&session_id), None)
-                .contains(selection.port_name.trim())
-        {
-            self.shell
-                .set_status(rust_i18n::t!("dialog.serialPortInUse"));
-            cx.notify();
-            return;
-        }
+            _ => None,
+        };
         self.remote_ops.clear_stats_sample(&session_id);
         self.session.begin_reconnect_action(session_id.clone());
         self.session.start.clear_active_selection();
@@ -610,7 +563,7 @@ impl NyaTermApp {
         self.commands.cancel_staged_quick_command(&old_id);
         self.session.mark_session_disconnected(&old_id);
         self.close_terminal_executions_for_session(&old_id, cx);
-        if let Some(connection) = saved {
+        if let Some(connection) = saved.filter(|_| serial_config.is_none()) {
             let ssh_runtime_mode = metadata.ssh_runtime_mode();
             self.continue_saved_connection_start(
                 connection,
@@ -633,7 +586,6 @@ impl NyaTermApp {
                     locked,
                     insert_index: Some(source_index),
                     reconnect_session_id: Some(old_id.clone()),
-                    serial_selection,
                     startup_command: reconnect_cwd_command.map(|command| StartupCommandRequest {
                         command,
                         delay_ms: 0,
@@ -656,7 +608,9 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        let launch_config = metadata.launch_config_for_restart();
+        let launch_config = serial_config
+            .map(SessionLaunchConfig::Serial)
+            .unwrap_or_else(|| metadata.launch_config_for_restart());
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
         match launch_config {
@@ -723,6 +677,9 @@ impl NyaTermApp {
                     },
                     cx,
                 );
+                if offer_serial_selection {
+                    self.session.start.allow_serial_reconnect_selection(&old_id);
+                }
             }
             SessionLaunchConfig::Ssh(config) => {
                 self.begin_background_ssh_start(

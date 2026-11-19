@@ -26,7 +26,6 @@ use rust_i18n::t;
 use super::super::NativeHostKeyVerifier;
 use super::{PendingSessionStartRegistration, SessionStartFocusTarget};
 use crate::features::formatting::{non_empty_string, parse_telnet_enter_mode};
-use crate::features::session::state::SerialConnectContinuation;
 use crate::features::{
     NyaTermApp, runtime_jobs::SessionStartSuccess, runtime_jobs::submit_session_start_job,
     session::AgentPromptBroker, session::CredentialPromptBroker, session::HostKeyPromptBroker,
@@ -279,14 +278,8 @@ impl NyaTermApp {
                 cx.notify();
                 return false;
             }
-            return self.open_serial_connect_prompt(
-                connection,
-                SerialConnectContinuation::Start(Box::new(options)),
-                prompt,
-                port_hint,
-                baud_hint,
-                cx,
-            );
+            return self
+                .open_serial_connect_prompt(connection, options, prompt, port_hint, baud_hint, cx);
         }
 
         if matches!(connection.config, ConnectionType::Adb { .. }) {

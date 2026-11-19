@@ -8874,6 +8874,50 @@ fn login_monitoring_setting_roundtrips_without_losing_unknown_fields() {
 }
 
 #[test]
+fn serial_reconnect_enter_defaults_off_and_preserves_saved_values_and_unknown_fields() {
+    let dir = unique_temp_dir("serial-reconnect-enter-settings");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert!(
+            !store
+                .load_app_settings_summary()
+                .unwrap()
+                .terminal_serial_reconnect_send_enter
+        );
+        store
+            .save_settings_value(&serde_json::json!({
+                "terminal": {"future": {"keep": true}}, "future_root": [99]
+            }))
+            .unwrap();
+        let mut settings = store.load_app_settings_summary().unwrap();
+        assert!(!settings.terminal_serial_reconnect_send_enter);
+        for enabled in [true, false, true] {
+            settings.terminal_serial_reconnect_send_enter = enabled;
+            let saved = store.save_terminal_settings(&settings).unwrap();
+            assert_eq!(saved.terminal_serial_reconnect_send_enter, enabled);
+            assert_eq!(
+                store
+                    .load_app_settings_summary()
+                    .unwrap()
+                    .terminal_serial_reconnect_send_enter,
+                enabled
+            );
+            let raw = store.load_settings_value().unwrap();
+            assert_eq!(raw["terminal"]["serial_reconnect_send_enter"], enabled);
+            assert_eq!(raw["terminal"]["future"]["keep"], true);
+            assert_eq!(raw["future_root"][0], 99);
+        }
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(
+        store
+            .load_app_settings_summary()
+            .unwrap()
+            .terminal_serial_reconnect_send_enter
+    );
+}
+
+#[test]
 fn terminal_wrapping_settings_load_legacy_and_round_trip_without_downgrading_unknown_values() {
     use nyaterm_core::models::settings::TerminalWrapMode;
     let dir = unique_temp_dir("terminal-wrapping-settings");

@@ -2806,6 +2806,7 @@
     "submit": "继续"
   },
   "serialPrompt": {
+    "chooseDevice": "选择设备…",
     "alreadyOpen": "请先完成当前的串口选择。",
     "baudRateInvalid": "波特率必须在 1 到 4000000 之间。",
     "baudRatePlaceholder": "115200",

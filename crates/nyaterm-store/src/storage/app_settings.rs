@@ -272,7 +272,7 @@ impl ConnectionStore {
             terminal_serial_reconnect_send_enter: json_bool(
                 &value,
                 &["terminal", "serial_reconnect_send_enter"],
-                true,
+                false,
             ),
             terminal_low_latency_mode: json_bool(&value, &["terminal", "low_latency_mode"], false),
             terminal_zebra_stripes_enabled: json_bool(

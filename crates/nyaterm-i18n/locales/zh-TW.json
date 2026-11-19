@@ -2806,6 +2806,7 @@
     "submit": "繼續"
   },
   "serialPrompt": {
+    "chooseDevice": "選擇裝置…",
     "alreadyOpen": "請先完成目前的序列埠選擇。",
     "baudRateInvalid": "鮑率必須介於 1 到 4000000。",
     "baudRatePlaceholder": "115200",

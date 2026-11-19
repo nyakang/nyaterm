@@ -13,6 +13,8 @@ use std::time::Instant;
 pub(in crate::features) struct PendingSessionStart {
     /// Preparation has no worker result to reap when its callback is cancelled.
     pub preparing: bool,
+    /// Only a user-requested automatic retry may open the device picker on failure.
+    pub offer_serial_reconnect_selection: bool,
     pub(in crate::features) mcp_open_operation_id: Option<String>,
     /// Retains an external override before a saved connection's config is built.
     pub requested_ssh_runtime_mode: Option<nyaterm_core::models::ssh_runtime::SshRuntimeMode>,
@@ -89,6 +91,11 @@ pub(in crate::features) struct FailedSessionStart {
     pub reason: SessionStartEndReason,
 }
 
+pub(super) struct ReconnectFailure {
+    error: String,
+    serial_config: Option<nyaterm_transport::SerialSessionConfig>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(in crate::features) struct SessionStartTabPlacement {
     pub(in crate::features) insert_index: usize,
@@ -106,7 +113,7 @@ pub(in crate::features::session) struct SessionStartFeatureState {
     pub(super) failed: HashMap<String, FailedSessionStart>,
     pub(super) active_failed: Option<String>,
     pub(super) cancelled: HashSet<String>,
-    pub(super) reconnect_failures: HashMap<String, String>,
+    pub(super) reconnect_failures: HashMap<String, ReconnectFailure>,
     pub(super) reconnect_completions: HashMap<String, PendingReconnectCompletion>,
     pub(super) pending_workspace_split: Option<(WorkspaceSplitDirection, String)>,
     pub(super) next_request_sequence: u64,
@@ -322,6 +329,7 @@ impl SessionStartFeatureState {
             id.clone(),
             PendingSessionStart {
                 preparing: true,
+                offer_serial_reconnect_selection: false,
                 mcp_open_operation_id: options.mcp_open_operation_id.clone(),
                 requested_ssh_runtime_mode: options.ssh_runtime_mode,
                 attempt: Default::default(),
@@ -456,6 +464,7 @@ impl SessionStartFeatureState {
             pending.tab_color = existing.tab_color;
             pending.locked = existing.locked;
             pending.tab_placement = existing.tab_placement;
+            pending.offer_serial_reconnect_selection = existing.offer_serial_reconnect_selection;
         }
         let reconnecting = pending.reconnect_session_id.is_some();
         self.pending.insert(request_id.clone(), pending);
@@ -506,7 +515,20 @@ impl SessionStartFeatureState {
             .and_then(|pending| pending.reconnect_session_id.clone());
         if let Some(session_id) = reconnect_session_id {
             if reconnect_session_exists {
-                self.reconnect_failures.insert(session_id, error);
+                let serial_config =
+                    pending
+                        .as_ref()
+                        .and_then(|pending| match pending.launch_config.as_ref()? {
+                            SessionLaunchConfig::Serial(config) => Some(config.clone()),
+                            _ => None,
+                        });
+                self.reconnect_failures.insert(
+                    session_id,
+                    ReconnectFailure {
+                        error,
+                        serial_config,
+                    },
+                );
             }
             return true;
         }
@@ -542,15 +564,47 @@ impl SessionStartFeatureState {
     }
 
     pub(in crate::features) fn reconnect_failure(&self, session_id: &str) -> Option<&str> {
-        self.reconnect_failures.get(session_id).map(String::as_str)
+        self.reconnect_failures
+            .get(session_id)
+            .map(|failure| failure.error.as_str())
+    }
+
+    pub(in crate::features) fn serial_reconnect_config(
+        &self,
+        session_id: &str,
+    ) -> Option<&nyaterm_transport::SerialSessionConfig> {
+        self.reconnect_failures
+            .get(session_id)?
+            .serial_config
+            .as_ref()
+    }
+
+    pub(in crate::features) fn allow_serial_reconnect_selection(&mut self, session_id: &str) {
+        if let Some(pending) = self.pending.values_mut().find(|pending| {
+            pending.kind == SessionKind::Serial
+                && pending.reconnect_session_id.as_deref() == Some(session_id)
+        }) {
+            pending.offer_serial_reconnect_selection = true;
+        }
     }
 
     pub(in crate::features) fn clear_reconnect_failure(&mut self, session_id: &str) {
         self.reconnect_failures.remove(session_id);
     }
 
-    pub(in crate::features) fn set_reconnect_failure(&mut self, session_id: String, error: String) {
-        self.reconnect_failures.insert(session_id, error);
+    pub(in crate::features) fn set_reconnect_failure(
+        &mut self,
+        session_id: String,
+        error: String,
+        serial_config: Option<nyaterm_transport::SerialSessionConfig>,
+    ) {
+        self.reconnect_failures.insert(
+            session_id,
+            ReconnectFailure {
+                error,
+                serial_config,
+            },
+        );
     }
 
     pub(in crate::features) fn record_reconnect_completion(

@@ -392,6 +392,9 @@ impl NyaTermApp {
         if editor.kind == ConnectionKindTab::Adb {
             self.prepare_android_tracker(cx);
         }
+        if editor.kind == ConnectionKindTab::Serial {
+            self.request_connection_serial_ports_refresh(cx);
+        }
         self.connection_state.begin_editor(editor);
         self.reconcile_open_editor_password_source();
         if self.security_secrets_locked() {

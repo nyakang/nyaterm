@@ -153,6 +153,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.settings.toggle_terminal_serial_reconnect_send_enter();
+        if !self.settings.summary().terminal_serial_reconnect_send_enter {
+            self.terminal.cancel_all_serial_reconnect_enters();
+        }
         self.save_terminal_settings(cx);
     }
 

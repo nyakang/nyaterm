@@ -2365,7 +2365,6 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn refresh_connection_auth_catalog(&mut self, cx: &mut Context<Self>) {
-        self.refresh_connection_serial_ports();
         self.submit_store_request(
             0,
             store_request(StoreDomain::Security, |store| {
@@ -2391,15 +2390,6 @@ impl NyaTermApp {
             },
             cx,
         );
-    }
-
-    pub(in crate::features) fn refresh_connection_serial_ports(&mut self) {
-        let ports = self
-            .session
-            .manager()
-            .list_serial_ports()
-            .unwrap_or_default();
-        self.connection_state.replace_serial_ports(ports);
     }
 
     pub(in crate::features) fn serial_ports_in_use(&self) -> std::collections::HashSet<String> {

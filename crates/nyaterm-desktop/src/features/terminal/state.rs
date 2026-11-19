@@ -87,6 +87,38 @@ pub(super) struct TerminalInputState {
     pub(super) focus_active: bool,
     pub(super) focus_subscriptions: Vec<Subscription>,
     pub(super) ime: TerminalImeState,
+    serial_reconnect_enters: HashMap<String, u64>,
+    next_serial_reconnect_enter: u64,
+}
+
+impl TerminalFeatureState {
+    pub(in crate::features) fn begin_serial_reconnect_enter(&mut self, session_id: String) -> u64 {
+        self.input.next_serial_reconnect_enter =
+            self.input.next_serial_reconnect_enter.wrapping_add(1);
+        let token = self.input.next_serial_reconnect_enter;
+        self.input.serial_reconnect_enters.insert(session_id, token);
+        token
+    }
+
+    pub(in crate::features) fn take_serial_reconnect_enter(
+        &mut self,
+        session_id: &str,
+        token: u64,
+    ) -> bool {
+        if self.input.serial_reconnect_enters.get(session_id) != Some(&token) {
+            return false;
+        }
+        self.input.serial_reconnect_enters.remove(session_id);
+        true
+    }
+
+    pub(in crate::features) fn cancel_serial_reconnect_enter(&mut self, session_id: &str) {
+        self.input.serial_reconnect_enters.remove(session_id);
+    }
+
+    pub(in crate::features) fn cancel_all_serial_reconnect_enters(&mut self) {
+        self.input.serial_reconnect_enters.clear();
+    }
 }
 
 /// Dedicated multi-line paste editor state backed by gpui-kit's editor.
@@ -436,6 +468,8 @@ impl TerminalFeatureState {
                 focus_active: false,
                 focus_subscriptions: Vec::new(),
                 ime: TerminalImeState::default(),
+                serial_reconnect_enters: HashMap::new(),
+                next_serial_reconnect_enter: 0,
             },
             paste: TerminalPasteReviewState::new(),
             assist: TerminalAssistState::new(),

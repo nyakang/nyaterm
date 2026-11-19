@@ -2806,6 +2806,7 @@
     "submit": "Continue"
   },
   "serialPrompt": {
+    "chooseDevice": "Choose device…",
     "alreadyOpen": "Finish the open serial prompt first.",
     "baudRateInvalid": "Baud rate must be between 1 and 4000000.",
     "baudRatePlaceholder": "115200",

@@ -353,6 +353,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.cancel_serial_reconnect_enter(session_id);
         // A tmux host closing takes its virtual pane sessions with it —
         self.android.close_view(session_id);
         // detached or not, they only exist as projections of this session.

@@ -2806,6 +2806,7 @@
     "submit": "続行"
   },
   "serialPrompt": {
+    "chooseDevice": "デバイスを選択…",
     "alreadyOpen": "開いているシリアル選択を先に完了してください。",
     "baudRateInvalid": "ボーレートは 1〜4000000 の範囲で指定してください。",
     "baudRatePlaceholder": "115200",
