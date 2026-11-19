@@ -38,6 +38,10 @@ pub(in crate::features::pages::transfers) fn sort_header_cell(
     let localized_label: SharedString = localized_label.into();
     let is_active = column == state.active_column;
     let is_resizing = state.resizing_column == Some(column);
+    let resize_id = SharedString::from(format!(
+        "transfer-browser-resize-{}",
+        browser_sort_column_label(column).to_lowercase()
+    ));
     let direction_icon = match state.direction {
         FileBrowserSortDirection::Ascending => "icons/fe/sort-ascending.svg",
         FileBrowserSortDirection::Descending => "icons/fe/sort-descending.svg",
@@ -97,23 +101,29 @@ pub(in crate::features::pages::transfers) fn sort_header_cell(
         })
         .child(
             div()
-                .id(SharedString::from(format!(
-                    "transfer-browser-resize-{}",
-                    browser_sort_column_label(column).to_lowercase()
-                )))
+                .id(resize_id.clone())
+                .group(resize_id.clone())
                 .absolute()
                 .right(px(-3.))
                 .top(px(4.))
                 .bottom(px(4.))
                 .w(px(7.))
-                .rounded_sm()
                 .cursor_col_resize()
-                .bg(if is_resizing {
-                    rgb(palette.success)
-                } else {
-                    rgb(0x1b2433)
-                })
-                .hover(|this| this.bg(rgb(palette.success)))
+                // Keep the grab area wide without painting it as a solid bar.
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(3.))
+                        .top_0()
+                        .bottom_0()
+                        .w(px(1.))
+                        .bg(if is_resizing {
+                            rgb(palette.primary)
+                        } else {
+                            rgba(0x00000000)
+                        })
+                        .group_hover(resize_id, |this| this.bg(rgb(palette.primary))),
+                )
                 .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                 }))
