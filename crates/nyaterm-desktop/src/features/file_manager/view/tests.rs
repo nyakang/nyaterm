@@ -65,6 +65,283 @@ fn wait_for_listings(cx: &mut VisualTestContext, workspace: &Entity<FileManagerW
     });
 }
 
+fn menu_fixture(name: &str, directory: bool) -> nyaterm_files::sftp::SftpFileEntry {
+    nyaterm_files::sftp::SftpFileEntry {
+        name: name.into(),
+        path: format!("/fixture/{name}"),
+        file_type: if directory {
+            nyaterm_files::sftp::SftpFileType::Directory
+        } else {
+            nyaterm_files::sftp::SftpFileType::File
+        },
+        size: Some(1),
+        permissions: None,
+        owner: String::new(),
+        group: String::new(),
+        modified_at: None,
+        raw_path_token: None,
+        symlink_target_is_directory: false,
+    }
+}
+
+#[gpui::test]
+fn context_menu_keeps_five_slots_and_disables_rename_and_properties_for_multiple_entries(
+    cx: &mut TestAppContext,
+) {
+    let root = TestTempDir::new("nyaterm-file-manager-menu");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-menu");
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    workspace.update(cx, |workspace, cx| {
+        let first = menu_fixture("first.txt", false);
+        let second = menu_fixture("second.txt", false);
+        let pane = workspace.pane_mut(PaneId::Left);
+        pane.entries = std::sync::Arc::new(vec![first.clone(), second.clone()]);
+        pane.selected_paths
+            .extend([first.identity_key(), second.identity_key()]);
+        let items = workspace.entry_menu(PaneId::Left, first, cx);
+        let commands = items[0].test_action_bar_items().expect("top action bar");
+        assert_eq!(commands.len(), 5);
+        assert_eq!(
+            commands
+                .iter()
+                .map(|item| item.test_label().to_string())
+                .collect::<Vec<_>>(),
+            [
+                rust_i18n::t!("menu.cut").to_string(),
+                rust_i18n::t!("menu.copy").to_string(),
+                rust_i18n::t!("menu.paste").to_string(),
+                rust_i18n::t!("fileExplorer.cmRename").to_string(),
+                rust_i18n::t!("fileExplorer.delete").to_string(),
+            ]
+        );
+        assert!(!commands[0].test_presentation().3);
+        assert!(!commands[1].test_presentation().3);
+        assert!(
+            commands[2].test_presentation().3,
+            "empty clipboard disables paste"
+        );
+        assert!(
+            commands[3].test_presentation().3,
+            "multiple selection disables rename"
+        );
+        assert!(
+            commands[4].test_presentation().5,
+            "delete keeps danger styling"
+        );
+        assert!(
+            items.last().unwrap().test_presentation().3,
+            "multiple selection disables properties"
+        );
+        let paths = items
+            .iter()
+            .find(|item| item.test_label() == rust_i18n::t!("fileExplorer.cmCopyPath"))
+            .unwrap();
+        assert_eq!(paths.children().unwrap().len(), 3);
+        for shortcut in ["Enter", "F3", "F4", "F5", "F6"] {
+            assert!(
+                items
+                    .iter()
+                    .any(|item| item.test_presentation().2.as_deref() == Some(shortcut))
+            );
+        }
+    });
+}
+
+#[gpui::test]
+fn directory_context_menu_only_offers_open_and_labels_the_opposite_pane(cx: &mut TestAppContext) {
+    let root = TestTempDir::new("nyaterm-file-manager-directory-menu");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-menu");
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    workspace.update(cx, |workspace, cx| {
+        let entry = menu_fixture("folder", true);
+        for pane in [PaneId::Left, PaneId::Right] {
+            workspace.pane_mut(pane).entries = std::sync::Arc::new(vec![entry.clone()]);
+            workspace.pane_mut(pane).select_entry(entry.identity_key());
+            let items = workspace.entry_menu(pane, entry.clone(), cx);
+            assert!(!items.last().unwrap().test_presentation().3);
+            assert!(
+                items.iter().all(|item| !matches!(
+                    item.test_presentation().2.as_deref(),
+                    Some("F3" | "F4")
+                ))
+            );
+            let side = rust_i18n::t!(if pane == PaneId::Left {
+                "fileManager.rightSide"
+            } else {
+                "fileManager.leftSide"
+            });
+            let expected = rust_i18n::t!(
+                "fileManager.copyToPane",
+                side = side.as_ref(),
+                target = rust_i18n::t!("fileManager.local").as_ref()
+            );
+            assert!(items.iter().any(|item| item.test_label() == expected));
+            workspace.pane_mut(pane).disconnected = true;
+            let items = workspace.entry_menu(pane, entry.clone(), cx);
+            assert!(
+                items[0]
+                    .test_action_bar_items()
+                    .unwrap()
+                    .iter()
+                    .all(|item| item.test_presentation().3)
+            );
+            workspace.pane_mut(pane).disconnected = false;
+        }
+    });
+}
+
+#[gpui::test]
+fn local_properties_load_from_the_captured_pane_without_changing_the_sidebar(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-properties");
+    let app = app_with_visible_ssh_session(cx, root.path(), "unrelated-ssh");
+    std::fs::write(root.path().join("properties.txt"), "property fixture").unwrap();
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    let entry = nyaterm_files::file_browser::FileBrowserService::local()
+        .list_dir(root.path().to_string_lossy())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.name == "properties.txt")
+        .unwrap();
+    workspace.update(cx, |workspace, _| {
+        workspace.left.entries = std::sync::Arc::new(vec![entry.clone()]);
+        workspace.left.select_entry(entry.identity_key());
+    });
+    cx.update(|cx| {
+        nyaterm_ui::init_components(cx);
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        );
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    let sidebar_path = cx.read(|cx| app.read(cx).transfer.browser_view().path.to_string());
+    cx.update(|window, cx| {
+        let selection = workspace.read(cx).selection(PaneId::Left);
+        app.update(cx, |app, cx| {
+            app.open_file_manager_properties(
+                "file-manager-reentrancy".into(),
+                PaneId::Left,
+                selection,
+                window,
+                cx,
+            )
+        });
+        workspace.update(cx, |workspace, _| workspace.active = PaneId::Right);
+    });
+    wait_for(cx, "local property load", |cx| {
+        app.read(cx)
+            .transfer
+            .properties_dialog()
+            .is_some_and(|state| state.properties.is_some() || state.error.is_some())
+    });
+    cx.read(|cx| {
+        let app = app.read(cx);
+        let state = app.transfer.properties_dialog().unwrap();
+        assert_eq!(state.entry.path, entry.path);
+        assert!(state.error.is_none(), "{:?}", state.error);
+        assert_eq!(state.properties.as_ref().unwrap().size, Some(16));
+        assert_eq!(app.transfer.browser_view().path, &sidebar_path);
+        assert_eq!(
+            app.transfer.properties_target().unwrap().endpoint,
+            PaneEndpoint::Local
+        );
+    });
+}
+
+#[gpui::test]
+fn reopening_properties_drops_the_previous_request_and_loading_errors_stay_in_the_dialog(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-properties-stale");
+    let app = app_with_visible_local_session(cx, root.path(), "properties-stale");
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    cx.update(|cx| {
+        nyaterm_ui::init_components(cx);
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        );
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    let selection = |name: &str| crate::features::file_manager::operations::FileManagerSelection {
+        endpoint: PaneEndpoint::Local,
+        directory: RemoteFilePath::new(root.path().to_string_lossy().into_owned()),
+        entries: vec![nyaterm_files::sftp::SftpFileEntry {
+            path: root.path().join(name).to_string_lossy().into_owned(),
+            ..menu_fixture(name, false)
+        }],
+    };
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_file_manager_properties(
+                "file-manager-reentrancy".into(),
+                PaneId::Left,
+                selection("first-missing"),
+                window,
+                cx,
+            );
+            let previous = app.transfer.properties_target().unwrap().request_id.clone();
+            app.open_file_manager_properties(
+                "file-manager-reentrancy".into(),
+                PaneId::Right,
+                selection("second-missing"),
+                window,
+                cx,
+            );
+            assert_ne!(
+                app.transfer.properties_target().unwrap().request_id,
+                previous
+            );
+        });
+    });
+    wait_for(cx, "property load failure", |cx| {
+        app.read(cx)
+            .transfer
+            .properties_dialog()
+            .is_some_and(|state| state.error.is_some())
+    });
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            app.transfer.properties_dialog().unwrap().entry.name,
+            "second-missing"
+        );
+        assert!(
+            app.transfer
+                .properties_dialog()
+                .unwrap()
+                .properties
+                .is_none()
+        );
+        assert!(app.transfer.properties_dialog().unwrap().error.is_some());
+        assert_eq!(
+            app.transfer.properties_target().unwrap().pane,
+            PaneId::Right
+        );
+        assert_eq!(workspace.read(cx).active, PaneId::Left);
+    });
+}
+
 #[gpui::test]
 fn opening_an_sftp_session_loads_the_local_pane_without_a_manual_refresh(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -253,6 +530,86 @@ fn draw_file_manager(cx: &mut VisualTestContext) {
             let _ = window.draw(cx);
         });
     }
+}
+
+#[gpui::test]
+fn context_action_bar_copy_keeps_the_original_selection_after_focus_changes(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton};
+    let root = TestTempDir::new("nyaterm-file-manager-menu-copy");
+    std::fs::create_dir_all(root.join("files")).unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        std::fs::write(root.join("files").join(name), b"fixture").unwrap();
+    }
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    cx.update(|cx| {
+        nyaterm_ui::init_components(cx);
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        );
+    });
+    let workspace = workspace(cx, &app, &root.join("files").to_string_lossy());
+    let entries = nyaterm_files::file_browser::FileBrowserService::local()
+        .list_dir(root.join("files").to_string_lossy())
+        .unwrap();
+    workspace.update(cx, |workspace, _| {
+        workspace.left.entries = std::sync::Arc::new(entries.clone());
+        workspace.left.selected_paths.extend(
+            entries
+                .iter()
+                .filter(|entry| entry.name != "gamma")
+                .map(|entry| entry.identity_key()),
+        );
+        workspace.right.entries = std::sync::Arc::new(entries.clone());
+        workspace.right.select_entry(
+            entries
+                .iter()
+                .find(|entry| entry.name == "gamma")
+                .unwrap()
+                .identity_key(),
+        );
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    let row = cx.debug_bounds("file-manager-row-left-alpha").unwrap();
+    cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
+    draw_file_manager(cx);
+    workspace.update(cx, |workspace, _| {
+        workspace.active = PaneId::Right;
+        workspace.left.clear_selection();
+    });
+    cx.update(|window, cx| {
+        window.focus_next(cx);
+        window.focus_next(cx);
+    });
+    cx.simulate_keystrokes("enter");
+    draw_file_manager(cx);
+    cx.read(|cx| {
+        let clipboard = app
+            .read(cx)
+            .transfer
+            .file_clipboard()
+            .expect("copy command publishes files");
+        assert!(!clipboard.cut);
+        assert_eq!(
+            clipboard
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "beta"]
+        );
+    });
 }
 
 #[gpui::test]

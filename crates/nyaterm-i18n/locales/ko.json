@@ -1649,6 +1649,14 @@
     "uploadPrompt": "원격 파일이 변경되었습니다. 변경 사항을 업로드할까요?"
   },
   "fileManager": {
+    "leftSide": "왼쪽",
+    "rightSide": "오른쪽",
+    "copyToPane": "%{side}(으)로 복사 (%{target})",
+    "moveToPane": "%{side}(으)로 이동 (%{target})",
+    "new": "새로 만들기",
+    "copyFullPath": "전체 경로 복사",
+    "copyName": "파일 이름 복사",
+    "copyParent": "상위 디렉터리 복사",
     "connected": "연결됨",
     "skipped": "건너뜀",
     "copy": "복사",

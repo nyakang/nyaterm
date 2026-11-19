@@ -322,6 +322,21 @@ impl NyaMenuItem {
     }
 
     #[doc(hidden)]
+    pub fn test_action_bar_items(&self) -> Option<&[NyaMenuItem]> {
+        match &self.kind {
+            NyaMenuItemKind::ActionBar(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    fn action_bar_tooltip(&self) -> SharedString {
+        match &self.shortcut {
+            Some(shortcut) => format!("{} {shortcut}", self.label).into(),
+            None => self.label.clone(),
+        }
+    }
+
+    #[doc(hidden)]
     pub fn test_icon_color(&self) -> Option<u32> {
         self.icon_color
     }
@@ -385,7 +400,7 @@ impl NyaMenuItem {
                                 .ghost()
                                 .compact()
                                 .accessibility_label(label.clone())
-                                .tooltip(label.clone())
+                                .tooltip(item.action_bar_tooltip())
                                 .disabled(item.disabled)
                                 .flex_1()
                                 .min_w_0()
@@ -1161,6 +1176,17 @@ mod tests {
         assert!(items[2].disabled);
         assert!(items[4].danger);
         assert!(bar.is_action_bar());
+    }
+
+    #[test]
+    fn action_bar_shortcuts_only_extend_the_tooltip() {
+        let copy = NyaMenuItem::action("Copy").shortcut("Ctrl+C");
+        assert_eq!(copy.label.as_ref(), "Copy");
+        assert_eq!(copy.action_bar_tooltip().as_ref(), "Copy Ctrl+C");
+        assert_eq!(
+            NyaMenuItem::action("Copy").action_bar_tooltip().as_ref(),
+            "Copy"
+        );
     }
 
     #[test]

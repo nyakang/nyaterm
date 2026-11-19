@@ -14,7 +14,10 @@ use nyaterm_files::sftp::RemoteFilePath;
 use rust_i18n::t;
 
 impl NyaTermApp {
-    fn file_browser_backend_for_endpoint(&self, endpoint: &PaneEndpoint) -> FileBrowserBackendKind {
+    pub(in crate::features) fn file_browser_backend_for_endpoint(
+        &self,
+        endpoint: &PaneEndpoint,
+    ) -> FileBrowserBackendKind {
         match endpoint {
             PaneEndpoint::Session(id) => self
                 .session

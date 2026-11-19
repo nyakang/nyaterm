@@ -1649,6 +1649,14 @@
     "uploadPrompt": "遠端檔案已修改，是否上傳變更？"
   },
   "fileManager": {
+    "leftSide": "左側",
+    "rightSide": "右側",
+    "copyToPane": "複製到%{side}（%{target}）",
+    "moveToPane": "移動到%{side}（%{target}）",
+    "new": "新增",
+    "copyFullPath": "複製完整路徑",
+    "copyName": "複製檔案名稱",
+    "copyParent": "複製所在目錄",
     "connected": "已連線",
     "skipped": "已略過",
     "copy": "複製",

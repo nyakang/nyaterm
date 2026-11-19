@@ -1649,6 +1649,14 @@
     "uploadPrompt": "远程文件已修改，是否上传更改？"
   },
   "fileManager": {
+    "leftSide": "左侧",
+    "rightSide": "右侧",
+    "copyToPane": "复制到%{side}（%{target}）",
+    "moveToPane": "移动到%{side}（%{target}）",
+    "new": "新建",
+    "copyFullPath": "复制完整路径",
+    "copyName": "复制文件名",
+    "copyParent": "复制所在目录",
     "connected": "已连接",
     "skipped": "已跳过",
     "copy": "复制",

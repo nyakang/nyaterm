@@ -1,4 +1,5 @@
 mod interaction;
+mod menu;
 mod navigation;
 mod path_navigation;
 mod queue;

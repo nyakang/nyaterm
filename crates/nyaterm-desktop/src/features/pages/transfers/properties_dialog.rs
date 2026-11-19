@@ -23,11 +23,26 @@ impl NyaTermApp {
         let entry = state.entry.clone();
         let properties = state.properties.clone();
         let loading = properties.is_none();
-        let editable = state
-            .session_id
-            .as_deref()
-            .and_then(|session_id| self.session.file_browser_backend_for_session(session_id))
-            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
+        let manager_properties = self.transfer.properties_target().is_some();
+        let location = self
+            .transfer
+            .properties_target()
+            .map(|target| {
+                nyaterm_files::file_browser::file_browser_parent(
+                    self.file_browser_backend_for_endpoint(&target.endpoint),
+                    &entry.path,
+                )
+            })
+            .unwrap_or_else(|| remote_parent_path(&entry.path));
+        let editable =
+            if let Some(target) = self.transfer.properties_target() {
+                self.file_browser_backend_for_endpoint(&target.endpoint)
+                    == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+            } else {
+                state.session_id.as_deref().and_then(|session_id| {
+                    self.session.file_browser_backend_for_session(session_id)
+                }) == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Remote)
+            };
         let property_mode = parse_transfer_mode(&state.mode_value)
             .or(entry.permissions)
             .unwrap_or(0o644);
@@ -75,12 +90,19 @@ impl NyaTermApp {
             .p(px(3.))
             .overflow_y_scrollbar()
             .when_some(properties, |this, properties| {
-                this.child(properties_summary(palette, &state, &properties))
-                    .when(symlink, |this| {
+                this.child(properties_summary(palette, &state, &properties, location))
+                    .when(symlink && (!manager_properties || editable), |this| {
                         this.child(property_input(
                             palette,
                             t!("fileExplorer.symlinkTarget"),
                             link_input,
+                        ))
+                    })
+                    .when(symlink && manager_properties && !editable, |this| {
+                        this.child(property_row(
+                            palette,
+                            t!("fileExplorer.symlinkTarget"),
+                            state.symlink_target_value.clone(),
                         ))
                     })
                     .when(editable, |this| {
@@ -100,6 +122,7 @@ impl NyaTermApp {
                         div()
                             .flex()
                             .when(symlink, |this| this.hidden())
+                            .when(manager_properties && !editable, |this| this.hidden())
                             .flex_col()
                             .gap_3()
                             .child(property_input(
@@ -192,6 +215,7 @@ fn properties_summary(
     palette: ThemePalette,
     state: &TransferPropertiesState,
     properties: &SftpFileProperties,
+    location: String,
 ) -> impl IntoElement {
     let entry = &state.entry;
     let entry_type_label = match entry.file_type {
@@ -218,7 +242,7 @@ fn properties_summary(
                 .child(property_row(
                     palette,
                     t!("fileExplorer.location"),
-                    truncate_preview(&remote_parent_path(&entry.path), 76),
+                    truncate_preview(&location, 76),
                 ))
                 .child(property_row(
                     palette,

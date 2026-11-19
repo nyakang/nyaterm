@@ -23,6 +23,7 @@ mod preview;
 pub(in crate::features) use self::preview::{PdfPageRequest, TransferPreviewCloseOutcome};
 
 use super::external_sync_runtime::ExternalEditorWatcher;
+use crate::features::file_manager::properties::FileManagerPropertiesTarget;
 use crate::models::{
     TransferBrowserColumnResizeState, TransferBrowserColumnWidths, TransferBrowserContextTarget,
     TransferBrowserDragSelectionState, TransferBrowserFavoritesMenuState,
@@ -229,6 +230,7 @@ struct TransferFileOpsState {
     new_file: Option<TransferNewFileState>,
     new_symlink: Option<TransferNewSymlinkState>,
     properties: Option<TransferPropertiesState>,
+    properties_target: Option<FileManagerPropertiesTarget>,
     unknown_file: Option<TransferUnknownFileState>,
 }
 
@@ -1065,11 +1067,24 @@ impl TransferFeatureState {
     }
 
     pub(in crate::features) fn open_properties_dialog(&mut self, state: TransferPropertiesState) {
+        self.file_ops.properties_target = None;
         self.file_ops.properties = Some(state);
+    }
+
+    pub(in crate::features) fn properties_target(&self) -> Option<&FileManagerPropertiesTarget> {
+        self.file_ops.properties_target.as_ref()
+    }
+
+    pub(in crate::features) fn set_properties_target(
+        &mut self,
+        target: FileManagerPropertiesTarget,
+    ) {
+        self.file_ops.properties_target = Some(target);
     }
 
     pub(in crate::features) fn close_properties_dialog(&mut self) {
         self.file_ops.properties = None;
+        self.file_ops.properties_target = None;
     }
 
     pub(in crate::features) fn close_properties_dialog_for_session(
@@ -1079,7 +1094,7 @@ impl TransferFeatureState {
         if !self.file_ops.properties_matches(Some(session_id), None) {
             return false;
         }
-        self.file_ops.properties = None;
+        self.close_properties_dialog();
         true
     }
 
@@ -1560,6 +1575,7 @@ impl TransferFileOpsState {
             new_file: None,
             new_symlink: None,
             properties: None,
+            properties_target: None,
             unknown_file: None,
         }
     }
@@ -1613,6 +1629,9 @@ impl TransferFileOpsState {
         session_id: Option<&str>,
         remote_path: &str,
     ) -> Option<&mut TransferPropertiesState> {
+        if self.properties_target.is_some() {
+            return None;
+        }
         self.properties.as_mut().filter(|state| {
             state.session_id.as_deref() == session_id && state.entry.path == remote_path
         })

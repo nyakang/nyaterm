@@ -1649,6 +1649,14 @@
     "uploadPrompt": "Remote file changed. Upload changes?"
   },
   "fileManager": {
+    "leftSide": "left",
+    "rightSide": "right",
+    "copyToPane": "Copy to %{side} (%{target})",
+    "moveToPane": "Move to %{side} (%{target})",
+    "new": "New",
+    "copyFullPath": "Copy Full Path",
+    "copyName": "Copy File Name",
+    "copyParent": "Copy Parent Directory",
     "connected": "Connected",
     "skipped": "Skipped",
     "copy": "Copy",

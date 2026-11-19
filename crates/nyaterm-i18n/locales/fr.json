@@ -1649,6 +1649,14 @@
     "uploadPrompt": "Fichier distant modifié. Téléverser les modifications ?"
   },
   "fileManager": {
+    "leftSide": "la gauche",
+    "rightSide": "la droite",
+    "copyToPane": "Copier vers %{side} (%{target})",
+    "moveToPane": "Déplacer vers %{side} (%{target})",
+    "new": "Nouveau",
+    "copyFullPath": "Copier le chemin complet",
+    "copyName": "Copier le nom du fichier",
+    "copyParent": "Copier le dossier parent",
     "connected": "Connecté",
     "skipped": "Ignoré",
     "copy": "Copier",

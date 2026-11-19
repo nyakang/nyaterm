@@ -1649,6 +1649,14 @@
     "uploadPrompt": "リモートファイルが変更されました。変更をアップロードしますか？"
   },
   "fileManager": {
+    "leftSide": "左側",
+    "rightSide": "右側",
+    "copyToPane": "%{side}にコピー（%{target}）",
+    "moveToPane": "%{side}に移動（%{target}）",
+    "new": "新規作成",
+    "copyFullPath": "フルパスをコピー",
+    "copyName": "ファイル名をコピー",
+    "copyParent": "親ディレクトリをコピー",
     "connected": "接続済み",
     "skipped": "スキップ済み",
     "copy": "コピー",
