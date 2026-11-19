@@ -702,7 +702,7 @@ fn a_successful_serial_reconnect_elicits_the_prompt_with_one_enter() {
     let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
     let mut cx = hosted(&mut cx, &app);
     let mut backend_id = String::new();
-    cx.update(|window, cx| {
+    cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             let config = nyaterm_transport::SerialSessionConfig {
                 port_name: path.clone(),
