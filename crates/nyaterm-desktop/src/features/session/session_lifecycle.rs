@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::{Context, Window};
-use nyaterm_core::ConnectionType;
+use nyaterm_core::{ConnectionType, SerialConnectPrompt};
 
 use crate::features::formatting::short_id;
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
@@ -404,6 +404,23 @@ impl NyaTermApp {
         self.reconnect_session_with_serial_selection(session_id, None, window, cx);
     }
 
+    /// The devices the OS offers right now, or the fixture's answer in tests.
+    ///
+    /// Enumeration never opens a port, so it cannot disturb a board that is
+    /// mid-replug; it only tells us whether the name still exists.
+    fn enumerated_serial_ports(&self) -> Vec<nyaterm_transport::SerialPortInfo> {
+        #[cfg(test)]
+        {
+            if let Some(ports) = &self.test_serial_ports {
+                return ports.clone();
+            }
+        }
+        self.session
+            .manager()
+            .list_serial_ports()
+            .unwrap_or_default()
+    }
+
     pub(in crate::features) fn reconnect_session_with_serial_selection(
         &mut self,
         session_id: String,
@@ -474,43 +491,61 @@ impl NyaTermApp {
             self.retry_rdp_runtime(&session_id, cx);
             return;
         }
-        if let Some(connection) = saved.as_ref()
-            && let ConnectionType::Serial {
-                connect_prompt,
-                port_name,
-                baud_rate,
-                ..
-            } = &connection.config
+        // A reconnect reuses the device the session already had open: the answer
+        // to the connect prompt belonged to that session, so asking again would
+        // stand between a replugged board and the tab that just lost it. An
+        // explicit selection still wins, which is how a retry on another device
+        // gets in.
+        // Whether the device came from this call (a retry on another device) or
+        // from the session itself. Only the latter is worth probing.
+        let reuses_saved_device = serial_selection.is_none();
+        let serial_selection = serial_selection.or_else(|| match &metadata.launch_config {
+            SessionLaunchConfig::Serial(config) => Some(SerialConnectSelection {
+                port_name: config.port_name.clone(),
+                baud_rate: config.baud_rate,
+            }),
+            _ => None,
+        });
+        // A board that came back under another name (or a dead driver that took
+        // its port with it) cannot be reopened: the direct attempt would fail
+        // with nowhere to say where the device went. When the session's device
+        // is no longer enumerated, let the prompt answer that, prefilled with
+        // what the session actually opened rather than the saved hint.
+        if reuses_saved_device
+            && let (Some(selection), Some(connection)) = (serial_selection.as_ref(), saved.as_ref())
+            && let ConnectionType::Serial { .. } = &connection.config
         {
-            if connect_prompt.asks_anything() && serial_selection.is_none() {
+            let ports = self.enumerated_serial_ports();
+            if !ports
+                .iter()
+                .any(|port| port.port_name == selection.port_name.trim())
+            {
+                self.connection_state.replace_serial_ports(ports);
                 self.open_serial_connect_prompt(
                     connection.clone(),
-                    SerialConnectContinuation::Reconnect { session_id },
-                    *connect_prompt,
-                    port_name.clone(),
-                    *baud_rate,
+                    SerialConnectContinuation::Reconnect {
+                        session_id: session_id.clone(),
+                    },
+                    // Both fields: the session's own answer pre-fills each one,
+                    // so confirming as-is reconnects exactly what was open, and
+                    // a dead driver that also mangled the rate can be corrected
+                    // too.
+                    SerialConnectPrompt {
+                        port: true,
+                        baud_rate: true,
+                    },
+                    selection.port_name.clone(),
+                    selection.baud_rate,
                     cx,
                 );
                 return;
             }
-            let selected_port = serial_selection
-                .as_ref()
-                .map_or(port_name.as_str(), |selection| selection.port_name.as_str());
-            if self
-                .session
-                .serial_ports_in_use(Some(&session_id), None)
-                .contains(selected_port.trim())
-            {
-                self.shell
-                    .set_status(rust_i18n::t!("dialog.serialPortInUse"));
-                cx.notify();
-                return;
-            }
-        } else if let SessionLaunchConfig::Serial(config) = &metadata.launch_config
+        }
+        if let Some(selection) = serial_selection.as_ref()
             && self
                 .session
                 .serial_ports_in_use(Some(&session_id), None)
-                .contains(config.port_name.trim())
+                .contains(selection.port_name.trim())
         {
             self.shell
                 .set_status(rust_i18n::t!("dialog.serialPortInUse"));

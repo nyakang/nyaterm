@@ -6,6 +6,7 @@ use gpui::{
     Window, div,
 };
 use nyaterm_core::{ConnectionType, SavedConnection};
+use nyaterm_transport::SessionEvent;
 use nyaterm_ui::{NyaDialogWindowExt as _, nya_root};
 
 use crate::features::NyaTermApp;
@@ -420,6 +421,9 @@ fn picking_a_listed_device_leaves_the_custom_field_behind() {
     });
 }
 
+/// A saved connection that asks at connect, and a session that opened a
+/// different device and rate than the saved hint: what the session answered is
+/// the one a reconnect has to reuse.
 fn prepare_serial_reconnect(app: &mut NyaTermApp) {
     let connection = serial(
         "COM7",
@@ -428,21 +432,30 @@ fn prepare_serial_reconnect(app: &mut NyaTermApp) {
     );
     let metadata = app.session.metadata_mut("existing").unwrap();
     metadata.launch_config = SessionLaunchConfig::Serial(nyaterm_transport::SerialSessionConfig {
-        port_name: "COM7".into(),
+        port_name: "COM9".into(),
+        baud_rate: 57600,
         ..Default::default()
     });
     metadata.source_connection_id = Some(connection.id.clone());
     app.connection_state
         .replace_loaded(vec![connection], vec![]);
+    // The probe finds COM9 alive, so the reconnect stays a direct one.
+    app.test_serial_ports = Some(vec![nyaterm_transport::SerialPortInfo {
+        port_name: "COM9".into(),
+        ..Default::default()
+    }]);
     app.session
         .set_custom_name("existing".into(), "My board".into());
     app.session.set_tab_color("existing", Some(0x123456));
     app.session.set_tab_locked("existing", true);
 }
 
+/// A board that came back under another name cannot be reopened blindly: the
+/// reconnect probes the enumeration and, finding the old device gone, asks
+/// where it went, prefilled with what the session actually had open.
 #[test]
-fn cancelling_serial_reconnect_preserves_the_live_session_and_selection() {
-    let root = TestConfigDir::new("nyaterm-serial-reconnect-cancel");
+fn a_reconnect_whose_device_vanished_asks_where_the_board_went() {
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-device-gone");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
@@ -450,38 +463,55 @@ fn cancelling_serial_reconnect_preserves_the_live_session_and_selection() {
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             prepare_serial_reconnect(app);
+            // The session's COM9 is gone; only COM7 is enumerated now.
+            app.test_serial_ports = Some(vec![nyaterm_transport::SerialPortInfo {
+                port_name: "COM7".into(),
+                ..Default::default()
+            }]);
             app.reconnect_session("existing".into(), window, cx);
-            app.reconnect_session("existing".into(), window, cx);
-            assert!(!app.session.metadata("existing").unwrap().disconnected);
-            assert!(!app.session.session_is_busy("existing"));
+            // No direct attempt: the prompt stands in for it.
             assert_eq!(app.session.start.pending_count(), 0);
+            let state = app.session.dialogs.serial_connect_prompt().unwrap();
+            // Prefilled with the session's own answer, not the saved hint.
+            assert_eq!(state.port_name, "COM9");
+            assert_eq!(state.baud_rate, "57600");
+            // COM9 is not enumerated, so the free-text field is on screen.
+            assert!(state.custom_port);
+            assert_eq!(state.continuation.reconnect_session_id(), Some("existing"));
+
+            // The board came back on COM7.
+            app.select_serial_prompt_port("COM7".into(), cx);
+            assert!(app.submit_serial_connect_prompt(window, cx));
         })
     });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.apply_serial_prompt_baud_rate("0".into(), cx);
-            assert!(!app.submit_serial_connect_prompt(window, cx));
-            assert!(!app.session.metadata("existing").unwrap().disconnected);
-            assert_eq!(app.session.start.pending_count(), 0);
-        })
-    });
-    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     app.read_with(&cx, |app, _| {
         assert!(app.session.dialogs.serial_connect_prompt().is_none());
-        assert!(!app.session.metadata("existing").unwrap().disconnected);
-        assert_eq!(app.session.active_id(), Some("existing"));
-        assert_eq!(app.session.custom_name("existing"), Some("My board"));
-        assert_eq!(app.session.tab_color("existing"), Some(0x123456));
-        assert!(app.session.tab_is_locked("existing"));
-        assert_eq!(app.session.start.pending_count(), 0);
+        assert_eq!(app.session.start.pending_count(), 1);
+        let pending = app.session.start.pending_entries().next().unwrap().1;
+        let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+            panic!("expected serial");
+        };
+        assert_eq!(config.port_name, "COM7");
+        // The rate the session had open, not the saved hint's 115200.
+        assert_eq!(config.baud_rate, 57600);
+        assert_eq!(pending.reconnect_session_id.as_deref(), Some("existing"));
+        assert_eq!(pending.custom_name.as_deref(), Some("My board"));
+        // The saved connection keeps its own hint untouched.
+        let ConnectionType::Serial { baud_rate, .. } =
+            &app.connection_state.connections()[0].config
+        else {
+            panic!("expected serial");
+        };
+        assert_eq!(*baud_rate, 115200);
     });
 }
 
+/// The device a session opened is the only answer a reconnect needs, so a board
+/// that came back after a replug returns on Enter rather than behind a dialog.
 #[test]
-fn confirming_serial_reconnect_reuses_its_port_and_preserves_tab_properties() {
-    let root = TestConfigDir::new("nyaterm-serial-reconnect-submit");
+fn reconnecting_a_serial_session_reuses_the_device_it_opened() {
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-reuses-device");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
@@ -490,26 +520,23 @@ fn confirming_serial_reconnect_reuses_its_port_and_preserves_tab_properties() {
         app.update(cx, |app, cx| {
             prepare_serial_reconnect(app);
             app.reconnect_session("existing".into(), window, cx);
-        })
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.apply_serial_prompt_baud_rate("57600".into(), cx);
-            assert!(app.submit_serial_connect_prompt(window, cx));
-            assert!(app.submit_serial_connect_prompt(window, cx));
+            assert!(!window.has_active_nya_dialog(cx));
+            assert!(app.session.dialogs.serial_connect_prompt().is_none());
             assert!(app.session.metadata("existing").unwrap().disconnected);
             assert_eq!(app.session.start.pending_count(), 1);
             let pending = app.session.start.pending_entries().next().unwrap().1;
             let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
                 panic!("expected serial");
             };
-            assert_eq!(config.port_name, "COM7");
+            // The session's answer, not the saved hint (COM7 @ 115200).
+            assert_eq!(config.port_name, "COM9");
             assert_eq!(config.baud_rate, 57600);
             assert_eq!(pending.reconnect_session_id.as_deref(), Some("existing"));
             assert_eq!(pending.custom_name.as_deref(), Some("My board"));
             assert_eq!(pending.tab_color, Some(0x123456));
             assert!(pending.locked);
+            // The saved connection keeps its hint: the selection is for this
+            // start only.
             let ConnectionType::Serial {
                 port_name,
                 baud_rate,
@@ -524,6 +551,165 @@ fn confirming_serial_reconnect_reuses_its_port_and_preserves_tab_properties() {
     });
 }
 
+/// When a serial transport dies (unplugged board, dead driver) it now reports
+/// the exit, so the tab shows the disconnect banner and Enter brings the board
+/// back on the device it opened.
+#[test]
+fn a_serial_session_that_exits_offers_enter_to_reconnect() {
+    let root = TestConfigDir::new("nyaterm-serial-exited-reconnect");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            prepare_serial_reconnect(app);
+            app.session.extend_pending_events([SessionEvent::Exited {
+                session_id: "existing".into(),
+                reason: "serial read failed: device gone".into(),
+            }]);
+            app.drain_session_events(cx);
+            let output = app.terminal.session_output("existing").unwrap();
+            assert_eq!(output.matches("[Session disconnected]").count(), 1);
+            assert_eq!(output.matches("[Press Enter to reconnect]").count(), 1);
+            assert!(app.session.metadata("existing").unwrap().disconnected);
+
+            // Enter on the disconnected tab is this exact call.
+            app.reconnect_session("existing".into(), window, cx);
+            assert_eq!(app.session.start.pending_count(), 1);
+            let pending = app.session.start.pending_entries().next().unwrap().1;
+            let Some(SessionLaunchConfig::Serial(config)) = &pending.launch_config else {
+                panic!("expected serial");
+            };
+            assert_eq!(config.port_name, "COM9");
+            assert_eq!(config.baud_rate, 57600);
+            assert_eq!(pending.reconnect_session_id.as_deref(), Some("existing"));
+        })
+    });
+}
+
+/// A device another tab already holds stays refused: reconnecting must not
+/// close a working session to collide with a port it cannot open.
+#[test]
+fn reconnecting_onto_a_device_another_session_holds_is_refused() {
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-port-in-use");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            prepare_serial_reconnect(app);
+            let mut other = app.session.metadata("existing").unwrap().clone();
+            other.launch_config =
+                SessionLaunchConfig::Serial(nyaterm_transport::SerialSessionConfig {
+                    port_name: "COM9".into(),
+                    ..Default::default()
+                });
+            app.session.register_session_metadata("other", other);
+            app.reconnect_session("existing".into(), window, cx);
+            assert!(!app.session.metadata("existing").unwrap().disconnected);
+            assert_eq!(app.session.start.pending_count(), 0);
+            assert_eq!(
+                app.shell.status(),
+                rust_i18n::t!("dialog.serialPortInUse").as_ref()
+            );
+        })
+    });
+}
+
+#[test]
+/// Serial consoles say nothing until they are spoken to, so a successful
+/// reconnect sends one Enter to bring the prompt straight back.
+#[cfg(unix)]
+#[test]
+fn a_successful_serial_reconnect_elicits_the_prompt_with_one_enter() {
+    use std::ffi::CStr;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::time::Duration;
+
+    let mut master = -1;
+    let mut slave = -1;
+    let mut name = [0 as libc::c_char; 128];
+    // openpty writes two owned descriptors and a NUL-terminated slave path.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                name.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+    let _master = unsafe { OwnedFd::from_raw_fd(master) };
+    let _slave = unsafe { OwnedFd::from_raw_fd(slave) };
+    let path = unsafe { CStr::from_ptr(name.as_ptr()) }
+        .to_str()
+        .unwrap()
+        .to_string();
+    let root = TestConfigDir::new("nyaterm-serial-reconnect-enter");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    let mut cx = hosted(&mut cx, &app);
+    let mut backend_id = String::new();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let config = nyaterm_transport::SerialSessionConfig {
+                port_name: path.clone(),
+                // serialport uses zero to skip IOSSIOSPEED, which macOS PTYs
+                // reject with ENOTTY. The fixture has no physical baud rate.
+                #[cfg(target_os = "macos")]
+                baud_rate: 0,
+                ..Default::default()
+            };
+            backend_id = app
+                .session
+                .manager()
+                .create_serial_session(config.clone())
+                .unwrap()
+                .id;
+            let mut metadata = app.session.metadata("existing").unwrap().clone();
+            metadata.launch_config = SessionLaunchConfig::Serial(config);
+            app.session.register_session_metadata(&backend_id, metadata);
+            app.session.select_active_session(&backend_id);
+            app.terminal
+                .seed_session_view(backend_id.clone(), "device> ".into(), "UTF-8");
+            app.schedule_serial_reconnect_enter(backend_id.clone(), cx);
+        })
+    });
+    cx.executor().advance_clock(Duration::from_millis(400));
+    cx.run_until_parked();
+
+    // One Enter, nothing else: the device answers with its prompt.
+    unsafe {
+        libc::fcntl(
+            master,
+            libc::F_SETFL,
+            libc::fcntl(master, libc::F_GETFL) | libc::O_NONBLOCK,
+        );
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 16];
+    while !bytes.contains(&b'\r') {
+        let read = unsafe { libc::read(master, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if read > 0 {
+            bytes.extend_from_slice(&buffer[..read as usize]);
+            continue;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no enter reached the device"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(bytes, vec![b'\r']);
+}
+
 #[test]
 fn serial_reconnect_rechecks_a_deleted_or_changed_saved_connection_before_closing() {
     for deleted in [true, false] {
@@ -535,12 +721,6 @@ fn serial_reconnect_rechecks_a_deleted_or_changed_saved_connection_before_closin
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
                 prepare_serial_reconnect(app);
-                app.reconnect_session("existing".into(), window, cx);
-            })
-        });
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            app.update(cx, |app, cx| {
                 let connections = if deleted {
                     vec![]
                 } else {
@@ -552,7 +732,7 @@ fn serial_reconnect_rechecks_a_deleted_or_changed_saved_connection_before_closin
                     ]
                 };
                 app.connection_state.replace_loaded(connections, vec![]);
-                assert!(app.submit_serial_connect_prompt(window, cx));
+                app.reconnect_session("existing".into(), window, cx);
                 assert!(!app.session.metadata("existing").unwrap().disconnected);
                 assert_eq!(app.session.start.pending_count(), 0);
                 assert!(!app.session.session_is_busy("existing"));
@@ -801,93 +981,8 @@ fn slow_serial_discovery_allows_editing_and_cancel_without_duplicate_enumeration
     }
 }
 
-#[cfg(unix)]
 #[test]
-fn cancelling_serial_reconnect_keeps_the_actual_serial_backend_open() {
-    use std::ffi::CStr;
-    use std::os::fd::{FromRawFd, OwnedFd};
-
-    let mut master = -1;
-    let mut slave = -1;
-    let mut name = [0 as libc::c_char; 128];
-    // openpty writes two owned descriptors and a NUL-terminated slave path.
-    assert_eq!(
-        unsafe {
-            libc::openpty(
-                &mut master,
-                &mut slave,
-                name.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        },
-        0
-    );
-    // Both descriptors were returned successfully and are owned by this test.
-    let _master = unsafe { OwnedFd::from_raw_fd(master) };
-    let _slave = unsafe { OwnedFd::from_raw_fd(slave) };
-    let path = unsafe { CStr::from_ptr(name.as_ptr()) }
-        .to_str()
-        .unwrap()
-        .to_string();
-    let root = TestConfigDir::new("nyaterm-serial-live-reconnect-cancel");
-    let mut cx = TestAppContext::single();
-    let _cleanup = TestAppCleanup::new(&cx);
-    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
-    let mut cx = hosted(&mut cx, &app);
-    let mut backend_id = String::new();
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            let config = nyaterm_transport::SerialSessionConfig {
-                port_name: path.clone(),
-                // serialport uses zero to skip IOSSIOSPEED, which macOS PTYs
-                // reject with ENOTTY. The fixture has no physical baud rate.
-                #[cfg(target_os = "macos")]
-                baud_rate: 0,
-                ..Default::default()
-            };
-            backend_id = app
-                .session
-                .manager()
-                .create_serial_session(config.clone())
-                .unwrap()
-                .id;
-            let mut metadata = app.session.metadata("existing").unwrap().clone();
-            metadata.launch_config = SessionLaunchConfig::Serial(config);
-            metadata.source_connection_id = Some("board".into());
-            app.session.register_session_metadata(&backend_id, metadata);
-            app.session.select_active_session(&backend_id);
-            app.terminal
-                .seed_session_view(backend_id.clone(), "device> ".into(), "UTF-8");
-            app.connection_state.replace_loaded(
-                vec![serial(&path, 115200, serde_json::json!({"port": true}))],
-                vec![],
-            );
-            app.reconnect_session(backend_id.clone(), window, cx);
-            assert_eq!(app.terminal.session_output(&backend_id), Some("device> "));
-        })
-    });
-    cx.run_until_parked();
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    app.read_with(&cx, |app, _| {
-        assert!(
-            app.session
-                .manager()
-                .list_sessions()
-                .unwrap()
-                .iter()
-                .any(|s| s.id == backend_id)
-        );
-        assert!(!app.session.metadata(&backend_id).unwrap().disconnected);
-        assert_eq!(app.terminal.session_output(&backend_id), Some("device> "));
-        assert_eq!(app.session.start.pending_count(), 0);
-        app.session.manager().close(&backend_id).unwrap();
-    });
-}
-
-#[test]
-fn confirming_serial_reconnect_does_not_recreate_a_session_closed_during_the_prompt() {
+fn reconnecting_a_closed_serial_session_leaves_nothing_pending() {
     let root = TestConfigDir::new("nyaterm-serial-reconnect-closed-session");
     let mut cx = TestAppContext::single();
     let _cleanup = TestAppCleanup::new(&cx);
@@ -896,14 +991,8 @@ fn confirming_serial_reconnect_does_not_recreate_a_session_closed_during_the_pro
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             prepare_serial_reconnect(app);
-            app.reconnect_session("existing".into(), window, cx);
-        })
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
             app.session.remove_session_catalog("existing");
-            assert!(app.submit_serial_connect_prompt(window, cx));
+            app.reconnect_session("existing".into(), window, cx);
             assert!(!app.session.has_session("existing"));
             assert_eq!(app.session.start.pending_count(), 0);
             assert!(app.session.dialogs.serial_connect_prompt().is_none());

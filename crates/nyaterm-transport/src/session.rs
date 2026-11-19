@@ -586,6 +586,7 @@ impl SessionManager {
                     .then(|| Duration::from_secs(u64::from(config.keep_alive_interval_secs))),
                 lifecycle: lifecycle.clone(),
             }),
+            false,
         )
         .map_err(SessionError::Worker)?;
         let naws = TelnetNawsWriter::new(writer.command_tx.clone(), &config);
@@ -831,7 +832,7 @@ impl SessionManager {
             .sessions
             .lock()
             .map_err(|_| SessionError::LockPoisoned)?;
-        let mut writer = QueuedTransportWriter::spawn(
+        let mut writer = QueuedTransportWriter::spawn_serial(
             session_id.clone(),
             port,
             WriterFlushPolicy::serial(),

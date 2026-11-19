@@ -124,6 +124,15 @@ impl NyaTermApp {
                 }
             }
             SuggestionFill::Replace(command) => {
+                // Synchronized input fans the same bytes out to every session;
+                // a whole-line rewrite based on this session's echo would
+                // corrupt peers whose line differs.
+                if self.sync_input.may_fan_out_from(&popup.session_id) {
+                    return self.reject_command_suggestion(
+                        "Suggestion replacement is disabled while input is synchronized",
+                        cx,
+                    );
+                }
                 let Some(backend) = self.shell_line_editing(&popup.session_id) else {
                     return self.reject_command_suggestion("Shell editor is not confirmed", cx);
                 };

@@ -217,6 +217,19 @@ impl SettingsPanel {
                                 this.toggle_terminal_reconnect_restore_cwd(cx);
                             }),
                         ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.serialReconnectEnter"),
+                        Some(SharedString::from(t!("settings.serialReconnectEnterDesc"))),
+                        settings_switch(
+                            palette,
+                            "terminal-serial-reconnect-send-enter",
+                            self.settings.summary().terminal_serial_reconnect_send_enter,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_terminal_serial_reconnect_send_enter(cx);
+                            }),
+                        ),
                     )),
             ))
             .child(settings_form_section(

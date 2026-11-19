@@ -1286,6 +1286,13 @@ impl NyaTermApp {
             self.load_transfer_browser_for_active_session_if_needed(cx);
         }
         self.enter_connect_settle();
+        // Serial consoles say nothing until they are spoken to: without this
+        // the reconnected tab sits on the [Reconnecting…] banner.
+        if completion.kind == SessionKind::Serial
+            && self.settings.summary().terminal_serial_reconnect_send_enter
+        {
+            self.schedule_serial_reconnect_enter(new_id.to_string(), cx);
+        }
         self.terminal.enter_session_render_degraded(new_id);
         self.shell
             .set_status(if completion.kind == SessionKind::AdbShell {

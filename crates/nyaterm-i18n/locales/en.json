@@ -3367,6 +3367,8 @@
     "keepAliveInterval": "Keep-Alive Interval (seconds)",
     "reconnectRestoreCwd": "Restore directory after reconnect",
     "reconnectRestoreCwdDesc": "Return SSH sessions to the last trusted working directory.",
+    "serialReconnectEnter": "Send Enter after serial reconnect",
+    "serialReconnectEnterDesc": "After a serial session reconnects, send one Enter so the console prints its prompt right away.",
     "keepAliveIntervalDesc": "Send SSH keep-alive packets every X seconds. 0 to disable.",
     "keepAliveMode": "Keep-alive mode",
     "keepAliveModeCompatible": "Compatible",

@@ -3367,6 +3367,8 @@
     "keepAliveInterval": "キープアライブ間隔（秒）",
     "reconnectRestoreCwd": "再接続後に作業ディレクトリを復元",
     "reconnectRestoreCwdDesc": "SSH セッションを最後に信頼された作業ディレクトリへ戻します。",
+    "serialReconnectEnter": "シリアル再接続後にEnterを送信",
+    "serialReconnectEnterDesc": "シリアルセッションの再接続後、コンソールがすぐプロンプトを表示するようEnterを1回送信します。",
     "keepAliveIntervalDesc": "X 秒ごとに SSH キープアライブパケットを送信します。0 で無効。",
     "keepAliveMode": "キープアライブモード",
     "keepAliveModeCompatible": "互換",

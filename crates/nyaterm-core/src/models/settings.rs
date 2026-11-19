@@ -483,6 +483,10 @@ pub struct AppSettingsSummary {
     pub terminal_paste_image_as_path: bool,
     #[serde(default)]
     pub terminal_reconnect_restore_cwd: bool,
+    /// After a serial reconnect succeeds, send one Enter so consoles that only
+    /// print a prompt on input come straight back to the command line.
+    #[serde(default = "default_serial_reconnect_send_enter")]
+    pub terminal_serial_reconnect_send_enter: bool,
     /// Retained only to round-trip legacy settings; no longer affects terminal behavior.
     #[serde(default)]
     pub terminal_low_latency_mode: bool,
@@ -783,6 +787,7 @@ impl Default for AppSettingsSummary {
             terminal_show_multi_line_paste_dialog: true,
             terminal_paste_image_as_path: true,
             terminal_reconnect_restore_cwd: false,
+            terminal_serial_reconnect_send_enter: default_serial_reconnect_send_enter(),
             terminal_low_latency_mode: false,
             terminal_zebra_stripes_enabled: default_terminal_zebra_stripes_enabled(),
             terminal_zebra_stripes_by_row: false,
@@ -1003,6 +1008,10 @@ pub fn default_internal_editor_font_size() -> u16 {
 
 fn default_terminal_timestamp_format() -> String {
     DEFAULT_TERMINAL_TIMESTAMP_FORMAT.to_string()
+}
+
+fn default_serial_reconnect_send_enter() -> bool {
+    true
 }
 
 fn default_terminal_zebra_stripes_enabled() -> bool {

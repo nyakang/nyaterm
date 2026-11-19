@@ -200,7 +200,22 @@ impl QueuedTransportWriter {
     where
         W: Write + Send + 'static,
     {
-        Self::spawn_with_telnet_policy(session_id, writer, flush_policy, event_queue, None)
+        Self::spawn_with_telnet_policy(session_id, writer, flush_policy, event_queue, None, false)
+    }
+
+    /// A serial port writer. Unlike the other transports, a failed write means
+    /// the device is gone (unplugged, driver reset), so the worker also reports
+    /// the session exited and the tab may offer Enter-to-reconnect.
+    pub(crate) fn spawn_serial<W>(
+        session_id: String,
+        writer: W,
+        flush_policy: WriterFlushPolicy,
+        event_queue: SessionEventQueue,
+    ) -> std::io::Result<Self>
+    where
+        W: Write + Send + 'static,
+    {
+        Self::spawn_with_telnet_policy(session_id, writer, flush_policy, event_queue, None, true)
     }
 
     pub(crate) fn spawn_with_telnet_policy<W>(
@@ -209,6 +224,7 @@ impl QueuedTransportWriter {
         flush_policy: WriterFlushPolicy,
         event_queue: SessionEventQueue,
         telnet_policy: Option<TelnetWriterPolicy>,
+        exit_on_write_error: bool,
     ) -> std::io::Result<Self>
     where
         W: Write + Send + 'static,
@@ -228,6 +244,7 @@ impl QueuedTransportWriter {
                     command_rx,
                     event_queue,
                     telnet_policy,
+                    exit_on_write_error,
                 )
             },
         )?;
@@ -310,6 +327,7 @@ pub(crate) fn run_transport_writer<W>(
     command_rx: WriterMailbox,
     event_queue: SessionEventQueue,
     telnet_policy: Option<TelnetWriterPolicy>,
+    exit_on_write_error: bool,
 ) where
     W: Write,
 {
@@ -381,6 +399,15 @@ pub(crate) fn run_transport_writer<W>(
         if let Err(error) = write_result {
             if !stopped() {
                 send_session_error(&event_queue, &session_id, error);
+                // Only serial passes this flag: a failed write there means the
+                // device is gone, and the tab must reach its disconnected state
+                // instead of collecting input errors forever.
+                if exit_on_write_error {
+                    event_queue.push(SessionEvent::Exited {
+                        session_id: session_id.clone(),
+                        reason: "serial write failed".to_string(),
+                    });
+                }
             }
             break;
         }
@@ -1003,9 +1030,9 @@ impl TelnetAutoLoginState {
     }
 }
 
-pub(crate) fn spawn_serial_reader_thread(
+pub(crate) fn spawn_serial_reader_thread<R: Read + Send + 'static>(
     session_id: String,
-    mut reader: Box<dyn SerialPort>,
+    mut reader: R,
     stop_reader: Arc<AtomicBool>,
     event_queue: SessionEventQueue,
 ) -> std::io::Result<JoinHandle<()>> {
@@ -1033,6 +1060,17 @@ pub(crate) fn spawn_serial_reader_thread(
                         session_id: session_id.clone(),
                         message: error.to_string(),
                     });
+                    // An unplugged board or a dead driver surfaces as a read
+                    // error, never as EOF: report the exit so the tab reaches
+                    // its disconnected state instead of collecting write
+                    // failures. An intentional close already set the flag and
+                    // owns the session's end.
+                    if !stop_reader.load(Ordering::Relaxed) {
+                        event_queue.push(SessionEvent::Exited {
+                            session_id: session_id.clone(),
+                            reason: format!("serial read failed: {error}"),
+                        });
+                    }
                     break;
                 }
             }
