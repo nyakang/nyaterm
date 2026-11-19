@@ -1082,7 +1082,7 @@ impl NyaTermApp {
             keep_alive_mode: nyaterm_core::terminal::connection_input::KeepaliveMode::parse(
                 &self.settings.summary().terminal_keep_alive_mode,
             ),
-            terminal_shell_integration: self.settings.summary().terminal_zebra_stripes_enabled,
+            terminal_shell_integration: true,
             host_key_prompts: self.session.prompts.host_key_broker(),
             credential_prompts: self.session.prompts.credential_broker(),
             agent_prompts: self.session.prompts.agent_broker(),

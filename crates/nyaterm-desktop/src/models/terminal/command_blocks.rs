@@ -1,10 +1,12 @@
 use nyaterm_terminal::command_blocks::{CommandBlock, CommandBlockId};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TerminalCommandBlockState {
     pub selected: Option<CommandBlockId>,
     pub collapsed: BTreeSet<CommandBlockId>,
+    /// Validation tags for requested folds, owned by this presentation state.
+    collapsed_revisions: BTreeMap<CommandBlockId, u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -17,7 +19,20 @@ impl TerminalCommandBlockState {
     pub fn retain(&mut self, blocks: &[CommandBlock]) {
         let retained =
             |id: &CommandBlockId| blocks.binary_search_by_key(id, |block| block.id).is_ok();
-        self.collapsed.retain(retained);
+        self.collapsed.retain(|id| {
+            blocks
+                .binary_search_by_key(id, |block| block.id)
+                .ok()
+                .map(|index| &blocks[index])
+                .is_some_and(|block| {
+                    block.complete
+                        && !block.output.is_empty()
+                        && self.collapsed_revisions.get(id).copied().unwrap_or(0)
+                            == block.collapse_revision
+                })
+        });
+        self.collapsed_revisions
+            .retain(|id, _| self.collapsed.contains(id));
         if self.selected.is_some_and(|id| !retained(&id)) {
             self.selected = None;
         }
@@ -41,6 +56,9 @@ impl TerminalCommandBlockState {
         if matches!(action, CommandBlockAction::Toggle(_)) && block.can_collapse(cursor) {
             if !self.collapsed.remove(&id) {
                 self.collapsed.insert(id);
+                self.collapsed_revisions.insert(id, block.collapse_revision);
+            } else {
+                self.collapsed_revisions.remove(&id);
             }
             return true;
         }
@@ -52,6 +70,35 @@ impl TerminalCommandBlockState {
 mod tests {
     use super::{CommandBlockAction, TerminalCommandBlockState};
     use nyaterm_terminal::TerminalScreen;
+
+    #[test]
+    fn revoked_and_reclosed_regions_discard_stale_fold_requests() {
+        use nyaterm_core::terminal::input_tracker::TerminalInputState;
+        use nyaterm_terminal::command_navigation::command_submission_evidence;
+        let mut screen = TerminalScreen::new(80, 8);
+        screen.advance(b"$ echo hi");
+        let evidence =
+            command_submission_evidence(&screen.snapshot(), &TerminalInputState::new(), b"\r")
+                .unwrap();
+        screen.note_command_submission(evidence);
+        screen.advance(b"\r\nhi\r\n$ ");
+        let blocks = screen.snapshot().command_blocks;
+        let id = blocks[0].id;
+        let mut state = TerminalCommandBlockState::default();
+        assert!(state.apply(CommandBlockAction::Toggle(id), &blocks, 2));
+        // Coalescing may hide the intermediate reopened frame from desktop.
+        screen.advance(b"\r\nlate output\r\n$ ");
+        state.retain(&screen.snapshot().command_blocks);
+        assert!(!state.collapsed.contains(&id));
+        assert_eq!(state.selected, Some(id));
+        assert!(state.apply(
+            CommandBlockAction::Toggle(id),
+            &screen.snapshot().command_blocks,
+            4
+        ));
+        state.retain(&screen.snapshot().command_blocks);
+        assert!(state.collapsed.contains(&id));
+    }
 
     #[test]
     fn selection_is_exclusive_and_running_blocks_do_not_collapse() {

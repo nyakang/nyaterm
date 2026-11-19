@@ -3268,7 +3268,7 @@
     "groupTransfer": "Transfer",
     "groupWorkspace": "Workspace",
     "zebraStripes": "Terminal row stripes",
-    "zebraStripesDesc": "Highlight shell input rows and the clicked row, with an option to alternate backgrounds by row.",
+    "zebraStripesDesc": "Highlight shell input rows and the clicked row, with an option to alternate backgrounds by row. Turning this off does not disable command folding or navigation.",
     "zebraStripesByRow": "Alternate by row",
     "zebraStripesByRowDesc": "Alternate background colors for terminal display rows.",
     "syncHistory": {

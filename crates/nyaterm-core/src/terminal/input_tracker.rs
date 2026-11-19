@@ -48,7 +48,7 @@ fn leading_env_prefix() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\(([^()\r\n]+)\)\s*").expect("env prefix"))
 }
 
-fn prompt_matchers() -> &'static [Regex; 9] {
+pub(super) fn prompt_matchers() -> &'static [Regex; 9] {
     static MATCHERS: OnceLock<[Regex; 9]> = OnceLock::new();
     MATCHERS.get_or_init(|| {
         // Consume one separator after the terminator, preserving command spacing.

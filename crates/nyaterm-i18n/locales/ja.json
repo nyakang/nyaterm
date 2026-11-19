@@ -3268,7 +3268,7 @@
     "groupTransfer": "転送",
     "groupWorkspace": "ワークスペース",
     "zebraStripes": "ターミナルの行ストライプ",
-    "zebraStripesDesc": "シェルの入力領域とクリックした行を強調表示します。行ごとに背景色を交互に表示することもできます。",
+    "zebraStripesDesc": "シェルの入力領域とクリックした行を強調表示します。行ごとに背景色を交互に表示することもできます。無効にしてもコマンドの折りたたみと移動は利用できます。",
     "zebraStripesByRow": "行ごとに表示",
     "zebraStripesByRowDesc": "ターミナルの表示行ごとに背景色を交互に表示します。",
     "syncHistory": {

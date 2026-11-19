@@ -258,7 +258,7 @@ impl NyaTermApp {
         self.terminal
             .view
             .frame_pipeline
-            .note_command_input(session_id.to_owned(), None);
+            .reset_command_navigation(session_id.to_owned());
         self.terminal.view.frame_pipeline.arm_event_wakes();
     }
 

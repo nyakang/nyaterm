@@ -183,6 +183,7 @@ fn command_blocks_native_probe() {
     let output =
         std::env::var("NYATERM_COMMAND_PROBE_OUTPUT").expect("screenshot output directory");
     let large = std::env::var("NYATERM_COMMAND_PROBE_LARGE").is_ok();
+    let inferred = std::env::var("NYATERM_COMMAND_PROBE_INFERRED").is_ok();
     let palette = nyaterm_ui::theme_palette(&theme);
     gpui_platform::application().run(move |cx: &mut App| {
         nyaterm_ui::apply_component_theme(palette, font("Consolas"), px(14.), cx);
@@ -204,12 +205,25 @@ fn command_blocks_native_probe() {
         }, move |_, cx| cx.new(|_| Probe { surface: host })).expect("native command fixture");
         cx.spawn(async move |cx| {
             let mut screen = TerminalScreen::new(80, 20);
-            screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07echo first\r\n\x1b]133;C\x07first output\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07cargo build\r\n\x1b]133;C\x07Compiling example\r\nChecking command regions\r\nFinished successfully\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+            if inferred {
+                for (command, output) in [("echo first", "first output"), ("cargo build", "Compiling example\r\nChecking command regions\r\nFinished successfully")] {
+                    screen.advance(format!("$ {command}").as_bytes());
+                    let evidence = nyaterm_terminal::command_navigation::command_submission_evidence(
+                        &screen.snapshot(), &nyaterm_core::terminal::input_tracker::TerminalInputState::new(), b"\r",
+                    ).expect("fixture submission");
+                    screen.note_command_submission(evidence);
+                    screen.advance(format!("\r\n{output}\r\n").as_bytes());
+                }
+                screen.advance(b"$ ");
+            } else {
+                screen.advance(b"\x1b]133;A\x07$ \x1b]133;B\x07echo first\r\n\x1b]133;C\x07first output\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07cargo build\r\n\x1b]133;C\x07Compiling example\r\nChecking command regions\r\nFinished successfully\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+            }
             let selected = screen.snapshot().command_blocks[1].id;
-            for (name, collapsed, labels, stripes) in [
-                ("expanded", false, true, true),
-                ("collapsed", true, true, true),
-                ("rail-only", true, false, false),
+            for (name, collapsed, labels, stripes, by_row) in [
+                ("expanded", false, true, true, false),
+                ("collapsed", true, true, true, false),
+                ("by-row", false, true, true, true),
+                ("rail-only", true, false, false, false),
             ] {
                 let ids: std::collections::BTreeSet<_> = if collapsed { [selected].into() } else { Default::default() };
                 screen.set_collapsed_commands(ids.clone());
@@ -220,12 +234,13 @@ fn command_blocks_native_probe() {
                     surface.show_line_numbers = labels;
                     surface.show_timestamps = labels;
                     surface.zebra_stripes_enabled = stripes;
+                    surface.zebra_stripes_by_row = by_row;
                     install(surface, snapshot);
                     cx.notify();
                 })).unwrap();
                 cx.background_executor().timer(Duration::from_millis(300)).await;
                 let image = window.update(cx, |_, window, _| window.render_to_image().expect("command screenshot")).unwrap();
-                let path = std::path::Path::new(&output).join(format!("{theme}-{name}-{}.png", if large { "large" } else { "normal" }));
+                let path = std::path::Path::new(&output).join(format!("{theme}-{}{name}-{}.png", if inferred { "inferred-" } else { "" }, if large { "large" } else { "normal" }));
                 cx.background_executor().spawn(async move { image.save(path).expect("save command screenshot"); }).await;
             }
             cx.update(|cx| cx.quit());

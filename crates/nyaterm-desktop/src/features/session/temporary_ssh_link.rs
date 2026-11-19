@@ -271,7 +271,7 @@ impl NyaTermApp {
             encoding: self.settings.summary().interaction_default_encoding.clone(),
             ssh_algorithms: None,
             sftp: nyaterm_transport::SftpSettings::default(),
-            terminal_shell_integration: self.settings.summary().terminal_zebra_stripes_enabled,
+            terminal_shell_integration: true,
             deferred_pty: true,
             keep_alive_interval_secs,
             keep_alive_mode: nyaterm_core::terminal::connection_input::KeepaliveMode::parse(

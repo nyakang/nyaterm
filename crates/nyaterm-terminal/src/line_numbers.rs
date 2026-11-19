@@ -13,14 +13,18 @@ pub(crate) struct LineNumbers {
 }
 
 impl LineNumbers {
-    pub(crate) fn update(&mut self, line: i64, wraps: bool) {
+    /// Returns whether the hard-line structure changed, even if text did not.
+    pub(crate) fn update(&mut self, line: i64, wraps: bool) -> bool {
         match (self.wraps.binary_search(&line), wraps) {
-            (Err(index), true) => self.wraps.insert(index, line),
+            (Err(index), true) => {
+                self.wraps.insert(index, line);
+            }
             (Ok(index), false) => {
                 self.wraps.remove(index);
             }
-            _ => {}
+            _ => return false,
         }
+        true
     }
 
     pub(crate) fn stable_coordinate(&self, line: i64) -> i64 {
