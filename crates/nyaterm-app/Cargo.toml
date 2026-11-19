@@ -48,6 +48,11 @@ harness = false
 [features]
 default = ["font-kit"]
 font-kit = ["gpui_platform/font-kit"]
+vnc-renderer-bench = ["gpui/profiler", "gpui/test-support", "gpui_platform/test-support"]
+
+[[example]]
+name = "vnc_texture_probe"
+required-features = ["vnc-renderer-bench"]
 
 [build-dependencies]
 embed-resource = "3.0"

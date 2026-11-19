@@ -1,4 +1,7 @@
+pub(super) mod frame_source;
 pub(super) mod resize;
+use frame_source::RemoteDesktopFrameSource;
+use nyaterm_remote_desktop::presentation::VncPresentationConfig;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,7 +11,7 @@ use crate::models::event_wake::{ANY_INTEREST, EventWake};
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{Bounds, DynamicTexture, FocusHandle, Pixels, Subscription};
 use nyaterm_remote_desktop::{
-    CertificatePromptReason, ClipboardTracker, CursorPosition, CursorShape, Framebuffer, KeyMapper,
+    CertificatePromptReason, ClipboardTracker, CursorPosition, CursorShape, KeyMapper,
     RdpCapability, RdpCertificateRequest, RdpDisplayMetrics, RdpError, RdpErrorKind,
     RdpServerCapabilities, RdpSessionConfig, RdpSessionManager, RemoteDesktopError,
     RemoteDesktopViewState, VncServerCapabilities, VncSessionManager,
@@ -59,7 +62,7 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) start_token: String,
     pub(super) start_attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     pub(super) state: RemoteDesktopViewState,
-    pub(super) framebuffer: Option<Framebuffer>,
+    pub(super) framebuffer: Option<RemoteDesktopFrameSource>,
     pub(super) texture: Option<DynamicTexture>,
     pub(super) texture_dirty: bool,
     /// Scratch buffer for packing dirty rectangles before texture uploads.
@@ -201,6 +204,8 @@ impl RemoteDesktopFeatureState {
                 native.set_visible(false);
             }
             session.texture_dirty = session.framebuffer.is_some();
+            self.vnc_manager
+                .set_presentation_visible(id, false, VncPresentationConfig::default());
         }
         if !self.pending_texture_removals.is_empty() {
             self.wake.signal(ANY_INTEREST);
@@ -256,7 +261,9 @@ impl RemoteDesktopFeatureState {
     pub(in crate::features) fn new(focus: FocusHandle) -> Self {
         let (wake, wake_rx) = EventWake::new();
         let manager = Arc::new(RdpSessionManager::new());
-        let vnc_manager = Arc::new(VncSessionManager::new());
+        let vnc_manager = Arc::new(VncSessionManager::with_presentation_pipeline(
+            VncPresentationConfig::default(),
+        ));
         // Installed before any session exists, so every session queue gets it.
         // The closure only touches an atomic and an unbounded channel, which is
         // what `QueueWaker` requires of a callback invoked under the queue lock.

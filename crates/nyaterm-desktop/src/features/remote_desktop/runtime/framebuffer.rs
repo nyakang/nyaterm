@@ -2,8 +2,12 @@ use super::events::set_rdp_view_error;
 use super::lifecycle::clear_rdp_reconnect_after_frame;
 use crate::features::NyaTermApp;
 use crate::features::remote_desktop::state::RemoteDesktopSessionState;
+use crate::features::remote_desktop::state::frame_source::RemoteDesktopFrameSource;
 use anyhow::Context as _;
 use gpui::{Bounds, Context, DevicePixels, Point, Size, Window, point, size};
+use nyaterm_remote_desktop::presentation::{
+    VncPresentation, VncPresentationConfig, VncPresentationId,
+};
 use nyaterm_remote_desktop::{
     DirtyRect, Framebuffer, FramebufferLimits, RdpErrorKind, RdpFrameEvent, RemoteCursorEvent,
 };
@@ -54,7 +58,7 @@ impl NyaTermApp {
         session.cursor_visible = true;
         match Framebuffer::new(epoch, width, height, limits) {
             Ok(framebuffer) => {
-                session.framebuffer = Some(framebuffer);
+                session.framebuffer = Some(framebuffer.into());
                 session.texture_dirty = true;
             }
             Err(error) => {
@@ -100,7 +104,11 @@ impl NyaTermApp {
         }
         let mut dirty = Vec::new();
         for frame in frames {
-            let Some(framebuffer) = session.framebuffer.as_mut() else {
+            let Some(framebuffer) = session
+                .framebuffer
+                .as_mut()
+                .and_then(RemoteDesktopFrameSource::as_rdp_mut)
+            else {
                 continue;
             };
             match framebuffer.apply(&frame) {
@@ -128,8 +136,13 @@ impl NyaTermApp {
             self.prepare_remote_desktop_textures(session_id, window);
             return;
         }
-        let (Some(framebuffer), Some(texture)) = (session.framebuffer.as_ref(), session.texture)
-        else {
+        let (Some(framebuffer), Some(texture)) = (
+            session
+                .framebuffer
+                .as_ref()
+                .and_then(RemoteDesktopFrameSource::as_rdp),
+            session.texture,
+        ) else {
             return;
         };
         let area = u64::from(framebuffer.width()) * u64::from(framebuffer.height());
@@ -172,6 +185,164 @@ impl NyaTermApp {
                 window,
                 RdpErrorKind::ResourceExhausted,
                 format!("remote desktop texture update failed: {error}"),
+            );
+        }
+    }
+
+    pub(super) fn sync_vnc_presentation_visibility(&mut self, window: &Window) {
+        let software = crate::platform::is_software_renderer(self.shell.renderer());
+        let config = VncPresentationConfig {
+            frame_interval: std::time::Duration::from_millis(if software { 33 } else { 16 }),
+        };
+        for (id, session) in &mut self.remote_desktop.sessions {
+            let visible = !session.uploads_stopped
+                && window.is_visible()
+                && self.session.active_id() == Some(id.as_str());
+            self.remote_desktop
+                .vnc_manager
+                .set_presentation_visible(id, visible, config);
+            if visible
+                && session.texture_dirty
+                && session
+                    .framebuffer
+                    .as_ref()
+                    .is_some_and(|source| matches!(source, RemoteDesktopFrameSource::Vnc { .. }))
+            {
+                self.remote_desktop.vnc_manager.invalidate_presentation(id);
+                session.texture_dirty = false;
+            }
+        }
+    }
+
+    pub(super) fn reset_vnc_surface(
+        &mut self,
+        session_id: &str,
+        epoch: u64,
+        width: u32,
+        height: u32,
+        window: &mut Window,
+    ) {
+        let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
+            return;
+        };
+        if session.uploads_stopped {
+            return;
+        }
+        release_textures(session, window);
+        session.framebuffer = Some(RemoteDesktopFrameSource::Vnc {
+            width,
+            height,
+            id: VncPresentationId {
+                epoch,
+                generation: 0,
+                sequence: 0,
+            },
+        });
+        session.cursor_shape = None;
+        session.cursor_position = Default::default();
+        session.cursor_visible = true;
+        session.texture_dirty = false;
+    }
+
+    pub(super) fn apply_vnc_presentation(
+        &mut self,
+        session_id: &str,
+        presentation: VncPresentation,
+        window: &mut Window,
+    ) {
+        if !window.is_visible() || self.session.active_id() != Some(session_id) {
+            return;
+        }
+        let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
+            return;
+        };
+        if session.uploads_stopped {
+            return;
+        }
+        if session
+            .framebuffer
+            .as_ref()
+            .is_some_and(|source| source.vnc_presentation_is_stale(presentation.id))
+        {
+            return;
+        }
+        let dimensions = size(
+            DevicePixels(presentation.width as i32),
+            DevicePixels(presentation.height as i32),
+        );
+        if session
+            .texture
+            .is_some_and(|texture| texture.size() != dimensions)
+            && let Some(texture) = session.texture.take()
+        {
+            window.remove_dynamic_texture(texture);
+        }
+        let result = if let Some(texture) = session.texture {
+            let updates = presentation
+                .regions
+                .iter()
+                .map(|region| gpui::DynamicTextureUpdate {
+                    bounds: Bounds::new(
+                        point(
+                            DevicePixels(region.rect.x as i32),
+                            DevicePixels(region.rect.y as i32),
+                        ),
+                        size(
+                            DevicePixels(region.rect.width as i32),
+                            DevicePixels(region.rect.height as i32),
+                        ),
+                    ),
+                    bytes: std::sync::Arc::new(region.pixels.clone()),
+                    bytes_per_row: region.rect.width * 4,
+                })
+                .collect();
+            window.update_dynamic_texture_owned_batch(texture, updates)
+        } else if presentation.full && presentation.regions.len() == 1 {
+            window
+                .create_dynamic_texture_owned(
+                    dimensions,
+                    std::sync::Arc::new(presentation.regions[0].pixels.clone()),
+                )
+                .map(|texture| session.texture = Some(texture))
+        } else {
+            self.remote_desktop
+                .vnc_manager
+                .invalidate_presentation(session_id);
+            return;
+        };
+        if let Err(error) = result {
+            self.stop_remote_desktop_uploads(
+                session_id,
+                window,
+                RdpErrorKind::ResourceExhausted,
+                format!("VNC texture upload failed: {error}"),
+            );
+            return;
+        }
+        session.framebuffer = Some(RemoteDesktopFrameSource::Vnc {
+            width: presentation.width,
+            height: presentation.height,
+            id: presentation.id,
+        });
+        session.texture_dirty = false;
+        clear_rdp_reconnect_after_frame(session);
+        self.remote_desktop
+            .vnc_manager
+            .acknowledge_presentation(session_id, presentation.id);
+        if self.remote_desktop.metrics_enabled {
+            tracing::debug!(
+                regions = presentation.regions.len(),
+                upload_bytes = presentation
+                    .regions
+                    .iter()
+                    .map(|r| r.pixels.len())
+                    .sum::<usize>(),
+                submit_latency_us = presentation.completed_at.elapsed().as_micros() as u64,
+                prepare_latency_us = presentation
+                    .prepared_at
+                    .saturating_duration_since(presentation.completed_at)
+                    .as_micros() as u64,
+                "VNC presentation submitted"
             );
         }
     }
@@ -227,6 +398,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         cx.observe_window_visibility(window, |this, visibility, window, cx| {
+            this.sync_vnc_presentation_visibility(window);
             if visibility.is_visible() {
                 this.resume_remote_desktop_uploads(window, cx);
             }
@@ -246,6 +418,7 @@ impl NyaTermApp {
         {
             self.prepare_remote_desktop_textures(&session_id, window);
         }
+        self.sync_vnc_presentation_visibility(window);
         cx.notify();
     }
 
@@ -289,7 +462,11 @@ fn prepare_textures(
     session: &mut RemoteDesktopSessionState,
     window: &mut Window,
 ) -> anyhow::Result<()> {
-    if let Some(framebuffer) = session.framebuffer.as_ref() {
+    if let Some(framebuffer) = session
+        .framebuffer
+        .as_ref()
+        .and_then(RemoteDesktopFrameSource::as_rdp)
+    {
         let dimensions = size(
             DevicePixels(framebuffer.width() as i32),
             DevicePixels(framebuffer.height() as i32),

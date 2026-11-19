@@ -113,7 +113,7 @@ fn focused_rdp_and_vnc_surfaces_keep_tab_and_shift_tab_out_of_local_navigation()
                     )
                     .unwrap();
                 let session = app.remote_desktop.sessions.get_mut("remote").unwrap();
-                session.framebuffer = Some(framebuffer);
+                session.framebuffer = Some(framebuffer.into());
                 session.texture = Some(texture);
             });
             KeyboardFixture {

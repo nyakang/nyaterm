@@ -1,0 +1,164 @@
+{
+  "metadata": {
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "profile": "release",
+    "variants": {
+      "baseline": {
+        "revision": "436cfd57fae1eff4c52ec1d70c59ec400df08555",
+        "dirty": true,
+        "cargo_lock_sha256": "4607425eaac8186e3b95cba49dd71f0169809bf79e2e30e4ef92d4d0c2fe2388",
+        "probe": {
+          "sha256": "b738116e7da321c892bb1a5b337a7422c18cfd6785756c22c0a5e94a6c38956d",
+          "name": "vnc_pipeline_probe"
+        },
+        "helper": {
+          "sha256": "bec1dbb43c36fa9afc0b0175f980937bd7c63b08a9eeea3fa1390d24a8353de5",
+          "name": "nyaterm-vnc-helper-baseline"
+        }
+      },
+      "pipeline": {
+        "revision": "436cfd57fae1eff4c52ec1d70c59ec400df08555",
+        "dirty": true,
+        "cargo_lock_sha256": "777ef13d8b4484cfa4e68d6cf2791de410f82a832a73bf0e7e6ff1f77a5107b0",
+        "probe": {
+          "sha256": "22e8745545a0db8f24f58721e317b63ff5d30403a3828505802cbc61133b4169",
+          "name": "vnc_pipeline_probe"
+        },
+        "helper": {
+          "sha256": "296c51ef6081d6e1b611c6e5627b17e3dcbc8a5a701cacb026df9a6786e64d17",
+          "name": "nyaterm-vnc-helper"
+        }
+      }
+    },
+    "note": "elapsed includes helper startup and RFB handshake; consumer_cpu is timed work, not process CPU or GPU/display latency"
+  },
+  "records": [
+    {
+      "mode": "legacy",
+      "rectangles": 1000,
+      "interval_ms": 16,
+      "elapsed_ms": 2066.071814,
+      "consumer_cpu_ms": 3.467952,
+      "variant": "baseline",
+      "round": 0
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 1000,
+      "interval_ms": 16,
+      "elapsed_ms": 82.048826,
+      "consumer_cpu_ms": 0.088411,
+      "variant": "pipeline",
+      "round": 0
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 1000,
+      "interval_ms": 16,
+      "elapsed_ms": 64.38738,
+      "consumer_cpu_ms": 0.06606200000000001,
+      "variant": "pipeline",
+      "round": 1
+    },
+    {
+      "mode": "legacy",
+      "rectangles": 1000,
+      "interval_ms": 16,
+      "elapsed_ms": 2062.007623,
+      "consumer_cpu_ms": 2.9699980000000004,
+      "variant": "baseline",
+      "round": 1
+    },
+    {
+      "mode": "legacy",
+      "rectangles": 1000,
+      "interval_ms": 16,
+      "elapsed_ms": 2060.52802,
+      "consumer_cpu_ms": 2.419601,
+      "variant": "baseline",
+      "round": 2
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 1000,
+      "interval_ms": 16,
+      "elapsed_ms": 64.32948099999999,
+      "consumer_cpu_ms": 0.052840000000000005,
+      "variant": "pipeline",
+      "round": 2
+    },
+    {
+      "mode": "legacy",
+      "rectangles": 1000,
+      "interval_ms": 33,
+      "elapsed_ms": 4171.799003,
+      "consumer_cpu_ms": 2.69785,
+      "variant": "baseline",
+      "round": 0
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 1000,
+      "interval_ms": 33,
+      "elapsed_ms": 66.18935200000001,
+      "consumer_cpu_ms": 0.043003,
+      "variant": "pipeline",
+      "round": 0
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 1000,
+      "interval_ms": 33,
+      "elapsed_ms": 66.182534,
+      "consumer_cpu_ms": 0.040845,
+      "variant": "pipeline",
+      "round": 1
+    },
+    {
+      "mode": "legacy",
+      "rectangles": 1000,
+      "interval_ms": 33,
+      "elapsed_ms": 4172.323625999999,
+      "consumer_cpu_ms": 3.137805,
+      "variant": "baseline",
+      "round": 1
+    },
+    {
+      "mode": "legacy",
+      "rectangles": 1000,
+      "interval_ms": 33,
+      "elapsed_ms": 4171.207673,
+      "consumer_cpu_ms": 3.315372,
+      "variant": "baseline",
+      "round": 2
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 1000,
+      "interval_ms": 33,
+      "elapsed_ms": 66.173995,
+      "consumer_cpu_ms": 0.035359,
+      "variant": "pipeline",
+      "round": 2
+    },
+    {
+      "mode": "legacy",
+      "rectangles": 65535,
+      "interval_ms": 16,
+      "elapsed_ms": 133207.24224,
+      "consumer_cpu_ms": 494.51518100000004,
+      "variant": "baseline",
+      "round": 0
+    },
+    {
+      "mode": "pipeline",
+      "rectangles": 65535,
+      "interval_ms": 16,
+      "elapsed_ms": 627.522855,
+      "consumer_cpu_ms": 0.301581,
+      "variant": "pipeline",
+      "round": 0
+    }
+  ]
+}
