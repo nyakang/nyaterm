@@ -701,7 +701,7 @@ fn unconfirmed_or_nonterminal_line_input_never_enters_candidate_search() {
 #[test]
 fn restricted_terminal_states_never_publish_or_select_candidates() {
     let mut f = Fixture::new();
-    for scenario in 0..8 {
+    for scenario in 1..8 {
         f.suggest_in_shell("mv", "mv source destination");
         f.update(|app, cx, id| {
             let request = app
@@ -712,9 +712,6 @@ fn restricted_terminal_states_never_publish_or_select_candidates() {
                 )
                 .unwrap();
             match scenario {
-                0 => {
-                    app.toggle_broadcast_to_all(cx);
-                }
                 1 => app.terminal.assist.credential_prompt_input_until_ms = u64::MAX,
                 2 => app.security.activate_screen_lock("test lock".into()),
                 3 => {
@@ -767,9 +764,6 @@ fn restricted_terminal_states_never_publish_or_select_candidates() {
                 )
                 .is_none()
             );
-            if app.sync_input.broadcast_to_all() {
-                app.toggle_broadcast_to_all(cx);
-            }
             app.terminal.assist.credential_prompt_input_until_ms = 0;
             app.security.deactivate_screen_lock();
             app.session.metadata_mut(id).unwrap().disconnected = false;
@@ -780,6 +774,67 @@ fn restricted_terminal_states_never_publish_or_select_candidates() {
             app.session.select_active_session(id);
         });
     }
+    f.assert_quiet();
+}
+
+#[test]
+fn broadcast_still_publishes_suggestions_for_the_active_session_only() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        app.toggle_broadcast_to_all(cx);
+        assert!(app.sync_input.may_fan_out_from(id));
+        app.terminal.editing.clear_active();
+        app.terminal
+            .seed_session_view(id.into(), String::new(), "UTF-8");
+        app.note_shell_editing_input(b"gi", cx);
+        echo(app, cx, id, "gi");
+        assert_eq!(app.session.active_id(), Some(id));
+        assert!(app.command_suggestions_allowed_for_session(id));
+        let request = app
+            .prepare_command_suggestion_search(
+                app.terminal.assist.commands.search_generation,
+                CompletionMode::Token,
+                cx,
+            )
+            .unwrap();
+        app.terminal.assist.commands.refresh_task = None;
+        app.publish_command_suggestion_search(
+            request,
+            super::tests::history_search_fixture(
+                "git status",
+                "gi",
+                app.commands.completion_runtime().revision(),
+            ),
+            Duration::ZERO,
+            cx,
+        );
+        let popup = app.terminal.assist.commands.popup.as_ref().unwrap();
+        assert_eq!(popup.session_id, id);
+        assert_eq!(popup.draft, "gi");
+    });
+    f.assert_quiet();
+}
+
+#[test]
+fn broadcast_never_rewrites_the_line_for_a_non_prefix_candidate() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        app.toggle_broadcast_to_all(cx);
+        assert_eq!(
+            app.command_suggestion_fill_policy(id),
+            CompletionFillPolicy::AppendOnly
+        );
+        app.terminal.editing.clear_active();
+        app.terminal
+            .seed_session_view(id.into(), String::new(), "UTF-8");
+        app.note_shell_editing_input(b"pong", cx);
+        echo(app, cx, id, "pong");
+        popup(app, id, "ping 172.22.222.149");
+        assert_eq!(
+            app.submit_selected_command_suggestion(false, cx),
+            SuggestionSubmitResult::Rejected
+        );
+    });
     f.assert_quiet();
 }
 

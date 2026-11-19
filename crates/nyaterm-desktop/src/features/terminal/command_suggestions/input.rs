@@ -66,6 +66,12 @@ impl NyaTermApp {
         &self,
         session_id: &str,
     ) -> CompletionFillPolicy {
+        // Fan-out sends the same bytes to every synchronized session, so a
+        // rewrite driven by the active line's echo could corrupt a peer whose
+        // line differs. Only suffix appends are safe while routing is shared.
+        if self.sync_input.may_fan_out_from(session_id) {
+            return CompletionFillPolicy::AppendOnly;
+        }
         let shell_session = self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
@@ -117,7 +123,22 @@ impl NyaTermApp {
                 .settings
                 .summary()
                 .interaction_command_suggestions_enabled
-            && !self.sync_input.may_fan_out_from(session_id)
+    }
+
+    /// Reset an open popup to the current input-routing revision.
+    ///
+    /// Enabling broadcast or group sync changes the routing revision without
+    /// changing the active line, so the popup keeps its candidates and follows
+    /// the new route instead of being hidden.
+    pub(in crate::features) fn align_command_suggestion_sync_revision(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let revision = self.sync_input.revision();
+        if let Some(popup) = self.terminal.assist.commands.popup.as_mut() {
+            popup.sync_revision = revision;
+        }
+        self.reconcile_command_suggestion_availability(cx);
     }
 
     pub(in crate::features::terminal) fn command_suggestion_input_is_confirmed(&self) -> bool {
