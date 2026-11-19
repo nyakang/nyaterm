@@ -239,6 +239,12 @@ impl NetworkToolsFeatureState {
         self.config_windows.contains_key(&kind)
     }
 
+    pub(in crate::features) fn config_window_is_open_or_pending(&self) -> bool {
+        self.config_windows
+            .values()
+            .any(|entry| entry.window.is_open_or_pending())
+    }
+
     pub(in crate::features) fn begin_window_open(&mut self, kind: NetworkToolKind) -> bool {
         self.config_windows
             .entry(kind)
