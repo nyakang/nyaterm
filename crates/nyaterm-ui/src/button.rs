@@ -261,6 +261,7 @@ pub struct NyaIconButton {
     size: Option<Pixels>,
     disabled: bool,
     tooltip: Option<SharedString>,
+    tab_stop: bool,
     on_click: Option<NyaButtonClickHandler>,
 }
 
@@ -273,6 +274,7 @@ impl NyaIconButton {
             size: None,
             disabled: false,
             tooltip: None,
+            tab_stop: true,
             on_click: None,
         }
     }
@@ -302,6 +304,12 @@ impl NyaIconButton {
         self
     }
 
+    /// Removes the button from Tab traversal while keeping it clickable.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -326,7 +334,7 @@ impl RenderOnce for NyaIconButton {
         if let Some(on_click) = self.on_click {
             button = button.on_click(on_click);
         }
-        button.disabled(self.disabled)
+        button.disabled(self.disabled).tab_stop(self.tab_stop)
     }
 }
 

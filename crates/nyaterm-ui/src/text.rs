@@ -6,8 +6,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, HighlightStyle, InteractiveElement as _, IntoElement,
-    ParentElement as _, StyleRefinement, Styled as _, Subscription, Window, div, px, rems, rgb,
+    AnyElement, App, AppContext as _, Context, Entity, HighlightStyle, InteractiveElement as _,
+    IntoElement, ParentElement as _, StyleRefinement, Styled as _, Subscription, Window, div, px,
+    rems, rgb,
 };
 use gpui_base::text::{CodeBlock, SelectionFormat, TextView, TextViewState, TextViewStyle};
 use gpui_base::{ElementExt as _, TextSelection};
@@ -29,6 +30,10 @@ pub enum NyaTextFormat {
     Code,
 }
 
+/// Custom per-code-block chrome; rendered in place of the language label.
+pub type NyaCodeBlockActions =
+    Arc<dyn Fn(&CodeBlock, &mut Window, &mut App) -> AnyElement + Send + Sync>;
+
 /// An explicitly owned renderer survives virtual-list unmounts.
 #[derive(Clone)]
 pub struct NyaTextState {
@@ -39,6 +44,7 @@ pub struct NyaTextState {
     painted: Rc<Cell<bool>>,
     copy_valid: Rc<Cell<bool>>,
     code_highlighter: Rc<RefCell<CodeHighlightCache>>,
+    code_block_actions: Rc<RefCell<Option<NyaCodeBlockActions>>>,
     retained_selection: Rc<RefCell<Option<selection::RetainedRange>>>,
     applied_selection: Rc<RefCell<Option<selection::AppliedRange>>>,
 }
@@ -60,6 +66,7 @@ impl NyaTextState {
             painted: Rc::default(),
             copy_valid: Rc::new(Cell::new(true)),
             code_highlighter: Rc::new(RefCell::new(CodeHighlightCache::default())),
+            code_block_actions: Rc::default(),
             retained_selection: Rc::default(),
             applied_selection: Rc::default(),
         }
@@ -225,6 +232,10 @@ impl NyaTextState {
         }
     }
 
+    pub(crate) fn set_code_block_actions(&self, actions: NyaCodeBlockActions) {
+        *self.code_block_actions.borrow_mut() = Some(actions);
+    }
+
     pub(crate) fn set_code_highlights(&self, highlights: NyaCodeHighlights) {
         let mut cache = self.code_highlighter.borrow_mut();
         if Arc::ptr_eq(&cache.highlights, &highlights) || cache.highlights == highlights {
@@ -236,10 +247,16 @@ impl NyaTextState {
     }
 
     pub(crate) fn view(&self) -> TextView {
-        TextView::new(&self.inner)
+        let view = TextView::new(&self.inner)
             .selectable(true)
             .selection_format(SelectionFormat::Plain)
-            .shared_code_block_highlighter(self.code_highlighter.borrow().highlighter.clone())
+            .shared_code_block_highlighter(self.code_highlighter.borrow().highlighter.clone());
+        match self.code_block_actions.borrow().clone() {
+            Some(actions) => {
+                view.code_block_actions(move |block, window, cx| actions(block, window, cx))
+            }
+            None => view,
+        }
     }
 }
 

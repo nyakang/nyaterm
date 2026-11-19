@@ -160,7 +160,7 @@ sha2 = { version = "0.11", features = ["oid"] }
 signature = "3.0.0-rc.10"
 ssh-key = "=0.7.0-rc.12"
 thiserror = "2"
-time = { version = "0.3.47", features = ["formatting", "local-offset", "macros"] }
+time = { version = "0.3.47", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process", "io-util"] }
 tokio-util = "=0.7.19"
 tokio-socks = "0.5.2"

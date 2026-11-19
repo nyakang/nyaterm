@@ -44,25 +44,32 @@ fn hosted<'a>(
     (app, vcx)
 }
 
-fn load_message(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, text: &str) {
+fn load_messages(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, messages: Vec<AiMessage>) {
     vcx.update(|_, cx| {
         app.update(cx, |app, cx| {
             let session = app.ai.chat_session_id().to_string();
             let job = app.ai.begin_history_operation("fixture").unwrap();
-            let mut message: AiMessage = (*transcript_message(0)).clone();
-            message.session_id = session.clone();
-            message.content = text.into();
+            let mut messages = messages;
+            for message in &mut messages {
+                message.session_id = session.clone();
+            }
             assert!(app.ai.finish_history_message_load(
                 job,
                 &session,
                 session.clone(),
-                Ok(vec![message]),
+                Ok(messages),
                 "fixture".into()
             ));
             app.flush_ai_panel_snapshot(cx);
         })
     });
     compact_draw(app, vcx);
+}
+
+fn load_message(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, text: &str) {
+    let mut message: AiMessage = (*transcript_message(0)).clone();
+    message.content = text.into();
+    load_messages(app, vcx, vec![message]);
 }
 
 fn message_state(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext) -> NyaTextState {
@@ -245,4 +252,30 @@ fn collapsing_reasoning_clears_only_its_selection(cx: &mut TestAppContext) {
         snapshot.expanded_message_thoughts = Default::default()
     });
     vcx.update(|_, cx| assert_eq!(thought.selected_text(cx), ""));
+}
+
+#[gpui::test]
+fn message_copy_buttons_write_the_displayed_text_to_clipboard(cx: &mut TestAppContext) {
+    let root = TestConfigDir::new("nyaterm-ai-copy");
+    let _cleanup = crate::test_support::TestAppCleanup::new(cx);
+    let (app, vcx) = hosted(cx, root.path());
+    let mut user = (*transcript_message(0)).clone();
+    user.content = "copy this prompt".into();
+    let mut assistant = (*transcript_message(1)).clone();
+    assistant.role = AiMessageRole::Assistant;
+    assistant.content = "**bold** answer".into();
+    load_messages(&app, vcx, vec![user, assistant]);
+    for (selector, expected) in [
+        ("ai-copy-message-0", "copy this prompt"),
+        ("ai-copy-message-1", "**bold** answer"),
+    ] {
+        let button = vcx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing copy control for {selector}"));
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        compact_draw(&app, vcx);
+        vcx.update(|_, cx| {
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
+        });
+    }
 }

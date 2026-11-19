@@ -6,7 +6,7 @@ use crate::features::ai::panel::{AiAgentStepPresentation, AiPanel, AiPanelSnapsh
 use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
 
 impl AiPanel {
-    pub(super) fn transcript_text_order(
+    pub(in crate::features::ai::panel) fn transcript_text_order(
         &self,
         snapshot: &AiPanelSnapshot,
         rows: &[AiTranscriptRow],
@@ -56,13 +56,15 @@ impl AiPanel {
                             keys.push((owner, "answer".into()));
                         }
                     }
-                    for card in &message.command_cards {
-                        if snapshot.card_owner(&card.id) == Some(message.id.as_str()) {
-                            self.command_text_order(snapshot, card, activity, &mut keys);
+                    if !reasoning_only {
+                        for card in &message.command_cards {
+                            if snapshot.card_owner(&card.id) == Some(message.id.as_str()) {
+                                self.command_text_order(snapshot, card, activity, &mut keys);
+                            }
                         }
-                    }
-                    for step in snapshot.message_steps(&message.id) {
-                        self.step_text_order(snapshot, step, activity, &mut keys);
+                        for step in snapshot.message_steps(&message.id) {
+                            self.step_text_order(snapshot, step, activity, &mut keys);
+                        }
                     }
                 }
                 AiTranscriptRow::Command { index, .. } => self.command_text_order(

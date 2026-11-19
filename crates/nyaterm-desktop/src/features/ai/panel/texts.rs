@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gpui::{AnyElement, Context, IntoElement, Subscription, div, prelude::*, px};
+use gpui::{AnyElement, Context, IntoElement, Subscription, div, prelude::*, px, rgb};
 use nyaterm_core::AiMessageRole;
+use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use nyaterm_ui::text::{
     NyaSelectableCode, NyaTextFormat, NyaTextScope, NyaTextState, NyaTextStyle,
 };
-use nyaterm_ui::{NyaContextMenu, NyaMarkdown, NyaMenuItem, NyaSelectableText};
+use nyaterm_ui::{NyaContextMenu, NyaIconButton, NyaMarkdown, NyaMenuItem, NyaSelectableText};
 use rust_i18n::t;
 
 use super::components::ai_command_target_label;
@@ -367,6 +368,46 @@ impl AiPanel {
             .into_any_element(),
             NyaTextFormat::Markdown => NyaMarkdown::from_state(&entry.state)
                 .style(style)
+                .code_block_actions(move |block, _, _| {
+                    let code = block.code().to_string();
+                    let lang = block
+                        .lang()
+                        .map(|lang| lang.trim().to_string())
+                        .filter(|lang| !lang.is_empty());
+                    div()
+                        .debug_selector(|| "ai-code-block-actions".to_string())
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .pl_1()
+                        .when_some(lang, |element, lang| {
+                            element.child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(lang),
+                            )
+                        })
+                        .child(
+                            NyaIconButton::new("copy", "icons/copy.svg")
+                                .icon_size(px(12.))
+                                .size(px(20.))
+                                .tooltip(t!("ai.copyCode"))
+                                // Code blocks repeat per message; keep them out of Tab order.
+                                .tab_stop(false)
+                                .on_click(move |_, window, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        code.clone(),
+                                    ));
+                                    window.notify_operation(
+                                        "copy-ai-code-block",
+                                        NyaNotificationKind::Success,
+                                        t!("common.copied").to_string(),
+                                        cx,
+                                    );
+                                }),
+                        )
+                })
                 .into_any_element(),
             NyaTextFormat::Plain => NyaSelectableText::from_state(&entry.state)
                 .style(style)
