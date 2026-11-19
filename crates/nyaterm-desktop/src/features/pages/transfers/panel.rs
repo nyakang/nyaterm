@@ -1312,6 +1312,9 @@ mod tests {
             (Some("/short".to_string()), 1000.),
             (Some(format!("/{}", "中文目录".repeat(6))), 1000.),
             (Some(format!("/{}", "long-directory/".repeat(12))), 1000.),
+            (Some("/short".to_string()), 316.),
+            (Some("/short".to_string()), 300.),
+            (Some(format!("/{}", "中文目录".repeat(12))), 276.),
             (Some(format!("/{}", "中文目录".repeat(12))), 260.),
         ] {
             vcx.update(|_, cx| {
@@ -1321,7 +1324,7 @@ mod tests {
                         .replace_browser_favorites(path.iter().cloned().collect());
                 });
             });
-            show_favorites_menu(vcx, &app, 280., 100.);
+            show_favorites_menu(vcx, &app, viewport_width - 4., 100.);
             let menu = vcx.debug_bounds("transfer-browser-favorites-menu").unwrap();
             let expected = vcx.update(|window, cx| {
                 let label = path.as_deref().unwrap_or("");
@@ -1334,12 +1337,12 @@ mod tests {
                         .width,
                 );
                 (measured.ceil() + 88.)
-                    .clamp(300., 480.)
+                    .clamp(260., 400.)
                     .min(viewport_width - 16.)
             });
             assert_eq!(menu.size.width, px(expected));
             assert!(menu.left() >= px(8.));
-            assert!(menu.right() <= px(viewport_width - 8.));
+            assert_eq!(menu.right(), px(viewport_width - 8.));
             if let Some(path) = &path {
                 let remove = Box::leak(
                     format!("transfer-browser-favorite-menu-remove-{path}").into_boxed_str(),
@@ -1412,7 +1415,7 @@ mod tests {
                 .unwrap()
                 .size
                 .width,
-            px(300.)
+            px(260.)
         );
         let add = vcx
             .debug_bounds("transfer-browser-favorite-menu-add-current")

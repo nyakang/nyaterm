@@ -182,7 +182,7 @@ impl NyaTermApp {
                         "transfer-browser-favorite-menu-add-current",
                         t!("fileExplorer.addCurrentDirToFavorites"),
                         "icons/star.svg",
-                        palette.link,
+                        palette.primary,
                         palette,
                         cx.listener(|this, _, _, cx| {
                             this.add_current_transfer_browser_favorite(cx);
@@ -224,11 +224,14 @@ impl NyaTermApp {
 }
 
 fn favorites_menu_width(label_width: f32, viewport_width: f32) -> f32 {
+    let available_width = (viewport_width - 16.).max(1.);
+    // Preserve the normal minimum whenever it fits; containment takes priority
+    // in windows narrower than 260px plus the two 8px margins.
+    let min_width = 260_f32.min(available_width);
+    let max_width = 400_f32.min(available_width);
     // Menu border/padding, row padding, 18px icon, gap, and the always-reserved
     // remove button plus clearance for the overlay scrollbar.
-    (label_width.ceil() + 88.)
-        .clamp(300., 480.)
-        .min((viewport_width - 16.).max(1.))
+    (label_width.ceil() + 88.).clamp(min_width, max_width)
 }
 
 // Tab groups order controls but do not trap focus. Cycle past other groups so
@@ -264,10 +267,16 @@ mod tests {
 
     #[test]
     fn favorites_width_grows_with_labels_and_fits_narrow_windows() {
-        assert_eq!(favorites_menu_width(40., 1280.), 300.);
+        assert_eq!(favorites_menu_width(40., 1280.), 260.);
+        assert_eq!(favorites_menu_width(200., 1280.), 288.);
         assert_eq!(favorites_menu_width(280., 1280.), 368.);
-        assert_eq!(favorites_menu_width(800., 1280.), 480.);
+        assert_eq!(favorites_menu_width(800., 1280.), 400.);
         assert_eq!(favorites_menu_width(800., 320.), 304.);
+        assert_eq!(favorites_menu_width(40., 316.), 260.);
+        assert_eq!(favorites_menu_width(40., 300.), 260.);
+        assert_eq!(favorites_menu_width(800., 276.), 260.);
+        assert_eq!(favorites_menu_width(40., 276.), 260.);
+        assert_eq!(favorites_menu_width(40., 275.), 259.);
         assert_eq!(favorites_menu_width(40., 200.), 184.);
         assert_eq!(favorites_menu_width(40., 8.), 1.);
     }
