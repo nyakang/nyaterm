@@ -2577,6 +2577,11 @@
     "usersMeaning": "System-recorded login sessions; not every SSH connection."
   },
   "savedConnections": {
+    "openFileManager": "Open File Manager",
+    "openFileManagerSftpDisabled": "Open File Manager (SFTP disabled)",
+    "fileManagerConnectionUnavailable": "This saved connection is no longer available.",
+    "fileManagerRequiresSsh": "Opening the file manager requires an SSH connection.",
+    "fileManagerSftpDisabled": "SFTP is disabled for this SSH connection.",
     "dropRoot": "Move to root",
     "sessionImportTitle": "Import sessions",
     "restoreBackupTitle": "Restore NyaTerm backup",

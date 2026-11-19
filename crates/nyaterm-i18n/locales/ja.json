@@ -2577,6 +2577,11 @@
     "usersMeaning": "システムに記録されたログインセッションです。すべての SSH 接続ではありません。"
   },
   "savedConnections": {
+    "openFileManager": "ファイルマネージャーを開く",
+    "openFileManagerSftpDisabled": "ファイルマネージャーを開く（SFTP 無効）",
+    "fileManagerConnectionUnavailable": "この保存済み接続は利用できなくなりました。",
+    "fileManagerRequiresSsh": "ファイルマネージャーを開くには SSH 接続が必要です。",
+    "fileManagerSftpDisabled": "この SSH 接続では SFTP が無効になっています。",
     "dropRoot": "ルートへ移動",
     "sessionImportTitle": "セッションをインポート",
     "restoreBackupTitle": "NyaTerm バックアップを復元",

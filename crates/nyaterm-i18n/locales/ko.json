@@ -2577,6 +2577,11 @@
     "usersMeaning": "시스템에 기록된 로그인 세션이며 모든 SSH 연결을 뜻하지 않습니다."
   },
   "savedConnections": {
+    "openFileManager": "파일 관리자 열기",
+    "openFileManagerSftpDisabled": "파일 관리자 열기(SFTP 비활성화)",
+    "fileManagerConnectionUnavailable": "이 저장된 연결은 더 이상 사용할 수 없습니다.",
+    "fileManagerRequiresSsh": "파일 관리자를 열려면 SSH 연결이 필요합니다.",
+    "fileManagerSftpDisabled": "이 SSH 연결에서 SFTP가 비활성화되어 있습니다.",
     "dropRoot": "최상위로 이동",
     "sessionImportTitle": "세션 가져오기",
     "restoreBackupTitle": "NyaTerm 백업 복원",

@@ -2577,6 +2577,11 @@
     "usersMeaning": "系统记录的登录会话，不代表所有 SSH 连接。"
   },
   "savedConnections": {
+    "openFileManager": "打开文件管理器",
+    "openFileManagerSftpDisabled": "打开文件管理器（SFTP 已禁用）",
+    "fileManagerConnectionUnavailable": "该已保存的连接已不可用。",
+    "fileManagerRequiresSsh": "打开文件管理器需要 SSH 连接。",
+    "fileManagerSftpDisabled": "该 SSH 连接已禁用 SFTP。",
     "dropRoot": "移至根级",
     "sessionImportTitle": "导入会话",
     "restoreBackupTitle": "恢复 NyaTerm 备份",

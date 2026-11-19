@@ -2577,6 +2577,11 @@
     "usersMeaning": "系統記錄的登入工作階段，不代表所有 SSH 連線。"
   },
   "savedConnections": {
+    "openFileManager": "開啟檔案管理員",
+    "openFileManagerSftpDisabled": "開啟檔案管理員（SFTP 已停用）",
+    "fileManagerConnectionUnavailable": "此已儲存的連線已無法使用。",
+    "fileManagerRequiresSsh": "開啟檔案管理員需要 SSH 連線。",
+    "fileManagerSftpDisabled": "此 SSH 連線已停用 SFTP。",
     "dropRoot": "移至根層級",
     "sessionImportTitle": "匯入工作階段",
     "restoreBackupTitle": "還原 NyaTerm 備份",

@@ -2577,6 +2577,11 @@
     "usersMeaning": "Sessions enregistrées par le système, pas toutes les connexions SSH."
   },
   "savedConnections": {
+    "openFileManager": "Ouvrir le gestionnaire de fichiers",
+    "openFileManagerSftpDisabled": "Ouvrir le gestionnaire de fichiers (SFTP désactivé)",
+    "fileManagerConnectionUnavailable": "Cette connexion enregistrée n’est plus disponible.",
+    "fileManagerRequiresSsh": "L’ouverture du gestionnaire de fichiers nécessite une connexion SSH.",
+    "fileManagerSftpDisabled": "SFTP est désactivé pour cette connexion SSH.",
     "dropRoot": "Déplacer à la racine",
     "sessionImportTitle": "Importer des sessions",
     "restoreBackupTitle": "Restaurer une sauvegarde NyaTerm",

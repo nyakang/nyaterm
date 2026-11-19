@@ -1,7 +1,8 @@
 use rust_i18n::t;
 
 use gpui::{Context, Window};
-use nyaterm_core::SavedConnection;
+use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
+use nyaterm_core::{ConnectionType, SavedConnection};
 
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
 
@@ -105,6 +106,46 @@ impl NyaTermApp {
         self.start_resolved_saved_connections(connections, window, cx);
     }
 
+    pub(in crate::features) fn open_saved_connection_file_manager_by_id(
+        &mut self,
+        connection_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Resolve at activation time: an open menu must not retain an old endpoint
+        // or bypass a file-access policy changed since the menu was opened.
+        let connection = self
+            .connection_state
+            .connection_by_id(connection_id)
+            .cloned();
+        let error = match connection.as_ref() {
+            None => Some(t!("savedConnections.fileManagerConnectionUnavailable")),
+            Some(connection) if !matches!(connection.config, ConnectionType::Ssh { .. }) => {
+                Some(t!("savedConnections.fileManagerRequiresSsh"))
+            }
+            Some(connection) if !connection.sftp.enabled => {
+                Some(t!("savedConnections.fileManagerSftpDisabled"))
+            }
+            Some(_) => None,
+        };
+        if let Some(error) = error {
+            self.shell.set_status(error.to_string());
+            cx.notify();
+            return;
+        }
+        if let Some(connection) = connection {
+            self.start_saved_connection_with_options(
+                connection,
+                SavedConnectionStartOptions {
+                    ssh_runtime_mode: Some(SshRuntimeMode::Sftp),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+        }
+    }
+
     fn start_resolved_saved_connections(
         &mut self,
         mut connections: Vec<SavedConnection>,
@@ -203,3 +244,6 @@ impl NyaTermApp {
         started
     }
 }
+
+#[cfg(test)]
+mod tests;
