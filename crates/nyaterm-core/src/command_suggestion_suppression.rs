@@ -260,6 +260,12 @@ pub fn command_starts_interactive_input(command: &str) -> bool {
             };
             let name = command_name(first);
             match name.as_str() {
+                "cat" => {
+                    tokens.len() == 1
+                        || tokens.iter().skip(1).all(|token| token.starts_with('-'))
+                        || tokens.iter().skip(1).any(|token| token == "-")
+                }
+                "tee" => true,
                 "cmd" | "powershell" | "pwsh" | "bash" | "zsh" | "fish" | "sh" | "wsl" => {
                     tokens.len() == 1
                         || tokens
@@ -317,7 +323,7 @@ pub fn command_starts_line_editor(command: &str) -> bool {
         }
         // A remote command may be cat, even with -t. Require its prompt rather
         // than treating all ssh invocations as a line editor.
-        "ssh" | "telnet" | "ftp" | "sftp" => false,
+        "ssh" | "telnet" | "ftp" | "sftp" | "cat" | "tee" => false,
         _ => {
             !tokens.iter().any(|token| {
                 matches!(
@@ -426,6 +432,10 @@ mod navigation_tests {
             "node",
             "env A=1 psql",
             "less file",
+            "cat",
+            "cat -n",
+            "cat - file",
+            "tee output.txt",
         ] {
             assert!(command_starts_interactive_input(command), "{command}");
         }
@@ -434,6 +444,7 @@ mod navigation_tests {
             "node task.js",
             "python -c 'print(1)'",
             "ls",
+            "cat file.txt",
         ] {
             assert!(!command_starts_interactive_input(command), "{command}");
         }

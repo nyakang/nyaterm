@@ -2115,6 +2115,7 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
         command_mark: original.command_mark,
         line_id: original.line_id,
         shell_input: original.shell_input,
+        inferred_input: original.inferred_input,
         shell_input_columns: original.shell_input_columns,
         shell_integration: original.shell_integration,
     };
@@ -2153,6 +2154,7 @@ fn snapshot_row_cache_prunes_to_limit() {
                 command_mark: None,
                 line_id: None,
                 shell_input: None,
+                inferred_input: false,
                 shell_input_columns: None,
                 shell_integration: false,
             },

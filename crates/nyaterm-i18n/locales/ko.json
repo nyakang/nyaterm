@@ -3268,7 +3268,7 @@
     "groupTransfer": "전송",
     "groupWorkspace": "작업 공간",
     "zebraStripes": "터미널 행 줄무늬",
-    "zebraStripesDesc": "셸 입력 영역과 클릭한 행을 강조하며, 행마다 배경색을 번갈아 표시할 수도 있습니다.",
+    "zebraStripesDesc": "셸 입력 영역과 클릭한 행을 강조하며, 행마다 배경색을 번갈아 표시할 수도 있습니다. 꺼도 명령 접기와 탐색은 사용할 수 있습니다.",
     "zebraStripesByRow": "행별로 표시",
     "zebraStripesByRowDesc": "터미널의 표시 행마다 배경색을 번갈아 표시합니다.",
     "syncHistory": {

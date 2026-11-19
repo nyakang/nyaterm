@@ -63,6 +63,100 @@ fn frame_color_query_replies(pipeline: &TerminalFramePipeline, session_id: &str)
 }
 
 #[test]
+fn fallback_submission_publishes_background_without_navigation_and_preserves_output_order() {
+    use nyaterm_core::terminal::input_tracker::TerminalInputState;
+    use nyaterm_terminal::command_navigation::command_submission_evidence;
+
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.submit_output("s1", b"$ echo hi".to_vec(), "UTF-8", 1000);
+    pipeline.finish_pending_output().unwrap();
+    let before = pipeline
+        .take_events_for_transfer(&["s1".into()])
+        .into_iter()
+        .filter_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => frame.snapshot,
+            _ => None,
+        })
+        .next_back()
+        .unwrap();
+    let evidence = command_submission_evidence(&before, &TerminalInputState::new(), b"\r").unwrap();
+    pipeline.note_command_input("s1".into(), Some(evidence));
+    pipeline.finish_pending_output().unwrap();
+    let events = pipeline.take_events_for_transfer(&["s1".into()]);
+    assert!(events.iter().any(|event| matches!(event,
+        TerminalFrameEvent::Snapshot(frame) if frame.snapshot.row(0).unwrap().inferred_input)));
+    pipeline.submit_output("s1", b"\r\nhi\r\n$ ".to_vec(), "UTF-8", 1000);
+    pipeline.finish_pending_output().unwrap();
+    let events = pipeline.take_events_for_transfer(&["s1".into()]);
+    assert!(events.iter().any(|event| matches!(event,
+        TerminalFrameEvent::Output(frame) if frame.snapshot.as_ref().is_some_and(|snapshot|
+            snapshot.command_blocks[0].complete && snapshot.command_blocks[0].output == (1..2)))));
+}
+
+#[test]
+fn inference_moves_with_the_session_but_reconnect_drops_pending_evidence() {
+    use nyaterm_core::terminal::input_tracker::TerminalInputState;
+    use nyaterm_terminal::command_navigation::command_submission_evidence;
+
+    for reconnect in [false, true] {
+        let source = TerminalFramePipeline::default();
+        let mut session = TerminalFrameSession::new("UTF-8", 1000);
+        session.screen.advance(b"$ echo hi");
+        let evidence = command_submission_evidence(
+            &session.screen.snapshot(),
+            &TerminalInputState::new(),
+            b"\r",
+        )
+        .unwrap();
+        session.screen.note_command_submission(evidence);
+        source
+            .insert_sessions_from_transfer(vec![("s1".into(), session)])
+            .unwrap();
+        let session = source.take_session_for_transfer("s1").unwrap().unwrap();
+        let destination = TerminalFramePipeline::default();
+        destination
+            .insert_sessions_from_transfer(vec![("s1".into(), session)])
+            .unwrap();
+        let id = if reconnect {
+            assert!(destination.rekey_session("s1", "new", "UTF-8", 1000));
+            "new"
+        } else {
+            "s1"
+        };
+        destination.submit_output(id, b"\r\nhi\r\n$ ".to_vec(), "UTF-8", 1000);
+        let session = destination.take_session_for_transfer(id).unwrap().unwrap();
+        assert_eq!(
+            session.screen.snapshot().command_blocks[0].complete,
+            !reconnect
+        );
+    }
+}
+
+#[test]
+fn navigation_reset_does_not_let_program_output_impersonate_local_editing() {
+    use nyaterm_core::terminal::input_tracker::TerminalInputState;
+    use nyaterm_terminal::command_navigation::command_submission_evidence;
+    let pipeline = TerminalFramePipeline::default();
+    let mut session = TerminalFrameSession::new("UTF-8", 1000);
+    session.screen.advance(b"$ echo hi");
+    let evidence = command_submission_evidence(
+        &session.screen.snapshot(),
+        &TerminalInputState::new(),
+        b"\r",
+    )
+    .unwrap();
+    session.screen.note_command_submission(evidence);
+    session.screen.advance(b"\r\nhi\r\n$ ");
+    pipeline
+        .insert_sessions_from_transfer(vec![("s1".into(), session)])
+        .unwrap();
+    pipeline.reset_command_navigation("s1".into());
+    pipeline.submit_output("s1", b"output rather than input".to_vec(), "UTF-8", 1000);
+    let session = pipeline.take_session_for_transfer("s1").unwrap().unwrap();
+    assert!(!session.screen.snapshot().command_blocks[0].complete);
+}
+
+#[test]
 fn frame_color_palette_reaches_existing_background_new_and_seeded_sessions() {
     let pipeline = TerminalFramePipeline::default();
     pipeline.ensure_session("existing", "UTF-8", 100);

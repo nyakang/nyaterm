@@ -3268,7 +3268,7 @@
     "groupTransfer": "資料傳輸",
     "groupWorkspace": "工作區",
     "zebraStripes": "終端行斑馬紋",
-    "zebraStripesDesc": "高亮 Shell 輸入區域和滑鼠點選的目標行，可切換為逐行交替底色。",
+    "zebraStripesDesc": "高亮 Shell 輸入區域和滑鼠點選的目標行，可切換為逐行交替底色。關閉背景不影響命令摺疊和導覽。",
     "zebraStripesByRow": "按行顯示",
     "zebraStripesByRowDesc": "按終端顯示行交替顯示背景色。",
     "syncHistory": {
