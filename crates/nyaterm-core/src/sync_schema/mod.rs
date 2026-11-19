@@ -163,6 +163,10 @@ pub fn valid_fixed_cloud_sync_value(field: &SyncFieldId, value: &Value) -> bool 
                             .values()
                             .all(fixed_scalar_or_list)
                 }
+                "connect_prompt" => value.as_object().is_some_and(|flags| {
+                    flags.values().all(Value::is_boolean)
+                        && pick(value, SERIAL_CONNECT_PROMPT_FIELDS) == *value
+                }),
                 _ => fixed_scalar_or_list(value),
             })
         }) && pick(value, connection_fields(name)) == *value;
@@ -439,17 +443,13 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         result["post_login"] = pick(post_login, &["enabled", "command", "delay_ms"]);
     }
     if kind == "serial" {
-        result["serial"] = pick(
-            source,
-            &[
-                "baud_rate",
-                "data_bits",
-                "parity",
-                "stop_bits",
-                "flow_control",
-                "connect_prompt",
-            ],
-        );
+        result["serial"] = pick(source, connection_fields("serial"));
+        if let Some(prompt) = result["serial"]
+            .get_mut("connect_prompt")
+            .filter(|value| value.is_object())
+        {
+            *prompt = pick(prompt, SERIAL_CONNECT_PROMPT_FIELDS);
+        }
     }
     if let Some(asset) = source.get("asset") {
         let portable = pick(asset, &["tags", "notes"]);
@@ -559,6 +559,7 @@ pub fn apply_record(kind: &str, original: &Value, projected: &Value) -> Result<V
                     let nested_fields: &[&str] = match key.as_str() {
                         "device" => &["kind", "serial", "host", "port"],
                         "screen" => &["max_size", "max_fps", "bit_rate", "view_only"],
+                        "connect_prompt" => SERIAL_CONNECT_PROMPT_FIELDS,
                         _ => &[],
                     };
                     if nested_fields.is_empty() {
@@ -717,6 +718,8 @@ fn overlay_classified(original: &Value, before: &Value, after: &Value) -> Value 
     Value::Object(result)
 }
 
+const SERIAL_CONNECT_PROMPT_FIELDS: &[&str] = &["port", "baud_rate"];
+
 fn connection_fields(field: &str) -> &'static [&'static str] {
     match field {
         "endpoint" => &["type", "host", "port", "username", "domain", "device"],
@@ -764,6 +767,7 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
             "parity",
             "stop_bits",
             "flow_control",
+            "connect_prompt",
         ],
         "icon" => &["icon", "icon_auto_detect"],
         "asset" => &["tags", "notes"],
@@ -801,6 +805,17 @@ fn clear_connection_field(result: &mut Value, field: &str) {
             object.remove(field);
         } else {
             for key in connection_fields(field) {
+                if *key == "connect_prompt"
+                    && let Some(prompt) = object.get_mut(*key).and_then(Value::as_object_mut)
+                {
+                    // Clearing the known flags must preserve local future options.
+                    for flag in SERIAL_CONNECT_PROMPT_FIELDS {
+                        prompt.remove(*flag);
+                    }
+                    if !prompt.is_empty() {
+                        continue;
+                    }
+                }
                 object.remove(*key);
             }
         }
