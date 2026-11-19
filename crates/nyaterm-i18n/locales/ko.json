@@ -1698,7 +1698,9 @@
     "openLeft": "왼쪽에서 열기",
     "openRight": "오른쪽에서 열기",
     "openWorkspace": "작업 영역에서 파일 관리자 열기",
-    "goHome": "홈"
+    "goHome": "홈",
+    "goBack": "뒤로",
+    "goForward": "앞으로"
   },
   "fileTransfer": {
     "scanning": "파일 검색 중…",

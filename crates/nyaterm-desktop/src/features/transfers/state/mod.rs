@@ -67,6 +67,8 @@ pub(in crate::features) struct TransferFeatureState {
     worker_cleanup: BackgroundCleanup,
     paths: TransferPathState,
     pub(super) browser: TransferBrowserState,
+    temporary_browser_favorites:
+        HashMap<super::file_operations::FileOperationEndpoint, Vec<String>>,
     /// The memo over `browser.entries`.
     ///
     /// A coalesced progress batch moves job byte counts and nothing this listing is
@@ -388,6 +390,7 @@ impl TransferFeatureState {
             worker_cleanup: BackgroundCleanup::new(background_executor),
             paths: TransferPathState::new(remote_path, local_path, duplicate_policy),
             browser_filter: BrowserFilterCache::default(),
+            temporary_browser_favorites: HashMap::new(),
             browser: TransferBrowserState {
                 path: ".".to_string(),
                 raw_path_token: None,

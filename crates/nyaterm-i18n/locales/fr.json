@@ -1698,7 +1698,9 @@
     "openLeft": "Ouvrir à gauche",
     "openRight": "Ouvrir à droite",
     "openWorkspace": "Ouvrir le gestionnaire de fichiers dans l’espace de travail",
-    "goHome": "Accueil"
+    "goHome": "Accueil",
+    "goBack": "Précédent",
+    "goForward": "Suivant"
   },
   "fileTransfer": {
     "scanning": "Analyse des fichiers…",

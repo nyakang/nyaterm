@@ -10,6 +10,7 @@ mod dialog;
 mod document_editor;
 pub mod document_snapshot;
 pub mod document_syntax;
+pub mod file_navigation;
 pub mod hex_editor;
 mod hover_card;
 pub mod icons;

@@ -1698,7 +1698,9 @@
     "openLeft": "Open on the left",
     "openRight": "Open on the right",
     "openWorkspace": "Open File Manager in workspace",
-    "goHome": "Home"
+    "goHome": "Home",
+    "goBack": "Back",
+    "goForward": "Forward"
   },
   "fileTransfer": {
     "scanning": "Scanning files…",

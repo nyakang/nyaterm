@@ -612,6 +612,7 @@ impl NyaTermApp {
             .sftp_workspaces
             .insert(id.to_string(), view);
         self.refresh_file_manager_pane(format!("sftp-{id}"), PaneId::Left, cx);
+        self.refresh_file_manager_pane(format!("sftp-{id}"), PaneId::Right, cx);
     }
 
     pub(in crate::features) fn sftp_session_content(&self, id: &str) -> gpui::AnyElement {

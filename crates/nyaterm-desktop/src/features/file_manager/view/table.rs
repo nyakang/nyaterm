@@ -15,7 +15,7 @@ use gpui::{
     AnyElement, Context, CursorStyle, DragMoveEvent, IntoElement, MouseButton, MouseDownEvent,
     SharedString, div, prelude::*, px, rgb, uniform_list,
 };
-use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
+use nyaterm_files::file_browser::listing::{FileBrowserSortColumn, FileBrowserSortDirection};
 use nyaterm_files::sftp::SftpFileEntry;
 use nyaterm_ui::{
     NyaContextMenu, NyaHorizontalScrollbar, NyaMenuItem, NyaTooltip, NyaUniformListScrollbar,
@@ -266,12 +266,10 @@ impl FileManagerWorkspace {
             .border_color(rgb(palette.border));
         for &(column, width) in columns {
             let label_key = format!("fileManager.columns.{}", column_key(column));
-            let marker = if self.pane(pane).sort_column == column {
-                crate::models::transfer_ui::browser_sort_direction_marker(
-                    self.pane(pane).sort_direction,
-                )
-            } else {
-                ""
+            let is_active = self.pane(pane).sort_column == column;
+            let direction_icon = match self.pane(pane).sort_direction {
+                FileBrowserSortDirection::Ascending => "icons/fe/sort-ascending.svg",
+                FileBrowserSortDirection::Descending => "icons/fe/sort-descending.svg",
             };
             let mut label = div()
                 .id(SharedString::from(format!(
@@ -285,15 +283,20 @@ impl FileManagerWorkspace {
                 .relative()
                 .flex()
                 .items_center()
+                .gap_1()
                 .px_2()
                 .text_xs()
                 .cursor_pointer()
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(format!("{} {marker}", t!(&label_key))),
-                )
+                .child(div().min_w_0().truncate().child(t!(&label_key).to_string()))
+                .when(is_active, |label| {
+                    label.child(
+                        gpui::svg()
+                            .size(px(14.))
+                            .flex_none()
+                            .path(direction_icon)
+                            .text_color(rgb(palette.link)),
+                    )
+                })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
                     let state = this.pane_mut(pane);

@@ -1698,7 +1698,9 @@
     "openLeft": "左側で開く",
     "openRight": "右側で開く",
     "openWorkspace": "ワークスペースでファイルマネージャーを開く",
-    "goHome": "ホーム"
+    "goHome": "ホーム",
+    "goBack": "戻る",
+    "goForward": "進む"
   },
   "fileTransfer": {
     "scanning": "ファイルをスキャン中…",

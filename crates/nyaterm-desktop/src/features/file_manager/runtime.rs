@@ -188,6 +188,7 @@ impl NyaTermApp {
                     let pane = workspace.pane_mut(pane_id);
                     pane.disconnected = true;
                     pane.loading = false;
+                    pane.home_dir_pending = false;
                     pane.error = Some(crate::features::android::labels::file_error_message(&error));
                     cx.notify();
                 });
@@ -197,6 +198,8 @@ impl NyaTermApp {
         let generation = workspace.update(cx, |workspace, cx| {
             let pane = workspace.pane_mut(pane_id);
             pane.generation = pane.generation.wrapping_add(1);
+            pane.path_menu = None;
+            pane.path_editing = false;
             pane.loading = true;
             pane.error = None;
             cx.notify();
@@ -248,6 +251,7 @@ impl NyaTermApp {
                     Err(error) => workspace.update(cx, |workspace, cx| {
                         let pane = workspace.pane_mut(pane_id);
                         pane.loading = false;
+                        pane.home_dir_pending = false;
                         pane.error =
                             Some(crate::features::android::labels::file_error_message(&error));
                         cx.notify();

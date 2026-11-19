@@ -1698,7 +1698,9 @@
     "openLeft": "在左側開啟",
     "openRight": "在右側開啟",
     "openWorkspace": "在工作區開啟檔案管理器",
-    "goHome": "主目錄"
+    "goHome": "主目錄",
+    "goBack": "上一頁",
+    "goForward": "下一頁"
   },
   "fileTransfer": {
     "scanning": "正在掃描檔案…",

@@ -544,23 +544,9 @@ pub(in crate::features::pages::transfers) fn transfer_browser_view(
                         )
                         .when(search_expanded && !tree_mode, |toolbar| {
                             toolbar.child(
-                                div()
+                                nyaterm_ui::file_navigation::search_overlay(palette, div().h_full().min_w_0().flex_1().flex().children(search_input))
                                     .id(SharedString::from("transfer-browser-search-overlay"))
-                                    .absolute()
-                                    .top(px(4.))
-                                    .bottom(px(4.))
-                                    .left(px(6.))
-                                    .right(px(6.))
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(rgb(palette.primary))
-                                    .bg(rgb(palette.surface))
-                                    .shadow_lg()
-                                    .occlude()
-                                    .flex()
-                                    .items_center()
-                                    .on_click(|_, _, cx| cx.stop_propagation())
-                                    .children(search_input),
+                                    .on_click(|_, _, cx| cx.stop_propagation()),
                             )
                         }),
                 )

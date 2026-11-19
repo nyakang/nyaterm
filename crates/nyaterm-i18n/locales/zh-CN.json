@@ -1698,7 +1698,9 @@
     "openLeft": "在左侧打开",
     "openRight": "在右侧打开",
     "openWorkspace": "在工作区打开文件管理器",
-    "goHome": "主目录"
+    "goHome": "主目录",
+    "goBack": "后退",
+    "goForward": "前进"
   },
   "fileTransfer": {
     "scanning": "正在扫描文件…",

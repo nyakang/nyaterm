@@ -560,6 +560,7 @@ pub struct NyaDropdownMenu {
     id: SharedString,
     label: Option<SharedString>,
     content: Option<AnyElement>,
+    select_trigger: bool,
     icon_path: Option<SharedString>,
     icon_size: Option<Pixels>,
     tooltip: Option<SharedString>,
@@ -588,6 +589,7 @@ impl NyaDropdownMenu {
             id: id.into(),
             label: None,
             content: None,
+            select_trigger: false,
             icon_path: None,
             icon_size: None,
             tooltip: None,
@@ -612,6 +614,12 @@ impl NyaDropdownMenu {
     /// A full-width trigger with caller-owned, truncatable content.
     pub fn content(mut self, content: impl IntoElement) -> Self {
         self.content = Some(content.into_any_element());
+        self
+    }
+
+    /// A bordered, full-width choice button with a trailing dropdown indicator.
+    pub fn select_trigger(mut self) -> Self {
+        self.select_trigger = true;
         self
     }
 
@@ -704,12 +712,30 @@ impl NyaDropdownMenu {
 
 impl RenderOnce for NyaDropdownMenu {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let mut trigger = Button::new(self.id).ghost().small();
-        if let Some(label) = self.label {
-            trigger = trigger.label(label);
-        }
-        if let Some(content) = self.content {
-            trigger = trigger.w_full().child(content);
+        let mut trigger = Button::new(self.id).small();
+        if self.select_trigger {
+            let mut content = div().min_w_0().flex_1().text_left().truncate();
+            if let Some(label) = self.label {
+                trigger = trigger.accessibility_label(label.clone());
+                content = content.child(label);
+            }
+            if let Some(custom_content) = self.content {
+                content = content.child(custom_content);
+            }
+            trigger = trigger
+                .w_full()
+                .min_w_0()
+                .cursor_pointer()
+                .dropdown_caret(true)
+                .child(content);
+        } else {
+            trigger = trigger.ghost();
+            if let Some(label) = self.label {
+                trigger = trigger.label(label);
+            }
+            if let Some(content) = self.content {
+                trigger = trigger.w_full().child(content);
+            }
         }
         if let Some(icon_path) = self.icon_path {
             let icon = Icon::default()
@@ -886,9 +912,74 @@ mod tests {
     };
 
     use super::{
-        NyaContextMenu, NyaMenuItem, NyaMenuItemKind, popup_menu_should_scroll,
+        NyaContextMenu, NyaDropdownMenu, NyaMenuItem, NyaMenuItemKind, popup_menu_should_scroll,
         resolved_menu_widths, submenu_direction_probe_width,
     };
+
+    struct SourceChoiceFixture(Rc<Cell<bool>>);
+
+    impl Render for SourceChoiceFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let selected = self.0.clone();
+            div()
+                .id("source-choice-container")
+                .tab_group()
+                .w(px(120.))
+                .child(
+                    NyaDropdownMenu::new("source-choice")
+                        .select_trigger()
+                        .label("A remote connection name longer than the available width")
+                        .items([NyaMenuItem::action("Local").on_click(move |_, _, _| {
+                            selected.set(true);
+                        })]),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn select_trigger_supports_trailing_edge_clicks_and_keyboard_navigation(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let selected = Rc::new(Cell::new(false));
+        let (_, cx) = cx.add_window_view({
+            let selected = selected.clone();
+            move |_, _| SourceChoiceFixture(selected.clone())
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        cx.simulate_click(point(px(114.), px(12.)), Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            assert!(super::nya_popup_is_active(window, cx));
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            assert!(!super::nya_popup_is_active(window, cx));
+            window.focus_next(cx);
+        });
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+            assert!(super::nya_popup_is_active(window, cx));
+        });
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        assert!(selected.get());
+        cx.update(|window, cx| assert!(!super::nya_popup_is_active(window, cx)));
+    }
 
     #[gpui::test]
     fn popup_query_releases_dismissed_and_destroyed_menus(cx: &mut TestAppContext) {

@@ -2,7 +2,9 @@ use crate::features::NyaTermApp;
 use crate::features::file_manager::pane::{PaneEndpoint, PaneId};
 use crate::features::file_manager::workspace::{FileManagerSeed, FileManagerWorkspace};
 use crate::features::settings::SettingsPersistenceDomain;
-use crate::features::test_support::{app_with_visible_local_session, session_focus_test_window};
+use crate::features::test_support::{
+    app_with_visible_local_session, app_with_visible_ssh_session, session_focus_test_window,
+};
 use gpui::{
     App, AppContext as _, Entity, KeyDownEvent, Keystroke, TestAppContext, VisualTestContext,
 };
@@ -60,6 +62,55 @@ fn wait_for_listings(cx: &mut VisualTestContext, workspace: &Entity<FileManagerW
         for id in [PaneId::Left, PaneId::Right] {
             assert!(workspace.read(cx).pane(id).error.is_none());
         }
+    });
+}
+
+#[gpui::test]
+fn opening_an_sftp_session_loads_the_local_pane_without_a_manual_refresh(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-sftp-initial-local-listing");
+    let session_id = "sftp-initial-local-listing";
+    let app = app_with_visible_ssh_session(cx, root.path(), session_id);
+    let workspace = app.update(cx, |app, cx| {
+        let metadata = app.session.metadata_mut(session_id).unwrap();
+        metadata.confirmed_ssh_runtime_mode =
+            Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp);
+        metadata.disconnected = true;
+        app.ensure_sftp_session_view(session_id, cx);
+        app.file_manager
+            .workspace(&format!("sftp-{session_id}"))
+            .unwrap()
+    });
+    cx.read(|cx| {
+        let local = workspace.read(cx).pane(PaneId::Right);
+        assert_eq!(local.endpoint, PaneEndpoint::Local);
+        assert!(
+            local.generation > 0,
+            "opening the view must start the local load"
+        );
+    });
+    let cx = session_focus_test_window(cx, &app);
+    wait_for(cx, "initial local listing", |cx| {
+        let local = workspace.read(cx).pane(PaneId::Right);
+        !local.loading && local.last_successful_path.is_some()
+    });
+    let generation = cx.read(|cx| {
+        let local = workspace.read(cx).pane(PaneId::Right);
+        assert!(local.error.is_none());
+        assert!(!local.home_dir_pending);
+        assert!(!local.home_dir.is_empty());
+        assert_eq!(local.path.display_path, local.home_dir);
+        assert_eq!(local.last_successful_path.as_ref(), Some(&local.path));
+        // The local listing must complete even without a connected remote backend.
+        assert!(workspace.read(cx).pane(PaneId::Left).error.is_some());
+        local.generation
+    });
+    app.update(cx, |app, cx| app.ensure_sftp_session_view(session_id, cx));
+    cx.read(|cx| {
+        assert_eq!(
+            workspace.read(cx).pane(PaneId::Right).generation,
+            generation
+        );
     });
 }
 
@@ -205,6 +256,330 @@ fn draw_file_manager(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn source_dropdown_switches_a_narrow_pane_and_releases_the_workspace(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-source-dropdown");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    workspace.update(cx, |workspace, _| {
+        workspace.split_percent = 20;
+        workspace.left.endpoint = PaneEndpoint::OfflineConnection("offline-source".into());
+        workspace.right.select_entry("kept-right".into());
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    let source = cx.debug_bounds("file-manager-source-left").unwrap();
+    cx.simulate_click(
+        gpui::point(source.right() - gpui::px(10.), source.center().y),
+        Default::default(),
+    );
+    draw_file_manager(cx);
+    cx.update(|window, cx| assert!(nyaterm_ui::nya_popup_is_active(window, cx)));
+    cx.simulate_keystrokes("down enter");
+    draw_file_manager(cx);
+    wait_for_listings(cx, &workspace);
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert_eq!(state.left.endpoint, PaneEndpoint::Local);
+        assert!(state.left.generation > 0);
+        assert_eq!(state.right.selected_path.as_deref(), Some("kept-right"));
+    });
+}
+
+#[gpui::test]
+fn search_opens_on_typing_and_escape_clears_then_restores_list_focus(cx: &mut TestAppContext) {
+    let root = TestTempDir::new("nyaterm-file-manager-search-overlay");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    cx.update(|window, cx| {
+        workspace.update(cx, |state, cx| state.focus_pane(PaneId::Left, window, cx))
+    });
+    cx.simulate_keystrokes("a");
+    draw_file_manager(cx);
+    cx.update(|window, cx| {
+        let state = workspace.read(cx);
+        assert!(state.left.search_expanded);
+        assert_eq!(state.left.search, "a");
+        assert!(
+            state
+                .inputs(PaneId::Left)
+                .search
+                .read(cx)
+                .component_focus_handle(cx)
+                .contains_focused(window, cx)
+        );
+        assert!(state.right.search.is_empty());
+    });
+    cx.simulate_keystrokes("escape");
+    draw_file_manager(cx);
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert!(state.left.search_expanded);
+        assert!(state.left.search.is_empty());
+    });
+    cx.simulate_keystrokes("escape");
+    draw_file_manager(cx);
+    cx.update(|window, cx| {
+        let state = workspace.read(cx);
+        assert!(!state.left.search_expanded);
+        assert!(state.left.focus.is_focused(window));
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-f"
+    } else {
+        "ctrl-f"
+    });
+    draw_file_manager(cx);
+    cx.read(|cx| assert!(workspace.read(cx).left.search_expanded));
+}
+
+#[gpui::test]
+fn child_menu_keeps_endpoint_identity_and_discards_a_closed_request(cx: &mut TestAppContext) {
+    use crate::features::file_manager::navigation_runtime::ChildrenRequest;
+    use crate::features::file_manager::pane::PanePathMenu;
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-children");
+    std::fs::create_dir_all(root.join("child")).unwrap();
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    let path = RemoteFilePath::new(root.path().to_string_lossy());
+    let workspace = workspace(cx, &app, &path.display_path);
+    let cx = session_focus_test_window(cx, &app);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.file_manager_children(
+                "file-manager-reentrancy".into(),
+                PaneId::Right,
+                ChildrenRequest {
+                    endpoint: PaneEndpoint::Local,
+                    generation: 0,
+                    path: path.clone(),
+                    branch: None,
+                },
+                cx,
+            )
+        })
+    });
+    wait_for(cx, "child-directory menu", |cx| {
+        matches!(
+            workspace.read(cx).right.path_menu,
+            Some(PanePathMenu::Children {
+                result: Some(_),
+                ..
+            })
+        )
+    });
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        let Some(PanePathMenu::Children {
+            result: Some(Ok(entries)),
+            ..
+        }) = &state.right.path_menu
+        else {
+            panic!("missing directory listing")
+        };
+        assert!(entries.iter().any(|entry| entry.name == "child"));
+        assert!(state.left.path_menu.is_none());
+    });
+    cx.update(|_, cx| {
+        workspace.update(cx, |state, _| {
+            state.right.path_menu = None;
+            assert!(!state.right.apply_children_result(
+                0,
+                &PaneEndpoint::Local,
+                1,
+                &path,
+                Ok(vec![])
+            ));
+        })
+    });
+    // A deferred click from an earlier source must not open a menu on the new source.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.file_manager_children(
+                "file-manager-reentrancy".into(),
+                PaneId::Left,
+                ChildrenRequest {
+                    endpoint: PaneEndpoint::Session("old-source".into()),
+                    generation: 0,
+                    path: path.clone(),
+                    branch: None,
+                },
+                cx,
+            )
+        })
+    });
+    cx.read(|cx| assert!(workspace.read(cx).left.path_menu.is_none()));
+}
+
+#[gpui::test]
+fn favorites_share_saved_connection_settings_and_keep_temporary_sources_in_memory(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-favorites");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    app.update(cx, |app, cx| {
+        let saved = PaneEndpoint::OfflineConnection("saved-source".into());
+        app.set_file_manager_favorite(saved.clone(), "/favorite".into(), true, cx);
+        assert_eq!(app.file_manager_favorites(&saved), ["/favorite"]);
+        assert_eq!(
+            app.settings
+                .summary()
+                .ui_file_explorer_favorite_dirs_by_connection_id["saved-source"],
+            ["/favorite"]
+        );
+        app.set_file_manager_favorite(PaneEndpoint::Local, "C:\\temporary".into(), true, cx);
+        assert_eq!(
+            app.file_manager_favorites(&PaneEndpoint::Local),
+            ["C:\\temporary"]
+        );
+        assert_eq!(app.file_manager_favorites(&saved), ["/favorite"]);
+        app.set_file_manager_favorite(saved.clone(), "/favorite".into(), false, cx);
+        assert!(app.file_manager_favorites(&saved).is_empty());
+        assert!(
+            !app.settings
+                .summary()
+                .ui_file_explorer_favorite_dirs_by_connection_id
+                .contains_key("saved-source")
+        );
+    });
+}
+
+#[gpui::test]
+fn breadcrumb_popup_mouse_and_keyboard_navigation_keep_the_original_path(cx: &mut TestAppContext) {
+    use crate::features::file_manager::pane::PanePathMenu;
+    use gpui::{Modifiers, MouseButton};
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-path-popup");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    std::fs::create_dir_all(root.join("child")).unwrap();
+    let path = RemoteFilePath::new(root.join("child").to_string_lossy());
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let workspace = workspace(cx, &app, &root.path().to_string_lossy());
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    for keyboard in [false, true] {
+        cx.update(|window, cx| {
+            workspace.update(cx, |state, cx| {
+                state.focus_pane(PaneId::Right, window, cx);
+                state
+                    .right
+                    .open_path_menu(PanePathMenu::Paths(vec![("child".into(), path.clone())]));
+                cx.notify();
+            })
+        });
+        draw_file_manager(cx);
+        if keyboard {
+            cx.simulate_keystrokes("enter");
+        } else {
+            let row = cx.debug_bounds("fm-path-item-right-0").unwrap();
+            cx.simulate_mouse_down(row.center(), MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_up(row.center(), MouseButton::Left, Modifiers::none());
+        }
+        wait_for_listings(cx, &workspace);
+        cx.read(|cx| {
+            let state = workspace.read(cx);
+            assert_eq!(state.right.path, path);
+            assert!(state.right.path_menu.is_none());
+        });
+    }
+}
+
+#[gpui::test]
+fn editing_a_restored_path_resolves_home_without_navigating_and_expands_tilde(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-path-home");
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let original = root.path().to_string_lossy().into_owned();
+    let home = root.join("home").to_string_lossy().into_owned();
+    let workspace = workspace(cx, &app, &original);
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    cx.update(|window, cx| {
+        workspace.update(cx, |state, cx| {
+            state.begin_path_edit(PaneId::Right, window, cx)
+        })
+    });
+    wait_for(cx, "path home lookup", |cx| {
+        !workspace.read(cx).right.home_dir_pending
+    });
+    cx.update(|window, cx| {
+        workspace.update(cx, |state, cx| {
+            assert_eq!(state.right.path.display_path, original);
+            assert!(!state.right.home_dir.is_empty());
+            state.right.home_dir = home.clone();
+            state.inputs(PaneId::Right).path.update(cx, |input, cx| {
+                input.set_content_silent("~", cx);
+                input.focus_with_cursor_at_end(window, cx);
+            });
+        })
+    });
+    draw_file_manager(cx);
+    cx.simulate_keystrokes("enter");
+    wait_for_listings(cx, &workspace);
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert_eq!(state.right.path.display_path, home);
+        assert!(!state.right.path_editing);
+    });
+}
+
+#[gpui::test]
 fn parent_listing_reveals_selected_directory_after_list_layout(cx: &mut TestAppContext) {
     use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 
@@ -272,6 +647,7 @@ fn parent_listing_reveals_selected_directory_after_list_layout(cx: &mut TestAppC
 
 #[gpui::test]
 fn measured_workspace_switches_to_single_pane_and_keeps_input_focus(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
     let root = TestTempDir::new("nyaterm-file-manager-geometry");
     let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
     cx.update(|cx| {
@@ -304,6 +680,32 @@ fn measured_workspace_switches_to_single_pane_and_keeps_input_focus(cx: &mut Tes
         state.left.select_entry("kept-left".into());
         state.right.select_entry("kept-right".into());
     });
+    workspace.update(cx, |state, cx| {
+        state.split_percent = 20;
+        cx.notify();
+    });
+    draw_file_manager(cx);
+    for (pane, selector) in [
+        (PaneId::Left, "file-manager-actions-left"),
+        (PaneId::Right, "file-manager-actions-right"),
+    ] {
+        let actions = cx.debug_bounds(selector).unwrap();
+        let source = cx
+            .debug_bounds(match pane {
+                PaneId::Left => "file-manager-source-left",
+                PaneId::Right => "file-manager-source-right",
+            })
+            .unwrap();
+        cx.read(|cx| {
+            let bounds =
+                workspace.read(cx).pane_bounds[if pane == PaneId::Left { 0 } else { 1 }].unwrap();
+            assert!(actions.origin.x >= bounds.origin.x);
+            assert!(actions.right() <= bounds.right());
+            assert!(source.origin.x >= bounds.origin.x);
+            assert!(source.right() <= bounds.right());
+            assert!(source.size.width > gpui::px(24.));
+        });
+    }
     fixture.update(cx, |fixture, cx| {
         fixture.width = 540.;
         cx.notify();
@@ -354,6 +756,129 @@ fn measured_workspace_switches_to_single_pane_and_keeps_input_focus(cx: &mut Tes
     for scale in [1., 1.25, 1.5, 2.] {
         cx.simulate_scale_factor_change(scale);
         draw_file_manager(cx);
+        let actions = cx.debug_bounds("file-manager-actions-right").unwrap();
+        cx.read(|cx| {
+            let pane = workspace.read(cx).pane_bounds[1].unwrap();
+            assert!(actions.origin.x >= pane.origin.x);
+            assert!(actions.right() <= pane.right());
+        });
+    }
+}
+
+#[gpui::test]
+fn either_pane_swap_button_keeps_search_selection_and_focus_with_the_source(
+    cx: &mut TestAppContext,
+) {
+    use gpui::{Modifiers, MouseButton};
+
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-file-manager-toolbar-swap");
+    for name in ["left", "right"] {
+        let directory = root.join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(format!("{name}.txt")), b"fixture").unwrap();
+    }
+    let app = app_with_visible_local_session(cx, root.path(), "file-manager-test");
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    let workspace = workspace(cx, &app, &root.join("left").to_string_lossy());
+    workspace.update(cx, |state, cx| {
+        for (pane, name) in [(PaneId::Left, "left"), (PaneId::Right, "right")] {
+            let directory = root.join(name).to_string_lossy().into_owned();
+            let entries = nyaterm_files::file_browser::FileBrowserService::local()
+                .list_dir(&directory)
+                .unwrap();
+            let state = state.pane_mut(pane);
+            state.path = RemoteFilePath::new(directory);
+            state.select_entry(entries[0].identity_key());
+            state.entries = std::sync::Arc::new(entries);
+            state.search = name.to_string();
+        }
+        for pane in [PaneId::Left, PaneId::Right] {
+            let search = state.pane(pane).search.clone();
+            state
+                .inputs(pane)
+                .search
+                .update(cx, |input, cx| input.set_content_silent(&search, cx));
+        }
+        state.active = PaneId::Right;
+    });
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+
+    for (clicked, selector) in [
+        (PaneId::Left, "file-manager-swap-left"),
+        (PaneId::Right, "file-manager-swap-right"),
+    ] {
+        workspace.update(cx, |state, cx| {
+            state.pane_mut(clicked).search.clear();
+            state.pane_mut(clicked).search_expanded = false;
+            state
+                .inputs(clicked)
+                .search
+                .update(cx, |input, cx| input.set_content_silent("", cx));
+            cx.notify();
+        });
+        draw_file_manager(cx);
+        let previous = cx.read(|cx| {
+            let state = workspace.read(cx);
+            [PaneId::Left, PaneId::Right].map(|pane| {
+                let pane = state.pane(pane);
+                (
+                    pane.path.clone(),
+                    pane.search.clone(),
+                    pane.selected_paths.clone(),
+                )
+            })
+        });
+        let button = cx.debug_bounds(selector).unwrap();
+        cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::none());
+        draw_file_manager(cx);
+        wait_for_listings(cx, &workspace);
+        cx.update(|window, cx| {
+            let state = workspace.read(cx);
+            assert_eq!(state.active, clicked.other());
+            assert!(state.pane(state.active).focus.is_focused(window));
+            for (pane, expected) in [PaneId::Left, PaneId::Right]
+                .into_iter()
+                .zip(previous.iter().rev())
+            {
+                assert_eq!(state.pane(pane).path, expected.0);
+                assert_eq!(state.pane(pane).search, expected.1);
+                assert_eq!(state.pane(pane).selected_paths, expected.2);
+                if !expected.1.is_empty() {
+                    assert_eq!(state.inputs(pane).search.read(cx).value(cx), expected.1);
+                }
+            }
+        });
+        cx.update(|window, cx| {
+            workspace.update(cx, |state, cx| {
+                for (pane, expected) in [PaneId::Left, PaneId::Right]
+                    .into_iter()
+                    .zip(previous.iter().rev())
+                {
+                    if expected.1.is_empty() {
+                        // Hidden inputs apply their queued programmatic value when revealed.
+                        state.focus_search(pane, None, window, cx);
+                        assert_eq!(state.inputs(pane).search.read(cx).value(cx), expected.1);
+                        state.clear_or_close_search(pane, window, cx);
+                    }
+                }
+                state.focus_pane(clicked.other(), window, cx);
+            })
+        });
     }
 }
 
