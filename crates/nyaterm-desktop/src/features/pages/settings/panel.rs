@@ -2009,6 +2009,7 @@ forward_app_action!(
     toggle_startup_restore_window_layout,
     toggle_terminal_action_links,
     toggle_terminal_reconnect_restore_cwd,
+    toggle_terminal_serial_reconnect_send_enter,
     toggle_terminal_zebra_stripes,
     toggle_terminal_zebra_stripes_by_row,
     toggle_terminal_zoom_enabled,

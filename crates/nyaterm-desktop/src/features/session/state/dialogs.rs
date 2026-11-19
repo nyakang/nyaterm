@@ -108,6 +108,11 @@ impl SerialConnectPromptState {
     }
 }
 
+/// What the connect prompt was standing in for.
+///
+/// A fresh start defers its device to the prompt, and so does a reconnect whose
+/// device is no longer enumerated: the prompt answers where the board went, and
+/// the answer flows back into the same reconnect.
 pub(in crate::features) enum SerialConnectContinuation {
     Start(Box<SavedConnectionStartOptions>),
     Reconnect { session_id: String },

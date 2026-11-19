@@ -131,6 +131,10 @@ pub struct NyaTermApp {
     /// feature-owned background work have released their Windows file handles.
     #[cfg(test)]
     pub(in crate::features) _test_config_dir: Option<crate::test_support::TestConfigDir>,
+    /// The device enumeration a reconnect probe reports instead of asking the
+    /// OS. Real hardware is invisible to tests, so the fixtures name it.
+    #[cfg(test)]
+    pub(in crate::features) test_serial_ports: Option<Vec<nyaterm_transport::SerialPortInfo>>,
 }
 
 impl gpui::EventEmitter<NotesCatalogEvent> for NyaTermApp {}

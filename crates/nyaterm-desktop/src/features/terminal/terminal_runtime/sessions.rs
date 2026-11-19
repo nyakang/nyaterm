@@ -64,6 +64,37 @@ impl NyaTermApp {
         .detach();
     }
 
+    /// Serial consoles only print a prompt when they receive input, so a
+    /// reconnected tab would otherwise sit on the [Reconnecting…] banner until
+    /// the user typed a newline themselves. One Enter elicits the prompt; the
+    /// short delay lets the port open and the board settle first.
+    pub(in crate::features) fn schedule_serial_reconnect_enter(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this
+                    .session
+                    .metadata(&session_id)
+                    .is_none_or(|metadata| metadata.disconnected)
+                {
+                    return;
+                }
+                if this.send_terminal_input_to_session(session_id, vec![b'\r'], cx) {
+                    this.shell
+                        .set_status("enter sent to serial device".to_string());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(in crate::features) fn close_active_session(
         &mut self,
         window: &mut Window,

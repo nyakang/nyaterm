@@ -297,6 +297,122 @@ fn queued_transport_writer_preserves_character_at_a_time_mode() {
     );
 }
 
+struct FailingWriter;
+
+impl Write for FailingWriter {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("port gone"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A failed serial write means the device is gone: the worker reports the
+/// session exited so the tab reaches its disconnected state.
+#[test]
+fn serial_writer_error_reports_the_session_exited() {
+    let queue = SessionEventQueue::new();
+    let writer = QueuedTransportWriter::spawn_serial(
+        "serial-write".to_string(),
+        FailingWriter,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
+        queue.clone(),
+    )
+    .unwrap();
+
+    writer.write(b"x".to_vec()).expect("queued input");
+    let mut events = Vec::new();
+    wait_for_queue_state(
+        || {
+            events.extend(queue.drain(8).events);
+            events.len() >= 2
+        },
+        "error and exit events",
+    );
+    assert!(matches!(&events[0], SessionEvent::Error { .. }));
+    assert!(matches!(&events[1], SessionEvent::Exited { .. }));
+}
+
+/// Other transports keep the old behaviour: a write error is reported, but the
+/// session's lifecycle stays where it was.
+#[test]
+fn other_transport_writer_error_does_not_exit_the_session() {
+    let queue = SessionEventQueue::new();
+    let writer = QueuedTransportWriter::spawn(
+        "other-write".to_string(),
+        FailingWriter,
+        crate::transport_io::WriterFlushPolicy::AfterWrite,
+        queue.clone(),
+    )
+    .unwrap();
+
+    writer.write(b"x".to_vec()).expect("queued input");
+    let mut events = Vec::new();
+    wait_for_queue_state(
+        || {
+            events.extend(queue.drain(8).events);
+            !events.is_empty()
+        },
+        "the error event",
+    );
+    std::thread::sleep(Duration::from_millis(50));
+    events.extend(queue.drain(8).events);
+    assert!(matches!(&events[0], SessionEvent::Error { .. }));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Exited { .. }))
+    );
+}
+
+/// A serial read error is an unplugged board, not EOF: it must also report the
+/// exit, unless the session was closed on purpose.
+#[test]
+fn serial_reader_error_reports_the_session_exited() {
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("device gone"))
+        }
+    }
+
+    let queue = SessionEventQueue::new();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    crate::transport_io::spawn_serial_reader_thread(
+        "serial-read".to_string(),
+        FailingReader,
+        stop.clone(),
+        queue.clone(),
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    wait_for_queue_state(
+        || {
+            events.extend(queue.drain(8).events);
+            events.len() >= 2
+        },
+        "error and exit events",
+    );
+    assert!(matches!(&events[0], SessionEvent::Error { .. }));
+    assert!(matches!(&events[1], SessionEvent::Exited { .. }));
+
+    // An intentional close owns the session's end: no exit event follows.
+    let queue = SessionEventQueue::new();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    crate::transport_io::spawn_serial_reader_thread(
+        "serial-read-closed".to_string(),
+        FailingReader,
+        stop,
+        queue.clone(),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(queue.drain(8).events.is_empty());
+}
+
 #[test]
 fn local_session_echoes_output() {
     if cfg!(target_os = "windows") {
@@ -3272,6 +3388,7 @@ fn test_telnet_writer<W: Write + Send + 'static>(
                 stream,
             }),
         }),
+        false,
     )
     .unwrap()
 }

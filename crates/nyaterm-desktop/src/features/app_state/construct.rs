@@ -473,6 +473,8 @@ impl NyaTermApp {
             )),
             #[cfg(test)]
             _test_config_dir: None,
+            #[cfg(test)]
+            test_serial_ports: None,
         };
         app.update_custom_icons(custom_icons, cx);
         app.ensure_networktools_pump(cx);

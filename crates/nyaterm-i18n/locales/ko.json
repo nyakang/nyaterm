@@ -3367,6 +3367,8 @@
     "keepAliveInterval": "Keep-Alive 간격(초)",
     "reconnectRestoreCwd": "재연결 후 작업 디렉터리 복원",
     "reconnectRestoreCwdDesc": "SSH 세션을 마지막으로 신뢰된 작업 디렉터리로 되돌립니다.",
+    "serialReconnectEnter": "시리얼 재연결 후 Enter 전송",
+    "serialReconnectEnterDesc": "시리얼 세션이 재연결된 후 콘솔이 바로 프롬프트를 표시하도록 Enter를 한 번 보냅니다.",
     "keepAliveIntervalDesc": "X초마다 SSH keep-alive 패킷을 전송합니다. 0으로 설정해도 Keep-Alive가 비활성화됩니다.",
     "keepAliveMode": "SSH Keep-Alive 모드",
     "keepAliveModeCompatible": "호환 모드(권장)",

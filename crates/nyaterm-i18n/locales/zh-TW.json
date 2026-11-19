@@ -3367,6 +3367,8 @@
     "keepAliveInterval": "Keep-Alive 間隔 (秒)",
     "reconnectRestoreCwd": "重新連線後還原工作目錄",
     "reconnectRestoreCwdDesc": "將 SSH 工作階段還原到最後可信的工作目錄。",
+    "serialReconnectEnter": "串列埠重連後自動發送 Enter",
+    "serialReconnectEnterDesc": "串列埠工作階段重連成功後自動發送一次 Enter，讓主控台立即顯示命令列提示符。",
     "keepAliveIntervalDesc": "每隔 X 秒傳送 SSH keep-alive 資料包。設定為 0 也會停用 Keep-Alive。",
     "keepAliveMode": "SSH Keep-Alive 模式",
     "keepAliveModeCompatible": "相容模式（建議）",

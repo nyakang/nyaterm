@@ -214,6 +214,10 @@ impl SettingsFeatureState {
     pub(in crate::features) fn toggle_terminal_reconnect_restore_cwd(&mut self) {
         self.summary.terminal_reconnect_restore_cwd = !self.summary.terminal_reconnect_restore_cwd;
     }
+    pub(in crate::features) fn toggle_terminal_serial_reconnect_send_enter(&mut self) {
+        self.summary.terminal_serial_reconnect_send_enter =
+            !self.summary.terminal_serial_reconnect_send_enter;
+    }
     pub(in crate::features) fn toggle_multi_line_paste_dialog(&mut self) {
         self.summary.terminal_show_multi_line_paste_dialog =
             !self.summary.terminal_show_multi_line_paste_dialog;

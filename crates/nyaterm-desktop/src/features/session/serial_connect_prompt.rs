@@ -196,6 +196,8 @@ impl NyaTermApp {
                 }
             }
             SerialConnectContinuation::Reconnect { session_id } => {
+                // An explicit selection skips the reconnect probe, so the very
+                // device this dialog answered with is what gets opened.
                 self.reconnect_session_with_serial_selection(
                     session_id,
                     Some(selection),

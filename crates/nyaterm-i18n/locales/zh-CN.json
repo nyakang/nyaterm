@@ -3367,6 +3367,8 @@
     "keepAliveInterval": "Keep-Alive 间隔 (秒)",
     "reconnectRestoreCwd": "重连后恢复工作目录",
     "reconnectRestoreCwdDesc": "将 SSH 会话恢复到最后可信的工作目录。",
+    "serialReconnectEnter": "串口重连后自动发送回车",
+    "serialReconnectEnterDesc": "串口会话重连成功后自动发送一次回车，让控制台立即显示命令行提示符。",
     "keepAliveIntervalDesc": "每隔 X 秒发送 SSH keep-alive 控制包。设置为 0 以禁用。",
     "keepAliveMode": "Keep-alive 模式",
     "keepAliveModeCompatible": "兼容",

@@ -3367,6 +3367,8 @@
     "keepAliveInterval": "Intervalle Keep-Alive (secondes)",
     "reconnectRestoreCwd": "Restaurer le dossier après reconnexion",
     "reconnectRestoreCwdDesc": "Rétablit la session SSH dans le dernier dossier de travail fiable.",
+    "serialReconnectEnter": "Envoyer Entrée après reconnexion série",
+    "serialReconnectEnterDesc": "Après la reconnexion d'une session série, envoyer une Entrée pour que la console affiche son invite immédiatement.",
     "keepAliveIntervalDesc": "Envoyer des paquets SSH keep-alive toutes les X secondes. 0 pour désactiver.",
     "keepAliveMode": "Mode keep-alive",
     "keepAliveModeCompatible": "Compatible",

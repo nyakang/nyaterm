@@ -269,6 +269,11 @@ impl ConnectionStore {
                 &["terminal", "reconnect_restore_cwd"],
                 false,
             ),
+            terminal_serial_reconnect_send_enter: json_bool(
+                &value,
+                &["terminal", "serial_reconnect_send_enter"],
+                true,
+            ),
             terminal_low_latency_mode: json_bool(&value, &["terminal", "low_latency_mode"], false),
             terminal_zebra_stripes_enabled: json_bool(
                 &value,
@@ -1456,6 +1461,11 @@ impl ConnectionStore {
             &mut value,
             &["terminal", "reconnect_restore_cwd"],
             serde_json::Value::Bool(settings.terminal_reconnect_restore_cwd),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["terminal", "serial_reconnect_send_enter"],
+            serde_json::Value::Bool(settings.terminal_serial_reconnect_send_enter),
         );
         set_nested_json_value(
             &mut value,
