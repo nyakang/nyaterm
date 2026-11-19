@@ -224,6 +224,10 @@ impl SessionDialogState {
         true
     }
 
+    pub(in crate::features) fn clear_tab_actions_submenu(&mut self) -> bool {
+        self.tab_actions_submenu.take().is_some()
+    }
+
     pub(in crate::features) fn should_quit_after_close_all(&self) -> bool {
         self.pending_quit_after_close_all
     }
@@ -576,6 +580,9 @@ impl SessionFeatureState {
         submenu: TabActionsSubmenu,
     ) -> bool {
         self.dialogs.select_tab_actions_submenu(submenu)
+    }
+    pub(in crate::features) fn dialog_clear_tab_actions_submenu(&mut self) -> bool {
+        self.dialogs.clear_tab_actions_submenu()
     }
     pub(in crate::features) fn dialog_should_quit_after_close_all(&self) -> bool {
         self.dialogs.should_quit_after_close_all()
