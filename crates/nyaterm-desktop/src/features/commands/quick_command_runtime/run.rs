@@ -262,8 +262,12 @@ impl NyaTermApp {
         };
         if command.raw_send.unwrap_or_default() {
             let chunks = if let Some(send) = options.segmented_send {
-                match plan_segmented_quick_command(&command_text, send, self.active_session_kind())
-                {
+                match plan_segmented_quick_command(
+                    &command_text,
+                    send,
+                    self.active_session_kind(),
+                    true,
+                ) {
                     Ok(chunks) => chunks,
                     Err(error) => {
                         self.shell.set_status(error);
@@ -340,7 +344,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let chunks = if let Some(send) = options.segmented_send {
-            match plan_segmented_quick_command(&command_text, send, self.active_session_kind()) {
+            match plan_segmented_quick_command(
+                &command_text,
+                send,
+                self.active_session_kind(),
+                false,
+            ) {
                 Ok(chunks) => chunks,
                 Err(error) => {
                     self.shell.set_status(error);
@@ -632,18 +641,23 @@ fn plan_segmented_quick_command(
     text: &str,
     send: nyaterm_core::QuickCommandSegmentedSend,
     session_kind: Option<nyaterm_transport::SessionKind>,
+    literal: bool,
 ) -> Result<Vec<QuickCommandChunk>, String> {
     let mode = match send.mode {
         nyaterm_core::QuickCommandSegmentedSendMode::Line => SendCommandMode::Line,
         nyaterm_core::QuickCommandSegmentedSendMode::Character => SendCommandMode::Character,
     };
-    let units = build_send_command_units_for(
-        text,
-        SendCommandDataType::Text,
-        mode,
-        SendCommandLineEnding::Crlf,
-        session_kind,
-    )?;
+    let units = if literal && mode == SendCommandMode::Character {
+        text.chars().map(|ch| ch.to_string().into_bytes()).collect()
+    } else {
+        build_send_command_units_for(
+            text,
+            SendCommandDataType::Text,
+            mode,
+            SendCommandLineEnding::Crlf,
+            session_kind,
+        )?
+    };
     let interval = std::time::Duration::from_millis(send.interval_ms);
     Ok(units
         .into_iter()

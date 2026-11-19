@@ -90,6 +90,7 @@ fn segmented_plan_splits_lines_and_applies_interval_only_between_units() {
             interval_ms: 250,
         },
         Some(nyaterm_transport::SessionKind::Ssh),
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -121,6 +122,7 @@ fn segmented_plan_preserves_unicode_and_literal_script_escapes_by_character() {
             interval_ms: 20,
         },
         Some(nyaterm_transport::SessionKind::Telnet),
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -392,6 +394,27 @@ fn segmented_raw_characters_preserve_unicode_and_pause_escape_literally() {
     fixture.assert_wire(0, b"\\");
     fixture.advance();
     fixture.assert_wire(0, b"p");
+}
+
+#[test]
+fn segmented_literal_plan_preserves_actual_line_feed_by_character() {
+    let chunks = super::plan_segmented_quick_command(
+        "a\nb",
+        nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
+            interval_ms: 20,
+        },
+        Some(nyaterm_transport::SessionKind::Ssh),
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk.bytes.as_slice())
+            .collect::<Vec<_>>(),
+        [b"a".as_slice(), b"\n".as_slice(), b"b".as_slice()]
+    );
 }
 
 #[test]
