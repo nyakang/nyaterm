@@ -11,7 +11,9 @@ use nyaterm_files::file_browser::{
     FileBrowserBackendKind, file_browser_parent, file_browser_path_eq,
 };
 use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaContextMenu, NyaUniformListScrollbar};
+use nyaterm_ui::{
+    NyaButton, NyaButtonVariant, NyaContextMenu, NyaHoverCard, NyaUniformListScrollbar,
+};
 use rust_i18n::t;
 use std::ops::Range;
 
@@ -320,14 +322,29 @@ pub(super) fn transfer_tree_view(
                                             )
                                         })
                                         .when(!is_renaming, |this| {
-                                            this.child(
-                                                div()
-                                                    .min_w_0()
-                                                    .flex_1()
-                                                    .overflow_hidden()
-                                                    .text_ellipsis()
-                                                    .child(row.label),
-                                            )
+                                            let label = div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child(row.label);
+                                            // Action buttons and status markers keep their own
+                                            // tooltips instead of also opening file details.
+                                            let label = if let Some(details) = hover_details {
+                                                NyaHoverCard::new(
+                                                    format!("transfer-tree-entry-detail-{}", row.key),
+                                                    label,
+                                                    transfer_tree_hover_card(&details, palette),
+                                                )
+                                                .at_pointer()
+                                                .flexible_trigger()
+                                                .open_delay(std::time::Duration::from_millis(800))
+                                                .close_delay(std::time::Duration::from_millis(250))
+                                                .into_any_element()
+                                            } else {
+                                                label.into_any_element()
+                                            };
+                                            this.child(label)
                                         })
                                         .when(is_terminal_cwd, |this| {
                                             this.child(
@@ -368,15 +385,6 @@ pub(super) fn transfer_tree_view(
                                                             .build(window, cx)
                                                     }),
                                             )
-                                        })
-                                        .when_some(hover_details, |this, details| {
-                                            this.tooltip(move |window, cx| {
-                                                let details = details.clone();
-                                                nyaterm_ui::NyaTooltip::element(move |_, _| {
-                                                    transfer_tree_hover_card(&details, palette)
-                                                })
-                                                .build(window, cx)
-                                            })
                                         });
                                     div()
                                         .h(px(28.))

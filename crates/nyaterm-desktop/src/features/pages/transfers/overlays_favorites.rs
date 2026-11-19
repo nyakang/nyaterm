@@ -43,6 +43,7 @@ impl NyaTermApp {
 
     pub(in crate::features) fn transfer_browser_favorites_menu_overlay(
         &mut self,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
@@ -52,7 +53,26 @@ impl NyaTermApp {
         let current_path = normalized_transfer_browser_path(self.transfer.browser_view().path);
         let favorite_paths = self.transfer.browser_view().favorites.clone();
         let (viewport_w, viewport_h) = self.shell.viewport_size();
-        let menu_width = 220_f32.min((viewport_w - 16.).max(1.));
+        let font = self.gpui_ui_font().font();
+        let label_width = favorite_paths
+            .iter()
+            .map(String::as_str)
+            .chain([
+                t!("fileExplorer.addCurrentDirToFavorites").as_ref(),
+                t!("fileExplorer.noFavorites").as_ref(),
+            ])
+            .map(|label| {
+                let mut run = window.text_style().to_run(label.len());
+                run.font = font.clone();
+                f32::from(
+                    window
+                        .text_system()
+                        .shape_line(label.into(), px(12.), &[run], None)
+                        .width,
+                )
+            })
+            .fold(0., f32::max);
+        let menu_width = favorites_menu_width(label_width, viewport_w);
         let (menu_x, menu_y, menu_max_height) = transfer_menu_position(
             f32::from(state.x),
             f32::from(state.y),
@@ -161,7 +181,7 @@ impl NyaTermApp {
                     .child(NyaCompactMenuRow::new(
                         "transfer-browser-favorite-menu-add-current",
                         t!("fileExplorer.addCurrentDirToFavorites"),
-                        "icons/session/folder-open.svg",
+                        "icons/star.svg",
                         palette.link,
                         palette,
                         cx.listener(|this, _, _, cx| {
@@ -203,6 +223,14 @@ impl NyaTermApp {
     }
 }
 
+fn favorites_menu_width(label_width: f32, viewport_width: f32) -> f32 {
+    // Menu border/padding, row padding, 18px icon, gap, and the always-reserved
+    // remove button plus clearance for the overlay scrollbar.
+    (label_width.ceil() + 88.)
+        .clamp(300., 480.)
+        .min((viewport_width - 16.).max(1.))
+}
+
 // Tab groups order controls but do not trap focus. Cycle past other groups so
 // neither Tab nor arrow navigation can hand an open menu's keys to the terminal.
 fn move_menu_focus(
@@ -227,5 +255,20 @@ fn move_menu_focus(
             break;
         }
         first.get_or_insert(candidate);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::favorites_menu_width;
+
+    #[test]
+    fn favorites_width_grows_with_labels_and_fits_narrow_windows() {
+        assert_eq!(favorites_menu_width(40., 1280.), 300.);
+        assert_eq!(favorites_menu_width(280., 1280.), 368.);
+        assert_eq!(favorites_menu_width(800., 1280.), 480.);
+        assert_eq!(favorites_menu_width(800., 320.), 304.);
+        assert_eq!(favorites_menu_width(40., 200.), 184.);
+        assert_eq!(favorites_menu_width(40., 8.), 1.);
     }
 }
