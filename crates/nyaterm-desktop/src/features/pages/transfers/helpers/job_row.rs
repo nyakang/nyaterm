@@ -469,6 +469,7 @@ mod tests {
         };
         job.progress = Some(progress("/target", 2048, Some(2048), Some(2), Some(2)));
         job.summary = Some(nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+            retained_backups: Vec::new(),
             remote_path: "/target".into(),
             local_path: PathBuf::new(),
             bytes: 1024,

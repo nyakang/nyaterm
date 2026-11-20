@@ -78,6 +78,9 @@
       "passive_mode": "portable:ftp",
       "ftp_filename_encoding_mode": "portable:ftp",
       "ftp_filename_encoding": "portable:ftp",
+      "ftp_ascii_mode": "portable:ftp",
+      "ftp_security_mode": "portable:ftp",
+      "ftp_tls_version": "portable:ftp",
       "connect_timeout_ms": "local"
     }
   },

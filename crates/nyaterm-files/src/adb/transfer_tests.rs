@@ -7,6 +7,7 @@ use crate::sftp_transfer_types::{
 
 fn options(policy: SftpDuplicatePolicy) -> SftpPathTransferOptions {
     SftpPathTransferOptions::new(policy, None, SftpTransferOptions::default())
+        .with_staging_permissions(|_| Ok(()))
 }
 
 #[test]

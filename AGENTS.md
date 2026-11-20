@@ -138,7 +138,7 @@ must include explicit conversion logic and tests.
   `alacritty` (`alacritty_terminal`), `gpui-kit`, `IronRDP`
   (`ironrdp-client`, `ironrdp-connector`), `russh`, `russh-sftp`, `sspi-rs`,
   `picky-rs` (Picky and its ASN.1 crates),
-  `vnc-rs`, `zed` (`gpui`, `gpui_platform`), and `zmodem2`. Each branch carries
+  `suppaftp`, `vnc-rs`, `zed` (`gpui`, `gpui_platform`), and `zmodem2`. Each branch carries
   a `NYATERM.md` recording its base revision, its patches, and how they were
   validated.
 * `temp/vendor/`: untracked, read-only copies of those sources, kept only so

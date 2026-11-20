@@ -191,6 +191,7 @@ async fn posix_shell_upload_preserves_metadata_through_public_entry_points() {
             *service.selected.lock().unwrap() = Some(backend);
             commands.lock().unwrap().clear();
             service.shell(backend).probe().unwrap();
+            crate::ftp::tests::assert_remote_roundtrip(Arc::new(service.clone()), &format!("{root}/ftp-copy"));
             for mode in ["755", "640", "6755", "7644"] {
                 for with_progress in [false, true] {
                     *prefix.lock().unwrap() = String::new();

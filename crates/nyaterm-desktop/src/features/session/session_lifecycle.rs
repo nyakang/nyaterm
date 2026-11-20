@@ -332,7 +332,7 @@ impl NyaTermApp {
             .session_info(&session_id)
             .is_some_and(|info| info.kind == nyaterm_transport::SessionKind::Ftp)
         {
-            // Dropping the service closes the FTP control connection.
+            // Close sockets even while background jobs retain the service.
             self.ftp.remove_session(&session_id);
         } else if let Err(error) = self.session.manager().close_detached(&session_id) {
             self.session.finish_busy_action(&session_id);

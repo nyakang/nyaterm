@@ -1125,7 +1125,7 @@
     "ftpAuthModeUnsupported": "FTP はパスワードまたは匿名ログインのみ対応しています。",
     "ftpPassiveModeInvalid": "FTP パッシブモードが無効です。",
     "ftpFilenameEncodingInvalid": "有効な FTP ファイル名文字セットを選択してください。",
-    "ftpConnectTimeoutInvalid": "FTP 接続タイムアウトは {{min}}～{{max}} ミリ秒の範囲で指定してください。",
+    "ftpConnectTimeoutInvalid": "FTP 接続タイムアウトは %{min}～%{max} ミリ秒の範囲で指定してください。",
     "ftpPasswordRequired": "パスワードを入力するか、匿名ログインを選択してください。",
     "ftpPassiveMode": "パッシブモード",
     "ftpPassiveAuto": "自動",
@@ -1134,7 +1134,7 @@
     "ftpInitialDirectory": "リモート開始フォルダー",
     "ftpLocalInitialDirectory": "ローカル開始フォルダー",
     "ftpConnectTimeout": "接続タイムアウト（ミリ秒）",
-    "ftpAdvancedHint": "開始フォルダーが空の場合はサーバーまたはローカルの既定値を使用します。",
+    "ftpAdvancedHint": "開始フォルダーが空の場合はサーバーまたはローカルの既定値を使用します。 FTP 転送は先頭から開始し、権限やタイムスタンプを保持しません。",
     "ftpAsciiMode": "ASCII モード",
     "ftpAsciiModeHint": "アップロード時にローカルの改行を CRLF に変換し、ダウンロード時にローカルの改行へ戻します。テキストファイル専用です。",
     "ftpFtps": "FTPS（明示的 TLS）",
@@ -4790,5 +4790,16 @@
     "tmuxCommandFailed": "tmux コマンドが失敗しました",
     "details": "詳細（%{count}）",
     "repeated": "発生回数：%{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP 接続に失敗しました。",
+    "authentication": "FTP 認証に失敗しました。",
+    "timeout": "FTP 操作がタイムアウトしました。再接続してください。",
+    "unavailable": "FTP セッションを利用できません。再接続してください。",
+    "unsupportedSettings": "FTP はこれらの転送設定に対応していません。",
+    "limitExceeded": "FTP ファイルがプレビューまたはエディターのサイズ制限を超えています。",
+    "notFound": "FTP ファイルが見つかりません。",
+    "backupRetained": "ファイルを保存しました。以前のバックアップは %{backup} に残っています。",
+    "recoveryRequired": "サーバーが置換を確認しませんでした。復元のため、新しいファイル %{temporary} とバックアップ %{backup} を保持してください。"
   }
 }

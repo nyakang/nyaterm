@@ -7244,8 +7244,10 @@ dependencies = [
  "nyaterm-core",
  "nyaterm-terminal",
  "nyaterm-transport",
+ "rcgen",
  "russh",
  "russh-sftp",
+ "rustls",
  "same-file",
  "serde",
  "serde_json",
@@ -11582,8 +11584,7 @@ dependencies = [
 [[package]]
 name = "suppaftp"
 version = "13.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "919688e3d2128f0c3e77f4dff7a2035f2d73ccf488851ba96ba42002e850cad5"
+source = "git+https://github.com/nyakang/suppaftp?rev=6e91f7ab21b8d9f136a997d51cbd1e4591ba8147#6e91f7ab21b8d9f136a997d51cbd1e4591ba8147"
 dependencies = [
  "jiff 1.0.1",
  "lazy-regex",

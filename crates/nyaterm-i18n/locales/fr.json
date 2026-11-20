@@ -1125,7 +1125,7 @@
     "ftpAuthModeUnsupported": "FTP prend uniquement en charge le mot de passe ou la connexion anonyme.",
     "ftpPassiveModeInvalid": "Le mode passif FTP est invalide.",
     "ftpFilenameEncodingInvalid": "Choisissez un jeu de caractères FTP valide.",
-    "ftpConnectTimeoutInvalid": "Le délai de connexion FTP doit être compris entre {{min}} et {{max}} ms.",
+    "ftpConnectTimeoutInvalid": "Le délai de connexion FTP doit être compris entre %{min} et %{max} ms.",
     "ftpPasswordRequired": "Saisissez un mot de passe ou choisissez la connexion anonyme.",
     "ftpPassiveMode": "Mode passif",
     "ftpPassiveAuto": "Automatique",
@@ -1134,7 +1134,7 @@
     "ftpInitialDirectory": "Dossier de départ distant",
     "ftpLocalInitialDirectory": "Dossier de départ local",
     "ftpConnectTimeout": "Délai de connexion (ms)",
-    "ftpAdvancedHint": "Laissez les dossiers de départ vides pour utiliser la valeur par défaut.",
+    "ftpAdvancedHint": "Laissez les dossiers de départ vides pour utiliser la valeur par défaut. Les transferts FTP reprennent depuis le début et ne conservent ni les permissions ni les horodatages.",
     "ftpAsciiMode": "Mode ASCII",
     "ftpAsciiModeHint": "Convertit les fins de ligne locales en CRLF à l'envoi et les rétablit au téléchargement. À réserver aux fichiers texte.",
     "ftpFtps": "FTPS (TLS explicite)",
@@ -4790,5 +4790,16 @@
     "tmuxCommandFailed": "Échec de la commande tmux",
     "details": "Détails (%{count})",
     "repeated": "Occurrences : %{count}"
+  },
+  "ftpErrors": {
+    "connection": "Échec de la connexion FTP.",
+    "authentication": "Échec de l’authentification FTP.",
+    "timeout": "Délai FTP dépassé. Reconnectez-vous pour continuer.",
+    "unavailable": "La session FTP est indisponible. Reconnectez-vous pour continuer.",
+    "unsupportedSettings": "Ces paramètres de transfert ne sont pas disponibles pour FTP.",
+    "limitExceeded": "Le fichier FTP dépasse la limite de l’aperçu ou de l’éditeur.",
+    "notFound": "Le fichier FTP est introuvable.",
+    "backupRetained": "Le fichier a été enregistré. Une ancienne sauvegarde reste dans %{backup}.",
+    "recoveryRequired": "Le serveur n’a pas confirmé le remplacement. Conservez le nouveau fichier %{temporary} et la sauvegarde %{backup} pour la récupération."
   }
 }

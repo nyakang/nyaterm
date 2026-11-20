@@ -194,6 +194,11 @@ impl FileBrowserService {
         if let Some(parent) = local.parent().filter(|path| !path.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
+        let options = if matches!(self, Self::Ftp(_)) {
+            options.with_ftp_capabilities(false)
+        } else {
+            options
+        };
         let summary = FileCopyRequest {
             source: self.transfer_endpoint(remote),
             destination: FileTransferEndpoint::Local(local.clone()),
@@ -202,6 +207,7 @@ impl FileBrowserService {
         }
         .execute_with_progress(progress)?;
         Ok(SftpTransferSummary {
+            retained_backups: summary.retained_backups,
             remote_path: remote.display_path.clone(),
             local_path: PathBuf::from(summary.destination_path),
             bytes: summary.bytes,
@@ -243,6 +249,11 @@ impl FileBrowserService {
                 progress,
             );
         }
+        let options = if matches!(self, Self::Ftp(_)) {
+            options.with_ftp_capabilities(true)
+        } else {
+            options
+        };
         let summary = FileCopyRequest {
             source: FileTransferEndpoint::Local(local.clone()),
             destination: self.transfer_endpoint(remote),
@@ -251,6 +262,7 @@ impl FileBrowserService {
         }
         .execute_with_progress(progress)?;
         Ok(SftpTransferSummary {
+            retained_backups: summary.retained_backups,
             remote_path: summary.destination_path,
             local_path: local,
             bytes: summary.bytes,
@@ -319,6 +331,24 @@ impl FileBrowserService {
         destination: &RemoteFilePath,
         directory: bool,
     ) -> anyhow::Result<()> {
+        self.validate_copy_destination_with_control(
+            source,
+            target,
+            destination,
+            directory,
+            &SftpTransferControl::new(),
+        )
+    }
+
+    pub(crate) fn validate_copy_destination_with_control(
+        &self,
+        source: &RemoteFilePath,
+        target: &Self,
+        destination: &RemoteFilePath,
+        directory: bool,
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<()> {
+        control.check_cancelled()?;
         match (self, target) {
             (Self::Local(_), Self::Local(_)) => {
                 let source = std::fs::canonicalize(resolve_local_path(&source.display_path))?;
@@ -363,12 +393,57 @@ impl FileBrowserService {
             (Self::Adb(origin), Self::Adb(target)) => origin
                 .validate_copy_destination(source, target, destination, directory)
                 .map_err(crate::adb::file_error)?,
-            (Self::Ftp(origin), Self::Ftp(target)) if Arc::ptr_eq(origin, target) => {
+            (Self::Ftp(origin), Self::Ftp(target)) if origin.same_endpoint(target) => {
+                let source_path =
+                    crate::ftp::service::normalized_path(origin.home_dir(), &source.display_path)?;
+                let destination_path = crate::ftp::service::normalized_path(
+                    target.home_dir(),
+                    &destination.display_path,
+                )?;
                 anyhow::ensure!(
                     !file_browser_copy_destination_invalid(
                         FileBrowserBackendKind::Remote,
-                        &source.display_path,
-                        &destination.display_path,
+                        &source_path,
+                        &destination_path,
+                        directory
+                    ),
+                    "source and destination overlap"
+                );
+                let source = origin.canonical_target(&source_path, directory, control)?;
+                // Resolve the nearest existing destination ancestor, then append
+                // only validated missing components without creating anything.
+                let mut ancestor = destination_path;
+                let mut missing: Vec<String> = Vec::new();
+                let destination = loop {
+                    match target.stat_with_control(&ancestor, control) {
+                        Ok(entry) if entry.kind == FtpEntryKind::Symlink => {
+                            bail!("copying through symbolic links is not supported");
+                        }
+                        Ok(entry) => {
+                            let mut resolved = target.canonical_target(
+                                &ancestor,
+                                entry.is_directory(),
+                                control,
+                            )?;
+                            for name in missing.iter().rev() {
+                                resolved = crate::ftp::join_remote_path(&resolved, name);
+                            }
+                            break resolved;
+                        }
+                        Err(crate::ftp::FtpError::NotFound) => {
+                            let (parent, name) = crate::ftp::parent_and_name(&ancestor);
+                            anyhow::ensure!(parent != ancestor, "invalid destination");
+                            missing.push(name);
+                            ancestor = parent;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                };
+                anyhow::ensure!(
+                    !file_browser_copy_destination_invalid(
+                        FileBrowserBackendKind::Remote,
+                        &source,
+                        &destination,
                         directory
                     ),
                     "source and destination overlap"
@@ -632,7 +707,7 @@ impl FileBrowserService {
                 .map_err(crate::adb::file_error),
             Self::Ftp(service) => {
                 let bytes = service
-                    .read_file_bytes(&path.display_path)
+                    .read_file_bytes_limited(&path.display_path, max_bytes)
                     .map_err(|error| anyhow::anyhow!(error))?;
                 anyhow::ensure!(bytes.len() as u64 <= max_bytes, "file is too large to open");
                 let modified_at = service
@@ -667,7 +742,7 @@ impl FileBrowserService {
                 .map_err(crate::adb::file_error),
             Self::Ftp(service) => {
                 let bytes = service
-                    .read_file_bytes(&path.display_path)
+                    .read_file_bytes_limited(&path.display_path, max_bytes)
                     .map_err(|error| anyhow::anyhow!(error))?;
                 anyhow::ensure!(bytes.len() as u64 <= max_bytes, "file is too large to open");
                 anyhow::ensure!(
@@ -716,49 +791,14 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .write_text_document_path(path, content, expected_revision, force)
                 .map_err(crate::adb::file_error),
-            Self::Ftp(service) => {
-                let bytes = content.as_ref().as_bytes();
-                if !force {
-                    let Some(expected) = expected_revision else {
-                        bail!("a remote text revision is required for a safe save");
-                    };
-                    let current = service
-                        .read_file_bytes(&path.display_path)
-                        .map_err(|error| anyhow::anyhow!(error))?;
-                    let modified_at = service
-                        .stat(&path.display_path)
-                        .ok()
-                        .and_then(|entry| entry.modified)
-                        .and_then(system_time_secs);
-                    let current = RemoteTextRevision::from_bytes(
-                        &current,
-                        crate::remote_file::RemoteTextMetadata {
-                            size: current.len() as u64,
-                            modified_at,
-                        },
-                    );
-                    if &current != expected {
-                        return Ok(RemoteTextWriteResult::Conflict);
-                    }
-                }
-                service
-                    .write_file(&path.display_path, bytes)
-                    .map_err(|error| anyhow::anyhow!(error))?;
-                let modified_at = service
-                    .stat(&path.display_path)
-                    .ok()
-                    .and_then(|entry| entry.modified)
-                    .and_then(system_time_secs);
-                Ok(RemoteTextWriteResult::Saved {
-                    revision: RemoteTextRevision::from_bytes(
-                        bytes,
-                        crate::remote_file::RemoteTextMetadata {
-                            size: bytes.len() as u64,
-                            modified_at,
-                        },
-                    ),
-                })
-            }
+            Self::Ftp(service) => service
+                .write_text_document(
+                    &path.display_path,
+                    content.as_ref(),
+                    expected_revision,
+                    force,
+                )
+                .map_err(anyhow::Error::from),
         }
     }
 
@@ -777,7 +817,7 @@ impl FileBrowserService {
                 .map_err(crate::adb::file_error),
             Self::Ftp(service) => {
                 let content_bytes = service
-                    .read_file_bytes(&path.display_path)
+                    .read_file_bytes_limited(&path.display_path, max_bytes)
                     .map_err(|error| anyhow::anyhow!(error))?;
                 anyhow::ensure!(
                     content_bytes.len() as u64 <= max_bytes,
@@ -875,7 +915,7 @@ pub fn entry_from_ftp_entry(entry: &FtpEntry) -> SftpFileEntry {
     }
 }
 
-fn properties_from_ftp_entry(entry: &FtpEntry) -> SftpFileProperties {
+pub(crate) fn properties_from_ftp_entry(entry: &FtpEntry) -> SftpFileProperties {
     SftpFileProperties {
         symlink_target: None,
         name: entry.name.clone(),

@@ -154,7 +154,9 @@ schemars = "=1.2.2"
 serialport = { version = "4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-suppaftp = { version = "13.0.0", default-features = false, features = ["no-log"] }
+# `no-log` enables log/max_level_off for the entire dependency graph. Sensitive
+# FTP events are suppressed by the application's immutable all-sink filter.
+suppaftp = { version = "13.0.0", default-features = false }
 semver = { version = "1", features = ["serde"] }
 sha1 = { version = "0.11", features = ["oid"] }
 sha2 = { version = "0.11", features = ["oid"] }
@@ -222,6 +224,7 @@ debug = "full"
 opt-level = 1
 
 [patch.crates-io]
+suppaftp = { git = "https://github.com/nyakang/suppaftp", rev = "6e91f7ab21b8d9f136a997d51cbd1e4591ba8147" }
 # Keep Picky and its ASN.1 types on the same stable-RSA fork revision.
 picky = { version = "=7.0.0-rc.29", git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }

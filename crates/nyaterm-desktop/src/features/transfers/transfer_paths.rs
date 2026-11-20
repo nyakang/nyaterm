@@ -234,7 +234,7 @@ impl NyaTermApp {
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
             .then(|| self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>);
-        let path_options = SftpPathTransferOptions::new(
+        let path_options = crate::features::transfers::transfer_options::path_options(
             duplicate_policy,
             duplicate_resolver,
             self.sftp_transfer_options(),
@@ -336,7 +336,7 @@ impl NyaTermApp {
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
             .then(|| self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>);
-        let path_options = SftpPathTransferOptions::new(
+        let path_options = crate::features::transfers::transfer_options::path_options(
             duplicate_policy,
             duplicate_resolver,
             self.sftp_transfer_options(),
@@ -681,7 +681,7 @@ impl NyaTermApp {
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
             .then(|| self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>);
-        let path_options = SftpPathTransferOptions::new(
+        let path_options = crate::features::transfers::transfer_options::path_options(
             duplicate_policy,
             duplicate_resolver,
             self.sftp_transfer_options(),
@@ -736,7 +736,7 @@ impl NyaTermApp {
         }
         let total = paths.len();
         if total > 1 && path_options.duplicate_policy() == SftpDuplicatePolicy::Ask {
-            path_options = SftpPathTransferOptions::new(
+            path_options = crate::features::transfers::transfer_options::path_options(
                 SftpDuplicatePolicy::Ask,
                 Some(Arc::new(UploadBatchDuplicateResolver::new(
                     self.session.prompt_duplicate_broker(),

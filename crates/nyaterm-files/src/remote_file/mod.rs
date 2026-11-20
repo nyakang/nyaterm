@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub(crate) mod copy_inventory;
 pub(crate) mod copy_progress;
 #[cfg(test)]
 mod copy_tests;
@@ -19,6 +20,7 @@ mod copy_tests;
 mod editor_save_tests;
 #[cfg(test)]
 mod normal_listing_tests;
+pub(crate) mod path_copy;
 mod revision;
 mod shell;
 #[cfg(test)]
@@ -157,6 +159,15 @@ impl std::fmt::Debug for RemoteFileService {
 }
 
 impl RemoteFileService {
+    #[cfg(test)]
+    pub(crate) fn with_test_sftp(sftp_service: SftpService) -> Self {
+        Self {
+            sftp_service,
+            selected: Arc::new(Mutex::new(Some(RemoteFileBackendKind::Sftp))),
+            ..Self::new(SshSessionConfig::default())
+        }
+    }
+
     pub fn with_sudo(
         config: SshSessionConfig,
         multiplex: SshMultiplexHandle,
@@ -914,6 +925,7 @@ impl RemoteFileService {
                     .exec_ok(format!("cat -- {}", shell_quote(&remote_path)), None)?;
                 crate::download_path::TransferDownload::write(download_root, &local_path, &bytes)?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path,
                     local_path,
                     bytes: bytes.len() as u64,
@@ -986,6 +998,7 @@ impl RemoteFileService {
                     &options,
                 )?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: remote_path.display_path,
                     local_path,
                     bytes,
@@ -1050,6 +1063,7 @@ impl RemoteFileService {
                 )?;
                 let Some(target) = target else {
                     return Ok(SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path: remote_path.display_path,
                         local_path,
                         bytes: 0,
@@ -1067,6 +1081,7 @@ impl RemoteFileService {
                     options.transfer_options(),
                 )?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: remote_path.display_path,
                     local_path: target,
                     bytes,
@@ -1094,6 +1109,7 @@ impl RemoteFileService {
                     |_| {},
                 )?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path,
                     local_path,
                     bytes,
@@ -1141,6 +1157,7 @@ impl RemoteFileService {
                     progress,
                 )?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: remote_path.to_string(),
                     local_path,
                     bytes,
@@ -1190,6 +1207,7 @@ impl RemoteFileService {
                     progress,
                 )?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: remote_path.display_path.to_string(),
                     local_path,
                     bytes,
@@ -1252,6 +1270,7 @@ impl RemoteFileService {
                     return Err(error);
                 }
                 let summary = SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: remote_path.display_path.clone(),
                     local_path,
                     bytes: byte_count,
@@ -1303,6 +1322,7 @@ impl RemoteFileService {
                 )?;
                 let Some(target) = target else {
                     return Ok(SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path,
                         local_path,
                         bytes: 0,
@@ -1319,6 +1339,7 @@ impl RemoteFileService {
                     progress,
                 )?;
                 Ok(SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: target,
                     local_path,
                     bytes,
@@ -1356,6 +1377,7 @@ pub struct FileCopyRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileCopySummary {
+    pub retained_backups: Vec<String>,
     pub bytes: u64,
     pub used_local_staging: bool,
     pub destination_path: String,
@@ -1382,13 +1404,7 @@ impl FileCopyRequest {
         if matches!(self.source, FileTransferEndpoint::Ftp { .. })
             || matches!(self.destination, FileTransferEndpoint::Ftp { .. })
         {
-            return crate::ftp::copy::execute(
-                &self.source,
-                &self.destination,
-                &self.control,
-                &self.options,
-                progress,
-            );
+            return path_copy::execute(self, progress);
         }
         let browser_endpoint = |endpoint: &FileTransferEndpoint| match endpoint {
             FileTransferEndpoint::Local(path) => (
@@ -1456,7 +1472,7 @@ impl FileCopyRequest {
                 unreachable!("Android copies use the isolated copy adapter")
             }
             (FileTransferEndpoint::Ftp { .. }, _) | (_, FileTransferEndpoint::Ftp { .. }) => {
-                anyhow::bail!("FTP transfers are not supported yet")
+                unreachable!("FTP copies use the shared copy adapter")
             }
             (FileTransferEndpoint::Local(source), FileTransferEndpoint::Local(destination)) => {
                 let Some(destination) = resolve_copy_local_target(
@@ -1467,6 +1483,7 @@ impl FileCopyRequest {
                 )?
                 else {
                     return Ok(FileCopySummary {
+                        retained_backups: Vec::new(),
                         bytes: 0,
                         used_local_staging: false,
                         destination_path: destination.to_string_lossy().into_owned(),
@@ -1475,6 +1492,7 @@ impl FileCopyRequest {
                 };
                 control.wait_if_paused_blocking()?;
                 Ok(FileCopySummary {
+                    retained_backups: Vec::new(),
                     bytes: copy_local_path(
                         &source,
                         &destination,
@@ -1501,6 +1519,7 @@ impl FileCopyRequest {
                 )?
                 else {
                     return Ok(FileCopySummary {
+                        retained_backups: Vec::new(),
                         bytes: 0,
                         used_local_staging: false,
                         destination_path: path.display_path,
@@ -1531,6 +1550,7 @@ impl FileCopyRequest {
                         .bytes
                 };
                 Ok(FileCopySummary {
+                    retained_backups: Vec::new(),
                     bytes,
                     used_local_staging: false,
                     destination_path: path.display_path,
@@ -1552,6 +1572,7 @@ impl FileCopyRequest {
                     },
                 )?;
                 Ok(FileCopySummary {
+                    retained_backups: Vec::new(),
                     bytes: summary.bytes,
                     used_local_staging: false,
                     destination_path: summary.local_path.to_string_lossy().into_owned(),
@@ -1580,6 +1601,7 @@ impl FileCopyRequest {
                 )?
                 else {
                     return Ok(FileCopySummary {
+                        retained_backups: Vec::new(),
                         bytes: 0,
                         used_local_staging: false,
                         destination_path: destination_path.display_path,
@@ -1598,6 +1620,7 @@ impl FileCopyRequest {
                         progress.clone(),
                     )?;
                     return Ok(FileCopySummary {
+                        retained_backups: Vec::new(),
                         bytes,
                         used_local_staging: false,
                         destination_path: destination_path.display_path,
@@ -1641,6 +1664,7 @@ impl FileCopyRequest {
                         .bytes
                 };
                 Ok(FileCopySummary {
+                    retained_backups: Vec::new(),
                     bytes: downloaded.bytes.min(uploaded_bytes),
                     used_local_staging: true,
                     destination_path: destination_path.display_path,

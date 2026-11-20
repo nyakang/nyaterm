@@ -52,11 +52,12 @@ pub enum FtpSecurityMode {
 }
 
 impl FtpSecurityMode {
-    pub fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Result<Self, FtpError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "explicit" => Self::Explicit,
-            "implicit" => Self::Implicit,
-            _ => Self::None,
+            "" | "none" => Ok(Self::None),
+            "explicit" => Ok(Self::Explicit),
+            "implicit" => Ok(Self::Implicit),
+            _ => Err(FtpError::UnsupportedSettings),
         }
     }
 }
@@ -78,14 +79,15 @@ pub enum FtpTlsVersion {
 }
 
 impl FtpTlsVersion {
-    pub fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Result<Self, FtpError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "ssl3" => Self::Ssl3,
-            "tls10" => Self::Tls10,
-            "tls11" => Self::Tls11,
-            "tls12" => Self::Tls12,
-            "tls13" => Self::Tls13,
-            _ => Self::Auto,
+            "" | "auto" => Ok(Self::Auto),
+            "ssl3" => Ok(Self::Ssl3),
+            "tls10" => Ok(Self::Tls10),
+            "tls11" => Ok(Self::Tls11),
+            "tls12" => Ok(Self::Tls12),
+            "tls13" => Ok(Self::Tls13),
+            _ => Err(FtpError::UnsupportedSettings),
         }
     }
 }

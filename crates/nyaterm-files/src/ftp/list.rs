@@ -35,7 +35,11 @@ pub fn entries_from_lines(lines: &[String], parent: &str, machine_listing: bool)
                     .ok()
                     .or_else(|| ListParser::parse_dos(line).ok())
             }?;
-            Some(entry_from_file(&file, parent))
+            let mut entry = entry_from_file(&file, parent);
+            if machine_listing && !has_modify_fact(line) {
+                entry.modified = None;
+            }
+            Some(entry)
         })
         .filter(|entry| entry.name != "." && entry.name != "..")
         .collect()
@@ -45,7 +49,23 @@ pub fn entry_from_mlst_line(line: &str, path: &str) -> Option<FtpEntry> {
     let file = ListParser::parse_mlst(&normalize_mlsd_line(line)).ok()?;
     let mut entry = entry_from_file(&file, "/");
     entry.path = path.to_string();
+    entry.name = parent_and_name(path).1;
+    if !has_modify_fact(line) {
+        entry.modified = None;
+    }
     Some(entry)
+}
+
+fn has_modify_fact(line: &str) -> bool {
+    line.trim_start()
+        .split(' ')
+        .next()
+        .unwrap_or("")
+        .split(';')
+        .any(|fact| {
+            fact.split_once('=')
+                .is_some_and(|(name, _)| name.eq_ignore_ascii_case("modify"))
+        })
 }
 
 /// suppaftp only understands `type=link`, while many servers use the RFC 3659
@@ -146,6 +166,32 @@ mod tests {
         assert_eq!(
             parent_and_name("/home/a.txt"),
             ("/home".into(), "a.txt".into())
+        );
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use crate::ftp::list::{entries_from_lines, entry_from_mlst_line};
+    #[test]
+    fn missing_mlsd_modification_time_is_unknown_instead_of_a_synthetic_timestamp() {
+        let entries = entries_from_lines(&["type=file;size=3; file".into()], "/", true);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].modified, None);
+        assert_eq!(
+            entry_from_mlst_line("type=file;size=3; /file", "/file")
+                .unwrap()
+                .modified,
+            None
+        );
+        assert!(
+            entries_from_lines(
+                &["type=file;size=3;modify=20260101000000; file".into()],
+                "/",
+                true
+            )[0]
+            .modified
+            .is_some()
         );
     }
 }

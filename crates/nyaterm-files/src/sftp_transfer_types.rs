@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpTransferSummary {
+    /// Confirmed saves whose old backups could not be removed.
+    pub retained_backups: Vec<String>,
     pub remote_path: String,
     pub local_path: PathBuf,
     pub bytes: u64,
@@ -236,6 +238,8 @@ struct DownloadTargetOwner {
 
 mod download_targets;
 
+type StagingPermissions = Arc<dyn Fn(&Path) -> anyhow::Result<()> + Send + Sync>;
+
 /// Ordinary clones are independent tasks. Use clone_for_download_batch for sibling
 /// downloads and with_transfer_options for retries of the same task.
 pub struct SftpPathTransferOptions {
@@ -248,6 +252,7 @@ pub struct SftpPathTransferOptions {
     promised_type: Option<crate::sftp::SftpFileType>,
     download_runtime: Arc<Mutex<download_targets::DownloadRuntime>>,
     upload_runtime: crate::sftp::upload_runtime::UploadRuntime,
+    staging_permissions: Option<StagingPermissions>,
 }
 
 impl std::fmt::Debug for SftpPathTransferOptions {
@@ -269,6 +274,7 @@ impl Clone for SftpPathTransferOptions {
             self.transfer.clone(),
         );
         cloned.promised_type = self.promised_type;
+        cloned.staging_permissions = self.staging_permissions.clone();
         cloned
     }
 }
@@ -285,11 +291,45 @@ impl Default for SftpPathTransferOptions {
             promised_type: None,
             download_runtime: Arc::default(),
             upload_runtime: Default::default(),
+            staging_permissions: None,
         }
     }
 }
 
 impl SftpPathTransferOptions {
+    /// Desktop injects its native ACL policy before plaintext is staged.
+    pub fn with_staging_permissions(
+        mut self,
+        secure: impl Fn(&Path) -> anyhow::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.staging_permissions = Some(Arc::new(secure));
+        self
+    }
+
+    pub(crate) fn secure_staging_directory(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(secure) = &self.staging_permissions {
+            return secure(path);
+        }
+        #[cfg(windows)]
+        anyhow::bail!("private staging directory permissions were not provided");
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            Ok(())
+        }
+    }
+
+    /// Adapt application-wide SFTP preferences to the portable FTP capabilities.
+    pub fn with_ftp_capabilities(&self, upload: bool) -> Self {
+        let mut transfer = self.transfer.clone();
+        transfer.resume_broken_transfer = false;
+        transfer.preserve_timestamps = false;
+        if upload {
+            transfer.default_file_mode = None;
+        }
+        self.with_transfer_options(transfer)
+    }
+
     pub fn new(
         duplicate_policy: SftpDuplicatePolicy,
         duplicate_resolver: Option<Arc<dyn SftpDuplicateResolver>>,
@@ -305,6 +345,7 @@ impl SftpPathTransferOptions {
             promised_type: None,
             download_runtime: Arc::default(),
             upload_runtime: Default::default(),
+            staging_permissions: None,
         }
     }
 
@@ -370,7 +411,18 @@ impl SftpPathTransferOptions {
             promised_type: self.promised_type,
             download_runtime: Arc::clone(&self.download_runtime),
             upload_runtime: self.upload_runtime.clone(),
+            staging_permissions: self.staging_permissions.clone(),
         }
+    }
+
+    pub(crate) fn for_resolved_copy(&self, replace: bool) -> Self {
+        let mut options = self.with_transfer_options(self.transfer.clone());
+        options.duplicate_policy = if replace {
+            SftpDuplicatePolicy::Overwrite
+        } else {
+            SftpDuplicatePolicy::Skip
+        };
+        options
     }
 
     /// The root target has already been accepted. Merge its contents without

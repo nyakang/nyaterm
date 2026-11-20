@@ -177,7 +177,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// SDK/HTTP traces may include bodies, authentication, URLs and terminal input.
+// SDK/HTTP/FTP traces may include bodies, passwords, paths and terminal input.
 // This filter applies to every sink and cannot be relaxed by RUST_LOG.
 fn ai_log_target_allowed(metadata: &tracing::Metadata<'_>) -> bool {
     ![
@@ -187,6 +187,7 @@ fn ai_log_target_allowed(metadata: &tracing::Metadata<'_>) -> bool {
         "hyper_util",
         "h2",
         "tower_http",
+        "suppaftp",
     ]
     .iter()
     .any(|target| {
@@ -325,6 +326,7 @@ mod tests {
         log::error!(target: "nyaterm", "error-log-marker");
         tracing::error!(target: "genai::adapter", "secret-body-marker");
         log::error!(target: "reqwest::connect", "secret-body-marker");
+        log::error!(target: "suppaftp::sync_ftp::control", "secret-body-marker");
         tracing::info!(
             target: "nyaterm::networktools::tftp",
             service = "tftp",
@@ -354,7 +356,10 @@ mod tests {
             command
                 .args(["--exact", "tests::logging_child", "--nocapture"])
                 .env("NYATERM_LOGGING_TEST_DIR", &root)
-                .env("RUST_LOG", format!("{filter},genai=trace,reqwest=trace"));
+                .env(
+                    "RUST_LOG",
+                    format!("{filter},genai=trace,reqwest=trace,suppaftp=trace"),
+                );
             if fallback {
                 command.env("NYATERM_LOGGING_TEST_FALLBACK", "1");
             }

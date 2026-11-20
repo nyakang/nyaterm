@@ -21,7 +21,7 @@ pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey};
 mod transfer_events;
 mod transfer_feedback;
 pub(in crate::features) mod transfer_jobs;
-mod transfer_options;
+pub(in crate::features) mod transfer_options;
 mod transfer_paths;
 mod transfer_widgets;
 mod tree_runtime;

@@ -284,6 +284,7 @@ impl DragAggregate {
             Err("Native drag consumer failed".to_owned())
         } else {
             Ok(TransferJobOutput::Summary(SftpTransferSummary {
+                retained_backups: Vec::new(),
                 remote_path: root.path.clone(),
                 local_path: PathBuf::new(),
                 bytes: root.bytes,

@@ -5,10 +5,13 @@
 //! path.
 
 pub mod config;
+mod connection;
 pub(crate) mod copy;
 pub mod encoding;
 pub mod error;
+mod io;
 pub mod list;
+mod replace;
 pub mod service;
 mod text;
 
@@ -21,4 +24,7 @@ pub use list::{FtpEntry, FtpEntryKind, entries_from_lines, join_remote_path, par
 pub use service::FtpFileService;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+
+#[cfg(test)]
+mod tls_tests;

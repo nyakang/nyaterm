@@ -1125,7 +1125,7 @@
     "ftpAuthModeUnsupported": "FTP 僅支援密碼或匿名登入。",
     "ftpPassiveModeInvalid": "FTP 被動模式無效。",
     "ftpFilenameEncodingInvalid": "請選擇有效的 FTP 檔案名稱字元集。",
-    "ftpConnectTimeoutInvalid": "FTP 連線逾時必須介於 {{min}} 到 {{max}} 毫秒。",
+    "ftpConnectTimeoutInvalid": "FTP 連線逾時必須介於 %{min} 到 %{max} 毫秒。",
     "ftpPasswordRequired": "請輸入密碼或選擇匿名登入。",
     "ftpPassiveMode": "被動模式",
     "ftpPassiveAuto": "自動",
@@ -1134,7 +1134,7 @@
     "ftpInitialDirectory": "遠端起始目錄",
     "ftpLocalInitialDirectory": "本機起始目錄",
     "ftpConnectTimeout": "連線逾時（毫秒）",
-    "ftpAdvancedHint": "起始目錄留空時使用伺服器或本機預設目錄。",
+    "ftpAdvancedHint": "起始目錄留空時使用伺服器或本機預設目錄。 FTP 傳輸一律從頭開始，不保留權限與時間戳記。",
     "ftpAsciiMode": "ASCII 模式",
     "ftpAsciiModeHint": "上傳時將本機換行轉換為 CRLF，下載時轉換回本機換行；僅適用於文字檔。",
     "ftpFtps": "FTPS（顯式 TLS）",
@@ -4790,5 +4790,16 @@
     "tmuxCommandFailed": "tmux 指令失敗",
     "details": "詳細資訊（%{count}）",
     "repeated": "發生次數：%{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP 連線失敗。",
+    "authentication": "FTP 身分驗證失敗。",
+    "timeout": "FTP 操作逾時，請重新連線。",
+    "unavailable": "FTP 工作階段無法使用，請重新連線。",
+    "unsupportedSettings": "FTP 不支援這些傳輸設定。",
+    "limitExceeded": "FTP 檔案超過預覽或編輯器的大小限制。",
+    "notFound": "找不到 FTP 檔案。",
+    "backupRetained": "檔案已儲存，舊備份保留在 %{backup}。",
+    "recoveryRequired": "伺服器未確認取代結果。請保留新檔案 %{temporary} 與備份 %{backup}，以便復原。"
   }
 }

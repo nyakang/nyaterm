@@ -492,7 +492,10 @@ impl NyaTermApp {
                                 job.summary = Some(summary.clone());
                             }
                             if let TransferJobOutput::Sent {
-                                bytes, target_path, ..
+                                bytes,
+                                target_path,
+                                retained_backups,
+                                ..
                             } = output
                             {
                                 let local_target = self.transfer.file_operation(&event.id).is_some_and(|operation| {
@@ -507,6 +510,7 @@ impl NyaTermApp {
                                 }
                                 job.summary =
                                     Some(nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+                                        retained_backups,
                                         local_path: if local_target {
                                             std::path::PathBuf::from(&target_path)
                                         } else {
@@ -543,6 +547,9 @@ impl NyaTermApp {
                 _ => {}
             }
             if finished {
+                if append_retained_backup_warning(&mut job) {
+                    self.shell.set_status(job.detail.clone());
+                }
                 self.transfer.settle_cut_job(
                     &event.id,
                     job.status == TransferJobStatus::Completed
@@ -1054,6 +1061,7 @@ impl NyaTermApp {
             }
             TransferJobEvent::Finished(Ok(TransferJobOutput::Deleted)) => {}
             TransferJobEvent::Finished(Ok(TransferJobOutput::Sent {
+                retained_backups,
                 source_path,
                 source_parent_path,
                 source_entries,
@@ -1076,6 +1084,7 @@ impl NyaTermApp {
                 };
                 job.entries.clear();
                 job.summary = Some(nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+                    retained_backups,
                     remote_path: target_path.clone(),
                     local_path: job
                         .progress
@@ -1699,6 +1708,9 @@ impl NyaTermApp {
         }
         if event_finished {
             job.speed.reset();
+            if append_retained_backup_warning(&mut job) {
+                self.shell.set_status(job.detail.clone());
+            }
         }
         if !cleanup_internal_job {
             self.transfer
@@ -1803,6 +1815,14 @@ impl NyaTermApp {
             self.open_transfer_external_sync_window(prompt_id, cx);
         }
         if event_finished {
+            if let Some(session_id) = job_session_id.as_deref()
+                && self
+                    .ftp
+                    .service(session_id)
+                    .is_some_and(|service| !service.is_available())
+            {
+                self.mark_session_disconnected(session_id, cx);
+            }
             if editor_event {
                 cx.notify();
             }
@@ -1811,6 +1831,21 @@ impl NyaTermApp {
         }
         dirty
     }
+}
+
+fn append_retained_backup_warning(job: &mut crate::models::TransferJobState) -> bool {
+    let Some(summary) = &job.summary else {
+        return false;
+    };
+    if summary.retained_backups.is_empty() {
+        return false;
+    }
+    let warning = t!(
+        "ftpErrors.backupRetained",
+        backup = summary.retained_backups.join(" · ")
+    );
+    job.detail = format!("{} — {warning}", job.detail);
+    true
 }
 
 fn transfer_event_paths_match(left: &str, right: &str) -> bool {
@@ -2065,6 +2100,7 @@ mod tests {
                 id: "upload".into(),
                 event: TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(
                     SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path: "/remote/upload".into(),
                         local_path: PathBuf::from("/local/upload"),
                         bytes: 3,
@@ -2100,6 +2136,43 @@ mod tests {
     }
 
     #[test]
+    fn saved_transfer_with_retained_backup_stays_completed_and_shows_the_backup() {
+        let test_dir = TestConfigDir::new("nyaterm-transfer-backup-warning");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+        let sender = vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer.enqueue_transfer_job(running_job("saved"));
+                app.start_transfer_event_drain(cx);
+                app.transfer.transfer_event_sender()
+            })
+        });
+        vcx.run_until_parked();
+        sender
+            .unbounded_send(TransferJobResult {
+                id: "saved".into(),
+                event: TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(
+                    SftpTransferSummary {
+                        retained_backups: vec!["/remote/old-backup".into()],
+                        remote_path: "/remote/file".into(),
+                        local_path: PathBuf::new(),
+                        bytes: 3,
+                        skipped: false,
+                    },
+                ))),
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            let job = app.transfer.transfer_job("saved").unwrap();
+            assert_eq!(job.status, TransferJobStatus::Completed);
+            assert!(job.detail.contains("/remote/old-backup"));
+        });
+    }
+
+    #[test]
     fn skipped_job_does_not_cancel_other_batch_jobs() {
         let test_dir = TestConfigDir::new("nyaterm-transfer-batch-skip");
         let mut cx = TestAppContext::single();
@@ -2121,6 +2194,7 @@ mod tests {
                     id: id.to_string(),
                     event: TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(
                         SftpTransferSummary {
+                            retained_backups: Vec::new(),
                             remote_path: format!("/remote/{id}"),
                             local_path: PathBuf::from(id),
                             bytes: 0,
@@ -2278,6 +2352,7 @@ mod tests {
                         id: "adb-upload".into(),
                         event: TransferJobEvent::FileFinished(Ok(TransferJobOutput::Uploaded {
                             summary: nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+                                retained_backups: Vec::new(),
                                 remote_path: "/device/new-file".into(),
                                 local_path: root.path().join("input"),
                                 bytes: 3,
@@ -2829,6 +2904,7 @@ mod tests {
                 id: "completed".to_string(),
                 event: TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(
                     SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path: "/remote/completed".to_string(),
                         local_path: PathBuf::from("/local/completed"),
                         bytes: 1,
@@ -2912,6 +2988,7 @@ mod tests {
             },
             &TransferJobEvent::Finished(Ok(TransferJobOutput::Uploaded {
                 summary: nyaterm_files::sftp_transfer_types::SftpTransferSummary {
+                    retained_backups: Vec::new(),
                     remote_path: "/tmp/file".to_string(),
                     local_path: PathBuf::from("/tmp/file"),
                     bytes: 2,

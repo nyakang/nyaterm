@@ -507,11 +507,13 @@ impl NyaTermApp {
                         .map_err(crate::features::android::labels::session_start_error_message)
                 } else if let SessionLaunchConfig::Ftp(config) = &launch_config {
                     attempt.check()?;
-                    let service = nyaterm_files::ftp::FtpFileService::connect(
+                    let cancelled_attempt = attempt.clone();
+                    let service = nyaterm_files::ftp::FtpFileService::connect_with_cancel(
                         config.config.clone(),
                         config.login.clone(),
+                        move || cancelled_attempt.check().is_err(),
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| crate::features::ftp::labels::error_message(&error))?;
                     attempt.check()?;
                     let session_info = SessionInfo {
                         id: ftp_session_id

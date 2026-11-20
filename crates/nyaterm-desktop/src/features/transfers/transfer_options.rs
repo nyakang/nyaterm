@@ -13,3 +13,22 @@ impl NyaTermApp {
             .with_resume_broken_transfer(self.settings.summary().transfer_resume_broken_transfer)
     }
 }
+
+pub(in crate::features) fn path_options(
+    policy: nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy,
+    resolver: Option<std::sync::Arc<dyn nyaterm_files::sftp_transfer_types::SftpDuplicateResolver>>,
+    transfer: SftpTransferOptions,
+) -> nyaterm_files::sftp_transfer_types::SftpPathTransferOptions {
+    nyaterm_files::sftp_transfer_types::SftpPathTransferOptions::new(policy, resolver, transfer)
+        .with_staging_permissions(|path| {
+            #[cfg(windows)]
+            {
+                crate::platform::windows_acl::set_current_user_only(path, true)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = path;
+                Ok(())
+            }
+        })
+}

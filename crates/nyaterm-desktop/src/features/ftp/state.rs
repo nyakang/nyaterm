@@ -18,7 +18,9 @@ impl FtpFeatureState {
         session_id: String,
         service: Arc<FtpFileService>,
     ) {
-        self.services.insert(session_id, service);
+        if let Some(previous) = self.services.insert(session_id, service) {
+            previous.disconnect();
+        }
     }
 
     pub(in crate::features) fn service(&self, session_id: &str) -> Option<Arc<FtpFileService>> {
@@ -29,6 +31,8 @@ impl FtpFeatureState {
         &mut self,
         session_id: &str,
     ) -> Option<Arc<FtpFileService>> {
-        self.services.remove(session_id)
+        let service = self.services.remove(session_id)?;
+        service.disconnect();
+        Some(service)
     }
 }

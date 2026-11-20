@@ -545,6 +545,17 @@ struct TreeServer {
 
 impl TreeServer {
     fn start(entries: Vec<(&str, FakeNode)>) -> Self {
+        Self::start_connections(entries, 1)
+    }
+    fn start_connections(entries: Vec<(&str, FakeNode)>, count: usize) -> Self {
+        Self::start_options(entries, count, false, false)
+    }
+    fn start_options(
+        entries: Vec<(&str, FakeNode)>,
+        count: usize,
+        refuse_overwrite: bool,
+        fail_cleanup: bool,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind tree FTP server");
         let port = listener.local_addr().expect("tree FTP address").port();
         let commands = Arc::new(Mutex::new(Vec::new()));
@@ -559,10 +570,16 @@ impl TreeServer {
         let command_log = Arc::clone(&commands);
         let server_tree = Arc::clone(&tree);
         thread::spawn(move || {
-            let Ok((control, _)) = listener.accept() else {
-                return;
-            };
-            serve_tree(control, command_log, server_tree);
+            for _ in 0..count {
+                let Ok((control, _)) = listener.accept() else {
+                    return;
+                };
+                let commands = command_log.clone();
+                let tree = server_tree.clone();
+                thread::spawn(move || {
+                    serve_tree(control, commands, tree, refuse_overwrite, fail_cleanup)
+                });
+            }
         });
         Self {
             port,
@@ -618,6 +635,7 @@ fn overwrite_options() -> SftpPathTransferOptions {
         None,
         SftpTransferOptions::default(),
     )
+    .with_staging_permissions(|_| Ok(()))
 }
 
 fn test_directory(label: &str) -> PathBuf {
@@ -630,6 +648,8 @@ fn serve_tree(
     mut control: TcpStream,
     commands: Arc<Mutex<Vec<String>>>,
     tree: Arc<Mutex<HashMap<String, FakeNode>>>,
+    refuse_overwrite: bool,
+    fail_cleanup: bool,
 ) {
     let _ = control.write_all(b"220 fake FTP ready\r\n");
     let reader_stream = match control.try_clone() {
@@ -639,6 +659,7 @@ fn serve_tree(
     let mut reader = BufReader::new(reader_stream);
     let mut data_listener: Option<TcpListener> = None;
     let mut rename_from: Option<String> = None;
+    let mut cwd = "/".to_string();
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -670,7 +691,23 @@ fn serve_tree(
                 let _ = control.write_all(b"200 ok\r\n");
             }
             "PWD" => {
-                let _ = control.write_all(b"257 \"/\" is the current directory\r\n");
+                let _ = control
+                    .write_all(format!("257 \"{cwd}\" is the current directory\r\n").as_bytes());
+            }
+            "CWD" => {
+                let path = normalize_tree_path(argument);
+                if matches!(tree.lock().unwrap().get(&path), Some(FakeNode::Directory)) {
+                    cwd = path;
+                    let _ = control.write_all(b"250 directory changed\r\n");
+                } else {
+                    let _ = control.write_all(b"550 directory missing\r\n");
+                }
+            }
+            "ABOR" => {
+                let _ = control.write_all(b"226 aborted\r\n");
+            }
+            "NOOP" => {
+                let _ = control.write_all(b"200 alive\r\n");
             }
             "PASV" => match TcpListener::bind("127.0.0.1:0") {
                 Ok(listener) => {
@@ -719,7 +756,18 @@ fn serve_tree(
                         continue;
                     }
                 };
-                send_tree_body(&mut control, &mut data_listener, &bytes);
+                if path == "/stalled" {
+                    let _ = control.write_all(b"150 stalled data\r\n");
+                    if let Some(listener) = data_listener.take()
+                        && let Ok((mut socket, _)) = listener.accept()
+                    {
+                        let _ = socket.set_read_timeout(Some(Duration::from_secs(3)));
+                        let _ = socket.read(&mut [0]);
+                    }
+                    let _ = control.write_all(b"226 finished\r\n");
+                } else {
+                    send_tree_body(&mut control, &mut data_listener, &bytes);
+                }
             }
             "STOR" => {
                 let path = normalize_tree_path(argument);
@@ -737,6 +785,10 @@ fn serve_tree(
                 let target = normalize_tree_path(argument);
                 if let Some(from) = rename_from.take() {
                     let mut nodes = tree.lock().expect("tree state");
+                    if refuse_overwrite && nodes.contains_key(&target) {
+                        let _ = control.write_all(b"550 overwrite denied\r\n");
+                        continue;
+                    }
                     if let Some(node) = nodes.remove(&from) {
                         nodes.insert(target.clone(), node);
                     }
@@ -763,6 +815,10 @@ fn serve_tree(
             }
             "RMD" | "DELE" => {
                 let path = normalize_tree_path(argument);
+                if fail_cleanup && path.contains(".nyaterm-backup-") {
+                    let _ = control.write_all(b"550 cleanup denied\r\n");
+                    continue;
+                }
                 tree.lock().expect("tree state").remove(&path);
                 let _ = control.write_all(b"250 ok\r\n");
             }
@@ -1181,4 +1237,448 @@ fn cancelled_upload_removes_partial_remote_file() {
         server.temporary_paths()
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn separate_connections_to_the_same_ftp_endpoint_reject_self_and_descendant_copies() {
+    let server = TreeServer::start_connections(
+        vec![
+            ("/tree", FakeNode::Directory),
+            ("/tree/file", FakeNode::File(b"old".to_vec())),
+        ],
+        2,
+    );
+    let first = Arc::new(connect_tree(&server));
+    let second = Arc::new(connect_tree(&server));
+    for (source, destination) in [("/tree", "/tree/new"), ("/tree/file", "/tree/../tree/file")] {
+        assert!(
+            FileCopyRequest {
+                source: FileTransferEndpoint::Ftp {
+                    service: first.clone(),
+                    path: RemoteFilePath::new(source)
+                },
+                destination: FileTransferEndpoint::Ftp {
+                    service: second.clone(),
+                    path: RemoteFilePath::new(destination)
+                },
+                control: SftpTransferControl::new(),
+                options: overwrite_options(),
+            }
+            .execute()
+            .is_err()
+        );
+    }
+    assert!(
+        !server
+            .commands()
+            .iter()
+            .any(|command| command.starts_with("STOR ") || command.starts_with("MKD "))
+    );
+    assert_eq!(server.read("/tree/file").unwrap(), b"old");
+}
+
+#[test]
+fn ftp_and_adb_copy_both_directions_using_a_private_per_file_workspace() {
+    let ftp = TreeServer::start(vec![("/file", FakeNode::File(vec![42; 256 * 1024]))]);
+    let service = Arc::new(connect_tree(&ftp));
+    let adb = crate::adb::test_support::AdbFixture::new();
+    let workspaces = Arc::new(Mutex::new(Vec::new()));
+    let record = workspaces.clone();
+    let options = overwrite_options().with_staging_permissions(move |path| {
+        record.lock().unwrap().push(path.to_path_buf());
+        Ok(())
+    });
+    let source = FileTransferEndpoint::Ftp {
+        service: service.clone(),
+        path: RemoteFilePath::new("/file"),
+    };
+    let destination = FileTransferEndpoint::Adb {
+        service: adb.service.clone(),
+        path: RemoteFilePath::new("/device/file"),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let log = events.clone();
+    let summary = FileCopyRequest {
+        source: source.clone(),
+        destination: destination.clone(),
+        control: SftpTransferControl::new(),
+        options: options.clone(),
+    }
+    .execute_with_progress(move |value| log.lock().unwrap().push(value))
+    .unwrap();
+    assert_eq!(summary.bytes, 256 * 1024);
+    assert!(summary.used_local_staging);
+    let events = events.lock().unwrap();
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0].bytes_transferred <= pair[1].bytes_transferred)
+    );
+    assert_eq!(events.last().unwrap().bytes_transferred, 512 * 1024);
+    assert_eq!(
+        events.last().unwrap().item_count_completed,
+        events.last().unwrap().item_count_total
+    );
+    drop(events);
+    FileCopyRequest {
+        source: destination,
+        destination: FileTransferEndpoint::Ftp {
+            service,
+            path: RemoteFilePath::new("/back"),
+        },
+        control: SftpTransferControl::new(),
+        options,
+    }
+    .execute()
+    .unwrap();
+    assert_eq!(ftp.read("/back").unwrap(), vec![42; 256 * 1024]);
+    let workspaces = workspaces.lock().unwrap();
+    assert_eq!(workspaces.len(), 2);
+    assert!(workspaces.iter().all(|path| !path.exists()));
+}
+
+#[test]
+fn rejected_private_staging_permissions_prevent_reading_remote_contents() {
+    let ftp = TreeServer::start(vec![("/file", FakeNode::File(b"private".to_vec()))]);
+    let service = Arc::new(connect_tree(&ftp));
+    let adb = crate::adb::test_support::AdbFixture::new();
+    assert!(
+        FileCopyRequest {
+            source: FileTransferEndpoint::Ftp {
+                service,
+                path: RemoteFilePath::new("/file")
+            },
+            destination: FileTransferEndpoint::Adb {
+                service: adb.service.clone(),
+                path: RemoteFilePath::new("/device/file")
+            },
+            control: SftpTransferControl::new(),
+            options: overwrite_options()
+                .with_staging_permissions(|_| anyhow::bail!("fixture ACL denial")),
+        }
+        .execute()
+        .is_err()
+    );
+    assert!(
+        !ftp.commands()
+            .iter()
+            .any(|command| command.starts_with("RETR "))
+    );
+    assert_eq!(adb.device.lock().unwrap().sends, 0);
+}
+
+#[test]
+fn bounded_preview_stops_before_publishing_excess_bytes() {
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let ftp = TreeServer::start(vec![("/file", FakeNode::File(vec![42; 2 * 1024 * 1024]))]);
+    let service = connect_tree(&ftp);
+    let mut counter = Counter(0);
+    assert_eq!(
+        service.retrieve(
+            "/file",
+            &mut counter,
+            Some(1024),
+            &SftpTransferControl::new(),
+            |_| Ok(())
+        ),
+        Err(FtpError::LimitExceeded)
+    );
+    assert!(counter.0 <= 1024);
+}
+
+#[test]
+fn ftp_editor_detects_same_length_content_changes_before_safe_save() {
+    let ftp = TreeServer::start(vec![("/file", FakeNode::File(b"old".to_vec()))]);
+    let service = Arc::new(connect_tree(&ftp));
+    let browser = FileBrowserService::Ftp(service);
+    let path = RemoteFilePath::new("/file");
+    let document = browser.read_text_document_path(&path, 100).unwrap();
+    ftp.tree
+        .lock()
+        .unwrap()
+        .insert("/file".into(), FakeNode::File(b"new".to_vec()));
+    assert!(matches!(
+        browser
+            .write_text_document_path(&path, "edit", Some(&document.revision), false)
+            .unwrap(),
+        crate::remote_file::RemoteTextWriteResult::Conflict
+    ));
+    assert_eq!(ftp.read("/file").unwrap(), b"new");
+    assert!(matches!(
+        browser
+            .write_text_document_path(&path, "edit", None, true)
+            .unwrap(),
+        crate::remote_file::RemoteTextWriteResult::Saved { .. }
+    ));
+    assert_eq!(ftp.read("/file").unwrap(), b"edit");
+    assert!(ftp.temporary_paths().is_empty());
+}
+
+#[test]
+fn unknown_security_settings_are_rejected_without_downgrading_to_plain_ftp() {
+    use crate::ftp::{FtpSecurityMode, FtpTlsVersion};
+    assert!(FtpSecurityMode::parse("future-secure-mode").is_err());
+    assert!(FtpTlsVersion::parse("tls99").is_err());
+    assert_eq!(FtpSecurityMode::parse("").unwrap(), FtpSecurityMode::None);
+    assert_eq!(FtpTlsVersion::parse("").unwrap(), FtpTlsVersion::Auto);
+}
+
+#[test]
+fn cancelling_a_stalled_greeting_interrupts_the_connect_attempt() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut config = FtpConfig::new("127.0.0.1");
+    config.port = listener.local_addr().unwrap().port();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let check = cancel.clone();
+    let (ready, accepted) = std::sync::mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        ready.send(()).unwrap();
+        let mut byte = [0];
+        let _ = stream.read(&mut byte);
+    });
+    let worker = thread::spawn(move || {
+        FtpFileService::connect_with_cancel(config, FtpLogin::anonymous(""), move || {
+            check.load(Ordering::Acquire)
+        })
+    });
+    accepted.recv_timeout(Duration::from_secs(3)).unwrap();
+    let start = std::time::Instant::now();
+    cancel.store(true, Ordering::Release);
+    assert!(matches!(
+        worker.join().unwrap(),
+        Err(FtpError::Cancelled) | Err(FtpError::Connection)
+    ));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    server.join().unwrap();
+}
+
+pub(crate) fn assert_remote_roundtrip(
+    remote: Arc<crate::remote_file::RemoteFileService>,
+    target: &str,
+) {
+    let payload = vec![91; 256 * 1024];
+    let ftp = TreeServer::start(vec![("/file", FakeNode::File(payload.clone()))]);
+    let service = Arc::new(connect_tree(&ftp));
+    let destination = FileTransferEndpoint::Remote {
+        service: remote,
+        path: RemoteFilePath::new(target),
+    };
+    let uploaded = FileCopyRequest {
+        source: FileTransferEndpoint::Ftp {
+            service: service.clone(),
+            path: RemoteFilePath::new("/file"),
+        },
+        destination: destination.clone(),
+        control: SftpTransferControl::new(),
+        options: overwrite_options(),
+    }
+    .execute()
+    .unwrap();
+    assert_eq!(uploaded.bytes, payload.len() as u64);
+    assert!(uploaded.used_local_staging);
+    let downloaded = FileCopyRequest {
+        source: destination,
+        destination: FileTransferEndpoint::Ftp {
+            service,
+            path: RemoteFilePath::new("/back"),
+        },
+        control: SftpTransferControl::new(),
+        options: overwrite_options(),
+    }
+    .execute()
+    .unwrap();
+    assert_eq!(downloaded.bytes, payload.len() as u64);
+    assert_eq!(ftp.read("/back").unwrap(), payload);
+}
+
+#[test]
+fn configured_connect_timeout_also_bounds_a_stalled_greeting() {
+    for security_mode in [
+        crate::ftp::FtpSecurityMode::None,
+        crate::ftp::FtpSecurityMode::Implicit,
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut config = FtpConfig::new("127.0.0.1");
+        config.port = listener.local_addr().unwrap().port();
+        config.security_mode = security_mode;
+        config.connect_timeout = Duration::from_millis(80);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0; 4096];
+            while matches!(stream.read(&mut buffer), Ok(n) if n > 0) {}
+        });
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            FtpFileService::connect(config, FtpLogin::anonymous("")),
+            Err(FtpError::Timeout)
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        server.join().unwrap();
+    }
+}
+
+fn wait_for_retrieve(server: &TreeServer) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !server
+        .commands()
+        .iter()
+        .any(|command| command == "RETR /stalled")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn cancellation_interrupts_a_stalled_data_read_and_preserves_the_original() {
+    let server = TreeServer::start(vec![("/stalled", FakeNode::File(b"server".to_vec()))]);
+    let service = Arc::new(connect_tree(&server));
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("file");
+    std::fs::write(&target, b"original").unwrap();
+    let request = FileCopyRequest {
+        source: FileTransferEndpoint::Ftp {
+            service: service.clone(),
+            path: RemoteFilePath::new("/stalled"),
+        },
+        destination: FileTransferEndpoint::Local(target.clone()),
+        control: SftpTransferControl::new(),
+        options: overwrite_options(),
+    };
+    let cancel = request.control.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        let _ = send.send(request.execute());
+    });
+    wait_for_retrieve(&server);
+    cancel.cancel();
+    let result = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(result.unwrap_err().to_string(), SFTP_TRANSFER_CANCELLED);
+    assert_eq!(std::fs::read(target).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    worker.join().unwrap();
+}
+
+#[test]
+fn waiting_for_the_control_mutex_can_be_cancelled_and_disconnect_wakes_the_owner() {
+    let server = TreeServer::start(vec![("/stalled", FakeNode::File(b"server".to_vec()))]);
+    let service = Arc::new(connect_tree(&server));
+    let owner = service.clone();
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = owner.read_file_bytes_limited("/stalled", 10);
+        let _ = send.send(result);
+    });
+    wait_for_retrieve(&server);
+    let control = SftpTransferControl::new();
+    control.cancel();
+    assert_eq!(
+        service.retrieve("/stalled", &mut Vec::new(), None, &control, |_| Ok(())),
+        Err(FtpError::Cancelled)
+    );
+    // The public copy path must also cancel while its initial metadata probe
+    // waits behind another transfer, before it creates any local output.
+    let root = tempfile::tempdir().unwrap();
+    let request = FileCopyRequest {
+        source: FileTransferEndpoint::Ftp {
+            service: service.clone(),
+            path: RemoteFilePath::new("/stalled"),
+        },
+        destination: FileTransferEndpoint::Local(root.path().join("file")),
+        control: SftpTransferControl::new(),
+        options: overwrite_options(),
+    };
+    let cancel = request.control.clone();
+    let (copy_send, copy_receive) = std::sync::mpsc::channel();
+    let copy_worker = thread::spawn(move || {
+        let _ = copy_send.send(request.execute());
+    });
+    assert!(
+        copy_receive
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+    cancel.cancel();
+    assert!(
+        copy_receive
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .is_err()
+    );
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    copy_worker.join().unwrap();
+    service.disconnect();
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .is_err()
+    );
+    assert!(!service.is_available());
+    worker.join().unwrap();
+}
+
+#[test]
+fn ftp_upload_returns_success_with_a_retained_backup_after_cleanup_refusal() {
+    let server = TreeServer::start_options(
+        vec![("/file", FakeNode::File(b"old".to_vec()))],
+        1,
+        true,
+        true,
+    );
+    let service = Arc::new(connect_tree(&server));
+    let browser = FileBrowserService::Ftp(service);
+    let local = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(local.path(), b"new").unwrap();
+    let summary = browser
+        .upload_path_with_progress_and_path_options(
+            local.path().to_path_buf(),
+            "/file",
+            SftpTransferControl::new(),
+            overwrite_options(),
+            |_| {},
+        )
+        .unwrap();
+    assert!(!summary.skipped);
+    assert_eq!(summary.bytes, 3);
+    assert_eq!(summary.retained_backups.len(), 1);
+    assert_eq!(server.read("/file").unwrap(), b"new");
+    assert_eq!(server.read(&summary.retained_backups[0]).unwrap(), b"old");
+    assert!(server.temporary_paths().is_empty());
+}
+
+#[test]
+fn cancelling_after_uploading_a_chunk_keeps_the_old_destination() {
+    let server = TreeServer::start(vec![("/file", FakeNode::File(b"original".to_vec()))]);
+    let service = Arc::new(connect_tree(&server));
+    let local = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(local.path(), vec![42; 256 * 1024]).unwrap();
+    let control = SftpTransferControl::new();
+    let cancel = control.clone();
+    let result = FileCopyRequest {
+        source: FileTransferEndpoint::Local(local.path().to_path_buf()),
+        destination: FileTransferEndpoint::Ftp {
+            service,
+            path: RemoteFilePath::new("/file"),
+        },
+        control,
+        options: overwrite_options(),
+    }
+    .execute_with_progress(move |value| {
+        if value.bytes_transferred > 0 {
+            cancel.cancel();
+        }
+    });
+    assert_eq!(result.unwrap_err().to_string(), SFTP_TRANSFER_CANCELLED);
+    assert_eq!(server.read("/file").unwrap(), b"original");
 }

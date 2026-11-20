@@ -589,6 +589,25 @@ impl NyaTermApp {
                         }
                     }
                 };
+                let (security_mode, tls_version) = match (
+                    nyaterm_files::ftp::FtpSecurityMode::parse(&ftp_security_mode),
+                    nyaterm_files::ftp::FtpTlsVersion::parse(&ftp_tls_version),
+                ) {
+                    (Ok(security), Ok(tls)) => (security, tls),
+                    _ => {
+                        let message = crate::features::ftp::labels::error_message(
+                            &nyaterm_files::ftp::FtpError::UnsupportedSettings,
+                        );
+                        self.fail_start_preparation(&options, message.clone(), cx);
+                        self.complete_mcp_session_open_failure(
+                            options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                            &message,
+                        );
+                        self.shell.set_status(message);
+                        cx.notify();
+                        return;
+                    }
+                };
                 let config = FtpSessionConfig {
                     name: connection.name.clone(),
                     host: host.clone(),
@@ -609,10 +628,8 @@ impl NyaTermApp {
                         ),
                         filename_encoding: ftp_filename_encoding,
                         ascii_mode: ftp_ascii_mode,
-                        security_mode: nyaterm_files::ftp::FtpSecurityMode::parse(
-                            &ftp_security_mode,
-                        ),
-                        tls_version: nyaterm_files::ftp::FtpTlsVersion::parse(&ftp_tls_version),
+                        security_mode,
+                        tls_version,
                     },
                     login,
                 };

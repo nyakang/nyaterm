@@ -1125,7 +1125,7 @@
     "ftpAuthModeUnsupported": "FTP supports only password or anonymous login.",
     "ftpPassiveModeInvalid": "The FTP passive mode is invalid.",
     "ftpFilenameEncodingInvalid": "Choose a valid FTP filename charset.",
-    "ftpConnectTimeoutInvalid": "FTP connect timeout must be between {{min}} and {{max}} milliseconds.",
+    "ftpConnectTimeoutInvalid": "FTP connect timeout must be between %{min} and %{max} milliseconds.",
     "ftpPasswordRequired": "Enter a password or choose anonymous login.",
     "ftpPassiveMode": "Passive mode",
     "ftpPassiveAuto": "Automatic",
@@ -1134,7 +1134,7 @@
     "ftpInitialDirectory": "Remote startup folder",
     "ftpLocalInitialDirectory": "Local startup folder",
     "ftpConnectTimeout": "Connect timeout (ms)",
-    "ftpAdvancedHint": "Leave startup folders empty to use the server or local default.",
+    "ftpAdvancedHint": "Leave startup folders empty to use the server or local default. FTP transfers restart from the beginning and do not preserve permissions or timestamps.",
     "ftpAsciiMode": "ASCII mode",
     "ftpAsciiModeHint": "Converts local line endings to CRLF on upload and back to local line endings on download. Use it for text files only.",
     "ftpFtps": "FTPS (explicit TLS)",
@@ -4790,5 +4790,16 @@
     "tmuxCommandFailed": "tmux command failed",
     "details": "Details (%{count})",
     "repeated": "Occurrences: %{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP connection failed.",
+    "authentication": "FTP authentication failed.",
+    "timeout": "FTP operation timed out. Reconnect to continue.",
+    "unavailable": "The FTP session is unavailable. Reconnect to continue.",
+    "unsupportedSettings": "These transfer settings are unavailable for FTP.",
+    "limitExceeded": "The FTP file exceeds the preview or editor limit.",
+    "notFound": "The FTP file was not found.",
+    "backupRetained": "The file was saved. An old backup remains at %{backup}.",
+    "recoveryRequired": "The server did not confirm replacement. Preserve the new file at %{temporary} and any backup at %{backup} for recovery."
   }
 }

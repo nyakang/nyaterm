@@ -486,3 +486,57 @@ fn short_rsa_opt_in_syncs_per_connection_and_can_be_cleared() {
     let applied = apply_record("connection", &original, &projection).unwrap();
     assert!(applied.get("allow_short_rsa_host_keys").is_none());
 }
+
+#[test]
+fn ftp_projection_round_trips_portable_settings_and_preserves_local_extensions() {
+    let original = json!({
+        "type":"ftp", "id":"ftp-legacy", "name":"FTP", "host":"example.com", "port":21, "username":"u",
+        "initial_directory":"/remote", "local_initial_directory":"C:/private", "connect_timeout_ms":15000,
+        "passive_mode":"epsv", "ftp_filename_encoding_mode":"custom", "ftp_filename_encoding":"gbk",
+        "ftp_ascii_mode":true, "ftp_security_mode":"implicit", "ftp_tls_version":"tls12",
+        "auth":{"password":"local-secret", "mode":"password"}, "future_ftp":{"keep":true}
+    });
+    let projected = project_record("connection", &original).unwrap();
+    assert_eq!(
+        projected["endpoint"],
+        json!({"type":"ftp","host":"example.com","port":21,"username":"u"})
+    );
+    for field in [
+        "initial_directory",
+        "passive_mode",
+        "ftp_filename_encoding_mode",
+        "ftp_filename_encoding",
+        "ftp_ascii_mode",
+        "ftp_security_mode",
+        "ftp_tls_version",
+    ] {
+        assert_eq!(projected["ftp"][field], original[field]);
+    }
+    assert!(!projected.to_string().contains("local-secret"));
+    assert!(!projected.to_string().contains("C:/private"));
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["auth"], original["auth"]);
+    assert_eq!(applied["future_ftp"], original["future_ftp"]);
+    assert_eq!(
+        applied["local_initial_directory"],
+        original["local_initial_directory"]
+    );
+    assert_eq!(project_record("connection", &applied).unwrap(), projected);
+    let mut cleared = projected.clone();
+    cleared.as_object_mut().unwrap().remove("ftp");
+    let applied = apply_record("connection", &original, &cleared).unwrap();
+    assert!(applied.get("ftp_ascii_mode").is_none());
+    assert_eq!(applied["future_ftp"], original["future_ftp"]);
+    assert_eq!(applied["auth"], original["auth"]);
+}
+
+#[test]
+fn legacy_ftp_without_new_settings_stays_compatible_and_rejects_cloud_extensions() {
+    let original = json!({"type":"ftp","name":"legacy","host":"example","port":21,"username":"anonymous", "future_ftp":"local"});
+    let mut projected = project_record("connection", &original).unwrap();
+    assert_eq!(projected["ftp"], json!({}));
+    projected["ftp"]["future_ftp"] = json!("cloud");
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["future_ftp"], "local");
+    assert!(applied.get("ftp_security_mode").is_none());
+}

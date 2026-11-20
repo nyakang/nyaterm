@@ -47,6 +47,17 @@ pub(crate) struct DownloadRuntime {
 }
 
 impl DownloadRuntime {
+    pub(crate) fn track_directory(&mut self, path: &Path) -> anyhow::Result<()> {
+        self.validate_ancestors(path)?;
+        let identity = FileIdentity::from_path(path)?;
+        if let Some(previous) = self.directories.get(path) {
+            anyhow::ensure!(*previous == identity, "download directory was replaced");
+        } else {
+            self.directories.insert(path.to_path_buf(), identity);
+        }
+        Ok(())
+    }
+
     pub(crate) fn selected(&self, key: &SftpDuplicateCacheKey) -> Option<PathBuf> {
         self.selected.get(key).cloned()
     }

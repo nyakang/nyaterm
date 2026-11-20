@@ -1125,7 +1125,7 @@
     "ftpAuthModeUnsupported": "FTP 仅支持密码或匿名登录。",
     "ftpPassiveModeInvalid": "FTP 被动模式无效。",
     "ftpFilenameEncodingInvalid": "请选择有效的 FTP 文件名字符集。",
-    "ftpConnectTimeoutInvalid": "FTP 连接超时必须介于 {{min}} 到 {{max}} 毫秒。",
+    "ftpConnectTimeoutInvalid": "FTP 连接超时必须介于 %{min} 到 %{max} 毫秒。",
     "ftpPasswordRequired": "请输入密码或选择匿名登录。",
     "ftpPassiveMode": "被动模式",
     "ftpPassiveAuto": "自动",
@@ -1134,7 +1134,7 @@
     "ftpInitialDirectory": "远端起始目录",
     "ftpLocalInitialDirectory": "本地起始目录",
     "ftpConnectTimeout": "连接超时（毫秒）",
-    "ftpAdvancedHint": "起始目录留空时使用服务器或本地默认目录。",
+    "ftpAdvancedHint": "起始目录留空时使用服务器或本地默认目录。 FTP 传输始终从头开始，不保留权限和时间戳。",
     "ftpAsciiMode": "ASCII 模式",
     "ftpAsciiModeHint": "上传时将本地换行转换为 CRLF，下载时转换回本地换行；仅适用于文本文件。",
     "ftpFtps": "FTPS（显式 TLS）",
@@ -4790,5 +4790,16 @@
     "tmuxCommandFailed": "tmux 命令失败",
     "details": "详情（%{count}）",
     "repeated": "发生次数：%{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP 连接失败。",
+    "authentication": "FTP 身份验证失败。",
+    "timeout": "FTP 操作超时，请重新连接。",
+    "unavailable": "FTP 会话不可用，请重新连接。",
+    "unsupportedSettings": "FTP 不支持这些传输设置。",
+    "limitExceeded": "FTP 文件超过预览或编辑器的大小限制。",
+    "notFound": "找不到 FTP 文件。",
+    "backupRetained": "文件已保存，旧备份保留在 %{backup}。",
+    "recoveryRequired": "服务器未确认替换结果。请保留新文件 %{temporary} 和备份 %{backup}，以便恢复。"
   }
 }

@@ -412,11 +412,15 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         "telnet" => &["type", "host", "port", "username"],
         "rdp" => &["type", "host", "port", "username", "domain"],
         "vnc" => &["type", "host", "port", "username"],
+        "ftp" => &["type", "host", "port", "username"],
         "adb" => &["type", "device"],
         "local" | "local_terminal" | "serial" => &["type"],
         _ => return Err("Unsupported connection protocol".into()),
     };
     result["endpoint"] = pick(source, endpoint_fields);
+    if kind == "ftp" {
+        result["ftp"] = pick(source, connection_fields("ftp"));
+    }
     if kind == "adb" {
         if let Some(device) = source.get("device") {
             result["endpoint"]["device"] = pick(device, &["kind", "serial", "host", "port"]);
@@ -548,7 +552,14 @@ pub fn apply_record(kind: &str, original: &Value, projected: &Value) -> Result<V
         } else if kind == "connection"
             && matches!(
                 field.as_str(),
-                "endpoint" | "placement" | "terminal" | "serial" | "icon" | "telnet" | "android"
+                "endpoint"
+                    | "placement"
+                    | "terminal"
+                    | "serial"
+                    | "icon"
+                    | "telnet"
+                    | "android"
+                    | "ftp"
             )
         {
             let Some(group) = value.as_object() else {
@@ -648,6 +659,7 @@ pub fn supports_field(kind: &str, field: &str) -> bool {
                 | "tags"
                 | "endpoint"
                 | "android"
+                | "ftp"
                 | "placement"
                 | "terminal"
                 | "serial"
@@ -722,6 +734,15 @@ const SERIAL_CONNECT_PROMPT_FIELDS: &[&str] = &["port", "baud_rate"];
 
 fn connection_fields(field: &str) -> &'static [&'static str] {
     match field {
+        "ftp" => &[
+            "initial_directory",
+            "passive_mode",
+            "ftp_filename_encoding_mode",
+            "ftp_filename_encoding",
+            "ftp_ascii_mode",
+            "ftp_security_mode",
+            "ftp_tls_version",
+        ],
         "endpoint" => &["type", "host", "port", "username", "domain", "device"],
         "android" => &["directory", "screen"],
         "placement" => &["group_id", "sort_order", "tree_order"],
