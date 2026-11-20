@@ -344,26 +344,15 @@ impl NyaTermApp {
         self.ensure_rdp_focus_reporting(window, cx);
     }
 
-    fn root_chrome(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        self.ensure_paint_theme_caches();
-        let palette = self.theme_palette();
-        let wallpaper = self.shell.wallpaper_asset().cloned();
-        let wallpaper_opacity =
-            (self.settings.summary().background_image_opacity.min(100) as f32) / 100.0;
-        let wallpaper_fit = self.settings.summary().background_image_fit.clone();
-        let root = div()
-            .id(SharedString::from("nyaterm-root"))
-            .key_context(crate::shortcuts::WORKSPACE_KEY_CONTEXT)
-            .size_full()
-            .relative()
-            .bg(self.shell_background().root_color(palette.bg))
-            .text_color(rgb(palette.text))
-            .font(self.gpui_ui_font().font())
-            .text_size(px(self.settings.summary().ui_font_size.clamp(12, 24) as f32))
-            .child(self.session_tab_drag_listener_layer(cx))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.cancel_internal_drag_on_escape(event, window, cx);
-            }))
+    /// Occluding panels also hide the root hitbox. Share pointer lifecycle
+    /// handlers so drags still update and finish over an open panel.
+    fn workspace_pointer_boundary(
+        &self,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
             // Observe presses before child controls dismiss popups or toggle
             // panels. Popup dismissal and panel dismissal are separate clicks.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -382,12 +371,6 @@ impl NyaTermApp {
                 this.mark_user_activity();
             }))
             .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dismiss_workspace_menus_on_left_press(window, cx);
-                }),
-            )
-            .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, _, _, cx| {
                     if this.dismiss_transfer_rename_if_open(cx) {
@@ -396,11 +379,6 @@ impl NyaTermApp {
                     }
                 }),
             )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.handle_global_shortcut(event, window, cx) {
-                    cx.stop_propagation();
-                }
-            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 this.shell
                     .panels
@@ -443,6 +421,22 @@ impl NyaTermApp {
                 }),
             )
             .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    if this.finish_terminal_mouse_report(event, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                    if this.finish_terminal_mouse_report(event, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .on_mouse_up(
                 MouseButton::Navigate(NavigationDirection::Back),
                 cx.listener(|this, _event: &MouseUpEvent, window, cx| {
                     if this.current_left_panel() == Some(NavItem::Transfers) {
@@ -460,22 +454,39 @@ impl NyaTermApp {
                     }
                 }),
             )
-            .on_mouse_up(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                    if this.finish_terminal_mouse_report(event, cx) {
-                        cx.stop_propagation();
-                    }
+    }
+
+    fn root_chrome(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        self.ensure_paint_theme_caches();
+        let palette = self.theme_palette();
+        let wallpaper = self.shell.wallpaper_asset().cloned();
+        let wallpaper_opacity =
+            (self.settings.summary().background_image_opacity.min(100) as f32) / 100.0;
+        let wallpaper_fit = self.settings.summary().background_image_fit.clone();
+        let root = self
+            .workspace_pointer_boundary("nyaterm-root", cx)
+            .key_context(crate::shortcuts::WORKSPACE_KEY_CONTEXT)
+            .size_full()
+            .relative()
+            .bg(self.shell_background().root_color(palette.bg))
+            .text_color(rgb(palette.text))
+            .font(self.gpui_ui_font().font())
+            .text_size(px(self.settings.summary().ui_font_size.clamp(12, 24) as f32))
+            .child(self.session_tab_drag_listener_layer(cx))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.cancel_internal_drag_on_escape(event, window, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dismiss_workspace_menus_on_left_press(window, cx);
                 }),
             )
-            .on_mouse_up(
-                MouseButton::Middle,
-                cx.listener(|this, event: &MouseUpEvent, _, cx| {
-                    if this.finish_terminal_mouse_report(event, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.handle_global_shortcut(event, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .when_some(wallpaper, |this, wallpaper| {
                 if wallpaper_fit == "tile" {
                     let image = wallpaper.image().clone();
@@ -626,8 +637,9 @@ impl NyaTermApp {
 
             if let Some(panel) = left_floating {
                 let width = self.shell.left_panel_width();
-                let panel = div()
-                    .id("floating-left-panel")
+                let panel = self
+                    .workspace_pointer_boundary("floating-left-panel", cx)
+                    .occlude()
                     .debug_selector(|| "floating-left-panel".into())
                     .absolute()
                     .top_0()
@@ -653,8 +665,9 @@ impl NyaTermApp {
 
             if let Some(panel) = right_floating {
                 let width = self.shell.right_panel_width();
-                let panel = div()
-                    .id("floating-right-panel")
+                let panel = self
+                    .workspace_pointer_boundary("floating-right-panel", cx)
+                    .occlude()
                     .debug_selector(|| "floating-right-panel".into())
                     .absolute()
                     .top_0()
@@ -1319,11 +1332,15 @@ impl NyaTermApp {
 /// owner scene instead would leave it behind the child window: invisible, and
 /// with every click inside the RDP rectangle going to the remote session.
 fn floating_panel_layer(present_above_native: bool, panel: AnyElement) -> AnyElement {
-    if present_above_native {
+    // Main-surface dividers are deferred at priority 0 and registered first.
+    // Keep that priority: this panel paints after them, its nested resize handle
+    // paints after the panel, and app overlays at priority 1 remain above both.
+    let panel = if present_above_native {
         nyaterm_ui::nya_region_overlay(panel).into_any_element()
     } else {
         panel
-    }
+    };
+    deferred(panel).into_any_element()
 }
 
 fn wallpaper_tile_grid(viewport: (f32, f32), tile: (f32, f32)) -> (usize, usize) {

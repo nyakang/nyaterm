@@ -256,7 +256,10 @@ impl NyaTermApp {
         ))
     }
 
-    fn position_inside_floating_panel(&self, position: Point<Pixels>) -> bool {
+    pub(in crate::features) fn position_inside_floating_panel(
+        &self,
+        position: Point<Pixels>,
+    ) -> bool {
         [PanelSide::Left, PanelSide::Right]
             .into_iter()
             .filter_map(|side| self.floating_panel_window_bounds(side))
