@@ -134,18 +134,7 @@ impl NyaTermApp {
             }
             return had_panel;
         }
-        // Common idle path: no credentials, no detection, no match pipeline reply.
-        if self
-            .terminal
-            .assist
-            .credential_autofill_pending_request
-            .is_none()
-            && !self.terminal.assist.credential_autofill_detection_pending
-            && !self.has_credential_autofill_candidates()
-            && self.terminal.assist.credential_autofill_pending.is_none()
-        {
-            return false;
-        }
+        // Prompt detection also protects manual input, even with an empty vault.
         // Replies arrive on `start_credential_autofill_match_drain`; what is
         // left here is snapshot-driven detection.
         let mut root_overlay_dirty = false;
@@ -168,8 +157,6 @@ impl NyaTermApp {
             .is_some();
         if credential_autofill_snapshot_detection_can_run(
             self.session.active_id(),
-            self.has_credential_autofill_candidates()
-                || self.terminal.assist.credential_autofill_pending.is_some(),
             runtime_backlog,
             match_request_pending,
         ) {
@@ -376,20 +363,6 @@ impl NyaTermApp {
                 pending: self.terminal.assist.credential_autofill_pending.clone(),
             });
         true
-    }
-
-    /// Whether the credential autofill has anything to offer: vault credentials
-    /// from the security catalog. Kept cheap because detection ticks call it on
-    /// idle frames.
-    fn has_credential_autofill_candidates(&self) -> bool {
-        if !self
-            .settings
-            .summary()
-            .interaction_credential_autofill_enabled
-        {
-            return false;
-        }
-        !self.security.credentials().is_empty()
     }
 
     /// Deliver credential-autofill match replies as they arrive.
@@ -980,14 +953,10 @@ fn credential_suggestion_step_selection(
 
 fn credential_autofill_snapshot_detection_can_run(
     active_session_id: Option<&str>,
-    has_credentials_or_pending: bool,
     backlog: CredentialAutofillRuntimeBacklog,
     match_request_pending: bool,
 ) -> bool {
-    active_session_id.is_some()
-        && has_credentials_or_pending
-        && backlog.is_empty()
-        && !match_request_pending
+    active_session_id.is_some() && backlog.is_empty() && !match_request_pending
 }
 
 fn credential_autofill_pending_detection_can_run(
@@ -1205,28 +1174,19 @@ mod tests {
     }
 
     #[test]
-    fn credential_autofill_snapshot_detection_requires_active_session_and_credentials() {
+    fn credential_autofill_snapshot_detection_requires_active_session_and_no_pending_match() {
         assert!(credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            true,
             backlog(0, 0, 0, 0, 0),
             false
         ));
         assert!(!credential_autofill_snapshot_detection_can_run(
             None,
-            true,
             backlog(0, 0, 0, 0, 0),
             false
         ));
         assert!(!credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            false,
-            backlog(0, 0, 0, 0, 0),
-            false
-        ));
-        assert!(!credential_autofill_snapshot_detection_can_run(
-            Some("active"),
-            true,
             backlog(0, 0, 0, 0, 0),
             true
         ));
@@ -1236,31 +1196,26 @@ mod tests {
     fn credential_autofill_snapshot_detection_waits_for_all_backlogs() {
         assert!(!credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            true,
             backlog(1, 0, 0, 0, 0),
             false
         ));
         assert!(!credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            true,
             backlog(0, 1, 0, 0, 0),
             false
         ));
         assert!(!credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            true,
             backlog(0, 0, 1, 0, 0),
             false
         ));
         assert!(!credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            true,
             backlog(0, 0, 0, 1, 0),
             false
         ));
         assert!(!credential_autofill_snapshot_detection_can_run(
             Some("active"),
-            true,
             backlog(0, 0, 0, 0, 1),
             false
         ));
@@ -1480,6 +1435,67 @@ mod tests {
                 .replace_loaded(vec![connection], Vec::new());
         });
         app
+    }
+
+    #[test]
+    fn empty_vault_protects_manual_password_input_without_candidates() {
+        for saved_password in [true, false] {
+            let root = TestConfigDir::new("nyaterm-empty-vault-input-protection");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let auth = saved_password.then(|| ConnectionAuth {
+                mode: "password".into(),
+                password_source: Some(ConnectionPasswordSource::Connection),
+                password: Some(nyaterm_core::SecretString::from("connection-fixture")),
+                ..Default::default()
+            });
+            let app = app_with_account_backed_session(
+                &mut cx,
+                &root,
+                ssh_connection("root", auth),
+                "root",
+            );
+            cx.update_entity(&app, |app, cx| {
+                assert!(app.credential_autofill_enabled());
+                assert!(app.security.credentials().is_empty());
+                app.terminal.seed_session_view(
+                    SESSION_ID.into(),
+                    "[sudo] password for root: ".into(),
+                    "UTF-8",
+                );
+                let view = app.terminal.view.views.get_mut(SESSION_ID).unwrap();
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                // Exercise the production scheduler, including its idle fast path.
+                app.drain_pending_credential_autofill_detection(cx);
+                app.drain_pending_credential_autofill_detection(cx);
+                assert!(app.is_credential_prompt_input_mode());
+                assert!(app.terminal.assist.credential_suggestions.is_none());
+                assert!(
+                    app.terminal
+                        .assist
+                        .credential_autofill_pending_request
+                        .is_none()
+                );
+                app.note_shell_editing_input(b"manual-password-fixture", cx);
+                app.note_command_suggestion_input(b"manual-password-fixture", cx);
+                assert!(app.terminal.editing.predicted_input().value.is_empty());
+                assert!(app.terminal.editing.assist_input().value.is_empty());
+
+                app.terminal.seed_session_view(
+                    SESSION_ID.into(),
+                    "[sudo] password for root: \r\nroot@host:~# ".into(),
+                    "UTF-8",
+                );
+                let view = app.terminal.view.views.get_mut(SESSION_ID).unwrap();
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.drain_pending_credential_autofill_detection(cx);
+                assert!(!app.is_credential_prompt_input_mode());
+                app.note_shell_editing_input(b"ls", cx);
+                app.note_command_suggestion_input(b"ls", cx);
+                assert_eq!(app.terminal.editing.predicted_input().value, "ls");
+                assert_eq!(app.terminal.editing.assist_input().value, "ls");
+            });
+        }
     }
 
     #[test]
