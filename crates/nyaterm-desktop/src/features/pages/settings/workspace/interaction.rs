@@ -126,6 +126,19 @@ impl SettingsPanel {
                             self.settings.summary().interaction_mouse_events_require_alt,
                             cx.listener(|this, _, _, cx| this.toggle_mouse_events_require_alt(cx)),
                         ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.alternateScroll"),
+                        Some(SharedString::from(t!("settings.alternateScrollDesc"))),
+                        settings_switch(
+                            palette,
+                            "interaction-alternate-scroll",
+                            self.settings.summary().interaction_alternate_scroll,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_interaction_alternate_scroll(cx)
+                            }),
+                        ),
                     )),
             ))
             .child(settings_form_section(

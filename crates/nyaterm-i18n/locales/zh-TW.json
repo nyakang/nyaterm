@@ -3649,6 +3649,8 @@
     "terminalRightClickPaste": "貼上",
     "mouseEventsRequireAlt": "滑鼠回報需按 Alt",
     "mouseEventsRequireAltDesc": "僅在按住 Alt 時向終端程式傳送滑鼠事件。",
+    "alternateScroll": "全螢幕程式中滾輪傳送方向鍵",
+    "alternateScrollDesc": "在備用螢幕（tmux、screen、less、vim）且未啟用滑鼠回報時，將滑鼠滾輪作為上/下方向鍵傳送。關閉後滾輪不會翻動 shell 歷史。",
     "enableStartupLock": "啟動時鎖定",
     "enableStartupLockDesc": "應用程式啟動時鎖定。",
     "enableIdleLock": "閒置時鎖定",

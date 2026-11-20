@@ -622,6 +622,10 @@ pub struct AppSettingsSummary {
     pub interaction_terminal_right_click_action: TerminalRightClickAction,
     #[serde(default)]
     pub interaction_mouse_events_require_alt: bool,
+    /// xterm alternate-scroll emulation: on the alternate screen without mouse
+    /// reporting, the wheel is sent as Up/Down cursor keys (DECSET 1007).
+    #[serde(default = "default_true")]
+    pub interaction_alternate_scroll: bool,
     #[serde(default = "default_true")]
     pub interaction_terminal_zoom_enabled: bool,
     pub interaction_command_suggestions_enabled: bool,
@@ -853,6 +857,7 @@ impl Default for AppSettingsSummary {
             interaction_right_click_paste: false,
             interaction_terminal_right_click_action: TerminalRightClickAction::Menu,
             interaction_mouse_events_require_alt: false,
+            interaction_alternate_scroll: true,
             interaction_terminal_zoom_enabled: true,
             interaction_command_suggestions_enabled: true,
             interaction_credential_autofill_enabled: true,
