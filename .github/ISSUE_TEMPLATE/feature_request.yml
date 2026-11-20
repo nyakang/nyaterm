@@ -1,0 +1,111 @@
+name: ✨ Feature request
+description: Suggest an idea or enhancement for NyaTerm
+title: "[Feature]: "
+labels: ["enhancement"]
+
+body:
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: I have searched the existing issues, both open and closed, to make sure this is not a duplicate request.
+      options:
+        - label: "Yes"
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest an improvement for NyaTerm.
+
+        Please describe the problem you are trying to solve, not just the solution you want.
+
+  - type: textarea
+    id: problem
+    validations:
+      required: true
+    attributes:
+      label: Problem description
+      description: What problem, limitation, or inconvenience are you experiencing?
+      placeholder: |
+        For example:
+        I often need to connect to multiple SSH hosts, but currently it is difficult to...
+
+  - type: textarea
+    id: solution
+    validations:
+      required: true
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or enhancement you would like to see.
+      placeholder: |
+        For example:
+        Add a connection profile manager that allows users to save hosts, ports, usernames, and startup commands.
+
+  - type: textarea
+    id: alternatives
+    validations:
+      required: false
+    attributes:
+      label: Alternatives considered
+      description: Have you considered any alternative solutions or workarounds?
+      placeholder: |
+        For example:
+        I currently use a script or external SSH config, but it does not integrate well with NyaTerm.
+
+  - type: dropdown
+    id: area
+    validations:
+      required: true
+    attributes:
+      label: Area of improvement
+      description: Which part of NyaTerm does this request relate to?
+      options:
+        - Terminal
+        - SSH / Remote connection
+        - UI / UX
+        - Themes / Appearance
+        - Settings / Configuration
+        - Keyboard shortcuts
+        - Tabs / Sessions
+        - Performance
+        - Packaging / Installation
+        - Documentation
+        - Other
+
+  - type: dropdown
+    id: platform
+    validations:
+      required: true
+    attributes:
+      label: Target platform
+      description: Which platform should this feature support?
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - All platforms
+        - Not platform-specific
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to contribute
+      description: Let us know if you are willing to help with this feature.
+      options:
+        - label: I am willing to submit a pull request for this feature.
+        - label: I am willing to help test this feature.
+
+  - type: textarea
+    id: additional-context
+    validations:
+      required: false
+    attributes:
+      label: Additional context
+      description: Add any screenshots, mockups, examples, links, or extra information here.
+      placeholder: |
+        You can attach screenshots, diagrams, references, or examples of similar behavior in other tools.
+
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve NyaTerm.
