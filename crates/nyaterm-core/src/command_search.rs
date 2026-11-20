@@ -280,6 +280,7 @@ mod tests {
             created_at: None,
             use_count: None,
             sort_order: None,
+            extra: Default::default(),
         }
     }
 
@@ -322,6 +323,7 @@ mod tests {
             created_at: None,
             use_count: None,
             sort_order: None,
+            extra: Default::default(),
         }];
 
         let results = search_command_sources(&history, &quick_commands, "ps", 10, None, None);
@@ -419,6 +421,7 @@ mod tests {
                 created_at: None,
                 use_count: Some(1),
                 sort_order: None,
+                extra: Default::default(),
             },
             QuickCommand {
                 id: "qc-pinned".to_string(),
@@ -438,6 +441,7 @@ mod tests {
                 created_at: None,
                 use_count: Some(0),
                 sort_order: None,
+                extra: Default::default(),
             },
         ];
 

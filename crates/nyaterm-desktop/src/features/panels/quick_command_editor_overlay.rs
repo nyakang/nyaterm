@@ -121,8 +121,8 @@ impl NyaTermApp {
             &editor.segmented_send_interval_input,
             nyaterm_ui::NyaNumberInputOptions::default()
                 .range(0.0, 60.0)
-                .step(0.01)
-                .decimal_places(2)
+                .step(0.001)
+                .decimal_places(3)
                 .suffix(t!("serialSend.seconds")),
             cx,
         );
@@ -676,7 +676,7 @@ impl NyaTermApp {
                                             .text_size(px(10.))
                                             .text_color(rgb(palette.text_muted))
                                             .child(if editor.execution_mode == "segmented" {
-                                                t!("quickCommands.segmentedSendHint")
+                                                format!("{}\n{}", t!("quickCommands.segmentedSendHint"), t!("quickCommands.segmentedLegacyHint")).into()
                                             } else if editor.execution_mode == "append" {
                                                 append_hint
                                             } else {

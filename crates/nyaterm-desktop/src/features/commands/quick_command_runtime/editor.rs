@@ -212,6 +212,16 @@ impl NyaTermApp {
         let Some(editor) = self.commands.quick_editor_snapshot() else {
             return;
         };
+        if let Some(send) = editor
+            .original
+            .as_ref()
+            .and_then(|command| command.segmented_send.as_ref())
+            && let Err(error) = send.validate()
+        {
+            self.commands.set_quick_editor_error(error, None);
+            cx.notify();
+            return;
+        }
         let label = editor.label.trim().to_string();
         if label.is_empty() {
             self.commands
@@ -240,6 +250,13 @@ impl NyaTermApp {
             Some(nyaterm_core::QuickCommandSegmentedSend {
                 mode: editor.segmented_send_mode,
                 interval_ms,
+                extra: editor
+                    .original
+                    .as_ref()
+                    .and_then(|command| command.segmented_send.as_ref())
+                    .map(|send| send.extra.clone())
+                    .unwrap_or_default(),
+                ..Default::default()
             })
         } else {
             None
@@ -300,6 +317,10 @@ impl NyaTermApp {
                 .or(Some(now)),
             use_count: original.as_ref().and_then(|command| command.use_count),
             sort_order: original.as_ref().and_then(|command| command.sort_order),
+            extra: original
+                .as_ref()
+                .map(|command| command.extra.clone())
+                .unwrap_or_default(),
         };
 
         let Some(save_generation) = self.commands.begin_quick_editor_save() else {

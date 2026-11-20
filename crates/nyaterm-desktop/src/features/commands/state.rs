@@ -38,7 +38,7 @@ pub(in crate::features) struct CommandFeatureState {
     sensitive_submissions: std::collections::HashSet<String>,
     completed_sensitive_submissions: std::collections::HashSet<String>,
     confirmed_submissions: std::collections::HashSet<String>,
-    pub(super) staged: StagedQuickCommands,
+    pub(in crate::features) staged: StagedQuickCommands,
 }
 
 pub(in crate::features) struct CompletionSessionTransfer {
@@ -87,6 +87,13 @@ struct QuickCommandFeatureState {
 }
 
 impl CommandFeatureState {
+    pub(in crate::features) fn staged_send_progress(&self) -> Option<u64> {
+        self.staged.progress()
+    }
+
+    pub(in crate::features) fn stop_staged_sends(&mut self) {
+        self.staged.cancel_all();
+    }
     pub(in crate::features) fn new(init: CommandFeatureInit) -> Self {
         let catalog = CommandCatalogState::new(init.commands, init.categories);
         let selected_category = valid_quick_category(&init.selected_category, &catalog.categories);
@@ -896,7 +903,7 @@ impl CommandFeatureState {
         let editor = self.quick.editor.draft.as_mut()?;
         editor.segmented_send_mode = mode;
         editor.segmented_send_interval_input =
-            format!("{:.2}", mode.default_interval_ms() as f64 / 1_000.0);
+            nyaterm_core::send_command::format_interval_ms(mode.default_interval_ms());
         editor.error = None;
         editor.error_field = None;
         Some(editor.segmented_send_interval_input.clone())
@@ -1391,6 +1398,7 @@ mod tests {
             created_at: None,
             use_count: None,
             sort_order: None,
+            extra: Default::default(),
         }
     }
 
@@ -1574,6 +1582,24 @@ mod tests {
     }
 
     #[test]
+    fn quick_editor_restores_millisecond_intervals_without_rounding() {
+        for interval_ms in [1, 15, 999, 1001, 60000] {
+            let mut saved = command("milliseconds");
+            saved.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+                interval_ms,
+                ..Default::default()
+            });
+            let editor = QuickCommandEditorState::from_command(saved);
+            assert_eq!(
+                nyaterm_core::send_command::parse_interval_ms(
+                    &editor.segmented_send_interval_input
+                ),
+                Some(interval_ms)
+            );
+        }
+    }
+
+    #[test]
     fn quick_editor_segmented_options_restore_and_follow_unit_defaults() {
         let test_dir = TestConfigDir::new("nyaterm-command-state-test");
         let mut state = command_state(test_dir.path());
@@ -1582,6 +1608,7 @@ mod tests {
         saved.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
             interval_ms: 20,
+            ..Default::default()
         });
         let editor = QuickCommandEditorState::from_command(saved);
         assert_eq!(editor.execution_mode, "segmented");

@@ -10,7 +10,7 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let send = self.send_command.presentation(cx);
+        let send = self.send_command.view_presentation(cx);
         match send.data_type {
             SendCommandDataType::Hex => window.focus(&send.hex.read(cx).focus_handle(cx), cx),
             SendCommandDataType::Text => {

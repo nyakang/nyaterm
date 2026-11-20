@@ -226,7 +226,7 @@ fn quick_command_editor_segmented_select_shows_options_and_saves_profile() {
             .find(|command| command.label == "Segmented")
             .unwrap();
         assert_eq!(command.execution_mode.as_deref(), Some("append"));
-        let send = command.segmented_send.unwrap();
+        let send = command.segmented_send.as_ref().unwrap();
         assert_eq!(
             send.mode,
             nyaterm_core::QuickCommandSegmentedSendMode::Character

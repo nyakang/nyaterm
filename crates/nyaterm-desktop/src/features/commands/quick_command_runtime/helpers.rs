@@ -13,16 +13,7 @@ pub(super) fn validated_quick_command_text(command: &str) -> Option<String> {
 }
 
 pub(super) fn parse_segmented_send_interval(input: &str) -> Option<u64> {
-    let seconds = input.trim().parse::<f64>().ok()?;
-    if !seconds.is_finite()
-        || seconds < 0.0
-        || seconds > nyaterm_core::QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS as f64 / 1_000.0
-    {
-        return None;
-    }
-    let interval_ms = (seconds * 1_000.0).round();
-    (interval_ms <= nyaterm_core::QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS as f64)
-        .then_some(interval_ms as u64)
+    nyaterm_core::send_command::parse_interval_ms(input)
 }
 
 pub(super) fn unix_millis_now() -> u64 {

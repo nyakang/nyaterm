@@ -26,7 +26,9 @@ use super::{
 
 mod input;
 
-pub(in crate::features) use input::TerminalMouseReportRequest;
+pub(in crate::features) use input::{
+    StagedCommandInput, StagedQuickCommandWriteError, TerminalMouseReportRequest,
+};
 #[cfg(test)]
 use input::{
     lost_mouse_report_release_button, mouse_report_allowed_by_alt,

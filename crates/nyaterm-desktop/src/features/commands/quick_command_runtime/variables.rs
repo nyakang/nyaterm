@@ -23,11 +23,7 @@ impl NyaTermApp {
         let Some(prompt) = self.commands.take_quick_variable_prompt() else {
             return;
         };
-        let command_text = if prompt.segmented_send.is_some() {
-            substitute_segmented_quick_command_variables(&prompt.command, &prompt.variables)
-        } else {
-            substitute_quick_command_variables(&prompt.command, &prompt.variables)
-        };
+        let command_text = substitute_quick_command_variables(&prompt.command, &prompt.variables);
         self.send_resolved_quick_command_with_segmented(
             prompt.command_id,
             prompt.label,
@@ -35,7 +31,7 @@ impl NyaTermApp {
             super::run::QuickCommandSendOptions {
                 execute: prompt.execute,
                 send_to_all: prompt.send_to_all,
-                segmented_send: prompt.segmented_send,
+                segmented_send: prompt.segmented_send.clone(),
             },
             cx,
         );
@@ -85,28 +81,9 @@ pub(super) fn substitute_quick_command_variables(
     command_text: &str,
     variables: &[QuickCommandVariableDef],
 ) -> String {
-    substitute_quick_command_variables_with_escaping(command_text, variables, true)
-}
-
-pub(super) fn substitute_segmented_quick_command_variables(
-    command_text: &str,
-    variables: &[QuickCommandVariableDef],
-) -> String {
-    substitute_quick_command_variables_with_escaping(command_text, variables, false)
-}
-
-fn substitute_quick_command_variables_with_escaping(
-    command_text: &str,
-    variables: &[QuickCommandVariableDef],
-    escape_values: bool,
-) -> String {
     let mut command_text = command_text.to_string();
     for variable in variables {
-        let value = if escape_values {
-            variable.value.replace('\\', "\\\\")
-        } else {
-            variable.value.clone()
-        };
+        let value = variable.value.replace('\\', "\\\\");
         command_text = command_text.replace(&variable.raw, &value);
     }
     command_text
@@ -235,12 +212,20 @@ mod tests {
     }
 
     #[test]
-    fn segmented_variables_preserve_windows_paths_without_script_escaping() {
+    fn segmented_variable_paths_remain_data_when_the_template_is_a_script() {
         let mut variables = parse_quick_command_variables("cd {{path}}\nnext");
         variables[0].value = "C:\\temp".to_string();
+        let text = substitute_quick_command_variables("cd {{path}}\nnext", &variables);
+        let plan = nyaterm_core::send_command::SendCommandPlan::text(
+            &text,
+            nyaterm_core::send_command::SendCommandMode::Line,
+            nyaterm_core::send_command::SendCommandLineEnding::Cr,
+            nyaterm_core::send_command::TextInterpretation::Script,
+            std::time::Duration::ZERO,
+        );
         assert_eq!(
-            super::substitute_segmented_quick_command_variables("cd {{path}}\nnext", &variables),
-            "cd C:\\temp\nnext"
+            plan.flat_map(|chunk| chunk.bytes).collect::<Vec<_>>(),
+            b"cd C:\\temp\rnext\r"
         );
     }
 

@@ -31,6 +31,7 @@ fn command_with_execution_mode(execution_mode: Option<&str>) -> QuickCommand {
         created_at: None,
         use_count: None,
         sort_order: None,
+        extra: Default::default(),
     }
 }
 
@@ -88,6 +89,7 @@ fn segmented_plan_splits_lines_and_applies_interval_only_between_units() {
         nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
             interval_ms: 250,
+            ..Default::default()
         },
         Some(nyaterm_transport::SessionKind::Ssh),
         false,
@@ -98,12 +100,7 @@ fn segmented_plan_splits_lines_and_applies_interval_only_between_units() {
             .iter()
             .map(|chunk| chunk.bytes.as_slice())
             .collect::<Vec<_>>(),
-        [
-            b"one\r".as_slice(),
-            b"\r".as_slice(),
-            "三\r".as_bytes(),
-            b"\r".as_slice()
-        ]
+        [b"one\r".as_slice(), b"\r".as_slice(), "三\r".as_bytes()]
     );
     assert_eq!(chunks[0].delay, Duration::ZERO);
     assert!(
@@ -114,12 +111,13 @@ fn segmented_plan_splits_lines_and_applies_interval_only_between_units() {
 }
 
 #[test]
-fn segmented_plan_preserves_unicode_and_literal_script_escapes_by_character() {
+fn segmented_plan_preserves_unicode_and_interprets_script_pauses_by_character() {
     let chunks = super::plan_segmented_quick_command(
-        "中a\\p\n",
+        "中a\\pnext\n",
         nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
             interval_ms: 20,
+            ..Default::default()
         },
         Some(nyaterm_transport::SessionKind::Telnet),
         false,
@@ -128,21 +126,11 @@ fn segmented_plan_preserves_unicode_and_literal_script_escapes_by_character() {
     assert_eq!(
         chunks
             .iter()
-            .map(|chunk| chunk.bytes.as_slice())
+            .flat_map(|chunk| chunk.bytes.clone())
             .collect::<Vec<_>>(),
-        [
-            "中".as_bytes(),
-            b"a".as_slice(),
-            b"\\".as_slice(),
-            b"p".as_slice(),
-            b"\r".as_slice()
-        ]
+        "中anext\r".as_bytes()
     );
-    assert!(
-        chunks[1..]
-            .iter()
-            .all(|chunk| chunk.delay == Duration::from_millis(20))
-    );
+    assert_eq!(chunks[2].delay, Duration::from_millis(1020));
 }
 
 struct WireFixture {
@@ -157,6 +145,14 @@ struct WireFixture {
 
 impl WireFixture {
     fn new(count: usize) -> Self {
+        Self::with_telnet(count, true)
+    }
+
+    fn with_telnet(count: usize, raw_tcp: bool) -> Self {
+        Self::with_carrier(count, raw_tcp, false)
+    }
+
+    fn with_carrier(count: usize, raw_tcp: bool, serial_receiver: bool) -> Self {
         let root = TestConfigDir::new("nyaterm-staged-quick-command");
         let mut cx = TestAppContext::single();
         let cleanup = TestAppCleanup::new(&cx);
@@ -167,16 +163,32 @@ impl WireFixture {
             let manager = app.session.manager_handle();
             let metadata = app.session.metadata("fixture").unwrap().clone();
             let mut ids = Vec::new();
-            for _ in 0..count {
+            for index in 0..count {
                 let config = TelnetSessionConfig {
                     host: "127.0.0.1".into(),
                     port,
-                    raw_tcp: true,
+                    raw_tcp,
+                    send_naws: false,
+                    send_sga: false,
+                    enter_mode: if !raw_tcp || (serial_receiver && index == 1) {
+                        nyaterm_transport::TelnetEnterMode::Crlf
+                    } else {
+                        nyaterm_transport::TelnetEnterMode::Cr
+                    },
                     ..TelnetSessionConfig::default()
                 };
                 let info = manager.create_telnet_session(config.clone()).unwrap();
                 let mut metadata = metadata.clone();
-                metadata.launch_config = SessionLaunchConfig::Telnet(config);
+                // Raw TCP is an observable carrier; model the Telnet shell whose
+                // submit rules these tests exercise, independently of the carrier.
+                metadata.launch_config = if serial_receiver && index == 1 {
+                    SessionLaunchConfig::Serial(nyaterm_transport::SerialSessionConfig::default())
+                } else {
+                    SessionLaunchConfig::Telnet(TelnetSessionConfig {
+                        raw_tcp: false,
+                        ..config
+                    })
+                };
                 app.session.register_session_metadata(&info.id, metadata);
                 app.terminal
                     .seed_session_view(info.id.clone(), String::new(), "UTF-8");
@@ -354,6 +366,7 @@ fn segmented_lines_preserve_variable_paths_and_reach_all_targets_with_intervals(
         command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
             interval_ms: 1_000,
+            ..Default::default()
         });
         app.commands
             .replace_quick_command_catalog(vec![command], Vec::new());
@@ -382,6 +395,7 @@ fn segmented_raw_characters_preserve_unicode_and_pause_escape_literally() {
         command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
             interval_ms: 1_000,
+            ..Default::default()
         });
         app.commands
             .replace_quick_command_catalog(vec![command], Vec::new());
@@ -403,6 +417,7 @@ fn segmented_literal_plan_preserves_actual_line_feed_by_character() {
         nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
             interval_ms: 20,
+            ..Default::default()
         },
         Some(nyaterm_transport::SessionKind::Ssh),
         true,
@@ -426,6 +441,7 @@ fn segmented_lines_stop_after_competing_terminal_input() {
         command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
             mode: nyaterm_core::QuickCommandSegmentedSendMode::Line,
             interval_ms: 1_000,
+            ..Default::default()
         });
         app.commands
             .replace_quick_command_catalog(vec![command], Vec::new());
@@ -794,4 +810,196 @@ fn helper_backed_and_disconnected_sessions_are_never_terminal_sync_targets() {
         assert!(app.sync_input.target_allowed(&fixture.ids[1]));
         assert!(app.sync_input.target_allowed(&fixture.ids[2]));
     });
+}
+
+#[test]
+fn segmented_raw_lines_keep_mixed_endings_and_do_not_submit_the_final_line() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "first\r\nsecond\nlast".into();
+        command.raw_send = Some(true);
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            interval_ms: 0,
+            ..Default::default()
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"first\r\nsecond\nlast");
+}
+
+#[test]
+fn zero_interval_long_script_yields_before_completion_and_stops_on_competing_input() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "x".repeat(100_000);
+        command.raw_send = Some(true);
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            mode: nyaterm_core::QuickCommandSegmentedSendMode::Character,
+            interval_ms: 0,
+            ..Default::default()
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(app.commands.staged_send_progress().is_some());
+        assert!(app.send_terminal_input(b"manual".to_vec(), cx));
+    });
+    fixture.cx.run_until_parked();
+    fixture.advance();
+    let mut wire = vec![b'x'; 16 * 1024];
+    wire.extend_from_slice(b"manual");
+    fixture.assert_wire(0, &wire);
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        assert!(app.commands.staged_send_progress().is_none())
+    });
+}
+
+#[test]
+fn explicit_stop_wakes_a_sixty_second_delay_without_advancing_the_clock() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "one\ntwo".into();
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            interval_ms: 60_000,
+            ..Default::default()
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"one\r");
+    fixture
+        .cx
+        .update_entity(&fixture.app, |app, cx| app.stop_quick_command_sends(cx));
+    fixture.cx.run_until_parked();
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        assert!(app.commands.staged_send_progress().is_none())
+    });
+    fixture.cx.executor().advance_clock(Duration::from_secs(61));
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"");
+}
+
+#[test]
+fn segmented_targets_apply_each_protocol_line_ending() {
+    let send = nyaterm_core::QuickCommandSegmentedSend::default();
+    let bytes = |kind| {
+        super::plan_segmented_quick_command("AT\nATI", send.clone(), Some(kind), false)
+            .unwrap()
+            .into_iter()
+            .flat_map(|chunk| chunk.bytes)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bytes(nyaterm_transport::SessionKind::Ssh), b"AT\rATI\r");
+    assert_eq!(
+        bytes(nyaterm_transport::SessionKind::Serial),
+        b"AT\r\nATI\r\n"
+    );
+}
+
+#[test]
+fn unsupported_segmented_record_is_not_sent_and_keeps_its_payload() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let command: QuickCommand = serde_json::from_value(serde_json::json!({"id":"future", "label":"Future", "command":"never", "execution_mode":"execute", "segmented_send":{"version":2,"mode":"future","interval_ms":1}})).unwrap();
+        app.commands.replace_quick_command_catalog(vec![command], Vec::new()); app.apply_quick_command_by_id("future", false, cx);
+        assert!(app.commands.staged_send_progress().is_none());
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"");
+}
+
+#[test]
+fn command_send_infinite_zero_interval_yields_and_stops_immediately() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.send_command.apply_draft("tick".into());
+        app.send_command.apply_control_input(
+            crate::send_command::SendCommandControlFocus::Count,
+            "∞".into(),
+        );
+        app.send_command.apply_control_input(
+            crate::send_command::SendCommandControlFocus::Interval,
+            "0".into(),
+        );
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"tick\r");
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(app.send_command.is_sending());
+        app.stop_send_command(cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.cx.update_entity(&fixture.app, |app, _| {
+        assert!(!app.send_command.is_sending())
+    });
+    fixture.advance();
+    fixture.assert_wire(0, b"");
+}
+
+#[test]
+fn command_send_hex_keeps_non_utf8_bytes_without_text_encoding() {
+    let mut fixture = WireFixture::new(1);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        app.send_command
+            .set_data_type(crate::send_command::SendCommandDataType::Hex);
+        let hex = app.send_command.presentation(cx).hex;
+        hex.update(cx, |hex, cx| hex.set_bytes(vec![0xff, 0x0a, 0x00], cx));
+        app.send_command.apply_control_input(
+            crate::send_command::SendCommandControlFocus::Interval,
+            "0".into(),
+        );
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, &[0xff, 0x0a, 0x00]);
+}
+
+#[test]
+fn mixed_protocol_broadcast_plans_each_target_independently() {
+    let mut fixture = WireFixture::with_carrier(2, true, true);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "AT\nATI".into();
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            interval_ms: 0,
+            ..Default::default()
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", true, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"AT\rATI\r");
+    fixture.assert_wire(1, b"AT\r\nATI\r\n");
+}
+
+#[test]
+fn segmented_literal_line_feed_bypasses_real_telnet_enter_rewriting() {
+    let mut fixture = WireFixture::with_telnet(1, false);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut command = command_with_execution_mode(Some("append"));
+        command.command = "a\nb".into();
+        command.raw_send = Some(true);
+        command.segmented_send = Some(nyaterm_core::QuickCommandSegmentedSend {
+            interval_ms: 0,
+            ..Default::default()
+        });
+        app.commands
+            .replace_quick_command_catalog(vec![command], Vec::new());
+        app.apply_quick_command_by_id("command-1", false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.assert_wire(0, b"a\nb");
 }

@@ -40,6 +40,7 @@ struct ImportCommand {
     source: Option<String>,
     risk_level: Option<RiskLevel>,
     sort_order: Option<i32>,
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl ImportConfig {

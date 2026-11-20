@@ -855,6 +855,7 @@ fn quick_command(id: &str, category: Option<&str>, pinned: bool, order: i32) -> 
         created_at: None,
         use_count: None,
         sort_order: Some(order),
+        extra: Default::default(),
     }
 }
 

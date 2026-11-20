@@ -4,7 +4,7 @@ mod command_runtime;
 pub(in crate::features) mod completion_runtime;
 mod quick_command_runtime;
 mod runtime_state;
-mod staged;
+pub(in crate::features) mod staged;
 pub(in crate::features) mod state;
 
 pub(in crate::features) use quick_command_runtime::{

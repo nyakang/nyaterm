@@ -232,11 +232,12 @@ impl QuickCommandEditorState {
     }
 
     pub(crate) fn from_command(command: QuickCommand) -> Self {
-        let segmented_send = command.segmented_send;
+        let segmented_send = command.segmented_send.as_ref();
         let segmented_send_mode = segmented_send.map(|send| send.mode).unwrap_or_default();
         let segmented_send_interval_input = segmented_send
-            .map(|send| format!("{:.2}", send.interval_ms as f64 / 1_000.0))
+            .map(|send| nyaterm_core::send_command::format_interval_ms(send.interval_ms))
             .unwrap_or_else(|| "1.00".to_string());
+        let unsupported_error = segmented_send.and_then(|send| send.validate().err());
         let execution_mode = if segmented_send.is_some() {
             "segmented"
         } else if command.execution_mode.as_deref() == Some("append") {
@@ -259,7 +260,7 @@ impl QuickCommandEditorState {
             execution_mode,
             segmented_send_mode,
             segmented_send_interval_input,
-            error: None,
+            error: unsupported_error,
             error_field: None,
             original: Some(command),
         }

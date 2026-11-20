@@ -57,10 +57,17 @@ fn segmented_json_export_import_preserves_options_and_safe_legacy_mode() {
     merge_import(&mut config, parse_nyaterm_import(raw).unwrap()).unwrap();
     assert_eq!(config.commands[0].execution_mode.as_deref(), Some("append"));
     assert_eq!(
-        config.commands[0].segmented_send.unwrap().mode,
+        config.commands[0].segmented_send.as_ref().unwrap().mode,
         crate::QuickCommandSegmentedSendMode::Character
     );
-    assert_eq!(config.commands[0].segmented_send.unwrap().interval_ms, 20);
+    assert_eq!(
+        config.commands[0]
+            .segmented_send
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        20
+    );
 
     let exported = crate::models::quick_commands::export_quick_commands_json(config).unwrap();
     let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
@@ -68,7 +75,14 @@ fn segmented_json_export_import_preserves_options_and_safe_legacy_mode() {
     assert_eq!(value["commands"][0]["segmented_send"]["mode"], "character");
     let mut restored = QuickCommandsConfig::default();
     merge_import(&mut restored, parse_nyaterm_import(&exported).unwrap()).unwrap();
-    assert_eq!(restored.commands[0].segmented_send.unwrap().interval_ms, 20);
+    assert_eq!(
+        restored.commands[0]
+            .segmented_send
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        20
+    );
 }
 
 #[test]

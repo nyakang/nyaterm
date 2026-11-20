@@ -10,12 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gpui::{App, AppContext as _, Entity};
 use nyaterm_core::command_draft::{DraftOrigin, DraftProvenance};
 use nyaterm_core::hex_document::{HexCopyFormat, format_hex};
+use nyaterm_core::send_command::{SendCommandStatistics, TextSendStatistics};
 use nyaterm_transport::SessionKind;
 use nyaterm_ui::hex_editor::NyaHexEditorState;
 
 use crate::send_command::{
     SendCommandControlFocus, SendCommandDataType, SendCommandLineEnding, SendCommandMode,
-    SendCommandTarget, build_send_command_units_for,
+    SendCommandTarget,
 };
 
 pub(in crate::features) struct SendCommandFeatureState {
@@ -27,6 +28,7 @@ pub(in crate::features) struct SendCommandFeatureState {
 /// The payload being composed and where the caret is.
 struct SendCommandComposerState {
     text_draft: String,
+    text_statistics: TextSendStatistics,
     provenance: DraftProvenance,
     hex: Entity<NyaHexEditorState>,
     viewport_width: f32,
@@ -48,6 +50,7 @@ struct SendCommandOptionsState {
 /// In-flight send: cancellation flag and the counters shown in the bar.
 struct SendCommandProgressState {
     sending: bool,
+    run_id: Option<u64>,
     cancel: Option<Arc<AtomicBool>>,
     completed: u32,
     total: u32,
@@ -94,6 +97,7 @@ impl SendCommandFeatureState {
         Self {
             composer: SendCommandComposerState {
                 text_draft: String::new(),
+                text_statistics: TextSendStatistics::default(),
                 provenance: DraftProvenance::default(),
                 hex: cx.new(NyaHexEditorState::new),
                 viewport_width: 0.,
@@ -111,6 +115,7 @@ impl SendCommandFeatureState {
             },
             progress: SendCommandProgressState {
                 sending: false,
+                run_id: None,
                 cancel: None,
                 completed: 0,
                 total: 0,
@@ -121,8 +126,22 @@ impl SendCommandFeatureState {
     }
 
     pub(in crate::features) fn presentation(&self, cx: &App) -> SendCommandPresentationState {
+        let mut snapshot = self.view_presentation(cx);
+        if self.options.data_type == SendCommandDataType::Hex {
+            snapshot.draft = self.draft_for_send(false, cx);
+        }
+        snapshot
+    }
+
+    pub(in crate::features) fn view_presentation(&self, _cx: &App) -> SendCommandPresentationState {
         SendCommandPresentationState {
-            draft: self.draft_for_send(false, cx),
+            // Hex views already own decoded bytes; formatting the entire payload
+            // is needed only when sending, not on every frame.
+            draft: if self.options.data_type == SendCommandDataType::Text {
+                self.composer.text_draft.clone()
+            } else {
+                String::new()
+            },
             provenance: if self.options.data_type == SendCommandDataType::Text {
                 self.composer.provenance.clone()
             } else {
@@ -177,6 +196,7 @@ impl SendCommandFeatureState {
         }
         let text =
             std::str::from_utf8(self.composer.hex.read(cx).document().bytes()).map_err(|_| ())?;
+        self.composer.text_statistics = TextSendStatistics::from_text(text);
         self.composer.text_draft = text.to_string();
         self.composer.provenance = DraftProvenance::default();
         self.set_data_type(SendCommandDataType::Text);
@@ -226,6 +246,7 @@ impl SendCommandFeatureState {
         match self.options.data_type {
             SendCommandDataType::Text => {
                 self.composer.text_draft.clear();
+                self.composer.text_statistics = TextSendStatistics::default();
                 self.composer.provenance = DraftProvenance::default();
             }
             SendCommandDataType::Hex => self.composer.hex.update(cx, |hex, cx| hex.clear(cx)),
@@ -262,6 +283,7 @@ impl SendCommandFeatureState {
         if self.composer.text_draft != text {
             self.composer.provenance.edit(text.is_empty());
         }
+        self.composer.text_statistics = TextSendStatistics::from_text(&text);
         self.composer.text_draft = text;
     }
 
@@ -274,6 +296,7 @@ impl SendCommandFeatureState {
         self.composer
             .provenance
             .fill(origin, replace, self.composer.text_draft.is_empty());
+        self.composer.text_statistics = TextSendStatistics::from_text(&text);
         self.composer.text_draft = text;
     }
 
@@ -291,12 +314,13 @@ impl SendCommandFeatureState {
         draft
     }
 
-    pub(in crate::features) fn build_units(
-        &self,
-        draft: &str,
-        session_kind: Option<SessionKind>,
-        cx: &App,
-    ) -> Result<Vec<Vec<u8>>, String> {
+    fn validate_for_send(&self, cx: &App) -> Result<(), String> {
+        if nyaterm_core::send_command::parse_interval_ms(&self.options.interval_input).is_none() {
+            return Err(
+                "interval must be between 0 and 60 seconds with at most three decimal places"
+                    .into(),
+            );
+        }
         if self.options.data_type == SendCommandDataType::Hex
             && self.composer.hex.read(cx).error().is_some()
         {
@@ -313,13 +337,55 @@ impl SendCommandFeatureState {
         {
             return Err("incomplete hexadecimal byte".to_string());
         }
-        build_send_command_units_for(
-            draft,
-            self.options.data_type,
-            self.options.mode(),
-            self.options.line_ending,
-            session_kind,
-        )
+        Ok(())
+    }
+
+    pub(in crate::features) fn payload_statistics(
+        &self,
+        kind: Option<SessionKind>,
+        cx: &App,
+    ) -> Result<SendCommandStatistics, String> {
+        self.validate_for_send(cx)?;
+        if self.options.data_type == SendCommandDataType::Hex {
+            let bytes = self.composer.hex.read(cx).document().bytes().len();
+            Ok(SendCommandStatistics {
+                bytes,
+                units: if self.options.mode() == SendCommandMode::Byte {
+                    bytes
+                } else {
+                    usize::from(bytes > 0)
+                },
+            })
+        } else {
+            Ok(self.composer.text_statistics.for_delivery(
+                self.options.mode(),
+                crate::send_command::target_line_ending(kind, self.options.line_ending),
+            ))
+        }
+    }
+
+    pub(in crate::features) fn build_plan(
+        &self,
+        draft: &str,
+        session_kind: Option<SessionKind>,
+        cx: &App,
+    ) -> Result<nyaterm_core::send_command::SendCommandPlan, String> {
+        self.validate_for_send(cx)?;
+        use nyaterm_core::send_command::{SendCommandPlan, TextInterpretation};
+        let interval = std::time::Duration::from_millis(
+            nyaterm_core::send_command::parse_interval_ms(&self.options.interval_input)
+                .expect("validated interval"),
+        );
+        match self.options.data_type {
+            SendCommandDataType::Hex => SendCommandPlan::hex(draft, self.options.mode(), interval),
+            SendCommandDataType::Text => Ok(SendCommandPlan::text(
+                draft,
+                self.options.mode(),
+                crate::send_command::target_line_ending(session_kind, self.options.line_ending),
+                TextInterpretation::Plain,
+                interval,
+            )),
+        }
     }
 
     pub(in crate::features) fn begin_send(&mut self, units_per_round: u32) -> SendCommandRunState {
@@ -328,6 +394,7 @@ impl SendCommandFeatureState {
         let cancel = Arc::new(AtomicBool::new(false));
         self.progress = SendCommandProgressState {
             sending: true,
+            run_id: None,
             cancel: Some(cancel.clone()),
             completed: 0,
             total: if infinite {
@@ -353,6 +420,7 @@ impl SendCommandFeatureState {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn complete_progress_unit(&mut self) {
         if self.progress.sending {
             self.progress.completed = self.progress.completed.saturating_add(1);
@@ -362,11 +430,25 @@ impl SendCommandFeatureState {
     pub(in crate::features) fn finish_send(&mut self) -> SendCommandProgressResult {
         self.progress.sending = false;
         self.progress.cancel = None;
+        self.progress.run_id = None;
         SendCommandProgressResult {
             completed: self.progress.completed,
             total: self.progress.total,
             round: self.progress.round,
         }
+    }
+
+    pub(in crate::features) fn set_run_id(&mut self, run_id: u64) {
+        self.progress.run_id = Some(run_id);
+    }
+    pub(in crate::features) fn run_id(&self) -> Option<u64> {
+        self.progress.run_id
+    }
+    pub(in crate::features) fn complete_progress_units(&mut self, units: u64) {
+        self.progress.completed = self
+            .progress
+            .completed
+            .saturating_add(units.min(u32::MAX as u64) as u32);
     }
 
     pub(in crate::features) fn request_cancel(&self) -> bool {
@@ -466,7 +548,9 @@ impl SendCommandOptionsState {
     }
 
     fn sync_interval_input(&mut self) {
-        self.interval_input = format!("{:.2}", self.interval_seconds);
+        self.interval_input = nyaterm_core::send_command::format_interval_ms(
+            (self.interval_seconds * 1000.0).round() as u64,
+        );
     }
 
     fn count_label(&self) -> String {
@@ -476,11 +560,9 @@ impl SendCommandOptionsState {
     }
 
     fn apply_interval_input(&mut self, live: bool) {
-        let trimmed = self.interval_input.trim();
-        if let Ok(value) = trimmed.parse::<f64>() {
-            if value.is_finite() && value >= 0.0 {
-                self.interval_seconds = value.clamp(0.0, 60.0);
-            }
+        if let Some(interval) = nyaterm_core::send_command::parse_interval_ms(&self.interval_input)
+        {
+            self.interval_seconds = interval as f64 / 1000.0;
         } else if !live {
             self.apply_default_interval();
         }
@@ -508,6 +590,40 @@ mod tests {
 
     fn send_command_state(cx: &TestAppContext) -> SendCommandFeatureState {
         cx.update(SendCommandFeatureState::new)
+    }
+
+    #[test]
+    fn composer_statistics_refresh_on_edits_clears_and_hex_decoding() {
+        let cx = TestAppContext::single();
+        let mut state = send_command_state(&cx);
+        cx.update(|cx| {
+            state.apply_draft("中\r\nlast".into());
+            let stats = state
+                .payload_statistics(Some(nyaterm_transport::SessionKind::Ssh), cx)
+                .unwrap();
+            assert_eq!((stats.units, stats.bytes), (2, 9));
+            state.set_mode(SendCommandMode::Character);
+            let stats = state
+                .payload_statistics(Some(nyaterm_transport::SessionKind::Ssh), cx)
+                .unwrap();
+            assert_eq!((stats.units, stats.bytes), (6, 8));
+            state.clear_draft(cx);
+            assert_eq!(state.payload_statistics(None, cx).unwrap().units, 0);
+            state.fill_plugin_draft(
+                "next".into(),
+                nyaterm_core::command_draft::DraftOrigin::User,
+                true,
+            );
+            assert_eq!(state.payload_statistics(None, cx).unwrap().units, 4);
+            state.set_data_type(SendCommandDataType::Hex);
+            state
+                .composer
+                .hex
+                .update(cx, |hex, cx| hex.set_bytes(b"back\n".to_vec(), cx));
+            state.decode_utf8(cx).unwrap();
+            let stats = state.payload_statistics(None, cx).unwrap();
+            assert_eq!((stats.units, stats.bytes), (5, 5));
+        });
     }
 
     #[test]
@@ -556,9 +672,15 @@ mod tests {
         );
 
         assert!(state.apply_control_input(SendCommandControlFocus::Interval, "999".to_string()));
+        cx.update(|cx| assert!(state.payload_statistics(None, cx).is_err()));
         assert_eq!(
             state.synced_control_input(SendCommandControlFocus::Interval),
-            "60.00"
+            "1.00"
+        );
+        assert!(state.apply_control_input(SendCommandControlFocus::Interval, "0.001".to_string()));
+        assert_eq!(
+            state.synced_control_input(SendCommandControlFocus::Interval),
+            "0.001"
         );
     }
 

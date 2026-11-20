@@ -410,6 +410,21 @@ impl NyaTermApp {
                         cx,
                     ))
                     .child(quick_command_toolbar_divider(palette))
+                    .when(self.commands.staged_send_progress().is_some(), |toolbar| {
+                        toolbar
+                            .child(quick_command_toolbar_icon_button(
+                                palette,
+                                "quick-command-stop",
+                                "icons/session/stop.svg",
+                                false,
+                                t!("serialSend.stop"),
+                                cx.listener(|this, _, _, cx| this.stop_quick_command_sends(cx)),
+                            ))
+                            .child(div().text_size(px(11.)).child(t!(
+                                "serialSend.shellProgressCompleted",
+                                count = self.commands.staged_send_progress().unwrap_or_default()
+                            )))
+                    })
                     .child(quick_command_toolbar_icon_button(
                         palette,
                         "quick-command-add",

@@ -73,6 +73,32 @@ pub(super) fn parse_import_command(value: Value) -> Result<ImportCommand, String
         source: optional_string_field(&object, "source")?,
         risk_level: optional_risk_field(&object, "risk_level")?,
         sort_order: optional_i32_field(&object, "sort_order")?,
+        extra: object
+            .iter()
+            .filter(|(key, _)| {
+                !matches!(
+                    key.as_str(),
+                    "id" | "label"
+                        | "command"
+                        | "category_id"
+                        | "category"
+                        | "description"
+                        | "color_tag"
+                        | "icon_tag"
+                        | "pinned"
+                        | "execution_mode"
+                        | "segmented_send"
+                        | "raw_send"
+                        | "source"
+                        | "risk_level"
+                        | "sort_order"
+                        | "created_at"
+                        | "updated_at"
+                        | "use_count"
+                )
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     })
 }
 
@@ -81,9 +107,14 @@ fn optional_segmented_send_field(
 ) -> Result<Option<crate::QuickCommandSegmentedSend>, String> {
     match object.get("segmented_send") {
         Some(Value::Null) | None => Ok(None),
-        Some(value) => serde_json::from_value(value.clone())
-            .map(Some)
-            .map_err(|error| format!("segmented_send is invalid: {error}")),
+        Some(value) => {
+            let send: crate::QuickCommandSegmentedSend =
+                serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+            if value.get("version").and_then(Value::as_u64).unwrap_or(1) == 1 {
+                send.validate()?;
+            }
+            Ok(Some(send))
+        }
     }
 }
 
