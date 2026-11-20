@@ -17,6 +17,7 @@ mod send_command_runtime;
 mod state;
 mod terminal_context_menu_runtime;
 mod terminal_font;
+mod terminal_local_mode_runtime;
 pub(in crate::features) mod terminal_runtime;
 mod terminal_search_runtime;
 mod terminal_selection_runtime;

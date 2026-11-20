@@ -27,6 +27,7 @@ pub(crate) enum ShortcutId {
     TerminalCommandNext,
     TerminalCommandSelect,
     TerminalSelectAll,
+    TerminalLocalMode,
     ManageSyncGroups,
     ShowCommandSuggestions,
     ToggleRecording,
@@ -75,6 +76,7 @@ impl ShortcutId {
             Self::TerminalCommandNext => "terminal.commandNav.next",
             Self::TerminalCommandSelect => "terminal.commandNav.select",
             Self::TerminalSelectAll => "terminal.selectAll",
+            Self::TerminalLocalMode => "terminal.localMode",
             Self::ManageSyncGroups => "terminal.manageSyncGroups",
             Self::ShowCommandSuggestions => "terminal.showCommandSuggestions",
             Self::ToggleRecording => "terminal.recording.toggle",
@@ -383,7 +385,7 @@ macro_rules! shortcut {
     };
 }
 
-pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 43] = [
+pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 44] = [
     shortcut!(
         TerminalCopy,
         Terminal,
@@ -493,6 +495,17 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 43] = [
         "meta+shift+a",
         Supported,
         "Selects the visible terminal grid."
+    ),
+    shortcut!(
+        TerminalLocalMode,
+        Terminal,
+        "settings.shortcutLabels.localMode",
+        Terminal,
+        ShortcutKind::Direct,
+        "ctrl+enter",
+        "meta+enter",
+        Supported,
+        "Toggles keyboard-driven local selection mode."
     ),
     shortcut!(
         ManageSyncGroups,
@@ -1173,6 +1186,7 @@ fn binding_for_action(
         ShortcutId::TerminalCommandNext => binding!(TerminalCommandNext),
         ShortcutId::TerminalCommandSelect => binding!(TerminalCommandSelect),
         ShortcutId::TerminalSelectAll => binding!(TerminalSelectAll),
+        ShortcutId::TerminalLocalMode => binding!(TerminalLocalMode),
         ShortcutId::ManageSyncGroups => binding!(ManageSyncGroups),
         ShortcutId::ShowCommandSuggestions => binding!(ShowCommandSuggestions),
         ShortcutId::ToggleRecording => binding!(ToggleRecording),
@@ -1477,7 +1491,7 @@ mod tests {
 
     #[test]
     fn registry_is_complete_unique_and_has_valid_platform_defaults() {
-        assert_eq!(SHORTCUT_REGISTRY.len(), 43);
+        assert_eq!(SHORTCUT_REGISTRY.len(), 44);
         let mut ids = HashSet::new();
         for definition in SHORTCUT_REGISTRY {
             assert!(ids.insert(definition.id));

@@ -35,7 +35,7 @@ use crate::features::terminal::terminal_surface::{
     terminal_scrollbar_track_bounds_tracker, terminal_scrollbar_track_color, track_height,
 };
 use crate::models::{
-    TerminalPerformanceOverlay, TerminalProtocolState, TerminalSelection,
+    TerminalBufferCellPos, TerminalPerformanceOverlay, TerminalProtocolState, TerminalSelection,
     terminal_geometry_diagnostics_enabled,
 };
 use crate::terminal::{
@@ -412,6 +412,7 @@ pub(in crate::features) struct TerminalSurface {
     decorations: Arc<[TerminalLineDecorations]>,
     selection_visual: Option<TerminalSelection>,
     selection_visual_history: nyaterm_terminal::TerminalHistoryState,
+    local_mode_cursor: Option<TerminalBufferCellPos>,
     palette: ThemePalette,
     font_family: String,
     font_fallbacks: Option<FontFallbacks>,
@@ -503,6 +504,7 @@ impl TerminalSurface {
             decorations: Arc::from(Vec::<TerminalLineDecorations>::new()),
             selection_visual: None,
             selection_visual_history: Default::default(),
+            local_mode_cursor: None,
             palette: crate::theme::theme_palette("github-dark"),
             font_family: "monospace".to_string(),
             font_fallbacks: None,
@@ -2359,6 +2361,18 @@ impl TerminalSurface {
         true
     }
 
+    pub(in crate::features) fn set_local_mode_cursor(
+        &mut self,
+        cursor: Option<TerminalBufferCellPos>,
+    ) -> bool {
+        if self.local_mode_cursor == cursor {
+            return false;
+        }
+        self.local_mode_cursor = cursor;
+        self.revision = self.revision.saturating_add(1);
+        true
+    }
+
     fn visual_scroll_active(&self) -> bool {
         terminal_visual_scroll_active_for_state(self.scroll_offset, self.scroll_residual_lines)
     }
@@ -3407,7 +3421,8 @@ impl Render for TerminalSurface {
             .with_unwrapped_layout(self.painted_unwrapped.clone())
             .with_visual_y_offset(visual_y_offset)
             .with_zebra_stripes(zebra_stripes_visible, target_line)
-            .with_zebra_stripes_by_row(self.zebra_stripes_by_row);
+            .with_zebra_stripes_by_row(self.zebra_stripes_by_row)
+            .with_local_mode_cursor(self.local_mode_cursor);
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
         }

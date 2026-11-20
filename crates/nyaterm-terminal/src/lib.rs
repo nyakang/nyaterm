@@ -26,6 +26,7 @@ mod encoding;
 mod graphics;
 mod kitty_payload;
 mod line_numbers;
+pub mod local_mode;
 pub mod logical_lines;
 pub mod navigation;
 pub mod output;
