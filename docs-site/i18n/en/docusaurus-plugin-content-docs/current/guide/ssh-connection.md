@@ -200,6 +200,8 @@ Common operations include:
 - Duplicate a connection as a template
 - Reconnect from an existing saved source
 
+By default a new connection is only saved. With **Settings → General → Open new connections after saving** enabled, saving a new connection also starts it; editing an existing connection is unaffected.
+
 If you manage many hosts, using groups, icons, and descriptions helps separate environments, projects, and roles.
 
 ## Temporary SSH links

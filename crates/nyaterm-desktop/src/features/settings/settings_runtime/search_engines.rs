@@ -185,6 +185,14 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_terminal_action_links_insert_commands(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_terminal_action_links_insert_commands();
+        self.save_terminal_settings(cx);
+    }
+
     pub(in crate::features) fn toggle_terminal_action_links_matcher(
         &mut self,
         which: &'static str,
@@ -208,6 +216,23 @@ impl NyaTermApp {
             cx.notify();
         }
     }
+
+    /// Insert an action-link command for review without submitting it.
+    pub(in crate::features) fn insert_action_link_command(
+        &mut self,
+        command: String,
+        cx: &mut Context<Self>,
+    ) {
+        let bytes = action_link_insert_bytes(command);
+        if bytes.is_empty() {
+            return;
+        }
+        if self.send_terminal_input(bytes, cx) {
+            self.shell
+                .set_status("action link command inserted".to_string());
+            cx.notify();
+        }
+    }
 }
 
 /// A line submission is `\r`, not `\n`.
@@ -224,9 +249,18 @@ fn action_link_command_bytes(command: String) -> Vec<u8> {
     bytes
 }
 
+/// Insertion keeps the command editable: strip any line ending and add none.
+fn action_link_insert_bytes(command: String) -> Vec<u8> {
+    let mut bytes = command.into_bytes();
+    while matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        bytes.pop();
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
-    use super::action_link_command_bytes;
+    use super::{action_link_command_bytes, action_link_insert_bytes};
 
     #[test]
     fn action_link_commands_submit_with_a_carriage_return() {
@@ -237,5 +271,16 @@ mod tests {
             assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
             assert_eq!(&bytes[..bytes.len() - 1], b"ping 172.22.222.149");
         }
+    }
+
+    #[test]
+    fn action_link_insert_commands_strip_the_line_ending() {
+        for command in ["ping 172.22.222.149", "ping 172.22.222.149\r\n"] {
+            assert_eq!(
+                action_link_insert_bytes(command.to_string()),
+                b"ping 172.22.222.149"
+            );
+        }
+        assert!(action_link_insert_bytes(String::new()).is_empty());
     }
 }

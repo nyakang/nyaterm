@@ -390,6 +390,20 @@ impl NyaTermApp {
         }
     }
 
+    /// Resolve whether saving the editor should start the connection.
+    ///
+    /// Explicit entry points (for example the command palette's "create and
+    /// connect") still win, and editing an existing connection never opens it
+    /// just because the preference is on.
+    pub(in crate::features) fn connection_editor_connect_after_save(
+        &self,
+        connection_id: Option<&str>,
+        requested: bool,
+    ) -> bool {
+        requested
+            || (connection_id.is_none() && self.settings.summary().open_new_connection_after_save)
+    }
+
     pub(in crate::features) fn open_connection_editor(
         &mut self,
         connection_id: Option<String>,
@@ -399,6 +413,8 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.refresh_connection_auth_catalog(cx);
+        let connect_after_save =
+            self.connection_editor_connect_after_save(connection_id.as_deref(), connect_after_save);
         let editor = if let Some(connection_id) = connection_id {
             let Some(connection) = self
                 .connection_state

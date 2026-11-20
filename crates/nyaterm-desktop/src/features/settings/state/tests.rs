@@ -214,6 +214,11 @@ fn settings_owner_normalizes_general_and_interaction_transitions() {
     assert_eq!(state.toggle_command_suggestions(), !suggestions_enabled);
     let autofill_enabled = state.summary().interaction_credential_autofill_enabled;
     assert_eq!(state.toggle_credential_autofill(), !autofill_enabled);
+    let open_after_save = state.summary().open_new_connection_after_save;
+    assert_eq!(
+        state.toggle_open_new_connection_after_save(),
+        !open_after_save
+    );
 }
 
 #[test]

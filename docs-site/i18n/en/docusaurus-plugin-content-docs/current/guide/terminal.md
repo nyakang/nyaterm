@@ -159,6 +159,7 @@ Notes:
 - First enable **Action Links** in **Settings → Terminal**
 - Opening a link requires **Ctrl / Cmd + click** to avoid conflicts with normal text selection
 - The three matcher groups can be enabled or disabled separately
+- With **Insert commands into terminal** enabled, Ctrl/Cmd+click and command items in the action menu insert the command into the input line instead of running it; opening links, copy and paste are unchanged
 
 ### Terminal row zebra stripes
 

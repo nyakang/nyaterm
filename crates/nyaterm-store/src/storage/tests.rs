@@ -3471,12 +3471,14 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     summary.startup_restore_window_layout = false;
     summary.minimize_to_tray = true;
     summary.confirm_on_close = false;
+    summary.open_new_connection_after_save = true;
     summary.language = "zh-CN".to_string();
     let saved = store.save_general_settings(&summary).expect("save general");
     assert!(saved.startup_mode.restores_last_session());
     assert!(!saved.startup_restore_window_layout);
     assert!(saved.minimize_to_tray);
     assert!(!saved.confirm_on_close);
+    assert!(saved.open_new_connection_after_save);
     assert_eq!(saved.language, "zh-CN");
 
     summary = saved;
@@ -3493,6 +3495,10 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     let raw = store.load_settings_value().expect("raw");
     assert_eq!(
         raw["general"]["minimize_to_tray"],
+        serde_json::Value::Bool(true)
+    );
+    assert_eq!(
+        raw["general"]["open_new_connection_after_save"],
         serde_json::Value::Bool(true)
     );
     assert_eq!(
@@ -3620,6 +3626,7 @@ fn mac_matcher_loads_legacy_defaults_and_round_trips_without_losing_unknown_opti
         let summary = store.load_app_settings_summary().unwrap();
         assert!(summary.terminal_action_links_matchers.mac);
         assert!(!summary.terminal_action_links_enabled);
+        assert!(!summary.terminal_action_links_insert_commands);
     }
     store.save_settings_value(&serde_json::json!({"terminal": {
         "future_terminal_option": "keep",
@@ -3642,6 +3649,13 @@ fn mac_matcher_loads_legacy_defaults_and_round_trips_without_losing_unknown_opti
             serde_json::json!({"enabled": true})
         );
         assert_eq!(raw["terminal"]["future_terminal_option"], "keep");
+    }
+    for insert in [true, false] {
+        summary.terminal_action_links_insert_commands = insert;
+        let loaded = store.save_terminal_settings(&summary).unwrap();
+        assert_eq!(loaded.terminal_action_links_insert_commands, insert);
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["terminal"]["action_links_insert_commands"], insert);
     }
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
@@ -4174,6 +4188,9 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(!summary.interaction_command_suggestions_enabled);
     // The stored fixture predates the field, so it must default on.
     assert!(summary.interaction_credential_autofill_enabled);
+    // The new connection switch is opt-in: the fixture keeps saving without
+    // opening.
+    assert!(!summary.open_new_connection_after_save);
     assert_eq!(summary.interaction_command_suggestion_min_chars, 3);
     assert_eq!(summary.interaction_command_suggestion_max_chars, 80);
     assert_eq!(summary.interaction_word_separators, " .,:");

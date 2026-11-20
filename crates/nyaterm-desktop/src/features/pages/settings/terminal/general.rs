@@ -274,6 +274,24 @@ impl SettingsPanel {
                             }),
                         ),
                     ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.actionLinksInsertCommands"),
+                        Some(SharedString::from(t!(
+                            "settings.actionLinksInsertCommandsDesc"
+                        ))),
+                        settings_switch_with_enabled(
+                            palette,
+                            "terminal-action-links-insert-commands",
+                            self.settings
+                                .summary()
+                                .terminal_action_links_insert_commands,
+                            action_links_enabled,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_terminal_action_links_insert_commands(cx);
+                            }),
+                        ),
+                    ))
                     .child(
                         div()
                             .text_size(px(13.))

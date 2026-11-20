@@ -132,6 +132,21 @@ impl SettingsPanel {
                                 this.toggle_confirm_on_close(cx);
                             }),
                         ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
+                        t!("settings.openNewConnectionAfterSave"),
+                        Some(SharedString::from(t!(
+                            "settings.openNewConnectionAfterSaveDesc"
+                        ))),
+                        settings_switch(
+                            palette,
+                            "general-open-new-connection-after-save",
+                            self.settings.summary().open_new_connection_after_save,
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_open_new_connection_after_save(cx);
+                            }),
+                        ),
                     )),
             ))
             .child(self.startup_settings_section(cx))

@@ -918,3 +918,29 @@ fn saving_default_sessions_persists_all_modified_protocols_before_closing() {
         app.connection_state.active_editor_draft().is_none()
     }));
 }
+
+#[test]
+fn open_new_connection_after_save_applies_only_to_new_connections() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestAppCleanup;
+    let root = TestTempDir::new("nyaterm-open-new-connection");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, _| {
+        // Explicit entry points keep working, and editing an existing
+        // connection never starts it after the preference is enabled.
+        assert!(!app.connection_editor_connect_after_save(None, false));
+        assert!(app.connection_editor_connect_after_save(None, true));
+        assert!(!app.connection_editor_connect_after_save(Some("saved"), false));
+        assert!(app.connection_editor_connect_after_save(Some("saved"), true));
+
+        let mut settings = app.settings.summary().clone();
+        settings.open_new_connection_after_save = true;
+        app.settings.replace_summary(settings);
+
+        assert!(app.connection_editor_connect_after_save(None, false));
+        assert!(app.connection_editor_connect_after_save(None, true));
+        assert!(!app.connection_editor_connect_after_save(Some("saved"), false));
+    });
+}
