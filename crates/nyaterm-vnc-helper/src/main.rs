@@ -42,7 +42,6 @@ use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(90);
-const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const UPDATE_REQUEST_INTERVAL: Duration = Duration::from_millis(16);
 const STDOUT_BUFFER_BYTES: usize = 256 * 1024;
 const WORKER_JOIN_TIMEOUT: Duration = Duration::from_millis(700);
@@ -264,6 +263,7 @@ fn validate_control_phase(message: &VncControlMessage, hello_complete: bool) -> 
         | VncControlMessage::ServerKeyAuthenticated(_)
         | VncControlMessage::ServerHello { .. }
         | VncControlMessage::DesktopReset { .. }
+        | VncControlMessage::FrameUpdateComplete { .. }
         | VncControlMessage::State { .. }
         | VncControlMessage::Error { .. } => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -477,6 +477,7 @@ fn run() -> io::Result<()> {
             | VncControlMessage::ServerKeyAuthenticated(_)
             | VncControlMessage::ServerHello { .. }
             | VncControlMessage::DesktopReset { .. }
+            | VncControlMessage::FrameUpdateComplete { .. }
             | VncControlMessage::State { .. }
             | VncControlMessage::Error { .. } => {
                 return Err(io::Error::new(
@@ -617,6 +618,7 @@ struct SessionOutput {
     epoch: u64,
     generation: u64,
     cursor_shape_id: u64,
+    update_sequence: u64,
     last_state: Option<VncSessionState>,
 }
 
@@ -628,6 +630,7 @@ impl SessionOutput {
             generation: 0,
             epoch: 0,
             cursor_shape_id: 0,
+            update_sequence: 0,
             last_state: None,
         }
     }
@@ -665,6 +668,7 @@ impl SessionOutput {
 
     fn reset(&mut self, width: u32, height: u32) -> Result<u64, VncError> {
         self.epoch = self.epoch.saturating_add(1).max(1);
+        self.update_sequence = 0;
         self.control(VncControlMessage::DesktopReset {
             session_id: self.session_id.clone(),
             epoch: self.epoch,
@@ -887,9 +891,8 @@ async fn run_generation(
     output.state(VncSessionState::Negotiating, None)?;
     let mut pressed_keys = Vec::new();
     let mut pointer_state = VncPointerState::default();
-    let mut poll = tokio::time::interval(EVENT_POLL_INTERVAL);
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut refresh_due = false;
+    let mut last_refresh_request = tokio::time::Instant::now();
     let refresh_delay = tokio::time::sleep(Duration::from_secs(86_400));
     tokio::pin!(refresh_delay);
     loop {
@@ -899,21 +902,18 @@ async fn run_generation(
             return Ok(());
         }
         tokio::select! {
-            _ = poll.tick() => {
-                loop {
-                    match client.poll_event().await {
-                        Ok(Some(event)) => {
-                            handle_vnc_event(output, event)?;
-                            refresh_due = true;
-                            refresh_delay.as_mut().reset(tokio::time::Instant::now() + UPDATE_REQUEST_INTERVAL);
-                        }
-                        Ok(None) => break,
-                        Err(error) => return Err(classify_vnc_error(error)),
-                    }
+            event = client.recv_event() => {
+                let event = event.map_err(classify_vnc_error)?;
+                let complete = matches!(event, VncEvent::FramebufferUpdateComplete);
+                handle_vnc_event(output, event)?;
+                if complete {
+                    refresh_due = true;
+                    refresh_delay.as_mut().reset(last_refresh_request + UPDATE_REQUEST_INTERVAL);
                 }
             }
             _ = &mut refresh_delay, if refresh_due => {
                 client.input(X11Event::Refresh).await.map_err(classify_vnc_error)?;
+                last_refresh_request = tokio::time::Instant::now();
                 refresh_due = false;
             }
             command = recv_worker_command(Arc::clone(&mailbox)) => {
@@ -979,7 +979,8 @@ fn handle_vnc_event(output: &mut SessionOutput, event: VncEvent) -> Result<(), V
             validate_framebuffer_dimensions(u32::from(width), u32::from(height))?;
             output.reset(u32::from(width), u32::from(height))?;
         }
-        VncEvent::RawImage(rect, pixels) => {
+        VncEvent::RawImage(rect, mut pixels) => {
+            rgba_to_bgra(&mut pixels);
             // A server may send pixels before any resolution event; synthesize the
             // reset from the first rectangle so the epoch is never zero.
             let epoch = if output.epoch == 0 {
@@ -999,11 +1000,21 @@ fn handle_vnc_event(output: &mut SessionOutput, event: VncEvent) -> Result<(), V
                 width: u32::from(rect.width),
                 height: u32::from(rect.height),
                 stride: u32::from(rect.width) * 4,
-                format: PixelFormat::Rgba8,
+                format: PixelFormat::Bgra8,
                 pixels: pixels.into(),
             };
             output.frame(frame)?;
             output.state(VncSessionState::Connected, None)?;
+        }
+        VncEvent::FramebufferUpdateComplete => {
+            output.update_sequence = output.update_sequence.checked_add(1).ok_or_else(|| {
+                VncError::new(VncErrorKind::Protocol, "VNC update sequence exhausted")
+            })?;
+            output.control(VncControlMessage::FrameUpdateComplete {
+                session_id: output.session_id.clone(),
+                epoch: output.epoch,
+                sequence: output.update_sequence,
+            })?;
         }
         VncEvent::Text(text) if is_latin1_within_limit(&text) => {
             output.clipboard(text)?;

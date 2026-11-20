@@ -250,6 +250,7 @@ impl NyaTermApp {
             request_id.clone(),
             PendingSessionStart {
                 preparing: false,
+                offer_serial_reconnect_selection: false,
                 mcp_open_operation_id,
                 requested_ssh_runtime_mode,
                 attempt: Default::default(),
@@ -403,6 +404,8 @@ impl NyaTermApp {
             request_id,
         } = options;
         let kind = session_kind_for_launch_config(&launch_config);
+        let ftp_session_id = matches!(launch_config, SessionLaunchConfig::Ftp(_))
+            .then(|| reconnect_session_id.clone().unwrap_or_else(uuid));
         let multiplex_key = matches!(launch_config, SessionLaunchConfig::Ssh(_))
             .then(|| format!("ssh-session:{}", uuid()));
         let request_id = self.register_pending_session_start(
@@ -502,6 +505,25 @@ impl NyaTermApp {
                             SessionStartSuccess::channel(Arc::clone(&session_manager), info, None)
                         })
                         .map_err(crate::features::android::labels::session_start_error_message)
+                } else if let SessionLaunchConfig::Ftp(config) = &launch_config {
+                    attempt.check()?;
+                    let service = nyaterm_files::ftp::FtpFileService::connect(
+                        config.config.clone(),
+                        config.login.clone(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    attempt.check()?;
+                    let session_info = SessionInfo {
+                        id: ftp_session_id
+                            .clone()
+                            .ok_or_else(|| "missing FTP session id".to_string())?,
+                        name: config.name.clone(),
+                        kind: SessionKind::Ftp,
+                        working_dir: None,
+                        cols: 80,
+                        rows: 24,
+                    };
+                    Ok(SessionStartSuccess::ftp(session_info, Arc::new(service)))
                 } else {
                     create_session_from_launch_config(
                         &session_manager,
@@ -942,6 +964,7 @@ impl NyaTermApp {
                     return;
                 }
                 success.accept();
+                let ftp_service = success.ftp_service.take();
                 let session_info = success.session_info;
                 let launch_config = success
                     .launch_config
@@ -1003,6 +1026,11 @@ impl NyaTermApp {
                     launch_config,
                     disconnected: false,
                 };
+                // Register the FTP service before the tab activates so its first
+                // file-browser refresh can list the remote directory.
+                if let Some(service) = ftp_service {
+                    self.ftp.insert_service(session_id.clone(), service);
+                }
                 let rekey_queued = if let Some(old_id) = reconnect_session_id.as_deref()
                     && old_id != session_id
                 {
@@ -1051,6 +1079,16 @@ impl NyaTermApp {
                         tab_placement,
                         fallback_insert_index,
                     );
+                }
+                if self.ftp.service(&session_id).is_some() {
+                    let workspace_id = format!("sftp-{session_id}");
+                    if self.file_manager.workspace(&workspace_id).is_some() {
+                        self.refresh_file_manager_pane(
+                            workspace_id,
+                            crate::features::file_manager::PaneId::Left,
+                            cx,
+                        );
+                    }
                 }
                 if let Some(custom_name) = pending
                     .as_ref()
@@ -1182,6 +1220,9 @@ impl NyaTermApp {
                 let mcp_failure_id = pending
                     .as_ref()
                     .and_then(|p| p.mcp_open_operation_id.clone());
+                let offer_serial_selection = pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.offer_serial_reconnect_selection);
                 let reconnect_failure = self.session.start.record_failure(
                     request_id.clone(),
                     pending,
@@ -1189,6 +1230,12 @@ impl NyaTermApp {
                     was_active_pending,
                     reconnect_session_exists,
                 );
+                if offer_serial_selection
+                    && reconnect_session_exists
+                    && let Some(session_id) = reconnect_session_id
+                {
+                    self.offer_serial_reconnect_selection(session_id, cx);
+                }
                 if let Some(id) = mcp_failure_id.as_deref() {
                     self.complete_mcp_session_open_failure(id, &error);
                 }
@@ -1247,14 +1294,23 @@ impl NyaTermApp {
             } else {
                 "terminal history could not be transferred".to_string()
             };
+            let serial_config = self
+                .session
+                .metadata(new_id)
+                .and_then(|metadata| match &metadata.launch_config {
+                    SessionLaunchConfig::Serial(config) => Some(config.clone()),
+                    _ => None,
+                });
             let _ = self.session.manager().close(new_id);
             if self.session.has_session(new_id) {
                 self.remove_session_state(new_id, cx);
             }
             if self.session.has_session(old_id) {
-                self.session
-                    .start
-                    .set_reconnect_failure(old_id.to_string(), error.clone());
+                self.session.start.set_reconnect_failure(
+                    old_id.to_string(),
+                    error.clone(),
+                    serial_config,
+                );
             }
             if let Some(id) = completion.mcp_open_operation_id.as_deref() {
                 self.complete_mcp_session_open_failure(id, &error);
@@ -1286,6 +1342,13 @@ impl NyaTermApp {
             self.load_transfer_browser_for_active_session_if_needed(cx);
         }
         self.enter_connect_settle();
+        // An optional wake belongs to the accepted reconnect, never a first
+        // connect or a replacement whose history handoff failed.
+        if completion.kind == SessionKind::Serial
+            && self.settings.summary().terminal_serial_reconnect_send_enter
+        {
+            self.schedule_serial_reconnect_enter(new_id.to_string(), cx);
+        }
         self.terminal.enter_session_render_degraded(new_id);
         self.shell
             .set_status(if completion.kind == SessionKind::AdbShell {
@@ -1319,6 +1382,7 @@ fn session_kind_for_launch_config(config: &SessionLaunchConfig) -> SessionKind {
         SessionLaunchConfig::Serial(_) => SessionKind::Serial,
         SessionLaunchConfig::Rdp(_) => SessionKind::Rdp,
         SessionLaunchConfig::Vnc(_) => SessionKind::Vnc,
+        SessionLaunchConfig::Ftp(_) => SessionKind::Ftp,
     }
 }
 
@@ -1356,6 +1420,7 @@ fn create_session_from_launch_config(
                 multiplex_handle: None,
                 cleanup: None,
                 launch_config: None,
+                ftp_service: None,
             })
             .map_err(|error| error.to_string()),
         SessionLaunchConfig::Ssh(config) => {
@@ -1387,10 +1452,14 @@ fn create_session_from_launch_config(
                 multiplex_handle: None,
                 cleanup: None,
                 launch_config: None,
+                ftp_service: None,
             })
             .map_err(|error| error.to_string()),
         SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_) => {
             unreachable!("remote desktop sessions are created by RemoteDesktopFeatureState")
+        }
+        SessionLaunchConfig::Ftp(_) => {
+            unreachable!("FTP sessions are created by the FTP connection worker")
         }
     }
 }
@@ -1450,6 +1519,9 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
         }),
         SessionKind::Rdp | SessionKind::Vnc => {
             unreachable!("remote desktop session metadata does not originate from SessionManager")
+        }
+        SessionKind::Ftp => {
+            unreachable!("FTP metadata is supplied by its launcher")
         }
     }
 }
@@ -1547,6 +1619,7 @@ mod focus_tests {
                                 multiplex_handle: None,
                                 launch_config: Some(SessionLaunchConfig::Ssh(Box::default())),
                                 cleanup: None,
+                                ftp_service: None,
                             }),
                         },
                         cx,

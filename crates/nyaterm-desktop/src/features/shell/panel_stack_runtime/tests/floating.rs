@@ -15,7 +15,9 @@ use nyaterm_ui::{NyaDialogWindowExt as _, nya_popup_is_active};
 use crate::features::NyaTermApp;
 use crate::features::shell::state::NewSessionMenuAnchor;
 use crate::features::test_support::app_with_visible_local_session;
-use crate::models::{NavItem, PanelOpenMode, PanelSide, SessionLaunchConfig};
+use crate::models::{
+    BottomPanelMode, NavItem, PanelOpenMode, PanelResizeSide, PanelSide, SessionLaunchConfig,
+};
 use crate::test_support::{TestAppCleanup, TestConfigDir};
 
 fn app(cx: &mut TestAppContext, root: &Path) -> Entity<NyaTermApp> {
@@ -115,6 +117,155 @@ fn outside(cx: &mut VisualTestContext) -> Point<Pixels> {
     let right = cx.debug_bounds("floating-right-panel").unwrap();
     assert!(left.right() < right.left());
     point((left.right() + right.left()) / 2., left.center().y)
+}
+
+#[test]
+fn floating_panels_cover_the_bottom_divider_but_leave_its_exposed_part_draggable() {
+    let root = TestConfigDir::new("nyaterm-floating-bottom-divider");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    app.update(&mut cx, |app, _| {
+        app.shell.bottom_panel.mode = BottomPanelMode::QuickCommands;
+        app.shell.bottom_panel.quick_commands_height = 160.;
+    });
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let divider = cx.debug_bounds("bottom-panel-resize").unwrap();
+    for selector in ["floating-left-panel", "floating-right-panel"] {
+        let panel = cx.debug_bounds(selector).unwrap();
+        let position = point(panel.center().x, divider.center().y);
+        cx.simulate_mouse_move(position, None, Modifiers::none());
+        cx.executor().advance_clock(Duration::from_millis(300));
+        draw(&app, cx);
+        cx.read(|cx| {
+            assert!(
+                !app.read(cx)
+                    .shell
+                    .resize_handle_is_highlighted(&"bottom-panel-resize".into())
+            );
+        });
+        cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| assert!(app.read(cx).shell.bottom_panel.resize.is_none()));
+        cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+        draw(&app, cx);
+    }
+
+    let left = cx.debug_bounds("floating-left-panel").unwrap();
+    let right = cx.debug_bounds("floating-right-panel").unwrap();
+    let start = point((left.right() + right.left()) / 2., divider.center().y);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.read(|cx| assert!(app.read(cx).shell.bottom_panel.resize.is_some()));
+    // A drag started outside must keep updating and finish over an occluding panel.
+    let end = point(left.center().x, start.y - px(20.));
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    draw(&app, cx);
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert!(app.shell.bottom_panel.resize.is_none());
+        assert_eq!(app.shell.quick_commands_height(), 180.);
+    });
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+}
+
+#[test]
+fn floating_panel_width_drags_update_and_release_inside_the_panel() {
+    let root = TestConfigDir::new("nyaterm-floating-width-drag");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    for (selector, side) in [
+        ("floating-left-panel", PanelResizeSide::Left),
+        ("floating-right-panel", PanelResizeSide::Right),
+    ] {
+        let bounds = cx.debug_bounds(selector).unwrap();
+        let (start_x, delta) = match side {
+            PanelResizeSide::Left => (bounds.right() - px(1.), -px(24.)),
+            PanelResizeSide::Right => (bounds.left() + px(1.), px(24.)),
+        };
+        let start = point(start_x, bounds.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.read(|cx| {
+            assert!(
+                app.read(cx)
+                    .shell
+                    .panels
+                    .resize
+                    .is_some_and(|resize| resize.side == side)
+            )
+        });
+        let end = start + point(delta, px(0.));
+        cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        draw(&app, cx);
+        cx.read(|cx| assert!(app.read(cx).shell.panels.resize.is_none()));
+        let resized = cx.debug_bounds(selector).unwrap();
+        assert_eq!(resized.size.width, bounds.size.width - px(24.));
+    }
+    assert_eq!(
+        panels(&app, cx),
+        [Some(NavItem::Connections), Some(NavItem::AiAssistant)]
+    );
+}
+
+#[test]
+fn floating_panel_headers_occlude_terminal_buttons_scroll_and_coordinate_hit_tests() {
+    let root = TestConfigDir::new("nyaterm-floating-pointer-occlusion");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app(&mut cx, root.path());
+    let cx = window(&mut cx, &app);
+    open_both(&app, cx);
+    let prompt = cx.debug_bounds("ai-prompt").unwrap().center();
+    cx.simulate_click(prompt, Modifiers::none());
+    draw(&app, cx);
+    for selector in ["floating-left-panel", "floating-right-panel"] {
+        let bounds = cx.debug_bounds(selector).unwrap();
+        let position = point(bounds.center().x, bounds.top() + px(4.));
+        cx.read(|cx| assert!(app.read(cx).terminal_session_at_point(position).is_none()));
+        for button in [MouseButton::Right, MouseButton::Middle] {
+            app.update(cx, |app, _| {
+                app.shell.set_status("pointer stays in floating panel")
+            });
+            cx.simulate_mouse_down(position, button, Modifiers::none());
+            cx.simulate_mouse_up(position, button, Modifiers::none());
+            draw(&app, cx);
+            cx.update(|window, cx| {
+                assert!(!nya_popup_is_active(window, cx));
+                let app = app.read(cx);
+                assert!(!app.terminal.input_focus().is_focused(window));
+                assert_eq!(app.shell.status(), "pointer stays in floating panel");
+            });
+        }
+        let scroll_offset =
+            app.read_with(cx, |app, _| app.terminal.session_scroll_offset("floating"));
+        cx.simulate_mouse_move(position, None, Modifiers::none());
+        cx.simulate_event(gpui::ScrollEvent {
+            position,
+            delta: gpui::ScrollDelta::Lines(point(0., -3.)),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: gpui::ScrollSource::Pointer,
+        });
+        draw(&app, cx);
+        cx.read(|cx| {
+            assert_eq!(
+                app.read(cx).terminal.session_scroll_offset("floating"),
+                scroll_offset
+            )
+        });
+    }
+    // Closing an overlay restores the terminal's coordinate hit area.
+    let position = cx.debug_bounds("floating-left-panel").unwrap().center();
+    app.update(cx, |app, cx| app.close_floating_panel(PanelSide::Left, cx));
+    draw(&app, cx);
+    cx.read(|cx| assert!(app.read(cx).terminal_session_at_point(position).is_some()));
 }
 
 #[test]
@@ -854,10 +1005,12 @@ fn file_menu_keyboard_action_opens_a_dialog_without_dismissing_the_panels() {
     click_icon(&app, cx, "activity-aiAssistant");
     let table = cx.debug_bounds("transfer-browser-table-scroll").unwrap();
     let position = point(table.right() - px(5.), table.center().y);
+    app.update(cx, |app, _| app.shell.set_status("file context menu"));
     cx.simulate_mouse_down(position, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(position, MouseButton::Right, Modifiers::none());
     draw(&app, cx);
     cx.update(|window, cx| assert!(nya_popup_is_active(window, cx)));
+    cx.read(|cx| assert_ne!(app.read(cx).shell.status(), "terminal context menu opened"));
     // Local browser: Refresh, New file, New folder (separators are skipped).
     cx.simulate_keystrokes("down down down enter");
     draw(&app, cx);

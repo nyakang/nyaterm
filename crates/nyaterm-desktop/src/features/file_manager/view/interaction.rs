@@ -103,6 +103,11 @@ impl FileManagerWorkspace {
             cx.stop_propagation();
             return;
         }
+        if primary && key == "f" {
+            self.focus_search(self.active, None, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         let input_focused = [PaneId::Left, PaneId::Right].into_iter().any(|pane| {
             let inputs = self.inputs(pane);
             [&inputs.path, &inputs.search].into_iter().any(|input| {
@@ -117,7 +122,14 @@ impl FileManagerWorkspace {
                 self.pane_mut(self.active).path_editing = false;
                 self.focus_pane(self.active, window, cx);
                 cx.stop_propagation();
+            } else if key == "escape" {
+                self.clear_or_close_search(self.active, window, cx);
+                cx.stop_propagation();
             }
+            return;
+        }
+        if !modifiers.modified() && self.handle_path_menu_key(key, window, cx) {
+            cx.stop_propagation();
             return;
         }
         if primary && !modifiers.alt && !modifiers.shift && matches!(key, "c" | "x" | "v") {
@@ -125,15 +137,6 @@ impl FileManagerWorkspace {
         } else if primary && key == "a" {
             let visible = self.current_visible(self.active, cx);
             self.pane_mut(self.active).select_all(&visible);
-        } else if primary && key == "f" {
-            window.focus(
-                &self
-                    .inputs(self.active)
-                    .search
-                    .read(cx)
-                    .component_focus_handle(cx),
-                cx,
-            );
         } else if modifiers.alt && matches!(key, "left" | "right") {
             if let Some(path) =
                 self.pane_mut(self.active)
@@ -178,8 +181,40 @@ impl FileManagerWorkspace {
                 "f6" => self.send_transfer(FileTransferOperation::Move, window, cx),
                 "f7" => self.open_name_dialog(self.active, FileManagerNameKind::Folder, window, cx),
                 "delete" => self.delete_selection(window, cx),
-                "escape" => self.pane_mut(self.active).clear_selection(),
-                _ => return,
+                "escape" => {
+                    self.pane_mut(self.active).path_menu = None;
+                    self.pane_mut(self.active).clear_selection();
+                }
+                _ => {
+                    if !modifiers.function
+                        && let Some(text) =
+                            event.keystroke.key_char.as_deref().filter(|text| {
+                                !text.is_empty() && !text.chars().any(char::is_control)
+                            })
+                    {
+                        self.focus_search(self.active, Some(text.to_string()), window, cx);
+                    } else if key == "space" {
+                        self.focus_search(self.active, Some(" ".into()), window, cx);
+                    } else {
+                        return;
+                    }
+                }
+            }
+        } else if modifiers.shift
+            && !modifiers.control
+            && !modifiers.platform
+            && !modifiers.alt
+            && !modifiers.function
+        {
+            if let Some(text) = event
+                .keystroke
+                .key_char
+                .as_deref()
+                .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
+            {
+                self.focus_search(self.active, Some(text.to_string()), window, cx);
+            } else {
+                return;
             }
         } else {
             return;
@@ -221,6 +256,7 @@ impl FileManagerWorkspace {
     ) {
         self.focus_pane(pane, window, cx);
         self.pane_mut(pane).path_editing = false;
+        self.pane_mut(pane).path_menu = None;
         let endpoint = self.pane(pane).endpoint.clone();
         let id = self.id.clone();
         self.dispatch_app(window, cx, move |app, _, cx| {

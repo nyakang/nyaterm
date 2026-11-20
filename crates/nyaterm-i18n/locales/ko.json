@@ -897,6 +897,8 @@
       "display": "디스플레이",
       "session": "세션",
       "serial": "직렬 포트 설정",
+      "charset": "문자 집합",
+      "advanced": "고급",
       "startup": "시작 설정"
     },
     "serialSoftwareFlowControlModemDisabled": "XON/XOFF가 바이너리 데이터를 소비할 수 있으므로 소프트웨어 흐름 제어에서는 XMODEM/YMODEM/ZMODEM 파일 전송이 비활성화됩니다.",
@@ -1118,6 +1120,50 @@
     "newGroupRootHint": "최상위 수준에서 생성",
     "noAuthentication": "없음",
     "noAuthenticationDescription": "비밀번호나 키 없이 연결합니다. SSH 서버가 이를 허용하거나 대화형으로 요청할 때만 사용하세요.",
+    "ftpAnonymousLogin": "익명 로그인",
+    "ftpAnonymousHint": "익명 로그인은 저장된 비밀번호를 전송하지 않습니다. 서버가 익명 액세스를 허용할 때만 사용하세요.",
+    "ftpAuthModeUnsupported": "FTP는 비밀번호 또는 익명 로그인만 지원합니다.",
+    "ftpPassiveModeInvalid": "FTP 수동 모드가 올바르지 않습니다.",
+    "ftpFilenameEncodingInvalid": "유효한 FTP 파일 이름 문자 집합을 선택하세요.",
+    "ftpConnectTimeoutInvalid": "FTP 연결 시간 제한은 {{min}}~{{max}}ms여야 합니다.",
+    "ftpPasswordRequired": "비밀번호를 입력하거나 익명 로그인을 선택하세요.",
+    "ftpPassiveMode": "수동 모드",
+    "ftpPassiveAuto": "자동",
+    "ftpPassivePasv": "PASV(수동)",
+    "ftpPassiveEpsv": "EPSV(확장 수동)",
+    "ftpInitialDirectory": "원격 시작 폴더",
+    "ftpLocalInitialDirectory": "로컬 시작 폴더",
+    "ftpConnectTimeout": "연결 시간 제한(ms)",
+    "ftpAdvancedHint": "시작 폴더를 비우면 서버 또는 로컬 기본값을 사용합니다.",
+    "ftpAsciiMode": "ASCII 모드",
+    "ftpAsciiModeHint": "업로드 시 로컬 줄바꿈을 CRLF로 변환하고, 다운로드 시 로컬 줄바꿈으로 되돌립니다. 텍스트 파일에만 사용하세요.",
+    "ftpFtps": "FTPS(명시적 TLS)",
+    "ftpFtpsHint": "AUTH TLS로 제어 및 데이터 채널을 암호화합니다. 서버가 명시적 FTPS를 지원해야 합니다.",
+    "ftpSecurityMode": "보안 모드",
+    "ftpSecurityNone": "없음",
+    "ftpSecurityExplicit": "명시적 FTPS",
+    "ftpSecurityImplicit": "암시적 FTPS",
+    "ftpImplicitFtpsHint": "연결 직후 TLS 핸드셰이크를 수행하며 일반적으로 포트 990을 사용합니다.",
+    "ftpTlsVersion": "TLS 버전",
+    "ftpTlsAuto": "자동(시스템 기본값)",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0은 지원되지 않습니다. SSL 3.0, TLS 1.0, TLS 1.1은 폐기되었으며 시스템 정책에 의해 거부될 수 있습니다.",
+    "ftpNetworkRouteDescription": "점프 호스트를 선택하면 점프가 우선이며 이 페이지의 프록시는 사용되지 않습니다. 점프 호스트 연결에 필요한 프록시는 해당 SSH 연결에서 설정하세요.",
+    "ftpNetworkPlaintextDescription": "프록시 및 점프 설정은 연결과 함께 저장됩니다.",
+    "ftpSecurityModeInvalid": "FTP 보안 모드가 올바르지 않습니다.",
+    "ftpTlsVersionInvalid": "FTP TLS 버전이 올바르지 않습니다.",
+    "filenameEncodingTitle": "서버는 파일 이름에 다음 문자 집합을 사용합니다:",
+    "filenameEncodingAuto": "자동 감지",
+    "filenameEncodingAutoHint": "서버가 UTF-8을 지원하면 UTF-8을, 그렇지 않으면 시스템 로컬 인코딩을 사용합니다.",
+    "filenameEncodingForceUtf8": "UTF-8 강제",
+    "filenameEncodingCustom": "사용자 지정 문자 집합 사용",
+    "filenameEncodingLabel": "인코딩",
+    "filenameEncodingWarning": "잘못된 문자 집합을 사용하면 파일 이름이 올바르게 표시되지 않을 수 있습니다.",
+    "filenameEncodingScope": "서버 파일 이름과 경로에만 적용되며 파일 내용에는 영향을 주지 않습니다.",
     "noKeys": "키 없음",
     "noOtp": "없음",
     "noOtpEntries": "OTP 항목이 없습니다",
@@ -1458,7 +1504,6 @@
   "fileExplorer": {
     "clipboardEmpty": "파일 클립보드가 비어 있거나 다른 내용으로 바뀌었습니다",
     "clipboardMoving": "잘라낸 항목을 이동 중입니다. 완료될 때까지 기다려 주세요",
-
     "transferSourceUnavailable": "원본 연결을 사용할 수 없습니다. 다시 연결한 후 시도하세요.",
     "transferBackendUnsupported": "이 연결은 파일 전송을 지원하지 않습니다.",
     "transferInvalidDestination": "전송 대상이 잘못되었거나 파일 이름을 표현할 수 없습니다.",
@@ -1650,6 +1695,14 @@
     "uploadPrompt": "원격 파일이 변경되었습니다. 변경 사항을 업로드할까요?"
   },
   "fileManager": {
+    "leftSide": "왼쪽",
+    "rightSide": "오른쪽",
+    "copyToPane": "%{side}(으)로 복사 (%{target})",
+    "moveToPane": "%{side}(으)로 이동 (%{target})",
+    "new": "새로 만들기",
+    "copyFullPath": "전체 경로 복사",
+    "copyName": "파일 이름 복사",
+    "copyParent": "상위 디렉터리 복사",
     "connected": "연결됨",
     "skipped": "건너뜀",
     "copy": "복사",
@@ -1699,7 +1752,9 @@
     "openLeft": "왼쪽에서 열기",
     "openRight": "오른쪽에서 열기",
     "openWorkspace": "작업 영역에서 파일 관리자 열기",
-    "goHome": "홈"
+    "goHome": "홈",
+    "goBack": "뒤로",
+    "goForward": "앞으로"
   },
   "fileTransfer": {
     "scanning": "파일 검색 중…",
@@ -1708,6 +1763,7 @@
     "cancelAll": "모두 취소",
     "cancelled": "취소됨",
     "clearAll": "모두 지우기",
+    "clear": "지우기",
     "clearCompleted": "완료 항목 지우기",
     "completed": "완료됨",
     "cancelling": "취소 중",
@@ -1943,6 +1999,81 @@
     "ungrouped": "그룹 없음",
     "ungroupedConnections": "그룹 없음"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "%{addr}에서 수신 중",
+        "notRunning": "실행 중 아님",
+        "configure": "설정",
+        "start": "서버 시작",
+        "stop": "서버 중지"
+      },
+      "action": {
+        "reset": "초기화",
+        "browse": "찾아보기"
+      },
+      "bind": {
+        "allInterfaces": "모든 인터페이스",
+        "loopback": "루프백",
+        "savedUnavailable": "저장된 값, 이 컴퓨터에서 감지되지 않음"
+      },
+      "field": {
+        "bindAddress": "바인드 주소",
+        "port": "포트",
+        "rootDir": "서비스 디렉터리",
+        "timeout": "시간 제한(초)",
+        "concurrency": "최대 동시 전송"
+      },
+      "section": {
+        "basic": "기본 설정",
+        "limits": "전송 제한",
+        "permissions": "권한"
+      },
+      "hint": {
+        "firewall": "다른 컴퓨터에서 접속하려면 시스템 방화벽에서 이 UDP 포트를 허용하세요.",
+        "security": "선택한 디렉터리만 공유합니다. 신뢰할 수 있는 네트워크에서 사용하세요."
+      },
+      "error": {
+        "bind": "유효한 IP 주소를 입력하세요",
+        "port": "포트는 1~65535 범위여야 합니다",
+        "timeout": "시간 제한은 1~255초 범위여야 합니다",
+        "concurrency": "동시 전송 수는 1~%{max} 범위여야 합니다",
+        "rootDirRequired": "서비스 디렉터리를 선택하세요",
+        "rootDirUnreadable": "디렉터리가 없거나 읽을 수 없습니다",
+        "invalid": "잘못된 설정: %{message}"
+      },
+      "status": {
+        "saveHint": "변경 사항은 다음에 서비스를 시작할 때 적용됩니다.",
+        "saveAndRestart": "저장 후 서비스 다시 시작",
+        "restartFailed": "저장했지만 %{service} 서비스 다시 시작에 실패했습니다: %{message}",
+        "saveFailed": "네트워크 도구 설정을 저장할 수 없습니다",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 전송 시작: %{file}",
+        "finished": "%{service} · 전송 완료: %{file}(%{bytes}바이트)",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "알 수 없는 오류"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 서버",
+      "shortName": "TFTP",
+      "description": "이 컴퓨터에서 TFTP로 파일을 공유하고 받습니다.",
+      "field": {
+        "blockSize": "협상 블록 크기 상한",
+        "allowUpload": "업로드 허용",
+        "allowOverwrite": "파일 덮어쓰기 허용"
+      },
+      "hint": {
+        "blockSize": "클라이언트가 blksize를 요청할 때 허용되는 최대 DATA 페이로드(8–65464바이트)입니다.\n요청값과 이 상한 중 작은 값을 사용합니다.\nblksize 요청이 없으면 항상 512바이트를 사용합니다.",
+        "upload": "클라이언트가 서비스 디렉터리에 쓸 수 있습니다"
+      },
+      "error": {
+        "blockSize": "블록 크기는 8~65464 범위여야 합니다"
+      }
+    }
+  },
   "otp": {
     "cancel": "취소",
     "cancelled": "인증이 취소되었습니다",
@@ -2049,6 +2180,7 @@
     "fileTransfer": "전송",
     "gpuMonitor": "GPU",
     "network": "네트워크",
+    "networktools": "네트워크 도구",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "활성 세션이 없습니다",
     "noCommandsYet": "아직 명령이 없습니다",
@@ -2508,6 +2640,11 @@
     "usersMeaning": "시스템에 기록된 로그인 세션이며 모든 SSH 연결을 뜻하지 않습니다."
   },
   "savedConnections": {
+    "openFileManager": "파일 관리자 열기",
+    "openFileManagerSftpDisabled": "파일 관리자 열기(SFTP 비활성화)",
+    "fileManagerConnectionUnavailable": "이 저장된 연결은 더 이상 사용할 수 없습니다.",
+    "fileManagerRequiresSsh": "파일 관리자를 열려면 SSH 연결이 필요합니다.",
+    "fileManagerSftpDisabled": "이 SSH 연결에서 SFTP가 비활성화되어 있습니다.",
     "dropRoot": "최상위로 이동",
     "sessionImportTitle": "세션 가져오기",
     "restoreBackupTitle": "NyaTerm 백업 복원",
@@ -2737,6 +2874,7 @@
     "submit": "계속"
   },
   "serialPrompt": {
+    "chooseDevice": "장치 선택…",
     "alreadyOpen": "열려 있는 시리얼 선택을 먼저 완료하세요.",
     "baudRateInvalid": "보드레이트는 1~4000000 사이여야 합니다.",
     "baudRatePlaceholder": "115200",
@@ -3199,7 +3337,7 @@
     "groupTransfer": "전송",
     "groupWorkspace": "작업 공간",
     "zebraStripes": "터미널 행 줄무늬",
-    "zebraStripesDesc": "셸 입력 영역과 클릭한 행을 강조하며, 행마다 배경색을 번갈아 표시할 수도 있습니다.",
+    "zebraStripesDesc": "셸 입력 영역과 클릭한 행을 강조하며, 행마다 배경색을 번갈아 표시할 수도 있습니다. 꺼도 명령 접기와 탐색은 사용할 수 있습니다.",
     "zebraStripesByRow": "행별로 표시",
     "zebraStripesByRowDesc": "터미널의 표시 행마다 배경색을 번갈아 표시합니다.",
     "syncHistory": {
@@ -3298,6 +3436,8 @@
     "keepAliveInterval": "Keep-Alive 간격(초)",
     "reconnectRestoreCwd": "재연결 후 작업 디렉터리 복원",
     "reconnectRestoreCwdDesc": "SSH 세션을 마지막으로 신뢰된 작업 디렉터리로 되돌립니다.",
+    "serialReconnectEnter": "시리얼 재연결 후 Enter 전송",
+    "serialReconnectEnterDesc": "시리얼 세션이 재연결된 후 콘솔이 바로 프롬프트를 표시하도록 Enter를 한 번 보냅니다.",
     "keepAliveIntervalDesc": "X초마다 SSH keep-alive 패킷을 전송합니다. 0으로 설정해도 Keep-Alive가 비활성화됩니다.",
     "keepAliveMode": "SSH Keep-Alive 모드",
     "keepAliveModeCompatible": "호환 모드(권장)",

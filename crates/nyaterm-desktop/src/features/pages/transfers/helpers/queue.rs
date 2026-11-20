@@ -8,7 +8,7 @@ use gpui::{
 use nyaterm_files::sftp_transfer_types::SftpTransferProgress;
 use nyaterm_ui::NyaTooltip;
 
-pub(in crate::features::pages::transfers) fn queue_action_button(
+pub fn queue_action_button(
     palette: ThemePalette,
     id: impl Into<String>,
     icon_path: &'static str,

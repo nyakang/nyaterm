@@ -148,6 +148,17 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_terminal_serial_reconnect_send_enter(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_terminal_serial_reconnect_send_enter();
+        if !self.settings.summary().terminal_serial_reconnect_send_enter {
+            self.terminal.cancel_all_serial_reconnect_enters();
+        }
+        self.save_terminal_settings(cx);
+    }
+
     pub(in crate::features) fn toggle_remote_stats_show_users(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_remote_stats_show_users();
         self.remote_stats_users_setting_changed(cx);

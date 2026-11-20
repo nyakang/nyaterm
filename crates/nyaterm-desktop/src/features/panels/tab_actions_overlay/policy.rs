@@ -23,6 +23,7 @@ impl TabSessionCapability {
             SessionLaunchConfig::Vnc(_) => Self::Vnc,
             SessionLaunchConfig::AdbShell(_) => Self::AdbShell,
             SessionLaunchConfig::AdbFiles(_) | SessionLaunchConfig::AdbScreen(_) => Self::AdbView,
+            SessionLaunchConfig::Ftp(_) => Self::AdbView,
         }
     }
 

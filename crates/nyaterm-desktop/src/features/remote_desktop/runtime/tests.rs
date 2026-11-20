@@ -1323,6 +1323,8 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
                 .framebuffer
                 .as_ref()
                 .unwrap()
+                .as_rdp()
+                .unwrap()
                 .pixels()
                 .as_ptr();
             app.remote_desktop.release_inactive_textures("local");
@@ -1332,6 +1334,8 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
                 app.remote_desktop.sessions["healthy"]
                     .framebuffer
                     .as_ref()
+                    .unwrap()
+                    .as_rdp()
                     .unwrap()
                     .pixels()
                     .as_ptr(),

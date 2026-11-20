@@ -41,17 +41,18 @@ pub(in crate::features::session) struct SessionDialogState {
     pub(super) temporary_serial_port_name: String,
     pub(super) temporary_serial_baud_rate: String,
     pub(super) temporary_ssh_link_error: Option<&'static str>,
-    /// A saved serial connection waiting for its device and framing.
+    /// A serial start or reconnect waiting for its device and framing.
     pub(super) serial_connect_prompt: Option<SerialConnectPromptState>,
 }
 
-/// Connect-time questions for one saved serial connection.
+/// Runtime questions for one serial start or reconnect.
 ///
 /// The saved values are only defaults here: the pending start resumes with
 /// `SerialConnectSelection` built from this state, and the saved connection is
 /// never rewritten.
 pub(in crate::features) struct SerialConnectPromptState {
-    pub(in crate::features) connection: SavedConnection,
+    pub(in crate::features) connection_name: String,
+    pub(in crate::features) default_baud_rate: u32,
     pub(in crate::features) continuation: SerialConnectContinuation,
     pub(in crate::features) port_name: String,
     pub(in crate::features) baud_rate: String,
@@ -108,22 +109,31 @@ impl SerialConnectPromptState {
     }
 }
 
+/// What the connect prompt was standing in for.
+///
+/// Reconnects resolve their source from the existing session, including temporary
+/// sessions that have no saved connection. Submitting always revalidates it.
 pub(in crate::features) enum SerialConnectContinuation {
-    Start(Box<SavedConnectionStartOptions>),
-    Reconnect { session_id: String },
+    Start {
+        connection: Box<SavedConnection>,
+        options: Box<SavedConnectionStartOptions>,
+    },
+    Reconnect {
+        session_id: String,
+    },
 }
 
 impl SerialConnectContinuation {
     pub(in crate::features) fn reconnect_session_id(&self) -> Option<&str> {
         match self {
-            Self::Start(options) => options.reconnect_session_id.as_deref(),
+            Self::Start { options, .. } => options.reconnect_session_id.as_deref(),
             Self::Reconnect { session_id } => Some(session_id),
         }
     }
 
     pub(in crate::features) fn request_id(&self) -> Option<&str> {
         match self {
-            Self::Start(options) => options.request_id.as_deref(),
+            Self::Start { options, .. } => options.request_id.as_deref(),
             Self::Reconnect { .. } => None,
         }
     }
@@ -212,6 +222,10 @@ impl SessionDialogState {
         }
         self.tab_actions_submenu = Some(submenu);
         true
+    }
+
+    pub(in crate::features) fn clear_tab_actions_submenu(&mut self) -> bool {
+        self.tab_actions_submenu.take().is_some()
     }
 
     pub(in crate::features) fn should_quit_after_close_all(&self) -> bool {
@@ -566,6 +580,9 @@ impl SessionFeatureState {
         submenu: TabActionsSubmenu,
     ) -> bool {
         self.dialogs.select_tab_actions_submenu(submenu)
+    }
+    pub(in crate::features) fn dialog_clear_tab_actions_submenu(&mut self) -> bool {
+        self.dialogs.clear_tab_actions_submenu()
     }
     pub(in crate::features) fn dialog_should_quit_after_close_all(&self) -> bool {
         self.dialogs.should_quit_after_close_all()

@@ -1,7 +1,7 @@
 use rust_i18n::t;
 
 use gpui::Context;
-use nyaterm_core::SavedConnection;
+use nyaterm_core::{ConnectionType, SavedConnection};
 use nyaterm_ui::{NyaDialogWindowExt as _, NyaMenuItem};
 
 use crate::features::NyaTermApp;
@@ -89,16 +89,16 @@ impl NyaTermApp {
         clear_selection_after_copy: bool,
         cx: &mut Context<Self>,
     ) -> Vec<NyaMenuItem> {
-        if self
-            .connection_state
-            .connection_by_id(&connection_id)
-            .is_none()
-        {
+        let Some(connection) = self.connection_state.connection_by_id(&connection_id) else {
             self.shell.set_status("connection is no longer available");
             cx.notify();
             return Vec::new();
-        }
+        };
         let selected_count = target_ids.len();
+        let file_manager_enabled = (selected_count == 1
+            && target_ids.first() == Some(&connection_id)
+            && matches!(connection.config, ConnectionType::Ssh { .. }))
+        .then_some(connection.sftp.enabled);
         let connect_label = if selected_count > 1 {
             format!(
                 "{} ({selected_count})",
@@ -118,12 +118,29 @@ impl NyaTermApp {
         let rename_id = connection_id.clone();
         let move_items = self.connection_move_to_group_menu_items(target_ids.clone(), cx);
 
-        vec![
+        let mut items = vec![
             NyaMenuItem::action(connect_label)
                 .icon("icons/conn/connect.svg")
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.start_saved_connections_by_ids(&connect_ids, window, cx);
                 })),
+        ];
+        if let Some(enabled) = file_manager_enabled {
+            let label = if enabled {
+                t!("savedConnections.openFileManager")
+            } else {
+                t!("savedConnections.openFileManagerSftpDisabled")
+            };
+            items.push(
+                NyaMenuItem::action(label)
+                    .icon("icons/file-manager.svg")
+                    .disabled(!enabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_saved_connection_file_manager_by_id(&connection_id, window, cx);
+                    })),
+            );
+        }
+        items.extend([
             NyaMenuItem::action(t!("savedConnections.edit"))
                 .icon("icons/net/edit.svg")
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -149,7 +166,8 @@ impl NyaTermApp {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.delete_connections_by_ids(&target_ids, window, cx);
                 })),
-        ]
+        ]);
+        items
     }
 
     pub(in crate::features::pages::connections) fn connection_group_context_menu_items(
@@ -395,6 +413,84 @@ mod tests {
 
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
+
+    #[test]
+    fn file_manager_menu_targets_only_single_ssh_connections_and_respects_sftp_policy() {
+        let root = TestTempDir::new("nyaterm-file-manager-menu");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+        app.update(&mut cx, |app, cx| {
+            let connections = [
+                ("ssh", "ssh", true),
+                ("disabled", "ssh", false),
+                ("other-ssh", "ssh", true),
+                ("local", "local_terminal", true),
+                ("telnet", "telnet", true),
+                ("serial", "serial", true),
+                ("rdp", "rdp", true),
+                ("vnc", "vnc", true),
+                ("adb", "adb", true),
+            ]
+            .map(|(id, kind, enabled)| {
+                serde_json::from_value::<SavedConnection>(serde_json::json!({
+                    "id": id, "name": id, "type": kind, "host": "localhost",
+                    "port_name": "COM1",
+                    "device": { "kind": "usb", "serial": "fixture" },
+                    "sftp": { "enabled": enabled },
+                }))
+                .unwrap()
+            });
+            app.connection_state
+                .replace_loaded(connections.to_vec(), Vec::new());
+            let enabled_label = rust_i18n::t!("savedConnections.openFileManager");
+            let disabled_label = rust_i18n::t!("savedConnections.openFileManagerSftpDisabled");
+            for connection in &connections {
+                for menu in [
+                    app.connection_context_menu_items(connection.clone(), cx),
+                    app.connection_target_menu_items(
+                        connection.id.clone(),
+                        vec![connection.id.clone()],
+                        cx,
+                    ),
+                ] {
+                    let item = menu.iter().find(|item| {
+                        item.test_label() == enabled_label || item.test_label() == disabled_label
+                    });
+                    if matches!(connection.config, nyaterm_core::ConnectionType::Ssh { .. }) {
+                        let item = item.expect("SSH has a file manager action");
+                        assert_eq!(item.test_presentation().3, !connection.sftp.enabled);
+                        assert_eq!(menu[1].test_label(), item.test_label());
+                        assert_eq!(
+                            item.test_label(),
+                            if connection.sftp.enabled {
+                                enabled_label.as_ref()
+                            } else {
+                                disabled_label.as_ref()
+                            }
+                        );
+                    } else {
+                        assert!(item.is_none());
+                    }
+                }
+            }
+            let ids: Vec<_> = connections.iter().map(|item| item.id.clone()).collect();
+            app.connection_state
+                .select_list_connection("ssh".into(), &ids, false, false);
+            app.connection_state
+                .select_list_connection("disabled".into(), &ids, true, false);
+            let bulk = app.connection_context_menu_items(connections[0].clone(), cx);
+            assert!(bulk.iter().all(|item| {
+                item.test_label() != enabled_label && item.test_label() != disabled_label
+            }));
+            let unselected = app.connection_context_menu_items(connections[2].clone(), cx);
+            assert_eq!(unselected[1].test_label(), enabled_label);
+            let explicit = app.connection_target_menu_items("ssh".into(), vec!["ssh".into()], cx);
+            assert_eq!(explicit[1].test_label(), enabled_label);
+            assert_eq!(app.connection_state.selected_connections().len(), 2);
+        });
+    }
 
     #[test]
     fn connection_menus_preserve_selection_scope_and_assets_use_explicit_single_targets() {

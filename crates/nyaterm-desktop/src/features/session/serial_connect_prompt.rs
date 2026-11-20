@@ -7,14 +7,18 @@
 //! `SerialConnectSelection` on the pending start.
 
 use gpui::{Context, Window};
+use nyaterm_core::SavedConnection;
 use nyaterm_core::models::connection::SerialConnectPrompt;
-use nyaterm_core::{ConnectionType, SavedConnection};
+use nyaterm_ui::NyaDialogWindowExt as _;
 use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 use crate::features::session::SessionStartFocusTarget;
 use crate::features::session::state::SerialConnectContinuation;
-use crate::features::session::{SerialConnectPromptState, SerialConnectSelection};
+use crate::features::session::{
+    SavedConnectionStartOptions, SerialConnectPromptState, SerialConnectSelection,
+};
+use crate::models::SessionLaunchConfig;
 
 /// Every text field owned by the dialog; resetting the prefix re-seeds them from
 /// the prompt state.
@@ -32,7 +36,108 @@ impl NyaTermApp {
     pub(in crate::features) fn open_serial_connect_prompt(
         &mut self,
         connection: SavedConnection,
+        options: SavedConnectionStartOptions,
+        prompt: SerialConnectPrompt,
+        port_hint: String,
+        baud_hint: u32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let connection_name = connection.name.clone();
+        self.begin_serial_connect_prompt(
+            SerialConnectContinuation::Start {
+                connection: Box::new(connection),
+                options: Box::new(options),
+            },
+            connection_name,
+            prompt,
+            port_hint,
+            baud_hint,
+            cx,
+        )
+    }
+
+    pub(in crate::features) fn open_serial_reconnect_prompt(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.session.start_reconnect_is_pending(&session_id)
+            || self.session.session_is_busy(&session_id)
+        {
+            return false;
+        }
+        let Some(metadata) = self.session.metadata(&session_id) else {
+            return false;
+        };
+        let SessionLaunchConfig::Serial(config) = &metadata.launch_config else {
+            return false;
+        };
+        if let Some(id) = metadata.source_connection_id.as_ref() {
+            let Some(connection) = self
+                .connection_state
+                .connections()
+                .iter()
+                .find(|connection| &connection.id == id)
+            else {
+                self.shell.set_status(t!("terminal.savedConnectionDeleted"));
+                cx.notify();
+                return false;
+            };
+            if !metadata
+                .launch_config
+                .matches_saved_protocol(&connection.config)
+            {
+                self.shell
+                    .set_status(t!("terminal.savedConnectionProtocolChanged"));
+                cx.notify();
+                return false;
+            }
+        }
+        let config = self
+            .session
+            .start
+            .serial_reconnect_config(&session_id)
+            .unwrap_or(config)
+            .clone();
+        let name = self
+            .session
+            .display_name(&session_id)
+            .unwrap_or_else(|| config.name.clone());
+        self.begin_serial_connect_prompt(
+            SerialConnectContinuation::Reconnect { session_id },
+            name,
+            SerialConnectPrompt {
+                port: true,
+                baud_rate: true,
+            },
+            config.port_name,
+            config.baud_rate,
+            cx,
+        )
+    }
+
+    pub(in crate::features::session) fn offer_serial_reconnect_selection(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let app = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = NyaTermApp::update_in_main_window(&app, cx, |app, window, cx| {
+                if app.session.active_id() == Some(session_id.as_str())
+                    && app.session.start_reconnect_failure(&session_id).is_some()
+                    && !window.has_active_nya_dialog(cx)
+                {
+                    app.open_serial_reconnect_prompt(session_id, cx);
+                }
+            });
+        });
+    }
+
+    fn begin_serial_connect_prompt(
+        &mut self,
         continuation: SerialConnectContinuation,
+        connection_name: String,
         prompt: SerialConnectPrompt,
         port_hint: String,
         baud_hint: u32,
@@ -68,7 +173,8 @@ impl NyaTermApp {
         self.session
             .dialogs
             .begin_serial_connect_prompt(SerialConnectPromptState {
-                connection,
+                connection_name,
+                default_baud_rate: baud_hint,
                 continuation,
                 port_name,
                 baud_rate: baud_hint.to_string(),
@@ -101,7 +207,15 @@ impl NyaTermApp {
     }
 
     fn show_serial_connect_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session.dialogs.serial_connect_prompt().is_none() {
+        let Some(state) = self.session.dialogs.serial_connect_prompt() else {
+            return;
+        };
+        if let SerialConnectContinuation::Reconnect { session_id } = &state.continuation
+            && (!self.session.has_session(session_id)
+                || self.session.start_reconnect_is_pending(session_id))
+        {
+            self.session.dialogs.take_serial_connect_prompt();
+            self.forget_text_inputs(SERIAL_PROMPT_TEXT_PREFIX);
             return;
         }
         self.open_form_dialog(
@@ -173,19 +287,18 @@ impl NyaTermApp {
         self.forget_text_inputs(SERIAL_PROMPT_TEXT_PREFIX);
         // Text survives even for the field the dialog did not ask about, but the
         // saved value is the safer answer when it cannot be parsed.
-        let saved_baud_rate = match &state.connection.config {
-            ConnectionType::Serial { baud_rate, .. } => *baud_rate,
-            _ => 0,
-        };
         let selection = SerialConnectSelection {
             port_name,
-            baud_rate: baud_rate.unwrap_or(saved_baud_rate),
+            baud_rate: baud_rate.unwrap_or(state.default_baud_rate),
         };
         match state.continuation {
-            SerialConnectContinuation::Start(options) => {
+            SerialConnectContinuation::Start {
+                connection,
+                options,
+            } => {
                 let mut options = *options;
                 options.serial_selection = Some(selection);
-                if self.continue_saved_connection_start(state.connection, options, cx)
+                if self.continue_saved_connection_start(*connection, options, cx)
                     && self.session.start_has_active_pending()
                 {
                     self.focus_user_started_session_surface(
@@ -196,6 +309,8 @@ impl NyaTermApp {
                 }
             }
             SerialConnectContinuation::Reconnect { session_id } => {
+                // A failed explicit selection stays on the failure page instead
+                // of reopening this dialog in a loop.
                 self.reconnect_session_with_serial_selection(
                     session_id,
                     Some(selection),

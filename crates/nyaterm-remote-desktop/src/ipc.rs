@@ -815,6 +815,11 @@ mod tests {
             VncControlMessage::RequestFullFrame {
                 session_id: "vnc".to_string(),
             },
+            VncControlMessage::FrameUpdateComplete {
+                session_id: "vnc".into(),
+                epoch: 4,
+                sequence: 2,
+            },
         ];
         let mut encoded = Vec::new();
         for message in &messages {
@@ -830,6 +835,14 @@ mod tests {
             }
         }
         assert_eq!(decoded.len(), messages.len());
+        assert!(matches!(
+            decoded.last(),
+            Some(VncControlMessage::FrameUpdateComplete {
+                epoch: 4,
+                sequence: 2,
+                ..
+            })
+        ));
         assert!(matches!(
             decoded[1],
             VncControlMessage::ServerHello {

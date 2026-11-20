@@ -284,7 +284,7 @@ mod tests {
                     self.app.update(cx, |app, cx| {
                         crate::features::view_widgets::full_window_overlay_layer(
                             "transfer-favorites-menu-input-layer",
-                            app.transfer_browser_favorites_menu_overlay(cx),
+                            app.transfer_browser_favorites_menu_overlay(window, cx),
                         )
                         .into_any_element()
                     })
@@ -325,6 +325,7 @@ mod tests {
             nyaterm_ui::nya_root(host, window, cx)
         });
         let vcx: &mut VisualTestContext = vcx;
+        vcx.update(|window, _| window.activate_window());
         vcx.run_until_parked();
         for _ in 0..3 {
             vcx.update(|window, cx| {
@@ -879,6 +880,20 @@ mod tests {
             .debug_bounds("transfer-tree-details")
             .expect("structured file details");
         assert_eq!(details.size.width, px(208.));
+        let cwd_marker = vcx.debug_bounds(marker).unwrap();
+        vcx.simulate_mouse_move(cwd_marker.center(), None, Modifiers::none());
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        vcx.run_until_parked();
+        draw_path_fixture(vcx);
+        assert!(
+            vcx.debug_bounds("transfer-tree-details").is_none(),
+            "status tooltips must not also open file details"
+        );
+        vcx.simulate_mouse_move(row_bounds.center(), None, Modifiers::none());
+        vcx.executor().advance_clock(Duration::from_millis(800));
+        vcx.run_until_parked();
+        draw_path_fixture(vcx);
+        assert!(vcx.debug_bounds("transfer-tree-details").is_some());
         vcx.simulate_click(row_bounds.center(), Modifiers::none());
         vcx.simulate_mouse_move(
             row_bounds.center() - gpui::point(px(0.), px(56.)),
@@ -1287,6 +1302,108 @@ mod tests {
     }
 
     #[test]
+    fn favorites_menu_measures_unicode_paths_and_respects_width_limits() {
+        let test_dir = TestConfigDir::new("nyaterm-favorites-width");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        for (path, viewport_width) in [
+            (None, 1000.),
+            (Some("/short".to_string()), 1000.),
+            (Some(format!("/{}", "中文目录".repeat(6))), 1000.),
+            (Some(format!("/{}", "long-directory/".repeat(12))), 1000.),
+            (Some("/short".to_string()), 316.),
+            (Some("/short".to_string()), 300.),
+            (Some(format!("/{}", "中文目录".repeat(12))), 276.),
+            (Some(format!("/{}", "中文目录".repeat(12))), 260.),
+        ] {
+            vcx.update(|_, cx| {
+                app.update(cx, |app, _| {
+                    app.shell.set_viewport_size_for_test((viewport_width, 720.));
+                    app.transfer
+                        .replace_browser_favorites(path.iter().cloned().collect());
+                });
+            });
+            show_favorites_menu(vcx, &app, viewport_width - 4., 100.);
+            let menu = vcx.debug_bounds("transfer-browser-favorites-menu").unwrap();
+            let expected = vcx.update(|window, cx| {
+                let label = path.as_deref().unwrap_or("");
+                let mut run = window.text_style().to_run(label.len());
+                run.font = app.read(cx).gpui_ui_font().font();
+                let measured = f32::from(
+                    window
+                        .text_system()
+                        .shape_line(label.into(), px(12.), &[run], None)
+                        .width,
+                );
+                (measured.ceil() + 88.)
+                    .clamp(260., 400.)
+                    .min(viewport_width - 16.)
+            });
+            assert_eq!(menu.size.width, px(expected));
+            assert!(menu.left() >= px(8.));
+            assert_eq!(menu.right(), px(viewport_width - 8.));
+            if let Some(path) = &path {
+                let remove = Box::leak(
+                    format!("transfer-browser-favorite-menu-remove-{path}").into_boxed_str(),
+                );
+                let action = vcx.debug_bounds(remove).expect("reserved remove action");
+                assert!(action.left() >= menu.left());
+                assert!(action.right() < menu.right());
+            }
+            vcx.simulate_keystrokes("escape");
+            draw_path_fixture(vcx);
+        }
+    }
+
+    #[test]
+    fn file_details_open_below_pointer_without_moving_the_row() {
+        let test_dir = TestConfigDir::new("nyaterm-file-hover-position");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.transfer.replace_browser_entries_for_test(vec![
+                    super::super::tests_support::browser_entry(0),
+                ]);
+                app.flush_transfer_panel_snapshot(cx);
+            });
+        });
+        draw_path_fixture(vcx);
+        let row = vcx
+            .debug_bounds("transfer-browser-entry-/remote/entry-0000")
+            .unwrap();
+        let pointer = gpui::point(row.left() + px(80.), row.center().y);
+        vcx.simulate_mouse_move(pointer, None, Modifiers::none());
+        vcx.executor().advance_clock(Duration::from_millis(800));
+        vcx.run_until_parked();
+        draw_path_fixture(vcx);
+        let details = vcx
+            .debug_bounds("transfer-browser-entry-details")
+            .expect("file details card");
+        assert!(details.left() >= pointer.x + px(12.));
+        assert!(details.top() >= pointer.y + px(16.));
+        assert_eq!(
+            vcx.debug_bounds("transfer-browser-entry-/remote/entry-0000"),
+            Some(row)
+        );
+        vcx.simulate_mouse_move(
+            pointer + gpui::point(px(10.), px(0.)),
+            None,
+            Modifiers::none(),
+        );
+        draw_path_fixture(vcx);
+        assert_eq!(
+            vcx.debug_bounds("transfer-browser-entry-details"),
+            Some(details)
+        );
+        vcx.simulate_click(pointer, Modifiers::none());
+        draw_path_fixture(vcx);
+        assert!(vcx.debug_bounds("transfer-browser-entry-details").is_none());
+    }
+
+    #[test]
     fn favorites_menu_add_remove_keyboard_and_focus_restore() {
         let test_dir = TestConfigDir::new("nyaterm-favorites-actions");
         let mut cx = TestAppContext::single();
@@ -1298,7 +1415,7 @@ mod tests {
                 .unwrap()
                 .size
                 .width,
-            px(220.)
+            px(260.)
         );
         let add = vcx
             .debug_bounds("transfer-browser-favorite-menu-add-current")

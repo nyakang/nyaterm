@@ -181,6 +181,7 @@ fn success(request_id: &str, session_id: &str, config: SessionLaunchConfig) -> S
             multiplex_handle: None,
             launch_config: Some(config),
             cleanup: None,
+            ftp_service: None,
         }),
     }
 }
@@ -560,6 +561,92 @@ fn start_tab_double_click_respects_settings_and_close_buttons_stop_propagation()
                 assert_eq!(app.session.active_failed_request_id(), Some("target"));
             }
         });
+    }
+}
+
+#[test]
+fn tab_context_submenus_close_over_plain_rows_and_remain_usable_when_entered() {
+    use crate::models::TabActionsSubmenu;
+
+    let root = TestConfigDir::new("nyaterm-tab-submenu-hover");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "target");
+    app.update(&mut cx, |app, cx| app.sync_component_theme(cx));
+    let fixture_app = app.clone();
+    let (_, cx) = cx.add_window_view(move |_, cx| {
+        cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+        StartTabActionsHost { app: fixture_app }
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_tab_actions_at("target".into(), Some((8., 8.)), window, cx);
+        });
+        let _ = window.draw(cx);
+    });
+
+    for (trigger, submenu) in [
+        ("tab-ctx-set-color", TabActionsSubmenu::Color),
+        ("tab-ctx-ai", TabActionsSubmenu::Ai),
+        ("tab-ctx-move-window", TabActionsSubmenu::MoveWindow),
+    ] {
+        for plain_row in [
+            "tab-ctx-copy-name",
+            "tab-ctx-rename",
+            "tab-ctx-close-others",
+        ] {
+            let trigger_bounds = cx.debug_bounds(trigger).unwrap();
+            cx.simulate_mouse_move(trigger_bounds.center(), None, Default::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(
+                app.read_with(cx, |app, _| app.session.dialog_tab_actions_submenu()),
+                Some(submenu)
+            );
+
+            let gutter = gpui::point(
+                trigger_bounds.right() + gpui::px(2.),
+                trigger_bounds.center().y,
+            );
+            cx.simulate_mouse_move(gutter, None, Default::default());
+            cx.run_until_parked();
+            assert_eq!(
+                app.read_with(cx, |app, _| app.session.dialog_tab_actions_submenu()),
+                Some(submenu),
+                "crossing the menu gutter toward a submenu must keep it open"
+            );
+
+            let panel = cx.debug_bounds("tab-actions-submenu").unwrap();
+            cx.simulate_mouse_move(panel.center(), None, Default::default());
+            cx.run_until_parked();
+            assert_eq!(
+                app.read_with(cx, |app, _| app.session.dialog_tab_actions_submenu()),
+                Some(submenu),
+                "entering a submenu must keep it open"
+            );
+
+            let position = cx.debug_bounds(plain_row).unwrap().center();
+            cx.simulate_mouse_move(position, None, Default::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            app.read_with(cx, |app, _| {
+                assert_eq!(
+                    app.session.dialog_tab_actions_submenu(),
+                    None,
+                    "{trigger} must close when hovering {plain_row}, including disabled rows"
+                );
+                assert_eq!(app.session.dialog_tab_actions_session_id(), Some("target"));
+            });
+            assert!(cx.debug_bounds("tab-actions-submenu").is_none());
+        }
     }
 }
 

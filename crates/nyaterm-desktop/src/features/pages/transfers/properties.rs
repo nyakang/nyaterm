@@ -3,6 +3,7 @@ use super::{
     remote_file_name, remote_parent_path, transfer_properties_state_from_entry,
 };
 use crate::features::NyaTermApp;
+use crate::features::file_manager::properties::FileManagerPropertiesTarget;
 use crate::models::{
     TransferJobEvent, TransferJobKind, TransferJobOutput, TransferJobResult, TransferJobState,
     TransferJobStatus, TransferPropertiesField,
@@ -13,6 +14,27 @@ use nyaterm_files::sftp::{RemoteFilePath, SftpAttributeUpdate, SftpFileEntry, Sf
 use rust_i18n::t;
 
 impl NyaTermApp {
+    pub(in crate::features) fn open_file_manager_properties_dialog(
+        &mut self,
+        entry: SftpFileEntry,
+        target: FileManagerPropertiesTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.forget_text_inputs("transfer.properties.");
+        self.transfer
+            .open_properties_dialog(transfer_properties_state_from_entry(
+                entry,
+                target.endpoint.session_id().map(str::to_owned),
+            ));
+        self.transfer.set_properties_target(target);
+        self.open_transfer_properties_component_dialog(window, cx);
+        if let Some(target) = self.transfer.properties_target().cloned() {
+            self.start_file_manager_properties_job(target, None, window, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn open_current_transfer_browser_properties(
         &mut self,
         window: &mut Window,
@@ -107,17 +129,21 @@ impl NyaTermApp {
             name = truncate_preview(&state.entry.name, 42)
         )
         .to_string();
-        let primary_label = if state
-            .session_id
-            .as_deref()
-            .and_then(|session_id| self.session.file_browser_backend_for_session(session_id))
-            == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
-        {
+        let read_only =
+            if let Some(target) = self.transfer.properties_target() {
+                self.file_browser_backend_for_endpoint(&target.endpoint)
+                    != nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+            } else {
+                state.session_id.as_deref().and_then(|session_id| {
+                    self.session.file_browser_backend_for_session(session_id)
+                }) == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local)
+            };
+        let primary_label = if read_only {
             t!("common.close").to_string()
         } else {
             t!("common.save").to_string()
         };
-        self.open_form_dialog(
+        let dialog = self.open_tracked_form_dialog(
             (
                 title,
                 460.,
@@ -129,6 +155,10 @@ impl NyaTermApp {
             window,
             cx,
         );
+        if let Some(mut target) = self.transfer.properties_target().cloned() {
+            target.dialog = Some(dialog);
+            self.transfer.set_properties_target(target);
+        }
     }
 
     pub(in crate::features) fn apply_transfer_properties_input(
@@ -240,6 +270,20 @@ impl NyaTermApp {
         if state.saving {
             return false;
         }
+        if let Some(target) = self.transfer.properties_target().cloned() {
+            if !self.file_manager_properties_target_available(&target, cx) {
+                self.transfer
+                    .set_properties_error(t!("fileManager.sourceUnavailable").to_string());
+                cx.notify();
+                return false;
+            }
+            if self.file_browser_backend_for_endpoint(&target.endpoint)
+                != nyaterm_files::file_browser::FileBrowserBackendKind::Remote
+            {
+                self.close_transfer_properties(cx);
+                return true;
+            }
+        }
         if state
             .session_id
             .as_deref()
@@ -337,9 +381,13 @@ impl NyaTermApp {
         remote_path: RemoteFilePath,
         parent_path: String,
         update: SftpAttributeUpdate,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(target) = self.transfer.properties_target().cloned() {
+            self.start_file_manager_properties_job(target, Some(update), window, cx);
+            return;
+        }
         let service = match self.active_file_browser_service() {
             Ok(service) => service,
             Err(error) => {

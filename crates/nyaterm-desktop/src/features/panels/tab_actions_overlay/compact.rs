@@ -402,6 +402,7 @@ impl NyaTermApp {
             }
             div()
                 .id(SharedString::from("tab-actions-submenu"))
+                .debug_selector(|| "tab-actions-submenu".into())
                 .w(px(submenu_width))
                 .rounded_md()
                 .border_1()
@@ -411,6 +412,7 @@ impl NyaTermApp {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .on_mouse_move(|_, _, cx| cx.stop_propagation())
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(panel)
                 .into_any_element()
@@ -463,6 +465,7 @@ impl NyaTermApp {
                     .left(px(menu_x))
                     .top(px(menu_y))
                     .w(px(TAB_ACTIONS_MENU_WIDTH))
+                    .p_1()
                     .rounded_md()
                     .border_1()
                     .border_color(rgb(palette.border))
@@ -473,11 +476,17 @@ impl NyaTermApp {
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
-                            .max_h(px(menu_visible_height))
+                            .max_h(px((menu_visible_height - 8.).max(0.)))
                             .overflow_y_scrollbar()
-                            .p_1()
                             .flex()
                             .flex_col()
+                            // Keep the shell's padding outside this hitbox so crossing
+                            // the gutter toward a submenu does not close it.
+                            .on_mouse_move(cx.listener(|this, _, _, cx| {
+                                if this.session.dialog_clear_tab_actions_submenu() {
+                                    cx.notify();
+                                }
+                            }))
                             .child(tab_actions_submenu_host(
                                 "tab-actions-color-submenu",
                                 tab_actions_submenu_item(
@@ -989,6 +998,7 @@ where
     let icon_color = rgb(palette.text_muted);
     div()
         .id(SharedString::from(id))
+        .debug_selector(move || id.to_string())
         .h(px(28.))
         .flex_none()
         .px_2()
@@ -1003,6 +1013,7 @@ where
         .when(enabled, |this| {
             this.cursor_pointer()
                 .hover(|this| this.bg(rgb(palette.hover)))
+                .on_mouse_move(|_, _, cx| cx.stop_propagation())
                 .on_hover(on_hover)
                 .on_click(on_click)
         })

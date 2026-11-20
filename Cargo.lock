@@ -924,7 +924,7 @@ dependencies = [
 [[package]]
 name = "bench_metrics"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1579,7 +1579,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "gpui_util",
  "indexmap 2.14.2",
@@ -1732,7 +1732,7 @@ dependencies = [
  "bitflags 2.13.2",
  "core-foundation 0.10.1",
  "core-graphics-types",
- "foreign-types",
+ "foreign-types 0.5.0",
  "libc",
 ]
 
@@ -1755,7 +1755,7 @@ checksum = "a593227b66cbd4007b2a050dfdd9e1d1318311409c8d600dc82ba1b15ca9c130"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
- "foreign-types",
+ "foreign-types 0.5.0",
  "libc",
 ]
 
@@ -2464,7 +2464,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2523,7 +2523,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2554,7 +2554,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2883,7 +2883,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3198,12 +3198,21 @@ dependencies = [
 
 [[package]]
 name = "foreign-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
+dependencies = [
+ "foreign-types-shared 0.1.1",
+]
+
+[[package]]
+name = "foreign-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d737d9aa519fb7b749cbc3b962edcf310a8dd1f4b67c91c4f83975dbdd17d965"
 dependencies = [
  "foreign-types-macros",
- "foreign-types-shared",
+ "foreign-types-shared 0.3.1",
 ]
 
 [[package]]
@@ -3216,6 +3225,12 @@ dependencies = [
  "quote",
  "syn 3.0.6",
 ]
+
+[[package]]
+name = "foreign-types-shared"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "foreign-types-shared"
@@ -3837,13 +3852,13 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.20",
- "windows 0.57.0",
+ "windows 0.62.2",
 ]
 
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3915,7 +3930,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=f0950be3e71cae5f3f6c1095e6eaa834fb01522f#f0950be3e71cae5f3f6c1095e6eaa834fb01522f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3956,7 +3971,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=f0950be3e71cae5f3f6c1095e6eaa834fb01522f#f0950be3e71cae5f3f6c1095e6eaa834fb01522f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4032,7 +4047,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=f0950be3e71cae5f3f6c1095e6eaa834fb01522f#f0950be3e71cae5f3f6c1095e6eaa834fb01522f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -4043,7 +4058,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=f0950be3e71cae5f3f6c1095e6eaa834fb01522f#f0950be3e71cae5f3f6c1095e6eaa834fb01522f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -4057,7 +4072,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=f0950be3e71cae5f3f6c1095e6eaa834fb01522f#f0950be3e71cae5f3f6c1095e6eaa834fb01522f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4071,7 +4086,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4110,7 +4125,7 @@ dependencies = [
 [[package]]
 name = "gpui_ios"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -4131,7 +4146,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4148,6 +4163,7 @@ dependencies = [
  "gpui_util",
  "gpui_wgpu",
  "http_client",
+ "image",
  "libc",
  "log",
  "notify-rust",
@@ -4175,7 +4191,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4187,7 +4203,7 @@ dependencies = [
  "core-graphics",
  "ctor",
  "dispatch2",
- "foreign-types",
+ "foreign-types 0.5.0",
  "futures",
  "gpui",
  "gpui_apple",
@@ -4216,7 +4232,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4227,7 +4243,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4243,7 +4259,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -4253,7 +4269,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "log",
@@ -4263,7 +4279,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4292,7 +4308,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4320,7 +4336,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4782,7 +4798,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4895,7 +4911,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -5682,8 +5698,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac703058abac89e5c39b0b879dce2b6b14a4ba36600c7e7e3d0c60a6883ef3c"
 dependencies = [
  "defmt",
- "jiff-core",
- "jiff-static",
+ "jiff-core 0.1.2",
+ "jiff-static 0.2.39",
  "jiff-tzdb-platform",
  "js-sys",
  "log",
@@ -5692,6 +5708,20 @@ dependencies = [
  "serde_core",
  "wasm-bindgen",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "jiff"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5d126d72eb017f10b302e73bdeca446bea405ee449af4d9e7866d6b082d83e"
+dependencies = [
+ "jiff-core 1.0.1",
+ "jiff-static 1.0.1",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
 ]
 
 [[package]]
@@ -5705,15 +5735,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "jiff-core"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b46a105a9874634dd96231021526bf24ca04955a5998c59a9c7666e634b7b8"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "jiff-static"
 version = "0.2.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dc32470c67eb7d0e9ccb74303fa925313dc04cecb1aa048beaa6f391e36a93d"
 dependencies = [
- "jiff-core",
+ "jiff-core 0.1.2",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "jiff-static"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0127e9bde3c6130d6169e7d8d68676e4be69c4bf7573c308b6f960a5089c428"
+dependencies = [
+ "jiff-core 1.0.1",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5959,6 +6010,29 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
+]
+
+[[package]]
+name = "lazy-regex"
+version = "3.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0a2cce8a22920a29fdcc8c9170aa5d29edd9fbcf8bea856e24c2cb1c2419f67"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f1e4b1f1d8c71edb4ff2b2150ec4606445fd2ddf67ddc097655daf59286baa6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -6437,7 +6511,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6492,7 +6566,7 @@ dependencies = [
  "once_cell",
  "png 0.18.1",
  "thiserror 2.0.20",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6556,6 +6630,23 @@ dependencies = [
  "indexmap 2.14.2",
  "rustc-hash 1.1.0",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "native-tls"
+version = "0.2.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "465500e14ea162429d264d44189adc38b199b62b1c21eea9f69e4b73cb03bbf2"
+dependencies = [
+ "libc",
+ "log",
+ "openssl",
+ "openssl-probe",
+ "openssl-sys",
+ "schannel",
+ "security-framework 3.7.0",
+ "security-framework-sys",
+ "tempfile",
 ]
 
 [[package]]
@@ -6726,7 +6817,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6913,7 +7004,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-agent-client"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "nyaterm-core",
  "serde_json",
@@ -6923,7 +7014,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-ai-client"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "futures",
  "genai",
@@ -6939,7 +7030,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-android"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "hex",
  "nyaterm-core",
@@ -6954,7 +7045,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-android-helper"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "ffmpeg-next",
  "nyaterm-android",
@@ -6964,7 +7055,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-app"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -6991,7 +7082,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-cloud-storage"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "futures",
  "hex",
@@ -7016,7 +7107,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-completion-runtime"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "futures",
  "libc",
@@ -7028,7 +7119,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-core"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -7076,7 +7167,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-desktop"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7141,7 +7232,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-files"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7159,6 +7250,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "suppaftp",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -7171,7 +7263,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-i18n"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "regex",
  "rust-i18n",
@@ -7180,7 +7272,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "dirs",
  "jsonschema",
@@ -7198,7 +7290,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp-host"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "futures",
@@ -7218,7 +7310,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-mcp-protocol"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -7238,7 +7330,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-plugin-host"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "futures",
  "nyaterm-core",
@@ -7253,7 +7345,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-preview"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "bytemuck",
  "hayro",
@@ -7266,7 +7358,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-rdp-helper"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "arboard",
@@ -7291,7 +7383,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-recording"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "futures",
  "nyaterm-core",
@@ -7305,7 +7397,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-remote-desktop"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "nyaterm-core",
@@ -7319,7 +7411,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-remote-ops"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "libc",
@@ -7339,7 +7431,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-store"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -7366,7 +7458,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-sync"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "automerge",
  "hex",
@@ -7382,7 +7474,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-terminal"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "alacritty_terminal",
  "encoding_rs",
@@ -7397,7 +7489,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-terminal-gpui"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "aho-corasick",
  "futures",
@@ -7415,7 +7507,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-terminal-runtime"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "futures",
  "nyaterm-core",
@@ -7428,7 +7520,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-translation-client"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "nyaterm-core",
  "serde_json",
@@ -7438,7 +7530,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-transport"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "async-http-proxy",
@@ -7475,7 +7567,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-ui"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -7489,7 +7581,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-updater"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -7503,7 +7595,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-vnc-helper"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "nyaterm-core",
  "nyaterm-remote-desktop",
@@ -7516,7 +7608,7 @@ dependencies = [
 
 [[package]]
 name = "nyaterm-windows-rdp"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
  "anyhow",
  "cc",
@@ -7983,7 +8075,7 @@ dependencies = [
  "bytes",
  "futures",
  "http",
- "jiff",
+ "jiff 0.2.39",
  "log",
  "md-5 0.11.0",
  "percent-encoding",
@@ -8101,10 +8193,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "openssl"
+version = "0.10.81"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "foreign-types 0.3.2",
+ "libc",
+ "openssl-macros",
+ "openssl-sys",
+]
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.117"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "option-ext"
@@ -8148,7 +8277,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9321,7 +9450,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9660,7 +9789,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "derive_refineable",
 ]
@@ -9763,7 +9892,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "http",
- "jiff",
+ "jiff 0.2.39",
  "log",
  "percent-encoding",
  "sha1 0.11.0",
@@ -10297,7 +10426,7 @@ dependencies = [
  "errno 0.3.14",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10376,7 +10505,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10503,7 +10632,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "async-task",
  "backtrace",
@@ -10815,7 +10944,7 @@ dependencies = [
  "hex",
  "indexmap 1.9.3",
  "indexmap 2.14.2",
- "jiff",
+ "jiff 0.2.39",
  "schemars 0.9.0",
  "schemars 1.2.2",
  "serde_core",
@@ -11182,7 +11311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11442,12 +11571,25 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "heapless",
  "rayon",
  "tracing",
  "ztracing",
+]
+
+[[package]]
+name = "suppaftp"
+version = "13.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "919688e3d2128f0c3e77f4dff7a2035f2d73ccf488851ba96ba42002e850cad5"
+dependencies = [
+ "jiff 1.0.1",
+ "lazy-regex",
+ "log",
+ "native-tls",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -11697,10 +11839,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12288,7 +12430,7 @@ dependencies = [
  "once_cell",
  "png 0.18.1",
  "thiserror 2.0.20",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12676,7 +12818,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -13005,7 +13147,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.6.0"
-source = "git+https://github.com/nyakang/vnc-rs?rev=1faaf127fb804f779991cde08fafe4934b58598a#1faaf127fb804f779991cde08fafe4934b58598a"
+source = "git+https://github.com/nyakang/vnc-rs?rev=3edddb2b7a5c5f9dad4ca329a5cc06a997db4dcf#3edddb2b7a5c5f9dad4ca329a5cc06a997db4dcf"
 dependencies = [
  "aes 0.8.4",
  "async_io_stream",
@@ -13877,7 +14019,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -15341,7 +15483,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -15350,7 +15492,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=df44bb4fa7f95e9159a9558a4835f918a02e043e#df44bb4fa7f95e9159a9558a4835f918a02e043e"
+source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
 
 [[package]]
 name = "zune-core"

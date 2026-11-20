@@ -3,6 +3,7 @@ pub mod connection;
 pub mod connection_batch;
 pub mod credentials;
 pub mod network;
+pub mod networktools;
 pub mod notes;
 pub mod quick_commands;
 pub mod sessions;
@@ -49,6 +50,38 @@ fn default_rdp_port() -> u16 {
 
 fn default_vnc_port() -> u16 {
     5900
+}
+
+fn default_ftp_port() -> u16 {
+    21
+}
+
+fn default_ftp_passive_mode() -> String {
+    "auto".to_string()
+}
+
+fn default_ftp_filename_encoding_mode() -> String {
+    "auto".to_string()
+}
+
+fn default_ftp_connect_timeout_ms() -> u64 {
+    15_000
+}
+
+fn default_ftp_security_mode() -> String {
+    "none".to_string()
+}
+
+fn is_default_ftp_security_mode(value: &str) -> bool {
+    value == "none"
+}
+
+fn default_ftp_tls_version() -> String {
+    "auto".to_string()
+}
+
+fn is_default_ftp_tls_version(value: &str) -> bool {
+    value == "auto"
 }
 
 fn default_baud_rate() -> u32 {

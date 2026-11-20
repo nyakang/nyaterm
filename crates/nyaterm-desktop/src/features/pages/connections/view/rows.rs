@@ -230,7 +230,7 @@ pub(in crate::features::pages::connections) fn connection_section(
         .px_2()
         .pl(px(8. + section.depth as f32 * 16.))
         .rounded_sm()
-        .cursor_pointer()
+        .cursor_default()
         .bg({
             let drop_inside = snapshot.drop_position_for_kind_target(
                 ConnectionDragKind::Group,
@@ -290,7 +290,7 @@ pub(in crate::features::pages::connections) fn connection_section(
             |this, drag_group_id| {
                 let label = section.label.clone();
                 let drag_scroll = viewport.clone();
-                this.cursor_move().on_drag(
+                this.on_drag(
                     ConnectionDragPayload {
                         icon: None,
                         custom_icon: None,
@@ -301,6 +301,10 @@ pub(in crate::features::pages::connections) fn connection_section(
                         label,
                     },
                     move |payload, position, window, cx| {
+                        // GPUI installs the active drag after this constructor returns.
+                        window.defer(cx, |window, cx| {
+                            cx.set_active_drag_cursor_style(gpui::CursorStyle::ClosedHand, window);
+                        });
                         let _ = payload.panel.update(cx, |panel, cx| {
                             panel.arm_tree_drag(
                                 payload,
@@ -543,8 +547,7 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
         .when(show_inside, |this| {
             this.border_1().border_color(rgb(palette.link))
         })
-        .cursor_pointer()
-        .cursor_move()
+        .cursor_default()
         .on_drag(
             ConnectionDragPayload {
                 icon: Some(icon_def),
@@ -556,6 +559,10 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
                 label: connection.name.clone(),
             },
             move |payload, position, window, cx| {
+                // GPUI installs the active drag after this constructor returns.
+                window.defer(cx, |window, cx| {
+                    cx.set_active_drag_cursor_style(gpui::CursorStyle::ClosedHand, window);
+                });
                 let _ = payload.panel.update(cx, |panel, cx| {
                     panel.arm_tree_drag(
                         payload,

@@ -22,6 +22,7 @@ russh-sftp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+suppaftp = { workspace = true, features = ["native-tls", "deprecated"] }
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
@@ -33,7 +34,7 @@ uuid.workspace = true
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_SystemServices"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_SystemServices"] }
 
 [dev-dependencies]
 nyaterm-terminal.workspace = true

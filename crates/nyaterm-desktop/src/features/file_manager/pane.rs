@@ -33,6 +33,18 @@ impl PaneId {
 
 pub(in crate::features) use crate::features::transfers::file_operations::FileOperationEndpoint as PaneEndpoint;
 
+pub(super) enum PanePathMenu {
+    Paths(Vec<(String, RemoteFilePath)>),
+    Children {
+        path: RemoteFilePath,
+        branch: Option<RemoteFilePath>,
+        request: u64,
+        access_generation: Option<u64>,
+        result: Option<Result<Vec<SftpFileEntry>, String>>,
+    },
+    Favorites,
+}
+
 #[derive(Clone)]
 pub(in crate::features) struct PaneNavigationSnapshot {
     pub path: RemoteFilePath,
@@ -43,6 +55,7 @@ pub(in crate::features) struct PaneNavigationSnapshot {
     pub status: String,
     pub history: VecDeque<RemoteFilePath>,
     pub history_index: usize,
+    pub recent_paths: VecDeque<RemoteFilePath>,
     pub selected_path: Option<String>,
     pub selected_paths: HashSet<String>,
 }
@@ -58,11 +71,18 @@ pub(in crate::features) struct BrowserPaneState {
     pub status: String,
     pub disconnected: bool,
     pub search: String,
+    pub search_expanded: bool,
+    pub(super) path_menu: Option<PanePathMenu>,
+    pub(super) menu_request: u64,
+    pub(super) menu_selection: usize,
+    pub(super) menu_anchor_x: Option<gpui::Pixels>,
+    pub(super) menu_scroll: ScrollHandle,
     pub sort_column: FileBrowserSortColumn,
     pub sort_direction: FileBrowserSortDirection,
     pub column_widths: TransferBrowserColumnWidths,
     pub history: VecDeque<RemoteFilePath>,
     pub history_index: usize,
+    pub recent_paths: VecDeque<RemoteFilePath>,
     pub selected_path: Option<String>,
     pub selected_paths: HashSet<String>,
     pub list_scroll: UniformListScrollHandle,
@@ -95,6 +115,12 @@ impl BrowserPaneState {
             status: String::new(),
             disconnected: false,
             search: String::new(),
+            search_expanded: false,
+            path_menu: None,
+            menu_request: 0,
+            menu_selection: 0,
+            menu_anchor_x: None,
+            menu_scroll: ScrollHandle::new(),
             sort_column: FileBrowserSortColumn::Name,
             sort_direction: FileBrowserSortDirection::Ascending,
             column_widths: TransferBrowserColumnWidths {
@@ -106,6 +132,7 @@ impl BrowserPaneState {
             },
             history: VecDeque::new(),
             history_index: 0,
+            recent_paths: VecDeque::new(),
             selected_path: None,
             selected_paths: HashSet::new(),
             list_scroll: UniformListScrollHandle::new(),
@@ -125,6 +152,40 @@ impl BrowserPaneState {
             select_after_load: None,
             filter: BrowserFilterCache::default(),
             visibility_filter: None,
+        }
+    }
+
+    pub(super) fn open_path_menu(&mut self, menu: PanePathMenu) {
+        self.path_editing = false;
+        self.menu_selection = 0;
+        self.menu_scroll = ScrollHandle::new();
+        self.path_menu = Some(menu);
+    }
+
+    pub(super) fn apply_children_result(
+        &mut self,
+        generation: u64,
+        endpoint: &PaneEndpoint,
+        request: u64,
+        path: &RemoteFilePath,
+        result: Result<Vec<SftpFileEntry>, String>,
+    ) -> bool {
+        if self.generation != generation || &self.endpoint != endpoint {
+            return false;
+        }
+        if let Some(PanePathMenu::Children {
+            request: pending,
+            path: pending_path,
+            result: status,
+            ..
+        }) = &mut self.path_menu
+            && *pending == request
+            && pending_path == path
+        {
+            *status = Some(result);
+            true
+        } else {
+            false
         }
     }
 
@@ -161,6 +222,7 @@ impl BrowserPaneState {
             status: self.status.clone(),
             history: self.history.clone(),
             history_index: self.history_index,
+            recent_paths: self.recent_paths.clone(),
             selected_path: self.selected_path.clone(),
             selected_paths: self.selected_paths.clone(),
         }
@@ -174,6 +236,7 @@ impl BrowserPaneState {
         self.error = snapshot.error;
         self.status = snapshot.status;
         self.history = snapshot.history;
+        self.recent_paths = snapshot.recent_paths;
         self.history_index = snapshot
             .history_index
             .min(self.history.len().saturating_sub(1));
@@ -184,6 +247,8 @@ impl BrowserPaneState {
 
     pub(in crate::features) fn begin_load(&mut self, path: RemoteFilePath) -> u64 {
         self.generation = self.generation.wrapping_add(1);
+        self.path_menu = None;
+        self.path_editing = false;
         // All navigation entry points share this intent, including breadcrumbs and history.
         self.select_after_load = (self.endpoint.kind() == FileBrowserBackendKind::Remote
             && self.path != path
@@ -244,6 +309,9 @@ impl BrowserPaneState {
         self.disconnected = false;
         self.status = format!("{} item(s)", self.entries.len());
         self.last_successful_path = Some(self.path.clone());
+        self.recent_paths.retain(|path| path != &self.path);
+        self.recent_paths.push_front(self.path.clone());
+        self.recent_paths.truncate(30);
         if let Some(index) = self.history_target.take() {
             self.history_index = index.min(self.history.len().saturating_sub(1));
         } else {
@@ -296,6 +364,9 @@ impl BrowserPaneState {
         self.path = RemoteFilePath::new(String::new());
         self.entries = Arc::new(Vec::new());
         self.history.clear();
+        self.recent_paths.clear();
+        self.path_menu = None;
+        self.search_expanded = false;
         self.history_index = 0;
         self.selected_path = None;
         self.selected_paths.clear();
@@ -326,6 +397,7 @@ impl BrowserPaneState {
             return false;
         }
         self.endpoint = PaneEndpoint::Session(new_id.to_string());
+        self.path_menu = None;
         self.generation = self.generation.wrapping_add(1);
         true
     }

@@ -325,6 +325,16 @@ mod tests {
         log::error!(target: "nyaterm", "error-log-marker");
         tracing::error!(target: "genai::adapter", "secret-body-marker");
         log::error!(target: "reqwest::connect", "secret-body-marker");
+        tracing::info!(
+            target: "nyaterm::networktools::tftp",
+            service = "tftp",
+            "service-start-marker"
+        );
+        tracing::error!(
+            target: "nyaterm::networktools::tftp",
+            service = "tftp",
+            "service-failure-marker"
+        );
         drop(guard);
     }
 
@@ -333,6 +343,7 @@ mod tests {
         for (filter, fallback) in [
             ("nyaterm=trace", false),
             ("nyaterm=debug", false),
+            ("nyaterm=info", false),
             ("nyaterm=error", false),
             ("nyaterm=trace", true),
         ] {
@@ -359,14 +370,44 @@ mod tests {
             } else {
                 std::fs::read_dir(root.join("logs"))
                     .unwrap()
-                    .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+                    .map(|entry| {
+                        let entry = entry.unwrap();
+                        assert!(
+                            entry
+                                .file_name()
+                                .to_string_lossy()
+                                .starts_with("nyaterm-diagnostics."),
+                            "all services share the diagnostics log"
+                        );
+                        std::fs::read_to_string(entry.path()).unwrap()
+                    })
                     .collect::<String>()
             };
             assert!(!console.contains("secret-body-marker"));
             assert!(!jsonl.contains("secret-body-marker"));
+            for (marker, expected) in [
+                ("service-start-marker", !filter.ends_with("error")),
+                ("service-failure-marker", true),
+            ] {
+                assert_eq!(console.matches(marker).count(), usize::from(expected));
+                if !fallback {
+                    let event = jsonl
+                        .lines()
+                        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                        .find(|event| event["fields"]["message"] == marker);
+                    assert_eq!(event.is_some(), expected, "{filter}: {marker}");
+                    if let Some(event) = event {
+                        assert_eq!(event["target"], "nyaterm::networktools::tftp");
+                        assert_eq!(event["fields"]["service"], "tftp");
+                    }
+                }
+            }
             for (level, expected) in [
                 ("trace", filter.ends_with("trace")),
-                ("debug", !filter.ends_with("error")),
+                (
+                    "debug",
+                    filter.ends_with("trace") || filter.ends_with("debug"),
+                ),
                 ("error", true),
             ] {
                 for source in ["event", "log"] {

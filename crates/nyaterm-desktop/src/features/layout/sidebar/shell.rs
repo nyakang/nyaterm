@@ -126,6 +126,7 @@ impl NyaTermApp {
                 .clone()
                 .cached(cached_panel_style())
                 .into_any_element(),
+            NavItem::NetworkTools => self.networktools_panel(cx).into_any_element(),
             NavItem::Recording => {
                 let model = self.recording_sessions_panel_model();
                 self.recording_panel(model, cx).into_any_element()

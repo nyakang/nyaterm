@@ -17,6 +17,7 @@ struct RowTimestamp {
 pub(crate) struct ReflowRowMetadata {
     pub timestamp_ms: Option<u64>,
     pub cleared: bool,
+    pub inferred_input: bool,
     pub display_line_number: Option<usize>,
     pub logical_line_number: Option<usize>,
 }
@@ -90,6 +91,7 @@ pub(crate) fn capture(grid: &Grid<Cell>, state: &ScreenLineState) -> ReflowTimes
                     metadata: ReflowRowMetadata {
                         timestamp_ms: metadata.and_then(|metadata| metadata.timestamp_ms),
                         cleared: metadata.is_some_and(|metadata| metadata.cleared),
+                        inferred_input: metadata.is_some_and(|metadata| metadata.inferred_input),
                         display_line_number: state
                             .clear_line_origin
                             .and_then(|origin| usize::try_from(logical - origin).ok())
@@ -161,6 +163,7 @@ pub(crate) fn restore(grid: &Grid<Cell>, mut timestamps: ReflowTimestamps) -> Re
             let metadata = old.rows[index].metadata;
             if metadata.timestamp_ms.is_some()
                 || metadata.cleared
+                || metadata.inferred_input
                 || metadata.display_line_number.is_some()
                 || metadata.logical_line_number.is_some()
             {

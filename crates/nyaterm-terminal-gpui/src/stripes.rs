@@ -34,7 +34,7 @@ pub fn terminal_row_stripe_color(
         return Some((palette.terminal_line_highlight << 8) | 0xff);
     }
     let highlighted = match mode {
-        TerminalStripeMode::ShellInput => row.shell_input.is_some(),
+        TerminalStripeMode::ShellInput => row.shell_input.is_some() || row.inferred_input,
         TerminalStripeMode::Rows => id.logical_line.rem_euclid(2) == 1,
         TerminalStripeMode::UnwrappedRows => row.unwrapped_line_index?.rem_euclid(2) == 1,
     };
@@ -47,6 +47,31 @@ mod tests {
 
     use super::{TerminalStripeMode, terminal_row_stripe_color};
     use crate::unwrapped::TerminalUnwrappedLayout;
+
+    #[test]
+    fn inferred_input_background_matches_osc_without_changing_row_alternation() {
+        let mut screen = TerminalScreen::new(20, 4);
+        screen.advance(b"$ echo hi");
+        let snapshot = screen.snapshot();
+        let mut inferred = snapshot.row(0).unwrap().clone();
+        let mut integrated = inferred.clone();
+        inferred.inferred_input = true;
+        integrated.shell_input = Some(nyaterm_terminal::ShellInputLineKind::Submitted);
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        assert_eq!(
+            terminal_row_stripe_color(&inferred, TerminalStripeMode::ShellInput, None, palette),
+            terminal_row_stripe_color(&integrated, TerminalStripeMode::ShellInput, None, palette)
+        );
+        assert_eq!(
+            terminal_row_stripe_color(&inferred, TerminalStripeMode::Rows, None, palette),
+            terminal_row_stripe_color(
+                snapshot.row(0).unwrap(),
+                TerminalStripeMode::Rows,
+                None,
+                palette
+            )
+        );
+    }
 
     #[test]
     fn row_stripes_alternate_across_input_output_and_blank_rows() {

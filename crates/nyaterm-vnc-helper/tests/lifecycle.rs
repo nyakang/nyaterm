@@ -172,6 +172,11 @@ fn non_client_hello_messages() -> Vec<VncControlMessage> {
 
 fn helper_only_messages() -> Vec<VncControlMessage> {
     vec![
+        VncControlMessage::FrameUpdateComplete {
+            session_id: "s".into(),
+            epoch: 1,
+            sequence: 1,
+        },
         VncControlMessage::ServerHello {
             version: PROTOCOL_VERSION,
             capabilities: VncServerCapabilities::default(),
@@ -454,8 +459,8 @@ fn heartbeat_responds_on_a_static_session_and_preserves_sequence() {
 }
 
 #[test]
-fn older_and_newer_helpers_are_explicitly_incompatible_with_version_eleven() {
-    assert_eq!(PROTOCOL_VERSION, 12);
+fn older_and_newer_helpers_are_explicitly_incompatible_with_version_thirteen() {
+    assert_eq!(PROTOCOL_VERSION, 13);
     for version in [9, 10, PROTOCOL_VERSION + 1] {
         assert_helper_rejects(vec![VncControlMessage::ClientHello { version }]);
     }
@@ -484,6 +489,31 @@ fn session_start_rolls_back_each_worker_creation_failure() {
             "startup stage {stage} must return Ipc"
         );
         assert!(manager.state("spawn-failure").is_none());
+    }
+}
+
+#[test]
+fn presentation_session_start_rolls_back_each_worker_creation_failure() {
+    use nyaterm_remote_desktop::presentation::VncPresentationConfig;
+
+    unsafe {
+        std::env::set_var(
+            "NYATERM_VNC_HELPER",
+            env!("CARGO_BIN_EXE_nyaterm-vnc-helper"),
+        );
+    }
+    for stage in 0..7 {
+        let manager = nyaterm_remote_desktop::VncSessionManager::with_presentation_pipeline(
+            VncPresentationConfig::default(),
+        );
+        let _failure = nyaterm_core::runtime::worker::fail_after(stage);
+        let result = manager
+            .create_session_with_id("presentation-spawn-failure".into(), config(closed_port()));
+        assert!(
+            matches!(result, Err(error) if matches!(error.kind, VncErrorKind::Ipc | VncErrorKind::Internal)),
+            "presentation startup stage {stage} must fail"
+        );
+        assert!(manager.state("presentation-spawn-failure").is_none());
     }
 }
 

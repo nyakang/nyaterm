@@ -897,6 +897,8 @@
       "display": "Affichage",
       "session": "Session",
       "serial": "Port série",
+      "charset": "Jeu de caractères",
+      "advanced": "Avancé",
       "startup": "Démarrage"
     },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
@@ -1118,6 +1120,50 @@
     "newGroupRootHint": "Créer au niveau supérieur",
     "noAuthentication": "Aucune",
     "noAuthenticationDescription": "Se connecter sans mot de passe ni clé. À utiliser uniquement lorsque le serveur SSH l'autorise ou le demande de façon interactive.",
+    "ftpAnonymousLogin": "Connexion anonyme",
+    "ftpAnonymousHint": "La connexion anonyme n'envoie jamais de mot de passe enregistré. À utiliser uniquement si le serveur autorise l'accès anonyme.",
+    "ftpAuthModeUnsupported": "FTP prend uniquement en charge le mot de passe ou la connexion anonyme.",
+    "ftpPassiveModeInvalid": "Le mode passif FTP est invalide.",
+    "ftpFilenameEncodingInvalid": "Choisissez un jeu de caractères FTP valide.",
+    "ftpConnectTimeoutInvalid": "Le délai de connexion FTP doit être compris entre {{min}} et {{max}} ms.",
+    "ftpPasswordRequired": "Saisissez un mot de passe ou choisissez la connexion anonyme.",
+    "ftpPassiveMode": "Mode passif",
+    "ftpPassiveAuto": "Automatique",
+    "ftpPassivePasv": "PASV (passif)",
+    "ftpPassiveEpsv": "EPSV (passif étendu)",
+    "ftpInitialDirectory": "Dossier de départ distant",
+    "ftpLocalInitialDirectory": "Dossier de départ local",
+    "ftpConnectTimeout": "Délai de connexion (ms)",
+    "ftpAdvancedHint": "Laissez les dossiers de départ vides pour utiliser la valeur par défaut.",
+    "ftpAsciiMode": "Mode ASCII",
+    "ftpAsciiModeHint": "Convertit les fins de ligne locales en CRLF à l'envoi et les rétablit au téléchargement. À réserver aux fichiers texte.",
+    "ftpFtps": "FTPS (TLS explicite)",
+    "ftpFtpsHint": "Chiffre les canaux de contrôle et de données avec AUTH TLS. Le serveur doit prendre en charge le FTPS explicite.",
+    "ftpSecurityMode": "Mode de sécurité",
+    "ftpSecurityNone": "Aucun",
+    "ftpSecurityExplicit": "FTPS explicite",
+    "ftpSecurityImplicit": "FTPS implicite",
+    "ftpImplicitFtpsHint": "Démarre la négociation TLS immédiatement après la connexion ; utilise généralement le port 990.",
+    "ftpTlsVersion": "Version TLS",
+    "ftpTlsAuto": "Automatique (valeur système)",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0 n'est pas pris en charge. SSL 3.0, TLS 1.0 et TLS 1.1 sont obsolètes et peuvent être refusés par la stratégie du système.",
+    "ftpNetworkRouteDescription": "Lorsqu'un hôte de rebond est sélectionné, il est prioritaire et le proxy de cette page n'est pas utilisé. Configurez le proxy nécessaire sur cette connexion SSH.",
+    "ftpNetworkPlaintextDescription": "Les paramètres de proxy et de rebond sont enregistrés avec la connexion.",
+    "ftpSecurityModeInvalid": "Le mode de sécurité FTP est invalide.",
+    "ftpTlsVersionInvalid": "La version TLS FTP est invalide.",
+    "filenameEncodingTitle": "Le serveur utilise le jeu de caractères suivant pour les noms de fichiers :",
+    "filenameEncodingAuto": "Détection automatique",
+    "filenameEncodingAutoHint": "Utiliser UTF-8 si le serveur l'annonce, sinon l'encodage local du système.",
+    "filenameEncodingForceUtf8": "Forcer UTF-8",
+    "filenameEncodingCustom": "Utiliser un jeu de caractères personnalisé",
+    "filenameEncodingLabel": "Encodage",
+    "filenameEncodingWarning": "Un jeu de caractères incorrect peut afficher les noms de fichiers de façon erronée.",
+    "filenameEncodingScope": "Affecte uniquement les noms et chemins côté serveur, pas le contenu des fichiers.",
     "noKeys": "Aucune clé",
     "noOtp": "Aucun",
     "noOtpEntries": "Aucune entrée OTP",
@@ -1458,7 +1504,6 @@
   "fileExplorer": {
     "clipboardEmpty": "Le presse-papiers de fichiers est vide ou a été remplacé",
     "clipboardMoving": "Les éléments coupés sont déjà en cours de déplacement ; attendez la fin",
-
     "transferSourceUnavailable": "La connexion source est indisponible. Reconnectez-vous et réessayez.",
     "transferBackendUnsupported": "Cette connexion ne prend pas en charge le transfert de fichiers.",
     "transferInvalidDestination": "La destination est invalide ou ne peut pas représenter le nom du fichier.",
@@ -1650,6 +1695,14 @@
     "uploadPrompt": "Fichier distant modifié. Téléverser les modifications ?"
   },
   "fileManager": {
+    "leftSide": "la gauche",
+    "rightSide": "la droite",
+    "copyToPane": "Copier vers %{side} (%{target})",
+    "moveToPane": "Déplacer vers %{side} (%{target})",
+    "new": "Nouveau",
+    "copyFullPath": "Copier le chemin complet",
+    "copyName": "Copier le nom du fichier",
+    "copyParent": "Copier le dossier parent",
     "connected": "Connecté",
     "skipped": "Ignoré",
     "copy": "Copier",
@@ -1699,7 +1752,9 @@
     "openLeft": "Ouvrir à gauche",
     "openRight": "Ouvrir à droite",
     "openWorkspace": "Ouvrir le gestionnaire de fichiers dans l’espace de travail",
-    "goHome": "Accueil"
+    "goHome": "Accueil",
+    "goBack": "Précédent",
+    "goForward": "Suivant"
   },
   "fileTransfer": {
     "scanning": "Analyse des fichiers…",
@@ -1708,6 +1763,7 @@
     "cancelAll": "Tout annuler",
     "cancelled": "Annulé",
     "clearAll": "Tout effacer",
+    "clear": "Effacer",
     "clearCompleted": "Effacer terminés",
     "completed": "Terminé",
     "cancelling": "Annulation",
@@ -1943,6 +1999,81 @@
     "ungrouped": "Non groupé",
     "ungroupedConnections": "Non groupé"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "En écoute sur %{addr}",
+        "notRunning": "Arrêté",
+        "configure": "Configurer",
+        "start": "Démarrer le serveur",
+        "stop": "Arrêter le serveur"
+      },
+      "action": {
+        "reset": "Réinitialiser",
+        "browse": "Parcourir"
+      },
+      "bind": {
+        "allInterfaces": "Toutes les interfaces",
+        "loopback": "Boucle locale",
+        "savedUnavailable": "Valeur enregistrée, introuvable sur cette machine"
+      },
+      "field": {
+        "bindAddress": "Adresse d'écoute",
+        "port": "Port",
+        "rootDir": "Répertoire du serveur",
+        "timeout": "Délai (secondes)",
+        "concurrency": "Transferts simultanés max."
+      },
+      "section": {
+        "basic": "Paramètres de base",
+        "limits": "Limites de transfert",
+        "permissions": "Autorisations"
+      },
+      "hint": {
+        "firewall": "Autorisez ce port UDP dans le pare-feu système pour joindre d'autres machines.",
+        "security": "Le serveur ne partage que le répertoire sélectionné. Utilisez-le sur des réseaux de confiance."
+      },
+      "error": {
+        "bind": "Saisissez une adresse IP valide",
+        "port": "Le port doit être compris entre 1 et 65535",
+        "timeout": "Le délai doit être compris entre 1 et 255 secondes",
+        "concurrency": "La concurrence doit être comprise entre 1 et %{max}",
+        "rootDirRequired": "Choisissez un répertoire de service",
+        "rootDirUnreadable": "Le répertoire n'existe pas ou n'est pas lisible",
+        "invalid": "Paramètres invalides : %{message}"
+      },
+      "status": {
+        "saveHint": "Les modifications s'appliquent au prochain démarrage du service.",
+        "saveAndRestart": "Enregistrer et redémarrer le service",
+        "restartFailed": "Enregistré, mais le redémarrage du service %{service} a échoué : %{message}",
+        "saveFailed": "Impossible d'enregistrer les paramètres des outils réseau",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · Transfert démarré : %{file}",
+        "finished": "%{service} · Transfert terminé : %{file} (%{bytes} octets)",
+        "failed": "%{service} · %{file} : %{message}",
+        "failedUnknown": "Erreur inconnue"
+      }
+    },
+    "tftp": {
+      "title": "Serveur TFTP",
+      "shortName": "TFTP",
+      "description": "Partagez et recevez des fichiers en TFTP sur cette machine.",
+      "field": {
+        "blockSize": "Taille maximale de bloc négociée",
+        "allowUpload": "Autoriser les envois",
+        "allowOverwrite": "Autoriser l'écrasement"
+      },
+      "hint": {
+        "blockSize": "Charge utile DATA maximale si le client demande blksize (8–65464 octets).\nLa taille négociée est le minimum de la demande et de cette limite.\nSans demande blksize, les blocs font toujours 512 octets.",
+        "upload": "Les clients peuvent écrire dans le répertoire du serveur"
+      },
+      "error": {
+        "blockSize": "La taille de bloc doit être comprise entre 8 et 65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "Annuler",
     "cancelled": "Vérification annulée",
@@ -2049,6 +2180,7 @@
     "fileTransfer": "Transferts",
     "gpuMonitor": "GPU NVIDIA",
     "network": "Réseau",
+    "networktools": "Outils réseau",
     "npuMonitor": "NPU Ascend",
     "noActiveSessions": "Aucune session active",
     "noCommandsYet": "Aucune commande pour l'instant",
@@ -2508,6 +2640,11 @@
     "usersMeaning": "Sessions enregistrées par le système, pas toutes les connexions SSH."
   },
   "savedConnections": {
+    "openFileManager": "Ouvrir le gestionnaire de fichiers",
+    "openFileManagerSftpDisabled": "Ouvrir le gestionnaire de fichiers (SFTP désactivé)",
+    "fileManagerConnectionUnavailable": "Cette connexion enregistrée n’est plus disponible.",
+    "fileManagerRequiresSsh": "L’ouverture du gestionnaire de fichiers nécessite une connexion SSH.",
+    "fileManagerSftpDisabled": "SFTP est désactivé pour cette connexion SSH.",
     "dropRoot": "Déplacer à la racine",
     "sessionImportTitle": "Importer des sessions",
     "restoreBackupTitle": "Restaurer une sauvegarde NyaTerm",
@@ -2737,6 +2874,7 @@
     "submit": "Continuer"
   },
   "serialPrompt": {
+    "chooseDevice": "Choisir un périphérique…",
     "alreadyOpen": "Terminez d'abord la sélection de port en cours.",
     "baudRateInvalid": "Le débit doit être compris entre 1 et 4000000.",
     "baudRatePlaceholder": "115200",
@@ -3199,7 +3337,7 @@
     "groupTransfer": "Transfert",
     "groupWorkspace": "Espace de travail",
     "zebraStripes": "Bandes de lignes du terminal",
-    "zebraStripesDesc": "Mettre en évidence la saisie du shell et la ligne cliquée, avec une option pour alterner les fonds par ligne.",
+    "zebraStripesDesc": "Mettre en évidence la saisie du shell et la ligne cliquée, avec une option pour alterner les fonds par ligne. Désactiver cette option ne désactive ni le repli ni la navigation des commandes.",
     "zebraStripesByRow": "Alterner par ligne",
     "zebraStripesByRowDesc": "Alterner la couleur de fond des lignes affichées du terminal.",
     "syncHistory": {
@@ -3298,6 +3436,8 @@
     "keepAliveInterval": "Intervalle Keep-Alive (secondes)",
     "reconnectRestoreCwd": "Restaurer le dossier après reconnexion",
     "reconnectRestoreCwdDesc": "Rétablit la session SSH dans le dernier dossier de travail fiable.",
+    "serialReconnectEnter": "Envoyer Entrée après reconnexion série",
+    "serialReconnectEnterDesc": "Après la reconnexion d'une session série, envoyer une Entrée pour que la console affiche son invite immédiatement.",
     "keepAliveIntervalDesc": "Envoyer des paquets SSH keep-alive toutes les X secondes. 0 pour désactiver.",
     "keepAliveMode": "Mode keep-alive",
     "keepAliveModeCompatible": "Compatible",

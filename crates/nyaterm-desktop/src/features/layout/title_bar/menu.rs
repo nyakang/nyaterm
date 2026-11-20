@@ -1176,6 +1176,14 @@ mod tests {
             .expect("left panel submenu");
         assert!(left.iter().any(|item| item.test_label() == "Files"));
         assert!(left.iter().any(|item| item.test_label() == "Notes"));
-        assert!(left.iter().all(|item| item.test_presentation().4));
+        assert!(left.iter().any(|item| item.test_label() == "Network Tools"));
+        for item in left {
+            assert_eq!(
+                item.test_presentation().4,
+                item.test_label() != "Network Tools",
+                "default visibility for {}",
+                item.test_label()
+            );
+        }
     }
 }

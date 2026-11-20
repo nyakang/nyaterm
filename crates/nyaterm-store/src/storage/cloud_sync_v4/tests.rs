@@ -324,6 +324,96 @@ fn fixed_snapshot_round_trip_preserves_local_vault_settings_and_unknown_fields()
 }
 
 #[test]
+fn serial_connect_prompts_survive_both_sync_modes_and_can_be_pushed_again() {
+    use nyaterm_core::portable_snapshot::project_fixed_sync_entities;
+    use nyaterm_core::sync_schema::FIXED_CLOUD_SYNC_SCOPE;
+
+    for field_mode in [false, true] {
+        for prompt in [
+            None,
+            Some(json!({"port":true})),
+            Some(json!({"baud_rate":true})),
+            Some(json!({"port":true,"baud_rate":true})),
+        ] {
+            let source_dir = TestTempDir::new("nyaterm-serial-prompt-source");
+            let target_dir = TestTempDir::new("nyaterm-serial-prompt-target");
+            let source = ConnectionStore::open(source_dir.path()).unwrap();
+            let target = ConnectionStore::open(target_dir.path()).unwrap();
+            enable(&source);
+            enable(&target);
+            // A missing prompt is the persisted format from before this option.
+            let mut raw = json!({
+                "id":"serial", "name":"Serial", "type":"serial",
+                "port_name":"COM9", "baud_rate":115200
+            });
+            if let Some(prompt) = &prompt {
+                raw["connect_prompt"] = prompt.clone();
+            }
+            source
+                .save_connection(&serde_json::from_value::<SavedConnection>(raw).unwrap())
+                .unwrap();
+            let snapshot = source
+                .build_fixed_sync_snapshot("source", "version")
+                .unwrap();
+            let encoded =
+                crate::encode_encrypted_raw_portable_snapshot(&snapshot, "password").unwrap();
+            let decoded =
+                crate::decode_encrypted_raw_portable_snapshot(&encoded, "password").unwrap();
+            let sessions: serde_json::Value =
+                serde_json::from_str(&decoded.entities["sessions"]).unwrap();
+            assert!(sessions["connections"][0].get("port_name").is_none());
+            assert_eq!(
+                sessions["connections"][0].get("connect_prompt"),
+                prompt.as_ref()
+            );
+
+            if field_mode {
+                let projection = project_fixed_sync_entities(&decoded).unwrap();
+                let mut wire = SyncReplica::new(Uuid::new_v4());
+                wire.capture(&Default::default(), &projection, &FIXED_CLOUD_SYNC_SCOPE)
+                    .unwrap();
+                let mut proposal = prepared(&target);
+                proposal.plan = prepare(
+                    proposal.local.writer,
+                    proposal.local.replica.as_ref(),
+                    &proposal.local.effective,
+                    proposal.plan.expected_local.clone(),
+                    &[wire.fixed_snapshot().unwrap()],
+                    FIXED_CLOUD_SYNC_SCOPE,
+                )
+                .unwrap();
+                target.apply_v4_plan(proposal, "password").unwrap();
+            } else {
+                target
+                    .apply_fixed_sync_snapshot(&decoded, "password")
+                    .unwrap();
+            }
+
+            let saved = target.get_connection("serial").unwrap().unwrap();
+            let saved = serde_json::to_value(saved).unwrap();
+            assert_eq!(saved["port_name"], "");
+            assert_eq!(saved["baud_rate"], 115200);
+            assert_eq!(saved["connect_prompt"]["port"], true);
+            assert_eq!(
+                saved["connect_prompt"].get("baud_rate"),
+                prompt.as_ref().and_then(|prompt| prompt.get("baud_rate"))
+            );
+            let outgoing = target
+                .build_fixed_sync_snapshot("target", "version")
+                .unwrap();
+            let encoded =
+                crate::encode_encrypted_raw_portable_snapshot(&outgoing, "password").unwrap();
+            let decoded =
+                crate::decode_encrypted_raw_portable_snapshot(&encoded, "password").unwrap();
+            let sessions: serde_json::Value =
+                serde_json::from_str(&decoded.entities["sessions"]).unwrap();
+            assert_eq!(sessions["connections"][0]["connect_prompt"]["port"], true);
+            assert!(!source.has_v4_replicas().unwrap());
+        }
+    }
+}
+
+#[test]
 fn both_sync_modes_round_trip_all_core_collections_edits_relationships_and_deletions() {
     use nyaterm_core::portable_snapshot::{
         project_fixed_sync_entities, project_fixed_sync_snapshot,

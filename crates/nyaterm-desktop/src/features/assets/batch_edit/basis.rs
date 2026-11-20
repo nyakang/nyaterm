@@ -957,6 +957,7 @@ pub(in crate::features) fn batch_kind_value(kind: ConnectionBatchKind) -> &'stat
         ConnectionBatchKind::Adb => "adb",
         ConnectionBatchKind::LocalTerminal => "local",
         ConnectionBatchKind::Serial => "serial",
+        ConnectionBatchKind::Ftp => "ftp",
     }
 }
 

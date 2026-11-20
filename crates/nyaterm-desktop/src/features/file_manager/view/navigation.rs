@@ -1,11 +1,9 @@
-use super::small_button;
+use super::{icon_button, small_button};
 use crate::features::file_manager::pane::{PaneEndpoint, PaneId};
 use crate::features::file_manager::workspace::FileManagerWorkspace;
 use crate::theme::ThemePalette;
-use gpui::{AnyElement, Context, IntoElement, SharedString, div, prelude::*, px, rgb};
-use nyaterm_files::file_browser::{file_browser_name, file_browser_parent};
-use nyaterm_files::sftp::RemoteFilePath;
-use nyaterm_ui::{NyaDropdownMenu, NyaInput, NyaMenuItem, NyaTooltip};
+use gpui::{AnyElement, Context, IntoElement, div, prelude::*, px, rgb};
+use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem, NyaSearchInput};
 use rust_i18n::t;
 
 impl FileManagerWorkspace {
@@ -38,29 +36,27 @@ impl FileManagerWorkspace {
             })
             .collect::<Vec<_>>();
         let source_menu = NyaDropdownMenu::new(format!("fm-source-{}-{}", self.id, pane.as_str()))
+            .select_trigger()
+            .tooltip(source.clone())
             .label(source)
             .items(items);
-        let mut chrome = div().flex_none().min_w_0().flex().flex_col().child(
-            div()
-                .h(px(30.))
-                .min_w_0()
-                .flex()
-                .items_center()
-                .px_1()
-                .child(source_menu),
-        );
-        let mut navigation = div()
-            .h(px(28.))
-            .min_w_0()
+        let compact_navigation = self.pane_width(pane) < 400.;
+        let mut actions = div()
+            .debug_selector(move || format!("file-manager-actions-{}", pane.as_str()))
+            .flex_none()
             .flex()
             .items_center()
-            .gap_1()
-            .px_1();
-        for (delta, label) in [(-1, "←"), (1, "→")] {
-            navigation = navigation.child(
-                small_button(
+            .gap(px(2.));
+        for (delta, icon, tooltip) in [
+            (-1, "icons/fe/arrow-left.svg", t!("fileManager.goBack")),
+            (1, "icons/fe/arrow-right.svg", t!("fileManager.goForward")),
+        ] {
+            actions = actions.child(
+                icon_button(
+                    palette,
                     format!("fm-history-{}-{delta}", pane.as_str()),
-                    label,
+                    icon,
+                    tooltip,
                     cx.listener(move |this, _, window, cx| {
                         this.focus_pane(pane, window, cx);
                         if let Some(path) = this.pane_mut(pane).history_path(delta) {
@@ -75,124 +71,19 @@ impl FileManagerWorkspace {
                 }),
             );
         }
-        if let Some(session) = endpoint.session_id().map(str::to_owned) {
-            let (available, status) = self.read_app(cx, |app| {
-                (
-                    app.file_sudo_available(&session),
-                    app.file_sudo_status(&session),
-                )
-            });
-            if available || status.is_sudo() {
-                navigation = navigation.child(
-                    small_button(
-                        format!("fm-sudo-{}", pane.as_str()),
-                        crate::features::transfers::privilege_runtime::sudo_label(status),
-                        cx.listener(move |this, _, window, cx| {
-                            let session = session.clone();
-                            this.dispatch_app(window, cx, move |app, window, cx| {
-                                app.toggle_file_sudo(session, window, cx)
-                            });
-                        }),
-                    )
-                    .disabled(status.is_busy()),
-                );
-            }
-        }
-        let path_view = if state.path_editing {
-            div()
-                .h(px(24.))
-                .min_w_0()
-                .flex_1()
-                .child(NyaInput::new(&self.inputs(pane).path))
-                .into_any_element()
-        } else {
-            let mut crumbs = Vec::new();
-            let mut current = state.path.clone();
-            for _ in 0..128 {
-                if current.display_path.is_empty() {
-                    break;
-                }
-                let parent = file_browser_parent(endpoint.kind(), &current.display_path);
-                let label = if parent == current.display_path {
-                    current.display_path.clone()
-                } else {
-                    file_browser_name(endpoint.kind(), &current.display_path)
-                };
-                crumbs.push((label, current.clone()));
-                if parent == current.display_path {
-                    break;
-                }
-                current = if endpoint.kind()
-                    == nyaterm_files::file_browser::FileBrowserBackendKind::Remote
-                {
-                    match current.parent() {
-                        Ok(parent) => parent,
-                        Err(_) => break,
-                    }
-                } else {
-                    RemoteFilePath::new(parent)
-                };
-            }
-            crumbs.reverse();
-            let mut bar = div()
-                .id(SharedString::from(format!("fm-path-{}", pane.as_str())))
-                .h(px(24.))
-                .min_w_0()
-                .flex_1()
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .on_click(
-                    cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                        if event.click_count() >= 2 {
-                            this.begin_path_edit(pane, window, cx);
-                        }
-                    }),
-                );
-            for (index, (label, path)) in crumbs.into_iter().enumerate() {
-                if index > 0 {
-                    bar = bar.child(div().text_color(rgb(palette.text_muted)).child(" › "));
-                }
-                let tooltip = path.display_path.clone();
-                bar = bar.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "fm-crumb-{}-{index}",
-                            pane.as_str()
-                        )))
-                        .min_w_0()
-                        .flex_shrink(1.)
-                        .truncate()
-                        .text_xs()
-                        .cursor_pointer()
-                        .child(label)
-                        .tooltip(move |window, cx| {
-                            NyaTooltip::new(tooltip.clone()).build(window, cx)
-                        })
-                        .on_click(cx.listener(
-                            move |this, event: &gpui::ClickEvent, window, cx| {
-                                cx.stop_propagation();
-                                if event.click_count() >= 2 {
-                                    this.begin_path_edit(pane, window, cx);
-                                } else {
-                                    this.navigate_to(pane, path.clone(), window, cx);
-                                }
-                            },
-                        )),
-                );
-            }
-            bar.into_any_element()
-        };
-        navigation = navigation
-            .child(path_view)
-            .child(small_button(
+        actions = actions
+            .child(icon_button(
+                palette,
                 format!("fm-up-{}", pane.as_str()),
-                "↑",
+                "icons/fe/up.svg",
+                t!("fileExplorer.goUp"),
                 cx.listener(move |this, _, window, cx| this.navigate_parent(pane, window, cx)),
             ))
-            .child(small_button(
+            .child(icon_button(
+                palette,
                 format!("fm-home-{}", pane.as_str()),
-                "⌂",
+                "icons/android/home.svg",
+                t!("fileManager.goHome"),
                 cx.listener(move |this, _, window, cx| {
                     let id = this.id.clone();
                     this.focus_pane(pane, window, cx);
@@ -201,9 +92,11 @@ impl FileManagerWorkspace {
                     });
                 }),
             ))
-            .child(small_button(
+            .child(icon_button(
+                palette,
                 format!("fm-refresh-{}", pane.as_str()),
-                "↻",
+                "icons/fe/refresh.svg",
+                t!("fileExplorer.refresh"),
                 cx.listener(move |this, _, window, cx| {
                     let id = this.id.clone();
                     this.focus_pane(pane, window, cx);
@@ -212,22 +105,144 @@ impl FileManagerWorkspace {
                     });
                 }),
             ))
-            .child(small_button(
+            .child(icon_button(
+                palette,
                 format!("fm-copy-path-{}", pane.as_str()),
-                "⧉",
+                "icons/copy.svg",
+                t!("fileExplorer.copyDirPath"),
                 cx.listener(move |this, _, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                         this.pane(pane).path.display_path.clone(),
                     ));
                 }),
-            ));
-        chrome = chrome.child(navigation).child(
-            div()
-                .h(px(28.))
-                .min_w_0()
-                .px_1()
-                .child(NyaInput::new(&self.inputs(pane).search)),
-        );
+            ))
+            .child(
+                div()
+                    .flex_none()
+                    .debug_selector(move || format!("file-manager-swap-{}", pane.as_str()))
+                    .child(icon_button(
+                        palette,
+                        format!("fm-swap-{}", pane.as_str()),
+                        "icons/swap-horiz.svg",
+                        t!("fileManager.swapPanes"),
+                        cx.listener(move |this, _, window, cx| {
+                            this.focus_pane(pane, window, cx);
+                            this.swap_panes();
+                            for pane in [PaneId::Left, PaneId::Right] {
+                                let search = this.pane(pane).search.clone();
+                                this.inputs(pane)
+                                    .search
+                                    .update(cx, |input, cx| input.set_content_silent(&search, cx));
+                            }
+                            let id = this.id.clone();
+                            this.dispatch_app(window, cx, move |app, _, cx| {
+                                app.refresh_file_manager_pane(id.clone(), PaneId::Left, cx);
+                                app.refresh_file_manager_pane(id, PaneId::Right, cx);
+                                app.persist_file_manager_settings(cx);
+                            });
+                            this.focus_pane(this.active, window, cx);
+                        }),
+                    )),
+            );
+        actions = actions.child(icon_button(
+            palette,
+            format!("fm-search-{}", pane.as_str()),
+            "icons/fe/search.svg",
+            t!("fileExplorer.search"),
+            cx.listener(move |this, _, window, cx| this.focus_search(pane, None, window, cx)),
+        ));
+        if let Some(session) = endpoint.session_id().map(str::to_owned) {
+            let (available, status) = self.read_app(cx, |app| {
+                (
+                    app.file_sudo_available(&session),
+                    app.file_sudo_status(&session),
+                )
+            });
+            if available || status.is_sudo() {
+                actions = actions.child(
+                    icon_button(
+                        palette,
+                        format!("fm-sudo-{}", pane.as_str()),
+                        "icons/shield.svg",
+                        crate::features::transfers::privilege_runtime::sudo_label(status),
+                        cx.listener(move |this, _, window, cx| {
+                            let session = session.clone();
+                            this.dispatch_app(window, cx, move |app, window, cx| {
+                                app.toggle_file_sudo(session, window, cx)
+                            });
+                        }),
+                    )
+                    .text_color(rgb(if status.is_sudo() {
+                        palette.warning
+                    } else {
+                        palette.text_muted
+                    }))
+                    .disabled(status.is_busy()),
+                );
+            }
+        }
+        actions = actions.when(compact_navigation, |actions| {
+            actions.w_full().min_w_0().flex_wrap().justify_end()
+        });
+        let toolbar = div()
+            .relative()
+            .min_w_0()
+            .min_h(px(40.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py(px(4.))
+            .when(compact_navigation, |row| row.flex_wrap())
+            .child(
+                div()
+                    .debug_selector(move || format!("file-manager-source-{}", pane.as_str()))
+                    .min_w_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(source_menu),
+            )
+            .child(actions)
+            .when(
+                state.search_expanded || !state.search.is_empty(),
+                |toolbar| {
+                    let close = icon_button(
+                        palette,
+                        format!("fm-search-close-{}", pane.as_str()),
+                        "icons/window/close.svg",
+                        t!("common.close"),
+                        cx.listener(move |this, _, window, cx| {
+                            this.clear_or_close_search(pane, window, cx)
+                        }),
+                    );
+                    toolbar.child(nyaterm_ui::file_navigation::search_overlay(
+                        palette,
+                        NyaSearchInput::new(
+                            format!("fm-search-input-{}", pane.as_str()),
+                            &self.inputs(pane).search,
+                        )
+                        .compact()
+                        .bare()
+                        .trailing(close)
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, window, cx| {
+                                if event.keystroke.key == "escape" {
+                                    cx.stop_propagation();
+                                    this.clear_or_close_search(pane, window, cx);
+                                }
+                            },
+                        )),
+                    ))
+                },
+            );
+        let mut chrome = div()
+            .flex_none()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .child(self.path_navigation_view(palette, pane, cx));
         if state.disconnected || matches!(endpoint, PaneEndpoint::OfflineConnection(_)) {
             chrome = chrome.child(
                 div()

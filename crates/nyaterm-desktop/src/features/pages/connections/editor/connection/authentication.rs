@@ -189,7 +189,7 @@ pub(super) fn password_source(
     } = section;
     let uses_identity = matches!(
         editor.kind,
-        ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+        ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
     );
     let mut body = div()
         .debug_selector(|| "connection-password-controls".to_string())
@@ -312,10 +312,22 @@ pub(super) fn password_authentication(
     section: ConnectionEditorSectionContext<'_>,
     cx: &mut Context<NyaTermApp>,
 ) -> Div {
+    password_authentication_with_none_label(section, None, cx)
+}
+
+pub(super) fn password_authentication_with_none_label(
+    section: ConnectionEditorSectionContext<'_>,
+    none_label: Option<&str>,
+    cx: &mut Context<NyaTermApp>,
+) -> Div {
     let editor = section.editor;
     let protocol_requires_no_auth =
         editor.kind == ConnectionKindTab::Vnc && editor.vnc_security.mode == "none";
-    let choices = options::password_auth_choices(&editor.auth_mode, protocol_requires_no_auth);
+    let choices = options::password_auth_choices_with_none_label(
+        &editor.auth_mode,
+        protocol_requires_no_auth,
+        none_label,
+    );
     let selected_index = choices
         .iter()
         .position(|choice| choice.selected)

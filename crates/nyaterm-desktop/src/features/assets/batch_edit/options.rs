@@ -233,6 +233,7 @@ pub(super) fn batch_kind_label(kind: ConnectionBatchKind) -> SharedString {
         ConnectionBatchKind::Adb => "Android".into(),
         ConnectionBatchKind::LocalTerminal => t!("dialog.localTerminal").into(),
         ConnectionBatchKind::Serial => t!("dialog.serial").into(),
+        ConnectionBatchKind::Ftp => "FTP".into(),
     }
 }
 pub(super) fn scope_select_options(draft: &AssetBatchEditDraft) -> Vec<NyaSelectOption> {

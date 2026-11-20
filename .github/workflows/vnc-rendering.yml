@@ -1,0 +1,56 @@
+name: VNC native rendering probes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native-rendering:
+    name: Synthetic VNC rendering (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: vnc-probe-${{ runner.os }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-linux-deps
+        with:
+          extra_packages: xvfb
+      - name: Check background pipeline and helper lifecycle
+        run: cargo test --locked -p nyaterm-remote-desktop -p nyaterm-vnc-helper -p nyaterm-rdp-helper
+      - name: Build native texture probe
+        run: cargo build --locked -p nyaterm-app --example vnc_texture_probe --features vnc-renderer-bench
+      # Hosted GPUs are often software adapters. Preserve their identity in the
+      # artifact; these readback tests establish correctness, not physical display latency.
+      - name: Probe Linux native window under X11
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s '-screen 0 4096x2304x24' python scripts/bench/vnc_native_probe.py --probe target/debug/examples/vnc_texture_probe --output target/vnc-native/results.json --profile dev
+      - name: Probe macOS native window
+        if: runner.os == 'macOS'
+        run: python scripts/bench/vnc_native_probe.py --probe target/debug/examples/vnc_texture_probe --output target/vnc-native/results.json --profile dev
+      - name: Probe Windows native window
+        if: runner.os == 'Windows'
+        run: python scripts/bench/vnc_native_probe.py --probe target/debug/examples/vnc_texture_probe.exe --output target/vnc-native/results.json --profile dev
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vnc-native-${{ runner.os }}
+          path: target/vnc-native/results.json
+          if-no-files-found: warn

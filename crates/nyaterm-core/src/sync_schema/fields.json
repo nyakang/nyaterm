@@ -72,7 +72,13 @@
       "view_only": "local",
       "device": "portable:endpoint",
       "directory": "portable:android",
-      "screen": "portable:android"
+      "screen": "portable:android",
+      "initial_directory": "portable:ftp",
+      "local_initial_directory": "local",
+      "passive_mode": "portable:ftp",
+      "ftp_filename_encoding_mode": "portable:ftp",
+      "ftp_filename_encoding": "portable:ftp",
+      "connect_timeout_ms": "local"
     }
   },
   "ProxyConfig": {
@@ -327,6 +333,7 @@
       "terminal_show_multi_line_paste_dialog": "local",
       "terminal_paste_image_as_path": "local",
       "terminal_reconnect_restore_cwd": "local",
+      "terminal_serial_reconnect_send_enter": "local",
       "terminal_low_latency_mode": "local",
       "terminal_zebra_stripes_enabled": "local",
       "terminal_zebra_stripes_by_row": "local",

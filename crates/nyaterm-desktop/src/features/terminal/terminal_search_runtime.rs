@@ -681,14 +681,8 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        let wrap_around = self.terminal.search_wrap_around(self.session.active_id());
-        let (next_index, hit_boundary) = terminal_search_next_index(
-            self.terminal.search.active_index,
-            direction,
-            count,
-            wrap_around,
-        );
-        self.terminal.search.active_index = next_index;
+        self.terminal.search.active_index =
+            terminal_search_next_index(self.terminal.search.active_index, direction, count);
         if let Ok(matches) = self.terminal_buffer_matches()
             && let Some(range) = self
                 .terminal_buffer_occurrence_ranges()
@@ -697,30 +691,14 @@ impl NyaTermApp {
         {
             self.reveal_terminal_absolute_line(m.line_index, cx);
         }
-        self.shell.set_status(if hit_boundary {
-            if direction < 0 {
-                t!(
-                    "terminalCtx.searchReachedFirst",
-                    current = self.terminal.search.active_index + 1,
-                    total = count
-                )
-                .to_string()
-            } else {
-                t!(
-                    "terminalCtx.searchReachedLast",
-                    current = self.terminal.search.active_index + 1,
-                    total = count
-                )
-                .to_string()
-            }
-        } else {
+        self.shell.set_status(
             t!(
                 "terminalCtx.searchMatchStatus",
                 current = self.terminal.search.active_index + 1,
                 total = count
             )
-            .to_string()
-        });
+            .to_string(),
+        );
         self.notify_active_terminal_surface(cx);
         cx.notify();
     }
@@ -762,25 +740,12 @@ impl NyaTermApp {
     }
 }
 
-fn terminal_search_next_index(
-    current: usize,
-    direction: isize,
-    count: usize,
-    wrap_around: bool,
-) -> (usize, bool) {
+fn terminal_search_next_index(current: usize, direction: isize, count: usize) -> usize {
     if count == 0 {
-        return (0, false);
+        return 0;
     }
     let candidate = current.min(count - 1) as isize + direction;
-    if wrap_around {
-        (candidate.rem_euclid(count as isize) as usize, false)
-    } else if candidate < 0 {
-        (0, true)
-    } else if candidate >= count as isize {
-        (count - 1, true)
-    } else {
-        (candidate as usize, false)
-    }
+    candidate.rem_euclid(count as isize) as usize
 }
 
 fn selected_occurrence_is_original(
@@ -855,7 +820,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn terminal_search_keyboard_reuses_query_and_restores_terminal_focus() {
+    fn terminal_search_keyboard_navigates_without_restarting_and_restores_focus() {
         use crate::features::{NyaTermApp, test_support::app_with_visible_local_session};
         use gpui::{
             AppContext as _, InteractiveElement as _, IntoElement, ParentElement as _, Render,
@@ -897,6 +862,47 @@ mod tests {
         });
         window.simulate_keystrokes("n");
         window.update(|_, cx| assert_eq!(app.read(cx).terminal.search.query, "n"));
+        let (key, search_focus) = window.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.terminal.search.refresh_task = None;
+                let key = app.terminal_search_key().unwrap();
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                let mut result = TerminalFrameSearchResult::new(
+                    key.clone(),
+                    view.screen_revision,
+                    Ok((0..3)
+                        .map(|index| TerminalBufferMatch {
+                            line_index: 0,
+                            start_col: index * 2,
+                            end_col: index * 2 + 1,
+                        })
+                        .collect()),
+                );
+                result.occurrences = vec![0..1, 1..2, 2..3].into();
+                view.search_result = Some(result);
+                let field = app.text_input("terminal.search.query", "n", Default::default(), cx);
+                cx.notify();
+                (key, field.read(cx).component_focus_handle(cx))
+            })
+        });
+        for (keystroke, expected_index) in [
+            ("enter", 1),
+            ("enter", 2),
+            ("enter", 0),
+            ("shift-enter", 2),
+            ("shift-enter", 1),
+        ] {
+            window.simulate_keystrokes(keystroke);
+            window.update(|window, cx| {
+                let app = app.read(cx);
+                assert_eq!(
+                    app.terminal.search.active_index, expected_index,
+                    "{keystroke}"
+                );
+                assert_eq!(app.terminal_search_key().as_ref(), Some(&key));
+                assert!(search_focus.is_focused(window));
+            });
+        }
         window.simulate_keystrokes("tab");
         window.update(|_, cx| assert!(app.read(cx).terminal.search.open));
         window.simulate_keystrokes("escape");
@@ -907,13 +913,14 @@ mod tests {
     }
 
     #[test]
-    fn search_navigation_wraps_by_default_and_stops_when_disabled() {
-        assert_eq!(terminal_search_next_index(2, 1, 3, true), (0, false));
-        assert_eq!(terminal_search_next_index(0, -1, 3, true), (2, false));
-        assert_eq!(terminal_search_next_index(2, 1, 3, false), (2, true));
-        assert_eq!(terminal_search_next_index(0, -1, 3, false), (0, true));
-        assert_eq!(terminal_search_next_index(1, 1, 3, false), (2, false));
-        assert_eq!(terminal_search_next_index(8, -1, 3, false), (1, false));
+    fn search_navigation_always_wraps_in_both_directions() {
+        assert_eq!(terminal_search_next_index(2, 1, 3), 0);
+        assert_eq!(terminal_search_next_index(0, -1, 3), 2);
+        assert_eq!(terminal_search_next_index(1, 1, 3), 2);
+        assert_eq!(terminal_search_next_index(8, -1, 3), 1);
+        assert_eq!(terminal_search_next_index(0, 1, 1), 0);
+        assert_eq!(terminal_search_next_index(0, -1, 1), 0);
+        assert_eq!(terminal_search_next_index(0, 1, 0), 0);
     }
 
     #[test]

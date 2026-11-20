@@ -1135,6 +1135,9 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "input", &error);
             return Err(error.into());
         }
+        if !bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
+        }
         if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
             self.commands.complete_completion_submission(session_id);
         }
@@ -1239,6 +1242,9 @@ impl NyaTermApp {
             self.record_terminal_session_write_failure(session_id, "raw input", &error);
             return Err(error.into());
         }
+        if !bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
+        }
         if disposition.record_raw_input
             && self
                 .recording
@@ -1290,6 +1296,9 @@ impl NyaTermApp {
             .manager()
             .write(session_id, &encoded)
             .map_err(|error| self.terminal_session_write_error_text(session_id, error))?;
+        if !bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
+        }
         if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
             self.commands.complete_completion_submission(session_id);
         }
@@ -1397,6 +1406,9 @@ impl NyaTermApp {
         {
             self.record_terminal_session_write_failure(session_id, "framed input", &error);
             return Err(error);
+        }
+        if !wire_bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
         }
         if disposition.record_logical_input
             && self

@@ -8881,6 +8881,50 @@ fn login_monitoring_setting_roundtrips_without_losing_unknown_fields() {
 }
 
 #[test]
+fn serial_reconnect_enter_defaults_off_and_preserves_saved_values_and_unknown_fields() {
+    let dir = unique_temp_dir("serial-reconnect-enter-settings");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert!(
+            !store
+                .load_app_settings_summary()
+                .unwrap()
+                .terminal_serial_reconnect_send_enter
+        );
+        store
+            .save_settings_value(&serde_json::json!({
+                "terminal": {"future": {"keep": true}}, "future_root": [99]
+            }))
+            .unwrap();
+        let mut settings = store.load_app_settings_summary().unwrap();
+        assert!(!settings.terminal_serial_reconnect_send_enter);
+        for enabled in [true, false, true] {
+            settings.terminal_serial_reconnect_send_enter = enabled;
+            let saved = store.save_terminal_settings(&settings).unwrap();
+            assert_eq!(saved.terminal_serial_reconnect_send_enter, enabled);
+            assert_eq!(
+                store
+                    .load_app_settings_summary()
+                    .unwrap()
+                    .terminal_serial_reconnect_send_enter,
+                enabled
+            );
+            let raw = store.load_settings_value().unwrap();
+            assert_eq!(raw["terminal"]["serial_reconnect_send_enter"], enabled);
+            assert_eq!(raw["terminal"]["future"]["keep"], true);
+            assert_eq!(raw["future_root"][0], 99);
+        }
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(
+        store
+            .load_app_settings_summary()
+            .unwrap()
+            .terminal_serial_reconnect_send_enter
+    );
+}
+
+#[test]
 fn terminal_wrapping_settings_load_legacy_and_round_trip_without_downgrading_unknown_values() {
     use nyaterm_core::models::settings::TerminalWrapMode;
     let dir = unique_temp_dir("terminal-wrapping-settings");
@@ -9462,7 +9506,36 @@ fn short_rsa_opt_in_survives_portable_backup_and_clears_after_restore() {
 
 #[test]
 fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
-    use std::io::{Read as _, Seek as _, Write as _};
+    use std::io;
+    use std::sync::Arc;
+
+    use redb::{StorageBackend as _, backends::InMemoryBackend};
+
+    #[derive(Clone, Debug)]
+    struct RepairBackend(Arc<InMemoryBackend>);
+
+    impl redb::StorageBackend for RepairBackend {
+        fn len(&self) -> io::Result<u64> {
+            self.0.len()
+        }
+
+        fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+            self.0.read(offset, out)
+        }
+
+        fn set_len(&self, len: u64) -> io::Result<()> {
+            self.0.set_len(len)
+        }
+
+        fn sync_data(&self) -> io::Result<()> {
+            self.0.sync_data()
+        }
+
+        fn write(&self, offset: u64, data: &[u8]) -> io::Result<()> {
+            self.0.write(offset, data)
+        }
+    }
+
     let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-repaired-database");
     let store = ConnectionStore::open(root.path()).unwrap();
     let connection: SavedConnection = serde_json::from_value(serde_json::json!({
@@ -9474,19 +9547,21 @@ fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
     store.save_connection(&connection).unwrap();
     drop(store);
     let path = root.join("nyaterm.redb");
-    let database = redb::Database::open(&path).unwrap();
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
+    // Windows prevents a second file handle from modifying a live redb file.
+    // Inject corruption into a shared backend loaded from the real database
+    // so every platform exercises check_integrity's repair after opening.
+    let bytes = std::fs::read(&path).unwrap();
+    let backend = RepairBackend(Arc::new(InMemoryBackend::new()));
+    backend.set_len(bytes.len() as u64).unwrap();
+    backend.write(0, &bytes).unwrap();
+    let database = redb::Database::builder()
+        .create_with_backend(backend.clone())
         .unwrap();
-    file.seek(std::io::SeekFrom::Start(9)).unwrap();
     let mut god_byte = [0u8; 1];
-    file.read_exact(&mut god_byte).unwrap();
+    backend.read(9, &mut god_byte).unwrap();
     // Simulate an interrupted commit that permits fallback to the other slot.
     god_byte[0] = (god_byte[0] | 2) & !4;
-    file.seek(std::io::SeekFrom::Start(9)).unwrap();
-    file.write_all(&god_byte).unwrap();
+    backend.write(9, &god_byte).unwrap();
     // redb's supported file header has two 128-byte transaction slots.
     // Damaging the primary checksum exercises check_integrity's repaired result.
     let checksum_offset = if god_byte[0] & 1 == 0 {
@@ -9494,11 +9569,7 @@ fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
     } else {
         192 + 112
     };
-    file.seek(std::io::SeekFrom::Start(checksum_offset))
-        .unwrap();
-    file.write_all(&[0u8; 16]).unwrap();
-    file.sync_all().unwrap();
-    drop(file);
+    backend.write(checksum_offset, &[0u8; 16]).unwrap();
     let (database, repaired) = ConnectionStore::validate_opened_database(database, &path).unwrap();
     assert!(repaired);
     let store = ConnectionStore::from_database(database, path, None).unwrap();
@@ -9548,4 +9619,81 @@ fn quick_command_future_settings_survive_usage_updates_and_backups() {
     }
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn networktools_settings_round_trip_preserves_unknown_subtree_keys() {
+    let dir = unique_temp_dir("networktools-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+
+    let mut raw = store.load_settings_value().unwrap();
+    raw["networktools"] = serde_json::json!({
+        "tftp": {"port": 1069, "future_flag": true},
+        "ftp": {"port": 2121}
+    });
+    store.save_settings_value(&raw).unwrap();
+
+    let mut settings = store.load_networktools_settings().unwrap();
+    assert_eq!(settings.tftp.port, 1069);
+    assert_eq!(settings.tftp.bind_address, "0.0.0.0");
+    assert!(!settings.tftp.allow_upload);
+
+    settings.tftp.allow_upload = true;
+    store.save_networktools_settings(settings.clone()).unwrap();
+    assert_eq!(store.load_networktools_settings().unwrap(), settings);
+
+    // Unknown fields written by a newer build must survive our save.
+    let saved = store.load_settings_value().unwrap();
+    assert_eq!(saved["networktools"]["tftp"]["future_flag"], true);
+    assert_eq!(saved["networktools"]["ftp"]["port"], 2121);
+}
+
+#[test]
+fn networktools_settings_default_when_absent() {
+    let dir = unique_temp_dir("networktools-settings-default");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let settings = store.load_networktools_settings().unwrap();
+    assert!(settings.tftp.root_dir.is_empty());
+    assert!(!settings.tftp.allow_overwrite);
+    assert_eq!(
+        settings.tftp.port,
+        nyaterm_core::models::networktools::DEFAULT_TFTP_PORT
+    );
+}
+
+#[test]
+fn invalid_networktools_settings_preserve_the_existing_document() {
+    let dir = unique_temp_dir("networktools-invalid-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut raw = store.load_settings_value().unwrap();
+    raw["networktools"] = serde_json::json!({
+        "tftp": {"port": 1069, "future_flag": true}, "future_service": {"value": 8}
+    });
+    store.save_settings_value(&raw).unwrap();
+    let mut next = store.load_networktools_settings().unwrap();
+    next.tftp.block_size = 0;
+    assert!(store.save_networktools_settings(next).is_err());
+    assert_eq!(store.load_settings_value().unwrap(), raw);
+}
+
+#[test]
+fn unsupported_networktools_documents_are_not_replaced_when_saving_defaults() {
+    let dir = unique_temp_dir("networktools-unsupported-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    for unsupported in [
+        serde_json::json!(["future format"]),
+        serde_json::json!({"tftp": ["future format"], "future_service": 8}),
+    ] {
+        let mut raw = store.load_settings_value().unwrap();
+        raw["networktools"] = unsupported;
+        store.save_settings_value(&raw).unwrap();
+        assert!(
+            store
+                .save_networktools_settings(
+                    nyaterm_core::models::networktools::NetworkToolsSettings::default()
+                )
+                .is_err()
+        );
+        assert_eq!(store.load_settings_value().unwrap(), raw);
+    }
 }

@@ -53,7 +53,7 @@ resolver = "3"
 exclude = ["temp", "examples/plugins/guests"]
 
 [workspace.package]
-version = "2.0.6"
+version = "2.0.7"
 edition = "2024"
 authors = ["Kang"]
 license = "Apache-2.0"
@@ -90,10 +90,10 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "q
 same-file = "1"
 tempfile = "3"
 glob = "0.3.4"
-gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "df44bb4fa7f95e9159a9558a4835f918a02e043e" }
-gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "f0950be3e71cae5f3f6c1095e6eaa834fb01522f" }
-gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "f0950be3e71cae5f3f6c1095e6eaa834fb01522f" }
-gpui_platform = { git = "https://github.com/nyakang/zed", rev = "df44bb4fa7f95e9159a9558a4835f918a02e043e" }
+gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "468bc1eb8e31d8f802af766a4d2d74d2d08ea46a" }
+gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "9a0429b92d80f0dd9618fdcd721f69008d2ede7f" }
+gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "9a0429b92d80f0dd9618fdcd721f69008d2ede7f" }
+gpui_platform = { git = "https://github.com/nyakang/zed", rev = "468bc1eb8e31d8f802af766a4d2d74d2d08ea46a" }
 # Pure-Rust, `#![forbid(unsafe)]` PDF rasterizer (MIT OR Apache-2.0). Pinned
 # exactly: the crate is pre-1.0 and explicitly experimental, so a caret range
 # could pull in a breaking 0.8 without review. `embed-fonts` bundles the 14
@@ -154,6 +154,7 @@ schemars = "=1.2.2"
 serialport = { version = "4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+suppaftp = { version = "13.0.0", default-features = false, features = ["no-log"] }
 semver = { version = "1", features = ["serde"] }
 sha1 = { version = "0.11", features = ["oid"] }
 sha2 = { version = "0.11", features = ["oid"] }
@@ -174,7 +175,7 @@ url = "=2.5.8"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
-vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "1faaf127fb804f779991cde08fafe4934b58598a" }
+vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "3edddb2b7a5c5f9dad4ca329a5cc06a997db4dcf" }
 vte = "0.14"
 zeroize = "1"
 zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "87a80216179f29d90e0b8c06ee5b4a6a0132c763" }

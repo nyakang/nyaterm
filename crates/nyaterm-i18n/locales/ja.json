@@ -897,6 +897,8 @@
       "display": "表示",
       "session": "セッション",
       "serial": "シリアルポート設定",
+      "charset": "文字セット",
+      "advanced": "詳細設定",
       "startup": "起動設定"
     },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
@@ -1118,6 +1120,50 @@
     "newGroupRootHint": "最上位に作成",
     "noAuthentication": "なし",
     "noAuthenticationDescription": "パスワードや鍵なしで接続します。SSH サーバーが許可している場合や対話的に要求する場合にのみ使用してください。",
+    "ftpAnonymousLogin": "匿名ログイン",
+    "ftpAnonymousHint": "匿名ログインでは保存済みのパスワードを送信しません。サーバーが匿名アクセスを許可している場合にのみ使用してください。",
+    "ftpAuthModeUnsupported": "FTP はパスワードまたは匿名ログインのみ対応しています。",
+    "ftpPassiveModeInvalid": "FTP パッシブモードが無効です。",
+    "ftpFilenameEncodingInvalid": "有効な FTP ファイル名文字セットを選択してください。",
+    "ftpConnectTimeoutInvalid": "FTP 接続タイムアウトは {{min}}～{{max}} ミリ秒の範囲で指定してください。",
+    "ftpPasswordRequired": "パスワードを入力するか、匿名ログインを選択してください。",
+    "ftpPassiveMode": "パッシブモード",
+    "ftpPassiveAuto": "自動",
+    "ftpPassivePasv": "PASV（パッシブ）",
+    "ftpPassiveEpsv": "EPSV（拡張パッシブ）",
+    "ftpInitialDirectory": "リモート開始フォルダー",
+    "ftpLocalInitialDirectory": "ローカル開始フォルダー",
+    "ftpConnectTimeout": "接続タイムアウト（ミリ秒）",
+    "ftpAdvancedHint": "開始フォルダーが空の場合はサーバーまたはローカルの既定値を使用します。",
+    "ftpAsciiMode": "ASCII モード",
+    "ftpAsciiModeHint": "アップロード時にローカルの改行を CRLF に変換し、ダウンロード時にローカルの改行へ戻します。テキストファイル専用です。",
+    "ftpFtps": "FTPS（明示的 TLS）",
+    "ftpFtpsHint": "AUTH TLS で制御接続とデータ接続を暗号化します。サーバーが明示的 FTPS に対応している必要があります。",
+    "ftpSecurityMode": "セキュリティモード",
+    "ftpSecurityNone": "なし",
+    "ftpSecurityExplicit": "明示的 FTPS",
+    "ftpSecurityImplicit": "暗黙的 FTPS",
+    "ftpImplicitFtpsHint": "接続直後に TLS ハンドシェイクを行います。通常はポート 990 を使用します。",
+    "ftpTlsVersion": "TLS バージョン",
+    "ftpTlsAuto": "自動（システム既定）",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0 はサポートされません。SSL 3.0、TLS 1.0、TLS 1.1 は非推奨で、システムポリシーにより拒否される場合があります。",
+    "ftpNetworkRouteDescription": "ジャンプホストを選択するとジャンプが優先され、このページのプロキシは使用されません。ジャンプへの接続に必要なプロキシはその SSH 接続で設定してください。",
+    "ftpNetworkPlaintextDescription": "プロキシとジャンプの設定は接続と一緒に保存されます。",
+    "ftpSecurityModeInvalid": "FTP のセキュリティモードが無効です。",
+    "ftpTlsVersionInvalid": "FTP の TLS バージョンが無効です。",
+    "filenameEncodingTitle": "サーバーはファイル名に次の文字セットを使用します：",
+    "filenameEncodingAuto": "自動検出",
+    "filenameEncodingAutoHint": "サーバーが UTF-8 を宣言している場合は UTF-8、それ以外は本機のシステムエンコーディングを使用します。",
+    "filenameEncodingForceUtf8": "UTF-8 を強制",
+    "filenameEncodingCustom": "カスタム文字セットを使用",
+    "filenameEncodingLabel": "エンコーディング",
+    "filenameEncodingWarning": "誤った文字セットを使用するとファイル名が正しく表示されない場合があります。",
+    "filenameEncodingScope": "サーバー上のファイル名とパスのみに影響し、ファイル内容には影響しません。",
     "noKeys": "鍵がありません",
     "noOtp": "なし",
     "noOtpEntries": "OTP エントリがありません",
@@ -1458,7 +1504,6 @@
   "fileExplorer": {
     "clipboardEmpty": "ファイルのクリップボードは空か、置き換えられています",
     "clipboardMoving": "切り取った項目を移動中です。完了するまでお待ちください",
-
     "transferSourceUnavailable": "接続元を利用できません。再接続して再試行してください。",
     "transferBackendUnsupported": "この接続はファイル転送に対応していません。",
     "transferInvalidDestination": "転送先が無効か、ファイル名を表現できません。",
@@ -1650,6 +1695,14 @@
     "uploadPrompt": "リモートファイルが変更されました。変更をアップロードしますか？"
   },
   "fileManager": {
+    "leftSide": "左側",
+    "rightSide": "右側",
+    "copyToPane": "%{side}にコピー（%{target}）",
+    "moveToPane": "%{side}に移動（%{target}）",
+    "new": "新規作成",
+    "copyFullPath": "フルパスをコピー",
+    "copyName": "ファイル名をコピー",
+    "copyParent": "親ディレクトリをコピー",
     "connected": "接続済み",
     "skipped": "スキップ済み",
     "copy": "コピー",
@@ -1699,7 +1752,9 @@
     "openLeft": "左側で開く",
     "openRight": "右側で開く",
     "openWorkspace": "ワークスペースでファイルマネージャーを開く",
-    "goHome": "ホーム"
+    "goHome": "ホーム",
+    "goBack": "戻る",
+    "goForward": "進む"
   },
   "fileTransfer": {
     "scanning": "ファイルをスキャン中…",
@@ -1708,6 +1763,7 @@
     "cancelAll": "すべてキャンセル",
     "cancelled": "キャンセルしました",
     "clearAll": "すべて消去",
+    "clear": "クリア",
     "clearCompleted": "完了分を消去",
     "completed": "完了",
     "cancelling": "キャンセル中",
@@ -1943,6 +1999,81 @@
     "ungrouped": "グループなし",
     "ungroupedConnections": "グループなし"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "%{addr} で待機中",
+        "notRunning": "停止中",
+        "configure": "設定",
+        "start": "サーバーを開始",
+        "stop": "サーバーを停止"
+      },
+      "action": {
+        "reset": "リセット",
+        "browse": "参照"
+      },
+      "bind": {
+        "allInterfaces": "すべてのインターフェース",
+        "loopback": "ループバック",
+        "savedUnavailable": "保存値（このマシンでは未検出）"
+      },
+      "field": {
+        "bindAddress": "バインドアドレス",
+        "port": "ポート",
+        "rootDir": "サービスディレクトリ",
+        "timeout": "タイムアウト（秒）",
+        "concurrency": "最大同時転送数"
+      },
+      "section": {
+        "basic": "基本設定",
+        "limits": "転送制限",
+        "permissions": "権限"
+      },
+      "hint": {
+        "firewall": "他のマシンから接続するには、システムファイアウォールでこの UDP ポートを許可してください。",
+        "security": "選択したディレクトリのみを共有します。信頼できるネットワークで使用してください。"
+      },
+      "error": {
+        "bind": "有効な IP アドレスを入力してください",
+        "port": "ポートは 1～65535 の範囲で指定してください",
+        "timeout": "タイムアウトは 1～255 秒の範囲で指定してください",
+        "concurrency": "同時実行数は 1～%{max} の範囲で指定してください",
+        "rootDirRequired": "サービスディレクトリを選択してください",
+        "rootDirUnreadable": "ディレクトリが存在しないか、読み取れません",
+        "invalid": "設定が無効です: %{message}"
+      },
+      "status": {
+        "saveHint": "変更は次回サービスの起動時に反映されます。",
+        "saveAndRestart": "保存してサービスを再起動",
+        "restartFailed": "保存しましたが、%{service} サービスの再起動に失敗しました: %{message}",
+        "saveFailed": "ネットワークツールの設定を保存できませんでした",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 転送を開始: %{file}",
+        "finished": "%{service} · 転送完了: %{file}（%{bytes} バイト）",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "不明なエラー"
+      }
+    },
+    "tftp": {
+      "title": "TFTP サーバー",
+      "shortName": "TFTP",
+      "description": "このマシンで TFTP によるファイル共有と受信を行います。",
+      "field": {
+        "blockSize": "ネゴシエーションの最大ブロックサイズ",
+        "allowUpload": "アップロードを許可",
+        "allowOverwrite": "ファイルの上書きを許可"
+      },
+      "hint": {
+        "blockSize": "クライアントが blksize を要求した場合の DATA ペイロード上限（8–65464 バイト）。\n要求値とこの上限の小さい方を使用します。\nblksize を要求しない場合は常に 512 バイトを使用します。",
+        "upload": "クライアントはサービスディレクトリに書き込めます"
+      },
+      "error": {
+        "blockSize": "ブロックサイズは 8～65464 の範囲で指定してください"
+      }
+    }
+  },
   "otp": {
     "cancel": "キャンセル",
     "cancelled": "認証をキャンセルしました",
@@ -2049,6 +2180,7 @@
     "fileTransfer": "転送",
     "gpuMonitor": "NVIDIA GPU",
     "network": "ネットワーク",
+    "networktools": "ネットワークツール",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "アクティブなセッションがありません",
     "noCommandsYet": "コマンドがまだありません",
@@ -2508,6 +2640,11 @@
     "usersMeaning": "システムに記録されたログインセッションです。すべての SSH 接続ではありません。"
   },
   "savedConnections": {
+    "openFileManager": "ファイルマネージャーを開く",
+    "openFileManagerSftpDisabled": "ファイルマネージャーを開く（SFTP 無効）",
+    "fileManagerConnectionUnavailable": "この保存済み接続は利用できなくなりました。",
+    "fileManagerRequiresSsh": "ファイルマネージャーを開くには SSH 接続が必要です。",
+    "fileManagerSftpDisabled": "この SSH 接続では SFTP が無効になっています。",
     "dropRoot": "ルートへ移動",
     "sessionImportTitle": "セッションをインポート",
     "restoreBackupTitle": "NyaTerm バックアップを復元",
@@ -2737,6 +2874,7 @@
     "submit": "続行"
   },
   "serialPrompt": {
+    "chooseDevice": "デバイスを選択…",
     "alreadyOpen": "開いているシリアル選択を先に完了してください。",
     "baudRateInvalid": "ボーレートは 1〜4000000 の範囲で指定してください。",
     "baudRatePlaceholder": "115200",
@@ -3199,7 +3337,7 @@
     "groupTransfer": "転送",
     "groupWorkspace": "ワークスペース",
     "zebraStripes": "ターミナルの行ストライプ",
-    "zebraStripesDesc": "シェルの入力領域とクリックした行を強調表示します。行ごとに背景色を交互に表示することもできます。",
+    "zebraStripesDesc": "シェルの入力領域とクリックした行を強調表示します。行ごとに背景色を交互に表示することもできます。無効にしてもコマンドの折りたたみと移動は利用できます。",
     "zebraStripesByRow": "行ごとに表示",
     "zebraStripesByRowDesc": "ターミナルの表示行ごとに背景色を交互に表示します。",
     "syncHistory": {
@@ -3298,6 +3436,8 @@
     "keepAliveInterval": "キープアライブ間隔（秒）",
     "reconnectRestoreCwd": "再接続後に作業ディレクトリを復元",
     "reconnectRestoreCwdDesc": "SSH セッションを最後に信頼された作業ディレクトリへ戻します。",
+    "serialReconnectEnter": "シリアル再接続後にEnterを送信",
+    "serialReconnectEnterDesc": "シリアルセッションの再接続後、コンソールがすぐプロンプトを表示するようEnterを1回送信します。",
     "keepAliveIntervalDesc": "X 秒ごとに SSH キープアライブパケットを送信します。0 で無効。",
     "keepAliveMode": "キープアライブモード",
     "keepAliveModeCompatible": "互換",

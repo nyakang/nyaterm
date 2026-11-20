@@ -897,6 +897,8 @@
       "display": "顯示",
       "session": "工作階段",
       "serial": "序列埠設定",
+      "charset": "字元集",
+      "advanced": "進階",
       "startup": "啟動設定"
     },
     "serialSoftwareFlowControlModemDisabled": "軟體流控下停用 XMODEM/YMODEM/ZMODEM 檔案傳輸，因為 XON/XOFF 可能吞掉二進位資料。",
@@ -1118,6 +1120,50 @@
     "newGroupRootHint": "將在頂層建立分組",
     "noAuthentication": "無",
     "noAuthenticationDescription": "不使用密碼或私鑰發起連線。僅適用於允許 none 身分驗證，或會繼續互動式要求登入資訊的 SSH 伺服器。",
+    "ftpAnonymousLogin": "匿名登入",
+    "ftpAnonymousHint": "匿名登入不會傳送已儲存的密碼，僅伺服器允許匿名存取時可用。",
+    "ftpAuthModeUnsupported": "FTP 僅支援密碼或匿名登入。",
+    "ftpPassiveModeInvalid": "FTP 被動模式無效。",
+    "ftpFilenameEncodingInvalid": "請選擇有效的 FTP 檔案名稱字元集。",
+    "ftpConnectTimeoutInvalid": "FTP 連線逾時必須介於 {{min}} 到 {{max}} 毫秒。",
+    "ftpPasswordRequired": "請輸入密碼或選擇匿名登入。",
+    "ftpPassiveMode": "被動模式",
+    "ftpPassiveAuto": "自動",
+    "ftpPassivePasv": "PASV（被動）",
+    "ftpPassiveEpsv": "EPSV（擴充被動）",
+    "ftpInitialDirectory": "遠端起始目錄",
+    "ftpLocalInitialDirectory": "本機起始目錄",
+    "ftpConnectTimeout": "連線逾時（毫秒）",
+    "ftpAdvancedHint": "起始目錄留空時使用伺服器或本機預設目錄。",
+    "ftpAsciiMode": "ASCII 模式",
+    "ftpAsciiModeHint": "上傳時將本機換行轉換為 CRLF，下載時轉換回本機換行；僅適用於文字檔。",
+    "ftpFtps": "FTPS（顯式 TLS）",
+    "ftpFtpsHint": "透過 AUTH TLS 加密控制與資料連線；伺服器必須支援顯式 FTPS。",
+    "ftpSecurityMode": "安全模式",
+    "ftpSecurityNone": "無",
+    "ftpSecurityExplicit": "顯式 FTPS",
+    "ftpSecurityImplicit": "隱式 FTPS",
+    "ftpImplicitFtpsHint": "連線後立即進行 TLS 握手，通常使用 990 埠。",
+    "ftpTlsVersion": "TLS 版本",
+    "ftpTlsAuto": "自動（系統預設）",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "不支援 SSL 2.0；SSL 3.0、TLS 1.0 與 TLS 1.1 已廢棄，可能被系統原則拒絕。",
+    "ftpNetworkRouteDescription": "選擇跳板機時優先使用跳板，本頁代理不參與連線。存取跳板所需的代理請在該 SSH 連線上設定。",
+    "ftpNetworkPlaintextDescription": "代理與跳板設定會隨連線一起儲存。",
+    "ftpSecurityModeInvalid": "FTP 安全模式無效。",
+    "ftpTlsVersionInvalid": "FTP TLS 版本無效。",
+    "filenameEncodingTitle": "伺服器使用以下字元集編碼處理檔案名稱：",
+    "filenameEncodingAuto": "自動偵測",
+    "filenameEncodingAutoHint": "伺服器宣告支援 UTF-8 時使用 UTF-8，否則使用本機系統編碼。",
+    "filenameEncodingForceUtf8": "強制 UTF-8",
+    "filenameEncodingCustom": "使用自訂的字元集",
+    "filenameEncodingLabel": "編碼",
+    "filenameEncodingWarning": "使用錯誤的字元集可能導致檔案名稱顯示不正確。",
+    "filenameEncodingScope": "僅影響伺服器檔案名稱和路徑，不影響檔案內容。",
     "noKeys": "暫無金鑰",
     "noOtp": "無",
     "noOtpEntries": "暫無 OTP 條目",
@@ -1458,7 +1504,6 @@
   "fileExplorer": {
     "clipboardEmpty": "檔案剪貼簿為空或已被取代",
     "clipboardMoving": "選取的剪下項目正在移動，請等待完成",
-
     "transferSourceUnavailable": "來源連線無法使用，請重新連線後重試。",
     "transferBackendUnsupported": "此連線不支援檔案傳輸。",
     "transferInvalidDestination": "傳輸目的地無效或無法表示檔案名稱。",
@@ -1650,6 +1695,14 @@
     "uploadPrompt": "遠端檔案已修改，是否上傳變更？"
   },
   "fileManager": {
+    "leftSide": "左側",
+    "rightSide": "右側",
+    "copyToPane": "複製到%{side}（%{target}）",
+    "moveToPane": "移動到%{side}（%{target}）",
+    "new": "新增",
+    "copyFullPath": "複製完整路徑",
+    "copyName": "複製檔案名稱",
+    "copyParent": "複製所在目錄",
     "connected": "已連線",
     "skipped": "已略過",
     "copy": "複製",
@@ -1699,7 +1752,9 @@
     "openLeft": "在左側開啟",
     "openRight": "在右側開啟",
     "openWorkspace": "在工作區開啟檔案管理器",
-    "goHome": "主目錄"
+    "goHome": "主目錄",
+    "goBack": "上一頁",
+    "goForward": "下一頁"
   },
   "fileTransfer": {
     "scanning": "正在掃描檔案…",
@@ -1708,6 +1763,7 @@
     "cancelAll": "全部取消",
     "cancelled": "已取消",
     "clearAll": "清除全部",
+    "clear": "清除",
     "clearCompleted": "清除已完成",
     "completed": "已完成",
     "cancelling": "正在取消",
@@ -1943,6 +1999,81 @@
     "ungrouped": "未分類",
     "ungroupedConnections": "未分組"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "正在監聽 %{addr}",
+        "notRunning": "未執行",
+        "configure": "設定",
+        "start": "啟動服務",
+        "stop": "停止服務"
+      },
+      "action": {
+        "reset": "重設",
+        "browse": "瀏覽"
+      },
+      "bind": {
+        "allInterfaces": "所有網卡",
+        "loopback": "本機回環",
+        "savedUnavailable": "已儲存，本機未偵測到"
+      },
+      "field": {
+        "bindAddress": "監聽位址",
+        "port": "連接埠",
+        "rootDir": "服務目錄",
+        "timeout": "逾時（秒）",
+        "concurrency": "最大並行傳輸"
+      },
+      "section": {
+        "basic": "基本設定",
+        "limits": "傳輸限制",
+        "permissions": "權限"
+      },
+      "hint": {
+        "firewall": "如需其他機器存取，請在系統防火牆放行此 UDP 連接埠。",
+        "security": "服務僅分享所選目錄，請在可信任網路中使用。"
+      },
+      "error": {
+        "bind": "請輸入有效的 IP 位址",
+        "port": "連接埠需為 1～65535",
+        "timeout": "逾時需為 1～255 秒",
+        "concurrency": "並行數需為 1～%{max}",
+        "rootDirRequired": "請選擇服務目錄",
+        "rootDirUnreadable": "目錄不存在或無法讀取",
+        "invalid": "設定無效：%{message}"
+      },
+      "status": {
+        "saveHint": "變更會在下次啟動服務時生效。",
+        "saveAndRestart": "儲存並重新啟動服務",
+        "restartFailed": "已儲存，但重新啟動 %{service} 服務失敗：%{message}",
+        "saveFailed": "無法儲存網路工具設定",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 開始傳輸：%{file}",
+        "finished": "%{service} · 傳輸完成：%{file}（%{bytes} 位元組）",
+        "failed": "%{service} · %{file}：%{message}",
+        "failedUnknown": "未知錯誤"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 伺服器",
+      "shortName": "TFTP",
+      "description": "在本機透過 TFTP 分享與接收檔案。",
+      "field": {
+        "blockSize": "協商區塊大小上限",
+        "allowUpload": "允許上傳",
+        "allowOverwrite": "允許覆寫檔案"
+      },
+      "hint": {
+        "blockSize": "用戶端請求 blksize 時允許的最大 DATA 酬載（8–65464 位元組）。\n實際協商值取用戶端請求與此上限的較小值。\n未請求 blksize 的用戶端固定使用 512 位元組。",
+        "upload": "用戶端可以寫入服務目錄"
+      },
+      "error": {
+        "blockSize": "區塊大小需為 8～65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "取消",
     "cancelled": "身分驗證已取消",
@@ -2049,6 +2180,7 @@
     "fileTransfer": "檔案傳輸",
     "gpuMonitor": "GPU",
     "network": "網路",
+    "networktools": "網路工具",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "暫無活動工作階段",
     "noCommandsYet": "暫無命令記錄",
@@ -2508,6 +2640,11 @@
     "usersMeaning": "系統記錄的登入工作階段，不代表所有 SSH 連線。"
   },
   "savedConnections": {
+    "openFileManager": "開啟檔案管理員",
+    "openFileManagerSftpDisabled": "開啟檔案管理員（SFTP 已停用）",
+    "fileManagerConnectionUnavailable": "此已儲存的連線已無法使用。",
+    "fileManagerRequiresSsh": "開啟檔案管理員需要 SSH 連線。",
+    "fileManagerSftpDisabled": "此 SSH 連線已停用 SFTP。",
     "dropRoot": "移至根層級",
     "sessionImportTitle": "匯入工作階段",
     "restoreBackupTitle": "還原 NyaTerm 備份",
@@ -2737,6 +2874,7 @@
     "submit": "繼續"
   },
   "serialPrompt": {
+    "chooseDevice": "選擇裝置…",
     "alreadyOpen": "請先完成目前的序列埠選擇。",
     "baudRateInvalid": "鮑率必須介於 1 到 4000000。",
     "baudRatePlaceholder": "115200",
@@ -3199,7 +3337,7 @@
     "groupTransfer": "資料傳輸",
     "groupWorkspace": "工作區",
     "zebraStripes": "終端行斑馬紋",
-    "zebraStripesDesc": "高亮 Shell 輸入區域和滑鼠點選的目標行，可切換為逐行交替底色。",
+    "zebraStripesDesc": "高亮 Shell 輸入區域和滑鼠點選的目標行，可切換為逐行交替底色。關閉背景不影響命令摺疊和導覽。",
     "zebraStripesByRow": "按行顯示",
     "zebraStripesByRowDesc": "按終端顯示行交替顯示背景色。",
     "syncHistory": {
@@ -3298,6 +3436,8 @@
     "keepAliveInterval": "Keep-Alive 間隔 (秒)",
     "reconnectRestoreCwd": "重新連線後還原工作目錄",
     "reconnectRestoreCwdDesc": "將 SSH 工作階段還原到最後可信的工作目錄。",
+    "serialReconnectEnter": "串列埠重連後自動發送 Enter",
+    "serialReconnectEnterDesc": "串列埠工作階段重連成功後自動發送一次 Enter，讓主控台立即顯示命令列提示符。",
     "keepAliveIntervalDesc": "每隔 X 秒傳送 SSH keep-alive 資料包。設定為 0 也會停用 Keep-Alive。",
     "keepAliveMode": "SSH Keep-Alive 模式",
     "keepAliveModeCompatible": "相容模式（建議）",

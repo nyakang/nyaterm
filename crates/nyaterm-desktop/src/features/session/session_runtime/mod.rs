@@ -54,4 +54,7 @@ mod start;
 #[cfg(test)]
 mod serial_prompt_tests;
 
+#[cfg(test)]
+mod serial_reconnect_tests;
+
 pub(in crate::features) use start::SshSessionConfigBuildContext;

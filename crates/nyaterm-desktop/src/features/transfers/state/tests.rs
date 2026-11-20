@@ -1592,6 +1592,65 @@ fn transfer_properties_ignore_stale_results_and_close_for_the_owner_session() {
 }
 
 #[test]
+fn sidebar_property_results_cannot_overwrite_a_manager_dialog_for_the_same_session_and_path() {
+    use crate::features::file_manager::properties::FileManagerPropertiesTarget;
+    use crate::features::file_manager::{PaneEndpoint, PaneId};
+    use nyaterm_files::sftp::RemoteFilePath;
+
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut transfer = transfer_state(&cx);
+    transfer.open_properties_dialog(TransferPropertiesState {
+        symlink_target_value: String::new(),
+        session_id: Some("session".into()),
+        entry: file_entry("/srv/file.txt"),
+        properties: None,
+        mode_value: "0640".into(),
+        owner_value: String::new(),
+        group_value: String::new(),
+        recursive: false,
+        saving: false,
+        error: None,
+    });
+    transfer.set_properties_target(FileManagerPropertiesTarget {
+        request_id: "manager-request".into(),
+        dialog: None,
+        manager_id: "manager".into(),
+        pane: PaneId::Left,
+        endpoint: PaneEndpoint::Session("session".into()),
+        directory: RemoteFilePath::new("/srv"),
+        path: RemoteFilePath::new("/srv/file.txt"),
+        access_generation: None,
+    });
+    assert!(!transfer.complete_properties_load(
+        Some("session"),
+        "/srv/file.txt",
+        file_properties("/srv/file.txt"),
+        "0600".into(),
+        "owner".into(),
+        "group".into()
+    ));
+    assert!(!transfer.complete_properties_update(
+        Some("session"),
+        "/srv/file.txt",
+        file_properties("/srv/file.txt")
+    ));
+    assert!(!transfer.fail_properties_operation(
+        Some("session"),
+        "/srv/file.txt",
+        "old request failed".into()
+    ));
+    assert!(transfer.properties_dialog().unwrap().properties.is_none());
+    assert!(transfer.properties_dialog().unwrap().error.is_none());
+    assert_eq!(
+        transfer.properties_target().unwrap().request_id,
+        "manager-request"
+    );
+    assert!(transfer.close_properties_dialog_for_session("session"));
+    assert!(transfer.properties_target().is_none());
+}
+
+#[test]
 fn transfer_queue_owns_admission_events_and_job_removal() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);

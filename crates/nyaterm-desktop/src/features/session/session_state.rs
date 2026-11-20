@@ -298,6 +298,14 @@ impl NyaTermApp {
                 details.push((t!("sessionInfo.host"), config.host.clone()));
                 details.push((t!("sessionInfo.port"), config.port.to_string()));
             }
+            SessionLaunchConfig::Ftp(config) => {
+                details.push((t!("sessionInfo.launch"), "FTP".to_string()));
+                details.push((t!("sessionInfo.host"), config.host.clone()));
+                details.push((t!("sessionInfo.port"), config.port.to_string()));
+                if !config.username.trim().is_empty() {
+                    details.push((t!("sessionInfo.username"), config.username.clone()));
+                }
+            }
         }
 
         Some(details)

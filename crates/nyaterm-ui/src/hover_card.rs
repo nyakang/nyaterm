@@ -2,14 +2,19 @@ use std::time::Duration;
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, PointerCancelEvent, Render,
-    RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, Window, canvas, deferred, div, prelude::FluentBuilder as _, px,
+    MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels, Point, PointerCancelEvent, Render,
+    RenderOnce, ScrollEvent, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Task, Window, canvas, deferred, div, prelude::FluentBuilder as _,
+    px,
 };
 use gpui_base::{POPUP_PRIORITY, Popup, Positioner};
 use gpui_kit::component::ThemeStyled as _;
 
 use crate::{NyaPopoverAlign, NyaPopoverPlacement};
+
+mod pointer;
+
+use self::pointer::PointerPositioner;
 
 /// Hover-triggered rich content that stays open while the pointer moves from
 /// the trigger into the card.
@@ -24,6 +29,7 @@ pub struct NyaHoverCard {
     content: AnyElement,
     anchor: Anchor,
     placement: Option<NyaPopoverPlacement>,
+    at_pointer: bool,
     align: NyaPopoverAlign,
     offset: Pixels,
     open_delay: Duration,
@@ -46,6 +52,7 @@ impl NyaHoverCard {
             content: content.into_any_element(),
             anchor: Anchor::TopLeft,
             placement: None,
+            at_pointer: false,
             align: NyaPopoverAlign::Center,
             offset: px(0.),
             open_delay: Duration::from_millis(700),
@@ -60,6 +67,7 @@ impl NyaHoverCard {
     /// Align the card to a corner of its trigger.
     pub fn anchor(mut self, anchor: Anchor) -> Self {
         self.anchor = anchor;
+        self.at_pointer = false;
         self
     }
 
@@ -69,10 +77,19 @@ impl NyaHoverCard {
     /// instead of covering the rows below it.
     pub fn placement(mut self, placement: NyaPopoverPlacement) -> Self {
         self.placement = Some(placement);
+        self.at_pointer = false;
         self
     }
 
-    /// Let a side-placed trigger fill and shrink within its parent's flex row.
+    /// Prefer the pointer's lower-right corner, flipping on either axis when
+    /// needed. Capture the pointer when opening and keep that anchor fixed until
+    /// closing, so the card stays reachable. Overrides corner/side placement.
+    pub fn at_pointer(mut self) -> Self {
+        self.at_pointer = true;
+        self
+    }
+
+    /// Let a side- or pointer-placed trigger fill and shrink within its parent's flex row.
     /// This keeps truncated text constrained by the available column width.
     pub fn flexible_trigger(mut self) -> Self {
         self.flexible_trigger = true;
@@ -123,7 +140,7 @@ impl NyaHoverCard {
     }
 }
 
-/// Delayed open/close state shared by both positioning paths. `epoch` is what
+/// Delayed open/close state shared by all positioning paths. `epoch` is what
 /// retires a timer whose reason has already passed: hover events arrive faster
 /// than the delays they schedule.
 struct NyaHoverCardState {
@@ -143,6 +160,9 @@ struct NyaHoverCardState {
     horizontal_viewport: Option<ScrollHandle>,
     is_hovering_corridor: bool,
     content_bounds: Option<Bounds<Pixels>>,
+    at_pointer: bool,
+    pointer_position: Point<Pixels>,
+    pointer_anchor: Point<Pixels>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -165,6 +185,9 @@ impl NyaHoverCardState {
             horizontal_viewport: None,
             is_hovering_corridor: false,
             content_bounds: None,
+            at_pointer: false,
+            pointer_position: Point::default(),
+            pointer_anchor: Point::default(),
             _subscriptions: Vec::new(),
         }
     }
@@ -243,6 +266,9 @@ impl NyaHoverCardState {
 
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         if self.open != open {
+            if open {
+                self.pointer_anchor = self.pointer_position;
+            }
             self.open = open;
             cx.notify();
         }
@@ -250,8 +276,10 @@ impl NyaHoverCardState {
 
     fn on_trigger_hover(&mut self, hovering: bool, cx: &mut Context<Self>) {
         self.is_hovering_trigger = hovering;
-        if hovering && self.can_open() {
+        if hovering && self.can_open() && !self.open {
             self.schedule_open(cx);
+        } else if hovering && self.open {
+            self.cancel_tasks();
         } else if !self.is_hovering_content {
             self.schedule_close(cx);
         }
@@ -282,6 +310,7 @@ impl NyaHoverCardState {
     }
 
     fn on_pointer_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        self.pointer_position = event.position;
         let in_corridor = self.open
             && self.horizontal_viewport.as_ref().is_some_and(|handle| {
                 handle.bounds().contains(&event.position)
@@ -358,6 +387,8 @@ impl RenderOnce for NyaHoverCard {
         );
         state.update(cx, |state, cx| {
             state.sync(self.open_delay, self.close_delay);
+            state.at_pointer = self.at_pointer;
+            state.pointer_position = window.mouse_position();
             state.horizontal_viewport = self.horizontal_viewport.clone();
             let suspended = self.suspended || cx.has_active_drag();
             if state.suspended && !suspended {
@@ -367,6 +398,7 @@ impl RenderOnce for NyaHoverCard {
             state.set_suspended(suspended, cx);
         });
         let open = state.read(cx).is_open_now();
+        let positioned = self.placement.is_some() || self.at_pointer;
 
         // By default the trigger host neither grows nor shrinks. Text in a flex
         // row can opt into the available width; the cross axis still stretches
@@ -374,11 +406,12 @@ impl RenderOnce for NyaHoverCard {
         let root = div()
             .id(id.clone())
             .relative()
-            .when(self.placement.is_some(), |this| this.flex().flex_none())
+            .when(positioned, |this| this.flex().flex_none())
             .when(self.flexible_trigger, |this| this.flex_1().min_w_0())
             .items_stretch()
             .child(self.trigger)
-            .on_hover(window.listener_for(&state, |state, hovered, _, cx| {
+            .on_hover(window.listener_for(&state, |state, hovered, window, cx| {
+                state.pointer_position = window.mouse_position();
                 state.on_trigger_hover(*hovered, cx)
             }))
             .child(
@@ -420,6 +453,18 @@ impl RenderOnce for NyaHoverCard {
                                     cancel_state.update(cx, |state, cx| state.dismiss(cx));
                                 }
                             });
+                            let scroll_state = state.clone();
+                            window.on_mouse_event(move |_: &ScrollEvent, phase, _, cx| {
+                                if phase.capture() {
+                                    scroll_state.update(cx, |state, cx| {
+                                        if state.at_pointer
+                                            && (state.open || state.is_hovering_trigger)
+                                        {
+                                            state.dismiss(cx);
+                                        }
+                                    });
+                                }
+                            });
                         }
                     },
                 )
@@ -428,13 +473,13 @@ impl RenderOnce for NyaHoverCard {
             );
 
         if !open {
-            return if self.placement.is_none() {
+            return if !positioned {
                 Popup::new(id, root).anchor(self.anchor).into_any_element()
             } else {
                 root.into_any_element()
             };
         }
-        if self.placement.is_some() && !state.read(cx).trigger_captured {
+        if positioned && !state.read(cx).trigger_captured {
             return root.into_any_element();
         }
 
@@ -444,14 +489,21 @@ impl RenderOnce for NyaHoverCard {
             .flex()
             .flex_col()
             .tab_group()
+            .when(self.at_pointer, |this| {
+                let available = pointer::available_bounds(window).size;
+                this.debug_selector(|| "nya-pointer-hover-card".into())
+                    .max_w(available.width)
+                    .max_h(available.height)
+                    .overflow_hidden()
+            })
             .when(self.appearance, |this| {
                 this.popover_style(cx)
-                    .when(self.placement.is_some(), |this| {
+                    .when(positioned, |this| {
                         this.shadow(gpui_base::Theme::global(cx).tokens.shadow.md)
                     })
                     .p_3()
             })
-            .when(self.placement.is_none(), |this| {
+            .when(!positioned, |this| {
                 match self.anchor {
                     Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => {
                         this.bottom_1()
@@ -477,6 +529,18 @@ impl RenderOnce for NyaHoverCard {
             .on_hover(window.listener_for(&state, |state, hovered, _, cx| {
                 state.on_content_hover(*hovered, cx)
             }));
+
+        if self.at_pointer {
+            return root
+                .child(
+                    deferred(PointerPositioner::new(
+                        state.read(cx).pointer_anchor,
+                        content,
+                    ))
+                    .with_priority(POPUP_PRIORITY),
+                )
+                .into_any_element();
+        }
 
         let Some(placement) = self.placement else {
             return Popup::new(id, root)
@@ -700,6 +764,199 @@ mod tests {
 
     struct Harness {
         clicked: Rc<Cell<bool>>,
+    }
+
+    struct PointerHarness {
+        clicked: Rc<Cell<bool>>,
+    }
+
+    impl Render for PointerHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicked = self.clicked.clone();
+            div().size_full().flex().child(
+                NyaHoverCard::new(
+                    "pointer-card",
+                    div()
+                        .size_full()
+                        .debug_selector(|| "pointer-trigger".into()),
+                    div()
+                        .id("pointer-content")
+                        .debug_selector(|| "pointer-content".into())
+                        .w(px(120.))
+                        .h(px(80.))
+                        .on_click(move |_, _, _| clicked.set(true)),
+                )
+                .at_pointer()
+                .flexible_trigger()
+                .appearance(false)
+                .open_delay(Duration::from_millis(10))
+                .close_delay(Duration::from_millis(250)),
+            )
+        }
+    }
+
+    fn open_pointer_card(cx: &mut gpui::VisualTestContext, position: gpui::Point<gpui::Pixels>) {
+        cx.simulate_mouse_move(position, None, Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(10));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    #[gpui::test]
+    fn pointer_card_uses_latest_pointer_and_keeps_its_anchor_while_reading(
+        cx: &mut TestAppContext,
+    ) {
+        let clicked = Rc::new(Cell::new(false));
+        let (_, cx) = cx.add_window_view(|_, _| PointerHarness {
+            clicked: clicked.clone(),
+        });
+        activate_and_draw(cx);
+        cx.simulate_mouse_move(point(px(100.), px(100.)), None, Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(5));
+        let pointer = point(px(150.), px(110.));
+        open_pointer_card(cx, pointer);
+        let card = cx
+            .debug_bounds("pointer-content")
+            .expect("opened pointer card");
+        assert_eq!(card.origin, pointer + point(px(12.), px(16.)));
+
+        cx.simulate_mouse_move(point(px(170.), px(115.)), None, Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(cx.debug_bounds("pointer-content"), Some(card));
+        cx.simulate_mouse_move(card.center(), None, Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(cx.debug_bounds("pointer-content"), Some(card));
+        cx.simulate_click(card.center(), Modifiers::default());
+        assert!(clicked.get());
+    }
+
+    #[gpui::test]
+    fn pointer_card_flips_at_window_edges_on_its_first_frame(cx: &mut TestAppContext) {
+        for right in [false, true] {
+            for bottom in [false, true] {
+                let (_, cx) = cx.add_window_view(|_, _| PointerHarness {
+                    clicked: Rc::default(),
+                });
+                activate_and_draw(cx);
+                let viewport = cx.update(|window, _| super::pointer::available_bounds(window));
+                let pointer = point(
+                    if right {
+                        viewport.right() - px(24.)
+                    } else {
+                        viewport.left() + px(24.)
+                    },
+                    if bottom {
+                        viewport.bottom() - px(24.)
+                    } else {
+                        viewport.top() + px(24.)
+                    },
+                );
+                open_pointer_card(cx, pointer);
+                let card = cx
+                    .debug_bounds("pointer-content")
+                    .expect("first positioned frame");
+                if right {
+                    assert_eq!(card.right(), pointer.x - px(12.));
+                } else {
+                    assert_eq!(card.left(), pointer.x + px(12.));
+                }
+                if bottom {
+                    assert_eq!(card.bottom(), pointer.y - px(16.));
+                } else {
+                    assert_eq!(card.top(), pointer.y + px(16.));
+                }
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn pointer_card_repositions_and_fits_after_window_resize(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| PointerHarness {
+            clicked: Rc::default(),
+        });
+        activate_and_draw(cx);
+        open_pointer_card(cx, point(px(200.), px(200.)));
+        let original = cx.debug_bounds("nya-pointer-hover-card").unwrap();
+        assert_eq!(original.origin, point(px(212.), px(216.)));
+        // Resizing must constrain the very next frame without recapturing the
+        // mouse or letting the card's original preferred size overflow.
+        for (width, height) in [(300., 250.), (100., 60.)] {
+            cx.simulate_resize(gpui::size(px(width), px(height)));
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let viewport = cx.update(|window, _| super::pointer::available_bounds(window));
+            let card = cx.debug_bounds("nya-pointer-hover-card").unwrap();
+            assert!(card.left() >= viewport.left());
+            assert!(card.top() >= viewport.top());
+            assert!(card.right() <= viewport.right());
+            assert!(card.bottom() <= viewport.bottom());
+        }
+    }
+
+    #[gpui::test]
+    fn pointer_cards_cancel_on_click_drag_escape_and_window_deactivation(cx: &mut TestAppContext) {
+        for action in ["click", "drag", "escape", "deactivate"] {
+            for open_first in [false, true] {
+                let (_, cx) = cx.add_window_view(|_, _| PointerHarness {
+                    clicked: Rc::default(),
+                });
+                activate_and_draw(cx);
+                let pointer = point(px(100.), px(100.));
+                cx.simulate_mouse_move(pointer, None, Modifiers::default());
+                cx.executor()
+                    .advance_clock(Duration::from_millis(if open_first { 10 } else { 5 }));
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                match action {
+                    "click" => cx.simulate_click(pointer, Modifiers::default()),
+                    "drag" => cx.simulate_mouse_move(
+                        pointer,
+                        Some(MouseButton::Left),
+                        Modifiers::default(),
+                    ),
+                    "escape" => cx.simulate_keystrokes("escape"),
+                    "deactivate" => cx.deactivate_window(),
+                    _ => unreachable!(),
+                }
+                cx.executor().advance_clock(Duration::from_millis(300));
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                assert!(
+                    cx.debug_bounds("pointer-content").is_none(),
+                    "{action}, open={open_first}"
+                );
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn scrolling_cancels_pointer_cards_until_pointer_reentry(cx: &mut TestAppContext) {
+        for open_first in [false, true] {
+            let (_, cx) = cx.add_window_view(|_, _| PointerHarness {
+                clicked: Rc::default(),
+            });
+            activate_and_draw(cx);
+            let pointer = point(px(100.), px(100.));
+            cx.simulate_mouse_move(pointer, None, Modifiers::default());
+            cx.executor()
+                .advance_clock(Duration::from_millis(if open_first { 10 } else { 5 }));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(cx.debug_bounds("pointer-content").is_some(), open_first);
+            cx.simulate_event(gpui::ScrollEvent {
+                position: pointer,
+                delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-20.))),
+                ..Default::default()
+            });
+            cx.executor().advance_clock(Duration::from_millis(300));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(cx.debug_bounds("pointer-content").is_none());
+            cx.simulate_mouse_move(point(px(-10.), px(-10.)), None, Modifiers::default());
+            open_pointer_card(cx, pointer);
+            assert!(cx.debug_bounds("pointer-content").is_some());
+        }
     }
 
     impl Render for Harness {

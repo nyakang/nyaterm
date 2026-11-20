@@ -64,6 +64,62 @@ impl NyaTermApp {
         .detach();
     }
 
+    /// Opt-in wake for an idle reconnected console. Competing input invalidates
+    /// the token so this Enter cannot submit a command the user has begun typing.
+    pub(in crate::features) fn schedule_serial_reconnect_enter(
+        &mut self,
+        session_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings.summary().terminal_serial_reconnect_send_enter
+            || self.session.metadata(&session_id).is_none_or(|metadata| {
+                metadata.disconnected
+                    || !matches!(
+                        metadata.launch_config,
+                        crate::models::SessionLaunchConfig::Serial(_)
+                    )
+            })
+        {
+            return;
+        }
+        let token = self
+            .terminal
+            .begin_serial_reconnect_enter(session_id.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if !this
+                    .terminal
+                    .take_serial_reconnect_enter(&session_id, token)
+                    || !this.settings.summary().terminal_serial_reconnect_send_enter
+                    || this.session.metadata(&session_id).is_none_or(|metadata| {
+                        metadata.disconnected
+                            || !matches!(
+                                metadata.launch_config,
+                                crate::models::SessionLaunchConfig::Serial(_)
+                            )
+                    })
+                {
+                    return;
+                }
+                // Keep this wake out of command history and synchronized input.
+                if this
+                    .write_session_raw_input_recorded(&session_id, b"\r")
+                    .is_ok()
+                {
+                    this.terminal.view.frame_pipeline.arm_output_event_wake();
+                    this.arm_terminal_input_wake(cx);
+                    this.shell
+                        .set_status("enter sent to serial device".to_string());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(in crate::features) fn close_active_session(
         &mut self,
         window: &mut Window,
@@ -95,6 +151,7 @@ impl NyaTermApp {
         session_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.cancel_serial_reconnect_enter(&session_id);
         if self.hide_referenced_session_tab(&session_id, cx) {
             return;
         }
@@ -153,6 +210,13 @@ impl NyaTermApp {
                 Ok(())
             } else if self.remote_desktop.is_session(close_id) {
                 self.close_remote_desktop_runtime(close_id)
+            } else if self
+                .session
+                .session_info(close_id)
+                .is_some_and(|info| info.kind == nyaterm_transport::SessionKind::Ftp)
+            {
+                // FTP view sessions own no SessionManager channel.
+                Ok(())
             } else {
                 self.session
                     .manager()

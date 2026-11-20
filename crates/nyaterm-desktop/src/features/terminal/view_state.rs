@@ -18,7 +18,6 @@ struct TerminalSessionTransferEntry {
     session_id: String,
     frame: Option<TerminalFrameSession>,
     view: Option<TerminalViewState>,
-    search_wrap: Option<bool>,
     scroll_residual: Option<f32>,
     selection: Option<TerminalSelection>,
     editing: Option<super::editing_state::SessionEditingState>,
@@ -38,7 +37,6 @@ impl TerminalFeatureState {
         self.view.views.contains_key(id)
             || self.view.surfaces.contains_key(id)
             || self.view.scroll_delta_residuals.contains_key(id)
-            || self.search.wrap_around_by_session.contains_key(id)
             || self.layout.session_surface_bounds.contains_key(id)
             || self.layout.session_scrollbar_track_bounds.contains_key(id)
             || self.selection.session_id.as_deref() == Some(id)
@@ -115,7 +113,6 @@ impl TerminalFeatureState {
                 };
                 TerminalSessionTransferEntry {
                     view: self.view.views.remove(&session_id),
-                    search_wrap: self.search.wrap_around_by_session.remove(&session_id),
                     scroll_residual: self.view.scroll_delta_residuals.remove(&session_id),
                     selection,
                     editing: self.editing.sessions.remove(&session_id),
@@ -194,11 +191,6 @@ impl TerminalFeatureState {
                 self.editing
                     .sessions
                     .insert(entry.session_id.clone(), editing);
-            }
-            if let Some(wrap) = entry.search_wrap {
-                self.search
-                    .wrap_around_by_session
-                    .insert(entry.session_id.clone(), wrap);
             }
             if let Some(residual) = entry.scroll_residual {
                 self.view

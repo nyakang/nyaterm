@@ -4,7 +4,7 @@ use std::sync::Arc;
 use nyaterm_core::SecretString;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// Maximum UTF-8 payload accepted for a single committed-text event.
 ///
@@ -1055,6 +1055,12 @@ pub enum VncControlMessage {
         epoch: u64,
         width: u32,
         height: u32,
+    },
+    /// All pixels belonging to this update precede this marker on stdout.
+    FrameUpdateComplete {
+        session_id: String,
+        epoch: u64,
+        sequence: u64,
     },
     State {
         session_id: String,

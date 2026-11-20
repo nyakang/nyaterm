@@ -230,6 +230,12 @@ impl NyaTermApp {
             return;
         };
 
+        if id.starts_with("networktools.") && id.ends_with(".bind") {
+            self.networktools.tftp_draft_mut().bind_address = value.to_string();
+            cx.notify();
+            return;
+        }
+
         if id == "remote.process.sort" {
             use crate::models::RemoteProcessSortKey;
             if let Some(key) = [
@@ -671,6 +677,17 @@ impl NyaTermApp {
                     "connection-editor-parity" => ConnectionEditorSelect::Parity,
                     "connection-editor-flow-control" => ConnectionEditorSelect::FlowControl,
                     "connection-editor-stop-bits" => ConnectionEditorSelect::StopBits,
+                    "connection-editor-ftp-passive-mode" => ConnectionEditorSelect::FtpPassiveMode,
+                    "connection-editor-ftp-filename-encoding-mode" => {
+                        ConnectionEditorSelect::FtpFilenameEncodingMode
+                    }
+                    "connection-editor-ftp-filename-encoding" => {
+                        ConnectionEditorSelect::FtpFilenameEncoding
+                    }
+                    "connection-editor-ftp-security-mode" => {
+                        ConnectionEditorSelect::FtpSecurityMode
+                    }
+                    "connection-editor-ftp-tls-version" => ConnectionEditorSelect::FtpTlsVersion,
                     _ => return,
                 };
                 if select == ConnectionEditorSelect::Group

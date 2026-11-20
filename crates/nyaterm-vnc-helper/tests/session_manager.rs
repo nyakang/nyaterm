@@ -394,3 +394,48 @@ fn password_prompt_hint_distinguishes_missing_rejected_and_unsupported_auth() {
         );
     }
 }
+
+#[test]
+fn background_pipeline_composes_a_maximum_rectangle_update_before_the_ui_consumes_it() {
+    use nyaterm_remote_desktop::presentation::VncPresentationConfig;
+    use_built_helper();
+    let (port, server) = spawn_no_auth_server((256, 256), |stream| {
+        push_update(stream, 256, 256, u16::MAX);
+        Ok(())
+    });
+    let manager = VncSessionManager::with_presentation_pipeline(VncPresentationConfig::default());
+    let id = manager.create_session(config(port)).unwrap();
+    manager.set_presentation_visible(&id, true, VncPresentationConfig::default());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let presentation = loop {
+        for event in manager.drain_batch(&id).control {
+            if let VncRuntimeEvent::Error {
+                error, fatal: true, ..
+            } = event
+            {
+                panic!("{error}");
+            }
+        }
+        if let Some(presentation) = manager.take_presentation(&id) {
+            break presentation;
+        }
+        assert!(Instant::now() < deadline, "background composition stalled");
+        std::thread::sleep(Duration::from_millis(16));
+    };
+    assert!(presentation.full);
+    assert_eq!(presentation.regions.len(), 1);
+    assert!(
+        presentation.regions[0].pixels[..usize::from(u16::MAX) * 4]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [0xc0, 0x80, 0x40, 0xff])
+    );
+    assert_eq!(
+        manager.presentation_metrics(&id).unwrap().rectangles,
+        u64::from(u16::MAX)
+    );
+    manager.acknowledge_presentation(&id, presentation.id);
+    manager.close(&id).unwrap();
+    server.join().unwrap().unwrap();
+}

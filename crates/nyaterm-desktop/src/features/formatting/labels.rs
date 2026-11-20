@@ -82,6 +82,7 @@ pub(in crate::features) fn session_kind_label(kind: SessionKind) -> std::borrow:
         SessionKind::AdbShell => rust_i18n::t!("android.shell"),
         SessionKind::AdbFiles => rust_i18n::t!("android.files"),
         SessionKind::AdbScreen => rust_i18n::t!("android.screen"),
+        SessionKind::Ftp => "FTP".into(),
     }
 }
 

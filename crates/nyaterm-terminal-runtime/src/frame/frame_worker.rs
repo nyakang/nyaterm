@@ -724,11 +724,14 @@ pub(super) fn run_terminal_frame_processor(
             TerminalFrameCommand::CommandInput {
                 session_id,
                 fallback,
+                input_activity,
             } => {
                 if let Some(session) = sessions.get_mut(&session_id) {
-                    let changed = session.screen.reset_command_navigation();
-                    if let Some(anchor) = fallback {
-                        session.screen.record_fallback_command_at(anchor);
+                    let mut changed = session.screen.reset_command_navigation();
+                    if let Some(submission) = fallback {
+                        changed |= session.screen.note_command_submission(submission);
+                    } else if input_activity {
+                        session.screen.note_command_input_activity();
                     }
                     if changed {
                         session.revision = session.revision.saturating_add(1);
