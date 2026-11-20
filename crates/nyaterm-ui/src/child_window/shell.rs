@@ -255,18 +255,18 @@ fn child_window_target(
         handle
             .update(cx, |_, window, cx| {
                 let display = window.display(cx);
-                // `window_bounds()` is a *restore* descriptor, not the window's
-                // current geometry: fullscreen and maximised read back the
-                // pre-fullscreen / pre-maximised rectangle (on Windows it comes
-                // from `GetWindowPlacement`'s `rcNormalPosition`), and a window
-                // snapped to a half of the screen keeps its pre-snap rect there
-                // too. Centring on it would drop the child at where the parent
-                // *used to be*, not where it is now, so anything still being
-                // presented uses the live `bounds()`. Only a minimised parent
-                // falls back to `window_bounds()`: its live origin is the
-                // minimise position (far off-screen) and the restored rectangle
-                // is the only sensible place to centre beside.
-                let parent_bounds = if window.visibility().is_visible() {
+                // Windows' restore bounds can retain the pre-snap rectangle.
+                // Use live bounds while shown, but restore bounds when hidden
+                // or minimised to avoid the off-screen minimise position.
+                // Other platforms also report occluded/suspended windows as
+                // hidden: preserve live fullscreen/maximised geometry there
+                // instead of falling back to the pre-fullscreen restore bounds.
+                let use_live_bounds = if cfg!(target_os = "windows") {
+                    window.visibility().is_visible()
+                } else {
+                    window.is_fullscreen() || window.is_simple_fullscreen() || window.is_maximized()
+                };
+                let parent_bounds = if use_live_bounds {
                     window.bounds()
                 } else {
                     window.window_bounds().get_bounds()
