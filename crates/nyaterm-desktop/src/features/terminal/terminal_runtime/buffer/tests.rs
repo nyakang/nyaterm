@@ -631,6 +631,7 @@ fn terminal_color_queries_follow_theme_preview_and_draft_cancellation_without_vi
     use crate::features::NyaTermApp;
     use crate::test_support::TestConfigDir;
     use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
     use nyaterm_core::{AppRuntime, RuntimeMode};
     use nyaterm_terminal_runtime::frame::TerminalFrameEvent;
 
@@ -675,6 +676,23 @@ fn terminal_color_queries_follow_theme_preview_and_draft_cancellation_without_vi
         (background >> 8) & 0xff,
         background & 0xff
     );
+    assert_eq!(ask(), initial);
+    app.update(&mut cx, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.update_theme_mode(ThemeMode::System, cx);
+        app.system_appearance_changed(SystemAppearance::Dark, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:0d0d/1111/1717\x07");
+    app.update(&mut cx, |app, cx| {
+        app.system_appearance_changed(SystemAppearance::Light, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:ffff/ffff/ffff\x07");
+    app.update(&mut cx, |app, cx| {
+        app.set_terminal_theme(Some("dracula"), cx);
+        app.system_appearance_changed(SystemAppearance::Dark, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:2828/2a2a/3636\x07");
+    app.update(&mut cx, |app, cx| app.cancel_settings(cx));
     assert_eq!(ask(), initial);
     app.update(&mut cx, |app, cx| {
         app.begin_settings_draft(cx);

@@ -54,12 +54,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap_5()
-                    .child(appearance_settings_field(
-                        palette,
-                        t!("settings.theme"),
-                        None,
-                        self.appearance_theme_select(false, cx),
-                    ))
+                    .child(self.appearance_theme_settings(cx))
                     .child(appearance_settings_field(
                         palette,
                         t!("settings.terminalTheme"),
@@ -526,7 +521,7 @@ impl SettingsPanel {
             .resolve_font_stack(&families, terminal, platform_default)
     }
 
-    fn appearance_theme_select(
+    pub(super) fn appearance_theme_select(
         &mut self,
         terminal: bool,
         cx: &mut Context<Self>,

@@ -30,6 +30,7 @@ pub(crate) enum TitleMenuCommand {
     ViewLogs,
     About,
     SetTheme(String),
+    FollowSystemTheme,
     SetTerminalTheme(Option<String>),
     SetLanguage(String),
     HideHeaderStatus,
@@ -97,6 +98,7 @@ impl TitleMenuCommand {
                 | Self::ExportConfig
                 | Self::OpenSettings
                 | Self::SetTheme(_)
+                | Self::FollowSystemTheme
                 | Self::SetTerminalTheme(_)
                 | Self::SetLanguage(_)
         )
