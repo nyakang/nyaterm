@@ -12,6 +12,10 @@ pub(super) fn validated_quick_command_text(command: &str) -> Option<String> {
     }
 }
 
+pub(super) fn parse_segmented_send_interval(input: &str) -> Option<u64> {
+    nyaterm_core::send_command::parse_interval_ms(input)
+}
+
 pub(super) fn unix_millis_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -132,6 +136,16 @@ mod tests {
                 validated_quick_command_text(command).as_deref(),
                 Some(command)
             );
+        }
+    }
+
+    #[test]
+    fn segmented_interval_accepts_seconds_and_converts_to_integer_milliseconds() {
+        for (input, expected) in [("0", 0), ("0.02", 20), ("1.00", 1000), ("60", 60000)] {
+            assert_eq!(super::parse_segmented_send_interval(input), Some(expected));
+        }
+        for input in ["", "abc", "-1", "60.01", "NaN", "inf"] {
+            assert_eq!(super::parse_segmented_send_interval(input), None);
         }
     }
 

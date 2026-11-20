@@ -1,7 +1,7 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use crate::features::commands::staged::{StagedCommandHistory, StagedQuickCommandTarget};
+use crate::features::terminal::terminal_runtime::StagedCommandInput;
+use futures::{FutureExt as _, StreamExt as _};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use gpui::{Context, KeyDownEvent};
@@ -103,166 +103,170 @@ impl NyaTermApp {
             return;
         }
 
-        let session_kind = self.active_session_kind();
         let draft = self.send_command.draft_for_send(append_enter, cx);
-        let units = match self.build_send_command_units(&draft, session_kind, cx) {
-            Ok(units) => units,
-            Err(message) => {
-                self.shell.set_status(message);
-                cx.notify();
-                return;
-            }
-        };
-        if units.is_empty() {
-            self.shell.set_status("command send is empty".to_string());
-            cx.notify();
-            return;
-        }
-        let target_session_ids = self.send_command_target_session_ids();
-        if target_session_ids.is_empty() {
-            if matches!(self.send_command.target(), SendCommandTarget::Current)
-                && self
-                    .session
-                    .active_id()
-                    .is_some_and(|session_id| self.session.is_disconnected(session_id))
-            {
-                self.shell
-                    .set_status("session disconnected — reconnect before sending".to_string());
-                cx.notify();
-                return;
-            }
+        let ids = self.send_command_target_session_ids();
+        if ids.is_empty() {
             self.shell
-                .set_status("start a session before sending".to_string());
+                .set_status("start a connected terminal session before sending");
             cx.notify();
             return;
         }
-
-        let units_per_round = units.len() as u32;
-        let sent_draft = self.send_command.presentation(cx).draft;
-        let clear_after_send = self.settings.summary().ui_serial_send_clear_after_send;
-        let failed_writes = Arc::new(AtomicUsize::new(0));
-        let run = self.send_command.begin_send(units_per_round);
-        let cancel = run.cancel;
-        let infinite = run.infinite;
-        let rounds = run.rounds;
-        let interval = run.interval_seconds;
-        let raw_units = run.raw_units;
-        self.shell.set_status(if infinite {
-            format!("sending {units_per_round} unit(s) × ∞")
-        } else {
-            format!("sending {units_per_round} unit(s) × {rounds}")
-        });
-        cx.notify();
-
-        cx.spawn(async move |this, cx| {
-            let mut first = true;
-            let mut aborted = false;
-            let mut round = 0u32;
-            let failed_writes_for_send = failed_writes.clone();
-            'outer: loop {
-                if !infinite && round >= rounds {
-                    break;
+        let mut plans = Vec::new();
+        for id in &ids {
+            let kind = self.session.session_info(id).map(|session| session.kind);
+            match self.send_command.build_plan(&draft, kind, cx) {
+                Ok(plan) => plans.push((id.clone(), plan)),
+                Err(error) => {
+                    self.shell.set_status(error);
+                    cx.notify();
+                    return;
                 }
-                if cancel.load(Ordering::SeqCst) {
+            }
+        }
+        let units_per_round: u64 = plans.iter().map(|(_, plan)| plan.unit_count()).sum();
+        if units_per_round == 0 {
+            self.shell.set_status("command send is empty");
+            cx.notify();
+            return;
+        }
+        let sent_draft = self.send_command.draft_for_send(false, cx);
+        let clear_after_send = self.settings.summary().ui_serial_send_clear_after_send;
+        let run = self
+            .send_command
+            .begin_send(units_per_round.min(u32::MAX as u64) as u32);
+        let run_id = self.commands.staged.begin(&ids);
+        self.commands.staged.hide_run(run_id);
+        self.send_command.set_run_id(run_id);
+        let mut wake = self.commands.staged.take_wake_receiver(run_id);
+        let input = if run.raw_units {
+            StagedCommandInput::Bytes
+        } else {
+            StagedCommandInput::Text
+        };
+        let current = matches!(self.send_command.target(), SendCommandTarget::Current);
+        let interval = Duration::from_secs_f64(run.interval_seconds);
+        self.shell
+            .set_status(format!("sending {units_per_round} unit(s)"));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let mut plans = plans;
+            let mut round = 0u32;
+            let mut interrupted_any = false;
+            let mut aborted = false;
+            let mut failed = 0usize;
+            'rounds: loop {
+                if run.cancel.load(Ordering::Acquire) {
                     aborted = true;
                     break;
                 }
+                if !run.infinite && round >= run.rounds {
+                    break;
+                }
                 round = round.saturating_add(1);
+                let now = cx.background_executor().now();
+                let mut targets = plans
+                    .iter()
+                    .map(|(id, plan)| {
+                        let mut plan = plan.clone();
+                        let pending = plan.next_batch(16 * 1024);
+                        StagedQuickCommandTarget {
+                            source_session_id: current.then(|| id.clone()),
+                            session_id: id.clone(),
+                            history: StagedCommandHistory::default(),
+                            plan,
+                            pending,
+                            ready_at: now + if round > 1 { interval } else { Duration::ZERO },
+                            finished: false,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let _ = this.update(cx, |this, cx| {
                     this.send_command.set_progress_round(round);
                     cx.notify();
                 });
-                for unit in &units {
-                    if cancel.load(Ordering::SeqCst) {
+                loop {
+                    if run.cancel.load(Ordering::Acquire) {
                         aborted = true;
-                        break 'outer;
+                        break 'rounds;
                     }
-                    if !first && interval > 0.0 {
-                        cx.background_executor().timer(Duration::from_secs_f64(interval)).await;
-                        if cancel.load(Ordering::SeqCst) {
-                            aborted = true;
-                            break 'outer;
+                    let Ok((done, interrupted, wait, progress)) = this.update(cx, |this, cx| {
+                        let result =
+                            this.poll_quick_command_targets(&mut targets, run_id, input, false, cx);
+                        this.send_command.complete_progress_units(result.3);
+                        if result.3 > 0 {
+                            cx.notify();
                         }
+                        result
+                    }) else {
+                        return;
+                    };
+                    let _ = progress;
+                    interrupted_any |= interrupted;
+                    if done {
+                        break;
                     }
-                    first = false;
-                    let unit = unit.clone();
-                    let targets = target_session_ids.clone();
-                    let failed_writes = failed_writes_for_send.clone();
-                    let _ = this.update(cx, |this, cx| {
-                        for session_id in &targets {
-                            let sent = if raw_units {
-                                this.send_terminal_raw_input_to_session(
-                                    session_id.clone(),
-                                    unit.clone(),
-                                    cx,
-                                )
-                            } else {
-                                this.send_terminal_input_to_session(
-                                    session_id.clone(),
-                                    unit.clone(),
-                                    cx,
-                                )
-                            };
-                            if !sent {
-                                failed_writes.fetch_add(1, Ordering::SeqCst);
-                            }
-                        }
-                        this.send_command.complete_progress_unit();
-                        cx.notify();
-                    });
+                    let timer = cx
+                        .background_executor()
+                        .timer(wait.max(Duration::from_millis(1)))
+                        .fuse();
+                    let notification = wake.next().fuse();
+                    futures::pin_mut!(timer, notification);
+                    futures::select_biased! { _ = notification => {}, _ = timer => {} }
+                }
+                failed += targets
+                    .iter()
+                    .filter(|target| target.pending.is_some())
+                    .count();
+                plans.retain(|(id, _)| {
+                    targets
+                        .iter()
+                        .any(|target| &target.session_id == id && target.pending.is_none())
+                });
+                if plans.is_empty() {
+                    aborted |= interrupted_any;
+                    break;
+                }
+                if !run.infinite && round >= run.rounds {
+                    break;
+                }
+                if interval.is_zero() {
+                    let timer = cx
+                        .background_executor()
+                        .timer(Duration::from_millis(1))
+                        .fuse();
+                    let notification = wake.next().fuse();
+                    futures::pin_mut!(timer, notification);
+                    futures::select_biased! { _ = notification => {}, _ = timer => {} }
                 }
             }
             let _ = this.update(cx, |this, cx| {
+                for id in &ids {
+                    this.commands.staged.finish(id, run_id);
+                }
+                this.commands.staged.end_run(run_id);
+                aborted |= interrupted_any;
                 let progress = this.send_command.finish_send();
-                let failed_writes = failed_writes.load(Ordering::SeqCst);
                 if this.send_command.clear_sent_draft(
                     clear_after_send,
-                    !aborted && !cancel.load(Ordering::SeqCst) && !infinite && failed_writes == 0
+                    !aborted
+                        && failed == 0
+                        && !run.infinite
+                        && !run.cancel.load(Ordering::Acquire)
                         && progress.completed == progress.total,
                     &sent_draft,
                     cx,
-                ) && this.send_command.presentation(cx).data_type == SendCommandDataType::Text {
+                ) && this.send_command.presentation(cx).data_type == SendCommandDataType::Text
+                {
                     this.reset_text_input("send-command.draft", "", cx);
                 }
-                if aborted {
-                    this.shell.set_status(if infinite {
-                        format!(
-                            "command send stopped at {} unit(s) · round {}",
-                            progress.completed, progress.round
-                        )
+                this.shell
+                    .set_status(if aborted || run.cancel.load(Ordering::Acquire) {
+                        format!("command send stopped at {} unit(s)", progress.completed)
+                    } else if failed > 0 {
+                        format!("command send failed on {failed} target(s)")
                     } else {
-                        format!(
-                            "command send stopped at {}/{}",
-                            progress.completed, progress.total
-                        )
+                        format!("command send completed: {round} round(s)")
                     });
-                    if failed_writes > 0 {
-                        this.shell.set_status(format!(
-                            "{}, {failed_writes} failed write(s)",
-                            this.shell.status()
-                        ));
-                    }
-                } else if infinite {
-                    this.shell.set_status(if failed_writes == 0 {
-                        format!(
-                            "command send completed: {} unit(s)",
-                            progress.completed
-                        )
-                    } else {
-                        format!(
-                            "command send completed: {} unit(s), {failed_writes} failed write(s)",
-                            progress.completed
-                        )
-                    });
-                } else {
-                    this.shell.set_status(if failed_writes == 0 {
-                        format!("command send completed: {rounds} round(s)")
-                    } else {
-                        format!(
-                            "command send completed: {rounds} round(s), {failed_writes} failed write(s)"
-                        )
-                    });
-                }
                 cx.notify();
             });
         })
@@ -271,6 +275,9 @@ impl NyaTermApp {
 
     pub(in crate::features) fn stop_send_command(&mut self, cx: &mut Context<Self>) {
         if self.send_command.request_cancel() {
+            if let Some(run_id) = self.send_command.run_id() {
+                self.commands.staged.cancel_run(run_id);
+            }
             self.shell.set_status("stopping command send…".to_string());
             cx.notify();
         }
@@ -432,15 +439,6 @@ impl NyaTermApp {
         self.shell
             .set_status(format!("command send target: {label}"));
         cx.notify();
-    }
-
-    pub(in crate::features) fn build_send_command_units(
-        &self,
-        draft: &str,
-        session_kind: Option<SessionKind>,
-        cx: &gpui::App,
-    ) -> Result<Vec<Vec<u8>>, String> {
-        self.send_command.build_units(draft, session_kind, cx)
     }
 
     pub(in crate::features) fn active_session_kind(&self) -> Option<SessionKind> {

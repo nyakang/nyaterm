@@ -24,12 +24,15 @@ impl NyaTermApp {
             return;
         };
         let command_text = substitute_quick_command_variables(&prompt.command, &prompt.variables);
-        self.send_resolved_quick_command(
+        self.send_resolved_quick_command_with_segmented(
             prompt.command_id,
             prompt.label,
             command_text,
-            prompt.execute,
-            prompt.send_to_all,
+            super::run::QuickCommandSendOptions {
+                execute: prompt.execute,
+                send_to_all: prompt.send_to_all,
+                segmented_send: prompt.segmented_send.clone(),
+            },
             cx,
         );
     }
@@ -80,8 +83,8 @@ pub(super) fn substitute_quick_command_variables(
 ) -> String {
     let mut command_text = command_text.to_string();
     for variable in variables {
-        let literal_value = variable.value.replace('\\', "\\\\");
-        command_text = command_text.replace(&variable.raw, &literal_value);
+        let value = variable.value.replace('\\', "\\\\");
+        command_text = command_text.replace(&variable.raw, &value);
     }
     command_text
 }
@@ -206,6 +209,24 @@ mod tests {
         let chunks = plan_quick_command(&text, true);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].bytes, b"cd C:\\temp\r".to_vec());
+    }
+
+    #[test]
+    fn segmented_variable_paths_remain_data_when_the_template_is_a_script() {
+        let mut variables = parse_quick_command_variables("cd {{path}}\nnext");
+        variables[0].value = "C:\\temp".to_string();
+        let text = substitute_quick_command_variables("cd {{path}}\nnext", &variables);
+        let plan = nyaterm_core::send_command::SendCommandPlan::text(
+            &text,
+            nyaterm_core::send_command::SendCommandMode::Line,
+            nyaterm_core::send_command::SendCommandLineEnding::Cr,
+            nyaterm_core::send_command::TextInterpretation::Script,
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(
+            plan.flat_map(|chunk| chunk.bytes).collect::<Vec<_>>(),
+            b"cd C:\\temp\rnext\r"
+        );
     }
 
     #[test]

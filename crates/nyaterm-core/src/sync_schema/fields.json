@@ -241,6 +241,8 @@
       "icon_tag": "portable:icon_tag",
       "pinned": "portable:pinned",
       "execution_mode": "portable:execution_mode",
+      "segmented_send": "portable:segmented_send",
+      "extra": "unsupported",
       "raw_send": "portable:raw_send",
       "source": "local",
       "risk_level": "local",
