@@ -32,6 +32,7 @@ fn version_request(socket: &mut TcpStream) {
 
 #[test]
 fn tcp_connect_failures_start_the_configured_adb_and_verify_its_server() {
+    let _guard = crate::adb::client::STARTED_SERVER_TEST_LOCK.lock().unwrap();
     // Inject OS connect results: reliably causing a loopback connect timeout is
     // not portable. The command and subsequent protocol probe remain real I/O.
     for kind in [
@@ -59,10 +60,12 @@ fn tcp_connect_failures_start_the_configured_adb_and_verify_its_server() {
         );
         worker.join().unwrap();
     }
+    super::take_started_servers();
 }
 
 #[test]
 fn refused_server_uses_custom_adb_and_verifies_that_startup_really_succeeded() {
+    let _guard = crate::adb::client::STARTED_SERVER_TEST_LOCK.lock().unwrap();
     let root = tempfile::tempdir().unwrap();
     let executable = custom_adb(root.path());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -73,6 +76,7 @@ fn refused_server_uses_custom_adb_and_verifies_that_startup_really_succeeded() {
     // success until a subsequent host:version probe has actually succeeded.
     assert!(matches!(client.ensure_server(), Err(AdbError::Io(_))));
     assert!(root.path().join("started").is_file());
+    super::take_started_servers();
 }
 
 #[test]
