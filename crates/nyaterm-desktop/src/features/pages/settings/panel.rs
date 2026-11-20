@@ -2359,10 +2359,12 @@ mod tests {
             });
         });
         draw(&app, vcx);
-        let system = vcx
-            .debug_bounds("appearance-theme-system")
-            .expect("system mode control");
-        vcx.simulate_click(system.center(), Modifiers::default());
+        let tabs = vcx
+            .debug_bounds("appearance-theme-mode")
+            .expect("theme mode segmented tabs");
+        let mut system = tabs.center();
+        system.x += tabs.size.width / 4.;
+        vcx.simulate_click(system, Modifiers::default());
         draw(&app, vcx);
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
@@ -2375,10 +2377,12 @@ mod tests {
             });
         });
         draw(&app, vcx);
-        let manual = vcx
-            .debug_bounds("appearance-theme-manual")
-            .expect("manual mode control");
-        vcx.simulate_click(manual.center(), Modifiers::default());
+        let tabs = vcx
+            .debug_bounds("appearance-theme-mode")
+            .expect("theme mode segmented tabs");
+        let mut manual = tabs.center();
+        manual.x -= tabs.size.width / 4.;
+        vcx.simulate_click(manual, Modifiers::default());
         draw(&app, vcx);
         vcx.update(|_, cx| {
             assert_eq!(

@@ -1,6 +1,6 @@
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
-use nyaterm_ui::{NyaButton, NyaSelectOption, ThemePalette};
+use nyaterm_ui::{NyaSelectOption, NyaTabItem, NyaTabs, NyaTabsVariant, ThemePalette};
 use rust_i18n::t;
 
 use crate::features::pages::settings::panel::SettingsPanel;
@@ -13,37 +13,32 @@ impl SettingsPanel {
     ) -> impl IntoElement + use<> {
         let palette = self.theme_palette();
         let system = self.settings.summary().theme_mode == ThemeMode::System;
-        let mode_buttons = div().flex().flex_wrap().gap_2().children([
-            div()
-                .debug_selector(|| "appearance-theme-manual".into())
-                .child(
-                    NyaButton::new("appearance-theme-manual", t!("settings.themeModeManual"))
-                        .form_control()
-                        .selected(!system)
-                        .on_click(cx.listener(|panel, _, _, cx| {
-                            panel.with_app(cx, |app, cx| {
-                                app.update_theme_mode(ThemeMode::Manual, cx)
-                            });
-                        })),
-                ),
-            div()
-                .debug_selector(|| "appearance-theme-system".into())
-                .child(
-                    NyaButton::new("appearance-theme-system", t!("settings.themeModeSystem"))
-                        .form_control()
-                        .selected(system)
-                        .on_click(cx.listener(|panel, _, _, cx| {
-                            panel.with_app(cx, |app, cx| {
-                                app.update_theme_mode(ThemeMode::System, cx)
-                            });
-                        })),
-                ),
-        ]);
+        let mode_tabs = div()
+            .w(px(260.))
+            .max_w_full()
+            .debug_selector(|| "appearance-theme-mode".into())
+            .child(
+                NyaTabs::new("appearance-theme-mode")
+                    .variant(NyaTabsVariant::Segmented)
+                    .items([
+                        NyaTabItem::new(t!("settings.themeModeManual")),
+                        NyaTabItem::new(t!("settings.themeModeSystem")),
+                    ])
+                    .selected_index(usize::from(system))
+                    .on_select(cx.listener(|panel, index: &usize, _, cx| {
+                        let mode = if *index == 1 {
+                            ThemeMode::System
+                        } else {
+                            ThemeMode::Manual
+                        };
+                        panel.with_app(cx, |app, cx| app.update_theme_mode(mode, cx));
+                    })),
+            );
         let mut content = div().flex().flex_col().gap_3().child(settings_form_row(
             palette,
             t!("settings.themeMode"),
             None,
-            mode_buttons,
+            mode_tabs,
         ));
         if system {
             let light = self.system_theme_card(SystemAppearance::Light, cx);
