@@ -4375,6 +4375,11 @@
     "tabDockSplitTop": "上に分割"
   },
   "terminalCtx": {
+    "keywordHighlight": "キーワードハイライト...",
+    "keywordHighlightTitle": "キーワードハイライト",
+    "sessionRules": "セッションルール",
+    "globalRules": "グローバルルール",
+    "keywordHighlightSelectHint": "左側でルールを選択するか、新規作成して編集してください。",
     "serialFoldersUnsupported": "シリアルプロトコルではフォルダーをアップロードできません",
     "serialUpload": "シリアルアップロード",
     "serialUploadCancelling": "シリアル転送をキャンセル中: %{id}",

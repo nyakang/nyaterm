@@ -229,6 +229,21 @@ fn empty_terminal_keyword_rules() -> Arc<Vec<nyaterm_core::ResolvedKeywordHighli
     Arc::clone(RULES.get_or_init(|| Arc::new(Vec::new())))
 }
 
+fn terminal_keyword_rules_with_session(
+    global: &Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    session_rules: &[nyaterm_core::models::KeywordHighlightRule],
+    is_dark: bool,
+) -> Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
+    if session_rules.is_empty() {
+        return Arc::clone(global);
+    }
+    Arc::new(nyaterm_core::overlay_resolved_keyword_highlight_rules(
+        global,
+        session_rules,
+        is_dark,
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::features) struct TerminalPaintedHitTestGeometry {
     pub(in crate::features) grid_bounds: Option<gpui::Bounds<gpui::Pixels>>,
@@ -377,6 +392,10 @@ pub(in crate::features) struct TerminalSurface {
     retained_rows: BTreeMap<usize, TerminalRetainedRow>,
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    /// Session-scoped highlight rules are stored as raw rules (both theme
+    /// colours) and overlaid onto `keyword_rules` for this surface only.
+    /// Borrowed by the popup editor; dropped with the surface on session close.
+    session_keyword_rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
     /// Cached `ui_highlight_line_roles`; the highlight path runs inside
     /// `app.update`, where reading the app entity would borrow it twice.
     line_roles: bool,
@@ -469,6 +488,7 @@ impl TerminalSurface {
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
+            session_keyword_rules: Vec::new(),
             line_roles: true,
             keyword_highlights: None,
             keyword_highlight_generation: 0,
@@ -1936,6 +1956,7 @@ impl TerminalSurface {
         if allow_empty_stale && decorations.is_empty() && !self.decorations.is_empty() {
             let show_cursor = show_cursor && !self.visual_scroll_active();
             let cursor_style = cursor_style.into();
+            let keyword_rules = self.keyword_rules_with_session(&keyword_rules);
             let rules_changed =
                 !terminal_keyword_rule_sets_equal(&self.keyword_rules, &keyword_rules);
             let changed = rules_changed
@@ -1961,6 +1982,7 @@ impl TerminalSurface {
     ) -> bool {
         let show_cursor = show_cursor && !self.visual_scroll_active();
         let cursor_style = cursor_style.into();
+        let keyword_rules = self.keyword_rules_with_session(&keyword_rules);
         let rules_changed = !terminal_keyword_rule_sets_equal(&self.keyword_rules, &keyword_rules);
         let decorations_changed = !Arc::ptr_eq(&self.decorations, &decorations)
             && self.decorations.as_ref() != decorations.as_ref();
@@ -2248,6 +2270,53 @@ impl TerminalSurface {
             line_roles: self.line_roles,
             ansi: self.palette.terminal_ansi,
         }
+    }
+
+    /// True when the terminal background is dark; matches
+    /// `ShellState::terminal_theme_is_dark` so session rules pick the same
+    /// light/dark colour as the globally resolved rules.
+    fn keyword_highlight_theme_is_dark(&self) -> bool {
+        let bg = self.palette.terminal_bg;
+        let r = ((bg >> 16) & 0xff) as f32;
+        let g = ((bg >> 8) & 0xff) as f32;
+        let b = (bg & 0xff) as f32;
+        let lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+        lum < 0.5
+    }
+
+    /// Overlay this surface's session rules on the globally resolved rules.
+    fn keyword_rules_with_session(
+        &self,
+        global: &Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    ) -> Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
+        terminal_keyword_rules_with_session(
+            global,
+            &self.session_keyword_rules,
+            self.keyword_highlight_theme_is_dark(),
+        )
+    }
+
+    /// Replace the session-scoped highlight rules for this surface and
+    /// invalidate/refresh highlighting so the change becomes visible at once.
+    pub(in crate::features) fn set_session_keyword_rules(
+        &mut self,
+        rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session_keyword_rules == rules {
+            return;
+        }
+        self.session_keyword_rules = rules;
+        let merged = self.keyword_rules_with_session(&self.keyword_rules);
+        self.keyword_rules = merged;
+        self.invalidate_keyword_highlight_config();
+        self.schedule_keyword_highlights(false, self.keyword_highlight_output_pressure, cx);
+    }
+
+    pub(in crate::features) fn session_keyword_rules(
+        &self,
+    ) -> &[nyaterm_core::models::KeywordHighlightRule] {
+        &self.session_keyword_rules
     }
 
     fn invalidate_keyword_highlight_config(&mut self) {

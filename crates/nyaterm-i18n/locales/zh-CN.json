@@ -4375,6 +4375,11 @@
     "tabDockSplitTop": "向上拆分"
   },
   "terminalCtx": {
+    "keywordHighlight": "关键词高亮...",
+    "keywordHighlightTitle": "关键词高亮",
+    "sessionRules": "会话规则",
+    "globalRules": "全局规则",
+    "keywordHighlightSelectHint": "在左侧选择规则或新建规则进行编辑。",
     "serialFoldersUnsupported": "串口协议不支持上传文件夹",
     "serialUpload": "串口上传",
     "serialUploadCancelling": "正在取消串口传输：%{id}",

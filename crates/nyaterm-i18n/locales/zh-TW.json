@@ -4375,6 +4375,11 @@
     "tabDockSplitTop": "向上拆分"
   },
   "terminalCtx": {
+    "keywordHighlight": "關鍵詞高亮...",
+    "keywordHighlightTitle": "關鍵詞高亮",
+    "sessionRules": "工作階段規則",
+    "globalRules": "全域規則",
+    "keywordHighlightSelectHint": "在左側選擇規則或新增規則進行編輯。",
     "serialFoldersUnsupported": "序列埠協定不支援上傳資料夾",
     "serialUpload": "序列埠上傳",
     "serialUploadCancelling": "正在取消序列埠傳輸：%{id}",

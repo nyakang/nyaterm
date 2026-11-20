@@ -4375,6 +4375,11 @@
     "tabDockSplitTop": "Split Top"
   },
   "terminalCtx": {
+    "keywordHighlight": "Keyword Highlight...",
+    "keywordHighlightTitle": "Keyword Highlight",
+    "sessionRules": "Session Rules",
+    "globalRules": "Global Rules",
+    "keywordHighlightSelectHint": "Select a rule on the left or create a new one to edit it.",
     "serialFoldersUnsupported": "Folders cannot be uploaded by a serial protocol",
     "serialUpload": "Serial upload",
     "serialUploadCancelling": "Serial transfer cancelling: %{id}",

@@ -18,6 +18,7 @@ use super::assist_state::TerminalAssistState;
 use super::command_suggestions::paste::SuggestionPasteContext;
 use super::editing_state::TerminalEditingState;
 use super::ime_state::TerminalImeState;
+use super::keyword_highlight_popup::KeywordHighlightPopupState;
 use super::terminal_surface::TerminalScrollbarDragState;
 use super::terminal_surface_entity::TerminalSurface;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
@@ -38,6 +39,7 @@ pub(in crate::features) struct TerminalFeatureState {
     pub(super) layout: TerminalLayoutState,
     pub(super) menus: TerminalMenuState,
     pub(super) paint: TerminalPaintCacheState,
+    pub(super) keyword_popup: KeywordHighlightPopupState,
 }
 
 /// Focus handles the terminal feature needs at construction time.
@@ -517,6 +519,7 @@ impl TerminalFeatureState {
             paint: TerminalPaintCacheState {
                 cached_keyword_highlight_rules: None,
             },
+            keyword_popup: KeywordHighlightPopupState::default(),
         }
     }
 

@@ -260,6 +260,20 @@ impl NyaTermApp {
             NyaMenuItem::submenu(t!("terminalCtx.recordingLogs"), recording_items)
                 .icon("icons/session/record.svg"),
             NyaMenuItem::separator(),
+            NyaMenuItem::action(t!("terminalCtx.keywordHighlight"))
+                .icon("icons/menu/palette.svg")
+                .on_click(cx.listener({
+                    let popup_session_id = select_all_session_id.clone();
+                    let popup_selected = selected.clone();
+                    move |this, _, _, cx| {
+                        this.open_keyword_highlight_popup(
+                            popup_session_id.clone(),
+                            popup_selected.clone(),
+                            cx,
+                        );
+                    }
+                })),
+            NyaMenuItem::separator(),
             NyaMenuItem::action(t!("terminalCtx.selectAll"))
                 .icon("icons/menu/select-all.svg")
                 .shortcut(select_all_sc)
@@ -593,6 +607,8 @@ mod tests {
                 "",
                 "Recording Logs",
                 "",
+                "Keyword Highlight...",
+                "",
                 "Select All",
             ]
         );
@@ -606,6 +622,8 @@ mod tests {
                 "Clear All",
                 "",
                 "Recording Logs",
+                "",
+                "Keyword Highlight...",
                 "",
                 "Select All",
             ]

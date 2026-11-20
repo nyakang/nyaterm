@@ -4375,6 +4375,11 @@
     "tabDockSplitTop": "위로 분할"
   },
   "terminalCtx": {
+    "keywordHighlight": "키워드 강조...",
+    "keywordHighlightTitle": "키워드 강조",
+    "sessionRules": "세션 규칙",
+    "globalRules": "전역 규칙",
+    "keywordHighlightSelectHint": "왼쪽에서 규칙을 선택하거나 새로 만들어 편집하세요.",
     "serialFoldersUnsupported": "직렬 프로토콜은 폴더 업로드를 지원하지 않습니다",
     "serialUpload": "직렬 업로드",
     "serialUploadCancelling": "직렬 전송 취소 중: %{id}",

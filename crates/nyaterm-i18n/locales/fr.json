@@ -4375,6 +4375,11 @@
     "tabDockSplitTop": "Fractionner en haut"
   },
   "terminalCtx": {
+    "keywordHighlight": "Surlignage des mots-clés...",
+    "keywordHighlightTitle": "Surlignage des mots-clés",
+    "sessionRules": "Règles de session",
+    "globalRules": "Règles globales",
+    "keywordHighlightSelectHint": "Sélectionnez une règle à gauche ou créez-en une nouvelle pour la modifier.",
     "serialFoldersUnsupported": "Les protocoles série ne permettent pas d’envoyer des dossiers",
     "serialUpload": "Envoi série",
     "serialUploadCancelling": "Annulation du transfert série : %{id}",
