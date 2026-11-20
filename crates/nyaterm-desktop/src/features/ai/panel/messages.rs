@@ -242,16 +242,25 @@ fn message_footer(
         .when_some(timestamp, |row, timestamp| {
             row.child(
                 div()
+                    .relative()
+                    // A glyph's optical center sits above its line-box center,
+                    // so nudge it down to meet the icon's middle.
+                    .top(px(2.))
                     .text_size(px(10.))
-                    .text_color(rgb(palette.text_muted))
+                    // Match the 20px copy button height so the glyphs share
+                    // its vertical center instead of hanging near the top.
+                    .line_height(px(20.))
+                    // Main text at reduced alpha: a middle step between the
+                    // theme's muted and dimmed tiers that follows the theme.
+                    .text_color(rgb(palette.text).opacity(0.8))
                     .child(timestamp),
             )
         })
-        .child(copy_message_button(id, text))
+        .child(copy_message_button(id, text, palette))
         .into_any_element()
 }
 
-fn copy_message_button(id: &str, text: &str) -> AnyElement {
+fn copy_message_button(id: &str, text: &str, palette: ThemePalette) -> AnyElement {
     let content = text.to_string();
     let selector = format!("ai-copy-{id}");
     div()
@@ -260,6 +269,7 @@ fn copy_message_button(id: &str, text: &str) -> AnyElement {
             NyaIconButton::new(format!("ai-copy-{id}"), "icons/copy.svg")
                 .icon_size(px(12.))
                 .size(px(20.))
+                .color(rgb(palette.text).opacity(0.8))
                 .tooltip(t!("ai.copy"))
                 // Auxiliary chrome per row must not flood Tab traversal.
                 .tab_stop(false)

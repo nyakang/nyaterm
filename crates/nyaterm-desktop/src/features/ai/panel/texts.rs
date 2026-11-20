@@ -383,8 +383,12 @@ impl AiPanel {
                         .when_some(lang, |element, lang| {
                             element.child(
                                 div()
+                                    .relative()
+                                    // Same optical-center nudge as the message footer.
+                                    .top(px(2.))
                                     .text_size(px(10.))
-                                    .text_color(rgb(palette.text_muted))
+                                    .line_height(px(20.))
+                                    .text_color(rgb(palette.text).opacity(0.8))
                                     .child(lang),
                             )
                         })
@@ -392,6 +396,7 @@ impl AiPanel {
                             NyaIconButton::new("copy", "icons/copy.svg")
                                 .icon_size(px(12.))
                                 .size(px(20.))
+                                .color(rgb(palette.text).opacity(0.8))
                                 .tooltip(t!("ai.copyCode"))
                                 // Code blocks repeat per message; keep them out of Tab order.
                                 .tab_stop(false)
