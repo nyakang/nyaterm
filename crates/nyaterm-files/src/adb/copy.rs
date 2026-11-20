@@ -20,6 +20,9 @@ fn browser(endpoint: &FileTransferEndpoint) -> (FileBrowserService, RemoteFilePa
         FileTransferEndpoint::Remote { service, path } => {
             (FileBrowserService::Remote(service.clone()), path.clone())
         }
+        FileTransferEndpoint::Ftp { service, path } => {
+            (FileBrowserService::Ftp(service.clone()), path.clone())
+        }
     }
 }
 fn exists(endpoint: &FileTransferEndpoint) -> anyhow::Result<bool> {
@@ -30,7 +33,7 @@ fn exists(endpoint: &FileTransferEndpoint) -> anyhow::Result<bool> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error.into()),
         },
-        FileTransferEndpoint::Remote { .. } => {
+        FileTransferEndpoint::Remote { .. } | FileTransferEndpoint::Ftp { .. } => {
             let (service, path) = browser(endpoint);
             Ok(service
                 .list_dir_path(&path.parent()?)?
@@ -303,6 +306,9 @@ fn node(
                     }
                     FileBrowserService::Remote(service) => {
                         service.set_modified_remote_path(&path, modified)?
+                    }
+                    FileBrowserService::Ftp(_) => {
+                        anyhow::bail!("FTP transfers are not supported yet")
                     }
                 }
             } else {

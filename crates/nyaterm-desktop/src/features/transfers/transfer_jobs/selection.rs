@@ -61,6 +61,20 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.open_delete_transfer_job_dialog(job_id, window, cx);
+    }
+
+    fn open_delete_transfer_job_dialog(
+        &mut self,
+        job_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(job) = self.transfer.transfer_job(&job_id) else {
+            self.shell.set_status("transfer job not found".to_string());
+            cx.notify();
+            return;
+        };
         let title = transfer_job_title(&job.kind);
         let description = t!("fileTransfer.deleteConfirmDesc", name = title).to_string();
         self.transfer.select_transfer_job_id(&job_id);

@@ -213,6 +213,13 @@ impl NyaTermApp {
         }) {
             return Err("RDP and VNC tabs cannot be moved while connected yet".to_string());
         }
+        if session_ids.iter().any(|session_id| {
+            self.session
+                .session_info(session_id)
+                .is_some_and(|session| session.kind == SessionKind::Ftp)
+        }) {
+            return Err("FTP tabs cannot be moved between windows yet".to_string());
+        }
         if session_ids
             .iter()
             .any(|session_id| self.recording.is_recording(session_id))

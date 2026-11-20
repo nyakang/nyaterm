@@ -383,6 +383,7 @@ fn protocol_key(kind: SessionKind) -> &'static str {
         SessionKind::AdbShell => "adb shell",
         SessionKind::AdbFiles => "adb files",
         SessionKind::AdbScreen => "adb screen",
+        SessionKind::Ftp => "ftp",
     }
 }
 

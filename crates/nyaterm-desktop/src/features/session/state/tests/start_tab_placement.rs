@@ -77,6 +77,7 @@ fn complete_start(
                 multiplex_handle: None,
                 launch_config: Some(config),
                 cleanup: None,
+                ftp_service: None,
             }),
         },
         cx,

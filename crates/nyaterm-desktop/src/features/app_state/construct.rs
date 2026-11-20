@@ -398,6 +398,7 @@ impl NyaTermApp {
             networktools,
             remote_desktop: RemoteDesktopFeatureState::new(cx.focus_handle()),
             android: crate::features::android::AndroidFeatureState::new(android_devices),
+            ftp: crate::features::ftp::FtpFeatureState::default(),
             translation: TranslationFeatureState::new(translation_settings),
             update,
             cloud_sync: {

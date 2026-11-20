@@ -241,7 +241,8 @@ fn item_endpoint(item: &QuickSwitchItem) -> Option<(&str, u16)> {
             ConnectionType::Ssh { host, port, .. }
             | ConnectionType::Telnet { host, port, .. }
             | ConnectionType::Rdp { host, port, .. }
-            | ConnectionType::Vnc { host, port, .. } => Some((host, *port)),
+            | ConnectionType::Vnc { host, port, .. }
+            | ConnectionType::Ftp { host, port, .. } => Some((host, *port)),
             ConnectionType::Adb {
                 device: nyaterm_core::models::android::AdbDeviceSelector::Tcp { host, port },
                 ..

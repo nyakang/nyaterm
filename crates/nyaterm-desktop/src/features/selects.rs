@@ -661,6 +661,17 @@ impl NyaTermApp {
                     "connection-editor-parity" => ConnectionEditorSelect::Parity,
                     "connection-editor-flow-control" => ConnectionEditorSelect::FlowControl,
                     "connection-editor-stop-bits" => ConnectionEditorSelect::StopBits,
+                    "connection-editor-ftp-passive-mode" => ConnectionEditorSelect::FtpPassiveMode,
+                    "connection-editor-ftp-filename-encoding-mode" => {
+                        ConnectionEditorSelect::FtpFilenameEncodingMode
+                    }
+                    "connection-editor-ftp-filename-encoding" => {
+                        ConnectionEditorSelect::FtpFilenameEncoding
+                    }
+                    "connection-editor-ftp-security-mode" => {
+                        ConnectionEditorSelect::FtpSecurityMode
+                    }
+                    "connection-editor-ftp-tls-version" => ConnectionEditorSelect::FtpTlsVersion,
                     _ => return,
                 };
                 if select == ConnectionEditorSelect::Group

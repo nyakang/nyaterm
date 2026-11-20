@@ -214,6 +214,7 @@ impl NyaTermApp {
             Some(SessionLaunchConfig::AdbShell(_)) => "adb_shell",
             Some(SessionLaunchConfig::AdbFiles(_)) => "adb_files",
             Some(SessionLaunchConfig::AdbScreen(_)) => "adb_screen",
+            Some(SessionLaunchConfig::Ftp(_)) => "ftp",
             Some(SessionLaunchConfig::Local(_)) | None => "Local",
         }
         .to_string();

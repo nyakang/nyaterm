@@ -135,6 +135,14 @@ pub(super) fn session_info_from_metadata(
             cols: 80,
             rows: 24,
         },
+        SessionLaunchConfig::Ftp(config) => SessionInfo {
+            id: session_id.to_string(),
+            name: config.name.clone(),
+            kind: SessionKind::Ftp,
+            working_dir: None,
+            cols: 80,
+            rows: 24,
+        },
     }
 }
 
@@ -462,6 +470,7 @@ impl SessionFeatureState {
                 Some(FileBrowserBackendKind::Adb)
             }
             SessionKind::LocalPty => Some(FileBrowserBackendKind::Local),
+            SessionKind::Ftp => Some(FileBrowserBackendKind::Remote),
             SessionKind::Ssh => self
                 .metadata(session_id)
                 .and_then(|metadata| metadata.ssh_config.as_ref())
@@ -848,6 +857,7 @@ impl SessionFeatureState {
             )),
             SessionLaunchConfig::Rdp(config) => Some(format!("{}:{}", config.host, config.port)),
             SessionLaunchConfig::Vnc(config) => Some(format!("{}:{}", config.host, config.port)),
+            SessionLaunchConfig::Ftp(config) => Some(format!("{}:{}", config.host, config.port)),
         }
     }
     pub(in crate::features) fn ssh_host(&self, session_id: &str) -> Option<String> {

@@ -49,7 +49,7 @@ impl NyaTermApp {
     }
 }
 
-pub(super) fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
+pub(super) fn connection_editor_select_keys() -> [ConnectionEditorSelect; 36] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -82,6 +82,11 @@ pub(super) fn connection_editor_select_keys() -> [ConnectionEditorSelect; 31] {
         ConnectionEditorSelect::Parity,
         ConnectionEditorSelect::StopBits,
         ConnectionEditorSelect::FlowControl,
+        ConnectionEditorSelect::FtpPassiveMode,
+        ConnectionEditorSelect::FtpFilenameEncodingMode,
+        ConnectionEditorSelect::FtpFilenameEncoding,
+        ConnectionEditorSelect::FtpSecurityMode,
+        ConnectionEditorSelect::FtpTlsVersion,
     ]
 }
 
@@ -121,6 +126,13 @@ pub(super) fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'s
         ConnectionEditorSelect::Parity => "connection-editor-parity",
         ConnectionEditorSelect::StopBits => "connection-editor-stop-bits",
         ConnectionEditorSelect::FlowControl => "connection-editor-flow-control",
+        ConnectionEditorSelect::FtpPassiveMode => "connection-editor-ftp-passive-mode",
+        ConnectionEditorSelect::FtpFilenameEncodingMode => {
+            "connection-editor-ftp-filename-encoding-mode"
+        }
+        ConnectionEditorSelect::FtpFilenameEncoding => "connection-editor-ftp-filename-encoding",
+        ConnectionEditorSelect::FtpSecurityMode => "connection-editor-ftp-security-mode",
+        ConnectionEditorSelect::FtpTlsVersion => "connection-editor-ftp-tls-version",
     }
 }
 

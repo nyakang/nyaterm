@@ -1135,6 +1135,29 @@ pub(super) fn connection_detail_rows(
                 t!("savedConnections.notSet").to_string(),
             ),
         ],
+        nyaterm_core::ConnectionType::Ftp {
+            host,
+            port,
+            username,
+            initial_directory,
+            ..
+        } => {
+            let mut rows = vec![
+                copyable_text_detail_row(t!("savedConnections.host").to_string(), host),
+                copyable_value_detail_row(
+                    t!("savedConnections.port").to_string(),
+                    port.to_string(),
+                ),
+                copyable_text_detail_row(t!("savedConnections.user").to_string(), username),
+            ];
+            if let Some(directory) = non_empty_detail_value(initial_directory) {
+                rows.push(copyable_text_detail_row(
+                    t!("savedConnections.workingDir").to_string(),
+                    &directory,
+                ));
+            }
+            rows
+        }
     };
 
     if matches!(&connection.config, nyaterm_core::ConnectionType::Ssh { .. })

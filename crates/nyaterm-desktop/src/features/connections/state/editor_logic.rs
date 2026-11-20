@@ -157,6 +157,31 @@ pub(super) fn set_connection_editor_select_value(
                 },
             };
         }
+        ConnectionEditorSelect::FtpPassiveMode => {
+            editor.ftp_passive_mode = value.unwrap_or_else(|| "auto".to_string());
+        }
+        ConnectionEditorSelect::FtpFilenameEncodingMode => {
+            editor.ftp_filename_encoding_mode = value.unwrap_or_else(|| "auto".to_string());
+        }
+        ConnectionEditorSelect::FtpFilenameEncoding => {
+            editor.ftp_filename_encoding = value.unwrap_or_else(|| "UTF-8".to_string());
+        }
+        ConnectionEditorSelect::FtpSecurityMode => {
+            let mode = value
+                .unwrap_or_else(|| "none".to_string())
+                .trim()
+                .to_ascii_lowercase();
+            let port = editor.port.trim().to_string();
+            if mode == "implicit" && (port.is_empty() || port == "21") {
+                editor.port = "990".to_string();
+            } else if mode != "implicit" && port == "990" {
+                editor.port = "21".to_string();
+            }
+            editor.ftp_security_mode = mode;
+        }
+        ConnectionEditorSelect::FtpTlsVersion => {
+            editor.ftp_tls_version = value.unwrap_or_else(|| "auto".to_string());
+        }
         ConnectionEditorSelect::Group => {
             editor.group_id = value;
             editor.new_group_name.clear();
@@ -644,6 +669,18 @@ pub(super) fn set_connection_editor_kind(
                 editor.port.clone()
             }
         }
+        ConnectionKindTab::Ftp => {
+            if editor.port.trim().is_empty()
+                || editor.port == "22"
+                || editor.port == "23"
+                || editor.port == "3389"
+                || editor.port == "5900"
+            {
+                "21".to_string()
+            } else {
+                editor.port.clone()
+            }
+        }
         ConnectionKindTab::Rdp => {
             if editor.port.trim().is_empty() || editor.port == "22" || editor.port == "23" {
                 "3389".to_string()
@@ -770,6 +807,7 @@ pub(super) fn toggle_connection_editor_flag(
         ConnectionEditorToggle::SftpCompatibilityMode => {
             editor.sftp_compatibility_mode = !editor.sftp_compatibility_mode;
         }
+        ConnectionEditorToggle::FtpAsciiMode => editor.ftp_ascii_mode = !editor.ftp_ascii_mode,
         ConnectionEditorToggle::RawTcp => {
             editor.raw_tcp_cli = !editor.raw_tcp_cli;
         }
@@ -1023,6 +1061,24 @@ pub(super) fn editor_field_seeds(
             draft.port.clone(),
             false,
             Empty,
+        ),
+        (
+            ConnectionEditorField::FtpInitialDirectory,
+            draft.ftp_initial_directory.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::FtpLocalInitialDirectory,
+            draft.ftp_local_initial_directory.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::FtpConnectTimeout,
+            draft.ftp_connect_timeout_ms.clone(),
+            false,
+            Literal("15000"),
         ),
         (
             ConnectionEditorField::Username,
@@ -1303,12 +1359,17 @@ pub(super) fn set_connection_editor_field_text(
                 && draft.account_id.is_some()
                 && matches!(
                     draft.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
                 )
             {
                 draft.username_source = nyaterm_core::ConnectionUsernameSource::Connection;
             }
         }
+        ConnectionEditorField::FtpInitialDirectory => draft.ftp_initial_directory = text,
+        ConnectionEditorField::FtpLocalInitialDirectory => {
+            draft.ftp_local_initial_directory = text;
+        }
+        ConnectionEditorField::FtpConnectTimeout => draft.ftp_connect_timeout_ms = text,
         ConnectionEditorField::AgentEnvironmentVariable => {
             draft.agent_endpoint = nyaterm_core::SshAgentEndpoint::Environment { variable: text };
         }

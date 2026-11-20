@@ -210,6 +210,13 @@ impl NyaTermApp {
                 Ok(())
             } else if self.remote_desktop.is_session(close_id) {
                 self.close_remote_desktop_runtime(close_id)
+            } else if self
+                .session
+                .session_info(close_id)
+                .is_some_and(|info| info.kind == nyaterm_transport::SessionKind::Ftp)
+            {
+                // FTP view sessions own no SessionManager channel.
+                Ok(())
             } else {
                 self.session
                     .manager()

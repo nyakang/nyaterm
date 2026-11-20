@@ -20,6 +20,7 @@ pub(crate) enum ConnectionKindTab {
     Rdp,
     Vnc,
     Adb,
+    Ftp,
 }
 
 impl ConnectionKindTab {
@@ -32,6 +33,7 @@ impl ConnectionKindTab {
             Self::Rdp => "RDP",
             Self::Vnc => "VNC",
             Self::Adb => "Android (ADB)",
+            Self::Ftp => "FTP",
         }
     }
 
@@ -44,6 +46,7 @@ impl ConnectionKindTab {
             nyaterm_core::ConnectionType::Rdp { .. } => Self::Rdp,
             nyaterm_core::ConnectionType::Vnc { .. } => Self::Vnc,
             nyaterm_core::ConnectionType::Adb { .. } => Self::Adb,
+            nyaterm_core::ConnectionType::Ftp { .. } => Self::Ftp,
         }
     }
 }
@@ -65,6 +68,8 @@ pub(crate) enum ConnectionEditorSection {
     Display,
     Session,
     Serial,
+    Charset,
+    Advanced,
 }
 
 impl ConnectionEditorSection {
@@ -111,6 +116,7 @@ impl ConnectionEditorSection {
             ],
             ConnectionKindTab::Serial => &[Self::Basic, Self::Terminal],
             ConnectionKindTab::Local => &[Self::Basic, Self::Terminal],
+            ConnectionKindTab::Ftp => &[Self::Basic, Self::Charset, Self::Advanced],
         }
     }
 
@@ -141,6 +147,8 @@ impl ConnectionEditorSection {
             Self::Display => "display",
             Self::Session => "session",
             Self::Serial => "serial",
+            Self::Charset => "charset",
+            Self::Advanced => "advanced",
         }
     }
 
@@ -160,6 +168,8 @@ impl ConnectionEditorSection {
             Self::Display => t!("dialog.editorSections.display"),
             Self::Session => t!("dialog.editorSections.session"),
             Self::Serial => t!("dialog.editorSections.serial"),
+            Self::Charset => t!("dialog.editorSections.charset"),
+            Self::Advanced => t!("dialog.editorSections.advanced"),
         }
     }
 }
@@ -178,6 +188,11 @@ pub(crate) enum ConnectionEditorSelect {
     ProxyJump,
     Backspace,
     Encoding,
+    FtpPassiveMode,
+    FtpFilenameEncodingMode,
+    FtpFilenameEncoding,
+    FtpSecurityMode,
+    FtpTlsVersion,
     SftpCwdFollowMode,
     SftpFilenameEncoding,
     SftpPipelineDepth,
@@ -271,6 +286,9 @@ pub(crate) enum ConnectionEditorField {
     RdpDisplayHeight,
     RdpReconnectAttempts,
     VncReconnectAttempts,
+    FtpInitialDirectory,
+    FtpLocalInitialDirectory,
+    FtpConnectTimeout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -322,6 +340,9 @@ impl ConnectionEditorField {
             Self::RdpReconnectAttempts | Self::VncReconnectAttempts => {
                 ConnectionEditorSection::Session
             }
+            Self::FtpInitialDirectory
+            | Self::FtpLocalInitialDirectory
+            | Self::FtpConnectTimeout => ConnectionEditorSection::Advanced,
         }
     }
 }
@@ -437,6 +458,15 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) username: String,
     pub(crate) domain: String,
     pub(crate) auth_mode: String,
+    pub(crate) ftp_initial_directory: String,
+    pub(crate) ftp_local_initial_directory: String,
+    pub(crate) ftp_passive_mode: String,
+    pub(crate) ftp_filename_encoding_mode: String,
+    pub(crate) ftp_filename_encoding: String,
+    pub(crate) ftp_ascii_mode: bool,
+    pub(crate) ftp_security_mode: String,
+    pub(crate) ftp_tls_version: String,
+    pub(crate) ftp_connect_timeout_ms: String,
     pub(crate) rdp_backend: String,
     pub(crate) rdp_security: nyaterm_core::RdpSecuritySettings,
     pub(crate) rdp_display: nyaterm_core::RdpDisplaySettings,
@@ -1060,6 +1090,27 @@ mod tests {
         assert_eq!(
             ConnectionEditorField::BaudRate.section(),
             ConnectionEditorSection::Basic
+        );
+    }
+
+    /// FTP exposes charset and transfer-mode controls without a network page.
+    #[test]
+    fn ftp_sections_omit_the_network_page() {
+        use super::{ConnectionEditorSection, ConnectionKindTab};
+        assert_eq!(
+            ConnectionEditorSection::for_kind(ConnectionKindTab::Ftp, false),
+            &[
+                ConnectionEditorSection::Basic,
+                ConnectionEditorSection::Charset,
+                ConnectionEditorSection::Advanced,
+            ]
+        );
+        assert_eq!(
+            ConnectionEditorSection::for_kind(ConnectionKindTab::Ftp, true),
+            &[
+                ConnectionEditorSection::Charset,
+                ConnectionEditorSection::Advanced,
+            ]
         );
     }
 

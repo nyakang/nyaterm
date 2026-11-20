@@ -29,6 +29,7 @@ impl NyaTermApp {
                 ConnectionType::Rdp { .. } => "RDP",
                 ConnectionType::Vnc { .. } => "VNC",
                 ConnectionType::Adb { .. } => "adb_shell",
+                ConnectionType::Ftp { .. } => "ftp",
             };
             tabs.push(RestorableOpenTab::with_leaf_root(
                 connection.name.clone(),

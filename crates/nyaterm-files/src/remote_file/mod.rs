@@ -1340,6 +1340,10 @@ pub enum FileTransferEndpoint {
         service: Arc<RemoteFileService>,
         path: RemoteFilePath,
     },
+    Ftp {
+        service: Arc<crate::ftp::FtpFileService>,
+        path: RemoteFilePath,
+    },
 }
 
 #[derive(Clone)]
@@ -1375,6 +1379,17 @@ impl FileCopyRequest {
         {
             return crate::adb::copy::execute(self, progress).map_err(crate::adb::file_error);
         }
+        if matches!(self.source, FileTransferEndpoint::Ftp { .. })
+            || matches!(self.destination, FileTransferEndpoint::Ftp { .. })
+        {
+            return crate::ftp::copy::execute(
+                &self.source,
+                &self.destination,
+                &self.control,
+                &self.options,
+                progress,
+            );
+        }
         let browser_endpoint = |endpoint: &FileTransferEndpoint| match endpoint {
             FileTransferEndpoint::Local(path) => (
                 crate::file_browser::FileBrowserService::local(),
@@ -1386,6 +1401,10 @@ impl FileCopyRequest {
             ),
             FileTransferEndpoint::Adb { service, path } => (
                 crate::file_browser::FileBrowserService::Adb(service.clone()),
+                path.clone(),
+            ),
+            FileTransferEndpoint::Ftp { service, path } => (
+                crate::file_browser::FileBrowserService::Ftp(service.clone()),
                 path.clone(),
             ),
         };
@@ -1435,6 +1454,9 @@ impl FileCopyRequest {
         match (self.source, self.destination) {
             (FileTransferEndpoint::Adb { .. }, _) | (_, FileTransferEndpoint::Adb { .. }) => {
                 unreachable!("Android copies use the isolated copy adapter")
+            }
+            (FileTransferEndpoint::Ftp { .. }, _) | (_, FileTransferEndpoint::Ftp { .. }) => {
+                anyhow::bail!("FTP transfers are not supported yet")
             }
             (FileTransferEndpoint::Local(source), FileTransferEndpoint::Local(destination)) => {
                 let Some(destination) = resolve_copy_local_target(

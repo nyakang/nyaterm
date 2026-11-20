@@ -15,22 +15,31 @@ use rust_i18n::t;
 use crate::features::pages::connections::list::ConnectionEditorChoice;
 
 /// Password / no-auth tabs, in the connection editor's order.
-pub(in crate::features) fn password_auth_choices(
+pub(in crate::features) fn password_auth_choices_with_none_label(
     selected: &str,
     protocol_requires_no_auth: bool,
+    none_label: Option<&str>,
 ) -> Vec<ConnectionEditorChoice> {
     let none_selected = protocol_requires_no_auth || selected == "none";
     let mut password =
         ConnectionEditorChoice::new(Some("password".to_string()), t!("dialog.password"), false);
     password.disabled = protocol_requires_no_auth;
-    vec![
+    password.selected = !none_selected;
+    let mut choices = vec![
         password,
         ConnectionEditorChoice::new(
             Some("none".to_string()),
-            t!("dialog.noAuthentication"),
+            none_label
+                .map(|label| label.to_string())
+                .unwrap_or_else(|| t!("dialog.noAuthentication").to_string()),
             none_selected,
         ),
-    ]
+    ];
+    if none_label.is_some() {
+        // A named no-auth entry (FTP anonymous) reads first.
+        choices.reverse();
+    }
+    choices
 }
 
 pub(in crate::features) fn ssh_auth_choices(selected: &str) -> Vec<ConnectionEditorChoice> {
@@ -564,6 +573,81 @@ pub(in crate::features) fn sftp_cwd_follow_choices(mode: &str) -> Vec<Connection
     .collect()
 }
 
+pub(in crate::features) fn ftp_passive_mode_choices(selected: &str) -> Vec<ConnectionEditorChoice> {
+    [
+        ("auto", t!("dialog.ftpPassiveAuto")),
+        ("pasv", t!("dialog.ftpPassivePasv")),
+        ("epsv", t!("dialog.ftpPassiveEpsv")),
+    ]
+    .into_iter()
+    .map(|(value, label)| {
+        ConnectionEditorChoice::new(
+            Some(value.to_string()),
+            label,
+            selected.trim().eq_ignore_ascii_case(value),
+        )
+    })
+    .collect()
+}
+
+pub(in crate::features) fn ftp_security_mode_choices(
+    selected: &str,
+) -> Vec<ConnectionEditorChoice> {
+    [
+        ("none", t!("dialog.ftpSecurityNone")),
+        ("explicit", t!("dialog.ftpSecurityExplicit")),
+        ("implicit", t!("dialog.ftpSecurityImplicit")),
+    ]
+    .into_iter()
+    .map(|(value, label)| {
+        ConnectionEditorChoice::new(
+            Some(value.to_string()),
+            label,
+            selected.trim().eq_ignore_ascii_case(value),
+        )
+    })
+    .collect()
+}
+
+pub(in crate::features) fn ftp_tls_version_choices(selected: &str) -> Vec<ConnectionEditorChoice> {
+    [
+        ("auto", t!("dialog.ftpTlsAuto")),
+        ("ssl3", t!("dialog.ftpTlsSsl3")),
+        ("tls10", t!("dialog.ftpTls10")),
+        ("tls11", t!("dialog.ftpTls11")),
+        ("tls12", t!("dialog.ftpTls12")),
+        ("tls13", t!("dialog.ftpTls13")),
+    ]
+    .into_iter()
+    .map(|(value, label)| {
+        ConnectionEditorChoice::new(
+            Some(value.to_string()),
+            label,
+            selected.trim().eq_ignore_ascii_case(value),
+        )
+    })
+    .collect()
+}
+
+pub(in crate::features) fn ftp_filename_encoding_choices(
+    selected: &str,
+) -> Vec<ConnectionEditorChoice> {
+    let selected = CharacterEncoding::parse(selected)
+        .map(|encoding| encoding.label().to_string())
+        .unwrap_or_else(|_| selected.trim().to_string());
+    CharacterEncoding::ALL
+        .into_iter()
+        .map(|encoding| {
+            let label = encoding.label().to_string();
+            ConnectionEditorChoice::new(
+                Some(label.clone()),
+                label.clone(),
+                selected.eq_ignore_ascii_case(&label),
+            )
+        })
+        .collect()
+}
+
 pub(in crate::features) fn sftp_filename_encoding_choices(
     selected: &str,
 ) -> Vec<ConnectionEditorChoice> {
@@ -843,6 +927,26 @@ mod tests {
 
     use super::{editor_serial_port_choices, serial_port_choices};
     use crate::models::SERIAL_PORT_ASK_AT_CONNECT;
+
+    #[test]
+    fn ftp_anonymous_login_leads_the_password_tab() {
+        let choices = super::password_auth_choices_with_none_label(
+            "password",
+            false,
+            Some("Anonymous login"),
+        );
+        assert_eq!(choices[0].value.as_deref(), Some("none"));
+        assert_eq!(choices[1].value.as_deref(), Some("password"));
+        assert!(choices[1].selected);
+        assert_eq!(
+            choices[1].label.as_str(),
+            rust_i18n::t!("dialog.password").as_ref()
+        );
+
+        let unnamed = super::password_auth_choices_with_none_label("password", false, None);
+        assert_eq!(unnamed[0].value.as_deref(), Some("password"));
+        assert_eq!(unnamed[1].value.as_deref(), Some("none"));
+    }
 
     fn port(name: &str) -> SerialPortInfo {
         SerialPortInfo {
