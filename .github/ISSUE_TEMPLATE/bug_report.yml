@@ -1,20 +1,24 @@
-name: 🐛 Report an issue
-description: Report an issue with NyaTerm
+name: 🐛 缺陷报告 / Bug report
+description: 报告 NyaTerm 的问题 / Report an issue with NyaTerm
 title: "[Bug]: "
 labels: ["bug"]
 
 body:
   - type: checkboxes
     attributes:
-      label: I have searched the existing issues, both open and closed, to make sure this is not a duplicate report.
+      label: 重复检查 / Duplicate check
       options:
-        - label: 'Yes'
+        - label: 我已搜索现有的开放和已关闭 Issue，确认这不是重复报告。 / I have searched open and closed issues to confirm this is not a duplicate report.
           required: true
 
   - type: markdown
     attributes:
       value: |
+        此表单仅用于报告缺陷！可使用中文或英文填写。
+        如需提出新功能或改进建议，请使用[功能请求表单](https://github.com/nyakang/nyaterm/issues/new?template=feature_request.yml)。
+
         This issue form is for reporting bugs only!
+        You may fill out this form in Chinese or English.
         If you have a feature or enhancement request, please use the [feature request](https://github.com/nyakang/nyaterm/issues/new?template=feature_request.yml).
 
   - type: textarea
@@ -22,57 +26,58 @@ body:
     validations:
       required: true
     attributes:
-      label: The bug
+      label: 问题描述 / Bug description
       description: >-
+        请描述遇到的问题，包括你想完成的操作、实际发生的情况和预期结果。
         Describe the issue you are experiencing. Tell us what you were trying
         to do, what happened, and what you expected to happen.
 
   - type: markdown
     attributes:
       value: |
-        ## Environment
+        ## 环境信息 / Environment
 
   - type: input
     id: os
     validations:
       required: true
     attributes:
-      label: The OS that NyaTerm is running on
-      placeholder: Windows 10, Windows 11, macOS 14, Ubuntu 22.04...etc
+      label: 操作系统 / Operating system
+      placeholder: 例如 / e.g. Windows 10, Windows 11, macOS 14, Ubuntu 22.04
 
   - type: input
     id: version
     validations:
       required: true
     attributes:
-      label: Version of NyaTerm
-      placeholder: v1.0.0
+      label: NyaTerm 版本 / NyaTerm version
+      placeholder: 例如 / e.g. v1.0.0
 
   - type: dropdown
     id: install-method
     validations:
       required: true
     attributes:
-      label: Installation method
+      label: 安装方式 / Installation method
       options:
-        - Downloaded from GitHub Releases
-        - Built from source
-        - Package manager
-        - Other
+        - 从 GitHub Releases 下载 / Downloaded from GitHub Releases
+        - 从源码构建 / Built from source
+        - 包管理器 / Package manager
+        - 其他 / Other
 
   - type: input
     id: shell
     attributes:
-      label: Shell
-      placeholder: PowerShell 7, cmd, zsh, bash, fish...etc
+      label: 命令行环境 / Shell
+      placeholder: 例如 / e.g. PowerShell 7, cmd, zsh, bash, fish
 
   - type: textarea
     id: repro
     validations:
       required: true
     attributes:
-      label: Reproduction steps
-      description: How do you trigger this bug? Please walk us through it step by step.
+      label: 复现步骤 / Reproduction steps
+      description: 如何触发这个问题？请逐步描述。 / How do you trigger this bug? Please walk us through it step by step.
       value: |
         1.
         2.
@@ -84,8 +89,9 @@ body:
     validations:
       required: false
     attributes:
-      label: Relevant log output
+      label: 相关日志 / Relevant log output
       description: >-
+        请在下方粘贴相关日志。已启用代码格式，无需添加反引号。
         Please copy and paste any relevant logs below. Code formatting is
         enabled, no need for backticks.
       render: shell
@@ -93,10 +99,11 @@ body:
   - type: textarea
     id: additional
     attributes:
-      label: Additional information
+      label: 补充信息 / Additional information
       description: >
+        如有其他信息，请在下方填写。
         If you have any additional information for us, use the field below.
 
   - type: markdown
     attributes:
-      value: Thank you for submitting the form
+      value: 感谢你提交问题报告！ / Thank you for submitting the report!
