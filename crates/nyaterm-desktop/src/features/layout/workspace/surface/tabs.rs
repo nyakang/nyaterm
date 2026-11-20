@@ -120,7 +120,7 @@ impl NyaTermApp {
             } else {
                 self.shell_surface_color(palette.bg)
             })
-            .cursor_pointer()
+            .cursor_default()
             .hover(move |this| this.bg(hover_bg))
             .when(active, |this| {
                 this.child(
@@ -306,11 +306,15 @@ impl NyaTermApp {
             } else {
                 rgba((accent << 8) | 0x12)
             })
-            .cursor_move()
+            .cursor_default()
             .when(source, |this| {
                 this.opacity(if local_preview { 0. } else { 0.55 })
             })
             .on_drag(payload, move |payload, position, window, cx| {
+                // GPUI installs the active drag after this constructor returns.
+                window.defer(cx, |window, cx| {
+                    cx.set_active_drag_cursor_style(gpui::CursorStyle::ClosedHand, window);
+                });
                 let _ = app.update(cx, |app, cx| {
                     app.begin_session_tab_drag(payload, position, window, cx)
                 });
@@ -648,10 +652,13 @@ impl NyaTermApp {
             .when(is_drag_source, |this| {
                 this.opacity(if has_local_preview { 0. } else { 0.55 })
             })
-            .cursor_pointer()
+            .cursor_default()
             .hover(move |this| this.bg(hover_bg))
-            .cursor_move()
             .on_drag(drag_payload, move |payload, position, window, cx| {
+                // GPUI installs the active drag after this constructor returns.
+                window.defer(cx, |window, cx| {
+                    cx.set_active_drag_cursor_style(gpui::CursorStyle::ClosedHand, window);
+                });
                 let _ = drag_source_app.update(cx, |app, cx| {
                     app.begin_session_tab_drag(payload, position, window, cx);
                 });
