@@ -1,6 +1,9 @@
 //! Cancellable host handshakes. Partial responses stay on the same socket.
-use crate::adb::client::{DeviceBinding, DeviceStatus, parse_devices, read_host_payload, request};
+use crate::adb::client::{
+    AdbClient, DeviceBinding, DeviceStatus, parse_devices, read_host_payload, request,
+};
 use crate::error::{AdbError, AdbResult};
+use crate::operation::AdbOperationControl;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -108,6 +111,30 @@ fn checked<T, F: FnMut() -> AdbResult<()>>(
     } else {
         result
     }
+}
+
+pub(super) fn version(mut stream: TcpStream, control: &AdbOperationControl) -> AdbResult<u32> {
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    // Retain the established-server idle timeout without ever retrying startup
+    // because a connected server's handshake is slow or incomplete.
+    let control = control.with_timeout(Duration::from_secs(10));
+    checked(&mut stream, &mut || control.check(), |socket| {
+        AdbClient::read_version(socket)
+    })
+}
+
+pub(super) fn host_request(
+    mut stream: TcpStream,
+    service: &[u8],
+    control: &AdbOperationControl,
+) -> AdbResult<TcpStream> {
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    checked(&mut stream, &mut || control.check(), |socket| {
+        request(socket, service)
+    })?;
+    Ok(stream)
 }
 pub(super) fn features(
     binding: &DeviceBinding,

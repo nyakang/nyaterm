@@ -144,7 +144,8 @@ impl NyaTermApp {
             };
             check_cancelled()?;
             let client =
-                AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?;
+                AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?
+                    .with_server_manager(tracker.server_manager());
             tracker.ensure(&client)?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let snapshot = loop {
@@ -592,7 +593,8 @@ impl NyaTermApp {
             .blocking_jobs
             .submit_task("android-discovery", move |_| {
                 let client =
-                    AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?;
+                    AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?
+                        .with_server_manager(tracker.server_manager());
                 tracker.ensure(&client)
             });
         cx.spawn(async move |this, cx| {

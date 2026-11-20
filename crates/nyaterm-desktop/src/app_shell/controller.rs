@@ -127,6 +127,13 @@ pub struct DesktopController {
 }
 
 impl DesktopController {
+    pub(in crate::app_shell) fn android_devices(
+        &self,
+        cx: &gpui::App,
+    ) -> nyaterm_android::devices::SharedDeviceService {
+        self.session_hub.read(cx).android_devices()
+    }
+
     pub fn new(runtime: AppRuntime, mut startup: AppShellStartup, cx: &mut Context<Self>) -> Self {
         let device_windows = startup.device_windows.clone();
         let pending_bootstrap = startup.take_pending_bootstrap();

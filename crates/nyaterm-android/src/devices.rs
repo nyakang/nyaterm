@@ -1,15 +1,15 @@
 //! One application-wide tracker; view channels do not own discovery workers.
 use crate::adb::client::{AdbClient, AdbDevice, parse_devices};
 use crate::adb::runtime::DeviceRuntime;
+use crate::adb::server::AdbServerManager;
 use crate::error::{AdbError, AdbResult};
+use crate::operation::AdbOperationControl;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::net::{Shutdown, TcpStream};
-use std::sync::{
-    Arc, Mutex, Weak,
-    atomic::{AtomicBool, Ordering},
-};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, TryLockError, Weak};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Default)]
 pub struct DeviceSnapshot {
@@ -21,25 +21,40 @@ pub struct DeviceSnapshot {
 }
 
 pub struct DeviceService {
-    stopped: Arc<AtomicBool>,
+    control: AdbOperationControl,
+    worker: Mutex<Option<JoinHandle<()>>>,
     state: Arc<Mutex<DeviceSnapshot>>,
     channel: Arc<Mutex<Option<TcpStream>>>,
     runtimes: Arc<Mutex<Vec<Weak<DeviceRuntime>>>>,
 }
 type SharedTracker = Arc<Mutex<Option<(AdbClient, Arc<DeviceService>)>>>;
 #[derive(Clone, Default)]
-pub struct SharedDeviceService(SharedTracker);
+pub struct SharedDeviceService {
+    tracker: SharedTracker,
+    control: AdbOperationControl,
+    servers: AdbServerManager,
+}
 impl SharedDeviceService {
+    pub fn server_manager(&self) -> AdbServerManager {
+        self.servers.clone()
+    }
+
     pub fn ensure(&self, client: &AdbClient) -> AdbResult<()> {
-        let mut state = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        self.control.check()?;
+        let mut state = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        self.control.check()?;
         if state.as_ref().is_some_and(|(existing, _)| {
             existing.executable == client.executable && existing.server == client.server
         }) {
             return Ok(());
         }
+        let client = client.clone().with_server_manager(self.servers.clone());
         *state = Some((
             client.clone(),
-            Arc::new(DeviceService::start(client.clone())?),
+            Arc::new(DeviceService::start_with_control(
+                client,
+                self.control.child(),
+            )?),
         ));
         Ok(())
     }
@@ -48,7 +63,8 @@ impl SharedDeviceService {
         runtime: &Arc<DeviceRuntime>,
         expected: &DeviceSnapshot,
     ) -> AdbResult<()> {
-        let shared = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        self.control.check()?;
+        let shared = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
         let Some((_, tracker)) = shared.as_ref() else {
             runtime.invalidate();
             return Err(AdbError::Offline);
@@ -73,7 +89,7 @@ impl SharedDeviceService {
         Ok(())
     }
     pub fn snapshot(&self) -> DeviceSnapshot {
-        self.0
+        self.tracker
             .try_lock()
             .ok()
             .as_deref()
@@ -81,101 +97,163 @@ impl SharedDeviceService {
             .map(|(_, service)| service.snapshot())
             .unwrap_or_default()
     }
+
+    /// Stop admitting discovery work immediately; transfer all waiting to a
+    /// background owner, including startup that currently holds the tracker lock.
+    pub fn begin_shutdown(&self) -> DeviceServiceShutdown {
+        self.control.cancel();
+        DeviceServiceShutdown {
+            tracker: Arc::clone(&self.tracker),
+        }
+    }
 }
+
+#[must_use = "finish discovery shutdown on a background worker"]
+pub struct DeviceServiceShutdown {
+    tracker: SharedTracker,
+}
+
+impl DeviceServiceShutdown {
+    /// Returns false if the worker could not be collected before the deadline.
+    /// Cancellation remains active even if an OS operation outlives this wait.
+    pub fn finish(self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let service = loop {
+            match self.tracker.try_lock() {
+                Ok(mut tracker) => break tracker.take(),
+                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner().take(),
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        };
+        let Some((_, service)) = service else {
+            return true;
+        };
+        service.stop();
+        let worker = service
+            .worker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        let Some(worker) = worker else { return true };
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        worker.join().is_ok()
+    }
+}
+
 impl DeviceService {
     /// Startup belongs on a background job: probing/starting ADB may block.
     pub fn start(client: AdbClient) -> AdbResult<Self> {
-        client.ensure_server()?;
-        let stopped = Arc::new(AtomicBool::new(false));
+        Self::start_with_control(client, AdbOperationControl::default())
+    }
+
+    fn start_with_control(client: AdbClient, control: AdbOperationControl) -> AdbResult<Self> {
+        client.ensure_server_with_control(&control)?;
+        control.check()?;
         let state = Arc::new(Mutex::new(DeviceSnapshot::default()));
         let channel = Arc::new(Mutex::new(None));
-        let worker_stop = stopped.clone();
+        let worker_control = control.clone();
         let worker_state = state.clone();
         let worker_channel = channel.clone();
         let runtimes = Arc::new(Mutex::new(Vec::new()));
         let worker_runtimes = runtimes.clone();
-        nyaterm_core::runtime::worker::spawn("android-device-tracker".into(), move || {
-            while !worker_stop.load(Ordering::Acquire) {
-                let result = (|| {
-                    let mut stream = client.tracker()?;
-                    *worker_channel.lock().unwrap_or_else(|p| p.into_inner()) =
-                        Some(stream.try_clone()?);
-                    let mut pending = Vec::new();
-                    let mut buffer = [0; 8192];
-                    loop {
-                        if worker_stop.load(Ordering::Acquire) {
-                            return Ok(());
-                        }
-                        match stream.read(&mut buffer) {
-                            Ok(0) => return Err(AdbError::Offline),
-                            Ok(count) => pending.extend_from_slice(&buffer[..count]),
-                            Err(error)
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                                ) =>
-                            {
-                                continue;
+        let worker =
+            nyaterm_core::runtime::worker::spawn("android-device-tracker".into(), move || {
+                while !worker_control.is_cancelled() {
+                    let result = (|| {
+                        let mut stream = client.tracker_with_control(
+                            &worker_control.with_timeout(Duration::from_secs(15)),
+                        )?;
+                        *worker_channel.lock().unwrap_or_else(|p| p.into_inner()) =
+                            Some(stream.try_clone()?);
+                        let mut pending = Vec::new();
+                        let mut buffer = [0; 8192];
+                        loop {
+                            if worker_control.is_cancelled() {
+                                return Ok(());
                             }
-                            Err(error) => return Err(error.into()),
-                        }
-                        while pending.len() >= 4 {
-                            let header = std::str::from_utf8(&pending[..4])
-                                .map_err(|_| AdbError::Protocol("tracker length"))?;
-                            let length = usize::from_str_radix(header, 16)
-                                .map_err(|_| AdbError::Protocol("tracker length"))?;
-                            if pending.len() < length + 4 {
-                                break;
+                            match stream.read(&mut buffer) {
+                                Ok(0) => return Err(AdbError::Offline),
+                                Ok(count) => pending.extend_from_slice(&buffer[..count]),
+                                Err(error)
+                                    if matches!(
+                                        error.kind(),
+                                        std::io::ErrorKind::TimedOut
+                                            | std::io::ErrorKind::WouldBlock
+                                    ) =>
+                                {
+                                    continue;
+                                }
+                                Err(error) => return Err(error.into()),
                             }
-                            let devices = parse_devices(&pending[4..length + 4])?;
-                            pending.drain(..length + 4);
-                            let mut state = worker_state.lock().unwrap_or_else(|p| p.into_inner());
-                            update_snapshot(&mut state, devices);
-                            invalidate_changed(&worker_runtimes, &state.devices);
+                            while pending.len() >= 4 {
+                                let header = std::str::from_utf8(&pending[..4])
+                                    .map_err(|_| AdbError::Protocol("tracker length"))?;
+                                let length = usize::from_str_radix(header, 16)
+                                    .map_err(|_| AdbError::Protocol("tracker length"))?;
+                                if pending.len() < length + 4 {
+                                    break;
+                                }
+                                let devices = parse_devices(&pending[4..length + 4])?;
+                                pending.drain(..length + 4);
+                                let mut state =
+                                    worker_state.lock().unwrap_or_else(|p| p.into_inner());
+                                update_snapshot(&mut state, devices);
+                                invalidate_changed(&worker_runtimes, &state.devices);
+                            }
                         }
-                    }
-                })();
-                if worker_stop.load(Ordering::Acquire) {
-                    break;
-                }
-                let session_error = result.err();
-                // The track stream only breaks when the server stops answering:
-                // either it exited or the socket path went away. Nothing else in
-                // the application re-runs `start-server` once a tracker exists,
-                // so a daemon that was stopped (by another tool, an update, a
-                // crash) would otherwise leave discovery dead and every session
-                // open failing with a bare "cannot communicate" I/O error.
-                let server_unreachable = matches!(
-                    session_error.as_ref(),
-                    Some(AdbError::Io(error))
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::TimedOut
-                                | std::io::ErrorKind::WouldBlock
-                        )
-                );
-                let mut state = worker_state.lock().unwrap_or_else(|p| p.into_inner());
-                update_snapshot(&mut state, Vec::new());
-                state.server_generation = state.server_generation.wrapping_add(1);
-                state.error = session_error.map(|e| e.to_string());
-                invalidate_changed(&worker_runtimes, &[]);
-                drop(state);
-                if server_unreachable {
-                    // Best effort: the next loop iteration reconnects either way,
-                    // and the error stays published when the server cannot start.
-                    let _ = client.ensure_server();
-                }
-                for _ in 0..10 {
-                    if worker_stop.load(Ordering::Acquire) {
+                    })();
+                    if worker_control.is_cancelled() {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(100));
+                    let session_error = result.err();
+                    // The track stream only breaks when the server stops answering:
+                    // either it exited or the socket path went away. Nothing else in
+                    // the application re-runs `start-server` once a tracker exists,
+                    // so a daemon that was stopped (by another tool, an update, a
+                    // crash) would otherwise leave discovery dead and every session
+                    // open failing with a bare "cannot communicate" I/O error.
+                    let server_unreachable = matches!(
+                        session_error.as_ref(),
+                        Some(AdbError::Io(error))
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::ConnectionRefused
+                                    | std::io::ErrorKind::TimedOut
+                                    | std::io::ErrorKind::WouldBlock
+                            )
+                    );
+                    let mut state = worker_state.lock().unwrap_or_else(|p| p.into_inner());
+                    update_snapshot(&mut state, Vec::new());
+                    state.server_generation = state.server_generation.wrapping_add(1);
+                    state.error = session_error.map(|e| e.to_string());
+                    invalidate_changed(&worker_runtimes, &[]);
+                    drop(state);
+                    if server_unreachable {
+                        // Best effort: the next loop iteration reconnects either way,
+                        // and the error stays published when the server cannot start.
+                        let _ = client.ensure_server_with_control(&worker_control);
+                    }
+                    for _ in 0..10 {
+                        if worker_control.is_cancelled() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
                 }
-            }
-        })?;
+            })?;
         Ok(Self {
-            stopped,
+            control,
+            worker: Mutex::new(Some(worker)),
             state,
             channel,
             runtimes,
@@ -185,7 +263,7 @@ impl DeviceService {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
     pub fn stop(&self) {
-        self.stopped.store(true, Ordering::Release);
+        self.control.cancel();
         invalidate_changed(&self.runtimes, &[]);
         if let Some(stream) = self
             .channel
@@ -243,6 +321,9 @@ fn invalidate_changed(runtimes: &Mutex<Vec<Weak<DeviceRuntime>>>, devices: &[Adb
             true
         });
 }
+
+#[cfg(test)]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod transition_tests {

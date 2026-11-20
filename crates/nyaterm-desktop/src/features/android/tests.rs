@@ -68,10 +68,7 @@ fn closing_android_views_keeps_other_channels_and_submitted_file_service_alive()
             directory: "/sdcard/".into(),
             screen: AndroidScreenSettings::default(),
             binding,
-            client: AdbClient {
-                executable: "unused".into(),
-                server: "127.0.0.1:5037".parse().unwrap(),
-            },
+            client: AdbClient::new("unused".into(), "127.0.0.1:5037".parse().unwrap()),
             cols: 80,
             rows: 24,
         };
