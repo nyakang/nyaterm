@@ -14,7 +14,13 @@ in `docs-site/src/data/changelogData.ts`; update both locations when preparing a
 
 ## [Unreleased]
 
+### Changed
+
+- **credentials:** Offer only credentials whose prompt regex matches the prompt; an unmatched password prompt now shows no suggestion instead of every saved credential, and password autofill no longer offers the session's connection password.
+
 ### Fixed
+
+- **credentials:** Keep manual password input out of command tracking when autofill is enabled and the credential vault is empty.
 
 - **android:** Restart a stopped ADB server when the device tracker or a shell handshake finds it gone, instead of failing with a generic I/O error until something else starts ADB.
 - **terminal:** Select the first and last visible rows without autoscrolling the view; edge scrolling now starts only outside the text grid.

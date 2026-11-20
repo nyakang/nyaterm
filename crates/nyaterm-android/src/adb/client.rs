@@ -11,6 +11,7 @@ use nyaterm_core::models::android::AdbDeviceSelector;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AdbError, AdbResult};
+use crate::operation::AdbOperationControl;
 
 const REQUEST_LIMIT: usize = 65_535;
 const COMMAND_OUTPUT_LIMIT: u64 = 64 * 1024;
@@ -46,14 +47,28 @@ pub struct DeviceBinding {
 pub struct AdbClient {
     pub executable: PathBuf,
     pub server: SocketAddr,
+    servers: crate::adb::server::AdbServerManager,
 }
 
 impl AdbClient {
+    pub fn new(executable: PathBuf, server: SocketAddr) -> Self {
+        Self {
+            executable,
+            server,
+            servers: crate::adb::server::default_manager().clone(),
+        }
+    }
+
+    pub fn with_server_manager(mut self, servers: crate::adb::server::AdbServerManager) -> Self {
+        self.servers = servers;
+        self
+    }
+
     pub fn local(custom: Option<&Path>) -> AdbResult<Self> {
-        Ok(Self {
-            executable: resolve_executable(custom)?,
-            server: SocketAddr::from(([127, 0, 0, 1], 5037)),
-        })
+        Ok(Self::new(
+            resolve_executable(custom)?,
+            SocketAddr::from(([127, 0, 0, 1], 5037)),
+        ))
     }
 
     fn connect(&self) -> AdbResult<TcpStream> {
@@ -69,33 +84,26 @@ impl AdbClient {
     }
 
     pub fn ensure_server(&self) -> AdbResult<()> {
-        self.ensure_server_with_connection(TcpStream::connect_timeout(
-            &self.server,
-            Duration::from_secs(2),
-        ))
+        self.ensure_server_with_control(&AdbOperationControl::default())
     }
 
+    pub fn ensure_server_with_control(&self, control: &AdbOperationControl) -> AdbResult<()> {
+        self.servers.ensure(self, control)
+    }
+
+    #[cfg(test)]
     fn ensure_server_with_connection(
         &self,
         connection: std::io::Result<TcpStream>,
     ) -> AdbResult<()> {
-        match connection {
-            Ok(stream) => {
-                let mut stream = Self::configure_stream(stream)?;
-                return Self::check_server_version(Self::read_version(&mut stream)?);
-            }
-            // Only a TCP connect failure permits startup. A connected server's
-            // handshake/read timeout must never trigger adb's replacement logic.
-            Err(error) if server_unreachable(&error) => {}
-            Err(error) => return Err(error.into()),
-        }
-        // Never invoke start-server against an existing incompatible server:
-        // adb itself would terminate it, disturbing other applications.
-        self.command(&["start-server"])?;
-        Self::check_server_version(self.version()?)
+        crate::adb::server::ServerRegistry::default().ensure_with_connection(
+            self,
+            &AdbOperationControl::default(),
+            connection,
+        )
     }
 
-    fn check_server_version(version: u32) -> AdbResult<()> {
+    pub(super) fn check_server_version(version: u32) -> AdbResult<()> {
         if version == SERVER_PROTOCOL_VERSION {
             Ok(())
         } else {
@@ -108,7 +116,7 @@ impl AdbClient {
         Self::read_version(&mut stream)
     }
 
-    fn read_version(stream: &mut TcpStream) -> AdbResult<u32> {
+    fn read_version(stream: &mut (impl Read + Write)) -> AdbResult<u32> {
         request(stream, b"host:version")?;
         let data = read_host_payload(stream)?;
         u32::from_str_radix(
@@ -129,6 +137,21 @@ impl AdbClient {
         request(&mut stream, b"host:track-devices-l")?;
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         Ok(stream)
+    }
+
+    pub(crate) fn tracker_with_control(
+        &self,
+        control: &AdbOperationControl,
+    ) -> AdbResult<TcpStream> {
+        let stream = crate::adb::server::connect(self.server, control)?;
+        controlled::host_request(stream, b"host:track-devices-l", control)
+    }
+
+    pub(super) fn version_on_stream(
+        stream: TcpStream,
+        control: &AdbOperationControl,
+    ) -> AdbResult<()> {
+        Self::check_server_version(controlled::version(stream, control)?)
     }
 
     pub fn bind(&self, selector: &AdbDeviceSelector, generation: u64) -> AdbResult<DeviceBinding> {
@@ -238,6 +261,8 @@ impl AdbClient {
         // Native channels and subprocesses must address the same explicit
         // server; an inherited socket override would silently split the binding.
         command.env_remove("ADB_SERVER_SOCKET");
+        command.env_remove("ANDROID_ADB_SERVER_ADDRESS");
+        command.env_remove("ANDROID_ADB_SERVER_PORT");
         command.stdin(Stdio::null());
         #[cfg(windows)]
         {
@@ -272,10 +297,10 @@ impl AdbClient {
 /// Whether a TCP connect failure permits attempting ADB server startup.
 ///
 /// A closed port usually refuses at once, but on hosts where a socket filter
-/// delays the refusal the 2s connect deadline expires first and surfaces as
+/// delays the refusal the connect deadline expires first and surfaces as
 /// `TimedOut`, so both kinds have to lead to `start-server`.
 /// Never apply this classification to handshake or established-channel errors.
-fn server_unreachable(error: &std::io::Error) -> bool {
+pub(super) fn server_unreachable(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
         std::io::ErrorKind::ConnectionRefused
@@ -520,10 +545,7 @@ mod tests {
                 socket.write_all(&[*byte]).unwrap();
             }
         });
-        let client = AdbClient {
-            executable: "missing-fixture-adb".into(),
-            server,
-        };
+        let client = AdbClient::new("missing-fixture-adb".into(), server);
         assert!(matches!(
             client.ensure_server(),
             Err(AdbError::IncompatibleServer)
@@ -532,10 +554,7 @@ mod tests {
     }
     #[test]
     fn local_daemon_startup_uses_adb_local_socket_semantics() {
-        let client = AdbClient {
-            executable: "fixture-adb".into(),
-            server: "127.0.0.1:12345".parse().unwrap(),
-        };
+        let client = AdbClient::new("fixture-adb".into(), "127.0.0.1:12345".parse().unwrap());
         let command = client.process(&["start-server"]);
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(args, ["-P", "12345", "start-server"]);
@@ -616,10 +635,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("nyaterm-adb-pipe-{}", uuid::Uuid::new_v4()));
         std::fs::write(&path, "#!/bin/sh\nsleep 2 &\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let client = AdbClient {
-            executable: path.clone(),
-            server: "127.0.0.1:5037".parse().unwrap(),
-        };
+        let client = AdbClient::new(path.clone(), "127.0.0.1:5037".parse().unwrap());
         let started = std::time::Instant::now();
         assert!(matches!(
             client.command_with_control(

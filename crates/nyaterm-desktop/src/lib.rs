@@ -44,6 +44,7 @@ pub use app_shell::{
 pub fn init(cx: &mut gpui::App) {
     app_shell::init(cx);
     features::init(cx);
+    app_shell::android_shutdown::init(cx);
 }
 
 /// Runs the detached portable updater helper before normal application startup.

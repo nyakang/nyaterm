@@ -773,27 +773,21 @@ pub(crate) struct CredentialSuggestionState {
     pub(crate) kind: CredentialPromptKind,
     pub(crate) matches: Vec<CredentialAutofillTarget>,
     pub(crate) prompt_text: String,
-    /// Only a unique precise match is preselected. Ambiguous matches and the
-    /// unfiltered fallback require an explicit choice before Enter can fill.
+    /// Only a unique match is preselected; ambiguous matches require an
+    /// explicit choice before Enter can fill.
     pub(crate) selected_index: Option<usize>,
 }
 
 use nyaterm_core::credential_autofill::matching::CredentialAutofillMatcher;
 pub(crate) use nyaterm_core::credential_autofill::matching::{
-    ConnectionPasswordTarget, CredentialAutofillAction, CredentialAutofillMatchEvent,
-    CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey, CredentialAutofillTarget,
-    PendingCredentialAutofill, credential_autofill_action,
+    CredentialAutofillAction, CredentialAutofillMatchEvent, CredentialAutofillMatchRequest,
+    CredentialAutofillMatchRequestKey, CredentialAutofillTarget, PendingCredentialAutofill,
+    credential_autofill_action,
 };
 
 pub(crate) fn credential_autofill_target_display_name(target: &CredentialAutofillTarget) -> String {
-    match target {
-        CredentialAutofillTarget::Vault(credential) => credential.name.clone(),
-        CredentialAutofillTarget::ConnectionPassword(candidate) => format!(
-            "{} ({})",
-            candidate.connection_name,
-            t!("credentialAutofill.connectionPasswordLabel")
-        ),
-    }
+    let CredentialAutofillTarget::Vault(credential) = target;
+    credential.name.clone()
 }
 
 pub(crate) struct CredentialAutofillMatchPipeline {

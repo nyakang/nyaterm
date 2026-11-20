@@ -1,5 +1,7 @@
 use crate::adb::client::AdbClient;
+use crate::adb::server::{ServerRegistry, ServerShutdownReport};
 use crate::error::AdbError;
+use crate::operation::AdbOperationControl;
 use std::io::{Error, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
@@ -7,13 +9,13 @@ use std::time::Duration;
 fn custom_adb(root: &std::path::Path) -> std::path::PathBuf {
     let path = root.join(if cfg!(windows) { "adb.cmd" } else { "adb" });
     #[cfg(windows)]
-    std::fs::write(&path, "@echo off\r\n> \"%~dp0started\" echo %*\r\n").unwrap();
+    std::fs::write(&path, "@echo off\r\nif \"%~3\"==\"server\" exit /b 1\r\n> \"%~dp0started\" echo %*\r\nif not exist \"%~dp0wait-ready\" exit /b 0\r\n:wait\r\nif not exist \"%~dp0ready\" goto wait\r\n").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::write(
             &path,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/started\"\n",
+            "#!/bin/sh\ncase \"$*\" in *'server nodaemon') exit 1;; esac\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/started\"\nif [ -f \"$(dirname \"$0\")/wait-ready\" ]; then\nwhile [ ! -f \"$(dirname \"$0\")/ready\" ]; do sleep 0.01; done\nfi\n",
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -44,19 +46,46 @@ fn tcp_connect_failures_start_the_configured_adb_and_verify_its_server() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = AdbClient::local(Some(&executable)).unwrap();
         client.server = listener.local_addr().unwrap();
+        drop(listener);
+        std::fs::write(root.path().join("wait-ready"), b"").unwrap();
+        let server = client.server;
+        let server_root = root.path().to_path_buf();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !server_root.join("started").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let listener = TcpListener::bind(server).unwrap();
+            std::fs::write(server_root.join("ready"), b"").unwrap();
             let (mut socket, _) = listener.accept().unwrap();
             version_request(&mut socket);
             socket.write_all(b"OKAY00040029").unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         });
-        client
-            .ensure_server_with_connection(Err(Error::from(kind)))
+        let registry = ServerRegistry::default();
+        registry
+            .ensure_with_connection(
+                &client,
+                &AdbOperationControl::default(),
+                Err(Error::from(kind)),
+            )
             .unwrap();
         let args = std::fs::read_to_string(root.path().join("started")).unwrap();
         assert_eq!(
             args.split_whitespace().collect::<Vec<_>>(),
             ["-P", &client.server.port().to_string(), "start-server"]
         );
+        assert_eq!(
+            registry.begin_shutdown().finish(Duration::ZERO),
+            ServerShutdownReport::default()
+        );
+        assert!(
+            TcpStream::connect(server).is_ok(),
+            "the wrapper's unowned server must survive cleanup"
+        );
+        release_tx.send(()).unwrap();
         worker.join().unwrap();
     }
 }
@@ -95,11 +124,7 @@ fn connected_server_timeouts_never_start_adb() {
                         .unwrap();
                     assert_eq!(socket.read(&mut [0]).unwrap(), 0);
                 });
-                assert!(matches!(
-                    client.ensure_server(),
-                    Err(AdbError::Io(error))
-                        if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
-                ));
+                assert!(matches!(client.ensure_server(), Err(AdbError::Timeout)));
                 assert!(!root.path().join("started").exists());
                 worker.join().unwrap();
             });

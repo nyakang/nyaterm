@@ -91,8 +91,16 @@ Release packages include ADB, its companions, the Android helper and LGPL dynami
 FFmpeg libraries. `android.adb_path` is a device-local setting that overrides the
 bundled executable; an invalid explicit path is an error. Debug builds can use
 PATH or SDK discovery when the bundle is absent. Existing compatible ADB servers
-are reused; NyaTerm does not kill shared servers or delete ADB keys. Device
-authorization and operating-system USB drivers/permissions remain necessary.
+are reused. When no server is reachable, NyaTerm starts the configured ADB in
+foreground mode on the existing default port (5037), retaining its process handle.
+After all workspace users stop, application exit cancels discovery and terminates
+only the foreground processes it owns, with a bounded background cleanup. A server
+started by another tool, including one replacing an earlier NyaTerm server at the
+same port, is left running. Shell and batch wrappers, and executables that exit
+instead of supporting foreground mode, retain the `start-server` compatibility
+path; those detached servers are left running because NyaTerm cannot establish
+process ownership. NyaTerm does not delete ADB keys. Device authorization and
+operating-system USB drivers/permissions remain necessary.
 
 Pinned sources and SHA-256 values are in
 [`android-package.json`](../../scripts/release/android-package.json):

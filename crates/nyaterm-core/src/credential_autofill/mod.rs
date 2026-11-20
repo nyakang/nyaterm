@@ -128,105 +128,6 @@ pub fn is_default_password_prompt(output: &str) -> bool {
         && password_prompt_pattern().is_match(&prompt)
 }
 
-fn password_word_pattern() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\bpass(word|phrase)\b|密码|口令").expect("password word regex")
-    })
-}
-
-/// PIN, one-time code and MFA challenge wording, including the Chinese
-/// equivalents that also contain a password word (`动态口令`, `验证码`).
-fn otp_prompt_pattern() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)\b(passcode|pin|otp|one[-\s]?time\s+pass(word|phrase|code)|verification\s*code|auth(entication)?\s*code|2fa|mfa)\b|验证码|动态码|动态口令",
-        )
-        .expect("otp prompt regex")
-    })
-}
-
-/// Whether `output` asks for a login password rather than a PIN, one-time code
-/// or MFA challenge.
-///
-/// `detect_credential_prompt_kind` reports all of those as
-/// `CredentialPromptKind::Password`, because a saved credential may be
-/// configured to answer any of them. A connection password is narrower: it is
-/// a login secret for one specific account, so it may only be offered where a
-/// password is actually being asked for. `Verification code:` and `PIN:` are
-/// not answered with it.
-pub fn credential_prompt_requests_password(output: &str) -> bool {
-    let prompt = extract_credential_prompt_text(output);
-    !prompt.is_empty()
-        && prompt_terminator_pattern().is_match(&prompt)
-        && password_word_pattern().is_match(&prompt)
-        && !otp_prompt_pattern().is_match(&prompt)
-}
-
-fn sudo_password_target_pattern() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        // `pin` is deliberately absent: a PIN prompt does not name the account
-        // a login password belongs to, so `PIN for root:` is not a password
-        // prompt for root and must not be read as one.
-        Regex::new(
-            r"(?i)\b(password|passphrase|passcode)\b[^\r\n]{0,30}?\bfor\b[^\r\n]{0,40}?([A-Za-z0-9_.@-]+)['`]?\s*[:：]",
-        )
-        .expect("sudo password-for-user regex")
-    })
-}
-
-fn chinese_sudo_password_target_pattern() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        // `验证码` (verification code) is excluded for the same reason `pin` is
-        // in the English pattern: a code challenge does not name the account
-        // whose login password is being asked for.
-        Regex::new(r"(?:用户|账号|账户|帐户)\s*([^\s：:，,]+)\s*的\s*(?:密码|口令)\s*[:：]")
-            .expect("chinese sudo password-for-user regex")
-    })
-}
-
-/// Extracts the account a password prompt names as its target, e.g.
-/// `[sudo] password for root:` yields `root`. Returns None for prompts that do
-/// not single out a user, such as a bare `Password:`. Input is compared against
-/// the visible prompt text; escape sequences should already be stripped.
-pub fn credential_password_prompt_target_user(output: &str) -> Option<String> {
-    for pattern in [
-        sudo_password_target_pattern(),
-        chinese_sudo_password_target_pattern(),
-    ] {
-        if let Some(captures) = pattern.captures(output) {
-            let target = captures
-                .get(captures.len().saturating_sub(1))
-                .map(|matched| matched.as_str())
-                .unwrap_or_default()
-                .trim();
-            if !target.is_empty() {
-                return Some(target.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Whether a password prompt addresses the account `username` specifically,
-/// as in `[sudo] password for root:`. A prompt that does not name a user never
-/// matches a specific account, so `Password:` alone returns false.
-pub fn credential_password_prompt_targets_user(output: &str, username: &str) -> bool {
-    let username = username.trim();
-    if username.is_empty() {
-        return false;
-    }
-    let Some(target) = credential_password_prompt_target_user(output) else {
-        return false;
-    };
-    // `user@host` style targets address the account before the `@`.
-    let target_user = target.split('@').next().unwrap_or(&target).trim();
-    target_user.eq_ignore_ascii_case(username)
-}
-
 pub fn compile_prompt_regex(pattern: &str) -> Option<Regex> {
     Regex::new(&format!("(?im){pattern}")).ok()
 }
@@ -279,17 +180,6 @@ pub fn find_matching_credentials(
     credentials
         .iter()
         .filter(|credential| credential_matches_prompt(credential, kind, output))
-        .cloned()
-        .collect()
-}
-
-/// Default password prompt fallback: every enabled credential (Tauri parity).
-pub fn find_password_only_fallback_credentials(
-    credentials: &[SavedCredential],
-) -> Vec<SavedCredential> {
-    credentials
-        .iter()
-        .filter(|credential| credential.enabled)
         .cloned()
         .collect()
 }

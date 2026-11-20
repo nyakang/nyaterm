@@ -17,40 +17,17 @@ impl CredentialAutofillMatcher {
         credential_autofill_match_outcome(request, &mut self.regex_cache)
     }
 }
-/// A credential the autofill pipeline can act on. Vault entries come from the
-/// security center; the connection-password candidate is derived from the
-/// active session's source connection and is resolved through the connection
-/// store at fill time, never the credential vault.
+/// A credential the autofill pipeline can act on: an entry from the security
+/// center's credential vault.
 #[derive(Clone, PartialEq, Eq)]
 pub enum CredentialAutofillTarget {
     Vault(SavedCredential),
-    ConnectionPassword(ConnectionPasswordTarget),
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct ConnectionPasswordTarget {
-    pub connection_id: String,
-    pub connection_name: String,
-    pub username: String,
 }
 
 impl CredentialAutofillTarget {
-    pub fn enabled(&self) -> bool {
-        match self {
-            Self::Vault(credential) => credential.enabled,
-            Self::ConnectionPassword(_) => true,
-        }
-    }
-
-    pub fn username(&self) -> &str {
-        match self {
-            Self::Vault(credential) => &credential.username,
-            Self::ConnectionPassword(candidate) => &candidate.username,
-        }
-    }
-
-    pub fn is_connection_password(&self) -> bool {
-        matches!(self, Self::ConnectionPassword(_))
+    pub fn credential(&self) -> &SavedCredential {
+        let Self::Vault(credential) = self;
+        credential
     }
 }
 
@@ -89,10 +66,6 @@ pub enum CredentialAutofillMatchOutcome {
         kind: CredentialPromptKind,
         matches: Vec<CredentialAutofillTarget>,
         clear_pending: bool,
-        /// True when the prompt pattern selected these credentials. False for
-        /// the "every enabled credential" fallback, which is a list to pick
-        /// from rather than a match worth defaulting to.
-        precise: bool,
     },
     AutoFill {
         credential: CredentialAutofillTarget,
@@ -105,11 +78,10 @@ pub enum CredentialAutofillMatchOutcome {
 
 /// What the app does with a match reply.
 ///
-/// `Send` always stands on a prior user step. The only path to it is the
+/// `Send` always stands on a prior user step: the only path to it is the
 /// pending vault-credential flow, which the user enters by selecting a
-/// username suggestion; a connection password can never reach it, so
-/// remote-controlled terminal output stays an offer rather than an
-/// authorization to disclose a secret.
+/// username suggestion. Remote-controlled terminal output therefore stays an
+/// offer rather than an authorization to disclose a secret.
 #[derive(Clone, PartialEq, Eq)]
 pub enum CredentialAutofillAction {
     Send {
@@ -120,7 +92,6 @@ pub enum CredentialAutofillAction {
         kind: CredentialPromptKind,
         matches: Vec<CredentialAutofillTarget>,
         clear_pending: bool,
-        precise: bool,
     },
     None {
         clear_pending: bool,
@@ -140,32 +111,15 @@ pub fn credential_autofill_action(
             kind,
             matches,
             clear_pending,
-            precise,
         } => CredentialAutofillAction::Suggest {
             kind: *kind,
             matches: matches.clone(),
             clear_pending: *clear_pending,
-            precise: *precise,
         },
-        CredentialAutofillMatchOutcome::AutoFill { credential, kind }
-            if !credential.is_connection_password() =>
-        {
+        CredentialAutofillMatchOutcome::AutoFill { credential, kind } => {
             CredentialAutofillAction::Send {
                 target: credential.clone(),
                 kind: *kind,
-            }
-        }
-        // A connection password is decrypted and sent only from an explicit
-        // selection in the suggestion panel. Terminal output is remote input, so
-        // a prompt a remote process can print -- `[sudo] password for root:` --
-        // must never authorize sending the saved secret on its own. Downgrade
-        // any such reply to a suggestion the user has to pick.
-        CredentialAutofillMatchOutcome::AutoFill { credential, kind } => {
-            CredentialAutofillAction::Suggest {
-                kind: *kind,
-                matches: vec![credential.clone()],
-                clear_pending: true,
-                precise: true,
             }
         }
     }
@@ -174,11 +128,6 @@ pub fn credential_autofill_action(
 impl std::fmt::Debug for CredentialAutofillTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("CredentialAutofillTarget([REDACTED])")
-    }
-}
-impl std::fmt::Debug for ConnectionPasswordTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ConnectionPasswordTarget([REDACTED])")
     }
 }
 impl std::fmt::Debug for PendingCredentialAutofill {
@@ -218,14 +167,11 @@ fn credential_autofill_match_outcome(
     if let Some(pending) = request.pending.as_ref()
         && pending.session_id == request.key.session_id
     {
-        let pending_credential = request.credentials.iter().find_map(|target| match target {
-            CredentialAutofillTarget::Vault(credential)
-                if credential.id == pending.credential_id =>
-            {
-                Some(credential)
-            }
-            _ => None,
-        });
+        let pending_credential = request
+            .credentials
+            .iter()
+            .find(|target| target.credential().id == pending.credential_id)
+            .map(CredentialAutofillTarget::credential);
         if let Some(credential) = pending_credential
             && (credential_matches_prompt_cached(
                 credential,
@@ -264,16 +210,6 @@ fn credential_autofill_match_outcome(
                     kind: CredentialPromptKind::Password,
                     matches,
                     clear_pending: true,
-                    precise: true,
-                };
-            }
-            let fallback = find_password_only_fallback_targets(&request.credentials);
-            if !fallback.is_empty() {
-                return CredentialAutofillMatchOutcome::Suggest {
-                    kind: CredentialPromptKind::Password,
-                    matches: fallback,
-                    clear_pending: true,
-                    precise: false,
                 };
             }
             CredentialAutofillMatchOutcome::NoMatch {
@@ -296,15 +232,14 @@ fn credential_autofill_match_outcome(
                     kind: CredentialPromptKind::Username,
                     matches,
                     clear_pending: false,
-                    precise: true,
                 }
             }
         }
     }
 }
 
-/// Regex-matched credential suggestions come from vault candidates only; the
-/// connection-password candidate has no prompt pattern of its own.
+/// Regex-matched credential suggestions: only credentials whose own prompt
+/// pattern matches the prompt are offered, so an unmatched prompt offers none.
 fn find_matching_credential_targets_cached(
     credentials: &[CredentialAutofillTarget],
     kind: CredentialPromptKind,
@@ -313,25 +248,9 @@ fn find_matching_credential_targets_cached(
 ) -> Vec<CredentialAutofillTarget> {
     credentials
         .iter()
-        .filter_map(|target| match target {
-            CredentialAutofillTarget::Vault(credential)
-                if credential_matches_prompt_cached(credential, kind, output, regex_cache) =>
-            {
-                Some(target.clone())
-            }
-            _ => None,
+        .filter(|target| {
+            credential_matches_prompt_cached(target.credential(), kind, output, regex_cache)
         })
-        .collect()
-}
-
-/// Default password-prompt fallback (Tauri parity): every enabled target,
-/// preserving order so the connection-password candidate stays first.
-fn find_password_only_fallback_targets(
-    credentials: &[CredentialAutofillTarget],
-) -> Vec<CredentialAutofillTarget> {
-    credentials
-        .iter()
-        .filter(|target| target.enabled())
         .cloned()
         .collect()
 }
@@ -498,7 +417,6 @@ mod tests {
                 kind,
                 matches,
                 clear_pending,
-                precise,
             } => {
                 assert_eq!(kind, CredentialPromptKind::Username);
                 assert_eq!(matches.len(), 1);
@@ -507,20 +425,56 @@ mod tests {
                     CredentialAutofillTarget::Vault(credential) if credential.id == "c1"
                 ));
                 assert!(!clear_pending);
-                assert!(precise, "a username prompt match must be a precise match");
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
     }
 
     #[test]
-    fn credential_autofill_worker_falls_back_to_password_only_credentials() {
+    fn credential_autofill_worker_offers_nothing_when_no_password_pattern_matches() {
         let mut regex_cache = HashMap::new();
         let output = credential_autofill_match_outcome(
             request(
                 "Password:",
                 CredentialPromptKind::Password,
-                vault_credentials(vec![credential("c1", "", None, None, true)]),
+                vault_credentials(vec![
+                    credential("c1", "", None, None, true),
+                    credential(
+                        "c2",
+                        "root",
+                        Some("login as:"),
+                        Some("Enter ssh key passphrase:"),
+                        true,
+                    ),
+                ]),
+                None,
+            ),
+            &mut regex_cache,
+        );
+
+        assert!(
+            matches!(
+                output,
+                CredentialAutofillMatchOutcome::NoMatch {
+                    clear_pending: true
+                }
+            ),
+            "an unmatched password prompt must not list every credential"
+        );
+    }
+
+    #[test]
+    fn credential_autofill_worker_suggests_every_matching_password() {
+        let mut regex_cache = HashMap::new();
+        let output = credential_autofill_match_outcome(
+            request(
+                "Password:",
+                CredentialPromptKind::Password,
+                vault_credentials(vec![
+                    credential("c1", "", None, Some("Password:"), true),
+                    credential("c2", "", None, Some("^Password:$"), true),
+                    credential("c3", "", None, Some("Enter passphrase:"), true),
+                ]),
                 None,
             ),
             &mut regex_cache,
@@ -528,22 +482,17 @@ mod tests {
 
         match output {
             CredentialAutofillMatchOutcome::Suggest {
-                kind,
                 matches,
                 clear_pending,
-                precise,
+                ..
             } => {
-                assert_eq!(kind, CredentialPromptKind::Password);
-                assert_eq!(matches.len(), 1);
-                assert!(matches!(
-                    &matches[0],
-                    CredentialAutofillTarget::Vault(credential) if credential.id == "c1"
-                ));
+                let ids: Vec<&str> = matches
+                    .iter()
+                    .map(CredentialAutofillTarget::credential)
+                    .map(|credential| credential.id.as_str())
+                    .collect();
+                assert_eq!(ids, ["c1", "c2"]);
                 assert!(clear_pending);
-                assert!(
-                    !precise,
-                    "the every-credential fallback is not a precise match"
-                );
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
@@ -582,146 +531,6 @@ mod tests {
             }
             other => panic!("unexpected outcome: {other:?}"),
         }
-    }
-
-    #[test]
-    fn credential_autofill_worker_connects_password_variant_precedes_vault_fallback() {
-        let mut regex_cache = HashMap::new();
-        let candidate =
-            CredentialAutofillTarget::ConnectionPassword(super::ConnectionPasswordTarget {
-                connection_id: "conn-1".to_string(),
-                connection_name: "prod".to_string(),
-                username: "dev".to_string(),
-            });
-        let mut credentials = vec![candidate.clone()];
-        credentials.extend(vault_credentials(vec![credential(
-            "c1", "", None, None, true,
-        )]));
-        let output = credential_autofill_match_outcome(
-            request(
-                "Password:",
-                CredentialPromptKind::Password,
-                credentials,
-                None,
-            ),
-            &mut regex_cache,
-        );
-
-        match output {
-            CredentialAutofillMatchOutcome::Suggest {
-                kind,
-                matches,
-                clear_pending,
-                precise,
-            } => {
-                assert_eq!(kind, CredentialPromptKind::Password);
-                assert_eq!(matches.len(), 2);
-                assert_eq!(matches[0], candidate, "connection password stays first");
-                assert!(matches!(
-                    &matches[1],
-                    CredentialAutofillTarget::Vault(credential) if credential.id == "c1"
-                ));
-                assert!(clear_pending);
-                assert!(
-                    !precise,
-                    "a bare password prompt reaches the fallback list, not a precise match"
-                );
-            }
-            other => panic!("unexpected outcome: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn credential_autofill_worker_ignores_connection_password_as_username() {
-        let mut regex_cache = HashMap::new();
-        let candidate =
-            CredentialAutofillTarget::ConnectionPassword(super::ConnectionPasswordTarget {
-                connection_id: "conn-1".to_string(),
-                connection_name: "prod".to_string(),
-                username: "dev".to_string(),
-            });
-        let output = credential_autofill_match_outcome(
-            request(
-                "login as:",
-                CredentialPromptKind::Username,
-                vec![candidate],
-                None,
-            ),
-            &mut regex_cache,
-        );
-
-        assert!(matches!(
-            output,
-            CredentialAutofillMatchOutcome::NoMatch {
-                clear_pending: false
-            }
-        ));
-    }
-
-    fn connection_password_target(username: &str) -> CredentialAutofillTarget {
-        CredentialAutofillTarget::ConnectionPassword(super::ConnectionPasswordTarget {
-            connection_id: "conn-1".to_string(),
-            connection_name: "prod".to_string(),
-            username: username.to_string(),
-        })
-    }
-
-    #[test]
-    fn sudo_prompt_for_login_user_suggests_connection_password_without_sending_it() {
-        // A remote process can print this; it must not be able to authorize
-        // sending the saved connection password.
-        let mut regex_cache = HashMap::new();
-        let candidate = connection_password_target("root");
-        let outcome = credential_autofill_match_outcome(
-            request(
-                "[sudo] password for root:",
-                CredentialPromptKind::Password,
-                vec![candidate.clone()],
-                None,
-            ),
-            &mut regex_cache,
-        );
-
-        // The sole candidate does reach the user as a suggestion. It arrives
-        // through the every-credential fallback (the connection password has no
-        // vault prompt pattern), so it is not pre-selected...
-        assert_eq!(
-            credential_autofill_action(&outcome),
-            super::CredentialAutofillAction::Suggest {
-                kind: CredentialPromptKind::Password,
-                matches: vec![candidate],
-                clear_pending: true,
-                precise: false,
-            }
-        );
-        assert!(
-            !matches!(
-                credential_autofill_action(&outcome),
-                super::CredentialAutofillAction::Send { .. }
-            ),
-            "a matching sudo prompt must never resolve to a send"
-        );
-    }
-
-    #[test]
-    fn connection_password_autofill_reply_never_sends() {
-        // Defense in depth: even a reply that claims AutoFill is downgraded to
-        // a suggestion when it carries the connection password.
-        let candidate = connection_password_target("root");
-        let action = credential_autofill_action(&CredentialAutofillMatchOutcome::AutoFill {
-            credential: candidate.clone(),
-            kind: CredentialPromptKind::Password,
-        });
-
-        assert_eq!(
-            action,
-            super::CredentialAutofillAction::Suggest {
-                kind: CredentialPromptKind::Password,
-                matches: vec![candidate],
-                clear_pending: true,
-                precise: true,
-            }
-        );
     }
 
     #[test]

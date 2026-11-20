@@ -835,7 +835,6 @@
     "encodingFollowGlobal": "Follow Global Settings"
   },
   "credentialAutofill": {
-    "connectionPasswordLabel": "connection password",
     "dismiss": "Dismiss",
     "fill": "Fill",
     "passwordTitle": "Password",
