@@ -105,7 +105,19 @@ impl ConnectionStore {
         {
             session.updated_at = message.created_at.clone();
         }
-        history.messages.push(message);
+        // Native agent runs re-persist the in-memory assistant message at every
+        // projection point, so the same id is appended repeatedly with growing
+        // content. The newest snapshot must replace the earlier projection of
+        // that id instead of leaving duplicate rows behind.
+        if let Some(existing) = history
+            .messages
+            .iter_mut()
+            .find(|item| item.id == message.id && item.session_id == message.session_id)
+        {
+            *existing = message;
+        } else {
+            history.messages.push(message);
+        }
         self.save_ai_history(history)
     }
 
@@ -137,11 +149,24 @@ impl ConnectionStore {
         Ok(sessions)
     }
     pub fn list_ai_messages(&self, session_id: &str) -> Result<Vec<AiMessage>, StorageError> {
-        Ok(self
+        let messages: Vec<AiMessage> = self
             .load_ai_history()?
             .messages
             .into_iter()
             .filter(|message| message.session_id == session_id)
+            .collect();
+        // Databases written before `append_ai_message` replaced projections in
+        // place hold several rows sharing one message id. Keep the latest
+        // projection of each id so every message renders once.
+        let mut last_position = std::collections::HashMap::with_capacity(messages.len());
+        for (index, message) in messages.iter().enumerate() {
+            last_position.insert(message.id.clone(), index);
+        }
+        Ok(messages
+            .into_iter()
+            .enumerate()
+            .filter(|(index, message)| last_position.get(message.id.as_str()) == Some(index))
+            .map(|(_, message)| message)
             .collect())
     }
     pub fn rebind_ai_session(
@@ -569,6 +594,80 @@ mod tests {
         let limited = store.list_ai_audit_logs(Some(1)).expect("audit logs");
         assert_eq!(limited.len(), 1);
         assert_eq!(limited[0].id, "audit-later");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn append_ai_message_replaces_the_earlier_projection_of_an_id() {
+        let dir = unique_temp_dir("ai-message-projection-upsert");
+        let store = ConnectionStore::open(&dir).expect("store");
+        store
+            .append_ai_user_message("session-1", None, "prompt".to_string())
+            .expect("append user");
+
+        let message = |content: &str| AiMessage {
+            id: "assistant-1".to_string(),
+            session_id: "session-1".to_string(),
+            role: AiMessageRole::Assistant,
+            content: content.to_string(),
+            created_at: "2026-04-28T00:00:02Z".to_string(),
+            reasoning_content: None,
+            command_cards: Vec::new(),
+        };
+        store
+            .append_ai_message(message("partial answer"))
+            .expect("first projection");
+        store
+            .append_ai_message(message("final answer"))
+            .expect("second projection");
+
+        let messages = store.list_ai_messages("session-1").expect("messages");
+        assert_eq!(messages.len(), 2);
+        // The latest projection replaces the earlier row in place, preserving
+        // the message's position in the transcript.
+        assert_eq!(messages[1].id, "assistant-1");
+        assert_eq!(messages[1].content, "final answer");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn list_ai_messages_keeps_the_last_projection_of_a_duplicated_id() {
+        let dir = unique_temp_dir("ai-message-projection-dedupe");
+        let store = ConnectionStore::open(&dir).expect("store");
+        store
+            .append_ai_user_message("session-1", None, "prompt".to_string())
+            .expect("append user");
+
+        // Simulate history written before projections were replaced in place:
+        // several rows share one id, and only the last snapshot is current.
+        let mut history = store.load_ai_history().expect("history");
+        for (index, content) in ["stale", "stale", "current"].iter().enumerate() {
+            history.messages.push(AiMessage {
+                id: "assistant-1".to_string(),
+                session_id: "session-1".to_string(),
+                role: AiMessageRole::Assistant,
+                content: (*content).to_string(),
+                created_at: format!("2026-04-28T00:00:0{index}Z"),
+                reasoning_content: None,
+                command_cards: Vec::new(),
+            });
+        }
+        store.save_ai_history(history).expect("save");
+
+        let messages = store.list_ai_messages("session-1").expect("messages");
+        let assistant: Vec<_> = messages
+            .iter()
+            .filter(|message| message.id == "assistant-1")
+            .collect();
+        assert_eq!(assistant.len(), 1);
+        assert_eq!(assistant[0].content, "current");
+        // The surviving row keeps the last projection's position in the log.
+        assert_eq!(
+            messages.last().map(|message| message.id.as_str()),
+            Some("assistant-1")
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }
