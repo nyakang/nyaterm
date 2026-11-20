@@ -132,6 +132,17 @@ impl NyaTermApp {
         event: &KeyDownEvent,
         cx: &mut Context<Self>,
     ) {
+        // This listener sits on the panel that also hosts the shortcut search
+        // box. Swallowing keydown events while no recording is active breaks
+        // ordinary typing: GPUI forwards a keystroke's `key_char` to the focused
+        // input only when the event still propagates, so the search field could
+        // not accept Latin letters or symbols. IME composition bypasses that
+        // path, which is why Chinese input kept working and masked the bug.
+        // Key capture during an active recording is already handled by the
+        // global keystroke interceptor, so only stop propagation in that case.
+        if self.settings.keybinding_recording_id().is_none() {
+            return;
+        }
         cx.stop_propagation();
         self.record_keybinding_keystroke(&event.keystroke, cx);
     }
@@ -292,6 +303,68 @@ mod tests {
                     .map(|binding| binding.canonical()),
                 Some("ctrl+w".to_string())
             );
+        });
+    }
+
+    /// Mirrors the shortcuts panel: a container that forwards key down to
+    /// `handle_keybinding_key_down`, followed by a listener standing in for the
+    /// focused search input. While idle, a plain key must keep propagating so
+    /// characters reach the input; only an active recording may consume it.
+    struct PassthroughHost {
+        app: Entity<NyaTermApp>,
+        reached_input: Rc<Cell<usize>>,
+    }
+
+    impl Render for PassthroughHost {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let app = self.app.clone();
+            let reached_input = self.reached_input.clone();
+            div()
+                .size_full()
+                .id("passthrough-host")
+                .track_focus(self.app.read(cx).settings.keybinding_focus())
+                .on_key_down(move |event, _, cx| {
+                    app.update(cx, |app, cx| app.handle_keybinding_key_down(event, cx));
+                })
+                .on_key_down(move |_, _, _| {
+                    reached_input.set(reached_input.get() + 1);
+                })
+        }
+    }
+
+    #[test]
+    fn plain_keys_keep_propagating_when_not_recording() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let root = TestTempDir::new("nyaterm-keybinding-passthrough");
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        let reached_input = Rc::new(Cell::new(0usize));
+        let host_reached = reached_input.clone();
+        let host_app = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let host = cx.new(|_| PassthroughHost {
+                app: host_app,
+                reached_input: host_reached,
+            });
+            nyaterm_ui::nya_root(host, window, cx)
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let focus = app.read(cx).settings.keybinding_focus().clone();
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("a");
+        cx.run_until_parked();
+
+        assert_eq!(
+            reached_input.get(),
+            1,
+            "ordinary keys must reach the focused input while no shortcut is recording"
+        );
+        app.read_with(cx, |app, _| {
+            assert!(app.settings.keybinding_recording_id().is_none());
         });
     }
 }
