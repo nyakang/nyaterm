@@ -1386,9 +1386,10 @@ fn reasoning_disclosure_accepts_keyboard_and_persists_when_body_text_starts() {
     });
     compact_draw(&app, vcx);
     assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_message_thoughts().is_empty()));
-    // The first focusable element in this transcript is its reasoning disclosure.
+    // The user's copy button precedes the reasoning disclosure in Tab order.
     vcx.update(|window, cx| {
         window.blur(cx);
+        window.focus_next(cx);
         window.focus_next(cx);
         window.draw(cx).clear(cx);
     });
@@ -1551,6 +1552,8 @@ fn execution_disclosures_accept_keyboard_and_mouse_without_following_a_long_scri
     assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_execution_groups().is_empty()));
     vcx.update(|window, cx| {
         window.blur(cx);
+        // Pass the user's copy button to reach the execution disclosure.
+        window.focus_next(cx);
         window.focus_next(cx);
         window.draw(cx).clear(cx);
     });

@@ -3,6 +3,8 @@
 //! Split out of `storage.rs` by domain. Document keys, record shapes and the
 //! trimming rules are unchanged; this only moves the code.
 
+use std::collections::HashMap;
+
 use super::{
     ConnectionStore, SETTINGS_AI_AUDIT, SETTINGS_AI_HISTORY, SETTINGS_TABLE, StorageError,
     merge_unknown_json,
@@ -26,8 +28,37 @@ impl ConnectionStore {
     pub fn save_ai_history(&self, mut history: AiHistoryFile) -> Result<(), StorageError> {
         trim_ai_history(&mut history);
         let mut next = serde_json::to_value(history)?;
-        let current = self.load_settings_doc_value(SETTINGS_AI_HISTORY, serde_json::Value::Null)?;
+        let mut current =
+            self.load_settings_doc_value(SETTINGS_AI_HISTORY, serde_json::Value::Null)?;
+        // Message identity is scoped to its session. Merge newer projections'
+        // unknown fields first, retaining older non-conflicting fields as well.
+        // The generic array merger only matches the first row by id.
+        let current_messages = current
+            .as_object_mut()
+            .and_then(|root| root.remove("messages"))
+            .unwrap_or_default();
         merge_unknown_json(&current, &mut next);
+        if let (Some(current_messages), Some(next_messages)) = (
+            current_messages.as_array(),
+            next.get_mut("messages")
+                .and_then(serde_json::Value::as_array_mut),
+        ) {
+            let mut by_key: HashMap<_, Vec<_>> = HashMap::new();
+            for message in current_messages.iter().rev() {
+                if let Some(key) = ai_message_json_key(message) {
+                    by_key.entry(key).or_default().push(message);
+                }
+            }
+            for message in next_messages {
+                if let Some(previous) =
+                    ai_message_json_key(message).and_then(|key| by_key.get(&key))
+                {
+                    for projection in previous {
+                        merge_unknown_json(projection, message);
+                    }
+                }
+            }
+        }
         self.save_settings_doc_value(SETTINGS_AI_HISTORY, &next)?;
         Ok(())
     }
@@ -107,14 +138,22 @@ impl ConnectionStore {
         }
         // Native agent runs re-persist the in-memory assistant message at every
         // projection point, so the same id is appended repeatedly with growing
-        // content. The newest snapshot must replace the earlier projection of
-        // that id instead of leaving duplicate rows behind.
-        if let Some(existing) = history
+        // content. Match the read-side last-projection policy, keep its position
+        // in the transcript, and remove earlier duplicates from legacy history.
+        if let Some(last) = history
             .messages
-            .iter_mut()
-            .find(|item| item.id == message.id && item.session_id == message.session_id)
+            .iter()
+            .rposition(|item| item.id == message.id && item.session_id == message.session_id)
         {
-            *existing = message;
+            let previous = std::mem::replace(&mut history.messages[last], message);
+            let mut position = 0;
+            history.messages.retain(|item| {
+                let keep = position == last
+                    || item.id != previous.id
+                    || item.session_id != previous.session_id;
+                position += 1;
+                keep
+            });
         } else {
             history.messages.push(message);
         }
@@ -246,6 +285,13 @@ impl ConnectionStore {
         self.read_json_table::<AiAuditFile>(SETTINGS_TABLE, SETTINGS_AI_AUDIT)
             .map(|file| file.unwrap_or_default())
     }
+}
+
+fn ai_message_json_key(message: &serde_json::Value) -> Option<(String, String)> {
+    Some((
+        message.get("sessionId")?.as_str()?.to_string(),
+        message.get("id")?.as_str()?.to_string(),
+    ))
 }
 
 fn ai_session_title(user_input: &str) -> String {
@@ -629,6 +675,109 @@ mod tests {
         assert_eq!(messages[1].id, "assistant-1");
         assert_eq!(messages[1].content, "final answer");
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn append_ai_message_repairs_legacy_duplicates_without_losing_latest_content_or_metadata() {
+        let dir = unique_temp_dir("ai-message-legacy-upsert");
+        let store = ConnectionStore::open(&dir).expect("store");
+        let message = |session: &str, id: &str, content: &str| {
+            serde_json::json!({
+                "id": id,
+                "sessionId": session,
+                "role": "assistant",
+                "content": content,
+                "createdAt": "2026-04-28T00:00:02Z"
+            })
+        };
+        let mut partial = message("session-1", "assistant-1", "partial");
+        partial["futureMessage"] = serde_json::json!({"older": true, "version": "old"});
+        let mut old_final = message("session-1", "assistant-1", "old-final");
+        old_final["futureMessage"] = serde_json::json!({"newer": true, "version": "latest"});
+        let mut other_session = message("session-2", "assistant-1", "other session");
+        other_session["otherSessionField"] = serde_json::json!(true);
+        let legacy = serde_json::json!({
+            "futureRoot": true,
+            "sessions": (["session-1", "session-2"].map(|id| serde_json::json!({
+                "id": id,
+                "title": "Legacy",
+                "createdAt": "2026-04-28T00:00:00Z",
+                "updatedAt": "2026-04-28T00:00:02Z",
+                "futureSession": true
+            }))),
+            "messages": [
+                message("session-1", "before", "before"),
+                partial,
+                other_session.clone(),
+                message("session-1", "middle", "middle"),
+                old_final,
+                message("session-1", "after", "after")
+            ]
+        });
+        store
+            .save_settings_doc_value(SETTINGS_AI_HISTORY, &legacy)
+            .expect("write legacy history");
+        assert_eq!(
+            store.list_ai_messages("session-1").unwrap()[2].content,
+            "old-final"
+        );
+
+        let mut latest: AiMessage =
+            serde_json::from_value(message("session-1", "assistant-1", "new-final")).unwrap();
+        latest.reasoning_content = Some("latest reasoning".into());
+        // Repeated projections must remain idempotent after repairing old data.
+        for _ in 0..2 {
+            store.append_ai_message(latest.clone()).expect("upsert");
+            let messages = store.list_ai_messages("session-1").expect("messages");
+            assert_eq!(
+                messages
+                    .iter()
+                    .map(|message| message.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["before", "middle", "assistant-1", "after"]
+            );
+            assert_eq!(messages[2].content, "new-final");
+            assert_eq!(messages[2].reasoning_content, latest.reasoning_content);
+        }
+        drop(store);
+        let store = ConnectionStore::open(&dir).expect("reopen store");
+        let saved = store
+            .load_settings_doc_value(SETTINGS_AI_HISTORY, serde_json::Value::Null)
+            .expect("persisted history");
+        let records = saved["messages"].as_array().unwrap();
+        assert_eq!(records.len(), 5);
+        let latest_records: Vec<_> = records
+            .iter()
+            .filter(|record| record["sessionId"] == "session-1" && record["id"] == "assistant-1")
+            .collect();
+        assert_eq!(latest_records.len(), 1);
+        assert_eq!(latest_records[0]["content"], "new-final");
+        assert_eq!(
+            latest_records[0]["futureMessage"],
+            serde_json::json!({"older": true, "newer": true, "version": "latest"})
+        );
+        assert!(latest_records[0].get("otherSessionField").is_none());
+        let other = records
+            .iter()
+            .find(|record| record["sessionId"] == "session-2")
+            .unwrap();
+        assert_eq!(other["content"], other_session["content"]);
+        assert_eq!(other["otherSessionField"], true);
+        assert!(other.get("futureMessage").is_none());
+        assert_eq!(saved["futureRoot"], true);
+        assert!(
+            saved["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|session| session["futureSession"] == true)
+        );
+        assert_eq!(
+            store.list_ai_messages("session-1").unwrap()[2].content,
+            "new-final"
+        );
+        drop(store);
         std::fs::remove_dir_all(dir).ok();
     }
 

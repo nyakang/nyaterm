@@ -393,24 +393,30 @@ impl AiPanel {
                             )
                         })
                         .child(
-                            NyaIconButton::new("copy", "icons/copy.svg")
-                                .icon_size(px(12.))
-                                .size(px(20.))
-                                .color(rgb(palette.text).opacity(0.8))
-                                .tooltip(t!("ai.copyCode"))
-                                // Code blocks repeat per message; keep them out of Tab order.
-                                .tab_stop(false)
-                                .on_click(move |_, window, cx| {
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                        code.clone(),
-                                    ));
-                                    window.notify_operation(
-                                        "copy-ai-code-block",
-                                        NyaNotificationKind::Success,
-                                        t!("common.copied").to_string(),
-                                        cx,
-                                    );
-                                }),
+                            div()
+                                .debug_selector({
+                                    let start =
+                                        block.span.map(|span| span.start).unwrap_or_default();
+                                    move || format!("ai-code-copy-{start}")
+                                })
+                                .child(
+                                    NyaIconButton::new("copy", "icons/copy.svg")
+                                        .icon_size(px(12.))
+                                        .size(px(20.))
+                                        .color(rgb(palette.text).opacity(0.8))
+                                        .tooltip(t!("ai.copyCode"))
+                                        .on_click(move |_, window, cx| {
+                                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                                code.clone(),
+                                            ));
+                                            window.notify_operation(
+                                                "copy-ai-code-block",
+                                                NyaNotificationKind::Success,
+                                                t!("common.copied").to_string(),
+                                                cx,
+                                            );
+                                        }),
+                                ),
                         )
                 })
                 .into_any_element(),

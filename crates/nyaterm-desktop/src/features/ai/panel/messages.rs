@@ -271,8 +271,6 @@ fn copy_message_button(id: &str, text: &str, palette: ThemePalette) -> AnyElemen
                 .size(px(20.))
                 .color(rgb(palette.text).opacity(0.8))
                 .tooltip(t!("ai.copy"))
-                // Auxiliary chrome per row must not flood Tab traversal.
-                .tab_stop(false)
                 .on_click(move |_, window, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
                     window.notify_operation(
@@ -586,6 +584,7 @@ impl AiPanel {
                 !card.explanation.trim().is_empty() && card.explanation.trim() == display.trim()
             });
         let show_answer = !reasoning_only && !display.is_empty() && !duplicate_explanation;
+        // Copy the displayed answer's Markdown, excluding hidden reasoning.
         let timestamp = format_ai_message_time(&message.created_at);
         if show_answer {
             body = body.child(if is_user {
