@@ -181,6 +181,22 @@ impl NyaTermApp {
                 cx.notify();
                 return;
             }
+            SessionLaunchConfig::Ftp(config) => {
+                self.begin_background_session_start(
+                    format!("{} duplicate", config.name),
+                    SessionLaunchConfig::Ftp(config),
+                    metadata.source_connection_id.clone(),
+                    metadata.ai_execution_profile,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        after_session_id: Some(source_session_id),
+                        workspace_split: workspace_split.clone(),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            }
         }
         self.shell.show_workspace();
         if self.session.start_has_active_pending() {
@@ -311,6 +327,13 @@ impl NyaTermApp {
             self.android.stop_screen(&session_id);
         } else if self.remote_desktop.is_session(&session_id) {
             let _ = self.close_remote_desktop_runtime(&session_id);
+        } else if self
+            .session
+            .session_info(&session_id)
+            .is_some_and(|info| info.kind == nyaterm_transport::SessionKind::Ftp)
+        {
+            // Dropping the service closes the FTP control connection.
+            self.ftp.remove_session(&session_id);
         } else if let Err(error) = self.session.manager().close_detached(&session_id) {
             self.session.finish_busy_action(&session_id);
             self.shell.set_status(format!(
@@ -702,6 +725,23 @@ impl NyaTermApp {
                 self.session.finish_busy_action(&old_id);
                 self.shell
                     .set_status("Use Retry in the remote desktop view to reconnect".to_string());
+            }
+            SessionLaunchConfig::Ftp(config) => {
+                self.begin_background_session_start(
+                    format!("{} reconnect", config.name),
+                    SessionLaunchConfig::Ftp(config),
+                    source_connection_id,
+                    ai_execution_profile,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        locked,
+                        insert_index: Some(source_index),
+                        reconnect_session_id: Some(old_id.clone()),
+                        ..Default::default()
+                    },
+                    cx,
+                );
             }
         }
         // Tauri clears busy when reconnect action returns (even if SSH still connecting).

@@ -113,6 +113,44 @@ impl ConnectionEditorValidationError {
                     }),
                 };
             }
+            Self::FtpAuthModeUnsupported => {
+                return location(
+                    ConnectionEditorSection::Basic,
+                    ConnectionEditorFocusTarget::Select(ConnectionEditorSelect::Authentication),
+                );
+            }
+            Self::FtpPassiveModeInvalid => {
+                return location(
+                    ConnectionEditorSection::Advanced,
+                    ConnectionEditorFocusTarget::Select(ConnectionEditorSelect::FtpPassiveMode),
+                );
+            }
+            Self::FtpFilenameEncodingInvalid => {
+                return location(
+                    ConnectionEditorSection::Charset,
+                    ConnectionEditorFocusTarget::Select(
+                        ConnectionEditorSelect::FtpFilenameEncoding,
+                    ),
+                );
+            }
+            Self::FtpSecurityModeInvalid => {
+                return location(
+                    ConnectionEditorSection::Advanced,
+                    ConnectionEditorFocusTarget::Select(ConnectionEditorSelect::FtpSecurityMode),
+                );
+            }
+            Self::FtpTlsVersionInvalid => {
+                return location(
+                    ConnectionEditorSection::Advanced,
+                    ConnectionEditorFocusTarget::Select(ConnectionEditorSelect::FtpTlsVersion),
+                );
+            }
+            Self::FtpConnectTimeoutInvalid => {
+                return location(
+                    ConnectionEditorSection::Advanced,
+                    ConnectionEditorFocusTarget::Field(ConnectionEditorField::FtpConnectTimeout),
+                );
+            }
             _ => {}
         }
         let field = match self {
@@ -163,7 +201,13 @@ impl ConnectionEditorValidationError {
             | ConnectionEditorValidationError::RdpMstscRelayUnsupported
             | ConnectionEditorValidationError::SshAgentEndpoint(_)
             | ConnectionEditorValidationError::SshAgentForwarding { .. }
-            | ConnectionEditorValidationError::SshAlgorithms(_) => {
+            | ConnectionEditorValidationError::SshAlgorithms(_)
+            | ConnectionEditorValidationError::FtpAuthModeUnsupported
+            | ConnectionEditorValidationError::FtpPassiveModeInvalid
+            | ConnectionEditorValidationError::FtpFilenameEncodingInvalid
+            | ConnectionEditorValidationError::FtpSecurityModeInvalid
+            | ConnectionEditorValidationError::FtpTlsVersionInvalid
+            | ConnectionEditorValidationError::FtpConnectTimeoutInvalid => {
                 unreachable!("specialized validation locations handled above")
             }
         };

@@ -72,7 +72,13 @@
       "view_only": "local",
       "device": "portable:endpoint",
       "directory": "portable:android",
-      "screen": "portable:android"
+      "screen": "portable:android",
+      "initial_directory": "portable:ftp",
+      "local_initial_directory": "local",
+      "passive_mode": "portable:ftp",
+      "ftp_filename_encoding_mode": "portable:ftp",
+      "ftp_filename_encoding": "portable:ftp",
+      "connect_timeout_ms": "local"
     }
   },
   "ProxyConfig": {

@@ -154,6 +154,7 @@ schemars = "=1.2.2"
 serialport = { version = "4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+suppaftp = { version = "13.0.0", default-features = false, features = ["no-log"] }
 semver = { version = "1", features = ["serde"] }
 sha1 = { version = "0.11", features = ["oid"] }
 sha2 = { version = "0.11", features = ["oid"] }

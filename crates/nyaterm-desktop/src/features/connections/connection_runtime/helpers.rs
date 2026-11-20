@@ -45,6 +45,12 @@ pub(super) enum ConnectionEditorValidationError {
     PostLoginCommandRequired,
     PostLoginDelayInvalid,
     SftpShellDetectionTimeoutInvalid,
+    FtpAuthModeUnsupported,
+    FtpPassiveModeInvalid,
+    FtpFilenameEncodingInvalid,
+    FtpSecurityModeInvalid,
+    FtpTlsVersionInvalid,
+    FtpConnectTimeoutInvalid,
     SshAgentEndpoint(SshAgentEndpointValidationError),
     SshAgentForwarding {
         error: SshAgentEndpointValidationError,
@@ -144,7 +150,7 @@ pub(super) fn connection_editor_from_saved(
     };
     let uses_accounts = matches!(
         connection.config,
-        ConnectionType::Ssh { .. } | ConnectionType::Telnet { .. }
+        ConnectionType::Ssh { .. } | ConnectionType::Telnet { .. } | ConnectionType::Ftp { .. }
     );
     let password_source = if uses_accounts && !auth.uses_account_password()
         || !uses_accounts && (auth.password.is_some() || auth.has_password)
@@ -183,6 +189,15 @@ pub(super) fn connection_editor_from_saved(
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: auth.mode.clone(),
+        ftp_initial_directory: String::new(),
+        ftp_local_initial_directory: String::new(),
+        ftp_passive_mode: "auto".to_string(),
+        ftp_filename_encoding_mode: "auto".to_string(),
+        ftp_filename_encoding: "UTF-8".to_string(),
+        ftp_ascii_mode: false,
+        ftp_security_mode: "none".to_string(),
+        ftp_tls_version: "auto".to_string(),
+        ftp_connect_timeout_ms: "15000".to_string(),
         rdp_backend: "builtin".to_string(),
         rdp_security: RdpSecuritySettings::default(),
         rdp_display: RdpDisplaySettings::default(),
@@ -474,6 +489,33 @@ pub(super) fn connection_editor_from_saved(
             editor.vnc_reconnect = reconnect;
             editor.vnc_shared = shared;
             editor.vnc_view_only = view_only;
+        }
+        ConnectionType::Ftp {
+            host,
+            port,
+            username,
+            initial_directory,
+            local_initial_directory,
+            passive_mode,
+            ftp_filename_encoding_mode,
+            ftp_filename_encoding,
+            ftp_ascii_mode,
+            ftp_security_mode,
+            ftp_tls_version,
+            connect_timeout_ms,
+        } => {
+            editor.host = host;
+            editor.port = port.to_string();
+            editor.username = username;
+            editor.ftp_initial_directory = initial_directory;
+            editor.ftp_local_initial_directory = local_initial_directory;
+            editor.ftp_passive_mode = passive_mode;
+            editor.ftp_filename_encoding_mode = ftp_filename_encoding_mode;
+            editor.ftp_filename_encoding = ftp_filename_encoding;
+            editor.ftp_ascii_mode = ftp_ascii_mode;
+            editor.ftp_security_mode = ftp_security_mode;
+            editor.ftp_tls_version = ftp_tls_version;
+            editor.ftp_connect_timeout_ms = connect_timeout_ms.to_string();
         }
     }
     editor.normalize_rdp_backend_settings();
@@ -783,6 +825,92 @@ pub(super) fn build_saved_connection_from_editor(
                 view_only: editor.vnc_view_only,
             }
         }
+        ConnectionKindTab::Ftp => {
+            let host = editor.host.trim().to_string();
+            if host.is_empty() {
+                return Err(ConnectionEditorValidationError::HostRequired);
+            }
+            let port = parse_port(&editor.port)?;
+            if !matches!(editor.auth_mode.as_str(), "password" | "none") {
+                return Err(ConnectionEditorValidationError::FtpAuthModeUnsupported);
+            }
+            let username = editor.username.trim().to_string();
+            if editor.auth_mode == "password"
+                && username.is_empty()
+                && !(editor.account_id.is_some()
+                    && editor.username_source == nyaterm_core::ConnectionUsernameSource::Account)
+            {
+                return Err(ConnectionEditorValidationError::UsernameRequired);
+            }
+            let passive_mode = match editor.ftp_passive_mode.trim().to_ascii_lowercase().as_str() {
+                "pasv" => "pasv",
+                "epsv" => "epsv",
+                "auto" => "auto",
+                _ => return Err(ConnectionEditorValidationError::FtpPassiveModeInvalid),
+            };
+            let encoding_mode = match editor
+                .ftp_filename_encoding_mode
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "auto" => "auto",
+                "utf8" | "utf-8" => "utf8",
+                "custom" => "custom",
+                _ => return Err(ConnectionEditorValidationError::FtpFilenameEncodingInvalid),
+            };
+            let security_mode = match editor
+                .ftp_security_mode
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "none" => "none",
+                "explicit" => "explicit",
+                "implicit" => "implicit",
+                _ => return Err(ConnectionEditorValidationError::FtpSecurityModeInvalid),
+            };
+            let tls_version = match editor.ftp_tls_version.trim().to_ascii_lowercase().as_str() {
+                "auto" => "auto",
+                "ssl3" => "ssl3",
+                "tls10" => "tls10",
+                "tls11" => "tls11",
+                "tls12" => "tls12",
+                "tls13" => "tls13",
+                _ => return Err(ConnectionEditorValidationError::FtpTlsVersionInvalid),
+            };
+            let custom_encoding = editor.ftp_filename_encoding.trim().to_string();
+            let ftp_filename_encoding = if encoding_mode == "custom" {
+                nyaterm_core::character_encoding::CharacterEncoding::parse(&custom_encoding)
+                    .map_err(|_| ConnectionEditorValidationError::FtpFilenameEncodingInvalid)?
+                    .label()
+                    .to_string()
+            } else {
+                custom_encoding
+            };
+            let connect_timeout_ms = editor
+                .ftp_connect_timeout_ms
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| ConnectionEditorValidationError::FtpConnectTimeoutInvalid)?;
+            if !(1_000..=120_000).contains(&connect_timeout_ms) {
+                return Err(ConnectionEditorValidationError::FtpConnectTimeoutInvalid);
+            }
+            ConnectionType::Ftp {
+                host,
+                port,
+                username,
+                initial_directory: editor.ftp_initial_directory.trim().to_string(),
+                local_initial_directory: editor.ftp_local_initial_directory.trim().to_string(),
+                passive_mode: passive_mode.to_string(),
+                ftp_filename_encoding_mode: encoding_mode.to_string(),
+                ftp_filename_encoding,
+                ftp_ascii_mode: editor.ftp_ascii_mode,
+                ftp_security_mode: security_mode.to_string(),
+                ftp_tls_version: tls_version.to_string(),
+                connect_timeout_ms,
+            }
+        }
     };
 
     if editor.kind == ConnectionKindTab::Ssh {
@@ -837,7 +965,8 @@ pub(super) fn build_saved_connection_from_editor(
             ConnectionType::Ssh { host, port, .. }
             | ConnectionType::Telnet { host, port, .. }
             | ConnectionType::Rdp { host, port, .. }
-            | ConnectionType::Vnc { host, port, .. } => {
+            | ConnectionType::Vnc { host, port, .. }
+            | ConnectionType::Ftp { host, port, .. } => {
                 format!("{host}:{port}")
             }
             ConnectionType::LocalTerminal { .. } => "Local Terminal".to_string(),
@@ -861,7 +990,8 @@ pub(super) fn build_saved_connection_from_editor(
         ConnectionKindTab::Ssh
         | ConnectionKindTab::Telnet
         | ConnectionKindTab::Rdp
-        | ConnectionKindTab::Vnc => {
+        | ConnectionKindTab::Vnc
+        | ConnectionKindTab::Ftp => {
             // Whitespace is part of the secret, including at either end.
             let entered_password = editor.password.clone();
             let existing = editor.existing_password.clone();
@@ -907,13 +1037,13 @@ pub(super) fn build_saved_connection_from_editor(
             Some(ConnectionAuth {
                 account_id: matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
                 )
                 .then(|| editor.account_id.clone())
                 .flatten(),
                 password_source: matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
                 )
                 .then_some(
                     if (mode == "password" || retain_ssh_credentials)
@@ -929,7 +1059,7 @@ pub(super) fn build_saved_connection_from_editor(
                     .flatten(),
                 username_source: (matches!(
                     editor.kind,
-                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet
+                    ConnectionKindTab::Ssh | ConnectionKindTab::Telnet | ConnectionKindTab::Ftp
                 ) && editor
                     .account_id
                     .as_ref()
@@ -966,7 +1096,8 @@ pub(super) fn build_saved_connection_from_editor(
         ConnectionKindTab::Ssh
         | ConnectionKindTab::Telnet
         | ConnectionKindTab::Rdp
-        | ConnectionKindTab::Vnc => {
+        | ConnectionKindTab::Vnc
+        | ConnectionKindTab::Ftp => {
             let proxy_id = editor
                 .proxy_id
                 .clone()
@@ -1119,6 +1250,7 @@ pub(super) fn default_session_settings_kind_id(kind: ConnectionKindTab) -> &'sta
         ConnectionKindTab::Rdp => "rdp",
         ConnectionKindTab::Vnc => "vnc",
         ConnectionKindTab::Adb => "adb",
+        ConnectionKindTab::Ftp => "ftp",
     }
 }
 
@@ -1370,6 +1502,148 @@ mod tests {
             assert_eq!(reopened.host, editor.host);
             assert_eq!(reopened.port, editor.port);
         }
+    }
+
+    #[test]
+    fn ftp_editor_round_trips_protocol_and_charset_settings() {
+        let original: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"ftp", "name":"FTP", "type":"ftp",
+            "host":"ftp.example.test", "port":2121, "username":"deploy",
+            "initial_directory":"/pub", "local_initial_directory":"D:/downloads",
+            "passive_mode":"epsv",
+            "ftp_filename_encoding_mode":"custom",
+            "ftp_filename_encoding":"Windows-1252",
+            "ftp_ascii_mode":true,
+            "ftp_security_mode":"explicit",
+            "ftp_tls_version":"tls12",
+            "connect_timeout_ms":30000,
+            "auth":{"mode":"none"}
+        }))
+        .unwrap();
+        let editor = connection_editor_from_saved(original.clone(), false);
+        assert_eq!(editor.host, "ftp.example.test");
+        assert_eq!(editor.port, "2121");
+        assert_eq!(editor.ftp_passive_mode, "epsv");
+        assert_eq!(editor.ftp_filename_encoding_mode, "custom");
+        assert_eq!(editor.ftp_filename_encoding, "Windows-1252");
+        assert!(editor.ftp_ascii_mode);
+        assert_eq!(editor.ftp_security_mode, "explicit");
+        assert_eq!(editor.ftp_tls_version, "tls12");
+        assert_eq!(editor.ftp_connect_timeout_ms, "30000");
+        assert_eq!(editor.auth_mode, "none");
+
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        assert_eq!(saved.config, original.config);
+        assert_eq!(
+            saved.auth.as_ref().map(|auth| auth.mode.as_str()),
+            Some("none")
+        );
+
+        let reopened = connection_editor_from_saved(saved, false);
+        assert_eq!(reopened.ftp_initial_directory, editor.ftp_initial_directory);
+        assert_eq!(
+            reopened.ftp_local_initial_directory,
+            editor.ftp_local_initial_directory
+        );
+        assert_eq!(reopened.ftp_passive_mode, editor.ftp_passive_mode);
+        assert_eq!(
+            reopened.ftp_filename_encoding_mode,
+            editor.ftp_filename_encoding_mode
+        );
+        assert_eq!(reopened.ftp_filename_encoding, editor.ftp_filename_encoding);
+        assert_eq!(reopened.ftp_ascii_mode, editor.ftp_ascii_mode);
+        assert_eq!(reopened.ftp_security_mode, editor.ftp_security_mode);
+        assert_eq!(reopened.ftp_tls_version, editor.ftp_tls_version);
+        assert_eq!(
+            reopened.ftp_connect_timeout_ms,
+            editor.ftp_connect_timeout_ms
+        );
+    }
+
+    #[test]
+    fn ftp_editor_canonicalizes_custom_charset_aliases() {
+        let mut editor = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"ftp", "name":"FTP", "type":"ftp",
+                "host":"ftp.example.test", "port":21, "username":"",
+                "auth":{"mode":"none"}
+            }))
+            .unwrap(),
+            false,
+        );
+        editor.ftp_filename_encoding_mode = "custom".to_string();
+        editor.ftp_filename_encoding = "cp1252".to_string();
+        let saved = build_saved_connection_from_editor(&editor).unwrap();
+        match saved.config {
+            ConnectionType::Ftp {
+                ftp_filename_encoding,
+                ..
+            } => assert_eq!(ftp_filename_encoding, "Windows-1252"),
+            other => panic!("expected FTP config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ftp_editor_rejects_unsupported_auth_and_invalid_advanced_values() {
+        let mut editor = connection_editor_from_saved(
+            serde_json::from_value::<SavedConnection>(serde_json::json!({
+                "id":"ftp", "name":"FTP", "type":"ftp",
+                "host":"ftp.example.test", "port":21, "username":"",
+                "auth":{"mode":"none"}
+            }))
+            .unwrap(),
+            false,
+        );
+        assert!(build_saved_connection_from_editor(&editor).is_ok());
+
+        editor.auth_mode = "key".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpAuthModeUnsupported
+        );
+        editor.auth_mode = "none".to_string();
+
+        editor.ftp_passive_mode = "active".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpPassiveModeInvalid
+        );
+        editor.ftp_passive_mode = "auto".to_string();
+
+        editor.ftp_filename_encoding_mode = "custom".to_string();
+        editor.ftp_filename_encoding = "not-an-encoding".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpFilenameEncodingInvalid
+        );
+        editor.ftp_filename_encoding_mode = "auto".to_string();
+
+        editor.ftp_security_mode = "implicit".to_string();
+        assert!(build_saved_connection_from_editor(&editor).is_ok());
+        editor.ftp_security_mode = "starttls".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpSecurityModeInvalid
+        );
+        editor.ftp_security_mode = "none".to_string();
+
+        editor.ftp_tls_version = "ssl2".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpTlsVersionInvalid
+        );
+        editor.ftp_tls_version = "auto".to_string();
+
+        editor.ftp_connect_timeout_ms = "999".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpConnectTimeoutInvalid
+        );
+        editor.ftp_connect_timeout_ms = "abc".to_string();
+        assert_eq!(
+            build_saved_connection_from_editor(&editor).unwrap_err(),
+            ConnectionEditorValidationError::FtpConnectTimeoutInvalid
+        );
     }
 
     #[test]
@@ -2453,6 +2727,7 @@ pub(in crate::features) enum ConnectionEditorToggle {
     AgentStoredKeys,
     SftpEnabled,
     SftpCompatibilityMode,
+    FtpAsciiMode,
     SshCompatibilityMode,
     AllowShortRsaHostKeys,
     RawTcp,

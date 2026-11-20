@@ -323,6 +323,7 @@ impl SessionStartFeatureState {
             }
             ConnectionType::Rdp { .. } => (SessionKind::Rdp, AiExecutionProfile::Disabled),
             ConnectionType::Vnc { .. } => (SessionKind::Vnc, AiExecutionProfile::Disabled),
+            ConnectionType::Ftp { .. } => (SessionKind::Ftp, AiExecutionProfile::Disabled),
         };
         let id = uuid();
         self.begin_preparation(

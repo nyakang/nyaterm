@@ -181,6 +181,7 @@ fn success(request_id: &str, session_id: &str, config: SessionLaunchConfig) -> S
             multiplex_handle: None,
             launch_config: Some(config),
             cleanup: None,
+            ftp_service: None,
         }),
     }
 }

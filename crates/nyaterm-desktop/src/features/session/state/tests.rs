@@ -351,6 +351,7 @@ fn failed_retry_replaces_the_moved_tab_on_success_with_a_fresh_attempt() {
                         multiplex_handle: None,
                         launch_config: Some(config),
                         cleanup: None,
+                        ftp_service: None,
                     }),
                 },
                 cx,

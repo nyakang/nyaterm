@@ -27,6 +27,7 @@ pub enum SessionKind {
     Serial,
     Rdp,
     Vnc,
+    Ftp,
 }
 
 // `Eq` is impossible: `TmuxState` carries `f64` layout ratios.

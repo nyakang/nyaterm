@@ -161,6 +161,7 @@ impl SavedConnection {
             ConnectionType::Serial { .. } => "Serial",
             ConnectionType::Rdp { .. } => "RDP",
             ConnectionType::Vnc { .. } => "VNC",
+            ConnectionType::Ftp { .. } => "FTP",
         }
     }
 
@@ -219,6 +220,18 @@ impl SavedConnection {
                 format!("{account}{host}:{port}")
             }
             ConnectionType::Vnc { host, port, .. } => format!("{host}:{port}"),
+            ConnectionType::Ftp {
+                host,
+                port,
+                username,
+                ..
+            } => {
+                if username.is_empty() {
+                    format!("{host}:{port}")
+                } else {
+                    format!("{username}@{host}:{port}")
+                }
+            }
         }
     }
 }

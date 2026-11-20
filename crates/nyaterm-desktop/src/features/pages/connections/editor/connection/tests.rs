@@ -315,6 +315,10 @@ fn protocol_selectors(kind: ConnectionKindTab) -> (&'static str, &'static str) {
             "connection-editor-vnc-section",
             "connection-editor-vnc-advanced",
         ),
+        ConnectionKindTab::Ftp => (
+            "connection-editor-ftp-section",
+            "connection-editor-ftp-filename-encoding",
+        ),
     }
 }
 
@@ -353,6 +357,15 @@ fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> Connectio
         username: String::new(),
         domain: String::new(),
         auth_mode: "password".to_string(),
+        ftp_initial_directory: String::new(),
+        ftp_local_initial_directory: String::new(),
+        ftp_passive_mode: "auto".to_string(),
+        ftp_filename_encoding_mode: "auto".to_string(),
+        ftp_filename_encoding: "UTF-8".to_string(),
+        ftp_ascii_mode: false,
+        ftp_security_mode: "none".to_string(),
+        ftp_tls_version: "auto".to_string(),
+        ftp_connect_timeout_ms: "15000".to_string(),
         rdp_backend: "builtin".to_string(),
         rdp_security: Default::default(),
         rdp_display: Default::default(),
@@ -1527,6 +1540,25 @@ fn account_dropdown_escape_closes_the_menu_before_the_connection_editor(cx: &mut
 }
 
 #[gpui::test]
+fn ftp_passive_mode_select_routes_to_the_editor_draft(cx: &mut TestAppContext) {
+    let test_dir = TestConfigDir::new("nyaterm-ftp-passive-select");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_connection_editor_kind(ConnectionKindTab::Ftp, cx);
+            app.set_connection_editor_section(crate::models::ConnectionEditorSection::Advanced, cx);
+            app.on_select_changed("connection-editor-ftp-passive-mode", Some("epsv"), cx);
+            let passive_mode = app
+                .connection_state
+                .active_editor_draft()
+                .map(|editor| editor.ftp_passive_mode.clone());
+            assert_eq!(passive_mode.as_deref(), Some("epsv"));
+        });
+    });
+    draw_editor(&app, vcx);
+}
+
+#[gpui::test]
 fn vnc_no_authentication_hides_password_controls_without_losing_the_draft(cx: &mut TestAppContext) {
     let test_dir = TestConfigDir::new("nyaterm-vnc-auth-draft");
     let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
@@ -1736,6 +1768,7 @@ fn connection_editor_categories_fit_wide_and_compact_viewports() {
                 ConnectionKindTab::Serial,
                 ConnectionKindTab::Rdp,
                 ConnectionKindTab::Vnc,
+                ConnectionKindTab::Ftp,
             ] {
                 vcx.update(|_, cx| {
                     app.update(cx, |app, cx| app.set_connection_editor_kind(kind, cx))

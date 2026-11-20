@@ -21,11 +21,11 @@ fn key(endpoint: &FileTransferEndpoint) -> anyhow::Result<Vec<u8>> {
             .ok_or(FileTransferEntryError::InvalidDestination)?
             .as_bytes()
             .to_vec()),
-        FileTransferEndpoint::Remote { path, .. } | FileTransferEndpoint::Adb { path, .. } => {
-            Ok(path
-                .raw_path()?
-                .unwrap_or_else(|| path.display_path.as_bytes().to_vec()))
-        }
+        FileTransferEndpoint::Remote { path, .. }
+        | FileTransferEndpoint::Adb { path, .. }
+        | FileTransferEndpoint::Ftp { path, .. } => Ok(path
+            .raw_path()?
+            .unwrap_or_else(|| path.display_path.as_bytes().to_vec())),
     }
 }
 fn browser(endpoint: &FileTransferEndpoint) -> (FileBrowserService, RemoteFilePath) {
@@ -39,6 +39,9 @@ fn browser(endpoint: &FileTransferEndpoint) -> (FileBrowserService, RemoteFilePa
         }
         FileTransferEndpoint::Adb { service, path } => {
             (FileBrowserService::Adb(service.clone()), path.clone())
+        }
+        FileTransferEndpoint::Ftp { service, path } => {
+            (FileBrowserService::Ftp(service.clone()), path.clone())
         }
     }
 }

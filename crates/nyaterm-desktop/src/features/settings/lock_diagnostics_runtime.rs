@@ -326,6 +326,7 @@ impl NyaTermApp {
                 | SessionKind::AdbShell
                 | SessionKind::AdbFiles
                 | SessionKind::AdbScreen => {}
+                SessionKind::Ftp => {}
             }
         }
 

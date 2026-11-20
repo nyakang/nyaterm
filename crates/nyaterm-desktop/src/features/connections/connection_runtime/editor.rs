@@ -186,6 +186,27 @@ impl NyaTermApp {
                 max = "60000"
             )
             .into(),
+            ConnectionEditorValidationError::FtpAuthModeUnsupported => {
+                t!("dialog.ftpAuthModeUnsupported").into()
+            }
+            ConnectionEditorValidationError::FtpPassiveModeInvalid => {
+                t!("dialog.ftpPassiveModeInvalid").into()
+            }
+            ConnectionEditorValidationError::FtpFilenameEncodingInvalid => {
+                t!("dialog.ftpFilenameEncodingInvalid").into()
+            }
+            ConnectionEditorValidationError::FtpSecurityModeInvalid => {
+                t!("dialog.ftpSecurityModeInvalid").into()
+            }
+            ConnectionEditorValidationError::FtpTlsVersionInvalid => {
+                t!("dialog.ftpTlsVersionInvalid").into()
+            }
+            ConnectionEditorValidationError::FtpConnectTimeoutInvalid => t!(
+                "dialog.ftpConnectTimeoutInvalid",
+                min = "1000",
+                max = "120000"
+            )
+            .into(),
             ConnectionEditorValidationError::SshAgentEndpoint(error)
             | ConnectionEditorValidationError::SshAgentForwarding { error, .. } => match error {
                 nyaterm_core::SshAgentEndpointValidationError::Empty => {
@@ -255,6 +276,15 @@ impl NyaTermApp {
             username: "root".to_string(),
             domain: String::new(),
             auth_mode: "password".to_string(),
+            ftp_initial_directory: String::new(),
+            ftp_local_initial_directory: String::new(),
+            ftp_passive_mode: "auto".to_string(),
+            ftp_filename_encoding_mode: "auto".to_string(),
+            ftp_filename_encoding: "UTF-8".to_string(),
+            ftp_ascii_mode: false,
+            ftp_security_mode: "none".to_string(),
+            ftp_tls_version: "auto".to_string(),
+            ftp_connect_timeout_ms: "15000".to_string(),
             rdp_backend: "builtin".to_string(),
             rdp_security: RdpSecuritySettings::default(),
             rdp_display: RdpDisplaySettings::default(),
@@ -1142,6 +1172,7 @@ impl NyaTermApp {
                 ConnectionKindTab::Rdp => "RDP",
                 ConnectionKindTab::Vnc => "VNC",
                 ConnectionKindTab::Adb => "Android",
+                ConnectionKindTab::Ftp => "FTP",
             };
             self.shell
                 .set_status(t!("dialog.connectionTypeChanged", "type" => kind_label));

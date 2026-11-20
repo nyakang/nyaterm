@@ -70,6 +70,7 @@ fn new_session_connection_protocol(connection: &SavedConnection) -> &'static str
         ConnectionType::Ssh { .. } => "ssh",
         ConnectionType::Vnc { .. } => "vnc",
         ConnectionType::Adb { .. } => "adb",
+        ConnectionType::Ftp { .. } => "ftp",
     }
 }
 
@@ -350,6 +351,7 @@ impl NyaTermApp {
                         nyaterm_transport::SessionKind::AdbShell
                         | nyaterm_transport::SessionKind::AdbFiles
                         | nyaterm_transport::SessionKind::AdbScreen => "Android",
+                        nyaterm_transport::SessionKind::Ftp => "FTP",
                     },
                     SavedConnection::kind_label,
                 );

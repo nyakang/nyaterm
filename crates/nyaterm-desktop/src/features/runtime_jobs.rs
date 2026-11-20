@@ -45,6 +45,9 @@ pub(in crate::features) struct SessionStartSuccess {
     pub(in crate::features) multiplex_handle: Option<SshConnectionLease>,
     pub(in crate::features) launch_config: Option<SessionLaunchConfig>,
     pub(in crate::features) cleanup: Option<PendingSession>,
+    /// Connected FTP service; the worker owns the blocking connection until
+    /// the UI registers the session.
+    pub(in crate::features) ftp_service: Option<Arc<nyaterm_files::ftp::FtpFileService>>,
 }
 
 /// The worker's session is not owned by a window until its result is accepted.
@@ -72,6 +75,7 @@ impl SessionStartSuccess {
             multiplex_handle: Some(connection),
             launch_config,
             cleanup: Some(cleanup),
+            ftp_service: None,
         }
     }
 
@@ -90,6 +94,22 @@ impl SessionStartSuccess {
             launch_config,
             multiplex_handle: None,
             cleanup: Some(cleanup),
+            ftp_service: None,
+        }
+    }
+
+    /// A view-only FTP session owns no `SessionManager` channel; the service is
+    /// dropped with the result when the start is cancelled before registration.
+    pub(in crate::features) fn ftp(
+        session_info: SessionInfo,
+        service: Arc<nyaterm_files::ftp::FtpFileService>,
+    ) -> Self {
+        Self {
+            session_info,
+            multiplex_handle: None,
+            launch_config: None,
+            cleanup: None,
+            ftp_service: Some(service),
         }
     }
 

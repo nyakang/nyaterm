@@ -31,7 +31,7 @@ use crate::features::{
     session::AgentPromptBroker, session::CredentialPromptBroker, session::HostKeyPromptBroker,
     session::NativeOtpProvider, session::SavedConnectionStartOptions,
 };
-use crate::models::SessionLaunchConfig;
+use crate::models::{FtpSessionConfig, SessionLaunchConfig};
 
 fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarget {
     match config {
@@ -42,7 +42,8 @@ fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarge
         | ConnectionType::Ssh { .. }
         | ConnectionType::LocalTerminal { .. }
         | ConnectionType::Telnet { .. }
-        | ConnectionType::Serial { .. } => SessionStartFocusTarget::Terminal,
+        | ConnectionType::Serial { .. }
+        | ConnectionType::Ftp { .. } => SessionStartFocusTarget::Terminal,
     }
 }
 
@@ -346,16 +347,15 @@ impl NyaTermApp {
                 return;
             }
         }
-        if matches!(connection.config, ConnectionType::Telnet { .. })
-            && connection.auth.as_ref().is_some_and(|auth| {
-                auth.mode == "password"
-                    && auth.password_source
-                        == Some(
-                            nyaterm_core::models::credentials::ConnectionPasswordSource::Account,
-                        )
-                    && auth.saved_account_id().is_none()
-            })
-        {
+        if matches!(
+            connection.config,
+            ConnectionType::Telnet { .. } | ConnectionType::Ftp { .. }
+        ) && connection.auth.as_ref().is_some_and(|auth| {
+            auth.mode == "password"
+                && auth.password_source
+                    == Some(nyaterm_core::models::credentials::ConnectionPasswordSource::Account)
+                && auth.saved_account_id().is_none()
+        }) {
             let message = account_auth_error_message(
                 nyaterm_core::models::credentials::AccountAuthError::MissingAccount,
             );
@@ -369,15 +369,27 @@ impl NyaTermApp {
             return;
         }
         if let Some(password_id) = saved_connection_password_id(&connection) {
-            let telnet_auth = matches!(connection.config, ConnectionType::Telnet { .. })
-                .then(|| connection.auth.clone().unwrap_or_default());
+            let telnet_auth = matches!(
+                connection.config,
+                ConnectionType::Telnet { .. } | ConnectionType::Ftp { .. }
+            )
+            .then(|| connection.auth.clone().unwrap_or_default());
+            // FTP connection-scoped passwords are encrypted password records,
+            // not saved accounts, so they must be loaded by their own id.
+            let ftp_direct_password = matches!(connection.config, ConnectionType::Ftp { .. })
+                && connection
+                    .auth
+                    .as_ref()
+                    .is_some_and(|auth| !auth.uses_account_password());
             let connection_name = connection.name.clone();
             self.shell
                 .set_status(format!("loading saved credentials for {connection_name}"));
             self.submit_store_request(
                 0,
                 store_request(StoreDomain::Security, move |store| {
-                    if let Some(auth) = telnet_auth {
+                    if ftp_direct_password {
+                        store.load_decrypted_password_by_id(&password_id)
+                    } else if let Some(auth) = telnet_auth {
                         store.load_account_for_auth(&auth)
                     } else {
                         store.load_decrypted_password_by_id(&password_id)
@@ -388,7 +400,17 @@ impl NyaTermApp {
                     let mut connection = connection;
                     let password = match event.outcome {
                         Ok(Some(entry)) => {
-                            if let ConnectionType::Telnet { username, .. } = &mut connection.config {
+                            if ftp_direct_password {
+                                // Vault passwords are entry-scoped; FTP keeps its
+                                // configured username and only takes the secret.
+                                if let Some(auth) = connection.auth.as_mut() {
+                                    auth.password = entry.password.clone();
+                                    auth.has_password = false;
+                                }
+                                entry.password.filter(|password| !password.trim().is_empty())
+                            } else if let ConnectionType::Telnet { username, .. }
+                            | ConnectionType::Ftp { username, .. } = &mut connection.config
+                            {
                                 let auth = connection.auth.clone().unwrap_or_default();
                                 match auth.resolve_account_auth(username, Some(&entry)) {
                                     Ok((account_username, password)) => {
@@ -415,8 +437,9 @@ impl NyaTermApp {
                                     }
                                 }
                                 return;
+                            } else {
+                                entry.password.filter(|password| !password.trim().is_empty())
                             }
-                            entry.password.filter(|password| !password.trim().is_empty())
                         },
                         Ok(None) => {
                             this.fail_start_preparation(&options, "saved password was not found".to_string(), cx);
@@ -530,6 +553,77 @@ impl NyaTermApp {
         match connection.config.clone() {
             ConnectionType::Adb { .. } => {
                 unreachable!("Android start is routed before credential resolution")
+            }
+            ConnectionType::Ftp {
+                host,
+                port,
+                username,
+                initial_directory,
+                local_initial_directory,
+                passive_mode,
+                ftp_filename_encoding_mode,
+                ftp_filename_encoding,
+                ftp_ascii_mode,
+                ftp_security_mode,
+                ftp_tls_version,
+                connect_timeout_ms,
+            } => {
+                let auth = connection.auth.clone().unwrap_or_default();
+                let login = if auth.mode == "none" {
+                    nyaterm_files::ftp::FtpLogin::anonymous(username.clone())
+                } else {
+                    match inline_connection_password(connection.auth.as_ref()) {
+                        Some(password) => {
+                            nyaterm_files::ftp::FtpLogin::password(username.clone(), password)
+                        }
+                        None => {
+                            let message = rust_i18n::t!("dialog.ftpPasswordRequired").to_string();
+                            self.fail_start_preparation(&options, message.clone(), cx);
+                            self.complete_mcp_session_open_failure(
+                                options.mcp_open_operation_id.as_deref().unwrap_or(""),
+                                &message,
+                            );
+                            self.shell.set_status(message);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                };
+                let config = FtpSessionConfig {
+                    name: connection.name.clone(),
+                    host: host.clone(),
+                    port,
+                    username: username.trim().to_string(),
+                    initial_directory: initial_directory.clone(),
+                    local_initial_directory: local_initial_directory.clone(),
+                    config: nyaterm_files::ftp::FtpConfig {
+                        host,
+                        port,
+                        initial_directory,
+                        connect_timeout: std::time::Duration::from_millis(
+                            connect_timeout_ms.clamp(1_000, 120_000),
+                        ),
+                        passive_mode: nyaterm_files::ftp::FtpPassiveMode::parse(&passive_mode),
+                        filename_encoding_mode: nyaterm_files::ftp::FtpFilenameEncodingMode::parse(
+                            &ftp_filename_encoding_mode,
+                        ),
+                        filename_encoding: ftp_filename_encoding,
+                        ascii_mode: ftp_ascii_mode,
+                        security_mode: nyaterm_files::ftp::FtpSecurityMode::parse(
+                            &ftp_security_mode,
+                        ),
+                        tls_version: nyaterm_files::ftp::FtpTlsVersion::parse(&ftp_tls_version),
+                    },
+                    login,
+                };
+                self.begin_background_session_start(
+                    connection.name,
+                    SessionLaunchConfig::Ftp(config),
+                    Some(connection.id),
+                    AiExecutionProfile::Disabled,
+                    options,
+                    cx,
+                );
             }
             ConnectionType::LocalTerminal {
                 shell_path,
@@ -1419,9 +1513,15 @@ fn saved_connection_password_id(connection: &SavedConnection) -> Option<String> 
             .saved_account_id()
             .map(str::to_string);
     }
+    if matches!(connection.config, ConnectionType::Ftp { .. }) {
+        return stored_connection_password_id(connection.auth.as_ref());
+    }
     if !matches!(
         &connection.config,
-        ConnectionType::Telnet { .. } | ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. }
+        ConnectionType::Telnet { .. }
+            | ConnectionType::Rdp { .. }
+            | ConnectionType::Vnc { .. }
+            | ConnectionType::Ftp { .. }
     ) {
         return None;
     }
@@ -1629,8 +1729,8 @@ mod tests {
     use super::{
         SessionStartFocusTarget, SshSessionConfigBuildContext,
         build_ssh_session_config_with_context, inline_connection_password,
-        load_ssh_connection_password_with_context, session_start_focus_target,
-        stored_connection_password_id,
+        load_ssh_connection_password_with_context, saved_connection_password_id,
+        session_start_focus_target, stored_connection_password_id,
     };
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::{
@@ -1996,6 +2096,76 @@ mod tests {
                 assert_eq!(jump.allow_none_auth, mode == "none");
             }
         }
+    }
+
+    #[test]
+    fn ftp_saved_password_ids_load_connection_and_account_credentials() {
+        use nyaterm_core::models::credentials::ConnectionPasswordSource;
+
+        let connection = |auth: ConnectionAuth| SavedConnection {
+            extensions: Default::default(),
+            tags: Vec::new(),
+            id: "ftp-1".to_string(),
+            name: "FTP".to_string(),
+            config: ConnectionType::Ftp {
+                host: "example.com".to_string(),
+                port: 21,
+                username: "user".to_string(),
+                initial_directory: String::new(),
+                local_initial_directory: String::new(),
+                passive_mode: "auto".to_string(),
+                ftp_filename_encoding_mode: "auto".to_string(),
+                ftp_filename_encoding: "UTF-8".to_string(),
+                ftp_ascii_mode: false,
+                ftp_security_mode: "none".to_string(),
+                ftp_tls_version: "auto".to_string(),
+                connect_timeout_ms: 15_000,
+            },
+            group_id: None,
+            description: None,
+            tree_order: None,
+            sort_order: 0,
+            icon: None,
+            icon_auto_detect: None,
+            auth: Some(auth),
+            recording: None,
+            ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
+            ssh_compatibility_mode: false,
+            ssh_profile: Default::default(),
+            terminal_type: None,
+            sftp: Default::default(),
+            network: None,
+            post_login: None,
+            asset: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            last_used_at_ms: None,
+        };
+
+        let direct = connection(ConnectionAuth {
+            mode: "password".to_string(),
+            password_id: Some("connection-password".to_string()),
+            password_source: Some(ConnectionPasswordSource::Connection),
+            has_password: true,
+            ..ConnectionAuth::default()
+        });
+        assert_eq!(
+            saved_connection_password_id(&direct).as_deref(),
+            Some("connection-password")
+        );
+
+        let account = connection(ConnectionAuth {
+            mode: "password".to_string(),
+            account_id: Some("account-password".to_string()),
+            password_id: Some("account-password".to_string()),
+            password_source: Some(ConnectionPasswordSource::Account),
+            ..ConnectionAuth::default()
+        });
+        assert_eq!(
+            saved_connection_password_id(&account).as_deref(),
+            Some("account-password")
+        );
     }
 
     #[test]

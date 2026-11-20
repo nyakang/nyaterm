@@ -325,13 +325,18 @@ mod tests {
                 ..editing_config()
             };
             let mut state = TelnetInputState::default();
-            let text = encoding.encode("中a中").unwrap();
+            let (sample, remaining) = if encoding == CharacterEncoding::Windows1252 {
+                ("éaé", "é")
+            } else {
+                ("中a中", "中")
+            };
+            let text = encoding.encode(sample).unwrap();
             for byte in &text {
                 assert!(state.prepare(&[*byte], &config).0.is_empty());
             }
             state.prepare(b"\x7f\x08", &config);
-            assert_eq!(state.line, encoding.encode("中").unwrap());
-            let mut expected = encoding.encode("中").unwrap();
+            assert_eq!(state.line, encoding.encode(remaining).unwrap());
+            let mut expected = encoding.encode(remaining).unwrap();
             expected.push(b'\r');
             assert_eq!(state.prepare(b"\r", &config).0, expected);
         }

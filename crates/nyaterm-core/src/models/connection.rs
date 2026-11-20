@@ -5,15 +5,18 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     SavedConnection, default_backspace_mode_serial, default_backspace_mode_ssh,
-    default_backspace_mode_telnet, default_baud_rate, default_data_bits, default_parity,
+    default_backspace_mode_telnet, default_baud_rate, default_data_bits,
+    default_ftp_connect_timeout_ms, default_ftp_filename_encoding_mode, default_ftp_passive_mode,
+    default_ftp_port, default_ftp_security_mode, default_ftp_tls_version, default_parity,
     default_rdp_backend, default_rdp_certificate_policy, default_rdp_clipboard_mode,
     default_rdp_color_depth, default_rdp_display_mode, default_rdp_height, default_rdp_port,
     default_rdp_reconnect_attempts, default_rdp_width, default_sftp_shell_detection_timeout_ms,
     default_ssh_port, default_ssh_user, default_stop_bits, default_telnet_auto_login_timeout_ms,
     default_telnet_enter_mode, default_telnet_port, default_true, default_vnc_port,
     default_vnc_reconnect_attempts, default_vnc_scale_mode, default_vnc_security_mode,
-    deserialize_rdp_backend, is_default_sftp_shell_detection_timeout_ms,
-    is_default_telnet_auto_login_config, serialize_rdp_backend,
+    deserialize_rdp_backend, is_default_ftp_security_mode, is_default_ftp_tls_version,
+    is_default_sftp_shell_detection_timeout_ms, is_default_telnet_auto_login_config,
+    serialize_rdp_backend,
 };
 
 /// Default outbound idle interval for Telnet NOP keepalive, in seconds.
@@ -675,6 +678,42 @@ pub enum ConnectionType {
         shared: bool,
         #[serde(default)]
         view_only: bool,
+    },
+    Ftp {
+        host: String,
+        #[serde(default = "default_ftp_port")]
+        port: u16,
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        initial_directory: String,
+        #[serde(default)]
+        local_initial_directory: String,
+        #[serde(default = "default_ftp_passive_mode")]
+        passive_mode: String,
+        #[serde(default = "default_ftp_filename_encoding_mode")]
+        ftp_filename_encoding_mode: String,
+        #[serde(default)]
+        ftp_filename_encoding: String,
+        /// Keep the control and data channels on the FTP transfer type that
+        /// matches the local text files instead of always using binary.
+        #[serde(default, skip_serializing_if = "is_false")]
+        ftp_ascii_mode: bool,
+        /// `none` for plain FTP, `explicit` for FTPS through `AUTH TLS`.
+        #[serde(
+            default = "default_ftp_security_mode",
+            skip_serializing_if = "is_default_ftp_security_mode"
+        )]
+        ftp_security_mode: String,
+        /// `auto` keeps the TLS backend defaults; the other values pin the
+        /// minimum and maximum protocol version to the selected one.
+        #[serde(
+            default = "default_ftp_tls_version",
+            skip_serializing_if = "is_default_ftp_tls_version"
+        )]
+        ftp_tls_version: String,
+        #[serde(default = "default_ftp_connect_timeout_ms")]
+        connect_timeout_ms: u64,
     },
 }
 

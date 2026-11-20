@@ -58,6 +58,7 @@ impl FileBrowserService {
             }
             Self::Remote(service) => service.probe_directory_targets(paths, control, deadline),
             Self::Adb(_) => anyhow::bail!("directory target probing is unavailable"),
+            Self::Ftp(_) => anyhow::bail!("directory target probing is unavailable"),
         }
     }
 
@@ -74,6 +75,7 @@ impl FileBrowserService {
                 service.list_directory_lightweight(path, limits, control, deadline)
             }
             Self::Adb(_) => anyhow::bail!("lightweight listing is unavailable"),
+            Self::Ftp(_) => anyhow::bail!("lightweight listing is unavailable"),
         }
     }
 }
