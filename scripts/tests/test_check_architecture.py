@@ -16,6 +16,7 @@ class PluginDependencyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             crates = (
+                "nyaterm-executor", "nyaterm-host-tools-gpui",
                 "nyaterm-terminal-gpui", "nyaterm-terminal-runtime",
                 "nyaterm-i18n", "nyaterm-completion-runtime",
                 "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
@@ -32,6 +33,21 @@ class PluginDependencyTests(unittest.TestCase):
                 (directory / "Cargo.toml").write_text(document, encoding="utf-8")
             with patch.object(check_architecture, "ROOT", root):
                 return check_architecture.dependency_errors()
+
+    def test_executor_and_host_tools_boundaries_include_aliases_and_test_dependencies(self):
+        allowed_host_tools = {"nyaterm-core", "nyaterm-executor", "nyaterm-i18n", "nyaterm-remote-ops", "nyaterm-ui", "gpui", "gpui-platform"}
+        packages = allowed_host_tools | {"nyaterm-desktop", "nyaterm-store", "nyaterm-transport", "gpui-kit", "gpui-component", "gpui-base"}
+        for source in ["nyaterm-executor", "nyaterm-host-tools-gpui"]:
+            for target in sorted(packages):
+                for section in ["dependencies", "dev-dependencies", "build-dependencies", "target.'cfg(windows)'.dev-dependencies"]:
+                    with self.subTest(source=source, target=target, section=section):
+                        errors = self.check_dependencies("", "", {source:
+                            f'[{section}]\nhidden = {{ package = "{target}", version = "1" }}\n'})
+                        allowed = source == "nyaterm-host-tools-gpui" and target in allowed_host_tools
+                        self.assertEqual(errors, [] if allowed else [f"crate_boundary: {source} must not depend on {target}"])
+            self.assertEqual(self.check_dependencies("", "", {source:
+                '[dev-dependencies]\nhidden-transport.workspace = true\n'}),
+                [f"crate_boundary: {source} must not depend on nyaterm-transport"])
 
     def test_catalog_and_completion_dependencies_include_aliased_dev_and_target_entries(self):
         for source in ["nyaterm-i18n", "nyaterm-completion-runtime"]:

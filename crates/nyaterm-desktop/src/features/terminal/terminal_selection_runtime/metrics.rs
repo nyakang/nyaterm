@@ -10,13 +10,13 @@ use gpui::{App, Bounds, Context, FontWeight, Pixels, Point, px};
 use nyaterm_core::TerminalViewportInsets;
 
 use crate::features::NyaTermApp;
-use crate::features::formatting::terminal_timestamp_format_width_chars;
 use crate::features::shell::configured_appearance_font_stack;
 use crate::features::terminal::state::TerminalFontMetricsCache;
 use crate::features::terminal::terminal_surface_entity::{
     TerminalVisualScrollGeometry, terminal_snapshot_anchor_row_for_display_offset,
 };
 use crate::models::TerminalCellPos;
+use nyaterm_terminal_gpui::gutter::terminal_timestamp_format_width_chars;
 
 use super::{CELL_WIDTH_RATIO, LINE_HEIGHT_RATIO};
 use crate::features::terminal::{

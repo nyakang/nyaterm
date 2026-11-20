@@ -1,0 +1,27 @@
+[package]
+name = "nyaterm-host-tools-gpui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gpui.workspace = true
+nyaterm-core.workspace = true
+nyaterm-executor.workspace = true
+nyaterm-i18n.workspace = true
+nyaterm-remote-ops.workspace = true
+nyaterm-ui.workspace = true
+rust-i18n.workspace = true
+
+[features]
+default = []
+test-support = []
+
+[dev-dependencies]
+futures.workspace = true
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

@@ -1,3 +1,7 @@
+use nyaterm_terminal_gpui::gutter::{
+    TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
+    terminal_timestamp_format_width_chars,
+};
 use rust_i18n::t;
 
 use std::collections::HashMap;
@@ -11,10 +15,6 @@ use nyaterm_terminal::{TerminalScreen, TerminalSnapshot};
 use nyaterm_ui::{NyaContextMenu, NyaCopy, NyaPaste, NyaSelectAll};
 
 use crate::features::NyaTermApp;
-use crate::features::formatting::{
-    TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
-    terminal_timestamp_format_width_chars,
-};
 use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
 use crate::features::terminal::terminal_selection_runtime::{
     terminal_bounds_tracker, terminal_gutter_metrics,

@@ -7186,7 +7186,9 @@ dependencies = [
  "nyaterm-cloud-storage",
  "nyaterm-completion-runtime",
  "nyaterm-core",
+ "nyaterm-executor",
  "nyaterm-files",
+ "nyaterm-host-tools-gpui",
  "nyaterm-i18n",
  "nyaterm-mcp-host",
  "nyaterm-mcp-protocol",
@@ -7231,6 +7233,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-executor"
+version = "2.0.7"
+dependencies = [
+ "futures",
+]
+
+[[package]]
 name = "nyaterm-files"
 version = "2.0.7"
 dependencies = [
@@ -7261,6 +7270,23 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nyaterm-host-tools-gpui"
+version = "2.0.7"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gpui",
+ "gpui_platform",
+ "nyaterm-core",
+ "nyaterm-executor",
+ "nyaterm-i18n",
+ "nyaterm-remote-ops",
+ "nyaterm-ui",
+ "rust-i18n",
+ "tempfile",
 ]
 
 [[package]]
@@ -7504,6 +7530,7 @@ dependencies = [
  "regex",
  "serde_json",
  "smallvec",
+ "time",
  "tracing",
 ]
 

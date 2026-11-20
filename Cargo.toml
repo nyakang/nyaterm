@@ -9,6 +9,8 @@ default-members = [
     "crates/nyaterm-vnc-helper",
 ]
 members = [
+    "crates/nyaterm-executor",
+    "crates/nyaterm-host-tools-gpui",
     "crates/nyaterm-android-helper",
     "crates/nyaterm-android",
     "crates/nyaterm-app",
@@ -60,6 +62,8 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nyaterm-host-tools-gpui = { path = "crates/nyaterm-host-tools-gpui" }
+nyaterm-executor = { path = "crates/nyaterm-executor" }
 nyaterm-completion-runtime = { path = "crates/nyaterm-completion-runtime" }
 nyaterm-i18n = { path = "crates/nyaterm-i18n" }
 nyaterm-android = { path = "crates/nyaterm-android" }
