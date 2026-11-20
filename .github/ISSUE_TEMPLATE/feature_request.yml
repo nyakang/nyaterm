@@ -1,0 +1,129 @@
+name: ✨ 功能请求 / Feature request
+description: 为 NyaTerm 提出新功能或改进建议 / Suggest an idea or enhancement for NyaTerm
+title: "[Feature]: "
+labels: ["enhancement"]
+
+body:
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: 重复检查 / Duplicate check
+      options:
+        - label: 我已搜索现有的开放和已关闭 Issue，确认这不是重复请求。 / I have searched open and closed issues to confirm this is not a duplicate request.
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        感谢你为 NyaTerm 提出改进建议。可使用中文或英文填写。
+
+        请描述你想解决的问题，以及希望实现的方案。
+
+        Thanks for taking the time to suggest an improvement for NyaTerm.
+        You may fill out this form in Chinese or English.
+
+        Please describe the problem you are trying to solve, not just the solution you want.
+
+  - type: textarea
+    id: problem
+    validations:
+      required: true
+    attributes:
+      label: 问题描述 / Problem description
+      description: 你遇到了什么问题、限制或不便？ / What problem, limitation, or inconvenience are you experiencing?
+      placeholder: |
+        例如：
+        我经常需要连接多台 SSH 主机，但目前很难……
+
+        For example:
+        I often need to connect to multiple SSH hosts, but currently it is difficult to...
+
+  - type: textarea
+    id: solution
+    validations:
+      required: true
+    attributes:
+      label: 建议方案 / Proposed solution
+      description: 请描述你希望增加的功能或改进。 / Describe the feature or enhancement you would like to see.
+      placeholder: |
+        例如：
+        添加连接配置管理器，允许用户保存主机、端口、用户名和启动命令。
+
+        For example:
+        Add a connection profile manager that allows users to save hosts, ports, usernames, and startup commands.
+
+  - type: textarea
+    id: alternatives
+    validations:
+      required: false
+    attributes:
+      label: 考虑过的替代方案 / Alternatives considered
+      description: 你是否考虑过其他方案或临时解决办法？ / Have you considered any alternative solutions or workarounds?
+      placeholder: |
+        例如：
+        我目前使用脚本或外部 SSH 配置，但它们与 NyaTerm 的集成不够方便。
+
+        For example:
+        I currently use a script or external SSH config, but it does not integrate well with NyaTerm.
+
+  - type: dropdown
+    id: area
+    validations:
+      required: true
+    attributes:
+      label: 改进范围 / Area of improvement
+      description: 此请求涉及 NyaTerm 的哪一部分？ / Which part of NyaTerm does this request relate to?
+      options:
+        - 终端 / Terminal
+        - SSH 与远程连接 / SSH and remote connection
+        - 界面与交互 / UI and UX
+        - 主题与外观 / Themes and appearance
+        - 设置与配置 / Settings and configuration
+        - 快捷键 / Keyboard shortcuts
+        - 标签页与会话 / Tabs and sessions
+        - 性能 / Performance
+        - 打包与安装 / Packaging and installation
+        - 文档 / Documentation
+        - 其他 / Other
+
+  - type: dropdown
+    id: platform
+    validations:
+      required: true
+    attributes:
+      label: 目标平台 / Target platform
+      description: 此功能应支持哪些平台？ / Which platform should this feature support?
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - 所有平台 / All platforms
+        - 与平台无关 / Not platform-specific
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: 参与意愿 / Willingness to contribute
+      description: 请告诉我们你是否愿意协助实现此功能。 / Let us know if you are willing to help with this feature.
+      options:
+        - label: 我愿意为此功能提交 Pull Request。 / I am willing to submit a pull request for this feature.
+        - label: 我愿意协助测试此功能。 / I am willing to help test this feature.
+
+  - type: textarea
+    id: additional-context
+    validations:
+      required: false
+    attributes:
+      label: 补充信息 / Additional context
+      description: 请在此添加截图、设计图、示例、链接或其他信息。 / Add any screenshots, mockups, examples, links, or extra information here.
+      placeholder: |
+        你可以附上截图、示意图、参考资料或其他工具中类似功能的示例。
+
+        You can attach screenshots, diagrams, references, or examples of similar behavior in other tools.
+
+  - type: markdown
+    attributes:
+      value: |
+        感谢你帮助改进 NyaTerm！
+
+        Thank you for helping improve NyaTerm.

@@ -148,6 +148,9 @@ impl NyaTermApp {
             TitleMenuCommand::ViewLogs => self.reveal_log_dir(cx),
             TitleMenuCommand::About => self.open_about(window, cx),
             TitleMenuCommand::SetTheme(theme) => self.update_appearance_theme(theme, cx),
+            TitleMenuCommand::FollowSystemTheme => {
+                self.update_theme_mode(nyaterm_core::themes::appearance::ThemeMode::System, cx)
+            }
             TitleMenuCommand::SetTerminalTheme(theme) => {
                 self.set_terminal_theme(theme.as_deref(), cx)
             }
@@ -455,18 +458,28 @@ impl NyaTermApp {
 
     fn title_theme_menu_items(&self, _cx: &App) -> Vec<TitleMenuDefinition> {
         let current = self.settings.summary().theme.as_str();
-        self.settings
-            .theme_options()
-            .iter()
-            .cloned()
-            .map(|(theme, name)| {
-                let selected =
-                    current == theme || (current == "catppuccin" && theme == "catppuccin-mocha");
-                TitleMenuDefinition::action(name)
-                    .checked(selected)
-                    .command(TitleMenuCommand::SetTheme(theme.to_string()))
-            })
-            .collect()
+        let system = self.settings.summary().theme_mode
+            == nyaterm_core::themes::appearance::ThemeMode::System;
+        let mut items = vec![
+            TitleMenuDefinition::action(t!("settings.themeModeSystem"))
+                .checked(system)
+                .command(TitleMenuCommand::FollowSystemTheme),
+            TitleMenuDefinition::separator(),
+        ];
+        items.extend(
+            self.settings
+                .theme_options()
+                .iter()
+                .cloned()
+                .map(|(theme, name)| {
+                    let selected = current == theme
+                        || (current == "catppuccin" && theme == "catppuccin-mocha");
+                    TitleMenuDefinition::action(name)
+                        .checked(!system && selected)
+                        .command(TitleMenuCommand::SetTheme(theme.to_string()))
+                }),
+        );
+        items
     }
 
     fn title_terminal_theme_menu_items(

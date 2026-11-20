@@ -928,6 +928,46 @@ mod tests {
     }
 
     #[test]
+    fn system_theme_events_do_not_dirty_or_persist_settings_and_cancel_uses_current_appearance() {
+        use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
+        use nyaterm_store::StoreDomain;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.sync_component_theme(cx);
+            app.settings.set_theme_mode(ThemeMode::System);
+            let preferences = app.settings.summary().clone();
+            let stored_before = app
+                .store_blocking_client()
+                .request_fn(StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            app.begin_settings_draft(cx);
+            app.system_appearance_changed(SystemAppearance::Light, cx);
+            assert_eq!(app.settings.effective_theme_id(), "github-light");
+            assert!(!app.settings_draft_dirty());
+            assert_eq!(app.settings.summary(), &preferences);
+            let stored_after = app
+                .store_blocking_client()
+                .request_fn(StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(stored_before, stored_after);
+            app.update_system_theme(SystemAppearance::Light, "nord-light", cx);
+            assert!(app.settings_draft_dirty());
+            app.system_appearance_changed(SystemAppearance::Dark, cx);
+            app.cancel_settings(cx);
+            assert_eq!(app.settings.summary(), &preferences);
+            assert_eq!(app.settings.effective_theme_id(), "github-dark");
+            app.system_appearance_changed(SystemAppearance::Light, cx);
+            assert_eq!(app.settings.effective_theme_id(), "github-light");
+        });
+    }
+
+    #[test]
     fn command_output_highlighting_draft_cancel_and_apply_preserve_committed_preferences() {
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);

@@ -302,6 +302,9 @@
     "source": "models/settings.rs",
     "fields": {
       "theme": "conditional:preference",
+      "theme_mode": "conditional:preference",
+      "light_theme": "conditional:preference",
+      "dark_theme": "conditional:preference",
       "custom_themes": "local",
       "background_image_path": "local",
       "background_image_fit": "local",

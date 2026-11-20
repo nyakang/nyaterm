@@ -6,10 +6,13 @@ use crate::features::{
     FontResolutionStatus,
 };
 use nyaterm_core::AppSettingsSummary;
+use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode, effective_theme_id};
 use nyaterm_terminal::colors::TerminalColorPalette;
 use std::sync::Arc;
 
 pub(super) struct AppearanceSettingsState {
+    pub(super) system_appearance: SystemAppearance,
+    pub(super) subscription: Option<gpui::Subscription>,
     pub(super) palette: nyaterm_ui::ThemePalette,
     pub(super) theme_options: Arc<[(String, String)]>,
     pub(super) theme_diagnostics: Arc<[String]>,
@@ -21,8 +24,10 @@ pub(super) struct AppearanceSettingsState {
 impl SettingsFeatureState {
     pub(in crate::features) fn resolve_terminal_color_palette(
         summary: &AppSettingsSummary,
+        system_appearance: SystemAppearance,
     ) -> TerminalColorPalette {
-        terminal_color_palette(Self::resolve_terminal_palette(summary))
+        let effective_ui_theme = effective_theme_id(summary, system_appearance);
+        terminal_color_palette(Self::resolve_terminal_palette(summary, effective_ui_theme))
     }
 
     pub(in crate::features) fn terminal_color_palette(&self) -> TerminalColorPalette {
@@ -31,6 +36,7 @@ impl SettingsFeatureState {
 
     pub(super) fn resolve_terminal_palette(
         summary: &AppSettingsSummary,
+        effective_ui_theme: &str,
     ) -> nyaterm_ui::ThemePalette {
         let id = summary
             .terminal_theme
@@ -42,7 +48,7 @@ impl SettingsFeatureState {
             .filter(|id| {
                 nyaterm_core::themes::is_builtin(id) || summary.custom_themes.resolve(id).is_some()
             })
-            .unwrap_or(&summary.theme);
+            .unwrap_or(effective_ui_theme);
         let mut palette = nyaterm_ui::resolve_theme_palette(id, &summary.custom_themes);
         palette.apply_cursor_contrast_ratio(Self::terminal_contrast_ratio_for(summary));
         palette
@@ -65,9 +71,50 @@ impl SettingsFeatureState {
         self.appearance.theme_diagnostics = self.summary.custom_themes.diagnostics().into();
         self.appearance.theme_options =
             nyaterm_ui::available_themes(&self.summary.custom_themes).into();
-        self.appearance.palette =
-            nyaterm_ui::resolve_theme_palette(&self.summary.theme, &self.summary.custom_themes);
-        self.appearance.terminal_palette = Self::resolve_terminal_palette(&self.summary);
+        self.appearance.palette = nyaterm_ui::resolve_theme_palette(
+            self.effective_theme_id(),
+            &self.summary.custom_themes,
+        );
+        self.appearance.terminal_palette =
+            Self::resolve_terminal_palette(&self.summary, self.effective_theme_id());
+    }
+    pub(in crate::features) fn effective_theme_id(&self) -> &str {
+        effective_theme_id(&self.summary, self.appearance.system_appearance)
+    }
+    pub(in crate::features) fn system_appearance(&self) -> SystemAppearance {
+        self.appearance.system_appearance
+    }
+    pub(in crate::features) fn set_system_appearance(
+        &mut self,
+        appearance: SystemAppearance,
+    ) -> bool {
+        if self.appearance.system_appearance == appearance {
+            return false;
+        }
+        self.appearance.system_appearance = appearance;
+        self.refresh_theme_palettes();
+        true
+    }
+    pub(in crate::features) fn set_appearance_subscription(
+        &mut self,
+        subscription: gpui::Subscription,
+    ) {
+        self.appearance.subscription = Some(subscription);
+    }
+    pub(in crate::features) fn set_theme_mode(&mut self, mode: ThemeMode) {
+        self.summary.theme_mode = mode;
+        self.refresh_theme_palettes();
+    }
+    pub(in crate::features) fn set_system_theme(
+        &mut self,
+        appearance: SystemAppearance,
+        id: String,
+    ) {
+        match appearance {
+            SystemAppearance::Light => self.summary.light_theme = id,
+            SystemAppearance::Dark => self.summary.dark_theme = id,
+        }
+        self.refresh_theme_palettes();
     }
     pub(in crate::features) fn theme_palette(&self) -> nyaterm_ui::ThemePalette {
         self.appearance.palette
@@ -98,6 +145,21 @@ impl SettingsFeatureState {
         commit.merge_into(&mut self.summary);
         self.refresh_theme_palettes();
     }
+    pub(in crate::features) fn repair_deleted_theme_references(&mut self, id: &str) {
+        if self.summary.theme == id {
+            self.summary.theme = nyaterm_core::themes::DEFAULT_THEME_ID.into();
+        }
+        if self.summary.light_theme == id {
+            self.summary.light_theme = nyaterm_core::themes::appearance::default_light_theme();
+        }
+        if self.summary.dark_theme == id {
+            self.summary.dark_theme = nyaterm_core::themes::appearance::default_dark_theme();
+        }
+        if self.summary.terminal_theme.as_deref() == Some(id) {
+            self.summary.terminal_theme = None;
+        }
+        self.refresh_theme_palettes();
+    }
     pub(in crate::features) fn set_transfer_internal_editor_font_size(
         &mut self,
         size: u16,
@@ -117,6 +179,7 @@ impl SettingsFeatureState {
     }
     pub(in crate::features) fn set_appearance_theme(&mut self, theme: String) {
         self.summary.theme = theme;
+        self.summary.theme_mode = ThemeMode::Manual;
         self.refresh_theme_palettes();
     }
     pub(in crate::features) fn set_terminal_font_family(&mut self, family: String) -> bool {

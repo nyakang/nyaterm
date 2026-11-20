@@ -8,6 +8,7 @@
 use nyaterm_core::models::settings::TerminalWrapMode;
 use nyaterm_core::models::window_decoration::WindowDecoration;
 use nyaterm_core::models::window_material::{WindowMaterial, default_window_background_opacity};
+use nyaterm_core::themes::appearance::{ThemeMode, default_dark_theme, default_light_theme};
 use redb::{ReadableTable, ReadableTableMetadata};
 use std::collections::HashMap;
 
@@ -45,6 +46,23 @@ fn startup_mode_from_document(
             serde_json::Value::Bool(json_bool(value, &["general", "startup_restore"], false))
         })
         .into()
+}
+
+pub(super) fn read_theme_preferences(
+    value: &serde_json::Value,
+) -> Result<(ThemeMode, String, String), StorageError> {
+    let read = |key: &str, fallback: String| match json_path(value, &["appearance", key]) {
+        None => Ok(fallback),
+        Some(serde_json::Value::String(value)) => Ok(value.clone()),
+        Some(_) => Err(StorageError::InvalidData(format!(
+            "appearance.{key} must be a string"
+        ))),
+    };
+    Ok((
+        ThemeMode::from(read("theme_mode", "manual".into())?),
+        read("light_theme", default_light_theme())?,
+        read("dark_theme", default_dark_theme())?,
+    ))
 }
 
 // Reject malformed known fields before an unrelated save can replace their data.
@@ -103,7 +121,11 @@ impl ConnectionStore {
         .map_err(StorageError::InvalidData)?;
         let (window_material, window_background_opacity, window_decorations) =
             read_window_appearance(&value)?;
+        let (theme_mode, light_theme, dark_theme) = read_theme_preferences(&value)?;
         Ok(AppSettingsSummary {
+            theme_mode,
+            light_theme,
+            dark_theme,
             window_material,
             window_decorations,
             window_background_opacity,
@@ -1193,6 +1215,7 @@ impl ConnectionStore {
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
         read_window_appearance(&value)?;
+        read_theme_preferences(&value)?;
         // Preserve a newer representation when the safe default is unchanged.
         let unsupported_line_roles =
             json_path(&value, &["ui", "highlight_line_roles"]).is_some_and(|raw| !raw.is_boolean());
@@ -1209,6 +1232,21 @@ impl ConnectionStore {
             settings.window_decorations.as_str().to_owned(),
         );
         set_nested_json_string(&mut value, &["appearance", "theme"], settings.theme.clone());
+        set_nested_json_string(
+            &mut value,
+            &["appearance", "theme_mode"],
+            settings.theme_mode.as_str().to_owned(),
+        );
+        set_nested_json_string(
+            &mut value,
+            &["appearance", "light_theme"],
+            settings.light_theme.clone(),
+        );
+        set_nested_json_string(
+            &mut value,
+            &["appearance", "dark_theme"],
+            settings.dark_theme.clone(),
+        );
         set_nested_json_string(
             &mut value,
             &["appearance", "window_material"],

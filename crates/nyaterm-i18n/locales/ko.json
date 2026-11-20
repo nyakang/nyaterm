@@ -2978,6 +2978,12 @@
     "unread": "읽지 않음"
   },
   "settings": {
+    "themeMode": "테마 모드",
+    "themeModeManual": "수동 선택",
+    "themeModeSystem": "시스템 설정 따르기",
+    "systemLightTheme": "시스템이 밝은 모드일 때",
+    "systemDarkTheme": "시스템이 어두운 모드일 때",
+    "themeInUse": "사용 중",
     "configurationSessionInAnotherWindow": "다른 창에서 원격 연결이 실행 중이거나 시작 중입니다. 설정을 교체하기 전에 연결을 끊으세요.",
     "configurationReplacementInProgress": "설정을 교체하고 있습니다. 완료 후 연결을 다시 시도하세요.",
     "configurationRefreshRequired": "설정 새로 고침이 완료되지 않았습니다. 연결 또는 가져오기/동기화를 다시 시도하여 설정을 새로 고치세요.",

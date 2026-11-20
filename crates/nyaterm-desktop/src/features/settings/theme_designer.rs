@@ -199,7 +199,8 @@ impl NyaTermApp {
                     self.settings.theme_designer_mut().restore_focus = true;
                 } else {
                     let summary = self.settings.summary();
-                    let theme = resolve_theme(&summary.theme, &summary.custom_themes);
+                    let theme =
+                        resolve_theme(self.settings.effective_theme_id(), &summary.custom_themes);
                     self.settings.theme_designer_mut().load(theme);
                 }
             }
@@ -269,7 +270,7 @@ impl NyaTermApp {
         }
         let theme = state.baseline.clone().unwrap_or_else(|| {
             let summary = self.settings.summary();
-            resolve_theme(&summary.theme, &summary.custom_themes)
+            resolve_theme(self.settings.effective_theme_id(), &summary.custom_themes)
         });
         self.settings.theme_designer_mut().load(theme);
         self.ensure_theme_designer_inputs(cx);
@@ -396,14 +397,7 @@ impl NyaTermApp {
                     Ok((ThemeCommitOutcome::Committed(commit), saved)) => {
                         this.settings.merge_theme_commit(&commit);
                         if let Some(id) = deleting.as_deref() {
-                            if this.settings.summary().theme == id {
-                                this.settings.set_appearance_theme(
-                                    nyaterm_core::themes::DEFAULT_THEME_ID.into(),
-                                );
-                            }
-                            if this.settings.summary().terminal_theme.as_deref() == Some(id) {
-                                this.settings.set_terminal_theme(None);
-                            }
+                            this.settings.repair_deleted_theme_references(id);
                         }
                         if let Some(mut snapshot) = this.shell.take_settings_draft_snapshot() {
                             commit.merge_into(&mut snapshot.settings);
@@ -416,7 +410,10 @@ impl NyaTermApp {
                             t!("themeDesigner.saved").to_string();
                         if deleting.is_some() {
                             let summary = this.settings.summary();
-                            let theme = resolve_theme(&summary.theme, &summary.custom_themes);
+                            let theme = resolve_theme(
+                                this.settings.effective_theme_id(),
+                                &summary.custom_themes,
+                            );
                             this.settings.theme_designer_mut().load(theme);
                             this.ensure_theme_designer_inputs(cx);
                         }
@@ -512,6 +509,9 @@ impl NyaTermApp {
                                 catalog: true,
                                 ui: true,
                                 terminal: true,
+                                mode: true,
+                                light: true,
+                                dark: true,
                             },
                         };
                         this.settings.merge_theme_commit(&commit);
@@ -534,15 +534,7 @@ impl NyaTermApp {
     }
 
     fn custom_themes_changed(&mut self, cx: &mut Context<Self>) {
-        self.invalidate_paint_theme_caches();
-        self.sync_component_theme(cx);
-        self.refresh_visible_terminal_surfaces(cx);
-        self.defer_connection_panel_snapshot_flush(cx);
-        self.defer_remote_panel_snapshot_flush(cx);
-        self.defer_transfer_panel_snapshot_flush(cx);
-        self.defer_ai_panel_snapshot_flush(cx);
-        self.request_settings_panel_refresh(cx);
-        cx.notify();
+        self.refresh_applied_theme(cx);
     }
 
     fn prompt_theme_import(&mut self, cx: &mut Context<Self>) {
