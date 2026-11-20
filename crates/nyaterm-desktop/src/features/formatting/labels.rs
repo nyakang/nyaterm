@@ -425,6 +425,33 @@ pub(in crate::features) fn format_history_timestamp_ms(timestamp_ms: u64) -> Str
     )
 }
 
+/// AiMessage.created_at is RFC3339 UTC; display local wall-clock like
+/// `format_history_timestamp_ms`, keeping the date for messages older than today.
+pub(in crate::features) fn format_ai_message_time(created_at: &str) -> Option<String> {
+    let parsed = time::OffsetDateTime::parse(
+        created_at.trim(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .ok()?;
+    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    let datetime = parsed.to_offset(offset);
+    let date = datetime.date();
+    let today = time::OffsetDateTime::now_utc().to_offset(offset).date();
+    let clock = format!("{:02}:{:02}", datetime.hour(), datetime.minute());
+    Some(if date == today {
+        clock
+    } else if date.year() == today.year() {
+        format!("{:02}-{:02} {clock}", date.month() as u8, date.day())
+    } else {
+        format!(
+            "{:04}-{:02}-{:02} {clock}",
+            date.year(),
+            date.month() as u8,
+            date.day()
+        )
+    })
+}
+
 pub(in crate::features) fn format_duration_ms(duration_ms: Option<u64>) -> Option<String> {
     let value = duration_ms?;
     if value < 1000 {
