@@ -9,7 +9,7 @@ use gpui::{
     Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, div, prelude::*, px, rgb,
 };
 use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
-use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
+use nyaterm_ui::NyaHoverCard;
 use std::collections::HashSet;
 
 pub(in crate::features) fn format_browser_file_size(size: Option<u64>) -> String {
@@ -180,6 +180,8 @@ pub(super) fn transfer_browser_entry_row(
         .map(format_permissions_octal)
         .unwrap_or_else(|| "-".to_string());
     let detail = div()
+        .id("transfer-browser-entry-details")
+        .debug_selector(|| "transfer-browser-entry-details".to_string())
         .w(px(296.))
         .max_w(px(296.))
         .flex()
@@ -427,11 +429,10 @@ pub(super) fn transfer_browser_entry_row(
                                 .child(entry.name.clone()),
                             detail,
                         )
-                        .placement(NyaPopoverPlacement::Top)
+                        .at_pointer()
                         .flexible_trigger()
-                        .align(NyaPopoverAlign::Start)
                         .open_delay(std::time::Duration::from_millis(800))
-                        .close_delay(std::time::Duration::from_millis(100)),
+                        .close_delay(std::time::Duration::from_millis(250)),
                     )
                 }),
         )

@@ -56,6 +56,8 @@ pub(crate) enum ShortcutId {
     OpenChat,
     ShowAllCommands,
     RenameFile,
+    UploadFile,
+    DownloadFiles,
     CopySelectedConnections,
     LockScreen,
 }
@@ -102,6 +104,8 @@ impl ShortcutId {
             Self::OpenChat => "view.openChat",
             Self::ShowAllCommands => "view.showAllCommands",
             Self::RenameFile => "fileExplorer.rename",
+            Self::UploadFile => "fileExplorer.upload",
+            Self::DownloadFiles => "fileExplorer.downloadSelected",
             Self::CopySelectedConnections => "savedConnections.copySelected",
             Self::LockScreen => "special.lockScreen",
         }
@@ -379,7 +383,7 @@ macro_rules! shortcut {
     };
 }
 
-pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 41] = [
+pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 43] = [
     shortcut!(
         TerminalCopy,
         Terminal,
@@ -810,6 +814,28 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 41] = [
         "Renames the selected SFTP entry."
     ),
     shortcut!(
+        UploadFile,
+        FileExplorer,
+        "fileExplorer.upload",
+        FileExplorer,
+        ShortcutKind::Direct,
+        "f3",
+        "f3",
+        Contextual,
+        "Selects local files to upload to the current remote directory."
+    ),
+    shortcut!(
+        DownloadFiles,
+        FileExplorer,
+        "fileExplorer.downloadSelected",
+        FileExplorer,
+        ShortcutKind::Direct,
+        "f4",
+        "f4",
+        Contextual,
+        "Downloads the selected remote entries."
+    ),
+    shortcut!(
         CopySelectedConnections,
         SavedConnections,
         "settings.shortcutLabels.copySelectedSavedConnections",
@@ -1176,6 +1202,8 @@ fn binding_for_action(
         ShortcutId::OpenChat => binding!(OpenChat),
         ShortcutId::ShowAllCommands => binding!(ShowAllCommands),
         ShortcutId::RenameFile => binding!(RenameFile),
+        ShortcutId::UploadFile => binding!(UploadFile),
+        ShortcutId::DownloadFiles => binding!(DownloadFiles),
         ShortcutId::CopySelectedConnections => binding!(CopySelectedConnections),
         ShortcutId::LockScreen => binding!(LockScreen),
     }
@@ -1449,7 +1477,7 @@ mod tests {
 
     #[test]
     fn registry_is_complete_unique_and_has_valid_platform_defaults() {
-        assert_eq!(SHORTCUT_REGISTRY.len(), 41);
+        assert_eq!(SHORTCUT_REGISTRY.len(), 43);
         let mut ids = HashSet::new();
         for definition in SHORTCUT_REGISTRY {
             assert!(ids.insert(definition.id));
@@ -1465,6 +1493,74 @@ mod tests {
                 ShortcutId::parse(definition.id.as_str()),
                 Some(definition.id)
             );
+        }
+    }
+
+    #[gpui::test]
+    fn file_transfer_shortcuts_are_scoped_and_can_be_rebound(cx: &mut gpui::TestAppContext) {
+        let file_contexts = [
+            KeyContext::parse(WORKSPACE_KEY_CONTEXT).unwrap(),
+            KeyContext::parse(FILE_EXPLORER_KEY_CONTEXT).unwrap(),
+        ];
+        let terminal_contexts = [
+            KeyContext::parse(WORKSPACE_KEY_CONTEXT).unwrap(),
+            KeyContext::parse("Terminal").unwrap(),
+        ];
+        for (id, default_key, custom_key) in [
+            (ShortcutId::UploadFile, "f3", "ctrl-alt-f3"),
+            (ShortcutId::DownloadFiles, "f4", "ctrl-alt-f4"),
+        ] {
+            for overridden in [false, true] {
+                let overrides = if overridden {
+                    HashMap::from([(id.as_str().to_string(), custom_key.replace('-', "+"))])
+                } else {
+                    HashMap::new()
+                };
+                let resolved = ResolvedKeymap::resolve(&overrides);
+                let keymap = Keymap::new(cx.update(|cx| gpui_bindings(&resolved, cx)));
+                let key = gpui::Keystroke::parse(if overridden { custom_key } else { default_key })
+                    .unwrap();
+                assert_eq!(
+                    resolve_invocation(&resolved, &key, &file_contexts),
+                    Some(ShortcutInvocation {
+                        id,
+                        tab_index: None
+                    })
+                );
+                let (actions, pending) =
+                    keymap.bindings_for_input(std::slice::from_ref(&key), &file_contexts);
+                assert!(!pending);
+                assert_eq!(actions.len(), 1);
+                let expected: &dyn gpui::Action = match id {
+                    ShortcutId::UploadFile => &super::UploadFile,
+                    ShortcutId::DownloadFiles => &super::DownloadFiles,
+                    _ => unreachable!(),
+                };
+                assert!(actions[0].action().partial_eq(expected));
+                assert_eq!(
+                    resolve_invocation(&resolved, &key, &terminal_contexts),
+                    None
+                );
+                assert!(
+                    keymap
+                        .bindings_for_input(std::slice::from_ref(&key), &terminal_contexts)
+                        .0
+                        .is_empty()
+                );
+                if overridden {
+                    let old_key = gpui::Keystroke::parse(default_key).unwrap();
+                    assert_eq!(
+                        resolve_invocation(&resolved, &old_key, &file_contexts),
+                        None
+                    );
+                    assert!(
+                        keymap
+                            .bindings_for_input(&[old_key], &file_contexts)
+                            .0
+                            .is_empty()
+                    );
+                }
+            }
         }
     }
 

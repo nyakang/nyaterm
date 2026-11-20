@@ -1104,6 +1104,62 @@ fn linked_command_step(status: AiAgentStepStatus) -> AiAgentStepPresentation {
 }
 
 #[test]
+fn reasoning_only_rows_leave_steps_to_the_final_message() {
+    let root = TestConfigDir::new("nyaterm-ai-reasoning-row");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let (app, vcx) = compact_host(&mut cx, root.path());
+    let mut snapshot =
+        vcx.update(|_, cx| app.read(cx).ai_panel.read(cx).snapshot().unwrap().clone());
+    let mut messages: Vec<_> = (0..3).map(transcript_message).collect();
+    Arc::make_mut(&mut messages[1]).role = AiMessageRole::Assistant;
+    Arc::make_mut(&mut messages[1]).command_cards = vec![chat_card("agent-first")];
+    let final_message = Arc::make_mut(&mut messages[2]);
+    final_message.role = AiMessageRole::Assistant;
+    final_message.content = "final answer".into();
+    final_message.reasoning_content = Some("thinking".into());
+    snapshot.messages = messages.into();
+    let mut step = linked_command_step(AiAgentStepStatus::NeedsApproval);
+    step.step.command_card_id = None;
+    step.step.source_message_id = Some("message-2".into());
+    step.step.thought = Some("plan".into());
+    step.step.observation = Some("output".into());
+    step.thought_open = true;
+    step.output_open = true;
+    // The final message stays final while it also owns tool steps.
+    let mut answer = linked_command_step(AiAgentStepStatus::Completed);
+    answer.step.step_index = 1;
+    answer.step.kind = crate::features::ai::presentation::AiAgentStepKind::FinalAnswer;
+    answer.step.command_card_id = None;
+    answer.step.command = None;
+    answer.step.source_message_id = Some("message-2".into());
+    snapshot.agent_steps = vec![step, answer].into();
+    snapshot.expanded_execution_groups = vec!["message-0".into()].into();
+    let rows = AiTranscriptRow::project(&snapshot);
+    assert!(rows.iter().any(|row| matches!(
+        row,
+        AiTranscriptRow::ActivityMessage {
+            index: 2,
+            reasoning_only: true,
+            ..
+        }
+    )));
+    let order = vcx.update(|_, cx| {
+        app.read(cx)
+            .ai_panel
+            .read(cx)
+            .transcript_text_order(&snapshot, &rows)
+    });
+    let mut owners = std::collections::HashMap::new();
+    for (row, key) in order {
+        assert!(
+            owners.insert(key.clone(), row).is_none(),
+            "{key:?} is rendered by more than one transcript row"
+        );
+    }
+}
+
+#[test]
 fn transcript_deduplicates_ids_and_preserves_unrelated_commands_and_old_text() {
     use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase};
     let root = TestConfigDir::new("nyaterm-ai-card-dedup");
@@ -1330,9 +1386,10 @@ fn reasoning_disclosure_accepts_keyboard_and_persists_when_body_text_starts() {
     });
     compact_draw(&app, vcx);
     assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_message_thoughts().is_empty()));
-    // The first focusable element in this transcript is its reasoning disclosure.
+    // The user's copy button precedes the reasoning disclosure in Tab order.
     vcx.update(|window, cx| {
         window.blur(cx);
+        window.focus_next(cx);
         window.focus_next(cx);
         window.draw(cx).clear(cx);
     });
@@ -1495,6 +1552,8 @@ fn execution_disclosures_accept_keyboard_and_mouse_without_following_a_long_scri
     assert!(vcx.update(|_, cx| app.read(cx).ai.expanded_execution_groups().is_empty()));
     vcx.update(|window, cx| {
         window.blur(cx);
+        // Pass the user's copy button to reach the execution disclosure.
+        window.focus_next(cx);
         window.focus_next(cx);
         window.draw(cx).clear(cx);
     });

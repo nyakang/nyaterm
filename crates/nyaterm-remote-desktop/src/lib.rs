@@ -7,6 +7,7 @@ mod helper_process;
 mod input;
 mod ipc;
 pub mod pixel_memory;
+pub mod presentation;
 mod protocol;
 mod session;
 mod vnc;

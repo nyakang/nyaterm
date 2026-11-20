@@ -12,6 +12,7 @@ pub(in crate::features) fn file_operation_output(
             source_path,
             target_path,
         } => TransferJobOutput::Sent {
+            retained_backups: Vec::new(),
             source_path,
             target_path,
             source_parent_path: None,
@@ -23,6 +24,7 @@ pub(in crate::features) fn file_operation_output(
             entries: Vec::new(),
         },
         FileOperationResult::Completed(FileOperationSummary {
+            retained_backups,
             source_path,
             target_path,
             source_parent_path,
@@ -32,6 +34,7 @@ pub(in crate::features) fn file_operation_output(
             used_local_staging,
             entries,
         }) => TransferJobOutput::Sent {
+            retained_backups,
             source_path,
             target_path,
             source_parent_path,

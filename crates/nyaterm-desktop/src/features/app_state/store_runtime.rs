@@ -146,6 +146,7 @@ impl NyaTermApp {
     }
 
     pub(crate) fn shutdown_blocking_jobs(&mut self, cx: &mut Context<Self>) -> Task<()> {
+        let networktools_worker = self.networktools.take_shutdown();
         self.stop_mcp_background_operations(cx);
         let mcp_shutdown = self
             .mcp
@@ -199,6 +200,9 @@ impl NyaTermApp {
             }
             cx.background_spawn(async move {
                 stop_editor_watchers.await;
+                if let Some(worker) = networktools_worker {
+                    let _ = worker.join();
+                }
                 session_shutdown();
                 if let Some(shutdown) = frame_worker {
                     shutdown();

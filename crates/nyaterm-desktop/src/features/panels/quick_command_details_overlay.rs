@@ -110,8 +110,12 @@ impl NyaTermApp {
                         QuickCommandCardContent {
                             command: &command,
                             execution_mode: Some(QuickCommandCardExecutionMode {
-                                append: command.execution_mode.as_deref() == Some("append"),
-                                label: if command.execution_mode.as_deref() == Some("append") {
+                                append: command.segmented_send.is_none()
+                                    && command.execution_mode.as_deref() == Some("append"),
+                                segmented: command.segmented_send.is_some(),
+                                label: if command.segmented_send.is_some() {
+                                    t!("quickCommands.segmentedSendBadge")
+                                } else if command.execution_mode.as_deref() == Some("append") {
                                     t!("quickCommands.appendOnlyBadge")
                                 } else {
                                     t!("quickCommands.executeImmediately")

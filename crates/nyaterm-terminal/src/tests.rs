@@ -256,6 +256,25 @@ fn search_query(pattern: &str) -> TerminalSearchQuery {
 }
 
 #[test]
+fn find_preserves_padding_and_whitespace_only_queries() {
+    let mut screen = TerminalScreen::new(25, 2);
+    screen.advance(b"x needle x  z");
+    for (text, start, end) in [(" needle ", 1, 9), ("  ", 10, 12)] {
+        let hits = screen
+            .search_grid_occurrences_in_absolute_range(
+                &search_query(text),
+                0..1,
+                TerminalSearchRangeMode::StartsWithin,
+            )
+            .unwrap();
+        assert!(
+            hits.iter()
+                .any(|hit| hit.segments[0].start_col == start && hit.segments[0].end_col == end)
+        );
+    }
+}
+
+#[test]
 fn grid_search_returns_absolute_buffer_rows_without_flattening() {
     let mut screen = TerminalScreen::new(20, 3);
     screen.advance(b"alpha\r\nbeta\r\nneedle-one\r\nneedle-two");
@@ -2096,6 +2115,7 @@ fn snapshot_row_cache_uses_revision_as_authoritative_invalidation() {
         command_mark: original.command_mark,
         line_id: original.line_id,
         shell_input: original.shell_input,
+        inferred_input: original.inferred_input,
         shell_input_columns: original.shell_input_columns,
         shell_integration: original.shell_integration,
     };
@@ -2134,6 +2154,7 @@ fn snapshot_row_cache_prunes_to_limit() {
                 command_mark: None,
                 line_id: None,
                 shell_input: None,
+                inferred_input: false,
                 shell_input_columns: None,
                 shell_integration: false,
             },

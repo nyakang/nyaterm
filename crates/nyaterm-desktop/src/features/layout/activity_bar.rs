@@ -901,6 +901,15 @@ mod tests {
         let cx: &mut VisualTestContext = cx;
         draw(&app, cx);
 
+        // Optional tools start hidden, so the default layout has recovery items.
+        app.read_with(cx, |app, _| {
+            assert_eq!(
+                app.hidden_activity_entry_ids_for_target(&ActivityBarContextTarget::Bar {
+                    side: PanelSide::Left,
+                }),
+                vec!["networktools"]
+            );
+        });
         let bar_blank = gpui::point(gpui::px(20.), gpui::px(300.));
         cx.simulate_mouse_down(bar_blank, MouseButton::Right, Modifiers::default());
         draw(&app, cx);
@@ -908,6 +917,24 @@ mod tests {
         // separator. Hidden Items is the next row; if that row were omitted,
         // this click would hit the following action and dismiss the menu.
         let opener_center = gpui::point(gpui::px(100.), gpui::px(356.));
+        cx.simulate_click(opener_center, Modifiers::default());
+        draw(&app, cx);
+
+        cx.update(|_, cx| {
+            assert!(
+                app.read(cx)
+                    .shell
+                    .activity_bar_context_menu()
+                    .expect("default hidden tools should keep their parent menu open")
+                    .move_submenu_open
+            );
+            app.update(cx, |app, cx| {
+                app.show_activity_entry("networktools".to_string(), cx)
+            });
+        });
+        draw(&app, cx);
+        cx.simulate_mouse_down(bar_blank, MouseButton::Right, Modifiers::default());
+        draw(&app, cx);
         cx.simulate_click(opener_center, Modifiers::default());
         draw(&app, cx);
 
@@ -958,9 +985,10 @@ mod tests {
                 side: PanelSide::Right,
             });
 
-            assert_eq!(left, vec!["fileExplorer"]);
+            assert_eq!(left, vec!["fileExplorer", "networktools"]);
             assert!(right.iter().any(|id| id == "aiAssistant"));
             assert!(!right.iter().any(|id| id == "fileExplorer"));
+            assert!(!right.iter().any(|id| id == "networktools"));
             assert!(right.iter().any(|id| id == "gpuMonitor"));
         });
     }

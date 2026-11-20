@@ -1,7 +1,9 @@
 mod inputs;
 mod layout;
+mod navigation_runtime;
 mod operations;
 mod pane;
+pub(in crate::features) mod properties;
 mod runtime;
 mod state;
 mod tabs;

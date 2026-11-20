@@ -4,6 +4,7 @@
     {
       "ref": "prod-root-password",
       "name": "Prod root password",
+      "username": "root",
       "password": "replace-me"
     }
   ],
@@ -34,6 +35,8 @@
       "host": "web-01.example.com",
       "port": 22,
       "username": "deploy",
+      "description": "Direct connection password without a saved account",
+      "tags": ["production", "web"],
       "auth": {
         "mode": "password",
         "password": "replace-me"
@@ -67,6 +70,7 @@
       "group_path": ["Lab"],
       "host": "192.168.10.1",
       "port": 23,
+      "keep_alive_interval_secs": 30,
       "backspace_mode": "del"
     },
     {
@@ -77,6 +81,7 @@
       "baud_rate": 115200,
       "data_bits": 8,
       "parity": "none",
+      "flow_control": "none",
       "stop_bits": "1",
       "backspace_mode": "ctrl_h"
     },
@@ -84,7 +89,31 @@
       "name": "Local PowerShell",
       "type": "local_terminal",
       "shell_path": "pwsh.exe",
+      "shell_args": "-NoLogo",
       "working_dir": "C:\\Users\\me"
+    },
+    {
+      "name": "Prod app saved account",
+      "type": "ssh",
+      "group_path": ["Production"],
+      "host": "app-01.example.com",
+      "auth": {
+        "mode": "password",
+        "account_ref": "prod-root-password",
+        "password_source": "account"
+      }
+    },
+    {
+      "name": "Prod maintenance account with connection password",
+      "type": "ssh",
+      "group_path": ["Production"],
+      "host": "maintenance.example.com",
+      "auth": {
+        "mode": "password",
+        "account_ref": "prod-root-password",
+        "password_source": "connection",
+        "password": "replace-with-connection-password"
+      }
     }
   ]
 }

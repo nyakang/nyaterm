@@ -22,6 +22,7 @@ pub(in crate::features) mod session_tabs;
 mod shortcut_action_runtime;
 mod state;
 mod status_clocks;
+pub(in crate::features) mod system_theme;
 mod tab_drag;
 pub(in crate::features) mod tab_mouse;
 pub(in crate::features) mod tab_reorder;

@@ -863,9 +863,9 @@
     "passwordLabel": "密码",
     "passwordOnlyCredential": "仅密码凭据",
     "passwordPlaceholder": "要发送的密码",
-    "passwordRegexPlaceholder": "匹配密码提示的正则表达式",
+    "passwordRegexLabel": "密码提示正则",
     "passwordUnchanged": "留空保持当前密码不变",
-    "promptRegexLabel": "提示正则",
+    "promptRegexLabel": "用户名提示正则",
     "promptRegexOptionalLabel": "提示正则（可选）",
     "reorderFailed": "凭据排序保存失败",
     "reorderSuccess": "凭据顺序已保存",
@@ -896,6 +896,8 @@
       "display": "显示",
       "session": "会话",
       "serial": "串口设置",
+      "charset": "字符集",
+      "advanced": "高级",
       "startup": "启动设置"
     },
     "serialSoftwareFlowControlModemDisabled": "软件流控下禁用 XMODEM/YMODEM/ZMODEM 文件传输，因为 XON/XOFF 可能吞掉二进制数据。",
@@ -1117,6 +1119,50 @@
     "newGroupRootHint": "将在顶层创建分组",
     "noAuthentication": "无",
     "noAuthenticationDescription": "不使用密码或私钥发起连接。仅适用于允许 none 认证，或会继续交互式请求凭据的 SSH 服务端。",
+    "ftpAnonymousLogin": "匿名登录",
+    "ftpAnonymousHint": "匿名登录不会发送已保存的密码，仅服务器允许匿名访问时可用。",
+    "ftpAuthModeUnsupported": "FTP 仅支持密码或匿名登录。",
+    "ftpPassiveModeInvalid": "FTP 被动模式无效。",
+    "ftpFilenameEncodingInvalid": "请选择有效的 FTP 文件名字符集。",
+    "ftpConnectTimeoutInvalid": "FTP 连接超时必须介于 %{min} 到 %{max} 毫秒。",
+    "ftpPasswordRequired": "请输入密码或选择匿名登录。",
+    "ftpPassiveMode": "被动模式",
+    "ftpPassiveAuto": "自动",
+    "ftpPassivePasv": "PASV（被动）",
+    "ftpPassiveEpsv": "EPSV（扩展被动）",
+    "ftpInitialDirectory": "远端起始目录",
+    "ftpLocalInitialDirectory": "本地起始目录",
+    "ftpConnectTimeout": "连接超时（毫秒）",
+    "ftpAdvancedHint": "起始目录留空时使用服务器或本地默认目录。 FTP 传输始终从头开始，不保留权限和时间戳。",
+    "ftpAsciiMode": "ASCII 模式",
+    "ftpAsciiModeHint": "上传时将本地换行转换为 CRLF，下载时转换回本地换行；仅适用于文本文件。",
+    "ftpFtps": "FTPS（显式 TLS）",
+    "ftpFtpsHint": "通过 AUTH TLS 加密控制与数据连接；服务器必须支持显式 FTPS。",
+    "ftpSecurityMode": "安全模式",
+    "ftpSecurityNone": "无",
+    "ftpSecurityExplicit": "显式 FTPS",
+    "ftpSecurityImplicit": "隐式 FTPS",
+    "ftpImplicitFtpsHint": "连接后立即进行 TLS 握手，通常使用 990 端口。",
+    "ftpTlsVersion": "TLS 版本",
+    "ftpTlsAuto": "自动（系统默认）",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0 不受支持；SSL 3.0、TLS 1.0 与 TLS 1.1 已废弃，可能被系统策略拒绝。",
+    "ftpNetworkRouteDescription": "选择跳板机时优先使用跳板，本页代理不参与连接。访问跳板所需的代理请在该 SSH 连接上配置。",
+    "ftpNetworkPlaintextDescription": "代理与跳板设置会随连接一起保存。",
+    "ftpSecurityModeInvalid": "FTP 安全模式无效。",
+    "ftpTlsVersionInvalid": "FTP TLS 版本无效。",
+    "filenameEncodingTitle": "服务器使用以下字符集编码处理文件名：",
+    "filenameEncodingAuto": "自动检测",
+    "filenameEncodingAutoHint": "服务器声明支持 UTF-8 时使用 UTF-8，否则使用本机系统编码。",
+    "filenameEncodingForceUtf8": "强制 UTF-8",
+    "filenameEncodingCustom": "使用自定义的字符集",
+    "filenameEncodingLabel": "编码",
+    "filenameEncodingWarning": "使用错误的字符集可能导致文件名显示不正确。",
+    "filenameEncodingScope": "仅影响服务器文件名和路径，不影响文件内容。",
     "noKeys": "暂无密钥",
     "noOtp": "无",
     "noOtpEntries": "暂无 OTP 条目",
@@ -1274,6 +1320,8 @@
     "workingDirectorySelected": "工作目录：%{path}",
     "workingDirectorySelectionCancelled": "已取消选择工作目录。",
     "x11Forwarding": "X11 转发",
+    "allowShortRsaHostKeys": "允许短 RSA 主机密钥",
+    "allowShortRsaHostKeysDesc": "允许 512～1023 位 RSA 主机密钥。这些密钥安全性不足，仅应为旧设备启用；仍会验证主机身份和签名。",
     "sshCompatibilityMode": "兼容模式",
     "sshCompatibilityModeDesc": "禁用当前连接的远程资源监控、进程管理、Docker 等后台探测，避免旧版 SSH 服务器因额外命令而异常断开。不影响终端、SFTP 和 SSH 隧道。",
     "dynamicTabTitle": "动态标签标题",
@@ -1455,7 +1503,6 @@
   "fileExplorer": {
     "clipboardEmpty": "文件剪贴板为空或已被替换",
     "clipboardMoving": "选中的剪切项正在移动，请等待完成",
-
     "transferSourceUnavailable": "来源连接不可用，请重新连接后重试。",
     "transferBackendUnsupported": "此连接不支持文件传输。",
     "transferInvalidDestination": "传输目标无效或无法表示文件名。",
@@ -1572,9 +1619,15 @@
     "mtime": "修改时间",
     "name": "名称",
     "newFile": "新建文件",
-    "newFileName": "请输入新文件名：",
+    "newFileName": "文件名",
+    "newFileNamePlaceholder": "例如：config.yaml",
+    "newFolderNamePlaceholder": "例如：my-folder",
+    "permRead": "读取 R",
+    "permWrite": "写入 W",
+    "permExecute": "执行 X",
+    "specialPermissions": "特殊权限",
     "newFolder": "新建文件夹",
-    "newFolderName": "请输入新文件夹名：",
+    "newFolderName": "目录名",
     "newSymlink": "新建符号链接",
     "noFavorites": "暂无收藏",
     "noChildDirectories": "没有子目录",
@@ -1641,6 +1694,14 @@
     "uploadPrompt": "远程文件已修改，是否上传更改？"
   },
   "fileManager": {
+    "leftSide": "左侧",
+    "rightSide": "右侧",
+    "copyToPane": "复制到%{side}（%{target}）",
+    "moveToPane": "移动到%{side}（%{target}）",
+    "new": "新建",
+    "copyFullPath": "复制完整路径",
+    "copyName": "复制文件名",
+    "copyParent": "复制所在目录",
     "connected": "已连接",
     "skipped": "已跳过",
     "copy": "复制",
@@ -1690,7 +1751,9 @@
     "openLeft": "在左侧打开",
     "openRight": "在右侧打开",
     "openWorkspace": "在工作区打开文件管理器",
-    "goHome": "主目录"
+    "goHome": "主目录",
+    "goBack": "后退",
+    "goForward": "前进"
   },
   "fileTransfer": {
     "scanning": "正在扫描文件…",
@@ -1699,6 +1762,7 @@
     "cancelAll": "全部取消",
     "cancelled": "已取消",
     "clearAll": "清除全部",
+    "clear": "清除",
     "clearCompleted": "清除已完成",
     "completed": "已完成",
     "cancelling": "正在取消",
@@ -1934,6 +1998,81 @@
     "ungrouped": "未分类",
     "ungroupedConnections": "未分组"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "正在监听 %{addr}",
+        "notRunning": "未运行",
+        "configure": "配置",
+        "start": "启动服务",
+        "stop": "停止服务"
+      },
+      "action": {
+        "reset": "重置",
+        "browse": "浏览"
+      },
+      "bind": {
+        "allInterfaces": "所有网卡",
+        "loopback": "本机回环",
+        "savedUnavailable": "已保存，本机未检测到"
+      },
+      "field": {
+        "bindAddress": "监听地址",
+        "port": "端口",
+        "rootDir": "服务目录",
+        "timeout": "超时（秒）",
+        "concurrency": "最大并发传输"
+      },
+      "section": {
+        "basic": "基本设置",
+        "limits": "传输限制",
+        "permissions": "权限"
+      },
+      "hint": {
+        "firewall": "如需其他机器访问，请在系统防火墙中放行该 UDP 端口。",
+        "security": "服务仅共享所选目录，请在可信网络中使用。"
+      },
+      "error": {
+        "bind": "请输入有效的 IP 地址",
+        "port": "端口需为 1～65535",
+        "timeout": "超时需为 1～255 秒",
+        "concurrency": "并发需为 1～%{max}",
+        "rootDirRequired": "请选择服务目录",
+        "rootDirUnreadable": "目录不存在或不可读",
+        "invalid": "设置无效：%{message}"
+      },
+      "status": {
+        "saveHint": "更改将在下次启动服务时生效。",
+        "saveAndRestart": "保存并重启服务",
+        "restartFailed": "已保存，但重启 %{service} 服务失败：%{message}",
+        "saveFailed": "无法保存网络工具设置",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 开始传输：%{file}",
+        "finished": "%{service} · 传输完成：%{file}（%{bytes} 字节）",
+        "failed": "%{service} · %{file}：%{message}",
+        "failedUnknown": "未知错误"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 服务器",
+      "shortName": "TFTP",
+      "description": "在本机通过 TFTP 共享和接收文件。",
+      "field": {
+        "blockSize": "协商块大小上限",
+        "allowUpload": "允许上传",
+        "allowOverwrite": "允许覆盖文件"
+      },
+      "hint": {
+        "blockSize": "客户端请求 blksize 时允许的最大 DATA 载荷（8–65464 字节）。\n实际协商值取客户端请求与此上限的较小值。\n未请求 blksize 的客户端固定使用 512 字节。",
+        "upload": "客户端可以写入服务目录"
+      },
+      "error": {
+        "blockSize": "块大小需为 8～65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "取消",
     "cancelled": "身份验证已取消",
@@ -2040,6 +2179,7 @@
     "fileTransfer": "文件传输",
     "gpuMonitor": "NVIDIA GPU",
     "network": "网络",
+    "networktools": "网络工具",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "暂无活动会话",
     "noCommandsYet": "暂无命令记录",
@@ -2331,6 +2471,7 @@
     "emptyCommand": "命令为空",
     "errorCommandRequired": "命令脚本不能为空",
     "errorLabelRequired": "标签名称不能为空",
+    "errorSegmentedIntervalInvalid": "发送间隔必须是 0 到 60 之间的数字。",
     "executeHint": "发送命令并立即执行。",
     "executeImmediately": "立即执行",
     "executionMode": "执行模式",
@@ -2375,6 +2516,11 @@
     "search": "搜索命令...",
     "searchOrCreateCategory": "搜索或创建分类...",
     "selectIcon": "选择图标",
+    "segmentedCommandPlaceholder": "按行或字符拆分。使用 {{varName}} 填写变量。解析 \\r、\\n、\\t 和 \\p；开启原样发送可保留这些文字。",
+    "segmentedSend": "分段发送",
+    "segmentedSendBadge": "分段",
+    "segmentedSendHint": "按行发送会提交每行；按字符不自动提交末行。每个 \\p 额外暂停一秒。原样发送保持正文，不添加换行。",
+    "segmentedLegacyHint": "旧版本忽略分段参数并按追加模式发送；内部换行仍可能执行命令，旧版本保存时可能丢失这些参数。",
     "send": "发送",
     "sendToAll": "发送到所有会话",
     "sort": "排序",
@@ -2493,6 +2639,11 @@
     "usersMeaning": "系统记录的登录会话，不代表所有 SSH 连接。"
   },
   "savedConnections": {
+    "openFileManager": "打开文件管理器",
+    "openFileManagerSftpDisabled": "打开文件管理器（SFTP 已禁用）",
+    "fileManagerConnectionUnavailable": "该已保存的连接已不可用。",
+    "fileManagerRequiresSsh": "打开文件管理器需要 SSH 连接。",
+    "fileManagerSftpDisabled": "该 SSH 连接已禁用 SFTP。",
     "dropRoot": "移至根级",
     "sessionImportTitle": "导入会话",
     "restoreBackupTitle": "恢复 NyaTerm 备份",
@@ -2574,7 +2725,7 @@
     "ungroupedConnections": "未分组",
     "user": "用户",
     "windtermMasterPasswordTitle": "WindTerm 主密码",
-    "windtermMasterPasswordDesc": "此 WindTerm profile 启用了主密码。请输入主密码以解密保存的自动登录信息。",
+    "windtermMasterPasswordDesc": "此 WindTerm profile 的自动登录或 OneKey 账户使用主密码加密。请输入主密码以解密保存的凭据。",
     "windtermMasterPasswordConfirm": "导入",
     "windtermMasterPasswordRequired": "请输入 WindTerm 主密码",
     "windtermAccountsTitle": "WindTerm 账户",
@@ -2722,6 +2873,7 @@
     "submit": "继续"
   },
   "serialPrompt": {
+    "chooseDevice": "选择设备…",
     "alreadyOpen": "请先完成当前的串口选择。",
     "baudRateInvalid": "波特率必须在 1 到 4000000 之间。",
     "baudRatePlaceholder": "115200",
@@ -2825,6 +2977,12 @@
     "unread": "未读"
   },
   "settings": {
+    "themeMode": "主题模式",
+    "themeModeManual": "手动选择",
+    "themeModeSystem": "跟随系统",
+    "systemLightTheme": "系统浅色时",
+    "systemDarkTheme": "系统深色时",
+    "themeInUse": "使用中",
     "configurationSessionInAnotherWindow": "其他窗口有远程连接正在运行或启动，请先断开再替换配置。",
     "configurationReplacementInProgress": "正在替换配置，请在完成后重试连接。",
     "configurationRefreshRequired": "配置刷新尚未完成。请重试连接或导入/同步操作，以先重新刷新配置。",
@@ -3035,6 +3193,16 @@
     "dataDirectoryRestoreTitle": "将当前数据迁回默认目录",
     "dataDirectoryRestoreDesc": "会先将 %{path} 中原有的数据库、插件和录制归档为历史备份，再复制当前数据并重启。源目录和历史备份均会保留。",
     "dataDirectoryUseHistory": "改用历史数据",
+    "dataDirectoryRecoveryOpen": "打开数据目录",
+    "dataDirectoryRecoveryRebuild": "归档并重建…",
+    "dataDirectoryRecoveryRebuildConfirm": "在 %{path} 创建空数据库并重启？连接和设置将从空配置开始。已有数据库文件会归档到此目录，供手动恢复；其他文件和密钥材料会保留。",
+    "dataDirectoryRepairedDatabase": "数据库已成功修复，已加载保存的数据。",
+    "dataDirectoryCreatedDatabase": "经你确认，已在 %{path} 创建空数据库。",
+    "dataDirectoryErrorDatabaseMissing": "数据库缺失。请恢复文件后重试、选择已有数据目录，或明确选择创建空数据库。",
+    "dataDirectoryErrorDatabaseCorrupt": "数据库文件损坏。请恢复备份，或明确选择归档并创建空数据库。",
+    "dataDirectoryErrorDatabaseDataInvalid": "保存的数据无法解析。数据库已保留，禁止重建；请恢复兼容数据后重试。",
+    "dataDirectoryErrorDatabaseUpgrade": "数据库需要升级。数据库已保留，禁止重建。",
+    "dataDirectoryErrorDatabaseInitialization": "数据库初始化失败。数据库已保留，禁止重建。",
     "dataDirectoryRecoveryTitle": "恢复数据目录",
     "dataDirectoryRecoveryDesc": "所选目录无法打开，尚未启动工作区或自动同步。请重新连接磁盘后重试，或明确选择一个已有数据目录。",
     "dataDirectoryRecoveryRetry": "重试所选目录",
@@ -3049,6 +3217,8 @@
     "dataDirectoryAutoHint": "选择父目录即可；NyaTerm 会自动使用或创建其下的 %{dir} 子目录。上方显示的是实际生效的完整路径。",
     "dataDirectoryRestartRequired": "目录变更已保存，NyaTerm 即将重启。",
     "dataDirectoryNotice": "启动提示：",
+    "dataDirectoryRecreatedDatabase": "未找到可用的数据库，已在 %{path} 创建新的空数据库。原文件已保留为 %{archive}。",
+    "dataDirectoryCreateDatabaseFailed": "无法在 %{path} 创建数据库：%{reason}。请检查目录权限或磁盘空间。",
     "dataDirectorySyncWarning": "检测到同步目录（%{client}）。同步软件可能在 NyaTerm 运行期间复制数据库造成损坏，请退出 NyaTerm 后再同步，或使用便携快照备份。",
     "dataDirectoryMigrateTitle": "迁移到新目录",
     "dataDirectoryMigrateDesc": "将当前数据库和插件复制到 %{path}，源目录不会被删除。保存后 NyaTerm 会立即重启并在新目录上运行。",
@@ -3172,7 +3342,7 @@
     "groupTransfer": "数据传输",
     "groupWorkspace": "工作区",
     "zebraStripes": "终端行斑马纹",
-    "zebraStripesDesc": "高亮 Shell 输入区域和鼠标点击的目标行，可切换为逐行交替底色。",
+    "zebraStripesDesc": "高亮 Shell 输入区域和鼠标点击的目标行，可切换为逐行交替底色。关闭背景不影响命令折叠和导航。",
     "zebraStripesByRow": "按行显示",
     "zebraStripesByRowDesc": "按终端显示行交替显示背景色。",
     "syncHistory": {
@@ -3271,6 +3441,8 @@
     "keepAliveInterval": "Keep-Alive 间隔 (秒)",
     "reconnectRestoreCwd": "重连后恢复工作目录",
     "reconnectRestoreCwdDesc": "将 SSH 会话恢复到最后可信的工作目录。",
+    "serialReconnectEnter": "串口重连后自动发送回车",
+    "serialReconnectEnterDesc": "串口会话重连成功后自动发送一次回车，让控制台立即显示命令行提示符。",
     "keepAliveIntervalDesc": "每隔 X 秒发送 SSH keep-alive 控制包。设置为 0 以禁用。",
     "keepAliveMode": "Keep-alive 模式",
     "keepAliveModeCompatible": "兼容",
@@ -3732,8 +3904,8 @@
     "testSearchEngine": "测试",
     "theme": "界面主题",
     "themeDesc": "选择应用程序界面的颜色主题。",
-    "timestampFormat": "时间戳格式",
-    "timestampFormatDesc": "例如 HH:mm:ss 或 YYYY-MM-DD HH:mm:ss。",
+    "timestampFormat": "终端时间戳显示格式",
+    "timestampFormatDesc": "设置终端每行输出时间的显示格式，例如 HH:mm:ss 或 YYYY-MM-DD HH:mm:ss。在顶部‘终端 > 显示’中开启‘显示时间戳’后生效。",
     "timestampFormatHelp": "可使用 HH:mm:ss、[HH:mm:ss.SSS] 或 YYYY-MM-DD HH:mm:ss。支持标记：YYYY、YY、MM、M、DD、D、HH、H、mm、m、ss、s、SSS、SS、S。",
     "title": "设置",
     "transfer": "传输",
@@ -4629,5 +4801,16 @@
     "tmuxCommandFailed": "tmux 命令失败",
     "details": "详情（%{count}）",
     "repeated": "发生次数：%{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP 连接失败。",
+    "authentication": "FTP 身份验证失败。",
+    "timeout": "FTP 操作超时，请重新连接。",
+    "unavailable": "FTP 会话不可用，请重新连接。",
+    "unsupportedSettings": "FTP 不支持这些传输设置。",
+    "limitExceeded": "FTP 文件超过预览或编辑器的大小限制。",
+    "notFound": "找不到 FTP 文件。",
+    "backupRetained": "文件已保存，旧备份保留在 %{backup}。",
+    "recoveryRequired": "服务器未确认替换结果。请保留新文件 %{temporary} 和备份 %{backup}，以便恢复。"
   }
 }

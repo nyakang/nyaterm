@@ -863,9 +863,9 @@
     "passwordLabel": "비밀번호",
     "passwordOnlyCredential": "비밀번호 전용 자격 증명",
     "passwordPlaceholder": "전송할 비밀번호",
-    "passwordRegexPlaceholder": "비밀번호 프롬프트용 정규식",
+    "passwordRegexLabel": "비밀번호 프롬프트 정규식",
     "passwordUnchanged": "현재 값을 유지하려면 비워 두세요",
-    "promptRegexLabel": "프롬프트 정규식",
+    "promptRegexLabel": "사용자 이름 프롬프트 정규식",
     "promptRegexOptionalLabel": "프롬프트 정규식(선택)",
     "reorderFailed": "자격 증명 순서를 변경하지 못했습니다",
     "reorderSuccess": "자격 증명 순서가 저장되었습니다",
@@ -896,6 +896,8 @@
       "display": "디스플레이",
       "session": "세션",
       "serial": "직렬 포트 설정",
+      "charset": "문자 집합",
+      "advanced": "고급",
       "startup": "시작 설정"
     },
     "serialSoftwareFlowControlModemDisabled": "XON/XOFF가 바이너리 데이터를 소비할 수 있으므로 소프트웨어 흐름 제어에서는 XMODEM/YMODEM/ZMODEM 파일 전송이 비활성화됩니다.",
@@ -1117,6 +1119,50 @@
     "newGroupRootHint": "최상위 수준에서 생성",
     "noAuthentication": "없음",
     "noAuthenticationDescription": "비밀번호나 키 없이 연결합니다. SSH 서버가 이를 허용하거나 대화형으로 요청할 때만 사용하세요.",
+    "ftpAnonymousLogin": "익명 로그인",
+    "ftpAnonymousHint": "익명 로그인은 저장된 비밀번호를 전송하지 않습니다. 서버가 익명 액세스를 허용할 때만 사용하세요.",
+    "ftpAuthModeUnsupported": "FTP는 비밀번호 또는 익명 로그인만 지원합니다.",
+    "ftpPassiveModeInvalid": "FTP 수동 모드가 올바르지 않습니다.",
+    "ftpFilenameEncodingInvalid": "유효한 FTP 파일 이름 문자 집합을 선택하세요.",
+    "ftpConnectTimeoutInvalid": "FTP 연결 시간 제한은 %{min}~%{max}ms여야 합니다.",
+    "ftpPasswordRequired": "비밀번호를 입력하거나 익명 로그인을 선택하세요.",
+    "ftpPassiveMode": "수동 모드",
+    "ftpPassiveAuto": "자동",
+    "ftpPassivePasv": "PASV(수동)",
+    "ftpPassiveEpsv": "EPSV(확장 수동)",
+    "ftpInitialDirectory": "원격 시작 폴더",
+    "ftpLocalInitialDirectory": "로컬 시작 폴더",
+    "ftpConnectTimeout": "연결 시간 제한(ms)",
+    "ftpAdvancedHint": "시작 폴더를 비우면 서버 또는 로컬 기본값을 사용합니다. FTP 전송은 처음부터 시작하며 권한과 타임스탬프를 보존하지 않습니다.",
+    "ftpAsciiMode": "ASCII 모드",
+    "ftpAsciiModeHint": "업로드 시 로컬 줄바꿈을 CRLF로 변환하고, 다운로드 시 로컬 줄바꿈으로 되돌립니다. 텍스트 파일에만 사용하세요.",
+    "ftpFtps": "FTPS(명시적 TLS)",
+    "ftpFtpsHint": "AUTH TLS로 제어 및 데이터 채널을 암호화합니다. 서버가 명시적 FTPS를 지원해야 합니다.",
+    "ftpSecurityMode": "보안 모드",
+    "ftpSecurityNone": "없음",
+    "ftpSecurityExplicit": "명시적 FTPS",
+    "ftpSecurityImplicit": "암시적 FTPS",
+    "ftpImplicitFtpsHint": "연결 직후 TLS 핸드셰이크를 수행하며 일반적으로 포트 990을 사용합니다.",
+    "ftpTlsVersion": "TLS 버전",
+    "ftpTlsAuto": "자동(시스템 기본값)",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0은 지원되지 않습니다. SSL 3.0, TLS 1.0, TLS 1.1은 폐기되었으며 시스템 정책에 의해 거부될 수 있습니다.",
+    "ftpNetworkRouteDescription": "점프 호스트를 선택하면 점프가 우선이며 이 페이지의 프록시는 사용되지 않습니다. 점프 호스트 연결에 필요한 프록시는 해당 SSH 연결에서 설정하세요.",
+    "ftpNetworkPlaintextDescription": "프록시 및 점프 설정은 연결과 함께 저장됩니다.",
+    "ftpSecurityModeInvalid": "FTP 보안 모드가 올바르지 않습니다.",
+    "ftpTlsVersionInvalid": "FTP TLS 버전이 올바르지 않습니다.",
+    "filenameEncodingTitle": "서버는 파일 이름에 다음 문자 집합을 사용합니다:",
+    "filenameEncodingAuto": "자동 감지",
+    "filenameEncodingAutoHint": "서버가 UTF-8을 지원하면 UTF-8을, 그렇지 않으면 시스템 로컬 인코딩을 사용합니다.",
+    "filenameEncodingForceUtf8": "UTF-8 강제",
+    "filenameEncodingCustom": "사용자 지정 문자 집합 사용",
+    "filenameEncodingLabel": "인코딩",
+    "filenameEncodingWarning": "잘못된 문자 집합을 사용하면 파일 이름이 올바르게 표시되지 않을 수 있습니다.",
+    "filenameEncodingScope": "서버 파일 이름과 경로에만 적용되며 파일 내용에는 영향을 주지 않습니다.",
     "noKeys": "키 없음",
     "noOtp": "없음",
     "noOtpEntries": "OTP 항목이 없습니다",
@@ -1274,6 +1320,8 @@
     "workingDirectorySelected": "작업 디렉터리: %{path}",
     "workingDirectorySelectionCancelled": "작업 디렉터리 선택이 취소되었습니다.",
     "x11Forwarding": "X11 포워딩",
+    "allowShortRsaHostKeys": "짧은 RSA 호스트 키 허용",
+    "allowShortRsaHostKeysDesc": "512~1023비트 RSA 호스트 키를 허용합니다. 안전하지 않은 키이므로 구형 장치에만 사용하세요. 호스트 신원과 서명은 계속 검증합니다.",
     "sshCompatibilityMode": "호환 모드",
     "sshCompatibilityModeDesc": "이 연결의 원격 리소스 모니터링, 프로세스 관리, Docker 등의 백그라운드 탐지를 비활성화하여 추가 명령으로 인한 구형 SSH 서버의 연결 끊김을 방지합니다. 터미널, SFTP 및 SSH 터널에는 영향을 주지 않습니다.",
     "dynamicTabTitle": "동적 탭 제목",
@@ -1455,7 +1503,6 @@
   "fileExplorer": {
     "clipboardEmpty": "파일 클립보드가 비어 있거나 다른 내용으로 바뀌었습니다",
     "clipboardMoving": "잘라낸 항목을 이동 중입니다. 완료될 때까지 기다려 주세요",
-
     "transferSourceUnavailable": "원본 연결을 사용할 수 없습니다. 다시 연결한 후 시도하세요.",
     "transferBackendUnsupported": "이 연결은 파일 전송을 지원하지 않습니다.",
     "transferInvalidDestination": "전송 대상이 잘못되었거나 파일 이름을 표현할 수 없습니다.",
@@ -1572,9 +1619,15 @@
     "mtime": "수정됨",
     "name": "이름",
     "newFile": "새 파일",
-    "newFileName": "새 파일 이름:",
+    "newFileName": "파일 이름",
+    "newFileNamePlaceholder": "예: config.yaml",
+    "newFolderNamePlaceholder": "예: my-folder",
+    "permRead": "읽기 R",
+    "permWrite": "쓰기 W",
+    "permExecute": "실행 X",
+    "specialPermissions": "특수 권한",
     "newFolder": "새 폴더",
-    "newFolderName": "새 폴더 이름:",
+    "newFolderName": "디렉터리 이름",
     "newSymlink": "새 심볼릭 링크",
     "noFavorites": "즐겨찾기 없음",
     "noChildDirectories": "하위 디렉터리 없음",
@@ -1641,6 +1694,14 @@
     "uploadPrompt": "원격 파일이 변경되었습니다. 변경 사항을 업로드할까요?"
   },
   "fileManager": {
+    "leftSide": "왼쪽",
+    "rightSide": "오른쪽",
+    "copyToPane": "%{side}(으)로 복사 (%{target})",
+    "moveToPane": "%{side}(으)로 이동 (%{target})",
+    "new": "새로 만들기",
+    "copyFullPath": "전체 경로 복사",
+    "copyName": "파일 이름 복사",
+    "copyParent": "상위 디렉터리 복사",
     "connected": "연결됨",
     "skipped": "건너뜀",
     "copy": "복사",
@@ -1690,7 +1751,9 @@
     "openLeft": "왼쪽에서 열기",
     "openRight": "오른쪽에서 열기",
     "openWorkspace": "작업 영역에서 파일 관리자 열기",
-    "goHome": "홈"
+    "goHome": "홈",
+    "goBack": "뒤로",
+    "goForward": "앞으로"
   },
   "fileTransfer": {
     "scanning": "파일 검색 중…",
@@ -1699,6 +1762,7 @@
     "cancelAll": "모두 취소",
     "cancelled": "취소됨",
     "clearAll": "모두 지우기",
+    "clear": "지우기",
     "clearCompleted": "완료 항목 지우기",
     "completed": "완료됨",
     "cancelling": "취소 중",
@@ -1934,6 +1998,81 @@
     "ungrouped": "그룹 없음",
     "ungroupedConnections": "그룹 없음"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "%{addr}에서 수신 중",
+        "notRunning": "실행 중 아님",
+        "configure": "설정",
+        "start": "서버 시작",
+        "stop": "서버 중지"
+      },
+      "action": {
+        "reset": "초기화",
+        "browse": "찾아보기"
+      },
+      "bind": {
+        "allInterfaces": "모든 인터페이스",
+        "loopback": "루프백",
+        "savedUnavailable": "저장된 값, 이 컴퓨터에서 감지되지 않음"
+      },
+      "field": {
+        "bindAddress": "바인드 주소",
+        "port": "포트",
+        "rootDir": "서비스 디렉터리",
+        "timeout": "시간 제한(초)",
+        "concurrency": "최대 동시 전송"
+      },
+      "section": {
+        "basic": "기본 설정",
+        "limits": "전송 제한",
+        "permissions": "권한"
+      },
+      "hint": {
+        "firewall": "다른 컴퓨터에서 접속하려면 시스템 방화벽에서 이 UDP 포트를 허용하세요.",
+        "security": "선택한 디렉터리만 공유합니다. 신뢰할 수 있는 네트워크에서 사용하세요."
+      },
+      "error": {
+        "bind": "유효한 IP 주소를 입력하세요",
+        "port": "포트는 1~65535 범위여야 합니다",
+        "timeout": "시간 제한은 1~255초 범위여야 합니다",
+        "concurrency": "동시 전송 수는 1~%{max} 범위여야 합니다",
+        "rootDirRequired": "서비스 디렉터리를 선택하세요",
+        "rootDirUnreadable": "디렉터리가 없거나 읽을 수 없습니다",
+        "invalid": "잘못된 설정: %{message}"
+      },
+      "status": {
+        "saveHint": "변경 사항은 다음에 서비스를 시작할 때 적용됩니다.",
+        "saveAndRestart": "저장 후 서비스 다시 시작",
+        "restartFailed": "저장했지만 %{service} 서비스 다시 시작에 실패했습니다: %{message}",
+        "saveFailed": "네트워크 도구 설정을 저장할 수 없습니다",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 전송 시작: %{file}",
+        "finished": "%{service} · 전송 완료: %{file}(%{bytes}바이트)",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "알 수 없는 오류"
+      }
+    },
+    "tftp": {
+      "title": "TFTP 서버",
+      "shortName": "TFTP",
+      "description": "이 컴퓨터에서 TFTP로 파일을 공유하고 받습니다.",
+      "field": {
+        "blockSize": "협상 블록 크기 상한",
+        "allowUpload": "업로드 허용",
+        "allowOverwrite": "파일 덮어쓰기 허용"
+      },
+      "hint": {
+        "blockSize": "클라이언트가 blksize를 요청할 때 허용되는 최대 DATA 페이로드(8–65464바이트)입니다.\n요청값과 이 상한 중 작은 값을 사용합니다.\nblksize 요청이 없으면 항상 512바이트를 사용합니다.",
+        "upload": "클라이언트가 서비스 디렉터리에 쓸 수 있습니다"
+      },
+      "error": {
+        "blockSize": "블록 크기는 8~65464 범위여야 합니다"
+      }
+    }
+  },
   "otp": {
     "cancel": "취소",
     "cancelled": "인증이 취소되었습니다",
@@ -2040,6 +2179,7 @@
     "fileTransfer": "전송",
     "gpuMonitor": "GPU",
     "network": "네트워크",
+    "networktools": "네트워크 도구",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "활성 세션이 없습니다",
     "noCommandsYet": "아직 명령이 없습니다",
@@ -2331,6 +2471,7 @@
     "emptyCommand": "빈 명령",
     "errorCommandRequired": "명령이 필요합니다",
     "errorLabelRequired": "레이블이 필요합니다",
+    "errorSegmentedIntervalInvalid": "전송 간격은 0~60초 사이의 숫자여야 합니다.",
     "executeHint": "명령을 보내고 즉시 실행합니다.",
     "executeImmediately": "즉시 실행",
     "executionMode": "모드",
@@ -2375,6 +2516,11 @@
     "search": "명령 검색...",
     "searchOrCreateCategory": "검색 또는 생성...",
     "selectIcon": "아이콘",
+    "segmentedCommandPlaceholder": "줄 또는 문자 단위로 나눕니다. 변수에는 {{varName}}을 사용합니다. \\r, \\n, \\t, \\p를 해석하며 원문 전송을 켜면 그대로 보냅니다.",
+    "segmentedSend": "분할 전송",
+    "segmentedSendBadge": "분할",
+    "segmentedSendHint": "줄 모드는 각 줄을 실행하며 문자 모드는 마지막 줄을 자동 실행하지 않습니다. \\p마다 1초를 추가로 기다립니다. 원문 전송은 줄 끝 문자를 추가하지 않습니다.",
+    "segmentedLegacyHint": "이전 버전은 분할 설정을 무시하고 추가 모드로 전송합니다. 내부 줄바꿈으로 명령이 실행될 수 있으며 저장 시 설정이 사라질 수 있습니다.",
     "send": "전송",
     "sendToAll": "모두에게 전송",
     "sort": "정렬",
@@ -2493,6 +2639,11 @@
     "usersMeaning": "시스템에 기록된 로그인 세션이며 모든 SSH 연결을 뜻하지 않습니다."
   },
   "savedConnections": {
+    "openFileManager": "파일 관리자 열기",
+    "openFileManagerSftpDisabled": "파일 관리자 열기(SFTP 비활성화)",
+    "fileManagerConnectionUnavailable": "이 저장된 연결은 더 이상 사용할 수 없습니다.",
+    "fileManagerRequiresSsh": "파일 관리자를 열려면 SSH 연결이 필요합니다.",
+    "fileManagerSftpDisabled": "이 SSH 연결에서 SFTP가 비활성화되어 있습니다.",
     "dropRoot": "최상위로 이동",
     "sessionImportTitle": "세션 가져오기",
     "restoreBackupTitle": "NyaTerm 백업 복원",
@@ -2574,7 +2725,7 @@
     "ungroupedConnections": "그룹 없음",
     "user": "사용자",
     "windtermMasterPasswordTitle": "WindTerm 마스터 비밀번호",
-    "windtermMasterPasswordDesc": "이 WindTerm 프로필은 마스터 비밀번호를 사용합니다. 저장된 자동 로그인 정보를 복호화하려면 입력하세요.",
+    "windtermMasterPasswordDesc": "이 WindTerm 프로필은 자동 로그인 또는 OneKey 계정을 마스터 비밀번호로 암호화합니다. 저장된 자격 증명을 복호화하려면 입력하세요.",
     "windtermMasterPasswordConfirm": "가져오기",
     "windtermMasterPasswordRequired": "WindTerm 마스터 비밀번호를 입력하세요",
     "windtermAccountsTitle": "WindTerm 계정",
@@ -2722,6 +2873,7 @@
     "submit": "계속"
   },
   "serialPrompt": {
+    "chooseDevice": "장치 선택…",
     "alreadyOpen": "열려 있는 시리얼 선택을 먼저 완료하세요.",
     "baudRateInvalid": "보드레이트는 1~4000000 사이여야 합니다.",
     "baudRatePlaceholder": "115200",
@@ -2825,6 +2977,12 @@
     "unread": "읽지 않음"
   },
   "settings": {
+    "themeMode": "테마 모드",
+    "themeModeManual": "수동 선택",
+    "themeModeSystem": "시스템 설정 따르기",
+    "systemLightTheme": "시스템이 밝은 모드일 때",
+    "systemDarkTheme": "시스템이 어두운 모드일 때",
+    "themeInUse": "사용 중",
     "configurationSessionInAnotherWindow": "다른 창에서 원격 연결이 실행 중이거나 시작 중입니다. 설정을 교체하기 전에 연결을 끊으세요.",
     "configurationReplacementInProgress": "설정을 교체하고 있습니다. 완료 후 연결을 다시 시도하세요.",
     "configurationRefreshRequired": "설정 새로 고침이 완료되지 않았습니다. 연결 또는 가져오기/동기화를 다시 시도하여 설정을 새로 고치세요.",
@@ -3035,6 +3193,16 @@
     "dataDirectoryRestoreTitle": "현재 데이터를 기본 디렉터리로 이동",
     "dataDirectoryRestoreDesc": "%{path}의 기존 데이터베이스, 플러그인 및 녹화 파일을 기록 백업에 보관한 후 현재 데이터를 복사하고 다시 시작합니다. 원본과 백업은 유지됩니다.",
     "dataDirectoryUseHistory": "이전 데이터 사용",
+    "dataDirectoryRecoveryOpen": "데이터 폴더 열기",
+    "dataDirectoryRecoveryRebuild": "보관 후 다시 만들기…",
+    "dataDirectoryRecoveryRebuildConfirm": "%{path}에 빈 데이터베이스를 만들고 다시 시작할까요? 연결과 설정이 빈 상태로 시작됩니다. 기존 데이터베이스는 수동 복구를 위해 이 폴더에 보관하며 다른 파일과 키 자료는 유지됩니다.",
+    "dataDirectoryRepairedDatabase": "데이터베이스를 복구하고 저장된 데이터를 불러왔습니다.",
+    "dataDirectoryCreatedDatabase": "확인 후 %{path}에 빈 데이터베이스를 만들었습니다.",
+    "dataDirectoryErrorDatabaseMissing": "데이터베이스가 없습니다. 파일을 복원하고 다시 시도하거나 기존 폴더를 선택하거나 빈 데이터베이스 만들기를 명시적으로 선택하세요.",
+    "dataDirectoryErrorDatabaseCorrupt": "데이터베이스가 손상되었습니다. 백업을 복원하거나 보관 후 빈 데이터베이스를 만드세요.",
+    "dataDirectoryErrorDatabaseDataInvalid": "저장된 데이터를 해석할 수 없습니다. 데이터베이스는 유지되며 다시 만들기는 비활성화됩니다. 호환 데이터를 복원하세요.",
+    "dataDirectoryErrorDatabaseUpgrade": "데이터베이스 업그레이드가 필요합니다. 데이터베이스는 유지되며 다시 만들기는 비활성화됩니다.",
+    "dataDirectoryErrorDatabaseInitialization": "데이터베이스 초기화에 실패했습니다. 데이터베이스는 유지되며 다시 만들기는 비활성화됩니다.",
     "dataDirectoryRecoveryTitle": "데이터 디렉터리 복구",
     "dataDirectoryRecoveryDesc": "선택한 디렉터리를 열 수 없습니다. 작업 공간과 자동 동기화는 시작되지 않았습니다. 디스크를 다시 연결하고 재시도하거나 기존 데이터 디렉터리를 선택하세요.",
     "dataDirectoryRecoveryRetry": "선택한 디렉터리 재시도",
@@ -3049,6 +3217,8 @@
     "dataDirectoryAutoHint": "상위 폴더를 선택하면 NyaTerm이 그 안의 %{dir} 하위 폴더를 자동으로 사용하거나 만듭니다. 위 경로가 실제 적용되는 위치입니다.",
     "dataDirectoryRestartRequired": "디렉터리 변경이 저장되었습니다. NyaTerm이 곧 다시 시작됩니다.",
     "dataDirectoryNotice": "시작 알림:",
+    "dataDirectoryRecreatedDatabase": "사용 가능한 데이터베이스가 없어 %{path}에 새 빈 데이터베이스를 만들었습니다. 기존 파일은 %{archive}로 보관되었습니다.",
+    "dataDirectoryCreateDatabaseFailed": "%{path}에 데이터베이스를 만들 수 없습니다: %{reason}. 폴더 권한 또는 디스크 공간을 확인하세요.",
     "dataDirectorySyncWarning": "동기화 폴더(%{client})가 감지되었습니다. NyaTerm 실행 중에 동기화 도구가 데이터베이스를 복사하면 손상될 수 있습니다. 동기화 전에 NyaTerm을 종료하거나 포터블 스냅샷을 사용하세요.",
     "dataDirectoryMigrateTitle": "새 디렉터리로 마이그레이션",
     "dataDirectoryMigrateDesc": "현재 데이터베이스와 플러그인을 %{path}(으)로 복사합니다. 원본 디렉터리는 삭제되지 않습니다. 저장하면 NyaTerm이 즉시 다시 시작되어 새 디렉터리에서 실행됩니다.",
@@ -3172,7 +3342,7 @@
     "groupTransfer": "전송",
     "groupWorkspace": "작업 공간",
     "zebraStripes": "터미널 행 줄무늬",
-    "zebraStripesDesc": "셸 입력 영역과 클릭한 행을 강조하며, 행마다 배경색을 번갈아 표시할 수도 있습니다.",
+    "zebraStripesDesc": "셸 입력 영역과 클릭한 행을 강조하며, 행마다 배경색을 번갈아 표시할 수도 있습니다. 꺼도 명령 접기와 탐색은 사용할 수 있습니다.",
     "zebraStripesByRow": "행별로 표시",
     "zebraStripesByRowDesc": "터미널의 표시 행마다 배경색을 번갈아 표시합니다.",
     "syncHistory": {
@@ -3271,6 +3441,8 @@
     "keepAliveInterval": "Keep-Alive 간격(초)",
     "reconnectRestoreCwd": "재연결 후 작업 디렉터리 복원",
     "reconnectRestoreCwdDesc": "SSH 세션을 마지막으로 신뢰된 작업 디렉터리로 되돌립니다.",
+    "serialReconnectEnter": "시리얼 재연결 후 Enter 전송",
+    "serialReconnectEnterDesc": "시리얼 세션이 재연결된 후 콘솔이 바로 프롬프트를 표시하도록 Enter를 한 번 보냅니다.",
     "keepAliveIntervalDesc": "X초마다 SSH keep-alive 패킷을 전송합니다. 0으로 설정해도 Keep-Alive가 비활성화됩니다.",
     "keepAliveMode": "SSH Keep-Alive 모드",
     "keepAliveModeCompatible": "호환 모드(권장)",
@@ -3732,8 +3904,8 @@
     "testSearchEngine": "테스트",
     "theme": "UI 테마",
     "themeDesc": "앱 색상 테마를 선택하세요.",
-    "timestampFormat": "타임스탬프 형식",
-    "timestampFormatDesc": "예: HH:mm:ss 또는 YYYY-MM-DD HH:mm:ss.",
+    "timestampFormat": "터미널 타임스탬프 표시 형식",
+    "timestampFormatDesc": "터미널 출력의 각 줄에 표시할 시간 형식을 설정합니다. 예: HH:mm:ss 또는 YYYY-MM-DD HH:mm:ss. 상단 메뉴의 터미널 > 표시에서 타임스탬프 표시를 켜면 적용됩니다.",
     "timestampFormatHelp": "HH:mm:ss, [HH:mm:ss.SSS] 또는 YYYY-MM-DD HH:mm:ss를 사용할 수 있습니다. 지원 토큰: YYYY, YY, MM, M, DD, D, HH, H, mm, m, ss, s, SSS, SS, S.",
     "title": "설정",
     "transfer": "전송",
@@ -4629,5 +4801,16 @@
     "tmuxCommandFailed": "tmux 명령이 실패했습니다",
     "details": "상세 정보 (%{count})",
     "repeated": "발생 횟수: %{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP 연결에 실패했습니다.",
+    "authentication": "FTP 인증에 실패했습니다.",
+    "timeout": "FTP 작업 시간이 초과되었습니다. 다시 연결하세요.",
+    "unavailable": "FTP 세션을 사용할 수 없습니다. 다시 연결하세요.",
+    "unsupportedSettings": "FTP는 이 전송 설정을 지원하지 않습니다.",
+    "limitExceeded": "FTP 파일이 미리 보기 또는 편집기의 크기 제한을 초과합니다.",
+    "notFound": "FTP 파일을 찾을 수 없습니다.",
+    "backupRetained": "파일이 저장되었습니다. 이전 백업은 %{backup}에 남아 있습니다.",
+    "recoveryRequired": "서버가 교체를 확인하지 않았습니다. 복구를 위해 새 파일 %{temporary} 및 백업 %{backup}을 보존하세요."
   }
 }

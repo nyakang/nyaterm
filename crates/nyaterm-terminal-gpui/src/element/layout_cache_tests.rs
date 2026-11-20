@@ -635,6 +635,7 @@ fn zebra_state_does_not_invalidate_row_shaping() {
     let mut striped_snapshot = plain_snapshot.clone();
     edit_snapshot_row(&mut striped_snapshot, 0, |row| {
         row.shell_input = Some(ShellInputLineKind::Active);
+        row.inferred_input = true;
     });
     let make_element = |snapshot| {
         NyaTerminalElement::new(

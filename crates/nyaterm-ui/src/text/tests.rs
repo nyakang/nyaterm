@@ -572,3 +572,32 @@ fn clicking_context_copy_preserves_streamed_selection(cx: &mut TestAppContext) {
         );
     });
 }
+
+fn opaque_rgb(color: gpui::Hsla) -> u32 {
+    let color = gpui::Rgba::from(color);
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u32;
+    (channel(color.r) << 16) | (channel(color.g) << 8) | channel(color.b)
+}
+
+#[test]
+fn transcript_inline_code_is_readable_in_every_builtin_theme() {
+    for &theme in crate::theme::APPEARANCE_THEME_IDS {
+        let palette = crate::theme::theme_palette(theme);
+        for answer in [true, false] {
+            let style = super::NyaTextStyle::transcript(palette, answer).0;
+            let inline_code = style.inline_code();
+            let background = opaque_rgb(
+                inline_code
+                    .background_color
+                    .unwrap_or_else(|| style.code_background()),
+            );
+            let foreground = opaque_rgb(inline_code.color.unwrap_or_else(|| style.foreground()));
+            let contrast = crate::theme::contrast_ratio(foreground, background);
+            assert!(
+                contrast >= 4.5,
+                "{theme}: inline code {foreground:06x} on {background:06x} has contrast {contrast:.2}"
+            );
+            assert_eq!(style.is_dark(), palette.is_dark(), "{theme}");
+        }
+    }
+}

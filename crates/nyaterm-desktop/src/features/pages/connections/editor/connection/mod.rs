@@ -18,6 +18,7 @@ pub(in crate::features::pages::connections) use groups::ordered_connection_group
 use crate::models::ConnectionEditorFocusTarget;
 mod android;
 mod authentication;
+mod ftp;
 mod layout;
 mod local;
 pub(in crate::features) mod options;
@@ -46,6 +47,7 @@ use nyaterm_ui::{
     NyaInput, NyaPopover, NyaScrollable, NyaSelectOption, NyaSelectState, NyaSwitch, NyaTooltip,
 };
 
+use self::ftp::connection_editor_ftp_section;
 use self::local::connection_editor_local_section;
 use self::rdp::connection_editor_rdp_section;
 use self::serial::connection_editor_serial_section;
@@ -405,6 +407,11 @@ impl NyaTermApp {
         let sftp_cwd_options = options::sftp_cwd_follow_choices(&editor.sftp_cwd_follow_mode);
         let sftp_filename_encoding_options =
             options::sftp_filename_encoding_choices(&editor.sftp_filename_encoding);
+        let ftp_passive_options = options::ftp_passive_mode_choices(&editor.ftp_passive_mode);
+        let ftp_filename_encoding_options =
+            options::ftp_filename_encoding_choices(&editor.ftp_filename_encoding);
+        let ftp_security_options = options::ftp_security_mode_choices(&editor.ftp_security_mode);
+        let ftp_tls_version_options = options::ftp_tls_version_choices(&editor.ftp_tls_version);
         let ssh_algorithm_mode_options =
             options::ssh_algorithm_mode_choices(&editor.ssh_algorithm_mode);
         let serial_port_options = options::editor_serial_port_choices(
@@ -481,6 +488,26 @@ impl NyaTermApp {
                 ConnectionEditorSelect::Encoding,
                 encoding_options.as_slice(),
                 t!("connection.encodingFollowGlobal").to_string(),
+            ),
+            (
+                ConnectionEditorSelect::FtpPassiveMode,
+                ftp_passive_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::FtpFilenameEncoding,
+                ftp_filename_encoding_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::FtpSecurityMode,
+                ftp_security_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::FtpTlsVersion,
+                ftp_tls_version_options.as_slice(),
+                String::new(),
             ),
             (
                 ConnectionEditorSelect::SftpCwdFollowMode,
@@ -600,6 +627,8 @@ impl NyaTermApp {
                     | ConnectionEditorSelect::SftpFilenameEncoding
                     | ConnectionEditorSelect::SftpPipelineDepth
             ) && !editor.sftp_enabled
+                || select_key == ConnectionEditorSelect::FtpFilenameEncoding
+                    && editor.ftp_filename_encoding_mode != "custom"
                 || select_key == ConnectionEditorSelect::SavedPassword && password_disabled
                 || select_key == ConnectionEditorSelect::SerialPort
                     && self.connection_state.serial_ports_loading();
@@ -1110,6 +1139,9 @@ impl NyaTermApp {
             })
             .when(editor.kind == ConnectionKindTab::Vnc, |this| {
                 this.child(connection_editor_vnc_section(section_context, cx))
+            })
+            .when(editor.kind == ConnectionKindTab::Ftp, |this| {
+                this.child(connection_editor_ftp_section(section_context, cx))
             })
             .when(editor.section == ConnectionEditorSection::Basic, |this| {
                 this.child(tags::connection_tags_field(palette, &editor, &fields, cx))

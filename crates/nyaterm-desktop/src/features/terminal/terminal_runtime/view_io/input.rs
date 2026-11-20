@@ -10,6 +10,39 @@ use nyaterm_core::{
 };
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::features) enum StagedCommandInput {
+    Text,
+    Literal,
+    Bytes,
+}
+
+pub(in crate::features) enum StagedQuickCommandWriteError {
+    Backpressure,
+    Failed(String),
+}
+
+impl From<String> for StagedQuickCommandWriteError {
+    fn from(value: String) -> Self {
+        Self::Failed(value)
+    }
+}
+
+impl From<&str> for StagedQuickCommandWriteError {
+    fn from(value: &str) -> Self {
+        Self::Failed(value.to_string())
+    }
+}
+
+impl StagedQuickCommandWriteError {
+    fn message(self) -> String {
+        match self {
+            Self::Backpressure => "transport input queue is full".into(),
+            Self::Failed(message) => message,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouseReportWriteResult {
     NotHandled,
@@ -955,16 +988,44 @@ impl NyaTermApp {
     }
 
     /// Only the current script owner may bypass cancellation by competing input.
-    pub(in crate::features) fn write_staged_quick_command_input(
+    pub(in crate::features) fn try_write_staged_quick_command_input(
         &mut self,
         session_id: &str,
         bytes: &[u8],
         run_id: u64,
-    ) -> Result<(), String> {
+        input: StagedCommandInput,
+    ) -> Result<(), StagedQuickCommandWriteError> {
         if !self.commands.owns_staged_quick_command(session_id, run_id) {
             return Err("quick command cancelled by newer input".into());
         }
-        self.write_guarded_terminal_input(session_id, bytes)
+        if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
+            state.suggestion_fill = None;
+        }
+        if input != StagedCommandInput::Text {
+            let encoded = if input == StagedCommandInput::Bytes {
+                bytes.to_vec()
+            } else {
+                self.encode_session_outgoing(session_id, bytes)?
+            };
+            self.write_session_raw_input_recorded_guarded_typed(session_id, &encoded)
+        } else {
+            if self
+                .mcp
+                .capabilities
+                .terminal_executions
+                .capturing(session_id)
+                && bytes != b"\x03"
+            {
+                return Err("An automatic command is capturing this terminal".into());
+            }
+            if !bytes.is_empty() {
+                self.mcp
+                    .capabilities
+                    .terminal_executions
+                    .note_manual_takeover(session_id);
+            }
+            self.write_terminal_input_recorded_typed(session_id, bytes, None)
+        }
     }
 
     fn write_guarded_terminal_input(
@@ -1025,8 +1086,18 @@ impl NyaTermApp {
         bytes: &[u8],
         command: Option<&str>,
     ) -> Result<(), String> {
+        self.write_terminal_input_recorded_typed(session_id, bytes, command)
+            .map_err(StagedQuickCommandWriteError::message)
+    }
+
+    fn write_terminal_input_recorded_typed(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+        command: Option<&str>,
+    ) -> Result<(), StagedQuickCommandWriteError> {
         if self.security.screen_locked() {
-            return Err("screen locked".to_string());
+            return Err("screen locked".to_string().into());
         }
         // Charset-encode paste/typed text; pure ASCII CSI/mouse reports pass through.
         if self.recording_input_is_sensitive(session_id) {
@@ -1056,14 +1127,16 @@ impl NyaTermApp {
         } else {
             bytes.to_vec()
         };
-        if let Err(error) = self
-            .session
-            .manager()
-            .write(session_id, &encoded)
-            .map_err(|error| self.terminal_session_write_error_text(session_id, error))
-        {
+        if let Err(error) = self.session.manager().write(session_id, &encoded) {
+            if error.is_backpressure() {
+                return Err(StagedQuickCommandWriteError::Backpressure);
+            }
+            let error = self.terminal_session_write_error_text(session_id, error);
             self.record_terminal_session_write_failure(session_id, "input", &error);
-            return Err(error);
+            return Err(error.into());
+        }
+        if !bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
         }
         if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
             self.commands.complete_completion_submission(session_id);
@@ -1123,6 +1196,24 @@ impl NyaTermApp {
         bytes: &[u8],
     ) -> Result<(), String> {
         self.commands.cancel_staged_quick_command(session_id);
+        self.write_session_raw_input_recorded_guarded(session_id, bytes)
+    }
+
+    /// The staged writer has already checked ownership and must not cancel itself.
+    fn write_session_raw_input_recorded_guarded(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        self.write_session_raw_input_recorded_guarded_typed(session_id, bytes)
+            .map_err(StagedQuickCommandWriteError::message)
+    }
+
+    fn write_session_raw_input_recorded_guarded_typed(
+        &mut self,
+        session_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), StagedQuickCommandWriteError> {
         if self
             .mcp
             .capabilities
@@ -1139,18 +1230,20 @@ impl NyaTermApp {
                 .note_manual_takeover(session_id);
         }
         if self.security.screen_locked() {
-            return Err("screen locked".to_string());
+            return Err("screen locked".to_string().into());
         }
         let disposition = terminal_wire_write_disposition(TerminalWireWriteKind::RawInput);
         debug_assert!(!disposition.encode_session_charset);
-        if let Err(error) = self
-            .session
-            .manager()
-            .write_raw(session_id, bytes)
-            .map_err(|error| self.terminal_session_write_error_text(session_id, error))
-        {
+        if let Err(error) = self.session.manager().write_raw(session_id, bytes) {
+            if error.is_backpressure() {
+                return Err(StagedQuickCommandWriteError::Backpressure);
+            }
+            let error = self.terminal_session_write_error_text(session_id, error);
             self.record_terminal_session_write_failure(session_id, "raw input", &error);
-            return Err(error);
+            return Err(error.into());
+        }
+        if !bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
         }
         if disposition.record_raw_input
             && self
@@ -1203,6 +1296,9 @@ impl NyaTermApp {
             .manager()
             .write(session_id, &encoded)
             .map_err(|error| self.terminal_session_write_error_text(session_id, error))?;
+        if !bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
+        }
         if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
             self.commands.complete_completion_submission(session_id);
         }
@@ -1310,6 +1406,9 @@ impl NyaTermApp {
         {
             self.record_terminal_session_write_failure(session_id, "framed input", &error);
             return Err(error);
+        }
+        if !wire_bytes.is_empty() {
+            self.terminal.cancel_serial_reconnect_enter(session_id);
         }
         if disposition.record_logical_input
             && self
@@ -1577,44 +1676,6 @@ impl NyaTermApp {
         match self.write_session_input_recorded(&session_id, &bytes) {
             Ok(()) => {
                 self.record_command_history_from_bytes(Some(&session_id), &bytes);
-                let terminal_status_changed =
-                    self.set_terminal_status_if_changed(format!("sent {} byte(s)", bytes.len()));
-                self.arm_terminal_input_wake(cx);
-                if terminal_status_changed {
-                    cx.notify();
-                }
-                true
-            }
-            Err(error) => {
-                if self.set_terminal_status_if_changed(format!("input failed: {error}")) {
-                    cx.notify();
-                }
-                false
-            }
-        }
-    }
-
-    pub(in crate::features) fn send_terminal_raw_input_to_session(
-        &mut self,
-        session_id: String,
-        bytes: Vec<u8>,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if bytes.is_empty() {
-            return false;
-        }
-        if self.session.is_disconnected(&session_id) {
-            if self.set_terminal_status_if_changed(
-                "session disconnected — reconnect before sending".to_string(),
-            ) {
-                cx.notify();
-            }
-            return false;
-        }
-        self.terminal.view.frame_pipeline.arm_output_event_wake();
-
-        match self.write_session_raw_input_recorded(&session_id, &bytes) {
-            Ok(()) => {
                 let terminal_status_changed =
                     self.set_terminal_status_if_changed(format!("sent {} byte(s)", bytes.len()));
                 self.arm_terminal_input_wake(cx);

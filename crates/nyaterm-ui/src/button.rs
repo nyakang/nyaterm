@@ -259,8 +259,10 @@ pub struct NyaIconButton {
     icon_path: SharedString,
     icon_size: Option<Pixels>,
     size: Option<Pixels>,
+    color: Option<Hsla>,
     disabled: bool,
     tooltip: Option<SharedString>,
+    tab_stop: bool,
     on_click: Option<NyaButtonClickHandler>,
 }
 
@@ -271,14 +273,22 @@ impl NyaIconButton {
             icon_path: icon_path.into(),
             icon_size: None,
             size: None,
+            color: None,
             disabled: false,
             tooltip: None,
+            tab_stop: true,
             on_click: None,
         }
     }
 
     pub fn icon_size(mut self, size: Pixels) -> Self {
         self.icon_size = Some(size);
+        self
+    }
+
+    /// Recolors the icon in its idle state; hover/active keep their own theme fg.
+    pub fn color(mut self, color: impl Into<Hsla>) -> Self {
+        self.color = Some(color.into());
         self
     }
 
@@ -302,6 +312,12 @@ impl NyaIconButton {
         self
     }
 
+    /// Removes the button from Tab traversal while keeping it clickable.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -320,13 +336,16 @@ impl RenderOnce for NyaIconButton {
         if let Some(size) = self.size {
             button = button.size(size).flex_none();
         }
+        if let Some(color) = self.color {
+            button = button.text_color(color);
+        }
         if let Some(tooltip) = self.tooltip {
             button = button.tooltip(tooltip);
         }
         if let Some(on_click) = self.on_click {
             button = button.on_click(on_click);
         }
-        button.disabled(self.disabled)
+        button.disabled(self.disabled).tab_stop(self.tab_stop)
     }
 }
 

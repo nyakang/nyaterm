@@ -230,6 +230,12 @@ impl NyaTermApp {
             return;
         };
 
+        if id.starts_with("networktools.") && id.ends_with(".bind") {
+            self.networktools.tftp_draft_mut().bind_address = value.to_string();
+            cx.notify();
+            return;
+        }
+
         if id == "remote.process.sort" {
             use crate::models::RemoteProcessSortKey;
             if let Some(key) = [
@@ -304,6 +310,16 @@ impl NyaTermApp {
         match id {
             "remote.stats.network" => self.select_stats_network_interface(value, cx),
             "appearance-ui-theme" => self.update_appearance_theme(value, cx),
+            "appearance-light-theme" => self.update_system_theme(
+                nyaterm_core::themes::appearance::SystemAppearance::Light,
+                value,
+                cx,
+            ),
+            "appearance-dark-theme" => self.update_system_theme(
+                nyaterm_core::themes::appearance::SystemAppearance::Dark,
+                value,
+                cx,
+            ),
             "appearance-terminal-theme" => {
                 self.set_terminal_theme((value != FOLLOW_UI_THEME_VALUE).then_some(value), cx)
             }
@@ -594,6 +610,22 @@ impl NyaTermApp {
                 }
                 _ => {}
             },
+            "quick-command-editor-execution-mode" => {
+                let mode = match value {
+                    "append" => "append",
+                    "segmented" => "segmented",
+                    _ => "execute",
+                };
+                self.set_quick_command_editor_execution_mode(mode, cx);
+            }
+            "quick-command-editor-segmented-mode" => {
+                let mode = if value == "character" {
+                    nyaterm_core::QuickCommandSegmentedSendMode::Character
+                } else {
+                    nyaterm_core::QuickCommandSegmentedSendMode::Line
+                };
+                self.set_quick_command_editor_segmented_mode(mode, cx);
+            }
             id if id.starts_with("quick-command.variable.") => {
                 if let Some(index) = id
                     .strip_prefix("quick-command.variable.")
@@ -655,6 +687,17 @@ impl NyaTermApp {
                     "connection-editor-parity" => ConnectionEditorSelect::Parity,
                     "connection-editor-flow-control" => ConnectionEditorSelect::FlowControl,
                     "connection-editor-stop-bits" => ConnectionEditorSelect::StopBits,
+                    "connection-editor-ftp-passive-mode" => ConnectionEditorSelect::FtpPassiveMode,
+                    "connection-editor-ftp-filename-encoding-mode" => {
+                        ConnectionEditorSelect::FtpFilenameEncodingMode
+                    }
+                    "connection-editor-ftp-filename-encoding" => {
+                        ConnectionEditorSelect::FtpFilenameEncoding
+                    }
+                    "connection-editor-ftp-security-mode" => {
+                        ConnectionEditorSelect::FtpSecurityMode
+                    }
+                    "connection-editor-ftp-tls-version" => ConnectionEditorSelect::FtpTlsVersion,
                     _ => return,
                 };
                 if select == ConnectionEditorSelect::Group

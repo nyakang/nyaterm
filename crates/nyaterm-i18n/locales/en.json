@@ -863,9 +863,9 @@
     "passwordLabel": "Password",
     "passwordOnlyCredential": "Password-only credential",
     "passwordPlaceholder": "Password to send",
-    "passwordRegexPlaceholder": "Regex for password prompts",
+    "passwordRegexLabel": "Password prompt regex",
     "passwordUnchanged": "Leave empty to keep current",
-    "promptRegexLabel": "Prompt regex",
+    "promptRegexLabel": "Username prompt regex",
     "promptRegexOptionalLabel": "Prompt regex (optional)",
     "reorderFailed": "Failed to reorder credentials",
     "reorderSuccess": "Credential order saved",
@@ -896,6 +896,8 @@
       "display": "Display",
       "session": "Session",
       "serial": "Serial port",
+      "charset": "Charset",
+      "advanced": "Advanced",
       "startup": "Startup"
     },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
@@ -1117,6 +1119,50 @@
     "newGroupRootHint": "Create at the top level",
     "noAuthentication": "None",
     "noAuthenticationDescription": "Connect without password or key. Use only when the SSH server allows it or asks interactively.",
+    "ftpAnonymousLogin": "Anonymous login",
+    "ftpAnonymousHint": "Anonymous login never sends a saved password. Use it only when the server allows anonymous access.",
+    "ftpAuthModeUnsupported": "FTP supports only password or anonymous login.",
+    "ftpPassiveModeInvalid": "The FTP passive mode is invalid.",
+    "ftpFilenameEncodingInvalid": "Choose a valid FTP filename charset.",
+    "ftpConnectTimeoutInvalid": "FTP connect timeout must be between %{min} and %{max} milliseconds.",
+    "ftpPasswordRequired": "Enter a password or choose anonymous login.",
+    "ftpPassiveMode": "Passive mode",
+    "ftpPassiveAuto": "Automatic",
+    "ftpPassivePasv": "PASV (passive)",
+    "ftpPassiveEpsv": "EPSV (extended passive)",
+    "ftpInitialDirectory": "Remote startup folder",
+    "ftpLocalInitialDirectory": "Local startup folder",
+    "ftpConnectTimeout": "Connect timeout (ms)",
+    "ftpAdvancedHint": "Leave startup folders empty to use the server or local default. FTP transfers restart from the beginning and do not preserve permissions or timestamps.",
+    "ftpAsciiMode": "ASCII mode",
+    "ftpAsciiModeHint": "Converts local line endings to CRLF on upload and back to local line endings on download. Use it for text files only.",
+    "ftpFtps": "FTPS (explicit TLS)",
+    "ftpFtpsHint": "Secures the control and data channels with AUTH TLS. The server must support explicit FTPS.",
+    "ftpSecurityMode": "Security mode",
+    "ftpSecurityNone": "None",
+    "ftpSecurityExplicit": "Explicit FTPS",
+    "ftpSecurityImplicit": "Implicit FTPS",
+    "ftpImplicitFtpsHint": "Starts the TLS handshake immediately after connecting; usually uses port 990.",
+    "ftpTlsVersion": "TLS version",
+    "ftpTlsAuto": "Automatic (system default)",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0 is not supported. SSL 3.0, TLS 1.0 and TLS 1.1 are deprecated and may be rejected by system policy.",
+    "ftpNetworkRouteDescription": "When a jump host is selected it takes precedence and the proxy on this page is not used. Configure the proxy needed to reach the jump host on that SSH connection.",
+    "ftpNetworkPlaintextDescription": "Proxy and jump settings are saved with the connection.",
+    "ftpSecurityModeInvalid": "The FTP security mode is invalid.",
+    "ftpTlsVersionInvalid": "The FTP TLS version is invalid.",
+    "filenameEncodingTitle": "The server uses the following charset for file names:",
+    "filenameEncodingAuto": "Detect automatically",
+    "filenameEncodingAutoHint": "Use UTF-8 when the server advertises it; otherwise use the local system encoding.",
+    "filenameEncodingForceUtf8": "Force UTF-8",
+    "filenameEncodingCustom": "Use a custom charset",
+    "filenameEncodingLabel": "Encoding",
+    "filenameEncodingWarning": "Using the wrong charset can make file names display incorrectly.",
+    "filenameEncodingScope": "Affects server file names and paths only, not file contents.",
     "noKeys": "No keys",
     "noOtp": "None",
     "noOtpEntries": "No OTP entries",
@@ -1274,6 +1320,8 @@
     "workingDirectorySelected": "Working directory: %{path}",
     "workingDirectorySelectionCancelled": "Working directory selection cancelled.",
     "x11Forwarding": "X11 Forwarding",
+    "allowShortRsaHostKeys": "Allow short RSA host keys",
+    "allowShortRsaHostKeysDesc": "Allows 512–1023-bit RSA host keys. These keys are insecure; enable only for legacy devices. Host identity and signatures are still verified.",
     "sshCompatibilityMode": "Compatibility mode",
     "sshCompatibilityModeDesc": "Disable remote resource monitoring, process management, Docker, and related background probes for this connection to prevent extra commands from disconnecting older SSH servers. Terminal, SFTP, and SSH tunnels are unaffected.",
     "dynamicTabTitle": "Dynamic tab title",
@@ -1455,7 +1503,6 @@
   "fileExplorer": {
     "clipboardEmpty": "The file clipboard is empty or has been replaced",
     "clipboardMoving": "The cut items are already being moved; wait for completion",
-
     "transferSourceUnavailable": "The source connection is unavailable. Reconnect and try again.",
     "transferBackendUnsupported": "This connection does not support file transfer.",
     "transferInvalidDestination": "The transfer destination is invalid or cannot represent the filename.",
@@ -1572,9 +1619,15 @@
     "mtime": "Modified",
     "name": "Name",
     "newFile": "New File",
-    "newFileName": "New file name:",
+    "newFileName": "File name",
+    "newFileNamePlaceholder": "e.g. config.yaml",
+    "newFolderNamePlaceholder": "e.g. my-folder",
+    "permRead": "Read R",
+    "permWrite": "Write W",
+    "permExecute": "Execute X",
+    "specialPermissions": "Special permissions",
     "newFolder": "New Folder",
-    "newFolderName": "New folder name:",
+    "newFolderName": "Directory name",
     "newSymlink": "New Symlink",
     "noFavorites": "No favorites",
     "noChildDirectories": "No child directories",
@@ -1641,6 +1694,14 @@
     "uploadPrompt": "Remote file changed. Upload changes?"
   },
   "fileManager": {
+    "leftSide": "left",
+    "rightSide": "right",
+    "copyToPane": "Copy to %{side} (%{target})",
+    "moveToPane": "Move to %{side} (%{target})",
+    "new": "New",
+    "copyFullPath": "Copy Full Path",
+    "copyName": "Copy File Name",
+    "copyParent": "Copy Parent Directory",
     "connected": "Connected",
     "skipped": "Skipped",
     "copy": "Copy",
@@ -1690,7 +1751,9 @@
     "openLeft": "Open on the left",
     "openRight": "Open on the right",
     "openWorkspace": "Open File Manager in workspace",
-    "goHome": "Home"
+    "goHome": "Home",
+    "goBack": "Back",
+    "goForward": "Forward"
   },
   "fileTransfer": {
     "scanning": "Scanning files…",
@@ -1699,6 +1762,7 @@
     "cancelAll": "Cancel All",
     "cancelled": "Cancelled",
     "clearAll": "Clear All",
+    "clear": "Clear",
     "clearCompleted": "Clear Done",
     "completed": "Completed",
     "cancelling": "Cancelling",
@@ -1934,6 +1998,81 @@
     "ungrouped": "Ungrouped",
     "ungroupedConnections": "Ungrouped"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "Listening on %{addr}",
+        "notRunning": "Not running",
+        "configure": "Configure",
+        "start": "Start server",
+        "stop": "Stop server"
+      },
+      "action": {
+        "reset": "Reset",
+        "browse": "Browse"
+      },
+      "bind": {
+        "allInterfaces": "All interfaces",
+        "loopback": "Loopback",
+        "savedUnavailable": "Saved value, not detected on this machine"
+      },
+      "field": {
+        "bindAddress": "Bind address",
+        "port": "Port",
+        "rootDir": "Service directory",
+        "timeout": "Timeout (seconds)",
+        "concurrency": "Max concurrent transfers"
+      },
+      "section": {
+        "basic": "Basic settings",
+        "limits": "Transfer limits",
+        "permissions": "Permissions"
+      },
+      "hint": {
+        "firewall": "Allow the UDP port through the system firewall to reach other machines.",
+        "security": "The server only shares the selected directory. Run it on trusted networks."
+      },
+      "error": {
+        "bind": "Enter a valid IP address",
+        "port": "Port must be between 1 and 65535",
+        "timeout": "Timeout must be between 1 and 255 seconds",
+        "concurrency": "Concurrency must be between 1 and %{max}",
+        "rootDirRequired": "Choose a service directory",
+        "rootDirUnreadable": "Directory does not exist or is not readable",
+        "invalid": "Invalid settings: %{message}"
+      },
+      "status": {
+        "saveHint": "Changes apply the next time the service starts.",
+        "saveAndRestart": "Save and restart service",
+        "restartFailed": "Saved, but restarting the %{service} service failed: %{message}",
+        "saveFailed": "Could not save network tool settings",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · Transfer started: %{file}",
+        "finished": "%{service} · Transfer finished: %{file} (%{bytes} bytes)",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "Unknown error"
+      }
+    },
+    "tftp": {
+      "title": "TFTP server",
+      "shortName": "TFTP",
+      "description": "Serve and receive files over TFTP on this machine.",
+      "field": {
+        "blockSize": "Maximum negotiated block size",
+        "allowUpload": "Allow uploads",
+        "allowOverwrite": "Allow overwriting files"
+      },
+      "hint": {
+        "blockSize": "Maximum DATA payload accepted when a client requests blksize (8–65464 bytes).\nThe negotiated size is the smaller of the request and this limit.\nClients without blksize always use 512 bytes.",
+        "upload": "Clients can write to the service directory"
+      },
+      "error": {
+        "blockSize": "Block size must be between 8 and 65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "Cancel",
     "cancelled": "Verification cancelled",
@@ -2040,6 +2179,7 @@
     "fileTransfer": "Transfers",
     "gpuMonitor": "NVIDIA GPU",
     "network": "Network",
+    "networktools": "Network Tools",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "No active sessions",
     "noCommandsYet": "No commands yet",
@@ -2331,6 +2471,7 @@
     "emptyCommand": "Empty command",
     "errorCommandRequired": "Command required",
     "errorLabelRequired": "Label required",
+    "errorSegmentedIntervalInvalid": "Interval must be a number between 0 and 60 seconds.",
     "executeHint": "Send the command and execute it immediately.",
     "executeImmediately": "Run now",
     "executionMode": "Mode",
@@ -2375,6 +2516,11 @@
     "search": "Search cmd...",
     "searchOrCreateCategory": "Search or create...",
     "selectIcon": "Icon",
+    "segmentedCommandPlaceholder": "Split by line or character. Use {{varName}} for variables. Script escapes \\r, \\n, \\t and \\p are interpreted; enable raw send to keep them literal.",
+    "segmentedSend": "Segmented send",
+    "segmentedSendBadge": "Segmented",
+    "segmentedSendHint": "Lines are submitted; character mode does not submit the last line automatically. Each \\p adds a one-second pause. Raw send preserves the body without adding a line ending.",
+    "segmentedLegacyHint": "Older versions ignore segmented settings and use Append. Internal newlines can still execute commands; older versions may discard these settings when saving.",
     "send": "Send",
     "sendToAll": "Send to All",
     "sort": "Sort",
@@ -2493,6 +2639,11 @@
     "usersMeaning": "System-recorded login sessions; not every SSH connection."
   },
   "savedConnections": {
+    "openFileManager": "Open File Manager",
+    "openFileManagerSftpDisabled": "Open File Manager (SFTP disabled)",
+    "fileManagerConnectionUnavailable": "This saved connection is no longer available.",
+    "fileManagerRequiresSsh": "Opening the file manager requires an SSH connection.",
+    "fileManagerSftpDisabled": "SFTP is disabled for this SSH connection.",
     "dropRoot": "Move to root",
     "sessionImportTitle": "Import sessions",
     "restoreBackupTitle": "Restore NyaTerm backup",
@@ -2574,7 +2725,7 @@
     "ungroupedConnections": "Ungrouped",
     "user": "User",
     "windtermMasterPasswordTitle": "WindTerm Master Password",
-    "windtermMasterPasswordDesc": "This WindTerm profile uses a master password. Enter it to decrypt saved auto-login information.",
+    "windtermMasterPasswordDesc": "This WindTerm profile encrypts saved auto-logins or OneKey accounts with a master password. Enter it to decrypt the stored credentials.",
     "windtermMasterPasswordConfirm": "Import",
     "windtermMasterPasswordRequired": "Enter the WindTerm master password",
     "windtermAccountsTitle": "WindTerm Accounts",
@@ -2722,6 +2873,7 @@
     "submit": "Continue"
   },
   "serialPrompt": {
+    "chooseDevice": "Choose device…",
     "alreadyOpen": "Finish the open serial prompt first.",
     "baudRateInvalid": "Baud rate must be between 1 and 4000000.",
     "baudRatePlaceholder": "115200",
@@ -2825,6 +2977,12 @@
     "unread": "Unread"
   },
   "settings": {
+    "themeMode": "Theme mode",
+    "themeModeManual": "Manual",
+    "themeModeSystem": "Follow system",
+    "systemLightTheme": "When the system is light",
+    "systemDarkTheme": "When the system is dark",
+    "themeInUse": "In use",
     "configurationSessionInAnotherWindow": "Another window has a remote connection running or starting. Disconnect it before replacing configuration.",
     "configurationReplacementInProgress": "Configuration replacement is in progress. Try connecting again after it finishes.",
     "configurationRefreshRequired": "Configuration refresh did not finish. Retry the connection or import/sync action to refresh configuration first.",
@@ -3035,6 +3193,16 @@
     "dataDirectoryRestoreTitle": "Move current data back to the default directory",
     "dataDirectoryRestoreDesc": "The database, plugins and recordings currently in %{path} will be kept in a history backup before your current data is copied there. NyaTerm will restart. The source and backup are retained.",
     "dataDirectoryUseHistory": "Use historical data instead",
+    "dataDirectoryRecoveryOpen": "Open data directory",
+    "dataDirectoryRecoveryRebuild": "Archive and rebuild…",
+    "dataDirectoryRecoveryRebuildConfirm": "Create an empty database in %{path} and restart? Your connections and settings will start empty. Any existing database file will be archived in this directory for manual recovery. Other files and saved key material are retained.",
+    "dataDirectoryRepairedDatabase": "The database was repaired successfully. Your saved data has been loaded.",
+    "dataDirectoryCreatedDatabase": "After your confirmation, an empty database was created in %{path}.",
+    "dataDirectoryErrorDatabaseMissing": "The database is missing. Retry after restoring it, select an existing data directory, or explicitly create an empty database.",
+    "dataDirectoryErrorDatabaseCorrupt": "The database file is damaged. Restore a backup, or explicitly archive it and create an empty database.",
+    "dataDirectoryErrorDatabaseDataInvalid": "Saved records could not be decoded. The database has been retained; rebuilding is disabled. Restore compatible data and retry.",
+    "dataDirectoryErrorDatabaseUpgrade": "The database requires an upgrade. It has been retained; rebuilding is disabled.",
+    "dataDirectoryErrorDatabaseInitialization": "Database initialization failed. The database has been retained; rebuilding is disabled.",
     "dataDirectoryRecoveryTitle": "Choose how to recover your data directory",
     "dataDirectoryRecoveryDesc": "The selected directory could not be opened. No workspace or automatic synchronization has started. Reconnect the disk and retry, or explicitly select an existing data directory.",
     "dataDirectoryRecoveryRetry": "Retry selected directory",
@@ -3049,6 +3217,8 @@
     "dataDirectoryAutoHint": "Pick a parent folder; NyaTerm automatically uses or creates the %{dir} child inside it. The path above is the effective directory.",
     "dataDirectoryRestartRequired": "The directory change is saved. NyaTerm is restarting.",
     "dataDirectoryNotice": "Startup notice:",
+    "dataDirectoryRecreatedDatabase": "The database was missing or unreadable. A new empty database was created at %{path}; the previous file is kept as %{archive}.",
+    "dataDirectoryCreateDatabaseFailed": "NyaTerm could not create a database at %{path}: %{reason}. Check folder permissions or free disk space.",
     "dataDirectorySyncWarning": "This folder is managed by %{client}. Sync tools can copy the database while NyaTerm is running and corrupt it; quit NyaTerm before syncing or use a portable snapshot instead.",
     "dataDirectoryMigrateTitle": "Migrate to the new directory",
     "dataDirectoryMigrateDesc": "Copies the current database and plugins to %{path}. The source directory is not deleted. NyaTerm restarts immediately after you save and then runs in the new directory.",
@@ -3172,7 +3342,7 @@
     "groupTransfer": "Transfer",
     "groupWorkspace": "Workspace",
     "zebraStripes": "Terminal row stripes",
-    "zebraStripesDesc": "Highlight shell input rows and the clicked row, with an option to alternate backgrounds by row.",
+    "zebraStripesDesc": "Highlight shell input rows and the clicked row, with an option to alternate backgrounds by row. Turning this off does not disable command folding or navigation.",
     "zebraStripesByRow": "Alternate by row",
     "zebraStripesByRowDesc": "Alternate background colors for terminal display rows.",
     "syncHistory": {
@@ -3271,6 +3441,8 @@
     "keepAliveInterval": "Keep-Alive Interval (seconds)",
     "reconnectRestoreCwd": "Restore directory after reconnect",
     "reconnectRestoreCwdDesc": "Return SSH sessions to the last trusted working directory.",
+    "serialReconnectEnter": "Send Enter after serial reconnect",
+    "serialReconnectEnterDesc": "After a serial session reconnects, send one Enter so the console prints its prompt right away.",
     "keepAliveIntervalDesc": "Send SSH keep-alive packets every X seconds. 0 to disable.",
     "keepAliveMode": "Keep-alive mode",
     "keepAliveModeCompatible": "Compatible",
@@ -3732,8 +3904,8 @@
     "testSearchEngine": "Test",
     "theme": "UI Theme",
     "themeDesc": "Select the app color theme.",
-    "timestampFormat": "Timestamp format",
-    "timestampFormatDesc": "For example, HH:mm:ss or YYYY-MM-DD HH:mm:ss.",
+    "timestampFormat": "Terminal timestamp display format",
+    "timestampFormatDesc": "Set the time format for each line of terminal output, for example HH:mm:ss or YYYY-MM-DD HH:mm:ss. Enable Show timestamps in Terminal > Display in the top menu to use this format.",
     "timestampFormatHelp": "Use HH:mm:ss, [HH:mm:ss.SSS], or YYYY-MM-DD HH:mm:ss. Supported tokens: YYYY, YY, MM, M, DD, D, HH, H, mm, m, ss, s, SSS, SS, S.",
     "title": "Settings",
     "transfer": "Transfer",
@@ -4629,5 +4801,16 @@
     "tmuxCommandFailed": "tmux command failed",
     "details": "Details (%{count})",
     "repeated": "Occurrences: %{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP connection failed.",
+    "authentication": "FTP authentication failed.",
+    "timeout": "FTP operation timed out. Reconnect to continue.",
+    "unavailable": "The FTP session is unavailable. Reconnect to continue.",
+    "unsupportedSettings": "These transfer settings are unavailable for FTP.",
+    "limitExceeded": "The FTP file exceeds the preview or editor limit.",
+    "notFound": "The FTP file was not found.",
+    "backupRetained": "The file was saved. An old backup remains at %{backup}.",
+    "recoveryRequired": "The server did not confirm replacement. Preserve the new file at %{temporary} and any backup at %{backup} for recovery."
   }
 }

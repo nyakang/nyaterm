@@ -1,5 +1,5 @@
 //! Schema-neutral quick-command import preparation and merging.
-use crate::RiskLevel;
+use crate::{QuickCommandSegmentedSend, RiskLevel};
 
 #[derive(Debug, Default)]
 pub struct ImportSummary {
@@ -35,10 +35,12 @@ struct ImportCommand {
     icon_tag: Option<String>,
     pinned: Option<bool>,
     execution_mode: Option<String>,
+    segmented_send: Option<QuickCommandSegmentedSend>,
     raw_send: Option<bool>,
     source: Option<String>,
     risk_level: Option<RiskLevel>,
     sort_order: Option<i32>,
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl ImportConfig {

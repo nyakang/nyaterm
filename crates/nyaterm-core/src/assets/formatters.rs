@@ -214,6 +214,7 @@ pub fn format_asset_address(connection: &SavedConnection, labels: &AssetDisplayL
         ConnectionType::Ssh { host, .. }
         | ConnectionType::Telnet { host, .. }
         | ConnectionType::Rdp { host, .. }
+        | ConnectionType::Ftp { host, .. }
         | ConnectionType::Vnc { host, .. } => {
             let host = text(host);
             if host.is_empty() {
@@ -356,6 +357,9 @@ fn connection_address_fields(connection: &SavedConnection) -> (String, String, S
             (host.clone(), username.clone(), String::new())
         }
         ConnectionType::Vnc { host, .. } => (host.clone(), String::new(), String::new()),
+        ConnectionType::Ftp { host, username, .. } => {
+            (host.clone(), username.clone(), String::new())
+        }
         ConnectionType::Serial { port_name, .. } => {
             (String::new(), String::new(), port_name.clone())
         }

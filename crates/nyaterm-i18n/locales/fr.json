@@ -863,9 +863,9 @@
     "passwordLabel": "Mot de passe",
     "passwordOnlyCredential": "Identifiant avec mot de passe uniquement",
     "passwordPlaceholder": "Mot de passe à envoyer",
-    "passwordRegexPlaceholder": "Expression régulière pour les invites de mot de passe",
+    "passwordRegexLabel": "Expression régulière de l'invite de mot de passe",
     "passwordUnchanged": "Laisser vide pour conserver l'actuel",
-    "promptRegexLabel": "Expression régulière de l'invite",
+    "promptRegexLabel": "Expression régulière de l'invite de nom d'utilisateur",
     "promptRegexOptionalLabel": "Expression régulière de l'invite (facultatif)",
     "reorderFailed": "Échec de la réorganisation des identifiants",
     "reorderSuccess": "Ordre des identifiants enregistré",
@@ -896,6 +896,8 @@
       "display": "Affichage",
       "session": "Session",
       "serial": "Port série",
+      "charset": "Jeu de caractères",
+      "advanced": "Avancé",
       "startup": "Démarrage"
     },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
@@ -1117,6 +1119,50 @@
     "newGroupRootHint": "Créer au niveau supérieur",
     "noAuthentication": "Aucune",
     "noAuthenticationDescription": "Se connecter sans mot de passe ni clé. À utiliser uniquement lorsque le serveur SSH l'autorise ou le demande de façon interactive.",
+    "ftpAnonymousLogin": "Connexion anonyme",
+    "ftpAnonymousHint": "La connexion anonyme n'envoie jamais de mot de passe enregistré. À utiliser uniquement si le serveur autorise l'accès anonyme.",
+    "ftpAuthModeUnsupported": "FTP prend uniquement en charge le mot de passe ou la connexion anonyme.",
+    "ftpPassiveModeInvalid": "Le mode passif FTP est invalide.",
+    "ftpFilenameEncodingInvalid": "Choisissez un jeu de caractères FTP valide.",
+    "ftpConnectTimeoutInvalid": "Le délai de connexion FTP doit être compris entre %{min} et %{max} ms.",
+    "ftpPasswordRequired": "Saisissez un mot de passe ou choisissez la connexion anonyme.",
+    "ftpPassiveMode": "Mode passif",
+    "ftpPassiveAuto": "Automatique",
+    "ftpPassivePasv": "PASV (passif)",
+    "ftpPassiveEpsv": "EPSV (passif étendu)",
+    "ftpInitialDirectory": "Dossier de départ distant",
+    "ftpLocalInitialDirectory": "Dossier de départ local",
+    "ftpConnectTimeout": "Délai de connexion (ms)",
+    "ftpAdvancedHint": "Laissez les dossiers de départ vides pour utiliser la valeur par défaut. Les transferts FTP reprennent depuis le début et ne conservent ni les permissions ni les horodatages.",
+    "ftpAsciiMode": "Mode ASCII",
+    "ftpAsciiModeHint": "Convertit les fins de ligne locales en CRLF à l'envoi et les rétablit au téléchargement. À réserver aux fichiers texte.",
+    "ftpFtps": "FTPS (TLS explicite)",
+    "ftpFtpsHint": "Chiffre les canaux de contrôle et de données avec AUTH TLS. Le serveur doit prendre en charge le FTPS explicite.",
+    "ftpSecurityMode": "Mode de sécurité",
+    "ftpSecurityNone": "Aucun",
+    "ftpSecurityExplicit": "FTPS explicite",
+    "ftpSecurityImplicit": "FTPS implicite",
+    "ftpImplicitFtpsHint": "Démarre la négociation TLS immédiatement après la connexion ; utilise généralement le port 990.",
+    "ftpTlsVersion": "Version TLS",
+    "ftpTlsAuto": "Automatique (valeur système)",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0 n'est pas pris en charge. SSL 3.0, TLS 1.0 et TLS 1.1 sont obsolètes et peuvent être refusés par la stratégie du système.",
+    "ftpNetworkRouteDescription": "Lorsqu'un hôte de rebond est sélectionné, il est prioritaire et le proxy de cette page n'est pas utilisé. Configurez le proxy nécessaire sur cette connexion SSH.",
+    "ftpNetworkPlaintextDescription": "Les paramètres de proxy et de rebond sont enregistrés avec la connexion.",
+    "ftpSecurityModeInvalid": "Le mode de sécurité FTP est invalide.",
+    "ftpTlsVersionInvalid": "La version TLS FTP est invalide.",
+    "filenameEncodingTitle": "Le serveur utilise le jeu de caractères suivant pour les noms de fichiers :",
+    "filenameEncodingAuto": "Détection automatique",
+    "filenameEncodingAutoHint": "Utiliser UTF-8 si le serveur l'annonce, sinon l'encodage local du système.",
+    "filenameEncodingForceUtf8": "Forcer UTF-8",
+    "filenameEncodingCustom": "Utiliser un jeu de caractères personnalisé",
+    "filenameEncodingLabel": "Encodage",
+    "filenameEncodingWarning": "Un jeu de caractères incorrect peut afficher les noms de fichiers de façon erronée.",
+    "filenameEncodingScope": "Affecte uniquement les noms et chemins côté serveur, pas le contenu des fichiers.",
     "noKeys": "Aucune clé",
     "noOtp": "Aucun",
     "noOtpEntries": "Aucune entrée OTP",
@@ -1274,6 +1320,8 @@
     "workingDirectorySelected": "Répertoire de travail : %{path}",
     "workingDirectorySelectionCancelled": "Sélection du répertoire de travail annulée.",
     "x11Forwarding": "Transfert X11",
+    "allowShortRsaHostKeys": "Autoriser les clés hôte RSA courtes",
+    "allowShortRsaHostKeysDesc": "Autorise les clés hôte RSA de 512 à 1023 bits. Ces clés sont peu sûres : activez uniquement pour les anciens équipements. L’identité de l’hôte et les signatures restent vérifiées.",
     "sshCompatibilityMode": "Mode de compatibilité",
     "sshCompatibilityModeDesc": "Désactive la surveillance des ressources distantes, la gestion des processus, Docker et les sondes en arrière-plan pour cette connexion afin d’éviter les déconnexions des anciens serveurs SSH dues aux commandes supplémentaires. Le terminal, SFTP et les tunnels SSH restent disponibles.",
     "dynamicTabTitle": "Titre d’onglet dynamique",
@@ -1455,7 +1503,6 @@
   "fileExplorer": {
     "clipboardEmpty": "Le presse-papiers de fichiers est vide ou a été remplacé",
     "clipboardMoving": "Les éléments coupés sont déjà en cours de déplacement ; attendez la fin",
-
     "transferSourceUnavailable": "La connexion source est indisponible. Reconnectez-vous et réessayez.",
     "transferBackendUnsupported": "Cette connexion ne prend pas en charge le transfert de fichiers.",
     "transferInvalidDestination": "La destination est invalide ou ne peut pas représenter le nom du fichier.",
@@ -1572,9 +1619,15 @@
     "mtime": "Modifié",
     "name": "Nom",
     "newFile": "Nouveau fichier",
-    "newFileName": "Nom du nouveau fichier :",
+    "newFileName": "Nom du fichier",
+    "newFileNamePlaceholder": "Exemple : config.yaml",
+    "newFolderNamePlaceholder": "Exemple : my-folder",
+    "permRead": "Lecture R",
+    "permWrite": "Écriture W",
+    "permExecute": "Exécution X",
+    "specialPermissions": "Permissions spéciales",
     "newFolder": "Nouveau dossier",
-    "newFolderName": "Nom du nouveau dossier :",
+    "newFolderName": "Nom du dossier",
     "newSymlink": "Nouveau lien symbolique",
     "noFavorites": "Aucun favori",
     "noChildDirectories": "Aucun sous-répertoire",
@@ -1641,6 +1694,14 @@
     "uploadPrompt": "Fichier distant modifié. Téléverser les modifications ?"
   },
   "fileManager": {
+    "leftSide": "la gauche",
+    "rightSide": "la droite",
+    "copyToPane": "Copier vers %{side} (%{target})",
+    "moveToPane": "Déplacer vers %{side} (%{target})",
+    "new": "Nouveau",
+    "copyFullPath": "Copier le chemin complet",
+    "copyName": "Copier le nom du fichier",
+    "copyParent": "Copier le dossier parent",
     "connected": "Connecté",
     "skipped": "Ignoré",
     "copy": "Copier",
@@ -1690,7 +1751,9 @@
     "openLeft": "Ouvrir à gauche",
     "openRight": "Ouvrir à droite",
     "openWorkspace": "Ouvrir le gestionnaire de fichiers dans l’espace de travail",
-    "goHome": "Accueil"
+    "goHome": "Accueil",
+    "goBack": "Précédent",
+    "goForward": "Suivant"
   },
   "fileTransfer": {
     "scanning": "Analyse des fichiers…",
@@ -1699,6 +1762,7 @@
     "cancelAll": "Tout annuler",
     "cancelled": "Annulé",
     "clearAll": "Tout effacer",
+    "clear": "Effacer",
     "clearCompleted": "Effacer terminés",
     "completed": "Terminé",
     "cancelling": "Annulation",
@@ -1934,6 +1998,81 @@
     "ungrouped": "Non groupé",
     "ungroupedConnections": "Non groupé"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "En écoute sur %{addr}",
+        "notRunning": "Arrêté",
+        "configure": "Configurer",
+        "start": "Démarrer le serveur",
+        "stop": "Arrêter le serveur"
+      },
+      "action": {
+        "reset": "Réinitialiser",
+        "browse": "Parcourir"
+      },
+      "bind": {
+        "allInterfaces": "Toutes les interfaces",
+        "loopback": "Boucle locale",
+        "savedUnavailable": "Valeur enregistrée, introuvable sur cette machine"
+      },
+      "field": {
+        "bindAddress": "Adresse d'écoute",
+        "port": "Port",
+        "rootDir": "Répertoire du serveur",
+        "timeout": "Délai (secondes)",
+        "concurrency": "Transferts simultanés max."
+      },
+      "section": {
+        "basic": "Paramètres de base",
+        "limits": "Limites de transfert",
+        "permissions": "Autorisations"
+      },
+      "hint": {
+        "firewall": "Autorisez ce port UDP dans le pare-feu système pour joindre d'autres machines.",
+        "security": "Le serveur ne partage que le répertoire sélectionné. Utilisez-le sur des réseaux de confiance."
+      },
+      "error": {
+        "bind": "Saisissez une adresse IP valide",
+        "port": "Le port doit être compris entre 1 et 65535",
+        "timeout": "Le délai doit être compris entre 1 et 255 secondes",
+        "concurrency": "La concurrence doit être comprise entre 1 et %{max}",
+        "rootDirRequired": "Choisissez un répertoire de service",
+        "rootDirUnreadable": "Le répertoire n'existe pas ou n'est pas lisible",
+        "invalid": "Paramètres invalides : %{message}"
+      },
+      "status": {
+        "saveHint": "Les modifications s'appliquent au prochain démarrage du service.",
+        "saveAndRestart": "Enregistrer et redémarrer le service",
+        "restartFailed": "Enregistré, mais le redémarrage du service %{service} a échoué : %{message}",
+        "saveFailed": "Impossible d'enregistrer les paramètres des outils réseau",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · Transfert démarré : %{file}",
+        "finished": "%{service} · Transfert terminé : %{file} (%{bytes} octets)",
+        "failed": "%{service} · %{file} : %{message}",
+        "failedUnknown": "Erreur inconnue"
+      }
+    },
+    "tftp": {
+      "title": "Serveur TFTP",
+      "shortName": "TFTP",
+      "description": "Partagez et recevez des fichiers en TFTP sur cette machine.",
+      "field": {
+        "blockSize": "Taille maximale de bloc négociée",
+        "allowUpload": "Autoriser les envois",
+        "allowOverwrite": "Autoriser l'écrasement"
+      },
+      "hint": {
+        "blockSize": "Charge utile DATA maximale si le client demande blksize (8–65464 octets).\nLa taille négociée est le minimum de la demande et de cette limite.\nSans demande blksize, les blocs font toujours 512 octets.",
+        "upload": "Les clients peuvent écrire dans le répertoire du serveur"
+      },
+      "error": {
+        "blockSize": "La taille de bloc doit être comprise entre 8 et 65464"
+      }
+    }
+  },
   "otp": {
     "cancel": "Annuler",
     "cancelled": "Vérification annulée",
@@ -2040,6 +2179,7 @@
     "fileTransfer": "Transferts",
     "gpuMonitor": "GPU NVIDIA",
     "network": "Réseau",
+    "networktools": "Outils réseau",
     "npuMonitor": "NPU Ascend",
     "noActiveSessions": "Aucune session active",
     "noCommandsYet": "Aucune commande pour l'instant",
@@ -2331,6 +2471,7 @@
     "emptyCommand": "Commande vide",
     "errorCommandRequired": "Commande requise",
     "errorLabelRequired": "Libellé requis",
+    "errorSegmentedIntervalInvalid": "L’intervalle doit être un nombre compris entre 0 et 60 secondes.",
     "executeHint": "Envoyer la commande et l’exécuter immédiatement.",
     "executeImmediately": "Exécuter maintenant",
     "executionMode": "Mode",
@@ -2375,6 +2516,11 @@
     "search": "Rechercher une cmd…",
     "searchOrCreateCategory": "Rechercher ou créer…",
     "selectIcon": "Icône",
+    "segmentedCommandPlaceholder": "Découpe par ligne ou caractère. Utilisez {{varName}} pour les variables. Les séquences \\r, \\n, \\t et \\p sont interprétées ; activez l’envoi brut pour les conserver.",
+    "segmentedSend": "Envoi segmenté",
+    "segmentedSendBadge": "Segmenté",
+    "segmentedSendHint": "Chaque ligne est soumise ; le mode caractère ne soumet pas automatiquement la dernière ligne. Chaque \\p ajoute une pause d’une seconde. L’envoi brut n’ajoute aucun saut de ligne.",
+    "segmentedLegacyHint": "Les anciennes versions ignorent ces paramètres et utilisent le mode Ajout. Les sauts de ligne internes peuvent exécuter des commandes ; les paramètres peuvent être perdus lors de l’enregistrement.",
     "send": "Envoyer",
     "sendToAll": "Envoyer à tous",
     "sort": "Trier",
@@ -2493,6 +2639,11 @@
     "usersMeaning": "Sessions enregistrées par le système, pas toutes les connexions SSH."
   },
   "savedConnections": {
+    "openFileManager": "Ouvrir le gestionnaire de fichiers",
+    "openFileManagerSftpDisabled": "Ouvrir le gestionnaire de fichiers (SFTP désactivé)",
+    "fileManagerConnectionUnavailable": "Cette connexion enregistrée n’est plus disponible.",
+    "fileManagerRequiresSsh": "L’ouverture du gestionnaire de fichiers nécessite une connexion SSH.",
+    "fileManagerSftpDisabled": "SFTP est désactivé pour cette connexion SSH.",
     "dropRoot": "Déplacer à la racine",
     "sessionImportTitle": "Importer des sessions",
     "restoreBackupTitle": "Restaurer une sauvegarde NyaTerm",
@@ -2574,7 +2725,7 @@
     "ungroupedConnections": "Non groupé",
     "user": "Utilisateur",
     "windtermMasterPasswordTitle": "Mot de passe principal WindTerm",
-    "windtermMasterPasswordDesc": "Ce profil WindTerm utilise un mot de passe principal. Saisissez-le pour déchiffrer les informations de connexion automatique enregistrées.",
+    "windtermMasterPasswordDesc": "Ce profil WindTerm chiffre les connexions automatiques ou les comptes OneKey avec un mot de passe principal. Saisissez-le pour déchiffrer les identifiants enregistrés.",
     "windtermMasterPasswordConfirm": "Importer",
     "windtermMasterPasswordRequired": "Saisissez le mot de passe principal WindTerm",
     "windtermAccountsTitle": "Comptes WindTerm",
@@ -2722,6 +2873,7 @@
     "submit": "Continuer"
   },
   "serialPrompt": {
+    "chooseDevice": "Choisir un périphérique…",
     "alreadyOpen": "Terminez d'abord la sélection de port en cours.",
     "baudRateInvalid": "Le débit doit être compris entre 1 et 4000000.",
     "baudRatePlaceholder": "115200",
@@ -2825,6 +2977,12 @@
     "unread": "Non lu"
   },
   "settings": {
+    "themeMode": "Mode du thème",
+    "themeModeManual": "Choix manuel",
+    "themeModeSystem": "Suivre le système",
+    "systemLightTheme": "Quand le système est clair",
+    "systemDarkTheme": "Quand le système est sombre",
+    "themeInUse": "Actif",
     "configurationSessionInAnotherWindow": "Une connexion distante est active ou démarre dans une autre fenêtre. Déconnectez-la avant de remplacer la configuration.",
     "configurationReplacementInProgress": "Remplacement de la configuration en cours. Réessayez la connexion une fois terminé.",
     "configurationRefreshRequired": "La configuration n’a pas été actualisée. Réessayez la connexion ou l’importation/synchronisation pour l’actualiser.",
@@ -3035,6 +3193,16 @@
     "dataDirectoryRestoreTitle": "Ramener les données actuelles dans le dossier par défaut",
     "dataDirectoryRestoreDesc": "La base, les extensions et les enregistrements déjà présents dans %{path} seront archivés avant la copie des données actuelles et le redémarrage. La source et la sauvegarde sont conservées.",
     "dataDirectoryUseHistory": "Utiliser les anciennes données",
+    "dataDirectoryRecoveryOpen": "Ouvrir le dossier de données",
+    "dataDirectoryRecoveryRebuild": "Archiver et recréer…",
+    "dataDirectoryRecoveryRebuildConfirm": "Créer une base vide dans %{path} et redémarrer ? Les connexions et paramètres seront vides. Toute base existante sera archivée dans ce dossier pour une restauration manuelle. Les autres fichiers et clés seront conservés.",
+    "dataDirectoryRepairedDatabase": "La base a été réparée et les données enregistrées ont été chargées.",
+    "dataDirectoryCreatedDatabase": "Après votre confirmation, une base vide a été créée dans %{path}.",
+    "dataDirectoryErrorDatabaseMissing": "La base est absente. Restaurez-la puis réessayez, choisissez un dossier existant ou demandez explicitement une base vide.",
+    "dataDirectoryErrorDatabaseCorrupt": "La base est endommagée. Restaurez une sauvegarde ou demandez explicitement son archivage et une base vide.",
+    "dataDirectoryErrorDatabaseDataInvalid": "Les données enregistrées sont illisibles. La base est conservée et sa recréation est désactivée. Restaurez des données compatibles.",
+    "dataDirectoryErrorDatabaseUpgrade": "La base nécessite une mise à niveau. Elle est conservée et sa recréation est désactivée.",
+    "dataDirectoryErrorDatabaseInitialization": "Échec de l’initialisation. La base est conservée et sa recréation est désactivée.",
     "dataDirectoryRecoveryTitle": "Récupérer le dossier de données",
     "dataDirectoryRecoveryDesc": "Le dossier sélectionné est inaccessible. Aucun espace de travail ni synchronisation automatique ne démarre. Reconnectez le disque et réessayez, ou sélectionnez un dossier de données existant.",
     "dataDirectoryRecoveryRetry": "Réessayer le dossier sélectionné",
@@ -3049,6 +3217,8 @@
     "dataDirectoryAutoHint": "Choisissez un dossier parent ; NyaTerm utilise ou crée automatiquement le sous-dossier %{dir}. Le chemin ci-dessus est le dossier réellement utilisé.",
     "dataDirectoryRestartRequired": "Le changement de dossier est enregistré. NyaTerm redémarre.",
     "dataDirectoryNotice": "Avis au démarrage :",
+    "dataDirectoryRecreatedDatabase": "Aucune base de données exploitable n'a été trouvée. Une base vide a été créée dans %{path} ; le fichier précédent est conservé sous %{archive}.",
+    "dataDirectoryCreateDatabaseFailed": "Impossible de créer une base de données dans %{path} : %{reason}. Vérifiez les droits du dossier ou l'espace disque.",
     "dataDirectorySyncWarning": "Ce dossier est géré par %{client}. Les outils de synchronisation peuvent copier la base pendant que NyaTerm fonctionne et la corrompre ; fermez NyaTerm avant de synchroniser ou utilisez un instantané portable.",
     "dataDirectoryMigrateTitle": "Migrer vers le nouveau dossier",
     "dataDirectoryMigrateDesc": "Copie la base de données et les extensions actuelles vers %{path}. Le dossier source n'est pas supprimé. NyaTerm redémarre immédiatement après l'enregistrement et s'exécute ensuite dans le nouveau dossier.",
@@ -3172,7 +3342,7 @@
     "groupTransfer": "Transfert",
     "groupWorkspace": "Espace de travail",
     "zebraStripes": "Bandes de lignes du terminal",
-    "zebraStripesDesc": "Mettre en évidence la saisie du shell et la ligne cliquée, avec une option pour alterner les fonds par ligne.",
+    "zebraStripesDesc": "Mettre en évidence la saisie du shell et la ligne cliquée, avec une option pour alterner les fonds par ligne. Désactiver cette option ne désactive ni le repli ni la navigation des commandes.",
     "zebraStripesByRow": "Alterner par ligne",
     "zebraStripesByRowDesc": "Alterner la couleur de fond des lignes affichées du terminal.",
     "syncHistory": {
@@ -3271,6 +3441,8 @@
     "keepAliveInterval": "Intervalle Keep-Alive (secondes)",
     "reconnectRestoreCwd": "Restaurer le dossier après reconnexion",
     "reconnectRestoreCwdDesc": "Rétablit la session SSH dans le dernier dossier de travail fiable.",
+    "serialReconnectEnter": "Envoyer Entrée après reconnexion série",
+    "serialReconnectEnterDesc": "Après la reconnexion d'une session série, envoyer une Entrée pour que la console affiche son invite immédiatement.",
     "keepAliveIntervalDesc": "Envoyer des paquets SSH keep-alive toutes les X secondes. 0 pour désactiver.",
     "keepAliveMode": "Mode keep-alive",
     "keepAliveModeCompatible": "Compatible",
@@ -3732,8 +3904,8 @@
     "testSearchEngine": "Tester",
     "theme": "Thème de l'interface",
     "themeDesc": "Sélectionnez le thème de couleurs de l'application.",
-    "timestampFormat": "Format d'horodatage",
-    "timestampFormatDesc": "Par exemple, HH:mm:ss ou YYYY-MM-DD HH:mm:ss.",
+    "timestampFormat": "Format d'affichage de l'horodatage du terminal",
+    "timestampFormatDesc": "Définissez le format de l'heure de chaque ligne de sortie du terminal, par exemple HH:mm:ss ou YYYY-MM-DD HH:mm:ss. Activez Afficher les horodatages dans Terminal > Affichage dans le menu supérieur pour utiliser ce format.",
     "timestampFormatHelp": "Utilisez HH:mm:ss, [HH:mm:ss.SSS] ou YYYY-MM-DD HH:mm:ss. Jetons pris en charge : YYYY, YY, MM, M, DD, D, HH, H, mm, m, ss, s, SSS, SS, S.",
     "title": "Paramètres",
     "transfer": "Transfert",
@@ -4629,5 +4801,16 @@
     "tmuxCommandFailed": "Échec de la commande tmux",
     "details": "Détails (%{count})",
     "repeated": "Occurrences : %{count}"
+  },
+  "ftpErrors": {
+    "connection": "Échec de la connexion FTP.",
+    "authentication": "Échec de l’authentification FTP.",
+    "timeout": "Délai FTP dépassé. Reconnectez-vous pour continuer.",
+    "unavailable": "La session FTP est indisponible. Reconnectez-vous pour continuer.",
+    "unsupportedSettings": "Ces paramètres de transfert ne sont pas disponibles pour FTP.",
+    "limitExceeded": "Le fichier FTP dépasse la limite de l’aperçu ou de l’éditeur.",
+    "notFound": "Le fichier FTP est introuvable.",
+    "backupRetained": "Le fichier a été enregistré. Une ancienne sauvegarde reste dans %{backup}.",
+    "recoveryRequired": "Le serveur n’a pas confirmé le remplacement. Conservez le nouveau fichier %{temporary} et la sauvegarde %{backup} pour la récupération."
   }
 }

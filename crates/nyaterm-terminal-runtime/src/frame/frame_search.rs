@@ -44,6 +44,10 @@ pub struct TerminalFrameSearchResult {
     pub matches: Result<Arc<[TerminalBufferMatch]>, String>,
     pub occurrences: Arc<[Range<usize>]>,
     pub truncated: bool,
+    /// Only matches entirely before this boundary survive later live-screen edits.
+    history: Option<(nyaterm_terminal::TerminalHistoryState, usize)>,
+    pub partial: bool,
+    pub viewport_highlights: Option<Arc<[TerminalBufferMatch]>>,
     pub position_fingerprint: u64,
 }
 
@@ -63,8 +67,58 @@ impl TerminalFrameSearchResult {
             matches: matches.map(Arc::from),
             occurrences: Arc::from([]),
             truncated: false,
+            history: None,
+            partial: false,
+            viewport_highlights: None,
             position_fingerprint,
         }
+    }
+
+    pub fn retain_stable_history(
+        &mut self,
+        history: nyaterm_terminal::TerminalHistoryState,
+        revision: u64,
+    ) -> bool {
+        if self.revision == revision {
+            return true;
+        }
+        if revision < self.revision {
+            return false;
+        }
+        let Some((previous, boundary)) = self.history else {
+            return false;
+        };
+        let Some(change) = history.changes_since(previous) else {
+            return false;
+        };
+        let Ok(matches) = &self.matches else {
+            return false;
+        };
+        if change.evicted != 0 || matches.last().is_some_and(|m| m.line_index >= boundary) {
+            let mut kept = Vec::new();
+            let mut ranges = Vec::new();
+            for range in self.occurrences.iter() {
+                let segments = &matches[range.clone()];
+                if segments[0].line_index < change.evicted
+                    || segments[segments.len() - 1].line_index >= boundary
+                {
+                    continue;
+                }
+                let start = kept.len();
+                kept.extend(segments.iter().cloned().map(|mut m| {
+                    m.line_index -= change.evicted;
+                    m
+                }));
+                ranges.push(start..kept.len());
+            }
+            self.position_fingerprint = terminal_buffer_matches_position_fingerprint(&kept);
+            self.matches = Ok(kept.into());
+            self.occurrences = ranges.into();
+        }
+        self.history = Some((history, boundary.saturating_sub(change.evicted)));
+        self.revision = revision;
+        self.partial = true;
+        true
     }
 
     pub fn new_find(
@@ -76,6 +130,10 @@ impl TerminalFrameSearchResult {
         let matches = occurrences.map(|mut occurrences| {
             truncated = occurrences.len() > key.limit;
             occurrences.truncate(key.limit);
+            occurrences.sort_unstable_by_key(|hit| {
+                let start = &hit.segments[0];
+                (start.line_index, start.start_col)
+            });
             let mut segments = Vec::new();
             let mut ranges = Vec::with_capacity(occurrences.len());
             for occurrence in occurrences {
@@ -130,6 +188,11 @@ pub(super) struct FindSearchJob {
     pub(super) key: TerminalFrameSearchKey,
     pub(super) query: TerminalSearchQuery,
     pub(super) revision: u64,
+    initial_history: nyaterm_terminal::TerminalHistoryState,
+    first_line: nyaterm_terminal::TerminalLineId,
+    anchor: usize,
+    wrapped: bool,
+    mutable_start: usize,
     pub(super) total_rows: usize,
     pub(super) next_absolute_row: usize,
     pub(super) occurrences: Vec<TerminalGridOccurrence>,
@@ -137,11 +200,22 @@ pub(super) struct FindSearchJob {
 }
 
 impl FindSearchJob {
+    #[cfg(test)]
     pub(super) fn new(
         session_id: String,
         key: TerminalFrameSearchKey,
         session: &TerminalFrameSession,
     ) -> Self {
+        Self::from_anchor(session_id, key, session, 0)
+    }
+
+    pub(super) fn from_anchor(
+        session_id: String,
+        key: TerminalFrameSearchKey,
+        session: &TerminalFrameSession,
+        anchor: usize,
+    ) -> Self {
+        let mutable_start = session.screen.search_mutable_start();
         let query = TerminalSearchQuery {
             pattern: key.query.clone(),
             regex: key.regex,
@@ -155,11 +229,31 @@ impl FindSearchJob {
             key,
             query,
             revision: session.revision,
+            initial_history: session.screen.history_state(),
+            first_line: session
+                .screen
+                .search_line_id(0)
+                .expect("terminal has live rows"),
+            anchor,
+            wrapped: false,
+            mutable_start,
             total_rows: session.screen.total_rows(),
-            next_absolute_row: 0,
+            next_absolute_row: anchor.min(mutable_start),
             occurrences: Vec::new(),
             started_at: Instant::now(),
         }
+    }
+
+    fn evicted_rows(&self, session: &TerminalFrameSession) -> Option<usize> {
+        let history = session.screen.history_state();
+        history.scrolled_since(self.initial_history)?;
+        let first = session.screen.search_line_id(0)?;
+        usize::try_from(
+            first
+                .logical_line
+                .checked_sub(self.first_line.logical_line)?,
+        )
+        .ok()
     }
 
     pub(super) fn event(
@@ -178,18 +272,69 @@ impl FindSearchJob {
         &mut self,
         session: &TerminalFrameSession,
     ) -> Result<bool, nyaterm_terminal::TerminalSearchError> {
+        // Accumulate immutable logical lines in their original coordinates. The live
+        // tail (including a soft wrap into history) is matched once at publication.
+        let evicted = self.evicted_rows(session).unwrap_or_default();
+        let stop = if self.wrapped {
+            self.anchor.min(self.mutable_start)
+        } else {
+            self.mutable_start
+        };
         let end = self
             .next_absolute_row
             .saturating_add(SELECTED_OCCURRENCE_SEARCH_CHUNK_ROWS)
-            .min(self.total_rows);
-        let found = session.screen.search_grid_occurrences_in_absolute_range(
+            .min(stop);
+        let mut found = session.screen.search_grid_occurrences_in_absolute_range(
             &self.query,
-            self.next_absolute_row..end,
+            self.next_absolute_row.saturating_sub(evicted)..end.saturating_sub(evicted),
             TerminalSearchRangeMode::StartsWithin,
         )?;
+        for hit in &mut found {
+            for segment in &mut hit.segments {
+                segment.line_index += evicted;
+            }
+        }
         self.occurrences.extend(found);
         self.next_absolute_row = end;
-        Ok(end >= self.total_rows || self.occurrences.len() > self.key.limit)
+        if end == stop
+            && !self.wrapped
+            && self.anchor.min(self.mutable_start) != 0
+            && self.occurrences.len() <= self.key.limit
+        {
+            self.wrapped = true;
+            self.next_absolute_row = 0;
+            return Ok(false);
+        }
+        if end < stop && self.occurrences.len() <= self.key.limit {
+            return Ok(false);
+        }
+        self.occurrences.retain_mut(|hit| {
+            if hit.segments[0].line_index < evicted {
+                return false;
+            }
+            for segment in &mut hit.segments {
+                segment.line_index -= evicted;
+            }
+            true
+        });
+        let tail =
+            self.mutable_start.saturating_sub(evicted)..self.total_rows.saturating_sub(evicted);
+        let anchor = self.anchor.saturating_sub(evicted);
+        let split = anchor.clamp(tail.start, tail.end);
+        for range in [split..tail.end, tail.start..split] {
+            self.occurrences
+                .extend(session.screen.search_grid_occurrences_in_absolute_range(
+                    &self.query,
+                    range,
+                    TerminalSearchRangeMode::StartsWithin,
+                )?);
+        }
+        self.occurrences.sort_unstable_by_key(|hit| {
+            let start = &hit.segments[0];
+            (start.line_index < anchor, start.line_index, start.start_col)
+        });
+        self.revision = session.revision;
+        Ok(true)
     }
 }
 
@@ -201,13 +346,21 @@ pub(super) fn process_next_find_search_chunk(
     let Some(session) = sessions.get(&job.session_id) else {
         return Some(job.event(Err("search session was removed".to_string())));
     };
-    if session.revision != job.revision {
-        return Some(job.event(Err("search was cancelled by terminal output".to_string())));
+    if job.evicted_rows(session).is_none() {
+        return Some(job.event(Err("terminal search coordinates changed".to_string())));
     }
     match job.process_chunk(session) {
         Ok(true) => {
             let occurrences = std::mem::take(&mut job.occurrences);
-            Some(job.event(Ok(occurrences)))
+            let dirty =
+                job.initial_history.scroll_count != session.screen.history_state().scroll_count;
+            let mut event = job.event(Ok(occurrences));
+            event.result.history = Some((
+                session.screen.history_state(),
+                session.screen.search_mutable_start(),
+            ));
+            event.result.partial = dirty;
+            Some(event)
         }
         Ok(false) => {
             jobs.push_back(job);

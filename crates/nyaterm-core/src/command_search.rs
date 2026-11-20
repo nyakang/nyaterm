@@ -272,6 +272,7 @@ mod tests {
             icon_tag: None,
             pinned: None,
             execution_mode: None,
+            segmented_send: None,
             raw_send: None,
             source: None,
             risk_level: None,
@@ -279,6 +280,7 @@ mod tests {
             created_at: None,
             use_count: None,
             sort_order: None,
+            extra: Default::default(),
         }
     }
 
@@ -313,6 +315,7 @@ mod tests {
             icon_tag: None,
             pinned: None,
             execution_mode: None,
+            segmented_send: None,
             raw_send: None,
             source: None,
             risk_level: None,
@@ -320,6 +323,7 @@ mod tests {
             created_at: None,
             use_count: None,
             sort_order: None,
+            extra: Default::default(),
         }];
 
         let results = search_command_sources(&history, &quick_commands, "ps", 10, None, None);
@@ -409,6 +413,7 @@ mod tests {
                 icon_tag: None,
                 pinned: None,
                 execution_mode: None,
+                segmented_send: None,
                 raw_send: None,
                 source: None,
                 risk_level: None,
@@ -416,6 +421,7 @@ mod tests {
                 created_at: None,
                 use_count: Some(1),
                 sort_order: None,
+                extra: Default::default(),
             },
             QuickCommand {
                 id: "qc-pinned".to_string(),
@@ -427,6 +433,7 @@ mod tests {
                 icon_tag: None,
                 pinned: Some(true),
                 execution_mode: None,
+                segmented_send: None,
                 raw_send: None,
                 source: None,
                 risk_level: None,
@@ -434,6 +441,7 @@ mod tests {
                 created_at: None,
                 use_count: Some(0),
                 sort_order: None,
+                extra: Default::default(),
             },
         ];
 

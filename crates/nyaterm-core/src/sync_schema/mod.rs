@@ -163,6 +163,10 @@ pub fn valid_fixed_cloud_sync_value(field: &SyncFieldId, value: &Value) -> bool 
                             .values()
                             .all(fixed_scalar_or_list)
                 }
+                "connect_prompt" => value.as_object().is_some_and(|flags| {
+                    flags.values().all(Value::is_boolean)
+                        && pick(value, SERIAL_CONNECT_PROMPT_FIELDS) == *value
+                }),
                 _ => fixed_scalar_or_list(value),
             })
         }) && pick(value, connection_fields(name)) == *value;
@@ -219,6 +223,9 @@ pub const SECRET_KINDS: &[&str] = &[
 ];
 pub const PREFERENCE_FIELDS: &[(&str, &str)] = &[
     ("appearance", "theme"),
+    ("appearance", "theme_mode"),
+    ("appearance", "light_theme"),
+    ("appearance", "dark_theme"),
     ("appearance", "font_family"),
     ("appearance", "font_size"),
     ("appearance", "font_weight"),
@@ -246,7 +253,11 @@ pub fn valid_preference(id: &str, value: &Value) -> bool {
             .as_f64()
             .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
             .is_some_and(|ratio| [1.0, 3.0, 4.5, 7.0, 21.0].contains(&ratio)),
-        "appearance/theme" | "appearance/font_family" => value.is_string(),
+        "appearance/theme"
+        | "appearance/theme_mode"
+        | "appearance/light_theme"
+        | "appearance/dark_theme"
+        | "appearance/font_family" => value.is_string(),
         _ => false,
     }
 }
@@ -362,6 +373,8 @@ pub fn project_record(kind: &str, source: &Value) -> Result<Value, String> {
             "icon_tag",
             "pinned",
             "execution_mode",
+            "segmented_send",
+            "raw_send",
         ],
         "note" => &["title", "markdown", "parent_id", "sort_order"],
         "note_folder" => &["name", "parent_id", "sort_order"],
@@ -408,11 +421,15 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         "telnet" => &["type", "host", "port", "username"],
         "rdp" => &["type", "host", "port", "username", "domain"],
         "vnc" => &["type", "host", "port", "username"],
+        "ftp" => &["type", "host", "port", "username"],
         "adb" => &["type", "device"],
         "local" | "local_terminal" | "serial" => &["type"],
         _ => return Err("Unsupported connection protocol".into()),
     };
     result["endpoint"] = pick(source, endpoint_fields);
+    if kind == "ftp" {
+        result["ftp"] = pick(source, connection_fields("ftp"));
+    }
     if kind == "adb" {
         if let Some(device) = source.get("device") {
             result["endpoint"]["device"] = pick(device, &["kind", "serial", "host", "port"]);
@@ -439,17 +456,13 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         result["post_login"] = pick(post_login, &["enabled", "command", "delay_ms"]);
     }
     if kind == "serial" {
-        result["serial"] = pick(
-            source,
-            &[
-                "baud_rate",
-                "data_bits",
-                "parity",
-                "stop_bits",
-                "flow_control",
-                "connect_prompt",
-            ],
-        );
+        result["serial"] = pick(source, connection_fields("serial"));
+        if let Some(prompt) = result["serial"]
+            .get_mut("connect_prompt")
+            .filter(|value| value.is_object())
+        {
+            *prompt = pick(prompt, SERIAL_CONNECT_PROMPT_FIELDS);
+        }
     }
     if let Some(asset) = source.get("asset") {
         let portable = pick(asset, &["tags", "notes"]);
@@ -548,7 +561,14 @@ pub fn apply_record(kind: &str, original: &Value, projected: &Value) -> Result<V
         } else if kind == "connection"
             && matches!(
                 field.as_str(),
-                "endpoint" | "placement" | "terminal" | "serial" | "icon" | "telnet" | "android"
+                "endpoint"
+                    | "placement"
+                    | "terminal"
+                    | "serial"
+                    | "icon"
+                    | "telnet"
+                    | "android"
+                    | "ftp"
             )
         {
             let Some(group) = value.as_object() else {
@@ -559,6 +579,7 @@ pub fn apply_record(kind: &str, original: &Value, projected: &Value) -> Result<V
                     let nested_fields: &[&str] = match key.as_str() {
                         "device" => &["kind", "serial", "host", "port"],
                         "screen" => &["max_size", "max_fps", "bit_rate", "view_only"],
+                        "connect_prompt" => SERIAL_CONNECT_PROMPT_FIELDS,
                         _ => &[],
                     };
                     if nested_fields.is_empty() {
@@ -647,6 +668,7 @@ pub fn supports_field(kind: &str, field: &str) -> bool {
                 | "tags"
                 | "endpoint"
                 | "android"
+                | "ftp"
                 | "placement"
                 | "terminal"
                 | "serial"
@@ -717,8 +739,19 @@ fn overlay_classified(original: &Value, before: &Value, after: &Value) -> Value 
     Value::Object(result)
 }
 
+const SERIAL_CONNECT_PROMPT_FIELDS: &[&str] = &["port", "baud_rate"];
+
 fn connection_fields(field: &str) -> &'static [&'static str] {
     match field {
+        "ftp" => &[
+            "initial_directory",
+            "passive_mode",
+            "ftp_filename_encoding_mode",
+            "ftp_filename_encoding",
+            "ftp_ascii_mode",
+            "ftp_security_mode",
+            "ftp_tls_version",
+        ],
         "endpoint" => &["type", "host", "port", "username", "domain", "device"],
         "android" => &["directory", "screen"],
         "placement" => &["group_id", "sort_order", "tree_order"],
@@ -728,6 +761,7 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
             "terminal_type",
             "ssh_profile",
             "ssh_compatibility_mode",
+            "allow_short_rsa_host_keys",
             "ai_execution_profile",
             "dynamic_tab_title",
         ],
@@ -763,6 +797,7 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
             "parity",
             "stop_bits",
             "flow_control",
+            "connect_prompt",
         ],
         "icon" => &["icon", "icon_auto_detect"],
         "asset" => &["tags", "notes"],
@@ -800,6 +835,17 @@ fn clear_connection_field(result: &mut Value, field: &str) {
             object.remove(field);
         } else {
             for key in connection_fields(field) {
+                if *key == "connect_prompt"
+                    && let Some(prompt) = object.get_mut(*key).and_then(Value::as_object_mut)
+                {
+                    // Clearing the known flags must preserve local future options.
+                    for flag in SERIAL_CONNECT_PROMPT_FIELDS {
+                        prompt.remove(*flag);
+                    }
+                    if !prompt.is_empty() {
+                        continue;
+                    }
+                }
                 object.remove(*key);
             }
         }

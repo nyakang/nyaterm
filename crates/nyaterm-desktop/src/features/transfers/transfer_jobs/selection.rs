@@ -61,6 +61,20 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        self.open_delete_transfer_job_dialog(job_id, window, cx);
+    }
+
+    fn open_delete_transfer_job_dialog(
+        &mut self,
+        job_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(job) = self.transfer.transfer_job(&job_id) else {
+            self.shell.set_status("transfer job not found".to_string());
+            cx.notify();
+            return;
+        };
         let title = transfer_job_title(&job.kind);
         let description = t!("fileTransfer.deleteConfirmDesc", name = title).to_string();
         self.transfer.select_transfer_job_id(&job_id);
@@ -124,6 +138,15 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
+        self.reveal_transfer_local_path(target_path, true, cx);
+    }
+
+    pub(in crate::features) fn reveal_transfer_local_path(
+        &mut self,
+        target_path: std::path::PathBuf,
+        report_status: bool,
+        cx: &mut Context<Self>,
+    ) {
         // Keep filesystem checks and file-manager requests off the UI thread.
         let request = cx.background_executor().spawn(async move {
             let mut target_path = std::path::absolute(target_path)?;
@@ -196,14 +219,21 @@ impl NyaTermApp {
                                 cx.reveal_path(&target_path);
                             }
                         }
-                        this.shell
-                            .set_status("requested transfer location in file manager".to_string());
+                        if report_status {
+                            this.shell.set_status(
+                                "requested transfer location in file manager".to_string(),
+                            );
+                        }
                     }
-                    Err(error) => this
+                    Err(error) if report_status => this
                         .shell
                         .set_status(format!("cannot show transfer location: {error}")),
+                    // Automatic reveal is best effort and must preserve transfer success.
+                    Err(_) => {}
                 }
-                cx.notify();
+                if report_status {
+                    cx.notify();
+                }
             });
         })
         .detach();

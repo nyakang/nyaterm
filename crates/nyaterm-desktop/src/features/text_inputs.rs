@@ -670,6 +670,10 @@ impl NyaTermApp {
             self.apply_transfer_default_editor(text, cx);
         } else if id.as_ref() == "settings.transfer.default-permissions" {
             self.apply_transfer_file_permissions(text, cx);
+        } else if id.starts_with("networktools.") {
+            // The configuration form derives its field errors from the current
+            // input values on every render, so typing must repaint the window.
+            cx.notify();
         }
         if remote_panel_input {
             self.defer_remote_panel_snapshot_flush(cx);

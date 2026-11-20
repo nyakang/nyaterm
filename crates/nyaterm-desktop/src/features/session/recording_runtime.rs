@@ -518,6 +518,13 @@ fn recording_launch_context(
             Some(config.port),
             None,
         ),
+        SessionLaunchConfig::Ftp(config) => (
+            config.name.clone(),
+            "ftp".to_string(),
+            Some(config.host.clone()),
+            Some(config.port),
+            Some(config.username.clone()),
+        ),
     }
 }
 

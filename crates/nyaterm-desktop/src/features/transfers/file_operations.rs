@@ -15,9 +15,7 @@ use nyaterm_files::operations::{
     FileOperationRequest as ServiceRequest, FileTransferRequest, execute_file_operation,
 };
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry, SftpTransferControl};
-use nyaterm_files::sftp_transfer_types::{
-    SftpDuplicatePolicy, SftpDuplicateResolver, SftpPathTransferOptions,
-};
+use nyaterm_files::sftp_transfer_types::{SftpDuplicatePolicy, SftpDuplicateResolver};
 use rust_i18n::t;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -318,7 +316,11 @@ impl NyaTermApp {
         let resolver = (policy == SftpDuplicatePolicy::Ask).then(|| {
             self.session.prompt_duplicate_broker() as std::sync::Arc<dyn SftpDuplicateResolver>
         });
-        let options = SftpPathTransferOptions::new(policy, resolver, self.sftp_transfer_options());
+        let options = crate::features::transfers::transfer_options::path_options(
+            policy,
+            resolver,
+            self.sftp_transfer_options(),
+        );
         let tx = self.transfer.transfer_event_sender();
         self.submit_bulk_transfer_job("file-operation", id.clone(), tx.clone(), move || {
             let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
@@ -345,6 +347,20 @@ impl NyaTermApp {
                     event: TransferJobEvent::SourceType(properties.file_type),
                 });
             }
+            let options = if matches!(
+                source_service,
+                nyaterm_files::file_browser::FileBrowserService::Ftp(_)
+            ) || matches!(
+                target_service,
+                nyaterm_files::file_browser::FileBrowserService::Ftp(_)
+            ) {
+                options.with_ftp_capabilities(matches!(
+                    target_service,
+                    nyaterm_files::file_browser::FileBrowserService::Ftp(_)
+                ))
+            } else {
+                options
+            };
             let result = context
                 .request
                 .into_service_request()

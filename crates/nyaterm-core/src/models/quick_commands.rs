@@ -1,6 +1,127 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::ai::RiskLevel;
+
+pub const QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS: u64 = 60_000;
+pub const QUICK_COMMAND_SEGMENTED_SEND_LINE_INTERVAL_MS: u64 = 1_000;
+pub const QUICK_COMMAND_SEGMENTED_SEND_CHARACTER_INTERVAL_MS: u64 = 20;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickCommandSegmentedSendMode {
+    #[default]
+    Line,
+    Character,
+}
+
+impl QuickCommandSegmentedSendMode {
+    pub const fn default_interval_ms(self) -> u64 {
+        match self {
+            Self::Line => QUICK_COMMAND_SEGMENTED_SEND_LINE_INTERVAL_MS,
+            Self::Character => QUICK_COMMAND_SEGMENTED_SEND_CHARACTER_INTERVAL_MS,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct QuickCommandSegmentedSend {
+    pub mode: QuickCommandSegmentedSendMode,
+    pub interval_ms: u64,
+    pub version: u32,
+    pub extra: BTreeMap<String, Value>,
+    /// Preserve unsupported wire shapes without making them executable.
+    pub unsupported: Option<Value>,
+}
+
+impl Default for QuickCommandSegmentedSend {
+    fn default() -> Self {
+        Self {
+            mode: QuickCommandSegmentedSendMode::Line,
+            interval_ms: QUICK_COMMAND_SEGMENTED_SEND_LINE_INTERVAL_MS,
+            version: 1,
+            extra: BTreeMap::new(),
+            unsupported: None,
+        }
+    }
+}
+
+impl QuickCommandSegmentedSend {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.unsupported.is_some()
+            || self.version != 1
+            || self.interval_ms > QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS
+        {
+            return Err("Unsupported or invalid segmented-send configuration; update NyaTerm before using it".into());
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for QuickCommandSegmentedSend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuickCommandSegmentedSend")
+            .field("mode", &self.mode)
+            .field("interval_ms", &self.interval_ms)
+            .field("version", &self.version)
+            .field("unsupported", &self.unsupported.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Serialize for QuickCommandSegmentedSend {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(value) = &self.unsupported {
+            return value.serialize(serializer);
+        }
+        let mut value = serde_json::to_value(&self.extra).map_err(serde::ser::Error::custom)?;
+        value["mode"] = serde_json::to_value(self.mode).map_err(serde::ser::Error::custom)?;
+        value["interval_ms"] = self.interval_ms.into();
+        value["version"] = self.version.into();
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for QuickCommandSegmentedSend {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let parsed = (|| {
+            let object = value.as_object()?;
+            let version = object.get("version").map_or(Some(1), Value::as_u64)?;
+            if version != 1 {
+                return None;
+            }
+            let mode = match object.get("mode").and_then(Value::as_str) {
+                Some("line") | None if !object.contains_key("mode") || object["mode"] == "line" => {
+                    QuickCommandSegmentedSendMode::Line
+                }
+                Some("character") => QuickCommandSegmentedSendMode::Character,
+                _ => return None,
+            };
+            let interval_ms = object.get("interval_ms")?.as_u64()?;
+            if interval_ms > QUICK_COMMAND_SEGMENTED_SEND_MAX_INTERVAL_MS {
+                return None;
+            }
+            let extra = object
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "mode" | "interval_ms" | "version"))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            Some(Self {
+                mode,
+                interval_ms,
+                version: 1,
+                extra,
+                unsupported: None,
+            })
+        })();
+        Ok(parsed.unwrap_or_else(|| Self {
+            unsupported: Some(value),
+            ..Self::default()
+        }))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QuickCommandCategory {
@@ -29,6 +150,9 @@ pub struct QuickCommand {
     pub pinned: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_mode: Option<String>,
+    /// Legacy readers use Append, which may still submit internal newlines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segmented_send: Option<QuickCommandSegmentedSend>,
     /// Missing, null and false retain the legacy script interpretation.
     #[serde(default, skip_serializing_if = "raw_send_disabled")]
     pub raw_send: Option<bool>,
@@ -44,6 +168,8 @@ pub struct QuickCommand {
     pub use_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<i32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -416,6 +542,8 @@ pub struct QuickCommandExport {
     pub icon_tag: Option<String>,
     pub pinned: bool,
     pub execution_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segmented_send: Option<QuickCommandSegmentedSend>,
     #[serde(skip_serializing_if = "raw_send_disabled")]
     pub raw_send: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -424,6 +552,8 @@ pub struct QuickCommandExport {
     pub risk_level: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<i32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
@@ -451,15 +581,21 @@ impl From<QuickCommandsConfig> for QuickCommandsExportConfig {
                     color_tag: command.color_tag,
                     icon_tag: command.icon_tag,
                     pinned: command.pinned.unwrap_or_default(),
-                    execution_mode: command
-                        .execution_mode
-                        .unwrap_or_else(|| "execute".to_string()),
+                    execution_mode: if command.segmented_send.is_some() {
+                        "append".to_string()
+                    } else {
+                        command
+                            .execution_mode
+                            .unwrap_or_else(|| "execute".to_string())
+                    },
+                    segmented_send: command.segmented_send,
                     raw_send: command.raw_send,
                     source: command.source,
                     risk_level: command
                         .risk_level
                         .map(|risk| quick_command_export_risk_label(&risk).to_string()),
                     sort_order: command.sort_order,
+                    extra: command.extra,
                 })
                 .collect(),
         }
@@ -499,8 +635,64 @@ pub struct FuzzyResult {
 #[cfg(test)]
 mod tests {
     use crate::models::quick_commands::{
-        QuickCommand, QuickCommandsConfig, export_quick_commands_json,
+        QuickCommand, QuickCommandSegmentedSend, QuickCommandsConfig, export_quick_commands_json,
     };
+
+    #[test]
+    fn future_segmented_records_and_unknown_command_fields_survive_round_trips() {
+        for send in [
+            serde_json::json!({"version":2,"mode":"future","interval_ms":1,"extension":{"keep":true}}),
+            serde_json::json!({"version":1,"mode":"future","interval_ms":1}),
+            serde_json::json!({"mode":"line","interval_ms":1,"extension":{"keep":true}}),
+        ] {
+            let command: QuickCommand = serde_json::from_value(serde_json::json!({"id":"future","label":"Future","command":"first\nsecond","execution_mode":"append","segmented_send":send,"future_property":{"keep":true}})).unwrap();
+            let value = serde_json::to_value(&command).unwrap();
+            assert_eq!(value["future_property"], serde_json::json!({"keep":true}));
+            if send
+                .get("version")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(1)
+                != 1
+                || send["mode"] == "future"
+            {
+                assert!(command.segmented_send.as_ref().unwrap().validate().is_err());
+                assert_eq!(value["segmented_send"], send);
+            } else {
+                assert_eq!(value["segmented_send"]["extension"], send["extension"]);
+            }
+            let exported = export_quick_commands_json(QuickCommandsConfig {
+                commands: vec![command],
+                categories: vec![],
+            })
+            .unwrap();
+            let exported: serde_json::Value = serde_json::from_str(&exported).unwrap();
+            assert_eq!(
+                exported["commands"][0]["future_property"],
+                value["future_property"]
+            );
+            assert_eq!(
+                exported["commands"][0]["segmented_send"],
+                value["segmented_send"]
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_append_fallback_can_still_submit_internal_newlines() {
+        let command: QuickCommand = serde_json::from_value(serde_json::json!({"id":"paced","label":"Paced","command":"first\nsecond","execution_mode":"append","segmented_send":{"mode":"line","interval_ms":1000}})).unwrap();
+        let exported = export_quick_commands_json(QuickCommandsConfig {
+            commands: vec![command],
+            categories: vec![],
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(value["commands"][0]["execution_mode"], "append");
+        let legacy = crate::quick_command_script::plan_quick_command(
+            value["commands"][0]["command"].as_str().unwrap(),
+            false,
+        );
+        assert_eq!(legacy[0].bytes, b"first\nsecond");
+    }
 
     #[test]
     fn legacy_null_and_disabled_literal_modes_keep_the_old_serialized_shape() {
@@ -529,6 +721,53 @@ mod tests {
             .unwrap();
             let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
             assert!(value["commands"][0].get("raw_send").is_none());
+        }
+    }
+
+    #[test]
+    fn segmented_options_round_trip_and_legacy_json_omits_them() {
+        let legacy: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "legacy", "label": "Legacy", "command": "pwd"
+        }))
+        .unwrap();
+        assert_eq!(legacy.segmented_send, None);
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("segmented_send")
+                .is_none()
+        );
+
+        let segmented: QuickCommand = serde_json::from_value(serde_json::json!({
+            "id": "segmented",
+            "label": "Segmented",
+            "command": "one\ntwo",
+            "execution_mode": "append",
+            "segmented_send": {"mode": "character", "interval_ms": 20}
+        }))
+        .unwrap();
+        let serialized = serde_json::to_string(&segmented).unwrap();
+        assert_eq!(
+            serde_json::from_str::<QuickCommand>(&serialized).unwrap(),
+            segmented
+        );
+        let exported = export_quick_commands_json(QuickCommandsConfig {
+            commands: vec![segmented],
+            categories: Vec::new(),
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(value["commands"][0]["execution_mode"], "append");
+        assert_eq!(value["commands"][0]["segmented_send"]["interval_ms"], 20);
+    }
+
+    #[test]
+    fn unsupported_intervals_are_preserved_but_not_executable() {
+        for interval_ms in [-1, 60_001] {
+            let value = serde_json::json!({"mode": "line", "interval_ms": interval_ms});
+            let send: QuickCommandSegmentedSend = serde_json::from_value(value.clone()).unwrap();
+            assert!(send.validate().is_err());
+            assert_eq!(serde_json::to_value(send).unwrap(), value);
         }
     }
 

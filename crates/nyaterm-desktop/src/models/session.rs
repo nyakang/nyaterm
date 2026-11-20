@@ -107,6 +107,20 @@ pub(crate) enum SessionLaunchConfig {
     Serial(SerialSessionConfig),
     Rdp(RdpSessionConfig),
     Vnc(VncSessionConfig),
+    Ftp(FtpSessionConfig),
+}
+
+/// Blocking FTP launch settings; credentials never live in the stored model.
+#[derive(Clone)]
+pub(crate) struct FtpSessionConfig {
+    pub(crate) name: String,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) username: String,
+    pub(crate) initial_directory: String,
+    pub(crate) local_initial_directory: String,
+    pub(crate) config: nyaterm_files::ftp::FtpConfig,
+    pub(crate) login: nyaterm_files::ftp::FtpLogin,
 }
 
 #[derive(Clone)]
@@ -132,6 +146,7 @@ impl SessionLaunchConfig {
                 | (Self::Serial(_), ConnectionType::Serial { .. })
                 | (Self::Rdp(_), ConnectionType::Rdp { .. })
                 | (Self::Vnc(_), ConnectionType::Vnc { .. })
+                | (Self::Ftp(_), ConnectionType::Ftp { .. })
                 | (
                     Self::AdbShell(_) | Self::AdbFiles(_) | Self::AdbScreen(_),
                     ConnectionType::Adb { .. }
@@ -182,6 +197,7 @@ impl SessionLaunchConfig {
             Self::Serial(config) => Some(&config.encoding),
             Self::Rdp(_) => None,
             Self::Vnc(_) => None,
+            Self::Ftp(_) => None,
         }
     }
 }
@@ -265,21 +281,6 @@ impl QuickSwitchItem {
                 "{title} {subtitle} {request_id} {}",
                 search_detail.as_deref().unwrap_or_default()
             ),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum TerminalSearchMode {
-    Buffer,
-    History,
-}
-
-impl TerminalSearchMode {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Buffer => "Buffer",
-            Self::History => "History",
         }
     }
 }

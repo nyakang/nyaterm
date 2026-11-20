@@ -44,6 +44,12 @@ pub use app_shell::{
 pub fn init(cx: &mut gpui::App) {
     app_shell::init(cx);
     features::init(cx);
+    // Shut down adb servers this process started (never servers that were
+    // already running), so quitting does not leave a stray adb.exe behind.
+    cx.on_app_quit(|_| async move {
+        nyaterm_android::adb::client::shutdown_started_servers();
+    })
+    .detach();
 }
 
 /// Runs the detached portable updater helper before normal application startup.

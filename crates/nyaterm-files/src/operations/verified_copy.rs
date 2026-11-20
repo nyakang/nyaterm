@@ -135,6 +135,7 @@ pub fn copy_verified(
     if !summary.copied {
         return Ok(FileOperationResult::Skipped(
             crate::sftp_transfer_types::SftpTransferSummary {
+                retained_backups: Vec::new(),
                 remote_path: summary.destination_path,
                 local_path: Default::default(),
                 bytes: 0,
@@ -174,6 +175,7 @@ pub fn copy_verified(
         .list_dir_path(&target_parent)
         .unwrap_or_default();
     Ok(FileOperationResult::Completed(FileOperationSummary {
+        retained_backups: summary.retained_backups,
         source_path: source.display_path,
         source_parent_path,
         source_entries,

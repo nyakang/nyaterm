@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 
 use gpui::{Context, Window};
-use nyaterm_core::ConnectionType;
 
 use crate::features::formatting::short_id;
 use crate::features::{NyaTermApp, session::SavedConnectionStartOptions};
 use crate::models::{SessionLaunchConfig, StartupCommandRequest};
 
 use super::session_runtime::{MultiplexSshStartRequest, SessionStartFocusTarget};
-use super::state::{SerialConnectContinuation, SerialConnectSelection};
+use super::state::SerialConnectSelection;
 
 const RECONNECTING_BANNER: &str = "\r\n\x1b[36m[Reconnecting…]\x1b[0m\r\n";
 
@@ -182,6 +181,22 @@ impl NyaTermApp {
                 cx.notify();
                 return;
             }
+            SessionLaunchConfig::Ftp(config) => {
+                self.begin_background_session_start(
+                    format!("{} duplicate", config.name),
+                    SessionLaunchConfig::Ftp(config),
+                    metadata.source_connection_id.clone(),
+                    metadata.ai_execution_profile,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        after_session_id: Some(source_session_id),
+                        workspace_split: workspace_split.clone(),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            }
         }
         self.shell.show_workspace();
         if self.session.start_has_active_pending() {
@@ -312,6 +327,13 @@ impl NyaTermApp {
             self.android.stop_screen(&session_id);
         } else if self.remote_desktop.is_session(&session_id) {
             let _ = self.close_remote_desktop_runtime(&session_id);
+        } else if self
+            .session
+            .session_info(&session_id)
+            .is_some_and(|info| info.kind == nyaterm_transport::SessionKind::Ftp)
+        {
+            // Close sockets even while background jobs retain the service.
+            self.ftp.remove_session(&session_id);
         } else if let Err(error) = self.session.manager().close_detached(&session_id) {
             self.session.finish_busy_action(&session_id);
             self.shell.set_status(format!(
@@ -334,6 +356,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.cancel_serial_reconnect_enter(session_id);
         self.cancel_file_sudo_for_sessions(&[session_id.to_owned()], cx);
         self.cancel_native_runs_for_disconnected_session(session_id, cx);
         self.commands.cancel_staged_quick_command(session_id);
@@ -411,6 +434,7 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.terminal.cancel_serial_reconnect_enter(&session_id);
         if self.session.session_is_busy(&session_id) {
             self.shell
                 .set_status("session action already in progress".to_string());
@@ -474,49 +498,36 @@ impl NyaTermApp {
             self.retry_rdp_runtime(&session_id, cx);
             return;
         }
-        if let Some(connection) = saved.as_ref()
-            && let ConnectionType::Serial {
-                connect_prompt,
-                port_name,
-                baud_rate,
-                ..
-            } = &connection.config
-        {
-            if connect_prompt.asks_anything() && serial_selection.is_none() {
-                self.open_serial_connect_prompt(
-                    connection.clone(),
-                    SerialConnectContinuation::Reconnect { session_id },
-                    *connect_prompt,
-                    port_name.clone(),
-                    *baud_rate,
-                    cx,
-                );
-                return;
+        // Enumeration cannot prove whether custom paths or symlinks can open.
+        // Retry the last resolved configuration on the worker before offering
+        // another device; a failed selection must survive the next retry.
+        let offer_serial_selection = serial_selection.is_none();
+        let serial_config = match &metadata.launch_config {
+            SessionLaunchConfig::Serial(config) => {
+                let mut config = self
+                    .session
+                    .start
+                    .serial_reconnect_config(&session_id)
+                    .unwrap_or(config)
+                    .clone();
+                if let Some(selection) = serial_selection {
+                    config.port_name = selection.port_name;
+                    config.baud_rate = selection.baud_rate;
+                }
+                if self
+                    .session
+                    .serial_ports_in_use(Some(&session_id), None)
+                    .contains(config.port_name.trim())
+                {
+                    self.shell
+                        .set_status(rust_i18n::t!("dialog.serialPortInUse"));
+                    cx.notify();
+                    return;
+                }
+                Some(config)
             }
-            let selected_port = serial_selection
-                .as_ref()
-                .map_or(port_name.as_str(), |selection| selection.port_name.as_str());
-            if self
-                .session
-                .serial_ports_in_use(Some(&session_id), None)
-                .contains(selected_port.trim())
-            {
-                self.shell
-                    .set_status(rust_i18n::t!("dialog.serialPortInUse"));
-                cx.notify();
-                return;
-            }
-        } else if let SessionLaunchConfig::Serial(config) = &metadata.launch_config
-            && self
-                .session
-                .serial_ports_in_use(Some(&session_id), None)
-                .contains(config.port_name.trim())
-        {
-            self.shell
-                .set_status(rust_i18n::t!("dialog.serialPortInUse"));
-            cx.notify();
-            return;
-        }
+            _ => None,
+        };
         self.remote_ops.clear_stats_sample(&session_id);
         self.session.begin_reconnect_action(session_id.clone());
         self.session.start.clear_active_selection();
@@ -575,7 +586,7 @@ impl NyaTermApp {
         self.commands.cancel_staged_quick_command(&old_id);
         self.session.mark_session_disconnected(&old_id);
         self.close_terminal_executions_for_session(&old_id, cx);
-        if let Some(connection) = saved {
+        if let Some(connection) = saved.filter(|_| serial_config.is_none()) {
             let ssh_runtime_mode = metadata.ssh_runtime_mode();
             self.continue_saved_connection_start(
                 connection,
@@ -598,7 +609,6 @@ impl NyaTermApp {
                     locked,
                     insert_index: Some(source_index),
                     reconnect_session_id: Some(old_id.clone()),
-                    serial_selection,
                     startup_command: reconnect_cwd_command.map(|command| StartupCommandRequest {
                         command,
                         delay_ms: 0,
@@ -621,7 +631,9 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        let launch_config = metadata.launch_config_for_restart();
+        let launch_config = serial_config
+            .map(SessionLaunchConfig::Serial)
+            .unwrap_or_else(|| metadata.launch_config_for_restart());
         let source_connection_id = metadata.source_connection_id;
         let ai_execution_profile = metadata.ai_execution_profile;
         match launch_config {
@@ -688,6 +700,9 @@ impl NyaTermApp {
                     },
                     cx,
                 );
+                if offer_serial_selection {
+                    self.session.start.allow_serial_reconnect_selection(&old_id);
+                }
             }
             SessionLaunchConfig::Ssh(config) => {
                 self.begin_background_ssh_start(
@@ -710,6 +725,23 @@ impl NyaTermApp {
                 self.session.finish_busy_action(&old_id);
                 self.shell
                     .set_status("Use Retry in the remote desktop view to reconnect".to_string());
+            }
+            SessionLaunchConfig::Ftp(config) => {
+                self.begin_background_session_start(
+                    format!("{} reconnect", config.name),
+                    SessionLaunchConfig::Ftp(config),
+                    source_connection_id,
+                    ai_execution_profile,
+                    SavedConnectionStartOptions {
+                        custom_name,
+                        tab_color: custom_color,
+                        locked,
+                        insert_index: Some(source_index),
+                        reconnect_session_id: Some(old_id.clone()),
+                        ..Default::default()
+                    },
+                    cx,
+                );
             }
         }
         // Tauri clears busy when reconnect action returns (even if SSH still connecting).

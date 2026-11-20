@@ -576,10 +576,14 @@ impl NyaTermApp {
 
 impl NyaTermApp {
     pub(in crate::features) fn session_is_sftp_only(&self, id: &str) -> bool {
-        self.session
-            .metadata(id)
-            .and_then(|metadata| metadata.ssh_runtime_mode())
-            == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+        let Some(metadata) = self.session.metadata(id) else {
+            return false;
+        };
+        metadata.ssh_runtime_mode() == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+            || matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Ftp(_)
+            )
     }
 
     pub(in crate::features) fn ensure_sftp_session_view(
@@ -593,25 +597,57 @@ impl NyaTermApp {
         if !self.session_is_sftp_only(id) || self.file_manager.sftp_workspaces.contains_key(id) {
             return;
         }
+        let ftp_config =
+            self.session
+                .metadata(id)
+                .and_then(|metadata| match &metadata.launch_config {
+                    crate::models::SessionLaunchConfig::Ftp(config) => Some(config.clone()),
+                    _ => None,
+                });
         if let Some(metadata) = self.session.metadata_mut(id) {
             metadata.ai_execution_profile = nyaterm_core::AiExecutionProfile::Disabled;
         }
         let app = cx.entity();
-        let seed = FileManagerSeed {
-            left: PaneEndpoint::Session(id.to_string()),
-            left_path: None,
-            right: PaneEndpoint::Local,
-            right_path: None,
+        let (seed, single_pane) = if let Some(config) = ftp_config {
+            let left_path = if config.initial_directory.trim().is_empty() {
+                self.ftp
+                    .service(id)
+                    .map(|service| RemoteFilePath::new(service.home_dir().to_string()))
+            } else {
+                Some(RemoteFilePath::new(config.initial_directory.clone()))
+            };
+            let right_path = (!config.local_initial_directory.trim().is_empty())
+                .then(|| RemoteFilePath::new(config.local_initial_directory.clone()));
+            (
+                FileManagerSeed {
+                    left: PaneEndpoint::Session(id.to_string()),
+                    left_path,
+                    right: PaneEndpoint::Local,
+                    right_path,
+                },
+                false,
+            )
+        } else {
+            (
+                FileManagerSeed {
+                    left: PaneEndpoint::Session(id.to_string()),
+                    left_path: None,
+                    right: PaneEndpoint::Local,
+                    right_path: None,
+                },
+                true,
+            )
         };
         let view = cx.new(|cx| {
             let mut workspace = FileManagerWorkspace::new(app, format!("sftp-{id}"), seed, cx);
-            workspace.single_pane = true;
+            workspace.single_pane = single_pane;
             workspace
         });
         self.file_manager
             .sftp_workspaces
             .insert(id.to_string(), view);
         self.refresh_file_manager_pane(format!("sftp-{id}"), PaneId::Left, cx);
+        self.refresh_file_manager_pane(format!("sftp-{id}"), PaneId::Right, cx);
     }
 
     pub(in crate::features) fn sftp_session_content(&self, id: &str) -> gpui::AnyElement {

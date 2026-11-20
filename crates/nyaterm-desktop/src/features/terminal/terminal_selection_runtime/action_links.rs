@@ -350,6 +350,11 @@ impl NyaTermApp {
         &self,
         position: Point<Pixels>,
     ) -> Option<Option<String>> {
+        // Root-level hover and mouse reporting use coordinates rather than GPUI
+        // hitboxes, so they must respect the floating panels' input boundary.
+        if self.position_inside_floating_panel(position) {
+            return None;
+        }
         // Bounds survive tab/page switches. Only the authoritative visible set
         // may participate in root-level hover and mouse-report hit-testing.
         let visible_session_ids = self.visible_terminal_session_ids();

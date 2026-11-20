@@ -347,6 +347,14 @@ impl TerminalViewState {
         previous: nyaterm_terminal::TerminalHistoryState,
     ) {
         let current = self.history_state();
+        let revision = self.screen_revision;
+        if self
+            .search_result
+            .as_mut()
+            .is_some_and(|r| !r.retain_stable_history(current, revision))
+        {
+            self.search_result = None;
+        }
         let scrolled = current.scrolled_since(previous);
         if current.changes_since(previous).is_none() {
             self.clear_scrollback_query_caches();

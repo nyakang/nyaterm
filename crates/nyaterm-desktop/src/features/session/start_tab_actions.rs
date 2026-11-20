@@ -180,6 +180,7 @@ impl NyaTermApp {
         };
         let mut pending = PendingSessionStart {
             preparing: false,
+            offer_serial_reconnect_selection: false,
             mcp_open_operation_id: None,
             requested_ssh_runtime_mode: source.requested_ssh_runtime_mode,
             attempt: Default::default(),

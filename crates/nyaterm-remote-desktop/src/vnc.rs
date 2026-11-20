@@ -1,13 +1,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 use uuid::Uuid;
 
 use crate::heartbeat::{Heartbeat, Supervisor};
 use crate::helper_process;
+use crate::presentation::{
+    PresentationClient, PresentationWorker, VncPresentation, VncPresentationConfig,
+    VncPresentationId, VncPresentationMetrics,
+};
 use crate::{
     FRAME_PAYLOAD_LIMIT, MAX_VNC_CLIPBOARD_TEXT_BYTES, MAX_VNC_INPUT_BATCH, PROTOCOL_VERSION,
     PacketType, QueueWaker, RemoteCursorEvent, RemoteFrameEvent, RemotePointerEvent,
@@ -75,6 +79,7 @@ fn control_byte_cost(event: &VncRuntimeEvent) -> usize {
 }
 
 struct EventQueue {
+    presentation: OnceLock<PresentationClient>,
     trust: Arc<crate::vnc_trust::VncTrustState>,
     state: Mutex<EventQueueState>,
     space_available: Condvar,
@@ -92,6 +97,7 @@ impl Default for EventQueue {
 impl EventQueue {
     fn with_limits(frame_item_limit: usize, frame_byte_limit: usize) -> Self {
         Self {
+            presentation: OnceLock::new(),
             trust: Arc::default(),
             state: Mutex::new(EventQueueState::default()),
             space_available: Condvar::new(),
@@ -156,6 +162,17 @@ impl EventQueue {
     }
 
     fn push_reset(&self, session_id: &str, epoch: u64, width: u32, height: u32) -> bool {
+        if let Some(presentation) = self.presentation.get()
+            && !presentation
+                .frame(RemoteFrameEvent::Reset {
+                    epoch,
+                    width,
+                    height,
+                })
+                .unwrap_or(false)
+        {
+            return false;
+        }
         {
             let mut state = self
                 .state
@@ -183,6 +200,9 @@ impl EventQueue {
     }
 
     fn push_frame(&self, frame: RemoteFrameEvent) -> bool {
+        if let Some(presentation) = self.presentation.get() {
+            return presentation.frame(frame).unwrap_or(false);
+        }
         let cost = frame_byte_cost(&frame);
         if cost > self.frame_byte_limit {
             return false;
@@ -276,6 +296,9 @@ impl EventQueue {
     }
 
     fn close(&self) {
+        if let Some(presentation) = self.presentation.get() {
+            presentation.close();
+        }
         let mut state = self
             .state
             .lock()
@@ -294,6 +317,7 @@ impl EventQueue {
 }
 
 struct SessionRecord {
+    presentation_worker: Option<PresentationWorker>,
     state: Arc<Mutex<VncSessionState>>,
     capabilities: Arc<Mutex<Option<VncServerCapabilities>>>,
     queue: Arc<EventQueue>,
@@ -310,6 +334,7 @@ struct SessionRecord {
 /// only the transport moved behind IPC.
 #[derive(Default)]
 pub struct VncSessionManager {
+    presentation_config: Option<VncPresentationConfig>,
     sessions: Mutex<HashMap<String, SessionRecord>>,
     reaper: Mutex<Option<Reaper<SessionRecord>>>,
     /// Installed once by the application; copied into every session queue so
@@ -320,6 +345,55 @@ pub struct VncSessionManager {
 impl VncSessionManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Select background composition instead of the legacy ordered raw-frame queue.
+    pub fn with_presentation_pipeline(config: VncPresentationConfig) -> Self {
+        let mut manager = Self::default();
+        manager.presentation_config = Some(config);
+        manager
+    }
+
+    pub fn take_presentation(&self, session_id: &str) -> Option<VncPresentation> {
+        self.presentation_client(session_id)?.take()
+    }
+
+    pub fn acknowledge_presentation(&self, session_id: &str, id: VncPresentationId) {
+        if let Some(client) = self.presentation_client(session_id) {
+            client.acknowledge(id);
+        }
+    }
+
+    pub fn set_presentation_visible(
+        &self,
+        session_id: &str,
+        visible: bool,
+        config: VncPresentationConfig,
+    ) {
+        if let Some(client) = self.presentation_client(session_id) {
+            client.set_visible(visible, config);
+        }
+    }
+
+    pub fn invalidate_presentation(&self, session_id: &str) {
+        if let Some(client) = self.presentation_client(session_id) {
+            client.invalidate();
+        }
+    }
+
+    pub fn presentation_metrics(&self, session_id: &str) -> Option<VncPresentationMetrics> {
+        Some(self.presentation_client(session_id)?.metrics())
+    }
+
+    fn presentation_client(&self, session_id: &str) -> Option<PresentationClient> {
+        self.sessions
+            .lock()
+            .ok()?
+            .get(session_id)?
+            .queue
+            .presentation
+            .get()
+            .cloned()
     }
 
     /// Install the waker every session queue signals after enqueuing.
@@ -408,6 +482,7 @@ impl VncSessionManager {
         let state = Arc::new(Mutex::new(VncSessionState::Connecting));
         let capabilities = Arc::new(Mutex::new(None));
         let mut record = SessionRecord {
+            presentation_worker: None,
             state: state.clone(),
             capabilities: capabilities.clone(),
             queue: queue.clone(),
@@ -417,6 +492,29 @@ impl VncSessionManager {
             stderr: Some(stderr),
             supervisor: None,
         };
+        if let Some(config) = self.presentation_config {
+            let failure_queue = queue.clone();
+            let failure_state = state.clone();
+            let failure_id = session_id.clone();
+            let worker = match PresentationWorker::spawn(
+                format!("nyaterm-vnc-presentation-{session_id}"),
+                config,
+                queue.heartbeat.clone(),
+                self.queue_waker(),
+                move |error| push_fatal_error(&failure_id, &failure_queue, &failure_state, error),
+            ) {
+                Ok(worker) => worker,
+                Err(error) => {
+                    cleanup_child(&mut record);
+                    return Err(VncError::new(
+                        VncErrorKind::Internal,
+                        format!("failed to start VNC presentation worker: {error}"),
+                    ));
+                }
+            };
+            let _ = queue.presentation.set(worker.client.clone());
+            record.presentation_worker = Some(worker);
+        }
         record.reader = match spawn_reader(
             session_id.clone(),
             stdout,
@@ -1103,6 +1201,15 @@ fn handle_control(
         } if event_session == session_id => {
             queue.push_reset(session_id, epoch, width, height);
         }
+        VncControlMessage::FrameUpdateComplete {
+            session_id: event_session,
+            epoch,
+            sequence,
+        } if event_session == session_id => {
+            if let Some(presentation) = queue.presentation.get() {
+                presentation.complete(epoch, sequence)?;
+            }
+        }
         VncControlMessage::State {
             session_id: event_session,
             state: new_state,
@@ -1191,6 +1298,9 @@ fn set_state(state: &Arc<Mutex<VncSessionState>>, new_state: VncSessionState) {
 fn cleanup_child(record: &mut SessionRecord) {
     record.queue.trust.invalidate(true);
     record.queue.close();
+    if let Some(mut worker) = record.presentation_worker.take() {
+        worker.shutdown();
+    }
     if let Some(mut supervisor) = record.supervisor.take() {
         supervisor.stop();
     }

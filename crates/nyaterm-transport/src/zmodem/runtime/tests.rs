@@ -466,43 +466,44 @@ fn metadata_interrupts_finish_matching_without_reordering_events() {
 
 #[test]
 fn closing_or_cancelling_interrupts_a_partial_finish_wait() {
+    use crate::zmodem::runtime::finish_wait_active;
+    use std::cell::Cell;
     use std::sync::atomic::Ordering;
 
     for close in [false, true] {
         let manager = SessionManager::new();
-        let consumer = manager.register_event_consumer();
-        manager.assign_session_event_consumer("test", consumer);
         let shared = Shared::default();
         let mut pending = VecDeque::from([output(b"\r\x8aO")]);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(20));
-                if close {
-                    shared.state.lock().unwrap().closed = true;
-                } else {
-                    shared.cancelled.store(true, Ordering::Release);
-                }
-            });
-            let started = Instant::now();
-            assert!(
-                strip_finish_trailer(
-                    &manager,
-                    "test",
-                    consumer,
-                    &shared,
-                    ZmodemDirection::Download,
-                    &mut pending,
-                )
-                .is_empty()
-            );
-            assert!(started.elapsed() < FINISH_WAIT);
-        });
+        let drains = Cell::new(0);
+        assert!(
+            strip_finish_trailer_with(
+                "test",
+                ZmodemDirection::Download,
+                &mut pending,
+                || finish_wait_active(&manager, "test", &shared),
+                || {
+                    drains.set(drains.get() + 1);
+                    assert_eq!(drains.get(), 1, "must stop draining after cancellation");
+                    if close {
+                        shared.state.lock().unwrap().closed = true;
+                    } else {
+                        shared.cancelled.store(true, Ordering::Release);
+                    }
+                    Some(VecDeque::new())
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(drains.get(), 1);
         assert_eq!(output_bytes(pending), b"\r\x8aO");
     }
 }
 
 #[test]
 fn disconnect_during_finish_wait_preserves_output_and_exit_order() {
+    use crate::zmodem::runtime::finish_wait_active;
+    use std::cell::Cell;
+
     let manager = SessionManager::new();
     let consumer = manager.register_event_consumer();
     manager.assign_session_event_consumer("test", consumer);
@@ -511,25 +512,35 @@ fn disconnect_during_finish_wait_preserves_output_and_exit_order() {
         session_id: "test".into(),
         reason: "EOF".into(),
     };
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            std::thread::sleep(Duration::from_millis(20));
-            manager.event_queue.push(exited.clone());
-        });
-        let started = Instant::now();
-        assert!(
-            strip_finish_trailer(
-                &manager,
-                "test",
-                consumer,
-                &Shared::default(),
-                ZmodemDirection::Download,
-                &mut pending,
-            )
-            .is_empty()
-        );
-        assert!(started.elapsed() < FINISH_WAIT);
-    });
+    let shared = Shared::default();
+    let drains = Cell::new(0);
+    assert!(
+        strip_finish_trailer_with(
+            "test",
+            ZmodemDirection::Download,
+            &mut pending,
+            || finish_wait_active(&manager, "test", &shared),
+            || {
+                drains.set(drains.get() + 1);
+                assert_eq!(drains.get(), 1, "must stop draining after disconnect");
+                manager.event_queue.push(exited.clone());
+                Some(
+                    manager
+                        .drain_events_blocking_for_consumer_with_output_budget(
+                            consumer,
+                            256,
+                            128 * 1024,
+                            Duration::ZERO,
+                        )
+                        .unwrap()
+                        .events
+                        .into(),
+                )
+            },
+        )
+        .is_empty()
+    );
+    assert_eq!(drains.get(), 1);
     pending.extend(manager.event_queue.drain(100).events);
     assert_eq!(pending, VecDeque::from([output(b"\r\x8aO"), exited]));
 }

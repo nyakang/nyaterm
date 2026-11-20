@@ -462,20 +462,8 @@ impl NyaTermApp {
             theme
         };
         self.settings.set_appearance_theme(theme.to_string());
-        self.sync_component_theme(cx);
+        self.refresh_applied_theme(cx);
         self.save_appearance_settings(cx);
-        // The side panels (connections, remote monitor, transfers, AI) render
-        // from snapshots whose key embeds the panel chrome -- palette included.
-        // Their flush boundaries are interactions, input subscriptions, store
-        // replies, session switches, and their own clocks; a theme change is
-        // not one of them, so the panels kept painting the old palette until
-        // the next poll or relayout, surfacing as "the sidebars only follow
-        // after Apply". Queue their flushes so the chrome follows the theme
-        // immediately; each is a key comparison when nothing else moved.
-        self.defer_connection_panel_snapshot_flush(cx);
-        self.defer_remote_panel_snapshot_flush(cx);
-        self.defer_transfer_panel_snapshot_flush(cx);
-        self.defer_ai_panel_snapshot_flush(cx);
     }
 
     pub(in crate::features) fn update_terminal_font_family(

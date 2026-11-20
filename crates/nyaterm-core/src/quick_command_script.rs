@@ -11,7 +11,7 @@ const QUICK_COMMAND_PAUSE: Duration = Duration::from_secs(1);
 ///
 /// Scripts are split only where a `\p` pause separates them; everything else
 /// travels in a single chunk so the ordinary path stays one write.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickCommandChunk {
     /// Waited out before this chunk is written. Zero for the first chunk and
     /// for every chunk that directly follows another.

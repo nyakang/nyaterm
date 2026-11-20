@@ -1975,6 +1975,7 @@ impl SftpService {
                     close_sftp_session(session).await;
                     let bytes = bytes?;
                     Ok(SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path: remote_path.display_path.clone(),
                         local_path: local_path.clone(),
                         bytes,
@@ -2159,6 +2160,7 @@ impl SftpService {
                                 })?
                             else {
                                 return Ok(SftpTransferSummary {
+                                    retained_backups: Vec::new(),
                                     remote_path: remote_path.display_path.clone(),
                                     local_path: local_path.clone(),
                                     bytes: 0,
@@ -2199,6 +2201,7 @@ impl SftpService {
                                 .await?
                             };
                             Ok(SftpTransferSummary {
+                                retained_backups: Vec::new(),
                                 remote_path: remote_path.display_path.clone(),
                                 local_path: local_target,
                                 bytes,
@@ -2318,6 +2321,7 @@ impl SftpService {
                     close_upload_session(session, &upload_state).await;
                     let bytes = bytes?;
                     Ok(SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path: remote_path.clone(),
                         local_path: local_path.clone(),
                         bytes,
@@ -2390,6 +2394,7 @@ impl SftpService {
                     close_upload_session(session, &upload_state).await;
                     let bytes = bytes?;
                     Ok(SftpTransferSummary {
+                        retained_backups: Vec::new(),
                         remote_path: remote_path.display_path.clone(),
                         local_path: local_path.clone(),
                         bytes,
@@ -2546,6 +2551,7 @@ impl SftpService {
                             .await?
                         else {
                             return Ok(SftpTransferSummary {
+                                retained_backups: Vec::new(),
                                 remote_path: remote_path.clone(),
                                 local_path: local_path.clone(),
                                 bytes: 0,
@@ -2582,6 +2588,7 @@ impl SftpService {
                             .await?
                         };
                         Ok(SftpTransferSummary {
+                            retained_backups: Vec::new(),
                             remote_path: remote_target,
                             local_path: local_path.clone(),
                             bytes,

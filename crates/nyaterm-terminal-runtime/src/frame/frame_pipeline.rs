@@ -240,11 +240,20 @@ impl TerminalFramePipeline {
     pub fn note_command_input(
         &self,
         session_id: String,
-        fallback: Option<nyaterm_terminal::TerminalLineId>,
+        fallback: Option<nyaterm_terminal::command_navigation::CommandSubmissionEvidence>,
     ) {
         let _ = self.command_tx.send(TerminalFrameCommand::CommandInput {
             session_id,
             fallback,
+            input_activity: true,
+        });
+    }
+
+    pub fn reset_command_navigation(&self, session_id: String) {
+        let _ = self.command_tx.send(TerminalFrameCommand::CommandInput {
+            session_id,
+            fallback: None,
+            input_activity: false,
         });
     }
 

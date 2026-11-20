@@ -403,6 +403,7 @@ pub(in crate::features::panels) fn quick_command_editor_field_key(
         QuickCommandEditorField::Command => "command",
         QuickCommandEditorField::Category => "category",
         QuickCommandEditorField::Description => "description",
+        QuickCommandEditorField::SegmentedInterval => "segmented-interval",
     }
 }
 

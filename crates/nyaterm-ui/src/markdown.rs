@@ -1,8 +1,10 @@
 pub mod lightweight;
 
-use crate::text::{NyaTextState, NyaTextStyle};
-use gpui::{IntoElement, RenderOnce, SharedString};
-use gpui_base::text::TextView;
+use std::sync::Arc;
+
+use crate::text::{NyaCodeBlockActions, NyaTextState, NyaTextStyle};
+use gpui::{App, IntoElement, RenderOnce, SharedString, Window};
+use gpui_base::text::{CodeBlock, TextView};
 
 /// Stable NyaTerm boundary for selectable Markdown rendered by gpui-kit.
 #[derive(IntoElement)]
@@ -11,6 +13,7 @@ pub struct NyaMarkdown {
     source: SharedString,
     state: Option<NyaTextState>,
     style: Option<NyaTextStyle>,
+    code_block_actions: Option<NyaCodeBlockActions>,
 }
 
 impl NyaMarkdown {
@@ -20,6 +23,7 @@ impl NyaMarkdown {
             source: source.into(),
             state: None,
             style: None,
+            code_block_actions: None,
         }
     }
 
@@ -29,6 +33,7 @@ impl NyaMarkdown {
             source: "".into(),
             state: Some(state.clone()),
             style: None,
+            code_block_actions: None,
         }
     }
 
@@ -36,15 +41,40 @@ impl NyaMarkdown {
         self.style = Some(style);
         self
     }
+
+    /// Renders caller-provided actions in the corner of every fenced code
+    /// block, replacing the block's language label.
+    pub fn code_block_actions<F, E>(mut self, actions: F) -> Self
+    where
+        F: Fn(&CodeBlock, &mut Window, &mut App) -> E + Send + Sync + 'static,
+        E: IntoElement,
+    {
+        self.code_block_actions = Some(Arc::new(move |block, window, cx| {
+            actions(block, window, cx).into_any_element()
+        }));
+        self
+    }
 }
 
 impl RenderOnce for NyaMarkdown {
     fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        // The state carries the actions so the offscreen selection clones in
+        // retention paint the same code-block chrome as the live view.
+        if let (Some(state), Some(actions)) = (&self.state, &self.code_block_actions) {
+            state.set_code_block_actions(actions.clone());
+        }
         if self.state.is_none() && self.style.is_none() {
-            return gpui_kit::component::text::TextView::markdown(self.id, self.source)
+            let view = gpui_kit::component::text::TextView::markdown(self.id, self.source)
                 .selectable(true)
-                .on_link_click(open_link)
-                .into_any_element();
+                .on_link_click(open_link);
+            let view = match &self.code_block_actions {
+                Some(actions) => {
+                    let actions = actions.clone();
+                    view.code_block_actions(move |block, window, cx| actions(block, window, cx))
+                }
+                None => view,
+            };
+            return view.into_any_element();
         }
         let view = self
             .state

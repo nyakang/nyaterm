@@ -85,3 +85,12 @@ fn sftp_copy_reports_partial_writes_and_cleans_temporary_file_on_cancellation() 
         }
     }
 }
+
+#[test]
+fn ftp_and_sftp_copy_both_directions_through_public_file_requests() {
+    let (sftp, _) = super::filename_tests::service("utf8");
+    crate::ftp::tests::assert_remote_roundtrip(
+        Arc::new(crate::remote_file::RemoteFileService::with_test_sftp(sftp)),
+        "/copy.txt",
+    );
+}

@@ -6,6 +6,7 @@ use encoding_rs::Encoding;
 pub enum CharacterEncoding {
     #[default]
     Utf8,
+    Windows1252,
     Gbk,
     Gb18030,
     Big5,
@@ -30,8 +31,9 @@ impl std::fmt::Display for CharacterEncoding {
 }
 
 impl CharacterEncoding {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Utf8,
+        Self::Windows1252,
         Self::Gbk,
         Self::Gb18030,
         Self::Big5,
@@ -42,6 +44,8 @@ impl CharacterEncoding {
     pub fn parse(label: &str) -> Result<Self, EncodingError> {
         match label.trim().to_ascii_lowercase().as_str() {
             "utf8" | "utf-8" => Ok(Self::Utf8),
+            "windows-1252" | "windows1252" | "cp1252" | "1252" | "iso-8859-1" | "latin1"
+            | "latin-1" => Ok(Self::Windows1252),
             "gbk" | "gb2312" | "cp936" => Ok(Self::Gbk),
             "gb18030" => Ok(Self::Gb18030),
             "big5" => Ok(Self::Big5),
@@ -54,6 +58,7 @@ impl CharacterEncoding {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Utf8 => "UTF-8",
+            Self::Windows1252 => "Windows-1252",
             Self::Gbk => "GBK",
             Self::Gb18030 => "GB18030",
             Self::Big5 => "Big5",
@@ -65,6 +70,7 @@ impl CharacterEncoding {
     pub const fn codec(self) -> &'static Encoding {
         match self {
             Self::Utf8 => encoding_rs::UTF_8,
+            Self::Windows1252 => encoding_rs::WINDOWS_1252,
             Self::Gbk => encoding_rs::GBK,
             Self::Gb18030 => encoding_rs::GB18030,
             Self::Big5 => encoding_rs::BIG5,
@@ -113,6 +119,13 @@ mod tests {
         }
         for (label, expected) in [
             (" Utf8 ", CharacterEncoding::Utf8),
+            ("windows-1252", CharacterEncoding::Windows1252),
+            ("Windows1252", CharacterEncoding::Windows1252),
+            ("CP1252", CharacterEncoding::Windows1252),
+            ("1252", CharacterEncoding::Windows1252),
+            ("ISO-8859-1", CharacterEncoding::Windows1252),
+            ("latin1", CharacterEncoding::Windows1252),
+            ("latin-1", CharacterEncoding::Windows1252),
             ("gb2312", CharacterEncoding::Gbk),
             ("CP936", CharacterEncoding::Gbk),
             ("shift-jis", CharacterEncoding::ShiftJis),
@@ -127,6 +140,20 @@ mod tests {
                 Err(EncodingError::UnsupportedEncoding)
             );
         }
+    }
+
+    #[test]
+    fn windows_1252_round_trips_and_rejects_unrepresentable_text() {
+        let bytes = CharacterEncoding::Windows1252.encode("café €").unwrap();
+        let (decoded, _, had_errors) = encoding_rs::WINDOWS_1252.decode(&bytes);
+        assert!(!had_errors);
+        assert_eq!(decoded, "café €");
+        assert_eq!(
+            CharacterEncoding::Windows1252.encode("中"),
+            Err(EncodingError::UnrepresentableText(
+                CharacterEncoding::Windows1252
+            ))
+        );
     }
 
     #[test]

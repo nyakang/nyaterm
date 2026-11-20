@@ -9,39 +9,41 @@ default-members = [
     "crates/nyaterm-vnc-helper",
 ]
 members = [
-    "crates/nyaterm-android-helper",
-    "crates/nyaterm-android",
-    "crates/nyaterm-app",
-    "crates/nyaterm-i18n",
-    "crates/nyaterm-completion-runtime",
-    "crates/nyaterm-ai-client",
     "crates/nyaterm-agent-client",
+    "crates/nyaterm-ai-client",
+    "crates/nyaterm-android",
+    "crates/nyaterm-android-helper",
+    "crates/nyaterm-app",
     "crates/nyaterm-cloud-storage",
+    "crates/nyaterm-completion-runtime",
     "crates/nyaterm-core",
     "crates/nyaterm-desktop",
+    "crates/nyaterm-executor",
+    "crates/nyaterm-files",
+    "crates/nyaterm-host-tools-gpui",
+    "crates/nyaterm-i18n",
     "crates/nyaterm-mcp",
-    "crates/nyaterm-mcp-protocol",
     "crates/nyaterm-mcp-host",
+    "crates/nyaterm-mcp-protocol",
     "crates/nyaterm-otp",
-    "crates/nyaterm-preview",
-    "crates/nyaterm-translation-client",
     "crates/nyaterm-plugin-api",
     "crates/nyaterm-plugin-host",
+    "crates/nyaterm-preview",
     "crates/nyaterm-rdp-helper",
+    "crates/nyaterm-recording",
     "crates/nyaterm-remote-desktop",
-    "crates/nyaterm-windows-rdp",
+    "crates/nyaterm-remote-ops",
     "crates/nyaterm-store",
     "crates/nyaterm-sync",
     "crates/nyaterm-terminal",
     "crates/nyaterm-terminal-gpui",
     "crates/nyaterm-terminal-runtime",
-    "crates/nyaterm-recording",
-    "crates/nyaterm-remote-ops",
-    "crates/nyaterm-files",
+    "crates/nyaterm-translation-client",
     "crates/nyaterm-transport",
     "crates/nyaterm-ui",
     "crates/nyaterm-updater",
     "crates/nyaterm-vnc-helper",
+    "crates/nyaterm-windows-rdp",
 ]
 resolver = "3"
 # `temp/` is untracked and holds local reference checkouts, including the
@@ -53,13 +55,15 @@ resolver = "3"
 exclude = ["temp", "examples/plugins/guests"]
 
 [workspace.package]
-version = "2.0.6"
+version = "2.0.7"
 edition = "2024"
 authors = ["Kang"]
 license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nyaterm-host-tools-gpui = { path = "crates/nyaterm-host-tools-gpui" }
+nyaterm-executor = { path = "crates/nyaterm-executor" }
 nyaterm-completion-runtime = { path = "crates/nyaterm-completion-runtime" }
 nyaterm-i18n = { path = "crates/nyaterm-i18n" }
 nyaterm-android = { path = "crates/nyaterm-android" }
@@ -90,10 +94,10 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "q
 same-file = "1"
 tempfile = "3"
 glob = "0.3.4"
-gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "df44bb4fa7f95e9159a9558a4835f918a02e043e" }
-gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "f0950be3e71cae5f3f6c1095e6eaa834fb01522f" }
-gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "f0950be3e71cae5f3f6c1095e6eaa834fb01522f" }
-gpui_platform = { git = "https://github.com/nyakang/zed", rev = "df44bb4fa7f95e9159a9558a4835f918a02e043e" }
+gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "468bc1eb8e31d8f802af766a4d2d74d2d08ea46a" }
+gpui-base = { git = "https://github.com/nyakang/gpui-kit", rev = "9a0429b92d80f0dd9618fdcd721f69008d2ede7f" }
+gpui-kit = { git = "https://github.com/nyakang/gpui-kit", rev = "9a0429b92d80f0dd9618fdcd721f69008d2ede7f" }
+gpui_platform = { git = "https://github.com/nyakang/zed", rev = "468bc1eb8e31d8f802af766a4d2d74d2d08ea46a" }
 # Pure-Rust, `#![forbid(unsafe)]` PDF rasterizer (MIT OR Apache-2.0). Pinned
 # exactly: the crate is pre-1.0 and explicitly experimental, so a caret range
 # could pull in a breaking 0.8 without review. `embed-fonts` bundles the 14
@@ -145,7 +149,7 @@ redb = "4.1.0"
 regex = "1.11.1"
 rmcp = "=3.1.4"
 rustls = { version = "0.23.43", default-features = false, features = ["aws_lc_rs", "std"] }
-russh = { git = "https://github.com/nyakang/russh", rev = "f02221071224eb53501a620464e572c0559a91bd", features = ["des", "dsa"] }
+russh = { git = "https://github.com/nyakang/russh", rev = "25446652f68d69fc78037fadb6b645885da64e35", features = ["des", "dsa"] }
 russh-sftp = { git = "https://github.com/nyakang/russh-sftp", rev = "e2c3affd010e680556b1d1adc86d58d910075f4b" }
 rusty-leveldb = "4.0"
 rust-embed = { version = "8.11", features = ["include-exclude", "debug-embed"] }
@@ -154,13 +158,16 @@ schemars = "=1.2.2"
 serialport = { version = "4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# `no-log` enables log/max_level_off for the entire dependency graph. Sensitive
+# FTP events are suppressed by the application's immutable all-sink filter.
+suppaftp = { version = "13.0.0", default-features = false }
 semver = { version = "1", features = ["serde"] }
 sha1 = { version = "0.11", features = ["oid"] }
 sha2 = { version = "0.11", features = ["oid"] }
 signature = "3.0.0-rc.10"
 ssh-key = "=0.7.0-rc.12"
 thiserror = "2"
-time = { version = "0.3.47", features = ["formatting", "local-offset", "macros"] }
+time = { version = "0.3.47", features = ["formatting", "local-offset", "macros", "parsing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process", "io-util"] }
 tokio-util = "=0.7.19"
 tokio-socks = "0.5.2"
@@ -174,7 +181,7 @@ url = "=2.5.8"
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
-vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "1faaf127fb804f779991cde08fafe4934b58598a" }
+vnc = { package = "vnc-rs", git = "https://github.com/nyakang/vnc-rs", rev = "3edddb2b7a5c5f9dad4ca329a5cc06a997db4dcf" }
 vte = "0.14"
 zeroize = "1"
 zmodem2 = { git = "https://github.com/nyakang/zmodem2", rev = "87a80216179f29d90e0b8c06ee5b4a6a0132c763" }
@@ -214,7 +221,14 @@ debug = false
 inherits = "dev"
 debug = "full"
 
+# Work around the Rust 1.99.1 / LLVM SIGBUS in clearKillsForDef on macOS x64
+# while optimizing rust-i18n's large generated catalog initializer at level 3.
+# Revalidate on macOS x64 before removing this override (Actions job 134067038748).
+[profile.release.package.nyaterm-i18n]
+opt-level = 1
+
 [patch.crates-io]
+suppaftp = { git = "https://github.com/nyakang/suppaftp", rev = "6e91f7ab21b8d9f136a997d51cbd1e4591ba8147" }
 # Keep Picky and its ASN.1 types on the same stable-RSA fork revision.
 picky = { version = "=7.0.0-rc.29", git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }

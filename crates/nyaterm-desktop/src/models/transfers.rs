@@ -583,6 +583,7 @@ pub(crate) enum TransferJobOutput {
     /// of the target session's destination directory, used to update that
     /// session's browser cache without switching the active session.
     Sent {
+        retained_backups: Vec<String>,
         source_path: String,
         /// Set only after a verified cut has deleted the source.
         source_parent_path: Option<String>,

@@ -45,32 +45,37 @@ impl SendCommandDensity {
 
 impl NyaTermApp {
     pub(super) fn send_command_bar_view_state(&self, cx: &gpui::App) -> SendCommandBarViewState {
-        let send = self.send_command.presentation(cx);
+        let send = self.send_command.view_presentation(cx);
         let palette = self.theme_palette();
         let active_kind = self.active_session_kind();
         let group_targets = self.send_command_group_target_options();
         let is_serial_text_line = matches!(active_kind, Some(SessionKind::Serial))
             && send.data_type == SendCommandDataType::Text
             && send.mode == SendCommandMode::Line;
-        let unit_result = self.build_send_command_units(&send.draft, active_kind, cx);
+        let unit_result = self.send_command.payload_statistics(active_kind, cx);
         let (validation_error, unit_count, byte_count) = match &unit_result {
-            Ok(units) => {
-                let bytes = units.iter().map(Vec::len).sum::<usize>();
-                (false, units.len(), bytes)
-            }
+            Ok(stats) => (false, stats.units, stats.bytes),
             Err(_) => (true, 0usize, 0usize),
         };
         let hex = send.hex.read(cx);
         let density =
             SendCommandDensity::for_size(send.viewport_width, self.shell.command_send_height());
-        let has_payload = !send.draft.is_empty();
+        let has_payload = if send.data_type == SendCommandDataType::Hex {
+            !hex.document().bytes().is_empty()
+        } else {
+            !send.draft.is_empty()
+        };
         let hex_error = send.data_type == SendCommandDataType::Hex && hex.error().is_some();
+        let interval_error =
+            nyaterm_core::send_command::parse_interval_ms(&send.interval_input).is_none();
         let validation_error = validation_error || hex_error;
         let target_available = !self.send_command_target_session_ids().is_empty();
         let send_disabled =
             !send.sending && (validation_error || !has_payload || !target_available);
         let action_hint = if send.sending {
             t!("serialSend.stop").to_string()
+        } else if interval_error {
+            t!("quickCommands.errorSegmentedIntervalInvalid").to_string()
         } else if validation_error {
             t!("serialSend.hexError").to_string()
         } else if !has_payload {
@@ -80,7 +85,9 @@ impl NyaTermApp {
         } else {
             format!("{} · {}", t!("serialSend.send"), send_shortcut())
         };
-        let mut status = if hex_error {
+        let mut status = if interval_error {
+            t!("quickCommands.errorSegmentedIntervalInvalid").to_string()
+        } else if hex_error {
             t!("serialSend.invalidPaste").to_string()
         } else if validation_error {
             t!("serialSend.incompleteByte").to_string()

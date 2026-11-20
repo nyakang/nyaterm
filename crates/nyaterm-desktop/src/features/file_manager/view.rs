@@ -1,5 +1,7 @@
 mod interaction;
+mod menu;
 mod navigation;
+mod path_navigation;
 mod queue;
 mod table;
 
@@ -8,7 +10,7 @@ use gpui::{
     MouseDownEvent, ParentElement as _, Render, SharedString, Styled as _, Window, div, prelude::*,
     px, relative, rgb,
 };
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable};
+use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
 use super::pane::PaneId;
@@ -97,120 +99,37 @@ impl FileManagerWorkspace {
         });
     }
 
-    fn toolbar(&self, palette: ThemePalette, cx: &mut Context<Self>) -> AnyElement {
-        let can_transfer = !self.active_pane().selected_paths.is_empty()
-            && !self.active_pane().disconnected
-            && !self.pane(self.active.other()).disconnected
-            && !self.pane(self.active.other()).path.display_path.is_empty();
-        let target = self.read_app(cx, |app| {
-            app.endpoint_label(&self.pane(self.active.other()).endpoint)
-        });
-        let direction = if self.active == PaneId::Left {
-            "→"
-        } else {
-            "←"
-        };
-        let toolbar = div()
-            .h(px(36.))
+    fn pane_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut switches = div()
+            .h(px(28.))
             .flex_none()
-            .px_2()
             .flex()
             .items_center()
             .gap_1()
-            .border_b_1()
-            .border_color(rgb(palette.border))
-            .child(
+            .px_2();
+        for pane in [PaneId::Left, PaneId::Right] {
+            switches = switches.child(
                 NyaButton::new(
-                    "fm-copy",
-                    format!("{} {direction} {target}", t!("fileManager.copy")),
+                    format!("fm-show-{}", pane.as_str()),
+                    t!(if pane == PaneId::Left {
+                        "fileManager.leftPane"
+                    } else {
+                        "fileManager.rightPane"
+                    })
+                    .to_string(),
                 )
                 .small()
-                .disabled(!can_transfer)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.send_transfer(FileTransferOperation::Copy, window, cx)
-                })),
-            )
-            .child(
-                NyaButton::new("fm-move", t!("fileManager.move").to_string())
-                    .small()
-                    .disabled(!can_transfer)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.send_transfer(FileTransferOperation::Move, window, cx)
-                    })),
-            )
-            .child(
-                NyaButton::new("fm-swap", t!("fileManager.swapPanes").to_string())
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.swap_panes();
-                        for pane in [PaneId::Left, PaneId::Right] {
-                            let search = this.pane(pane).search.clone();
-                            this.inputs(pane)
-                                .search
-                                .update(cx, |input, cx| input.set_content_silent(&search, cx));
-                        }
-                        let id = this.id.clone();
-                        this.dispatch_app(window, cx, move |app, _, cx| {
-                            app.refresh_file_manager_pane(id.clone(), PaneId::Left, cx);
-                            app.refresh_file_manager_pane(id, PaneId::Right, cx);
-                            app.persist_file_manager_settings(cx);
-                        });
-                        this.focus_pane(this.active, window, cx);
-                    })),
-            )
-            .child(
-                NyaButton::new("fm-folder", t!("fileExplorer.newFolder").to_string())
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_name_dialog(this.active, FileManagerNameKind::Folder, window, cx)
-                    })),
-            )
-            .child(
-                NyaButton::new("fm-delete", t!("fileExplorer.delete").to_string())
-                    .small()
-                    .disabled(self.active_pane().selected_paths.is_empty())
-                    .on_click(cx.listener(|this, _, window, cx| this.delete_selection(window, cx))),
+                .variant(if self.active == pane {
+                    NyaButtonVariant::Primary
+                } else {
+                    NyaButtonVariant::Ghost
+                })
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)),
+                ),
             );
-        if self.single_pane {
-            let mut switches = div()
-                .h(px(28.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_1()
-                .px_2();
-            for pane in [PaneId::Left, PaneId::Right] {
-                switches = switches.child(
-                    NyaButton::new(
-                        format!("fm-show-{}", pane.as_str()),
-                        t!(if pane == PaneId::Left {
-                            "fileManager.leftPane"
-                        } else {
-                            "fileManager.rightPane"
-                        })
-                        .to_string(),
-                    )
-                    .small()
-                    .variant(if self.active == pane {
-                        NyaButtonVariant::Primary
-                    } else {
-                        NyaButtonVariant::Ghost
-                    })
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.focus_pane(pane, window, cx)),
-                    ),
-                );
-            }
-            return div()
-                .flex_none()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(switches)
-                .child(toolbar.overflow_x_scrollbar())
-                .into_any_element();
         }
-        toolbar.overflow_x_scrollbar().into_any_element()
+        switches.into_any_element()
     }
 
     fn measure(&self, pane: Option<PaneId>, cx: &mut Context<Self>) -> impl IntoElement {
@@ -368,7 +287,7 @@ impl Render for FileManagerWorkspace {
                 cx.listener(|this, _, window, cx| this.finish_resize(window, cx)),
             )
             .child(self.measure(None, cx))
-            .child(self.toolbar(palette, cx))
+            .when(self.single_pane, |view| view.child(self.pane_switcher(cx)))
             .child(self.panes(palette, cx))
             .child(self.queue_view(palette, cx))
             .into_any_element()
@@ -384,6 +303,21 @@ fn small_button(
         .small()
         .variant(NyaButtonVariant::Ghost)
         .on_click(on_click)
+}
+
+fn icon_button(
+    palette: ThemePalette,
+    id: impl Into<SharedString>,
+    icon: &'static str,
+    tooltip: impl Into<SharedString>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> NyaButton {
+    small_button(id, "", on_click)
+        .icon(icon)
+        .compact()
+        .height(px(24.))
+        .text_color(rgb(palette.text_muted))
+        .tooltip(tooltip)
 }
 
 #[cfg(test)]

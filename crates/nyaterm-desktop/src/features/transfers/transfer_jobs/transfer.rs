@@ -21,7 +21,7 @@ impl NyaTermApp {
         let duplicate_policy = self.transfer.duplicate_policy();
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask)
             .then(|| self.session.prompt_duplicate_broker() as Arc<dyn SftpDuplicateResolver>);
-        SftpPathTransferOptions::new(
+        crate::features::transfers::transfer_options::path_options(
             duplicate_policy,
             duplicate_resolver,
             self.sftp_transfer_options(),
@@ -548,7 +548,7 @@ impl NyaTermApp {
                     });
                 let path_options = self.transfer.transfer_job_retry_path_options(
                     &job_id,
-                    SftpPathTransferOptions::new(
+                    crate::features::transfers::transfer_options::path_options(
                         duplicate_policy,
                         duplicate_resolver,
                         transfer_options,
@@ -642,7 +642,7 @@ impl NyaTermApp {
                     });
                 let path_options = self.transfer.transfer_job_retry_path_options(
                     &job_id,
-                    SftpPathTransferOptions::new(
+                    crate::features::transfers::transfer_options::path_options(
                         duplicate_policy,
                         duplicate_resolver,
                         transfer_options,

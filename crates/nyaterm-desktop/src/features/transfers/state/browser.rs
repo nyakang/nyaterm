@@ -629,8 +629,26 @@ impl TransferFeatureState {
         self.browser.favorites.iter().cloned().collect()
     }
 
-    pub(in crate::features) fn clear_browser_favorites(&mut self) {
-        self.browser.favorites.clear();
+    pub(in crate::features) fn temporary_browser_favorites(
+        &self,
+        endpoint: &super::super::file_operations::FileOperationEndpoint,
+    ) -> Vec<String> {
+        self.temporary_browser_favorites
+            .get(endpoint)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(in crate::features) fn set_temporary_browser_favorites(
+        &mut self,
+        endpoint: super::super::file_operations::FileOperationEndpoint,
+        favorites: Vec<String>,
+    ) {
+        if favorites.is_empty() {
+            self.temporary_browser_favorites.remove(&endpoint);
+        } else {
+            self.temporary_browser_favorites.insert(endpoint, favorites);
+        }
     }
 
     pub(in crate::features) fn retain_browser_selection(

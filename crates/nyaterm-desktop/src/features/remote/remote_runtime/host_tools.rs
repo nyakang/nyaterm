@@ -11,8 +11,10 @@ use crate::blocking_jobs::BlockingJobScheduler;
 use crate::features::NyaTermApp;
 use crate::features::pages::remote::{HostContext, HostResolution, HostToolKind, HostToolsPanel};
 use gpui::{AppContext as _, Context, Entity, WeakEntity};
+use nyaterm_host_tools_gpui::{HostToolConfirmationHandler, HostToolsAppearance};
 use nyaterm_remote_ops::host::HostTarget;
 use rust_i18n::t;
+use std::rc::Rc;
 
 /// A captured interaction stays bound to both its session and concrete lease.
 #[derive(Clone)]
@@ -58,7 +60,25 @@ impl HostToolPanels {
     ) -> Self {
         let make = |kind: HostToolKind, cx: &mut Context<NyaTermApp>| {
             let (app, scheduler) = (app.clone(), scheduler.clone());
-            cx.new(|cx| HostToolsPanel::new(kind, app, scheduler, cx))
+            let confirmation: HostToolConfirmationHandler = Rc::new(move |request, window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    app.open_confirm_dialog(
+                        (
+                            request.title(),
+                            request.description(),
+                            request.confirm_label(),
+                            true,
+                            move |_app, _window, cx| {
+                                request.approve(cx);
+                                true
+                            },
+                        ),
+                        window,
+                        cx,
+                    );
+                });
+            });
+            cx.new(|cx| HostToolsPanel::new(kind, confirmation, scheduler, cx))
         };
         Self {
             ports: make(HostToolKind::Ports, cx),
@@ -164,6 +184,11 @@ impl NyaTermApp {
         self.host_tool_panels.connection = connection;
         let signature = self.host_tools_signature();
         let chrome = self.panel_chrome();
+        let chrome = HostToolsAppearance {
+            palette: chrome.palette,
+            transparent_surface: chrome.transparent_surface,
+            code_font_family: crate::features::shell::gpui_code_font_family(),
+        };
         for kind in HostToolPanels::ALL {
             let panel = self.host_tool_panels.entity(kind).clone();
             if connection_changed || panel.read(cx).signature() != signature {
@@ -176,7 +201,8 @@ impl NyaTermApp {
                 });
             }
             panel.update(cx, |panel, cx| panel.set_chrome(chrome, cx));
-            let demand = self.panel_is_rendered(kind.nav_item()) && panel.read(cx).host_ready();
+            let demand =
+                self.panel_is_rendered(host_tool_nav_item(kind)) && panel.read(cx).host_ready();
             panel.update(cx, |panel, cx| panel.set_demand(demand, cx));
         }
     }
@@ -206,4 +232,12 @@ fn local_host() -> HostResolution {
         target,
         os,
     })
+}
+
+/// Navigation belongs to the application, not the reusable panels.
+pub(in crate::features) fn host_tool_nav_item(kind: HostToolKind) -> crate::models::NavItem {
+    match kind {
+        HostToolKind::Ports => crate::models::NavItem::Ports,
+        HostToolKind::Services => crate::models::NavItem::Services,
+    }
 }

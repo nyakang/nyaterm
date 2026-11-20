@@ -158,6 +158,7 @@ fn consuming_an_entire_sideband_prefix_keeps_ui_routing_after_the_drain_complete
 fn pending(name: &str) -> PendingSessionStart {
     PendingSessionStart {
         preparing: false,
+        offer_serial_reconnect_selection: false,
         mcp_open_operation_id: None,
         requested_ssh_runtime_mode: None,
         attempt: Default::default(),
@@ -350,6 +351,7 @@ fn failed_retry_replaces_the_moved_tab_on_success_with_a_fresh_attempt() {
                         multiplex_handle: None,
                         launch_config: Some(config),
                         cleanup: None,
+                        ftp_service: None,
                     }),
                 },
                 cx,

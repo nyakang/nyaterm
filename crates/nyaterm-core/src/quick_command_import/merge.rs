@@ -98,6 +98,11 @@ pub fn merge_import(
             &["execute", "append"],
             "command.execution_mode",
         )?;
+        let execution_mode = if command.segmented_send.is_some() {
+            "append".to_string()
+        } else {
+            execution_mode
+        };
         if let Some(source) = command.source.as_deref().map(str::trim) {
             validate_one_of(source, &["manual", "ai"], "command.source")?;
         }
@@ -112,6 +117,7 @@ pub fn merge_import(
             icon_tag: trim_optional(command.icon_tag),
             pinned: command.pinned,
             execution_mode: Some(execution_mode),
+            segmented_send: command.segmented_send,
             raw_send: command.raw_send,
             source: trim_optional(command.source),
             risk_level: command.risk_level,
@@ -119,6 +125,7 @@ pub fn merge_import(
             created_at: Some(now),
             use_count: None,
             sort_order: command.sort_order,
+            extra: command.extra,
         };
         if upsert_command(config, imported) {
             summary.imported_commands += 1;
@@ -167,7 +174,7 @@ pub(super) fn upsert_category(
     }
 }
 
-pub(super) fn upsert_command(config: &mut QuickCommandsConfig, command: QuickCommand) -> bool {
+pub(super) fn upsert_command(config: &mut QuickCommandsConfig, mut command: QuickCommand) -> bool {
     if let Some(existing) = config
         .commands
         .iter_mut()
@@ -175,6 +182,9 @@ pub(super) fn upsert_command(config: &mut QuickCommandsConfig, command: QuickCom
     {
         let created_at = existing.created_at;
         let use_count = existing.use_count;
+        let mut extra = existing.extra.clone();
+        extra.extend(command.extra);
+        command.extra = extra;
         *existing = command;
         existing.created_at = created_at.or(existing.created_at);
         existing.use_count = use_count.or(existing.use_count);

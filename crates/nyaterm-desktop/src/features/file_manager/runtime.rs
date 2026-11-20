@@ -14,7 +14,10 @@ use nyaterm_files::sftp::RemoteFilePath;
 use rust_i18n::t;
 
 impl NyaTermApp {
-    fn file_browser_backend_for_endpoint(&self, endpoint: &PaneEndpoint) -> FileBrowserBackendKind {
+    pub(in crate::features) fn file_browser_backend_for_endpoint(
+        &self,
+        endpoint: &PaneEndpoint,
+    ) -> FileBrowserBackendKind {
         match endpoint {
             PaneEndpoint::Session(id) => self
                 .session
@@ -188,6 +191,7 @@ impl NyaTermApp {
                     let pane = workspace.pane_mut(pane_id);
                     pane.disconnected = true;
                     pane.loading = false;
+                    pane.home_dir_pending = false;
                     pane.error = Some(crate::features::android::labels::file_error_message(&error));
                     cx.notify();
                 });
@@ -197,6 +201,8 @@ impl NyaTermApp {
         let generation = workspace.update(cx, |workspace, cx| {
             let pane = workspace.pane_mut(pane_id);
             pane.generation = pane.generation.wrapping_add(1);
+            pane.path_menu = None;
+            pane.path_editing = false;
             pane.loading = true;
             pane.error = None;
             cx.notify();
@@ -248,6 +254,7 @@ impl NyaTermApp {
                     Err(error) => workspace.update(cx, |workspace, cx| {
                         let pane = workspace.pane_mut(pane_id);
                         pane.loading = false;
+                        pane.home_dir_pending = false;
                         pane.error =
                             Some(crate::features::android::labels::file_error_message(&error));
                         cx.notify();

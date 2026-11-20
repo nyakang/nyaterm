@@ -1,4 +1,4 @@
-//! Navigation-only submission evidence. It never changes the editing tracker.
+//! Submission evidence for navigation and presentation. It never changes the editing tracker.
 
 use nyaterm_core::terminal::input_tracker::{
     MAX_TRACKED_INPUT_BYTES, TerminalInputState, get_tracked_submission_command,
@@ -9,6 +9,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::editing::recover_marked_input;
 use crate::{TerminalLineId, TerminalSnapshot};
 
+#[derive(Clone)]
 pub struct CommandSubmissionEvidence {
     pub anchor: TerminalLineId,
     pub command: String,

@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{
-    AppContext as _, Entity, IntoElement, MouseButton, ParentElement as _, Render, Styled as _,
-    TestAppContext, VisualTestContext, div, point, px,
+    AppContext as _, Entity, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton,
+    ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, point, px,
 };
 use nyaterm_core::{AiMessage, AiMessageRole};
 use nyaterm_ui::text::NyaTextState;
@@ -44,25 +44,32 @@ fn hosted<'a>(
     (app, vcx)
 }
 
-fn load_message(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, text: &str) {
+fn load_messages(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, messages: Vec<AiMessage>) {
     vcx.update(|_, cx| {
         app.update(cx, |app, cx| {
             let session = app.ai.chat_session_id().to_string();
             let job = app.ai.begin_history_operation("fixture").unwrap();
-            let mut message: AiMessage = (*transcript_message(0)).clone();
-            message.session_id = session.clone();
-            message.content = text.into();
+            let mut messages = messages;
+            for message in &mut messages {
+                message.session_id = session.clone();
+            }
             assert!(app.ai.finish_history_message_load(
                 job,
                 &session,
                 session.clone(),
-                Ok(vec![message]),
+                Ok(messages),
                 "fixture".into()
             ));
             app.flush_ai_panel_snapshot(cx);
         })
     });
     compact_draw(app, vcx);
+}
+
+fn load_message(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext, text: &str) {
+    let mut message: AiMessage = (*transcript_message(0)).clone();
+    message.content = text.into();
+    load_messages(app, vcx, vec![message]);
 }
 
 fn message_state(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext) -> NyaTextState {
@@ -73,6 +80,17 @@ fn message_state(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext) -> NyaTe
             .text_state(TextOwner::Message("message-0".into()), "answer")
             .unwrap()
     })
+}
+
+fn press_key(vcx: &mut VisualTestContext, key: &str) {
+    let keystroke =
+        vcx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+    vcx.simulate_event(KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    vcx.simulate_event(KeyUpEvent { keystroke });
 }
 
 fn open_menu(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext) {
@@ -245,4 +263,89 @@ fn collapsing_reasoning_clears_only_its_selection(cx: &mut TestAppContext) {
         snapshot.expanded_message_thoughts = Default::default()
     });
     vcx.update(|_, cx| assert_eq!(thought.selected_text(cx), ""));
+}
+
+#[gpui::test]
+fn message_copy_buttons_write_the_displayed_text_to_clipboard(cx: &mut TestAppContext) {
+    let root = TestConfigDir::new("nyaterm-ai-copy");
+    let _cleanup = crate::test_support::TestAppCleanup::new(cx);
+    let (app, vcx) = hosted(cx, root.path());
+    let mut user = (*transcript_message(0)).clone();
+    user.content = "copy this <think>literal prompt</think>".into();
+    let mut assistant = (*transcript_message(1)).clone();
+    assistant.role = AiMessageRole::Assistant;
+    assistant.content = "<think>embedded reasoning</think>**bold** answer".into();
+    assistant.reasoning_content = Some("separate reasoning".into());
+    load_messages(&app, vcx, vec![user, assistant]);
+    for (selector, expected) in [
+        (
+            "ai-copy-message-0",
+            "copy this <think>literal prompt</think>",
+        ),
+        ("ai-copy-message-1", "**bold** answer"),
+    ] {
+        let button = vcx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing copy control for {selector}"));
+        vcx.simulate_click(button.center(), gpui::Modifiers::default());
+        compact_draw(&app, vcx);
+        vcx.update(|_, cx| {
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
+        });
+    }
+}
+
+#[gpui::test]
+fn code_copy_buttons_copy_each_blocks_literal_code(cx: &mut TestAppContext) {
+    let root = TestConfigDir::new("nyaterm-ai-code-copy");
+    let _cleanup = crate::test_support::TestAppCleanup::new(cx);
+    let (app, vcx) = hosted(cx, root.path());
+    let mut assistant = (*transcript_message(0)).clone();
+    assistant.role = AiMessageRole::Assistant;
+    assistant.content =
+        "```rust\nlet answer = 42;\n```\n\n```python\nprint(\"中文 😀\")\n```".into();
+    load_messages(&app, vcx, vec![assistant]);
+    for (selector, expected) in [
+        ("ai-code-copy-0", "let answer = 42;"),
+        ("ai-code-copy-30", "print(\"中文 😀\")"),
+    ] {
+        let button = vcx.debug_bounds(selector).expect("code copy button");
+        vcx.simulate_click(button.center(), Default::default());
+        compact_draw(&app, vcx);
+        vcx.update(|_, cx| {
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
+        });
+    }
+}
+
+#[gpui::test]
+fn tab_navigation_can_activate_code_and_message_copy_buttons(cx: &mut TestAppContext) {
+    let root = TestConfigDir::new("nyaterm-ai-keyboard-copy");
+    let _cleanup = crate::test_support::TestAppCleanup::new(cx);
+    let (app, vcx) = hosted(cx, root.path());
+    let mut assistant = (*transcript_message(0)).clone();
+    assistant.role = AiMessageRole::Assistant;
+    let markdown = "```sh\nprintf hello\n```";
+    assistant.content = markdown.into();
+    load_messages(&app, vcx, vec![assistant]);
+    let state = message_state(&app, vcx);
+    vcx.update(|window, cx| state.focus(window, cx));
+    compact_draw(&app, vcx);
+    press_key(vcx, "tab");
+    compact_draw(&app, vcx);
+    press_key(vcx, "enter");
+    compact_draw(&app, vcx);
+    vcx.update(|_, cx| {
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().unwrap(),
+            "printf hello"
+        );
+    });
+    press_key(vcx, "tab");
+    compact_draw(&app, vcx);
+    press_key(vcx, "space");
+    compact_draw(&app, vcx);
+    vcx.update(|_, cx| {
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), markdown);
+    });
 }

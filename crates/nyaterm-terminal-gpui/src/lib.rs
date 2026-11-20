@@ -16,6 +16,7 @@ mod element;
 pub mod fonts;
 pub mod geometry;
 mod glyphs;
+pub mod gutter;
 mod images;
 mod input;
 pub mod keywords;

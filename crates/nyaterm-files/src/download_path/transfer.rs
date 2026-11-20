@@ -27,7 +27,7 @@ impl TransferDownload {
         Ok((staged, tokio::fs::File::from_std(file)))
     }
 
-    fn prepare(
+    pub(crate) fn prepare(
         root: &Path,
         target: &Path,
         resume_offset: u64,
@@ -102,7 +102,7 @@ impl TransferDownload {
         tokio::task::spawn_blocking(move || self.commit(&root, &target)).await?
     }
 
-    fn commit(self, root: &Path, target: &Path) -> anyhow::Result<FileIdentity> {
+    pub(crate) fn commit(self, root: &Path, target: &Path) -> anyhow::Result<FileIdentity> {
         validate_access(root, target, &self.access)?;
         ensure_no_symlink(root, &self.path)?;
         let identity = FileIdentity::from_path(&self.path)?;

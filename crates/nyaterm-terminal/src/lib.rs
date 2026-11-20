@@ -247,6 +247,8 @@ pub struct TerminalSnapshotRow {
     pub hyperlinks: Box<[HyperlinkSpan]>,
     pub command_mark: Option<ShellCommandMark>,
     pub shell_input: Option<ShellInputLineKind>,
+    /// Echo-confirmed fallback input background; never authorizes editing or execution.
+    pub inferred_input: bool,
     /// Proven input region for highlighting; columns are half-open. While editing,
     /// only the OSC input anchor and its soft wraps qualify, since completion output
     /// can appear before OSC 133 C. Submitted regions retain their column bounds.
@@ -629,6 +631,7 @@ struct TerminalSnapshotRowCacheKey {
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
+    inferred_input: bool,
     shell_input_columns: Option<(usize, usize)>,
     shell_integration: bool,
 }
@@ -738,6 +741,7 @@ struct LineMetadata {
     revision: Option<u64>,
     command_mark: Option<ShellCommandMark>,
     shell_input: bool,
+    inferred_input: bool,
     input_start_col: Option<usize>,
     input_end_col: Option<usize>,
 }
@@ -745,6 +749,7 @@ struct LineMetadata {
 #[derive(Debug, Default)]
 struct ScreenLineState {
     command_blocks: command_blocks::CommandBlocks,
+    inference: Option<command_blocks::InferredCommand>,
     /// Logical first retained input row after a local clear.
     clear_line_origin: Option<i64>,
     line_numbers: line_numbers::LineNumbers,
@@ -778,6 +783,13 @@ impl ScreenLineState {
         let last = self.logical_line(bottommost);
         self.line_numbers.retain_from(first);
         self.command_blocks.retain(first, last);
+        if self.inference.as_ref().is_some_and(|pending| {
+            !(first..=last).contains(&pending.submission.anchor.logical_line)
+        }) {
+            // History trimming may happen without another output chunk to drive
+            // inference; release its zeroizing submission buffer immediately.
+            self.inference = None;
+        }
         let before = self.metadata.len();
         let mut retained = self.metadata.split_off(&first);
         if let Some(after_last) = last.checked_add(1) {
@@ -863,6 +875,8 @@ pub struct TerminalCore {
     session_encoding: SessionEncoding,
     #[cfg(test)]
     last_signature_scan_count: usize,
+    #[cfg(test)]
+    inference_cells_visited: usize,
     #[cfg(test)]
     last_metadata_prune_count: usize,
     #[cfg(test)]
@@ -1054,6 +1068,8 @@ impl TerminalCore {
             #[cfg(test)]
             last_signature_scan_count: 0,
             #[cfg(test)]
+            inference_cells_visited: 0,
+            #[cfg(test)]
             last_metadata_prune_count: 0,
             #[cfg(test)]
             last_shell_input_commit_count: 0,
@@ -1174,6 +1190,9 @@ impl TerminalCore {
         let pending_prompt = self.primary_lines.pending_command_prompt;
         let blocks_before_reflow =
             cols_changed.then(|| std::mem::take(&mut self.primary_lines.command_blocks));
+        let inference_before_reflow = cols_changed
+            .then(|| self.primary_lines.inference.take())
+            .flatten();
         // A width reflow rewrites grid coordinates arbitrarily and rebuilds the
         // numbering indices, so remember the cursor's pinned number to re-anchor
         // it afterwards. Row-only growth keeps logical identities instead (see
@@ -1326,7 +1345,23 @@ impl TerminalCore {
                 block.end = end;
                 true
             });
+            let mapped_inference = inference_before_reflow.and_then(|mut pending| {
+                pending.submission.anchor.logical_line =
+                    remap(pending.submission.anchor.logical_line)?;
+                pending.submission.anchor.epoch = self.primary_lines.epoch;
+                pending.output = match pending.output {
+                    Some(output) => Some(remap(output)?),
+                    None => None,
+                };
+                pending.return_prompt = match pending.return_prompt {
+                    Some(prompt) => Some(remap(prompt)?),
+                    None => None,
+                };
+                pending.invalidate_cache();
+                Some(pending)
+            });
             self.primary_lines.command_blocks = blocks;
+            self.primary_lines.inference = mapped_inference;
             self.primary_lines.command_navigation.revision = navigation.revision.wrapping_add(1);
             self.primary_lines.command_navigation.position = mapped_position;
             self.primary_lines.command_navigation.selection = mapped_selection;
@@ -1340,6 +1375,7 @@ impl TerminalCore {
                     LineMetadata {
                         timestamp_ms: metadata.timestamp_ms,
                         cleared: metadata.cleared,
+                        inferred_input: metadata.inferred_input,
                         signature: Some(signature),
                         revision: Some(revision),
                         ..LineMetadata::default()
@@ -1553,6 +1589,7 @@ impl TerminalCore {
     /// This keeps a newly fed tail from being interpreted as the continuation of
     /// a skipped UTF-8/charset, ANSI, OSC, or graphics payload.
     pub fn reset_stream_state(&mut self) {
+        self.cancel_command_inference();
         self.parser = ansi::Processor::new();
         self.scroll_region_tracker.reset_stream();
         self.graphics_ingress = GraphicsIngress::new();
@@ -1623,12 +1660,14 @@ impl TerminalCore {
 
     /// Discard history and completed output while retaining the editable input rows.
     pub fn clear_except_input(&mut self) {
+        self.cancel_command_inference();
         self.active_line_state_mut().command_blocks = Default::default();
         self.collapsed_commands.clear();
         self.active_line_state_mut().command_navigation = Default::default();
         self.active_line_state_mut().pending_command_prompt = None;
         for metadata in self.active_line_state_mut().metadata.values_mut() {
             metadata.command_anchor = false;
+            metadata.inferred_input = false;
         }
         let cursor = self.term.renderable_content().cursor.point;
         let cursor_row = cursor.line.0.clamp(0, self.rows.saturating_sub(1) as i32) as usize;
@@ -1843,6 +1882,7 @@ impl TerminalCore {
             self.sync_presentation_state();
             self.update_active_input_end();
             self.stamp_changed_lines();
+            self.update_command_inference();
         }
     }
 
@@ -2096,13 +2136,32 @@ impl TerminalCore {
         self.search_grid_in_absolute_range(query, 0..self.total_rows())
     }
 
+    /// Line identity for a retained absolute row on the current screen.
+    pub fn search_line_id(&self, row: usize) -> Option<TerminalLineId> {
+        if row >= self.total_rows() {
+            return None;
+        }
+        let state = self.active_line_state();
+        Some(TerminalLineId {
+            epoch: state.epoch,
+            logical_line: state.logical_origin + row as i64 - self.scrollback_len() as i64,
+        })
+    }
+
+    /// Start of the first logical line that can be rewritten by live output.
+    pub fn search_mutable_start(&self) -> usize {
+        let first = self.term.line_search_left(Point::new(Line(0), Column(0)));
+        self.scrollback_len()
+            .saturating_add_signed(first.line.0 as isize)
+    }
+
     pub fn search_grid_occurrences_in_absolute_range(
         &self,
         query: &TerminalSearchQuery,
         absolute_lines: Range<usize>,
         mode: TerminalSearchRangeMode,
     ) -> Result<Vec<TerminalGridOccurrence>, TerminalSearchError> {
-        if query.pattern.trim().is_empty() || query.limit == 0 {
+        if query.pattern.is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
         let total_rows = self.total_rows();
@@ -2180,7 +2239,7 @@ impl TerminalCore {
         query: &TerminalSearchQuery,
         absolute_lines: Range<usize>,
     ) -> Result<Vec<TerminalGridMatch>, TerminalSearchError> {
-        if query.pattern.trim().is_empty() || query.limit == 0 {
+        if query.pattern.is_empty() || query.limit == 0 {
             return Ok(Vec::new());
         }
 
@@ -2478,11 +2537,18 @@ impl TerminalCore {
             metadata.timestamp_ms = Some(now_ms);
             metadata.revision = Some(revision);
         }
+        let content_changed = metadata.signature != Some(signature);
+        if content_changed {
+            metadata.inferred_input = false;
+        }
         metadata.signature = Some(signature);
         if erased_input {
             metadata.shell_input = false;
             metadata.input_start_col = None;
             metadata.input_end_col = None;
+        }
+        if content_changed && let Some(pending) = self.active_line_state_mut().inference.as_mut() {
+            pending.invalidate_line(logical_line);
         }
         if erased_input {
             self.active_line_state_mut()
@@ -2507,7 +2573,17 @@ impl TerminalCore {
             .flags
             .contains(Flags::WRAPLINE);
         let state = self.active_line_state_mut();
-        state.line_numbers.update(state.logical_line(line), wraps);
+        let logical_line = state.logical_line(line);
+        if state.line_numbers.update(logical_line, wraps)
+            && let Some(pending) = state.inference.as_mut()
+        {
+            // Rendered signatures omit WRAPLINE; joining or splitting a hard
+            // line must independently invalidate parsed prompt observations.
+            pending.invalidate_line(logical_line);
+            if let Some(metadata) = state.metadata.get_mut(&logical_line) {
+                metadata.inferred_input = false;
+            }
+        }
     }
 
     fn initialize_line_numbers(&mut self) {
@@ -2582,12 +2658,14 @@ impl TerminalCore {
     fn sync_presentation_state(&mut self) {
         let alternate = self.alternate_screen();
         if alternate != self.presentation_alternate {
+            self.cancel_command_inference();
             self.primary_lines.input_anchor = None;
             self.alternate_lines.input_anchor = None;
             self.presentation_alternate = alternate;
         }
         let reset_generation = self.term.reset_generation();
         if reset_generation != self.consumed_reset_generation {
+            self.primary_lines.inference = None;
             self.primary_lines.command_blocks = Default::default();
             self.alternate_lines.command_blocks = Default::default();
             self.collapsed_commands.clear();
@@ -2625,6 +2703,7 @@ impl TerminalCore {
         // Entering and leaving alternate screen can occur in one parser chunk.
         // Its generation records the transition even when the final mode agrees.
         if alternate_generation != self.alternate_lines.consumed_generation {
+            self.cancel_command_inference();
             self.primary_lines.input_anchor = None;
         }
         Self::sync_screen_line_state(
@@ -2656,6 +2735,7 @@ impl TerminalCore {
             state.reflow_number_anchor = None;
             state.metadata.clear();
             state.command_blocks = Default::default();
+            state.inference = None;
             state.line_numbers = Default::default();
             state.command_navigation = Default::default();
             state.pending_command_prompt = None;
@@ -2718,6 +2798,9 @@ impl TerminalCore {
     fn apply_shell_boundary(&mut self, boundary: ShellBoundaryKind) {
         if self.alternate_screen() {
             return;
+        }
+        if !matches!(boundary, ShellBoundaryKind::InputStart) {
+            self.supersede_command_inference();
         }
         let point = self.term.renderable_content().cursor.point;
         let logical_line = self.active_line_state().logical_line(point.line);
@@ -3003,6 +3086,7 @@ fn snapshot_window_from_term(
         let display_line_number =
             line_id.and_then(|id| line_state.line_numbers.number(id.logical_line));
         let shell_input = line_state.shell_input_kind(line_id.map(|id| id.logical_line));
+        let inferred_input = metadata.is_some_and(|metadata| metadata.inferred_input);
         let shell_input_columns = shell_input.and_then(|kind| {
             if kind == ShellInputLineKind::Active
                 && !active_input_highlight_end
@@ -3051,6 +3135,7 @@ fn snapshot_window_from_term(
             command_mark,
             line_id,
             shell_input,
+            inferred_input,
             shell_input_columns,
             shell_integration,
         };
@@ -3082,6 +3167,7 @@ fn snapshot_window_from_term(
                     command_mark,
                     line_id,
                     shell_input,
+                    inferred_input,
                     shell_input_columns,
                     shell_integration,
                 },
@@ -3219,6 +3305,7 @@ struct SnapshotRowMetadata {
     command_mark: Option<ShellCommandMark>,
     line_id: Option<TerminalLineId>,
     shell_input: Option<ShellInputLineKind>,
+    inferred_input: bool,
     shell_input_columns: Option<(usize, usize)>,
     shell_integration: bool,
 }
@@ -3241,6 +3328,7 @@ fn snapshot_row_from_term(
         command_mark,
         line_id,
         shell_input,
+        inferred_input,
         shell_input_columns,
         shell_integration,
     } = metadata;
@@ -3292,6 +3380,7 @@ fn snapshot_row_from_term(
         wraps_to_next,
         command_mark,
         shell_input,
+        inferred_input,
         shell_input_columns,
         shell_integration,
     }

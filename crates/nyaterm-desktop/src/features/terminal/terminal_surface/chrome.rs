@@ -1,14 +1,10 @@
 use gpui::{
-    App, ClickEvent, Context, FontWeight, IntoElement, KeyDownEvent, MouseButton, SharedString,
-    Window, div, prelude::*, px, rgb, rgba, svg,
+    Context, IntoElement, KeyDownEvent, MouseButton, SharedString, div, prelude::*, px, rgb, rgba,
 };
-use nyaterm_core::truncate_preview;
-use nyaterm_ui::{NyaInput, NyaScrollable};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton, NyaInput};
 use rust_i18n::t;
 
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
-use crate::models::TerminalSearchMode;
-use crate::theme::ThemePalette;
 
 use super::{
     TERMINAL_SCROLLBAR_COLUMN_WIDTH, TERMINAL_SCROLLBAR_MIN_THUMB_HEIGHT,
@@ -182,188 +178,46 @@ impl NyaTermApp {
         let search_input = self.text_input(
             "terminal.search.query",
             &query,
-            TextInputSetup::placeholder("Find"),
+            TextInputSetup::placeholder(t!("terminalCtx.find")),
             cx,
         );
+        let search_app = cx.entity();
         let search_focus = search_input.read(cx).focus_handle();
         let search_focused = search_input.read(cx).has_focus();
         let buffer_matches = self.terminal_buffer_matches();
         let buffer_occurrence_count = self.terminal_buffer_occurrence_ranges().len();
         let buffer_search_complete = self.terminal_buffer_search_complete();
         let buffer_search_truncated = self.terminal_buffer_search_truncated();
-        let history_results = self.terminal_history_search_results();
-        let history_pending = self.terminal_history_search_pending_for_current_query();
-        let (status, is_error) = match self.terminal.search.mode {
-            TerminalSearchMode::Buffer => match &buffer_matches {
-                Ok(_) if self.terminal.search.query.trim().is_empty() => (String::new(), false),
-                Ok(_) if buffer_occurrence_count == 0 && !buffer_search_complete => {
-                    ("searching".to_string(), false)
-                }
-                Ok(_) if buffer_occurrence_count == 0 => ("not found".to_string(), false),
-                Ok(_) => {
-                    let count = buffer_occurrence_count;
-                    let count_label = if buffer_search_truncated {
-                        "1000+".to_string()
-                    } else {
-                        count.to_string()
-                    };
-                    (
-                        format!(
-                            "{}/{}{}",
-                            self.terminal
-                                .search
-                                .active_index
-                                .min(count.saturating_sub(1))
-                                + 1,
-                            count_label,
-                            if buffer_search_complete {
-                                ""
-                            } else {
-                                " searching"
-                            },
-                        ),
-                        false,
-                    )
-                }
-                Err(error) => (truncate_preview(error, 40), true),
-            },
-            TerminalSearchMode::History if history_pending => ("searching".to_string(), false),
-            TerminalSearchMode::History => match &history_results {
-                Ok(response) if self.terminal.search.query.trim().is_empty() => {
-                    (String::new(), false)
-                }
-                Ok(response) if response.results.is_empty() => ("not found".to_string(), false),
-                Ok(response) => (
-                    format!(
-                        "{} result(s){}",
-                        response.total,
-                        if response.truncated { " truncated" } else { "" }
-                    ),
-                    false,
-                ),
-                Err(error) => (truncate_preview(error, 40), true),
-            },
-        };
-        let show_history_results = self.terminal.search.mode == TerminalSearchMode::History
-            && !self.terminal.search.query.trim().is_empty();
-        let mut history_rows = div().id(SharedString::from("terminal-search-history-results"));
-        if show_history_results {
-            history_rows = history_rows
-                .mt_1()
-                .max_h(px(256.))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .border_t_1()
-                .border_color(rgb(palette.border))
-                .pt_1();
-            match history_results {
-                Ok(response) if response.results.is_empty() => {
-                    history_rows = history_rows.child(
-                        div()
-                            .px_2()
-                            .py_2()
-                            .text_xs()
-                            .text_color(rgb(palette.text_muted))
-                            .child("No history matches."),
-                    );
-                }
-                Ok(response) => {
-                    history_rows = history_rows.child(
-                        div()
-                            .px_1()
-                            .pb_1()
-                            .text_xs()
-                            .text_color(rgb(palette.text_dimmed))
-                            .child(format!(
-                                "{} match(es) · {} ms{}",
-                                response.total,
-                                response.elapsed_ms,
-                                if response.truncated {
-                                    " · truncated"
-                                } else {
-                                    ""
-                                }
-                            )),
-                    );
-                    for result in response.results.into_iter().take(8) {
-                        let before = result.before.join("\n");
-                        let after = result.after.join("\n");
-                        let mut context_parts = Vec::new();
-                        if !before.trim().is_empty() {
-                            context_parts.push(truncate_preview(&before, 120));
-                        }
-                        context_parts.push(format!("> {}", truncate_preview(&result.preview, 120)));
-                        if !after.trim().is_empty() {
-                            context_parts.push(truncate_preview(&after, 120));
-                        }
-                        let context = context_parts.join("\n");
-                        history_rows =
-                            history_rows.child(
-                                div()
-                                    .rounded_sm()
-                                    .border_1()
-                                    .border_color(rgb(palette.border))
-                                    .bg(rgb(palette.input))
-                                    .p_2()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight(700.))
-                                            .text_color(rgb(palette.text_muted))
-                                            .child(format!("line {}", result.line_number)),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt_1()
-                                            .font_family(
-                                                crate::features::shell::gpui_code_font_family(),
-                                            )
-                                            .text_xs()
-                                            .text_color(rgb(palette.text))
-                                            .line_height(px(16.))
-                                            .child(truncate_preview(&result.preview, 96)),
-                                    )
-                                    .when(
-                                        !result.before.is_empty() || !result.after.is_empty(),
-                                        |this| {
-                                            this.child(
-                                            div()
-                                                .mt_1()
-                                                .font_family(
-                                                    crate::features::shell::gpui_code_font_family(),
-                                                )
-                                                .text_size(px(10.))
-                                                .text_color(rgb(palette.text_dimmed))
-                                                .line_height(px(14.))
-                                                .child(context),
-                                        )
-                                        },
-                                    ),
-                            );
-                    }
-                }
-                Err(error) => {
-                    history_rows = history_rows.child(
-                        div()
-                            .px_2()
-                            .py_2()
-                            .text_xs()
-                            .text_color(rgb(palette.danger))
-                            .child(truncate_preview(&error, 96)),
-                    );
-                }
+        let status = if buffer_matches.is_err() {
+            t!("terminalCtx.findInvalidRegex").to_string()
+        } else if query.is_empty() {
+            String::new()
+        } else if buffer_occurrence_count == 0 {
+            if buffer_search_complete {
+                t!("terminalCtx.findNoResults")
+            } else {
+                t!("terminalCtx.findSearching")
             }
-        }
-
-        // Only the populated dropdown scrolls; wrapping the empty div would give
-        // the scroll wrapper a full-size root with nothing in it.
-        let history_rows = if show_history_results {
-            history_rows.overflow_y_scrollbar().into_any_element()
+            .to_string()
         } else {
-            history_rows.into_any_element()
+            format!(
+                "{}/{}{}",
+                self.terminal
+                    .search
+                    .active_index
+                    .min(buffer_occurrence_count - 1)
+                    + 1,
+                buffer_occurrence_count,
+                if buffer_search_truncated {
+                    "+"
+                } else if !buffer_search_complete {
+                    "…"
+                } else {
+                    ""
+                }
+            )
         };
-
+        let disabled = buffer_matches.is_err() || buffer_occurrence_count == 0;
         div()
             .id(SharedString::from("terminal-search-bar"))
             .absolute()
@@ -388,248 +242,114 @@ impl NyaTermApp {
             .on_mouse_down(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
             .on_mouse_move(|_, _, cx| cx.stop_propagation())
             .on_click(|_, _, cx| cx.stop_propagation())
+            .flex()
+            .items_center()
+            .gap_1()
             .child(
                 div()
+                    .id(SharedString::from("terminal-search-input"))
+                    .h(px(24.))
+                    .min_w_0()
+                    .flex_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(if search_focused {
+                        palette.primary
+                    } else {
+                        palette.border
+                    }))
+                    .bg(rgb(palette.input_surface()))
+                    .pl_2()
+                    .pr(px(2.))
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .child(terminal_search_mode_button(
-                        "terminal-search-mode-buffer",
-                        TerminalSearchMode::Buffer.label(),
-                        self.terminal.search.mode == TerminalSearchMode::Buffer,
-                        self.theme_palette(),
-                        cx.listener(|this, _, _, cx| {
-                            this.terminal.search.mode = TerminalSearchMode::Buffer;
-                            this.terminal.search.active_index = 0;
-                            this.refresh_terminal_search_state(cx);
+                    .cursor_text()
+                    .text_xs()
+                    .text_color(rgb(palette.text))
+                    .on_click(move |_, window, cx| {
+                        window.focus(&search_focus, cx);
+                    })
+                    .child(div().min_w_0().flex_1().h_full().child(
+                        NyaInput::new(&search_input).on_enter(move |shift, _, cx| {
+                            search_app.update(cx, |this, cx| {
+                                this.mark_user_activity();
+                                this.navigate_terminal_search(if shift { -1 } else { 1 }, cx);
+                            });
                         }),
                     ))
-                    .child(terminal_search_mode_button(
-                        "terminal-search-mode-history",
-                        TerminalSearchMode::History.label(),
-                        self.terminal.search.mode == TerminalSearchMode::History,
-                        self.theme_palette(),
-                        cx.listener(|this, _, _, cx| {
-                            this.terminal.search.mode = TerminalSearchMode::History;
-                            this.terminal.search.active_index = 0;
-                            this.refresh_terminal_search_state(cx);
-                        }),
-                    ))
-                    .child(div().flex_1())
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(if is_error {
-                                rgb(palette.danger)
-                            } else {
-                                rgb(palette.text_muted)
-                            })
-                            .child(status),
+                        NyaButton::new("terminal-search-case", "Aa")
+                            .compact()
+                            .height(px(20.))
+                            .variant(NyaButtonVariant::Ghost)
+                            .selected(self.terminal.search.case_sensitive)
+                            .tooltip(t!("terminalCtx.searchCaseSensitive"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.terminal.search.case_sensitive =
+                                    !this.terminal.search.case_sensitive;
+                                this.terminal.search.active_index = 0;
+                                this.refresh_terminal_search_state(cx);
+                            })),
                     )
-                    .child(terminal_search_icon_button(
-                        "terminal-search-close",
-                        "icons/window/close.svg",
-                        self.theme_palette(),
-                        cx.listener(|this, _, window, cx| {
-                            this.close_terminal_search(window, cx);
-                        }),
-                    )),
-            )
-            .child(
-                div()
-                    .mt_1()
-                    .flex()
-                    .items_center()
-                    .gap_1()
                     .child(
-                        div()
-                            .id(SharedString::from("terminal-search-input"))
-                            .h(px(24.))
-                            .min_w_0()
-                            .flex_1()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(rgb(if search_focused {
-                                palette.primary
-                            } else {
-                                palette.border
-                            }))
-                            .bg(rgb(palette.input_surface()))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .cursor_text()
-                            .text_xs()
-                            .text_color(rgb(palette.text))
-                            .on_click(move |_, window, cx| {
-                                window.focus(&search_focus, cx);
-                            })
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .h_full()
-                                    .child(NyaInput::new(&search_input)),
-                            ),
+                        NyaButton::new("terminal-search-word", "ab")
+                            .compact()
+                            .height(px(20.))
+                            .variant(NyaButtonVariant::Ghost)
+                            .selected(self.terminal.search.whole_word)
+                            .tooltip(t!("terminalCtx.searchWholeWord"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.terminal.search.whole_word = !this.terminal.search.whole_word;
+                                this.terminal.search.active_index = 0;
+                                this.refresh_terminal_search_state(cx);
+                            })),
                     )
-                    .child(terminal_search_flag_button(
-                        "terminal-search-case",
-                        "Aa",
-                        self.terminal.search.case_sensitive,
-                        self.theme_palette(),
-                        cx.listener(|this, _, _, cx| {
-                            this.terminal.search.case_sensitive =
-                                !this.terminal.search.case_sensitive;
-                            this.terminal.search.active_index = 0;
-                            this.refresh_terminal_search_state(cx);
-                        }),
-                    ))
-                    .child(terminal_search_flag_button(
-                        "terminal-search-regex",
-                        ".*",
-                        self.terminal.search.regex,
-                        self.theme_palette(),
-                        cx.listener(|this, _, _, cx| {
-                            this.terminal.search.regex = !this.terminal.search.regex;
-                            this.terminal.search.active_index = 0;
-                            this.refresh_terminal_search_state(cx);
-                        }),
-                    ))
-                    .child(terminal_search_flag_button(
-                        "terminal-search-word",
-                        "Word",
-                        self.terminal.search.whole_word,
-                        self.theme_palette(),
-                        cx.listener(|this, _, _, cx| {
-                            this.terminal.search.whole_word = !this.terminal.search.whole_word;
-                            this.terminal.search.active_index = 0;
-                            this.refresh_terminal_search_state(cx);
-                        }),
-                    ))
-                    .child(terminal_search_flag_button(
-                        "terminal-search-wrap",
-                        t!("terminalCtx.searchWrapAround"),
-                        self.terminal.search_wrap_around(self.session.active_id()),
-                        self.theme_palette(),
-                        cx.listener(|this, _, _, cx| {
-                            let session_id = this.session.active_id_owned();
-                            this.terminal
-                                .toggle_search_wrap_around(session_id.as_deref());
-                            cx.notify();
-                        }),
-                    ))
-                    .when(
-                        self.terminal.search.mode == TerminalSearchMode::Buffer,
-                        |this| {
-                            this.child(terminal_search_icon_button(
-                                "terminal-search-prev",
-                                "icons/chevron-up.svg",
-                                self.theme_palette(),
-                                cx.listener(|this, _, _, cx| {
-                                    this.navigate_terminal_search(-1, cx);
-                                }),
-                            ))
-                            .child(terminal_search_icon_button(
-                                "terminal-search-next",
-                                "icons/chevron-down.svg",
-                                self.theme_palette(),
-                                cx.listener(|this, _, _, cx| {
-                                    this.navigate_terminal_search(1, cx);
-                                }),
-                            ))
-                        },
+                    .child(
+                        NyaButton::new("terminal-search-regex", ".*")
+                            .compact()
+                            .height(px(20.))
+                            .variant(NyaButtonVariant::Ghost)
+                            .selected(self.terminal.search.regex)
+                            .tooltip(t!("terminalCtx.searchRegex"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.terminal.search.regex = !this.terminal.search.regex;
+                                this.terminal.search.active_index = 0;
+                                this.refresh_terminal_search_state(cx);
+                            })),
                     ),
             )
-            .child(history_rows)
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(rgb(if buffer_matches.is_err() {
+                        palette.danger
+                    } else {
+                        palette.text_muted
+                    }))
+                    .child(status),
+            )
+            .child(
+                NyaIconButton::new("terminal-search-prev", "icons/chevron-up.svg")
+                    .size(px(22.))
+                    .disabled(disabled)
+                    .tooltip(t!("terminalCtx.findPrevious"))
+                    .on_click(cx.listener(|this, _, _, cx| this.navigate_terminal_search(-1, cx))),
+            )
+            .child(
+                NyaIconButton::new("terminal-search-next", "icons/chevron-down.svg")
+                    .size(px(22.))
+                    .disabled(disabled)
+                    .tooltip(t!("terminalCtx.findNext"))
+                    .on_click(cx.listener(|this, _, _, cx| this.navigate_terminal_search(1, cx))),
+            )
+            .child(
+                NyaIconButton::new("terminal-search-close", "icons/window/close.svg")
+                    .size(px(22.))
+                    .tooltip(t!("common.close"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.close_terminal_search(window, cx)),
+                    ),
+            )
     }
-}
-
-fn terminal_search_mode_button(
-    id: impl Into<String>,
-    label: &'static str,
-    active: bool,
-    palette: ThemePalette,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(SharedString::from(id.into()))
-        .h(px(20.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_sm()
-        .bg(if active {
-            rgb(palette.accent)
-        } else {
-            rgba(0x00000000)
-        })
-        .text_color(if active {
-            rgb(palette.bg)
-        } else {
-            rgb(palette.text_muted)
-        })
-        .text_size(px(11.))
-        .cursor_pointer()
-        .hover(|this| this.opacity(0.9))
-        .child(label)
-        .on_click(on_click)
-}
-
-fn terminal_search_icon_button(
-    id: impl Into<String>,
-    icon_path: &'static str,
-    palette: ThemePalette,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(SharedString::from(id.into()))
-        .size(px(20.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
-        .text_color(rgb(palette.text_muted))
-        .cursor_pointer()
-        .hover(|this| this.opacity(0.8))
-        .child(
-            svg()
-                .size(px(14.))
-                .path(icon_path)
-                .text_color(rgb(palette.text_muted)),
-        )
-        .on_click(on_click)
-}
-
-fn terminal_search_flag_button(
-    id: impl Into<String>,
-    label: impl Into<SharedString>,
-    active: bool,
-    palette: ThemePalette,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let label = label.into();
-    div()
-        .id(SharedString::from(id.into()))
-        .h(px(24.))
-        .px_1()
-        .flex()
-        .items_center()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(if active {
-            rgb(palette.accent)
-        } else {
-            rgba(0x00000000)
-        })
-        .text_color(if active {
-            rgb(palette.bg)
-        } else {
-            rgb(palette.text_muted)
-        })
-        .text_size(px(11.))
-        .cursor_pointer()
-        .hover(|this| this.opacity(0.9))
-        .child(label)
-        .on_click(on_click)
 }

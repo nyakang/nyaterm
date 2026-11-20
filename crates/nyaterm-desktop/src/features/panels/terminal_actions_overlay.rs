@@ -10,7 +10,7 @@ use super::terminal_action_prompt_text;
 use crate::features::NyaTermApp;
 use crate::features::formatting::recent_terminal_output;
 use crate::features::view_widgets::tab_action_button;
-use crate::models::{BottomPanelMode, RightFocus, TerminalSearchMode};
+use crate::models::{BottomPanelMode, RightFocus};
 use crate::widgets::small_button;
 
 impl NyaTermApp {
@@ -323,18 +323,6 @@ impl NyaTermApp {
                             .grid()
                             .grid_cols(4)
                             .gap_2()
-                            .child(tab_action_button(
-                                palette,
-                                "terminal-actions-history-search",
-                                t!("suggestions.title"),
-                                t!("terminalActions.commandHistory"),
-                                cx.listener(|this, _, window, cx| {
-                                    this.terminal.close_actions();
-                                    this.terminal.set_search_mode(TerminalSearchMode::History);
-                                    this.open_terminal_search(window, cx);
-                                    this.shell.set_status("command history search focused".to_string());
-                                }),
-                            ))
                             .child(tab_action_button(
                                 palette,
                                 "terminal-actions-quick-commands",

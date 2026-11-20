@@ -25,6 +25,8 @@ pub(super) struct ZmodemSessionState {
     pending_upload: Option<Vec<PathBuf>>,
     /// Download waiting for user to pick a save directory.
     pending_download: bool,
+    download_directory: Option<PathBuf>,
+    last_download_path: Option<PathBuf>,
 }
 
 impl Default for ZmodemSessionState {
@@ -34,6 +36,8 @@ impl Default for ZmodemSessionState {
             worker: None,
             pending_upload: None,
             pending_download: false,
+            download_directory: None,
+            last_download_path: None,
         }
     }
 }
@@ -69,6 +73,33 @@ impl ZmodemSessionState {
         self.detector = ZmodemDetector::new();
         self.pending_download = false;
         self.pending_upload = None;
+        self.clear_download_target();
+    }
+
+    fn clear_download_target(&mut self) {
+        self.download_directory = None;
+        self.last_download_path = None;
+    }
+
+    fn note_download_progress(&mut self, file_name: &str) -> Option<PathBuf> {
+        // Transport supplies the sanitized name used to create the local file.
+        let path = self.download_directory.as_ref()?.join(file_name);
+        self.last_download_path = Some(path.clone());
+        Some(path)
+    }
+
+    fn finish_completed_transfer(
+        &mut self,
+        direction: ZmodemDirection,
+        file_count: u32,
+    ) -> Option<PathBuf> {
+        let target = if direction == ZmodemDirection::Download && file_count > 0 {
+            self.last_download_path.take()
+        } else {
+            None
+        };
+        self.finish_transfer();
+        target
     }
 }
 
@@ -131,6 +162,7 @@ impl NyaTermApp {
         }
         state.detector = ZmodemDetector::new();
         state.pending_download = false;
+        state.clear_download_target();
         false
     }
 
@@ -315,6 +347,7 @@ impl NyaTermApp {
         };
         state.pending_upload = None;
         state.pending_download = false;
+        state.clear_download_target();
         if let Some(worker) = state.worker.as_ref() {
             worker.cancel("cancelled");
             self.shell
@@ -337,6 +370,8 @@ impl NyaTermApp {
         if let Some(state) = self.session.zmodem_state_mut(&session_id) {
             state.pending_download = false;
             if let Some(worker) = state.worker.as_ref() {
+                state.download_directory = Some(save_dir.clone());
+                state.last_download_path = None;
                 worker.accept_download(save_dir);
             }
         }
@@ -487,6 +522,7 @@ impl NyaTermApp {
                     worker.accept_upload(files);
                 }
                 let state = self.zmodem_state_mut(session_id);
+                state.clear_download_target();
                 state.worker = Some(worker);
                 state.pending_download = direction == ZmodemDirection::Download;
                 // Surface detection event status before opening a path picker.
@@ -655,8 +691,12 @@ impl NyaTermApp {
                     cx,
                 );
                 self.finish_zmodem_transfer_jobs(session_id, true, None, cx);
-                if let Some(state) = self.session.zmodem_state_mut(session_id) {
-                    state.finish_transfer();
+                if let Some(target) = self
+                    .session
+                    .zmodem_state_mut(session_id)
+                    .and_then(|state| state.finish_completed_transfer(direction, file_count))
+                {
+                    self.reveal_transfer_local_path(target, false, cx);
                 }
             }
             ZmodemEvent::Failed { reason } => {
@@ -695,10 +735,18 @@ impl NyaTermApp {
                 file_name: file_name.to_string(),
             },
         };
+        let local_path = if direction == ZmodemDirection::Download {
+            self.session
+                .zmodem_state_mut(session_id)
+                .and_then(|state| state.note_download_progress(file_name))
+                .unwrap_or_else(|| PathBuf::from(file_name))
+        } else {
+            PathBuf::from(file_name)
+        };
         let progress = SftpTransferProgress {
             phase: None,
             remote_path: format!("zmodem://{short}/{file_name}"),
-            local_path: PathBuf::from(file_name),
+            local_path,
             bytes_transferred,
             total_bytes: (total_size > 0).then_some(total_size),
             item_count_completed: None,
@@ -972,18 +1020,75 @@ const ZMODEM_WORKER_EVENT_DRAIN_BATCH: usize = 32;
 
 #[cfg(test)]
 mod tests {
-    use super::ZmodemTransferJobUpdate;
+    use super::{ZmodemSessionState, ZmodemTransferJobUpdate, ZmodemWorkerEvent};
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
-    use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
+    use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata, TransferJobStatus};
     use crate::test_support::TestConfigDir;
     use gpui::{AppContext as _, Context, Subscription, TestAppContext};
     use nyaterm_core::{AiExecutionProfile, AppRuntime, RuntimeMode, uuid};
-    use nyaterm_transport::{LocalSessionConfig, ZmodemDirection};
+    use nyaterm_transport::{LocalSessionConfig, ZmodemAction, ZmodemDirection, ZmodemEvent};
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     const SESSION_ID: &str = "zmodem-panel-session";
+
+    #[test]
+    fn successful_download_reveals_last_file_once_including_empty_files() {
+        for names in [vec!["empty.txt"], vec!["first.txt", "last.txt"]] {
+            let directory = PathBuf::from("downloads");
+            let mut state = ZmodemSessionState::default();
+            state.download_directory = Some(directory.clone());
+            for name in &names {
+                assert_eq!(
+                    state.note_download_progress(name),
+                    Some(directory.join(name))
+                );
+            }
+            assert_eq!(
+                state.finish_completed_transfer(ZmodemDirection::Download, names.len() as u32),
+                Some(directory.join(names.last().unwrap()))
+            );
+            assert!(state.download_directory.is_none());
+            assert_eq!(
+                state.finish_completed_transfer(ZmodemDirection::Download, names.len() as u32),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn upload_and_zero_file_download_do_not_reveal_a_file() {
+        for (direction, file_count) in
+            [(ZmodemDirection::Upload, 1), (ZmodemDirection::Download, 0)]
+        {
+            let mut state = ZmodemSessionState::default();
+            state.download_directory = Some(PathBuf::from("downloads"));
+            state.note_download_progress("old.txt");
+            assert_eq!(state.finish_completed_transfer(direction, file_count), None);
+            assert!(state.last_download_path.is_none());
+            assert!(state.download_directory.is_none());
+        }
+    }
+
+    #[test]
+    fn consecutive_downloads_do_not_reuse_the_previous_target() {
+        let mut state = ZmodemSessionState::default();
+        for directory in ["first", "second"] {
+            state.download_directory = Some(PathBuf::from(directory));
+            state.note_download_progress("file.txt");
+            assert_eq!(
+                state.finish_completed_transfer(ZmodemDirection::Download, 1),
+                Some(PathBuf::from(directory).join("file.txt"))
+            );
+        }
+        assert_eq!(state.note_download_progress("missing-directory.txt"), None);
+        assert_eq!(
+            state.finish_completed_transfer(ZmodemDirection::Download, 1),
+            None
+        );
+    }
 
     struct RootNotifyObserver {
         count: usize,
@@ -1184,5 +1289,126 @@ mod tests {
             0,
             "transfer progress should not rely on a root app notification"
         );
+    }
+
+    #[test]
+    fn download_progress_preserves_each_sessions_full_local_path() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            for session_id in [SESSION_ID, "other-session"] {
+                let directory = PathBuf::from("downloads").join(session_id);
+                app.zmodem_state_mut(session_id).download_directory = Some(directory.clone());
+                app.handle_zmodem_event(
+                    session_id,
+                    ZmodemEvent::Progress {
+                        file_name: "empty.txt".to_string(),
+                        bytes_transferred: 0,
+                        total_size: 0,
+                        direction: ZmodemDirection::Download,
+                    },
+                    cx,
+                );
+                let job = app
+                    .transfer
+                    .transfer_jobs()
+                    .iter()
+                    .find(|job| job.session_id.as_deref() == Some(session_id))
+                    .unwrap();
+                assert_eq!(
+                    job.progress.as_ref().unwrap().local_path,
+                    directory.join("empty.txt")
+                );
+                assert_eq!(
+                    app.session
+                        .zmodem_state_mut(session_id)
+                        .unwrap()
+                        .finish_completed_transfer(ZmodemDirection::Download, 1),
+                    Some(directory.join("empty.txt"))
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn failed_and_cancelled_downloads_discard_the_reveal_target() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            for cancelled in [false, true] {
+                let state = app.zmodem_state_mut(SESSION_ID);
+                state.download_directory = Some(PathBuf::from("downloads"));
+                state.note_download_progress("partial.txt");
+                if cancelled {
+                    app.cancel_zmodem_transfer(SESSION_ID, cx);
+                } else {
+                    app.handle_zmodem_event(
+                        SESSION_ID,
+                        ZmodemEvent::Failed {
+                            reason: "download failed".to_string(),
+                        },
+                        cx,
+                    );
+                }
+                let state = app.session.zmodem_state_mut(SESSION_ID).unwrap();
+                assert!(state.download_directory.is_none());
+                assert!(state.last_download_path.is_none());
+                assert_eq!(
+                    state.finish_completed_transfer(ZmodemDirection::Download, 1),
+                    None
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn automatic_reveal_failure_preserves_success_when_worker_finishes() {
+        let root = TestConfigDir::new("nyaterm-zmodem-reveal-failure");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        // Both the file and parent are unavailable, so no native file manager is opened.
+        let directory = root.path().join("unavailable");
+        cx.update_entity(&app, |app, cx| {
+            app.zmodem_state_mut(SESSION_ID).download_directory = Some(directory.clone());
+            app.apply_zmodem_worker_event(
+                SESSION_ID,
+                ZmodemWorkerEvent {
+                    actions: vec![
+                        ZmodemAction::EmitEvent(ZmodemEvent::Progress {
+                            file_name: "empty.txt".to_string(),
+                            bytes_transferred: 0,
+                            total_size: 0,
+                            direction: ZmodemDirection::Download,
+                        }),
+                        ZmodemAction::EmitEvent(ZmodemEvent::Complete {
+                            direction: ZmodemDirection::Download,
+                            file_count: 1,
+                        }),
+                    ],
+                    done: true,
+                    pending_events: Default::default(),
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.update_entity(&app, |app, _| {
+            assert_eq!(
+                app.shell.status(),
+                format!("ZMODEM download complete (1 file(s)) [{SESSION_ID}]")
+            );
+            let job = app.transfer.transfer_jobs().first().unwrap();
+            assert_eq!(job.status, TransferJobStatus::Completed);
+            assert_eq!(
+                job.progress.as_ref().unwrap().local_path,
+                directory.join("empty.txt")
+            );
+            let state = app.session.zmodem_state(SESSION_ID).unwrap();
+            assert!(state.download_directory.is_none());
+            assert!(state.last_download_path.is_none());
+        });
     }
 }

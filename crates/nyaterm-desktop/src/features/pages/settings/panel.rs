@@ -134,6 +134,8 @@ pub(in crate::features) struct SettingsPresentation {
     pub(in crate::features) summary: Arc<AppSettingsSummary>,
     pub(in crate::features) startup_options: Arc<[NyaSelectOption]>,
     pub(in crate::features) theme_options: Arc<[(String, String)]>,
+    pub(in crate::features) system_appearance: nyaterm_core::themes::appearance::SystemAppearance,
+    pub(in crate::features) effective_theme: SharedString,
     pub(in crate::features) theme_diagnostics: Arc<[String]>,
     pub(in crate::features) theme_designer:
         crate::features::settings::theme_designer::ThemeDesignerState,
@@ -167,6 +169,8 @@ impl SettingsPresentation {
             summary: Arc::new(AppSettingsSummary::default()),
             startup_options: Arc::from([]),
             theme_options: nyaterm_ui::available_themes(&Default::default()).into(),
+            system_appearance: Default::default(),
+            effective_theme: "github-dark".into(),
             theme_diagnostics: Arc::from([]),
             theme_designer: Default::default(),
             keyword_config: Arc::new(KeywordHighlightConfig::default()),
@@ -2008,11 +2012,8 @@ forward_app_action!(
     toggle_remote_stats_show_users,
     toggle_startup_restore_window_layout,
     toggle_terminal_action_links,
-    toggle_terminal_line_numbers,
-    toggle_terminal_wrap_markers,
     toggle_terminal_reconnect_restore_cwd,
-    toggle_terminal_timestamps,
-    toggle_terminal_workspace_padding,
+    toggle_terminal_serial_reconnect_send_enter,
     toggle_terminal_zebra_stripes,
     toggle_terminal_zebra_stripes_by_row,
     toggle_terminal_zoom_enabled,
@@ -2343,6 +2344,48 @@ mod tests {
             .expect("settings footer button is drawn");
         vcx.simulate_click(bounds.center(), Modifiers::default());
         draw(app, vcx);
+    }
+
+    #[test]
+    fn system_theme_mode_controls_update_cached_settings_and_can_return_to_manual() {
+        use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
+        let dir = TestConfigDir::new("nyaterm-system-theme-controls");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, dir.path());
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::Appearance, cx)
+            });
+        });
+        draw(&app, vcx);
+        let system = vcx
+            .debug_bounds("appearance-theme-system")
+            .expect("system mode control");
+        vcx.simulate_click(system.center(), Modifiers::default());
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert_eq!(app.settings.summary().theme_mode, ThemeMode::System);
+                app.system_appearance_changed(SystemAppearance::Light, cx);
+                app.flush_settings_panel_snapshots(cx);
+                let snapshot = app.settings_panel.read(cx).snapshot.as_ref().unwrap();
+                assert_eq!(snapshot.settings.effective_theme, "github-light");
+                assert_eq!(snapshot.chrome.palette, app.theme_palette());
+            });
+        });
+        draw(&app, vcx);
+        let manual = vcx
+            .debug_bounds("appearance-theme-manual")
+            .expect("manual mode control");
+        vcx.simulate_click(manual.center(), Modifiers::default());
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            assert_eq!(
+                app.read(cx).settings.summary().theme_mode,
+                ThemeMode::Manual
+            )
+        });
     }
 
     #[test]

@@ -48,6 +48,7 @@ pub enum ConnectionBatchKind {
     Serial,
     Rdp,
     Vnc,
+    Ftp,
 }
 
 impl ConnectionBatchKind {
@@ -60,6 +61,7 @@ impl ConnectionBatchKind {
             ConnectionType::Serial { .. } => Self::Serial,
             ConnectionType::Rdp { .. } => Self::Rdp,
             ConnectionType::Vnc { .. } => Self::Vnc,
+            ConnectionType::Ftp { .. } => Self::Ftp,
         }
     }
 
@@ -69,6 +71,7 @@ impl ConnectionBatchKind {
             Self::Telnet => super::default_telnet_port(),
             Self::Rdp => super::default_rdp_port(),
             Self::Vnc => super::default_vnc_port(),
+            Self::Ftp => super::default_ftp_port(),
             Self::LocalTerminal | Self::Serial | Self::Adb => 0,
         }
     }
@@ -442,6 +445,7 @@ fn endpoint_port_default(config: &ConnectionType) -> u16 {
         ConnectionType::Telnet { .. } => super::default_telnet_port(),
         ConnectionType::Rdp { .. } => super::default_rdp_port(),
         ConnectionType::Vnc { .. } => super::default_vnc_port(),
+        ConnectionType::Ftp { .. } => super::default_ftp_port(),
         ConnectionType::LocalTerminal { .. } | ConnectionType::Serial { .. } => 0,
     }
 }

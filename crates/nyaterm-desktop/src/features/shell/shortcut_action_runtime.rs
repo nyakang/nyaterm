@@ -3,15 +3,15 @@ use gpui::{Context, Div, InteractiveElement, Stateful, Window};
 use crate::features::NyaTermApp;
 use crate::models::{NavItem, StartupCommandAction};
 use crate::shortcuts::{
-    CloseTab, CopySelectedConnections, DuplicateSession, DuplicateSessionWithCommand, LockScreen,
-    ManageSyncGroups, MultiplexSsh, MultiplexSshWithCommand, NewLocalTerminal, NewSession, NextTab,
-    NextTerminalGroup, OpenChat, OpenNewSessionMenu, OpenSettings, PreviousTab,
-    PreviousTerminalGroup, QuickSwitch, RenameFile, ResetZoom, ShortcutId, ShortcutInvocation,
-    ShowAllCommands, ShowCommandSuggestions, SwitchToTab, TemporarySshLink, TerminalClear,
-    TerminalClearAll, TerminalCommandNext, TerminalCommandPrevious, TerminalCommandSelect,
-    TerminalCopy, TerminalFind, TerminalPaste, TerminalPasteSelected, TerminalSelectAll,
-    ToggleLeftSidebar, ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording,
-    ToggleRightSidebar, ZoomIn, ZoomOut,
+    CloseTab, CopySelectedConnections, DownloadFiles, DuplicateSession,
+    DuplicateSessionWithCommand, LockScreen, ManageSyncGroups, MultiplexSsh,
+    MultiplexSshWithCommand, NewLocalTerminal, NewSession, NextTab, NextTerminalGroup, OpenChat,
+    OpenNewSessionMenu, OpenSettings, PreviousTab, PreviousTerminalGroup, QuickSwitch, RenameFile,
+    ResetZoom, ShortcutId, ShortcutInvocation, ShowAllCommands, ShowCommandSuggestions,
+    SwitchToTab, TemporarySshLink, TerminalClear, TerminalClearAll, TerminalCommandNext,
+    TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalFind, TerminalPaste,
+    TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar, ToggleNativeFullscreen,
+    TogglePaneFocus, ToggleRecording, ToggleRightSidebar, UploadFile, ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
@@ -268,6 +268,8 @@ impl NyaTermApp {
                     self.open_transfer_rename_dialog(window, cx);
                 }
             }
+            ShortcutId::UploadFile => self.upload_transfer_browser_files_shortcut(cx),
+            ShortcutId::DownloadFiles => self.download_transfer_browser_files_shortcut(window, cx),
             ShortcutId::CopySelectedConnections => self.copy_selected_connections(cx),
             ShortcutId::LockScreen => self.lock_app(window, cx),
         }
@@ -368,6 +370,8 @@ impl NyaTermApp {
             .on_action(direct_handler!(OpenChat, OpenChat))
             .on_action(direct_handler!(ShowAllCommands, ShowAllCommands))
             .on_action(direct_handler!(RenameFile, RenameFile))
+            .on_action(direct_handler!(UploadFile, UploadFile))
+            .on_action(direct_handler!(DownloadFiles, DownloadFiles))
             .on_action(direct_handler!(
                 CopySelectedConnections,
                 CopySelectedConnections

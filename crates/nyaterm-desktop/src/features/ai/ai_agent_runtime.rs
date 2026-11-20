@@ -254,6 +254,7 @@ impl NyaTermApp {
                 | SessionKind::Serial
                 | SessionKind::Rdp
                 | SessionKind::Vnc => AiExecutionProfile::SendOnly,
+                SessionKind::Ftp => AiExecutionProfile::Disabled,
             })
             .unwrap_or(AiExecutionProfile::SendOnly)
     }

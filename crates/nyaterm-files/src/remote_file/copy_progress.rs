@@ -45,12 +45,13 @@ impl CopyProgress {
         callback: impl FnMut(SftpTransferProgress) + Send + 'static,
     ) -> Self {
         let remote_path = match destination {
-            FileTransferEndpoint::Remote { path, .. } | FileTransferEndpoint::Adb { path, .. } => {
-                path.display_path.clone()
-            }
+            FileTransferEndpoint::Remote { path, .. }
+            | FileTransferEndpoint::Adb { path, .. }
+            | FileTransferEndpoint::Ftp { path, .. } => path.display_path.clone(),
             FileTransferEndpoint::Local(_) => match source {
                 FileTransferEndpoint::Remote { path, .. }
-                | FileTransferEndpoint::Adb { path, .. } => path.display_path.clone(),
+                | FileTransferEndpoint::Adb { path, .. }
+                | FileTransferEndpoint::Ftp { path, .. } => path.display_path.clone(),
                 FileTransferEndpoint::Local(path) => path.to_string_lossy().into_owned(),
             },
         };
@@ -137,6 +138,25 @@ impl CopyProgress {
                             control.wait_if_paused_blocking()?;
                             if !matches!(entry.name.as_str(), "." | "..") {
                                 pending.push(FileTransferEndpoint::Remote {
+                                    service: service.clone(),
+                                    path: entry.remote_path(),
+                                });
+                            }
+                        }
+                    } else {
+                        bytes = bytes
+                            .zip(properties.size)
+                            .and_then(|(a, b)| a.checked_add(b));
+                    }
+                }
+                FileTransferEndpoint::Ftp { service, path } => {
+                    let browser = crate::file_browser::FileBrowserService::Ftp(service.clone());
+                    let properties = browser.remote_file_properties(&path)?;
+                    if properties.file_type == SftpFileType::Directory {
+                        for entry in browser.list_dir_path(&path)? {
+                            control.wait_if_paused_blocking()?;
+                            if !matches!(entry.name.as_str(), "." | "..") {
+                                pending.push(FileTransferEndpoint::Ftp {
                                     service: service.clone(),
                                     path: entry.remote_path(),
                                 });

@@ -455,7 +455,10 @@ impl NyaTermApp {
 
     pub(in crate::features) fn sync_transfer_browser_favorites_for_active_session(&mut self) {
         let Some(connection_id) = self.active_transfer_browser_connection_id() else {
-            self.transfer.clear_browser_favorites();
+            let favorites = self.session.active_id().map(|id| self.transfer.temporary_browser_favorites(
+                &crate::features::transfers::file_operations::FileOperationEndpoint::Session(id.to_string())
+            )).unwrap_or_default();
+            self.transfer.replace_browser_favorites(favorites.into());
             return;
         };
         let favorites = self
@@ -482,6 +485,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let Some(connection_id) = self.active_transfer_browser_connection_id() else {
+            if let Some(id) = self.session.active_id_owned() {
+                self.transfer.set_temporary_browser_favorites(
+                    crate::features::transfers::file_operations::FileOperationEndpoint::Session(id),
+                    self.transfer.browser_favorites_owned(),
+                );
+            }
             self.transfer
                 .set_browser_status("favorite kept for this temporary session only");
             return;

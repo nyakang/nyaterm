@@ -381,6 +381,7 @@ impl NyaTermApp {
                 self.shell.resize_handle_is_highlighted(&id),
             )
             .id(id.clone())
+            .debug_selector(|| "bottom-panel-resize".into())
             .cursor_row_resize()
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 this.update_resize_handle_hover(hover_id.clone(), *hovered, cx);

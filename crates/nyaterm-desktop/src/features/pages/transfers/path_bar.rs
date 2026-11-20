@@ -80,8 +80,6 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
     let breadcrumbs = build_transfer_browser_breadcrumbs(&current_browser_path, &browser.home_dir);
     // Shell padding, gaps, and the edit and favorite buttons.
     let breadcrumb_width = (chrome.panel_width - 32. - metrics.control_height * 2.).max(0.);
-    let (visible_breadcrumbs, overflow_breadcrumbs) =
-        collapse_transfer_browser_breadcrumbs(&breadcrumbs, breadcrumb_width, metrics);
 
     div()
         .relative()
@@ -139,11 +137,8 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         TransferBrowserBreadcrumbRowPresentation {
                             palette,
                             display_path: display_browser_path.clone(),
-                            current_path: current_browser_path.clone(),
                             expanded_children_path: browser.expanded_children_path.clone(),
                             all_segments: breadcrumbs.clone(),
-                            visible_segments: visible_breadcrumbs.clone(),
-                            overflow_segments: overflow_breadcrumbs.clone(),
                             overflow_label: t!("fileExplorer.breadcrumbOverflow").to_string(),
                             available_width: breadcrumb_width,
                             metrics,
@@ -151,88 +146,47 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         cx,
                     ))
                 })
-                .when(!browser.path_editing, |this| {
-                    this.child(
-                        div()
-                            .id("transfer-browser-path-edit")
-                            .debug_selector(|| "transfer-browser-path-edit".to_string())
-                            .size(px(metrics.control_height))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .hover(|this| this.bg(rgb(palette.surface_elevated)))
-                            .tooltip(|window, cx| {
-                                nyaterm_ui::NyaTooltip::new(t!("fileExplorer.editPath"))
-                                    .build(window, cx)
-                            })
-                            .on_click(cx.listener(|panel, _, window, cx| {
-                                cx.stop_propagation();
-                                panel.with_app(cx, |this, cx| {
-                                    this.begin_transfer_browser_path_edit(window, cx);
-                                });
-                            }))
-                            .child(
-                                svg()
-                                    .size(px(14.))
-                                    .path("icons/edit.svg")
-                                    .text_color(rgb(palette.text_muted)),
-                            ),
+                .when(!browser.path_editing, |row| {
+                    row.child(
+                        nyaterm_ui::file_navigation::path_icon(
+                            palette,
+                            "transfer-browser-path-edit",
+                            "icons/edit.svg",
+                            t!("fileExplorer.editPath"),
+                            metrics.control_height,
+                            false,
+                        )
+                        .on_click(cx.listener(|panel, _, window, cx| {
+                            cx.stop_propagation();
+                            panel.with_app(cx, |app, cx| {
+                                app.begin_transfer_browser_path_edit(window, cx)
+                            });
+                        })),
                     )
                 })
                 .child(
-                    div()
-                        .id(SharedString::from("transfer-browser-path-favorite"))
-                        .ml_1()
-                        .size(px(metrics.control_height))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_sm()
-                        .text_sm()
-                        .text_color(if is_current_favorite {
-                            rgb(palette.link)
+                    nyaterm_ui::file_navigation::path_icon(
+                        palette,
+                        "transfer-browser-path-favorite",
+                        if is_current_favorite {
+                            "icons/fe/star.svg"
                         } else {
-                            rgb(palette.text_muted)
-                        })
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(rgb(palette.surface_elevated))
-                                .text_color(rgb(palette.text))
-                        })
-                        .tooltip({
-                            let label = t!("fileExplorer.favorites").to_string();
-                            move |window, cx| {
-                                nyaterm_ui::NyaTooltip::new(label.clone()).build(window, cx)
-                            }
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|panel, event: &MouseDownEvent, window, cx| {
-                                panel.with_app(cx, |this, cx| {
-                                    cx.stop_propagation();
-                                    this.open_transfer_browser_favorites_menu(event, window, cx);
-                                })
-                            }),
-                        )
-                        .child(
-                            svg()
-                                .size(px(14.))
-                                .flex_none()
-                                .path(if is_current_favorite {
-                                    "icons/fe/star.svg"
-                                } else {
-                                    "icons/fe/star-outline.svg"
-                                })
-                                .text_color(if is_current_favorite {
-                                    rgb(palette.link)
-                                } else {
-                                    rgb(palette.text_muted)
-                                }),
-                        ),
+                            "icons/fe/star-outline.svg"
+                        },
+                        t!("fileExplorer.favorites"),
+                        metrics.control_height,
+                        is_current_favorite,
+                    )
+                    .ml_1()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|panel, event: &MouseDownEvent, window, cx| {
+                            panel.with_app(cx, |app, cx| {
+                                cx.stop_propagation();
+                                app.open_transfer_browser_favorites_menu(event, window, cx);
+                            });
+                        }),
+                    ),
                 ),
         )
         .when(browser.path_editing, |this| {
@@ -694,268 +648,88 @@ fn transfer_browser_breadcrumb_row(
     presentation: TransferBrowserBreadcrumbRowPresentation,
     cx: &mut Context<TransferPanel>,
 ) -> impl IntoElement {
+    use nyaterm_ui::file_navigation::{Breadcrumb, BreadcrumbMenu, BreadcrumbRow, breadcrumb_row};
     let TransferBrowserBreadcrumbRowPresentation {
         palette,
         display_path,
-        current_path,
         expanded_children_path,
         all_segments,
-        visible_segments,
-        overflow_segments,
         overflow_label,
         available_width,
         metrics,
     } = presentation;
-    let mut row = div()
-        .id(SharedString::from("transfer-browser-path-display"))
-        .debug_selector(|| "transfer-browser-path-display".to_string())
+    let overflow_segments = all_segments.clone();
+    div()
         .min_w_0()
         .flex_1()
         .flex()
-        .items_center()
-        .overflow_hidden()
         .font_family(crate::features::shell::gpui_code_font_family())
-        .text_size(px(metrics.font_size))
-        .line_height(px(metrics.line_height))
-        .cursor_text()
-        .on_click(cx.listener(|panel, _, window, cx| {
-            panel.with_app(cx, |this, cx| {
-                this.begin_transfer_browser_path_edit(window, cx);
-            });
-        }))
-        .tooltip(move |window, cx| {
-            nyaterm_ui::NyaTooltip::new(display_path.clone()).build(window, cx)
-        });
-
-    if !overflow_segments.is_empty() {
-        let open_segments = overflow_segments.clone();
-        row = row.child(
-            div()
-                .id(SharedString::from("transfer-browser-breadcrumb-overflow"))
-                .size(px(metrics.control_height))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_sm()
-                .text_color(rgb(palette.text_muted))
-                .cursor_pointer()
-                .hover(|this| {
-                    this.bg(rgb(palette.surface_elevated))
-                        .text_color(rgb(palette.text))
-                })
-                .tooltip(move |window, cx| {
-                    nyaterm_ui::NyaTooltip::new(overflow_label.clone()).build(window, cx)
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
-                        panel.with_app(cx, |this, cx| {
-                            cx.stop_propagation();
-                            window.focus(this.transfer.browser_view().focus, cx);
-                            this.open_transfer_browser_breadcrumb_overflow(
-                                open_segments.clone(),
-                                event,
-                                cx,
-                            );
-                        })
-                    }),
-                )
-                .on_click(|_, _, cx| cx.stop_propagation())
-                .child(
-                    svg()
-                        .size(px(14.))
-                        .path("icons/session/more.svg")
-                        .text_color(rgb(palette.text_muted)),
-                ),
-        );
-    }
-
-    let current_label_width = (available_width
-        - if overflow_segments.is_empty() {
-            0.
-        } else {
-            metrics.control_height
-        }
-        - visible_segments
-            .iter()
-            .filter(|segment| segment.path != current_path)
-            .map(|segment| metrics.segment_width(segment))
-            .sum::<f32>()
-        - metrics.children_width)
-        .clamp(16., metrics.max_label_width);
-    for segment in visible_segments {
-        let is_current = segment.path == current_path;
-        let is_expanded = expanded_children_path.as_deref() == Some(segment.path.as_str());
-        let branch_child_path = all_segments
-            .iter()
-            .position(|candidate| candidate.path == segment.path)
-            .and_then(|index| all_segments.get(index + 1))
-            .map(|candidate| candidate.path.clone());
-        let label_path = segment.path.clone();
-        let children_path = segment.path.clone();
-        let children_branch = branch_child_path.clone();
-        let children_tooltip =
-            t!("fileExplorer.showChildDirectories", path = segment.path).to_string();
-        row = row.child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "transfer-browser-breadcrumb-label-{}",
-                            segment.path
-                        )))
-                        .debug_selector({
-                            let path = segment.path.clone();
-                            move || format!("transfer-browser-breadcrumb-label-{path}")
-                        })
-                        .h(px(metrics.control_height))
-                        .max_w(px(if is_current {
-                            current_label_width
-                        } else {
-                            metrics.max_label_width
-                        }))
-                        .px(px(4.))
-                        .flex()
-                        .items_center()
-                        .overflow_hidden()
-                        .rounded_l_sm()
-                        .text_color(if is_current {
-                            rgb(palette.text)
-                        } else {
-                            rgb(palette.text_muted)
-                        })
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(rgb(palette.surface_elevated))
-                                .text_color(rgb(palette.text))
-                        })
-                        .on_click(cx.listener(move |panel, _, window, cx| {
-                            cx.stop_propagation();
-                            panel.with_app(cx, |this, cx| {
-                                if is_current {
-                                    this.begin_transfer_browser_path_edit(window, cx);
-                                } else {
-                                    this.open_transfer_browser_directory(
-                                        label_path.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            })
-                        }))
-                        .child(truncate_preview(&segment.label, 18)),
-                )
-                .child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "transfer-browser-breadcrumb-children-{}",
-                            segment.path
-                        )))
-                        .debug_selector({
-                            let path = segment.path.clone();
-                            move || format!("transfer-browser-breadcrumb-children-{path}")
-                        })
-                        .h(px(metrics.control_height))
-                        .w(px(metrics.children_width))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_r_sm()
-                        .text_color(rgb(palette.text_muted))
-                        .when(is_expanded, |this| this.bg(rgb(palette.surface_elevated)))
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(rgb(palette.surface_elevated))
-                                .text_color(rgb(palette.text))
-                        })
-                        .tooltip(move |window, cx| {
-                            nyaterm_ui::NyaTooltip::new(children_tooltip.clone()).build(window, cx)
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
-                                panel.with_app(cx, |this, cx| {
-                                    cx.stop_propagation();
-                                    window.focus(this.transfer.browser_view().focus, cx);
-                                    this.open_transfer_browser_children_menu(
-                                        children_path.clone(),
-                                        children_branch.clone(),
-                                        event,
-                                        cx,
-                                    );
-                                })
-                            }),
+        .child(breadcrumb_row(
+            BreadcrumbRow {
+                prefix: "transfer-browser".into(),
+                palette,
+                display_path,
+                segments: all_segments
+                    .into_iter()
+                    .map(|segment| Breadcrumb {
+                        children_tooltip: t!(
+                            "fileExplorer.showChildDirectories",
+                            path = segment.path
                         )
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(
-                            svg()
-                                .size(px(11.))
-                                .path(if is_expanded {
-                                    "icons/chevron-down.svg"
-                                } else {
-                                    "icons/menu/chevron-right.svg"
-                                })
-                                .text_color(rgb(palette.text_muted)),
-                        ),
-                ),
-        );
-    }
-    row
+                        .to_string(),
+                        id: segment.path.clone(),
+                        key: segment.path,
+                        label: segment.label,
+                    })
+                    .collect(),
+                expanded: expanded_children_path,
+                overflow_label,
+                width: available_width,
+                metrics,
+            },
+            |panel: &mut TransferPanel, _, window, cx| {
+                panel.with_app(cx, |app, cx| {
+                    app.begin_transfer_browser_path_edit(window, cx)
+                });
+            },
+            |panel, path, window, cx| {
+                panel.with_app(cx, |app, cx| {
+                    app.open_transfer_browser_directory(path, window, cx)
+                });
+            },
+            move |panel, action, event, window, cx| {
+                panel.with_app(cx, |app, cx| {
+                    window.focus(app.transfer.browser_view().focus, cx);
+                    match action {
+                        BreadcrumbMenu::Children(path, branch) => {
+                            app.open_transfer_browser_children_menu(path, branch, event, cx)
+                        }
+                        BreadcrumbMenu::Overflow(paths) => {
+                            let segments = overflow_segments
+                                .iter()
+                                .filter(|s| paths.contains(&s.path))
+                                .cloned()
+                                .collect();
+                            app.open_transfer_browser_breadcrumb_overflow(segments, event, cx);
+                        }
+                    }
+                });
+            },
+            cx,
+        ))
 }
 
 struct TransferBrowserBreadcrumbRowPresentation {
     palette: crate::theme::ThemePalette,
     display_path: String,
-    current_path: String,
     expanded_children_path: Option<String>,
     all_segments: Vec<TransferBrowserBreadcrumbSegment>,
-    visible_segments: Vec<TransferBrowserBreadcrumbSegment>,
-    overflow_segments: Vec<TransferBrowserBreadcrumbSegment>,
     overflow_label: String,
     available_width: f32,
     metrics: TransferBrowserPathMetrics,
 }
 
-/// Keep the rendered controls and the collapse budget on the same font scale.
-#[derive(Clone, Copy)]
-struct TransferBrowserPathMetrics {
-    font_size: f32,
-    line_height: f32,
-    control_height: f32,
-    children_width: f32,
-    max_label_width: f32,
-}
-
-impl TransferBrowserPathMetrics {
-    fn new(ui_font_size: f32) -> Self {
-        // Match the 12px file labels at the default 16px UI size while keeping
-        // the path readable at smaller settings and responsive to larger ones.
-        let font_size = (ui_font_size * 0.75).max(10.);
-        let line_height = font_size * 1.5;
-        Self {
-            font_size,
-            line_height,
-            control_height: (line_height + 4.).max(22.),
-            children_width: (font_size * 0.8).max(16.),
-            max_label_width: 128. * font_size / 10.,
-        }
-    }
-
-    fn row_height(self) -> f32 {
-        self.control_height + 5. // Vertical padding and bottom border.
-    }
-
-    fn segment_width(self, segment: &TransferBrowserBreadcrumbSegment) -> f32 {
-        let label = truncate_preview(&segment.label, 18);
-        (label.chars().count() as f32 * self.font_size * 0.6 + 8.).min(self.max_label_width)
-            + self.children_width
-    }
-}
+use nyaterm_ui::file_navigation::PathMetrics as TransferBrowserPathMetrics;
 
 fn transfer_browser_path_menu_label(label: &str) -> String {
     // POSIX names can contain line breaks. Only normalize the presentation;
@@ -1170,6 +944,7 @@ fn build_transfer_browser_breadcrumbs(
     segments
 }
 
+#[cfg(test)]
 fn collapse_transfer_browser_breadcrumbs(
     segments: &[TransferBrowserBreadcrumbSegment],
     available_width: f32,
@@ -1178,40 +953,16 @@ fn collapse_transfer_browser_breadcrumbs(
     Vec<TransferBrowserBreadcrumbSegment>,
     Vec<TransferBrowserBreadcrumbSegment>,
 ) {
-    let mut shown = vec![true; segments.len()];
-    loop {
-        let hidden = shown.iter().filter(|shown| !**shown).count();
-        let width = segments
-            .iter()
-            .zip(&shown)
-            .filter(|(_, shown)| **shown)
-            .map(|(segment, _)| metrics.segment_width(segment))
-            .sum::<f32>()
-            + if hidden > 0 {
-                metrics.control_height
-            } else {
-                0.
-            };
-        if width <= available_width.max(0.) {
-            break;
-        }
-        let last = segments.len().saturating_sub(1);
-        let to_hide = (1..last.saturating_sub(1))
-            .find(|&index| shown[index])
-            .or_else(|| (last > 1 && shown[0]).then_some(0))
-            .or_else(|| (last > 0 && shown[last - 1]).then_some(last - 1));
-        let Some(index) = to_hide else { break };
-        shown[index] = false;
-    }
-    let (mut visible, mut overflow) = (Vec::new(), Vec::new());
-    for (segment, shown) in segments.iter().zip(shown) {
-        if shown {
-            visible.push(segment.clone());
-        } else {
-            overflow.push(segment.clone());
-        }
-    }
-    (visible, overflow)
+    let labels = segments
+        .iter()
+        .map(|s| s.label.as_str())
+        .collect::<Vec<_>>();
+    let (visible, hidden) =
+        nyaterm_ui::file_navigation::collapsed_indices(&labels, available_width, metrics);
+    (
+        visible.into_iter().map(|i| segments[i].clone()).collect(),
+        hidden.into_iter().map(|i| segments[i].clone()).collect(),
+    )
 }
 
 fn transfer_browser_path_history_list(

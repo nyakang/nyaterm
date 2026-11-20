@@ -298,6 +298,14 @@ impl NyaTermApp {
                 details.push((t!("sessionInfo.host"), config.host.clone()));
                 details.push((t!("sessionInfo.port"), config.port.to_string()));
             }
+            SessionLaunchConfig::Ftp(config) => {
+                details.push((t!("sessionInfo.launch"), "FTP".to_string()));
+                details.push((t!("sessionInfo.host"), config.host.clone()));
+                details.push((t!("sessionInfo.port"), config.port.to_string()));
+                if !config.username.trim().is_empty() {
+                    details.push((t!("sessionInfo.username"), config.username.clone()));
+                }
+            }
         }
 
         Some(details)
@@ -354,6 +362,9 @@ impl NyaTermApp {
         }
 
         self.session.select_active_session(session_id);
+        if switching_sessions {
+            self.switch_terminal_find_pane(previous_session_id.as_deref(), session_id, cx);
+        }
         self.remote_desktop.release_inactive_textures(session_id);
         self.sync_ai_active_scope(cx);
         if switching_sessions {

@@ -124,6 +124,13 @@ pub(in crate::features) fn fatal_message(code: &str) -> Cow<'static, str> {
 
 /// Preserve unrelated backends' diagnostics; Android errors never expose raw device output.
 pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
+    if let Some(error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<nyaterm_files::ftp::FtpError>())
+    {
+        return crate::features::ftp::labels::error_message(error);
+    }
+
     if let Some(error) = error.chain().find_map(|cause| {
         cause.downcast_ref::<nyaterm_files::file_browser::FileTransferEntryError>()
     }) {
@@ -200,6 +207,17 @@ pub(in crate::features) fn file_error_message(error: &anyhow::Error) -> String {
 
 /// Classify failures without formatting the error chain, which can contain user data.
 pub(in crate::features) fn file_error_code(error: &anyhow::Error) -> &'static str {
+    if let Some(error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<nyaterm_files::ftp::FtpError>())
+    {
+        return if *error == nyaterm_files::ftp::FtpError::Cancelled {
+            "Cancelled"
+        } else {
+            error.code()
+        };
+    }
+
     use nyaterm_files::adb::AdbFileValidationError;
     // anyhow contexts support typed downcasts through Error, but the standard
     // source chain only exposes the wrapper and its underlying cause.

@@ -852,7 +852,9 @@ mod tests {
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::features::sync::CloudSyncLiveState;
-    use crate::models::{AiActionEditorField, AiActionListKind, NavItem, SettingsTab};
+    use crate::models::{
+        AiActionEditorField, AiActionListKind, KeywordHighlightEditorField, NavItem, SettingsTab,
+    };
     use crate::test_support::TestConfigDir;
 
     use super::ALL_SETTINGS_TABS;
@@ -1206,6 +1208,50 @@ mod tests {
             });
         });
         assert_released(&app, vcx, &engine_ids);
+
+        // Adding a keyword rule opens its row, which immediately draws four
+        // inputs. Building only the focused name input causes a debug panic.
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.focus_settings_tab(SettingsTab::TerminalGeneral, cx)
+            });
+        });
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| app.add_keyword_highlight_rule(window, cx))
+        });
+        let rule_id = vcx.update(|_, cx| {
+            app.read(cx)
+                .settings
+                .keyword_config()
+                .rules
+                .last()
+                .expect("the keyword highlight rule was added")
+                .id
+                .clone()
+        });
+        assert_built(
+            &app,
+            vcx,
+            &[
+                &NyaTermApp::keyword_highlight_text_input_id(
+                    &rule_id,
+                    KeywordHighlightEditorField::Name,
+                ),
+                &NyaTermApp::keyword_highlight_text_input_id(
+                    &rule_id,
+                    KeywordHighlightEditorField::Patterns,
+                ),
+                &NyaTermApp::keyword_highlight_text_input_id(
+                    &rule_id,
+                    KeywordHighlightEditorField::ColorDark,
+                ),
+                &NyaTermApp::keyword_highlight_text_input_id(
+                    &rule_id,
+                    KeywordHighlightEditorField::ColorLight,
+                ),
+            ],
+            &[],
+        );
 
         // A freshly added provider credential draws three fields.
         vcx.update(|_, cx| {

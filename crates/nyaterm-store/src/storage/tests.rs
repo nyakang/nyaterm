@@ -12,6 +12,135 @@ use nyaterm_core::{
 };
 
 #[test]
+fn system_theme_preferences_load_legacy_settings_and_round_trip_future_modes() {
+    use nyaterm_core::themes::appearance::ThemeMode;
+    let dir = unique_temp_dir("system-theme-compatibility");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store
+        .save_settings_value(&serde_json::json!({"appearance":{"theme":"nord", "future":42}}))
+        .unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert_eq!(settings.theme_mode, ThemeMode::Manual);
+    assert_eq!(settings.theme, "nord");
+    assert_eq!(settings.light_theme, "github-light");
+    assert_eq!(settings.dark_theme, "github-dark");
+    settings.theme_mode = ThemeMode::System;
+    settings.light_theme = "nord-light".into();
+    settings.dark_theme = "dracula".into();
+    let saved = store.save_appearance_settings(&settings).unwrap();
+    assert_eq!(saved.theme_mode, ThemeMode::System);
+    assert_eq!(saved.light_theme, "nord-light");
+    assert_eq!(saved.dark_theme, "dracula");
+    assert_eq!(saved.theme, "nord");
+    settings.theme_mode = ThemeMode::Unknown("scheduled".into());
+    store.save_appearance_settings(&settings).unwrap();
+    let mut reloaded = store.load_app_settings_summary().unwrap();
+    reloaded.ui_font_size += 1;
+    store.save_appearance_settings(&reloaded).unwrap();
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["appearance"]["theme_mode"], "scheduled");
+    assert_eq!(raw["appearance"]["future"], 42);
+}
+
+#[test]
+fn malformed_system_theme_preferences_cannot_be_overwritten_by_unrelated_saves() {
+    let dir = unique_temp_dir("system-theme-malformed");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let settings = store.load_app_settings_summary().unwrap();
+    for field in ["theme_mode", "light_theme", "dark_theme"] {
+        let raw = serde_json::json!({"appearance":{field:{"future":true}}});
+        store.save_settings_value(&raw).unwrap();
+        assert!(store.load_app_settings_summary().is_err());
+        assert!(store.save_appearance_settings(&settings).is_err());
+        assert_eq!(store.load_settings_value().unwrap(), raw);
+    }
+}
+
+#[test]
+fn theme_only_commits_preserve_system_pairs_and_detect_concurrent_preference_changes() {
+    use crate::storage::ThemeCommitOutcome;
+    use nyaterm_core::themes::appearance::ThemeMode;
+    use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
+    let dir = unique_temp_dir("system-theme-commits");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    settings.theme_mode = ThemeMode::System;
+    settings.light_theme = "nord-light".into();
+    settings.dark_theme = "nord".into();
+    settings = store.save_appearance_settings(&settings).unwrap();
+    let apply = |target| ThemeMutation::Apply {
+        id: "dracula".into(),
+        target,
+    };
+    let ThemeCommitOutcome::Committed(commit) = store
+        .commit_theme_mutation(
+            &ThemeSettings::from(&settings),
+            &apply(ThemeApplyTarget::Terminal),
+        )
+        .unwrap()
+    else {
+        panic!("unexpected conflict")
+    };
+    assert_eq!(commit.settings.mode, ThemeMode::System);
+    let ThemeCommitOutcome::Committed(commit) = store
+        .commit_theme_mutation(&commit.settings, &apply(ThemeApplyTarget::Ui))
+        .unwrap()
+    else {
+        panic!("unexpected conflict")
+    };
+    assert_eq!(commit.settings.mode, ThemeMode::Manual);
+    assert_eq!(commit.settings.light, "nord-light");
+    assert_eq!(commit.settings.dark, "nord");
+    let mut concurrent = store.load_app_settings_summary().unwrap();
+    concurrent.light_theme = "github-light".into();
+    store.save_appearance_settings(&concurrent).unwrap();
+    assert!(matches!(
+        store
+            .commit_theme_mutation(&commit.settings, &apply(ThemeApplyTarget::Ui))
+            .unwrap(),
+        ThemeCommitOutcome::Conflict
+    ));
+    assert_eq!(
+        store.load_app_settings_summary().unwrap().light_theme,
+        "github-light"
+    );
+}
+
+#[test]
+fn system_theme_preferences_survive_portable_and_native_backups() {
+    use nyaterm_core::themes::appearance::ThemeMode;
+    let source_dir = unique_temp_dir("system-theme-source");
+    let portable_dir = unique_temp_dir("system-theme-portable");
+    let native_dir = unique_temp_dir("system-theme-native");
+    let backup_dir = unique_temp_dir("system-theme-backup");
+    let backup_path = backup_dir.join("settings.redb");
+    let source = ConnectionStore::open(&source_dir).unwrap();
+    let mut settings = source.load_app_settings_summary().unwrap();
+    settings.theme_mode = ThemeMode::System;
+    settings.light_theme = "nord-light".into();
+    settings.dark_theme = "nord".into();
+    source.save_appearance_settings(&settings).unwrap();
+    let mut snapshot = source
+        .build_raw_portable_snapshot(PortableSnapshotKind::Backup, "device", "test")
+        .unwrap();
+    snapshot.recalculate_hash().unwrap();
+    let target = ConnectionStore::open(&portable_dir).unwrap();
+    target.apply_raw_portable_snapshot(&snapshot).unwrap();
+    let assert_preferences = |store: &ConnectionStore| {
+        let restored = store.load_app_settings_summary().unwrap();
+        assert_eq!(restored.theme_mode, ThemeMode::System);
+        assert_eq!(restored.light_theme, "nord-light");
+        assert_eq!(restored.dark_theme, "nord");
+        assert_eq!(restored.theme, "github-dark");
+    };
+    assert_preferences(&target);
+    drop(source);
+    ConnectionStore::export_config_database(&source_dir, None, &backup_path).unwrap();
+    ConnectionStore::import_config_database(&native_dir, None, &backup_path).unwrap();
+    assert_preferences(&ConnectionStore::open(&native_dir).unwrap());
+}
+
+#[test]
 fn theme_commits_are_atomic_and_preserve_unrelated_settings_and_unknown_fields() {
     use crate::storage::ThemeCommitOutcome;
     use nyaterm_core::themes::management::{ThemeApplyTarget, ThemeMutation, ThemeSettings};
@@ -677,6 +806,7 @@ fn round_trips_sessions_in_redb_compatible_tables() {
                 ..Default::default()
             }),
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -753,6 +883,7 @@ fn exports_and_imports_native_redb_backup() {
             icon_auto_detect: None,
             auth: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -852,6 +983,7 @@ fn exports_and_imports_portable_snapshot() {
                     ..Default::default()
                 }),
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -1129,6 +1261,7 @@ fn encrypted_portable_snapshot_requires_master_password() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -1185,6 +1318,7 @@ fn encrypted_portable_snapshot_requires_master_password() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -2174,6 +2308,7 @@ fn rejects_invalid_backup_without_replacing_current_database() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -2254,6 +2389,7 @@ fn save_and_delete_connection_updates_store() {
         icon_auto_detect: None,
         auth: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -2309,6 +2445,7 @@ fn save_group_and_connection_persists_both_records() {
         icon_auto_detect: None,
         auth: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -2391,6 +2528,7 @@ fn deleting_group_removes_descendants_and_grouped_connections() {
                 icon_auto_detect: None,
                 auth: None,
                 ssh_algorithms: None,
+                allow_short_rsa_host_keys: false,
                 ssh_compatibility_mode: false,
                 ssh_profile: Default::default(),
                 terminal_type: None,
@@ -2446,6 +2584,7 @@ fn load_sessions_decrypts_legacy_connection_password_record() {
             ..Default::default()
         }),
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -6432,6 +6571,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(false),
                 execution_mode: Some("append".to_string()),
+                segmented_send: None,
                 raw_send: None,
                 source: Some("ai".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Low),
@@ -6439,6 +6579,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 created_at: Some(111),
                 use_count: Some(7),
                 sort_order: Some(3),
+                extra: Default::default(),
             },
             Some(QuickCommandCategory {
                 id: "cat-shell".to_string(),
@@ -6465,6 +6606,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(true),
                 execution_mode: Some("append".to_string()),
+                segmented_send: None,
                 raw_send: None,
                 source: Some("manual".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Medium),
@@ -6472,6 +6614,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 created_at: Some(999),
                 use_count: Some(99),
                 sort_order: Some(3),
+                extra: Default::default(),
             },
             Some(QuickCommandCategory {
                 id: "cat-shell".to_string(),
@@ -6509,14 +6652,15 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
 }
 
 #[test]
-fn quick_command_literal_mode_survives_storage_backup_and_sync_with_legacy_commands() {
-    let dir = unique_temp_dir("quick-command-literal");
+fn quick_command_options_survive_storage_backup_and_sync_with_legacy_commands() {
+    let dir = unique_temp_dir("quick-command-options");
     let store = ConnectionStore::open(&dir).unwrap();
     let config: QuickCommandsConfig = serde_json::from_value(serde_json::json!({
         "commands": [
             {"id":"legacy", "label":"Legacy", "command":"pwd"},
             {"id":"null", "label":"Null", "command":"pwd", "raw_send":null},
-            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true}
+            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true},
+            {"id":"segmented", "label":"Segmented", "command":"one\ntwo", "execution_mode":"append", "segmented_send":{"mode":"character","interval_ms":20}}
         ]
     })).unwrap();
     // Seed the legacy document as written by older versions, before a typed save.
@@ -6575,6 +6719,7 @@ fn quick_commands_export_matches_tauri_json_shape() {
             icon_tag: Some("terminal".to_string()),
             pinned: Some(true),
             execution_mode: Some("append".to_string()),
+            segmented_send: None,
             raw_send: None,
             source: Some("manual".to_string()),
             risk_level: Some(nyaterm_core::RiskLevel::Low),
@@ -6582,6 +6727,7 @@ fn quick_commands_export_matches_tauri_json_shape() {
             created_at: Some(111),
             use_count: Some(7),
             sort_order: Some(3),
+            extra: Default::default(),
         }],
     })
     .expect("export serializes");
@@ -6664,6 +6810,7 @@ fn sync_snapshot_strips_device_local_ssh_agent_settings() {
             post_login: None,
             recording: None,
             ssh_algorithms: None,
+            allow_short_rsa_host_keys: false,
             ssh_compatibility_mode: false,
             ssh_profile: Default::default(),
             terminal_type: None,
@@ -7371,6 +7518,7 @@ fn ssh_connection_for_asset(id: &str) -> SavedConnection {
         post_login: None,
         recording: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -8862,6 +9010,50 @@ fn login_monitoring_setting_roundtrips_without_losing_unknown_fields() {
 }
 
 #[test]
+fn serial_reconnect_enter_defaults_off_and_preserves_saved_values_and_unknown_fields() {
+    let dir = unique_temp_dir("serial-reconnect-enter-settings");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        assert!(
+            !store
+                .load_app_settings_summary()
+                .unwrap()
+                .terminal_serial_reconnect_send_enter
+        );
+        store
+            .save_settings_value(&serde_json::json!({
+                "terminal": {"future": {"keep": true}}, "future_root": [99]
+            }))
+            .unwrap();
+        let mut settings = store.load_app_settings_summary().unwrap();
+        assert!(!settings.terminal_serial_reconnect_send_enter);
+        for enabled in [true, false, true] {
+            settings.terminal_serial_reconnect_send_enter = enabled;
+            let saved = store.save_terminal_settings(&settings).unwrap();
+            assert_eq!(saved.terminal_serial_reconnect_send_enter, enabled);
+            assert_eq!(
+                store
+                    .load_app_settings_summary()
+                    .unwrap()
+                    .terminal_serial_reconnect_send_enter,
+                enabled
+            );
+            let raw = store.load_settings_value().unwrap();
+            assert_eq!(raw["terminal"]["serial_reconnect_send_enter"], enabled);
+            assert_eq!(raw["terminal"]["future"]["keep"], true);
+            assert_eq!(raw["future_root"][0], 99);
+        }
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(
+        store
+            .load_app_settings_summary()
+            .unwrap()
+            .terminal_serial_reconnect_send_enter
+    );
+}
+
+#[test]
 fn terminal_wrapping_settings_load_legacy_and_round_trip_without_downgrading_unknown_values() {
     use nyaterm_core::models::settings::TerminalWrapMode;
     let dir = unique_temp_dir("terminal-wrapping-settings");
@@ -9403,4 +9595,234 @@ fn default_session_batch_commits_all_protocols_or_preserves_the_entire_catalog()
     assert_eq!(after["ssh"]["encoding"], "GBK");
     assert_eq!(after["ssh"]["future"]["version"], 8);
     assert_eq!(after["telnet"], before.unwrap()["telnet"]);
+}
+
+#[test]
+fn short_rsa_opt_in_survives_portable_backup_and_clears_after_restore() {
+    let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-short-rsa-backup");
+    let source = root.join("source");
+    let target = root.join("restored");
+    let backup = root.join("backup.nya");
+    let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "name":"legacy", "type":"ssh", "host":"example.invalid", "ssh_profile":"network_device",
+        "allow_short_rsa_host_keys":true, "future_field":{"v":7}
+    })).unwrap();
+    let store = ConnectionStore::open(&source).unwrap();
+    store.save_connection(&connection).unwrap();
+    drop(store);
+    ConnectionStore::export_portable_snapshot(&source, None, &backup, "fixture", "2.0.6").unwrap();
+    ConnectionStore::import_portable_snapshot(&target, None, &backup).unwrap();
+    let store = ConnectionStore::open_existing(&target).unwrap();
+    connection = store.list_connections().unwrap().remove(0);
+    assert!(connection.allow_short_rsa_host_keys);
+    assert_eq!(
+        serde_json::to_value(&connection).unwrap()["future_field"]["v"],
+        7
+    );
+    connection.allow_short_rsa_host_keys = false;
+    store.save_connection(&connection).unwrap();
+    drop(store);
+    let store = ConnectionStore::open_existing(&target).unwrap();
+    let connection = store.list_connections().unwrap().remove(0);
+    assert!(!connection.allow_short_rsa_host_keys);
+    assert!(
+        serde_json::to_value(connection)
+            .unwrap()
+            .get("allow_short_rsa_host_keys")
+            .is_none()
+    );
+}
+
+#[test]
+fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
+    use std::io;
+    use std::sync::Arc;
+
+    use redb::{StorageBackend as _, backends::InMemoryBackend};
+
+    #[derive(Clone, Debug)]
+    struct RepairBackend(Arc<InMemoryBackend>);
+
+    impl redb::StorageBackend for RepairBackend {
+        fn len(&self) -> io::Result<u64> {
+            self.0.len()
+        }
+
+        fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+            self.0.read(offset, out)
+        }
+
+        fn set_len(&self, len: u64) -> io::Result<()> {
+            self.0.set_len(len)
+        }
+
+        fn sync_data(&self) -> io::Result<()> {
+            self.0.sync_data()
+        }
+
+        fn write(&self, offset: u64, data: &[u8]) -> io::Result<()> {
+            self.0.write(offset, data)
+        }
+    }
+
+    let root = nyaterm_core::test_support::TestTempDir::new("nyaterm-repaired-database");
+    let store = ConnectionStore::open(root.path()).unwrap();
+    let connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "id":"retained", "name":"retained", "type":"ssh", "host":"example.invalid"
+    }))
+    .unwrap();
+    store.save_connection(&connection).unwrap();
+    // Both committed header slots contain the same user data.
+    store.save_connection(&connection).unwrap();
+    drop(store);
+    let path = root.join("nyaterm.redb");
+    // Windows prevents a second file handle from modifying a live redb file.
+    // Inject corruption into a shared backend loaded from the real database
+    // so every platform exercises check_integrity's repair after opening.
+    let bytes = std::fs::read(&path).unwrap();
+    let backend = RepairBackend(Arc::new(InMemoryBackend::new()));
+    backend.set_len(bytes.len() as u64).unwrap();
+    backend.write(0, &bytes).unwrap();
+    let database = redb::Database::builder()
+        .create_with_backend(backend.clone())
+        .unwrap();
+    let mut god_byte = [0u8; 1];
+    backend.read(9, &mut god_byte).unwrap();
+    // Simulate an interrupted commit that permits fallback to the other slot.
+    god_byte[0] = (god_byte[0] | 2) & !4;
+    backend.write(9, &god_byte).unwrap();
+    // redb's supported file header has two 128-byte transaction slots.
+    // Damaging the primary checksum exercises check_integrity's repaired result.
+    let checksum_offset = if god_byte[0] & 1 == 0 {
+        64 + 112
+    } else {
+        192 + 112
+    };
+    backend.write(checksum_offset, &[0u8; 16]).unwrap();
+    let (database, repaired) = ConnectionStore::validate_opened_database(database, &path).unwrap();
+    assert!(repaired);
+    let store = ConnectionStore::from_database(database, path, None).unwrap();
+    assert_eq!(store.list_connections().unwrap()[0].id, "retained");
+}
+
+#[test]
+fn quick_command_future_settings_survive_usage_updates_and_backups() {
+    let dir = unique_temp_dir("quick-command-future-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let source = serde_json::json!({"commands":[{"id":"future","label":"Future","command":"never","execution_mode":"append","segmented_send":{"version":2,"mode":"future","interval_ms":1,"extension":{"keep":true}},"future_property":{"keep":true}},{"id":"ordinary","label":"Ordinary","command":"pwd"}],"categories":[]});
+    let config: QuickCommandsConfig = serde_json::from_value(source.clone()).unwrap();
+    store.save_quick_commands(config).unwrap();
+    store.increment_quick_command_use_count("ordinary").unwrap();
+    let value = serde_json::to_value(store.load_quick_commands().unwrap()).unwrap();
+    assert_eq!(
+        value["commands"][0]["segmented_send"],
+        source["commands"][0]["segmented_send"]
+    );
+    assert_eq!(
+        value["commands"][0]["future_property"],
+        source["commands"][0]["future_property"]
+    );
+    for kind in [
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Backup,
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Sync,
+    ] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "future-test", "2.0.6")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let encoded = crate::portable_codec::encode_raw_portable_snapshot(&snapshot).unwrap();
+        let decoded = crate::portable_codec::decode_raw_portable_snapshot(&encoded).unwrap();
+        store
+            .save_quick_commands(QuickCommandsConfig::default())
+            .unwrap();
+        store.apply_raw_portable_snapshot(&decoded).unwrap();
+        let restored = serde_json::to_value(store.load_quick_commands().unwrap()).unwrap();
+        assert_eq!(
+            restored["commands"][0]["segmented_send"],
+            source["commands"][0]["segmented_send"]
+        );
+        assert_eq!(
+            restored["commands"][0]["future_property"],
+            source["commands"][0]["future_property"]
+        );
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn networktools_settings_round_trip_preserves_unknown_subtree_keys() {
+    let dir = unique_temp_dir("networktools-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+
+    let mut raw = store.load_settings_value().unwrap();
+    raw["networktools"] = serde_json::json!({
+        "tftp": {"port": 1069, "future_flag": true},
+        "ftp": {"port": 2121}
+    });
+    store.save_settings_value(&raw).unwrap();
+
+    let mut settings = store.load_networktools_settings().unwrap();
+    assert_eq!(settings.tftp.port, 1069);
+    assert_eq!(settings.tftp.bind_address, "0.0.0.0");
+    assert!(!settings.tftp.allow_upload);
+
+    settings.tftp.allow_upload = true;
+    store.save_networktools_settings(settings.clone()).unwrap();
+    assert_eq!(store.load_networktools_settings().unwrap(), settings);
+
+    // Unknown fields written by a newer build must survive our save.
+    let saved = store.load_settings_value().unwrap();
+    assert_eq!(saved["networktools"]["tftp"]["future_flag"], true);
+    assert_eq!(saved["networktools"]["ftp"]["port"], 2121);
+}
+
+#[test]
+fn networktools_settings_default_when_absent() {
+    let dir = unique_temp_dir("networktools-settings-default");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let settings = store.load_networktools_settings().unwrap();
+    assert!(settings.tftp.root_dir.is_empty());
+    assert!(!settings.tftp.allow_overwrite);
+    assert_eq!(
+        settings.tftp.port,
+        nyaterm_core::models::networktools::DEFAULT_TFTP_PORT
+    );
+}
+
+#[test]
+fn invalid_networktools_settings_preserve_the_existing_document() {
+    let dir = unique_temp_dir("networktools-invalid-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut raw = store.load_settings_value().unwrap();
+    raw["networktools"] = serde_json::json!({
+        "tftp": {"port": 1069, "future_flag": true}, "future_service": {"value": 8}
+    });
+    store.save_settings_value(&raw).unwrap();
+    let mut next = store.load_networktools_settings().unwrap();
+    next.tftp.block_size = 0;
+    assert!(store.save_networktools_settings(next).is_err());
+    assert_eq!(store.load_settings_value().unwrap(), raw);
+}
+
+#[test]
+fn unsupported_networktools_documents_are_not_replaced_when_saving_defaults() {
+    let dir = unique_temp_dir("networktools-unsupported-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    for unsupported in [
+        serde_json::json!(["future format"]),
+        serde_json::json!({"tftp": ["future format"], "future_service": 8}),
+    ] {
+        let mut raw = store.load_settings_value().unwrap();
+        raw["networktools"] = unsupported;
+        store.save_settings_value(&raw).unwrap();
+        assert!(
+            store
+                .save_networktools_settings(
+                    nyaterm_core::models::networktools::NetworkToolsSettings::default()
+                )
+                .is_err()
+        );
+        assert_eq!(store.load_settings_value().unwrap(), raw);
+    }
 }

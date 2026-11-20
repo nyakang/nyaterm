@@ -4,6 +4,7 @@ pub mod navigation;
 pub mod terminal_path;
 pub mod transfer_paths;
 
+use crate::ftp::{FtpEntry, FtpEntryKind, FtpFileService};
 use crate::local_fs::LocalFileService;
 use crate::remote_file::{
     FileCopyRequest, FileTransferEndpoint, RemoteFileService, RemoteTextDocument,
@@ -11,7 +12,7 @@ use crate::remote_file::{
 };
 use crate::sftp::{
     RemoteBinaryFile, RemoteFilePath, SftpAttributeUpdate, SftpFileEntry, SftpFileProperties,
-    SftpRemoteTextFile, SftpTransferControl,
+    SftpFileType, SftpRemoteTextFile, SftpTransferControl,
 };
 use crate::sftp_transfer_types::{
     SftpPathTransferOptions, SftpTransferProgress, SftpTransferSummary,
@@ -143,6 +144,7 @@ pub enum FileBrowserService {
     Local(LocalFileService),
     Remote(Arc<RemoteFileService>),
     Adb(Arc<crate::adb::AdbFileService>),
+    Ftp(Arc<FtpFileService>),
 }
 
 impl std::fmt::Debug for FileBrowserService {
@@ -162,13 +164,14 @@ impl FileBrowserService {
     pub fn same_execution_identity(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Remote(left), Self::Remote(right)) => left.same_execution_identity(right),
+            (Self::Ftp(left), Self::Ftp(right)) => Arc::ptr_eq(left, right),
             (Self::Local(_), Self::Local(_)) | (Self::Adb(_), Self::Adb(_)) => true,
             _ => false,
         }
     }
     pub fn downgrade(&self) -> Option<WeakFileBrowserService> {
         match self {
-            Self::Local(_) => None,
+            Self::Local(_) | Self::Ftp(_) => None,
             Self::Remote(service) => Some(WeakFileBrowserService::Remote(Arc::downgrade(service))),
             Self::Adb(service) => Some(WeakFileBrowserService::Adb(Arc::downgrade(service))),
         }
@@ -191,6 +194,11 @@ impl FileBrowserService {
         if let Some(parent) = local.parent().filter(|path| !path.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
+        let options = if matches!(self, Self::Ftp(_)) {
+            options.with_ftp_capabilities(false)
+        } else {
+            options
+        };
         let summary = FileCopyRequest {
             source: self.transfer_endpoint(remote),
             destination: FileTransferEndpoint::Local(local.clone()),
@@ -199,6 +207,7 @@ impl FileBrowserService {
         }
         .execute_with_progress(progress)?;
         Ok(SftpTransferSummary {
+            retained_backups: summary.retained_backups,
             remote_path: remote.display_path.clone(),
             local_path: PathBuf::from(summary.destination_path),
             bytes: summary.bytes,
@@ -240,6 +249,11 @@ impl FileBrowserService {
                 progress,
             );
         }
+        let options = if matches!(self, Self::Ftp(_)) {
+            options.with_ftp_capabilities(true)
+        } else {
+            options
+        };
         let summary = FileCopyRequest {
             source: FileTransferEndpoint::Local(local.clone()),
             destination: self.transfer_endpoint(remote),
@@ -248,6 +262,7 @@ impl FileBrowserService {
         }
         .execute_with_progress(progress)?;
         Ok(SftpTransferSummary {
+            retained_backups: summary.retained_backups,
             remote_path: summary.destination_path,
             local_path: local,
             bytes: summary.bytes,
@@ -261,7 +276,7 @@ impl FileBrowserService {
                 self.kind(),
                 &path.display_path,
             ))),
-            Self::Remote(_) | Self::Adb(_) => path.parent(),
+            Self::Remote(_) | Self::Adb(_) | Self::Ftp(_) => path.parent(),
         }
     }
 
@@ -284,6 +299,11 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .child_path(directory, name)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(_) => Ok(RemoteFilePath::new(file_browser_join(
+                self.kind(),
+                &directory.display_path,
+                name,
+            ))),
         }
     }
 
@@ -311,6 +331,24 @@ impl FileBrowserService {
         destination: &RemoteFilePath,
         directory: bool,
     ) -> anyhow::Result<()> {
+        self.validate_copy_destination_with_control(
+            source,
+            target,
+            destination,
+            directory,
+            &SftpTransferControl::new(),
+        )
+    }
+
+    pub(crate) fn validate_copy_destination_with_control(
+        &self,
+        source: &RemoteFilePath,
+        target: &Self,
+        destination: &RemoteFilePath,
+        directory: bool,
+        control: &SftpTransferControl,
+    ) -> anyhow::Result<()> {
+        control.check_cancelled()?;
         match (self, target) {
             (Self::Local(_), Self::Local(_)) => {
                 let source = std::fs::canonicalize(resolve_local_path(&source.display_path))?;
@@ -355,6 +393,62 @@ impl FileBrowserService {
             (Self::Adb(origin), Self::Adb(target)) => origin
                 .validate_copy_destination(source, target, destination, directory)
                 .map_err(crate::adb::file_error)?,
+            (Self::Ftp(origin), Self::Ftp(target)) if origin.same_endpoint(target) => {
+                let source_path =
+                    crate::ftp::service::normalized_path(origin.home_dir(), &source.display_path)?;
+                let destination_path = crate::ftp::service::normalized_path(
+                    target.home_dir(),
+                    &destination.display_path,
+                )?;
+                anyhow::ensure!(
+                    !file_browser_copy_destination_invalid(
+                        FileBrowserBackendKind::Remote,
+                        &source_path,
+                        &destination_path,
+                        directory
+                    ),
+                    "source and destination overlap"
+                );
+                let source = origin.canonical_target(&source_path, directory, control)?;
+                // Resolve the nearest existing destination ancestor, then append
+                // only validated missing components without creating anything.
+                let mut ancestor = destination_path;
+                let mut missing: Vec<String> = Vec::new();
+                let destination = loop {
+                    match target.stat_with_control(&ancestor, control) {
+                        Ok(entry) if entry.kind == FtpEntryKind::Symlink => {
+                            bail!("copying through symbolic links is not supported");
+                        }
+                        Ok(entry) => {
+                            let mut resolved = target.canonical_target(
+                                &ancestor,
+                                entry.is_directory(),
+                                control,
+                            )?;
+                            for name in missing.iter().rev() {
+                                resolved = crate::ftp::join_remote_path(&resolved, name);
+                            }
+                            break resolved;
+                        }
+                        Err(crate::ftp::FtpError::NotFound) => {
+                            let (parent, name) = crate::ftp::parent_and_name(&ancestor);
+                            anyhow::ensure!(parent != ancestor, "invalid destination");
+                            missing.push(name);
+                            ancestor = parent;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                };
+                anyhow::ensure!(
+                    !file_browser_copy_destination_invalid(
+                        FileBrowserBackendKind::Remote,
+                        &source,
+                        &destination,
+                        directory
+                    ),
+                    "source and destination overlap"
+                );
+            }
             _ => {}
         }
         Ok(())
@@ -373,6 +467,9 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .create_dir_remote_path(path, mode)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .create_dir(&path.display_path)
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -389,6 +486,9 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .create_file_remote_path(path, mode)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .create_file(&path.display_path)
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -403,7 +503,7 @@ impl FileBrowserService {
     pub fn kind(&self) -> FileBrowserBackendKind {
         match self {
             Self::Local(_) => FileBrowserBackendKind::Local,
-            Self::Remote(_) => FileBrowserBackendKind::Remote,
+            Self::Remote(_) | Self::Ftp(_) => FileBrowserBackendKind::Remote,
             Self::Adb(_) => FileBrowserBackendKind::Adb,
         }
     }
@@ -418,6 +518,12 @@ impl FileBrowserService {
                 edit_attributes: false,
                 direct_external_open: false,
             },
+            Self::Ftp(_) => FileBrowserCapabilities {
+                ordinary_transfer: true,
+                create_symlink: false,
+                edit_attributes: false,
+                direct_external_open: false,
+            },
         }
     }
 
@@ -426,6 +532,7 @@ impl FileBrowserService {
             Self::Local(service) => service.home_dir(),
             Self::Remote(service) => service.home_dir(),
             Self::Adb(_) => Ok("/sdcard/".into()),
+            Self::Ftp(service) => Ok(service.home_dir().to_string()),
         }
     }
 
@@ -436,6 +543,10 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .list_dir_path(&RemoteFilePath::new(path.as_ref()))
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .list_dir(path.as_ref())
+                .map(|entries| entries.iter().map(entry_from_ftp_entry).collect())
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -444,6 +555,10 @@ impl FileBrowserService {
             Self::Local(service) => service.list_dir(resolve_local_path(&path.display_path)),
             Self::Remote(service) => service.list_dir_path(path),
             Self::Adb(service) => service.list_dir_path(path).map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .list_dir(&path.display_path)
+                .map(|entries| entries.iter().map(entry_from_ftp_entry).collect())
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -454,6 +569,9 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .create_dir_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .create_dir(path.as_ref())
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -464,6 +582,9 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .create_file_remote_path(&RemoteFilePath::new(path.as_ref()), mode)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .create_file(path.as_ref())
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -473,7 +594,7 @@ impl FileBrowserService {
         target_path: impl AsRef<str>,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Adb(_) | Self::Local(_) => {
+            Self::Adb(_) | Self::Local(_) | Self::Ftp(_) => {
                 bail!("creating symbolic links is unavailable for this backend")
             }
             Self::Remote(service) => service.create_symlink_path(link_path, target_path),
@@ -487,6 +608,9 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .delete_remote_path(path)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .remove_tree(&path.display_path)
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -504,6 +628,9 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .rename_remote_paths(old_path, new_path)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .rename(&old_path.display_path, &new_path.display_path)
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -522,6 +649,16 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .rename_remote_paths_no_replace(source, destination)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => {
+                // FTP has no atomic exclusive rename; a stat check keeps the
+                // shared no-replace contract for the common case.
+                if service.stat(&destination.display_path).is_ok() {
+                    bail!("the destination already exists");
+                }
+                service
+                    .rename(&source.display_path, &destination.display_path)
+                    .map_err(|error| anyhow::anyhow!(error))
+            }
         }
     }
 
@@ -535,6 +672,10 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .remote_file_properties(path)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .stat(&path.display_path)
+                .map(|entry| properties_from_ftp_entry(&entry))
+                .map_err(|error| anyhow::anyhow!(error)),
         }
     }
 
@@ -544,7 +685,7 @@ impl FileBrowserService {
         update: SftpAttributeUpdate,
     ) -> anyhow::Result<()> {
         match self {
-            Self::Adb(_) | Self::Local(_) => {
+            Self::Adb(_) | Self::Local(_) | Self::Ftp(_) => {
                 bail!("editing attributes is unavailable for this backend")
             }
             Self::Remote(service) => service.update_remote_path_attributes(path, update),
@@ -564,6 +705,25 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .read_text_file_path(path, max_bytes)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => {
+                let bytes = service
+                    .read_file_bytes_limited(&path.display_path, max_bytes)
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                anyhow::ensure!(bytes.len() as u64 <= max_bytes, "file is too large to open");
+                let modified_at = service
+                    .stat(&path.display_path)
+                    .ok()
+                    .and_then(|entry| entry.modified)
+                    .and_then(system_time_secs)
+                    .unwrap_or(0);
+                Ok(SftpRemoteTextFile {
+                    path: path.display_path.clone(),
+                    content: String::from_utf8(bytes.clone())
+                        .map_err(|_| anyhow::anyhow!("file is not valid UTF-8 text"))?,
+                    size: bytes.len() as u64,
+                    modified_at,
+                })
+            }
         }
     }
 
@@ -580,6 +740,34 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .read_text_document_path(path, max_bytes)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => {
+                let bytes = service
+                    .read_file_bytes_limited(&path.display_path, max_bytes)
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                anyhow::ensure!(bytes.len() as u64 <= max_bytes, "file is too large to open");
+                anyhow::ensure!(
+                    !bytes.contains(&0),
+                    "binary files are not supported by the built-in editor"
+                );
+                let modified_at = service
+                    .stat(&path.display_path)
+                    .ok()
+                    .and_then(|entry| entry.modified)
+                    .and_then(system_time_secs);
+                let content = String::from_utf8(bytes.clone())
+                    .map_err(|_| anyhow::anyhow!("file is not valid UTF-8 text"))?;
+                Ok(RemoteTextDocument {
+                    path: path.display_path.clone(),
+                    content,
+                    revision: RemoteTextRevision::from_bytes(
+                        &bytes,
+                        crate::remote_file::RemoteTextMetadata {
+                            size: bytes.len() as u64,
+                            modified_at,
+                        },
+                    ),
+                })
+            }
         }
     }
 
@@ -603,6 +791,14 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .write_text_document_path(path, content, expected_revision, force)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => service
+                .write_text_document(
+                    &path.display_path,
+                    content.as_ref(),
+                    expected_revision,
+                    force,
+                )
+                .map_err(anyhow::Error::from),
         }
     }
 
@@ -619,6 +815,27 @@ impl FileBrowserService {
             Self::Adb(service) => service
                 .read_file_bytes_path(path, max_bytes)
                 .map_err(crate::adb::file_error),
+            Self::Ftp(service) => {
+                let content_bytes = service
+                    .read_file_bytes_limited(&path.display_path, max_bytes)
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                anyhow::ensure!(
+                    content_bytes.len() as u64 <= max_bytes,
+                    "file is too large to preview"
+                );
+                let modified_at = service
+                    .stat(&path.display_path)
+                    .ok()
+                    .and_then(|entry| entry.modified)
+                    .and_then(system_time_secs)
+                    .unwrap_or(0);
+                Ok(RemoteBinaryFile {
+                    path: path.display_path.clone(),
+                    size: content_bytes.len() as u64,
+                    content_bytes,
+                    modified_at,
+                })
+            }
         }
     }
 
@@ -633,6 +850,10 @@ impl FileBrowserService {
                 service: service.clone(),
                 path: path.clone(),
             },
+            Self::Ftp(service) => FileTransferEndpoint::Ftp {
+                service: service.clone(),
+                path: path.clone(),
+            },
         }
     }
 
@@ -642,7 +863,7 @@ impl FileBrowserService {
 
     pub fn remote_service(&self) -> Option<Arc<RemoteFileService>> {
         match self {
-            Self::Adb(_) | Self::Local(_) => None,
+            Self::Adb(_) | Self::Local(_) | Self::Ftp(_) => None,
             Self::Remote(service) => Some(service.clone()),
         }
     }
@@ -656,6 +877,61 @@ fn resolve_local_path(path: &str) -> PathBuf {
         std::env::current_dir()
             .map(|current| current.join(&path))
             .unwrap_or(path)
+    }
+}
+
+fn system_time_secs(time: std::time::SystemTime) -> Option<u64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
+fn ftp_entry_modified_at(modified: Option<std::time::SystemTime>) -> Option<u32> {
+    modified
+        .and_then(system_time_secs)
+        .and_then(|secs| u32::try_from(secs).ok())
+}
+
+fn ftp_file_type(kind: FtpEntryKind) -> SftpFileType {
+    match kind {
+        FtpEntryKind::File => SftpFileType::File,
+        FtpEntryKind::Directory => SftpFileType::Directory,
+        FtpEntryKind::Symlink => SftpFileType::Symlink,
+    }
+}
+
+pub fn entry_from_ftp_entry(entry: &FtpEntry) -> SftpFileEntry {
+    SftpFileEntry {
+        name: entry.name.clone(),
+        path: entry.path.clone(),
+        file_type: ftp_file_type(entry.kind),
+        size: (entry.kind != FtpEntryKind::Directory).then_some(entry.size),
+        permissions: None,
+        owner: String::new(),
+        group: String::new(),
+        modified_at: ftp_entry_modified_at(entry.modified),
+        raw_path_token: None,
+        symlink_target_is_directory: false,
+    }
+}
+
+pub(crate) fn properties_from_ftp_entry(entry: &FtpEntry) -> SftpFileProperties {
+    SftpFileProperties {
+        symlink_target: None,
+        name: entry.name.clone(),
+        path: entry.path.clone(),
+        file_type: ftp_file_type(entry.kind),
+        size: (entry.kind != FtpEntryKind::Directory).then_some(entry.size),
+        permissions: None,
+        permissions_symbolic: String::new(),
+        owner: String::new(),
+        group: String::new(),
+        uid: None,
+        gid: None,
+        modified_at: ftp_entry_modified_at(entry.modified),
+        accessed_at: None,
+        raw_path_token: None,
+        symlink_target_is_directory: false,
     }
 }
 

@@ -3,8 +3,9 @@ use std::fs;
 use crate::ConnectionStore;
 use crate::data_directory::{
     DATABASE_FILE_NAME, DataDirectoryError, DataRootLease, JOURNAL_NAME, LOCATION_FILE_NAME,
-    TEST_FAILURE, linux_network_mount, open_startup, prepare_switch, queue_switch, read_location,
-    set_active_data_dir, write_location,
+    TEST_FAILURE, commit_database_rebuild, linux_network_mount, open_startup,
+    prepare_database_rebuild, prepare_switch, queue_switch, read_location, set_active_data_dir,
+    write_location,
 };
 use nyaterm_core::app_identity::AppFlavor;
 use nyaterm_core::test_support::TestTempDir;
@@ -80,6 +81,117 @@ fn first_run_can_create_a_database_without_creating_configured_missing_roots() {
     let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
     assert!(opened.store.db_path().exists());
     assert!(!opened.selection.custom);
+}
+
+fn archived_databases(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let prefix = format!("{DATABASE_FILE_NAME}.corrupt-");
+    let mut archives = fs::read_dir(path)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        })
+        .collect::<Vec<_>>();
+    archives.sort();
+    archives
+}
+
+#[test]
+fn configured_missing_database_requires_confirmation_before_creation() {
+    let root = TestTempDir::new("nyaterm-data-directory-create-missing-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    assert!(archived_databases(&custom).is_empty());
+    let choice = prepare_database_rebuild(&local, &local, &custom, AppFlavor::Stable).unwrap();
+    assert!(archived_databases(&custom).is_empty());
+    commit_database_rebuild(&local, &local, &choice, AppFlavor::Stable).unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert_eq!(
+        fs::canonicalize(&opened.selection.data_dir).unwrap(),
+        fs::canonicalize(&custom).unwrap()
+    );
+    assert!(custom.join(DATABASE_FILE_NAME).exists());
+    assert!(!local.join(DATABASE_FILE_NAME).exists());
+}
+
+#[test]
+fn empty_database_requires_confirmation_and_is_archived() {
+    let root = TestTempDir::new("nyaterm-data-directory-empty-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(DATABASE_FILE_NAME), b"").unwrap();
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    assert!(archived_databases(&custom).is_empty());
+    let choice = prepare_database_rebuild(&local, &local, &custom, AppFlavor::Stable).unwrap();
+    assert!(archived_databases(&custom).is_empty());
+    commit_database_rebuild(&local, &local, &choice, AppFlavor::Stable).unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert!(opened.store.list_connections().unwrap().is_empty());
+    let archives = archived_databases(&custom);
+    assert_eq!(archives.len(), 1);
+    assert!(fs::read(&archives[0]).unwrap().is_empty());
+}
+
+#[test]
+fn corrupt_database_requires_confirmation_and_is_archived() {
+    let root = TestTempDir::new("nyaterm-data-directory-corrupt-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(DATABASE_FILE_NAME), b"not a redb database").unwrap();
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    assert!(archived_databases(&custom).is_empty());
+    let choice = prepare_database_rebuild(&local, &local, &custom, AppFlavor::Stable).unwrap();
+    assert!(archived_databases(&custom).is_empty());
+    commit_database_rebuild(&local, &local, &choice, AppFlavor::Stable).unwrap();
+    let opened = open_startup(&local, &local, AppFlavor::Stable).unwrap();
+    assert!(opened.store.list_connections().unwrap().is_empty());
+    let archives = archived_databases(&custom);
+    assert_eq!(archives.len(), 1);
+    assert_eq!(fs::read(&archives[0]).unwrap(), b"not a redb database");
+    assert!(custom.join(DATABASE_FILE_NAME).exists());
+}
+
+#[test]
+fn startup_does_not_replace_a_database_held_by_another_process() {
+    let root = TestTempDir::new("nyaterm-data-directory-db-in-use");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    let held = ConnectionStore::open(&custom).unwrap();
+    let error = open_startup(&local, &local, AppFlavor::Stable)
+        .err()
+        .expect("startup must fail while the database is held");
+    assert_eq!(error.code(), "in_use");
+    assert!(archived_databases(&custom).is_empty());
+    drop(held);
+}
+
+#[test]
+fn startup_does_not_create_a_database_while_a_migration_journal_exists() {
+    let root = TestTempDir::new("nyaterm-data-directory-journal-db");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(JOURNAL_NAME), b"{}").unwrap();
+    let error = open_startup(&local, &local, AppFlavor::Stable)
+        .err()
+        .expect("startup must require recovery while a journal exists");
+    assert_eq!(error.code(), "recovery_required");
+    assert!(!custom.join(DATABASE_FILE_NAME).exists());
+    assert!(archived_databases(&custom).is_empty());
 }
 
 #[test]
@@ -807,4 +919,160 @@ fn future_migration_journal_never_publishes_or_archives_data() {
     assert_eq!(fs::read(path).unwrap(), bytes);
     assert!(local.join(DATABASE_FILE_NAME).exists());
     assert!(!target.join(DATABASE_FILE_NAME).exists());
+}
+
+#[test]
+fn rebuild_rejects_a_database_changed_after_confirmation() {
+    let root = TestTempDir::new("nyaterm-rebuild-stale");
+    let local = root.join("local");
+    let custom = root.join("custom");
+    fs::create_dir_all(&custom).unwrap();
+    set_active_data_dir(&local, Some(&custom)).unwrap();
+    fs::write(custom.join(DATABASE_FILE_NAME), b"damaged before").unwrap();
+    let choice = prepare_database_rebuild(&local, &local, &custom, AppFlavor::Stable).unwrap();
+    fs::write(
+        custom.join(DATABASE_FILE_NAME),
+        b"changed after confirmation",
+    )
+    .unwrap();
+    assert!(matches!(
+        commit_database_rebuild(&local, &local, &choice, AppFlavor::Stable),
+        Err(DataDirectoryError::CopyMismatch(_))
+    ));
+    assert_eq!(
+        fs::read(custom.join(DATABASE_FILE_NAME)).unwrap(),
+        b"changed after confirmation"
+    );
+    assert!(archived_databases(&custom).is_empty());
+}
+
+#[test]
+fn rebuild_failures_restore_original_database_and_leave_other_files_untouched() {
+    for point in [
+        "rebuild_staged",
+        "rebuild_archived",
+        "rebuild_published",
+        "directory_sync",
+        "pointer",
+    ] {
+        let root = TestTempDir::new("nyaterm-rebuild-rollback");
+        let local = root.join("local");
+        let custom = root.join("custom");
+        fs::create_dir_all(&custom).unwrap();
+        set_active_data_dir(&local, Some(&custom)).unwrap();
+        fs::write(
+            custom.join(DATABASE_FILE_NAME),
+            b"original damaged database",
+        )
+        .unwrap();
+        fs::write(custom.join("master.key"), b"synthetic opaque key material").unwrap();
+        let pointer = fs::read(local.join(LOCATION_FILE_NAME)).unwrap();
+        let choice = prepare_database_rebuild(&local, &local, &custom, AppFlavor::Stable).unwrap();
+        TEST_FAILURE.with(|failure| failure.set(Some(point)));
+        assert!(commit_database_rebuild(&local, &local, &choice, AppFlavor::Stable).is_err());
+        assert_eq!(
+            fs::read(custom.join(DATABASE_FILE_NAME)).unwrap(),
+            b"original damaged database"
+        );
+        assert_eq!(
+            fs::read(custom.join("master.key")).unwrap(),
+            b"synthetic opaque key material"
+        );
+        assert_eq!(fs::read(local.join(LOCATION_FILE_NAME)).unwrap(), pointer);
+        assert!(archived_databases(&custom).is_empty());
+    }
+}
+
+#[test]
+fn undecodable_connection_is_not_classified_as_physical_database_corruption() {
+    use redb::TableDefinition;
+    let root = TestTempDir::new("nyaterm-rebuild-json");
+    let local = root.join("local");
+    fixture(&local);
+    let database = redb::Database::open(local.join(DATABASE_FILE_NAME)).unwrap();
+    let txn = database.begin_write().unwrap();
+    txn.open_table(TableDefinition::<&str, &[u8]>::new("connections"))
+        .unwrap()
+        .insert("connections/broken", b"{invalid".as_slice())
+        .unwrap();
+    txn.commit().unwrap();
+    drop(database);
+    let error = open_startup(&local, &local, AppFlavor::Stable)
+        .err()
+        .unwrap();
+    assert!(matches!(error, DataDirectoryError::DatabaseDataInvalid(_)));
+    assert!(!crate::data_directory::startup_recovery(&local, &local, &error).can_rebuild);
+    assert!(prepare_database_rebuild(&local, &local, &local, AppFlavor::Stable).is_err());
+    assert!(archived_databases(&local).is_empty());
+    let database = redb::Database::open(local.join(DATABASE_FILE_NAME)).unwrap();
+    let txn = database.begin_write().unwrap();
+    txn.open_table(TableDefinition::<&str, &[u8]>::new("connections"))
+        .unwrap()
+        .remove("connections/broken")
+        .unwrap();
+    txn.commit().unwrap();
+    drop(database);
+    let opened = ConnectionStore::open_existing(&local).unwrap();
+    assert_eq!(opened.list_connections().unwrap().len(), 1);
+    assert_eq!(opened.list_passwords().unwrap().len(), 1);
+}
+
+#[test]
+fn storage_failures_other_than_explicit_corruption_cannot_offer_rebuild() {
+    let root = TestTempDir::new("nyaterm-rebuild-error-classification");
+    let errors = [
+        crate::StorageError::InvalidData("unsupported record".into()),
+        crate::StorageError::MissingMasterKey,
+        crate::StorageError::Open {
+            path: root.path().into(),
+            source: redb::DatabaseError::RepairAborted,
+        },
+        crate::StorageError::Open {
+            path: root.path().into(),
+            source: redb::DatabaseError::UpgradeRequired(1),
+        },
+        crate::StorageError::Open {
+            path: root.path().into(),
+            source: redb::DatabaseError::Storage(redb::StorageError::Io(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            ))),
+        },
+    ];
+    for error in errors {
+        let classified = crate::data_directory::classify_storage_error(root.path(), error);
+        assert!(
+            !crate::data_directory::startup_recovery(root.path(), root.path(), &classified)
+                .can_rebuild
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rebuild_refuses_database_symlinks() {
+    let root = TestTempDir::new("nyaterm-rebuild-symlink");
+    let local = root.join("local");
+    fs::create_dir_all(&local).unwrap();
+    let target = root.join("original");
+    fs::write(&target, b"retained data").unwrap();
+    std::os::unix::fs::symlink(&target, local.join(DATABASE_FILE_NAME)).unwrap();
+    assert!(prepare_database_rebuild(&local, &local, &local, AppFlavor::Stable).is_err());
+    assert_eq!(fs::read(&target).unwrap(), b"retained data");
+}
+
+#[cfg(unix)]
+#[test]
+fn first_run_does_not_create_through_a_dangling_database_symlink() {
+    let root = TestTempDir::new("nyaterm-startup-dangling-database");
+    let local = root.join("local");
+    fs::create_dir_all(&local).unwrap();
+    let target = root.join("must-not-create");
+    std::os::unix::fs::symlink(&target, local.join(DATABASE_FILE_NAME)).unwrap();
+    assert!(open_startup(&local, &local, AppFlavor::Stable).is_err());
+    assert!(!target.exists());
+    assert!(
+        fs::symlink_metadata(local.join(DATABASE_FILE_NAME))
+            .unwrap()
+            .is_symlink()
+    );
 }

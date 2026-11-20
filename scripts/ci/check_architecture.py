@@ -111,6 +111,7 @@ def dependency_errors() -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     workspace_dependencies = workspace["workspace"]["dependencies"]
     for crate, forbidden in (
+        ("nyaterm-executor", set()),
         ("nyaterm-i18n", set()),
         ("nyaterm-completion-runtime", set()),
         ("nyaterm-android", set()),
@@ -162,9 +163,17 @@ def dependency_errors() -> list[str]:
                 and package.startswith("nyaterm-")
                 and package not in {"nyaterm-core", "nyaterm-terminal", "nyaterm-transport", "nyaterm-recording"}
             )
-            wrong_i18n_direction = crate == "nyaterm-i18n" and package.startswith("nyaterm-")
-            if wrong_i18n_direction or wrong_terminal_runtime_direction or wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
+            wrong_leaf_direction = crate in {"nyaterm-i18n", "nyaterm-executor"} and package.startswith("nyaterm-")
+            if wrong_leaf_direction or wrong_terminal_runtime_direction or wrong_mcp_direction or wrong_sync_direction or wrong_adapter_direction or package in forbidden or package == "gpui" or package.startswith("gpui-"):
                 errors.append(f"crate_boundary: {crate} must not depend on {package}")
+    host_tools = tomllib.loads(
+        (ROOT / "crates/nyaterm-host-tools-gpui/Cargo.toml").read_text(encoding="utf-8")
+    )
+    for package in dependency_packages(host_tools, workspace_dependencies):
+        if (package.startswith("nyaterm-") and package not in {
+            "nyaterm-core", "nyaterm-executor", "nyaterm-i18n", "nyaterm-remote-ops", "nyaterm-ui"
+        }) or (package.startswith("gpui-") and package != "gpui-platform"):
+            errors.append(f"crate_boundary: nyaterm-host-tools-gpui must not depend on {package}")
     terminal_presentation = tomllib.loads(
         (ROOT / "crates/nyaterm-terminal-gpui/Cargo.toml").read_text(encoding="utf-8")
     )

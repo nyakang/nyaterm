@@ -1,6 +1,4 @@
-use crate::models::{
-    RecordingEventReceiver, RecordingHistorySearchKey, RecordingWriteHandle, RecordingWritePipeline,
-};
+use crate::models::{RecordingEventReceiver, RecordingWriteHandle, RecordingWritePipeline};
 use gpui::{ListAlignment, ListState, px};
 use nyaterm_recording::recording::RecordingStatus;
 use nyaterm_terminal::recording_sanitizer::RecordingSanitizer;
@@ -237,10 +235,6 @@ impl RecordingFeatureState {
         data: impl Into<Vec<u8>>,
     ) {
         self.pipeline.write_raw_input(session_id, data);
-    }
-
-    pub(in crate::features) fn request_history_search(&self, key: RecordingHistorySearchKey) {
-        self.pipeline.request_history_search(key);
     }
 
     pub(in crate::features) fn take_event_receiver(&mut self) -> Option<RecordingEventReceiver> {

@@ -65,6 +65,13 @@ impl NyaTermApp {
     ) -> impl IntoElement {
         let palette = self.theme_palette();
         let reconnect_session_id = session_id.clone();
+        let serial_session_id = session_id.clone();
+        let serial = self.session.metadata(&session_id).is_some_and(|metadata| {
+            matches!(
+                metadata.launch_config,
+                crate::models::SessionLaunchConfig::Serial(_)
+            )
+        });
         div()
             .size_full()
             .flex()
@@ -111,6 +118,17 @@ impl NyaTermApp {
                     this.reconnect_session(reconnect_session_id.clone(), window, cx);
                 }),
             ))
+            .when(serial, |this| {
+                this.child(small_button(
+                    palette,
+                    format!("workspace-reconnect-device-{serial_session_id}"),
+                    t!("serialPrompt.chooseDevice"),
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_serial_reconnect_prompt(serial_session_id.clone(), cx);
+                    }),
+                ))
+            })
     }
 
     pub(super) fn workspace_session_content(

@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+nyaterm-host-tools-gpui.workspace = true
+nyaterm-executor.workspace = true
 nyaterm-completion-runtime.workspace = true
 nyaterm-i18n.workspace = true
 tempfile.workspace = true
@@ -59,6 +61,7 @@ zip.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+nyaterm-host-tools-gpui = { workspace = true, features = ["test-support"] }
 nyaterm-terminal-runtime = { workspace = true, features = ["test-support"] }
 russh.workspace = true
 nyaterm-recording = { workspace = true, features = ["test-support"] }

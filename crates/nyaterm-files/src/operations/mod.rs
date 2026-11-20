@@ -51,6 +51,7 @@ pub enum FileOperationRequest {
 }
 
 pub struct FileOperationSummary {
+    pub retained_backups: Vec<String>,
     pub source_path: String,
     pub target_path: String,
     pub source_parent_path: Option<String>,

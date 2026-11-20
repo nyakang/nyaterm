@@ -8,6 +8,10 @@ is disconnected or connecting. Views have independent channels, and closing a vi
 retains submitted transfers. Disconnect retains directories, terminal history and
 layout. Reconnect is manual and never replays commands. Reconnecting a channel
 reuses a valid unchanged binding and leaves sibling Shell, screen and file channels running.
+Discovery restarts a stopped ADB server using the configured executable. Only
+TCP connection failures permit startup; an existing server's protocol timeout
+does not. A server restart invalidates device leases, so reconnect renews the
+binding and generation before opening channels instead of retrying an old transport ID.
 Pending Shell requests retain their device until accepted, failed or cancelled;
 undeliverable successful results close their channel on the background reaper.
 Previously saved Android Files views and layouts still restore, with both file-manager panes initialized.

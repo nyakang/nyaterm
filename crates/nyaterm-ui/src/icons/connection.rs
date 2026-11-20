@@ -167,6 +167,7 @@ const PROTOCOL_ICONS: &[(&str, IconDef)] = &[
     ("serial", IconDef::mono("icons/conn/serial.svg", 0xbc8cff)),
     ("rdp", IconDef::mono("icons/conn/rdp.svg", 0x22d3ee)),
     ("vnc", IconDef::mono("icons/conn/vnc.svg", 0xfb7185)),
+    ("ftp", IconDef::mono("icons/conn/ftp.svg", 0xfeb50a)),
 ];
 
 /// Keys the GPUI build has written that the old app never had. They are not
@@ -246,6 +247,7 @@ pub fn default_connection_icon_for_kind(kind: &str) -> IconDef {
         "Serial" => "serial",
         "RDP" => "rdp",
         "VNC" => "vnc",
+        "FTP" => "ftp",
         "ADB" | "Android" | "Android (ADB)" => "android",
         _ => DEFAULT_CONNECTION_ICON,
     };
@@ -402,9 +404,20 @@ mod tests {
     }
 
     #[test]
+    fn ftp_default_uses_the_tinted_folder_glyph() {
+        let ftp = resolve_connection_icon(None, "FTP");
+        assert_eq!(ftp.path, "icons/conn/ftp.svg");
+        assert!(matches!(ftp.paint, IconPaint::Mono(0xfeb50a)));
+        assert_eq!(ftp, resolve_connection_icon(Some("ftp"), "SSH"));
+        assert_ne!(ftp, default_connection_icon_for_kind("SSH"));
+    }
+
+    #[test]
     fn unknown_and_empty_keys_fall_back_by_kind() {
         let mut paths = Vec::new();
-        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC", "ADB"] {
+        for kind in [
+            "SSH", "Local", "Telnet", "Serial", "RDP", "VNC", "FTP", "ADB",
+        ] {
             let default = default_connection_icon_for_kind(kind);
             for key in [None, Some(""), Some("   "), Some("nonsense")] {
                 assert_eq!(resolve_connection_icon(key, kind), default);
@@ -468,7 +481,9 @@ mod tests {
 
     #[test]
     fn every_protocol_default_has_one_matching_picker_option() {
-        for kind in ["SSH", "Local", "Telnet", "Serial", "RDP", "VNC", "ADB"] {
+        for kind in [
+            "SSH", "Local", "Telnet", "Serial", "RDP", "VNC", "FTP", "ADB",
+        ] {
             let default = resolve_connection_icon(None, kind);
             let matching_options = CONNECTION_ICON_OPTIONS
                 .iter()
@@ -476,7 +491,7 @@ mod tests {
                 .count();
             assert_eq!(matching_options, 1, "{kind} default must be selectable");
         }
-        for key in ["rdp", "vnc"] {
+        for key in ["rdp", "vnc", "ftp"] {
             assert_eq!(
                 resolve_connection_icon(Some(key), "SSH"),
                 resolve_connection_icon(None, &key.to_uppercase()),

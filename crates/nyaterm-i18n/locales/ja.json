@@ -863,9 +863,9 @@
     "passwordLabel": "パスワード",
     "passwordOnlyCredential": "パスワードのみの認証情報",
     "passwordPlaceholder": "送信するパスワード",
-    "passwordRegexPlaceholder": "パスワードプロンプト用の正規表現",
+    "passwordRegexLabel": "パスワードプロンプトの正規表現",
     "passwordUnchanged": "空欄のままにすると現在の値を保持します",
-    "promptRegexLabel": "プロンプトの正規表現",
+    "promptRegexLabel": "ユーザー名プロンプトの正規表現",
     "promptRegexOptionalLabel": "プロンプトの正規表現（任意）",
     "reorderFailed": "認証情報の並べ替えに失敗しました",
     "reorderSuccess": "認証情報の順序を保存しました",
@@ -896,6 +896,8 @@
       "display": "表示",
       "session": "セッション",
       "serial": "シリアルポート設定",
+      "charset": "文字セット",
+      "advanced": "詳細設定",
       "startup": "起動設定"
     },
     "serialSoftwareFlowControlModemDisabled": "XMODEM/YMODEM/ZMODEM transfers are disabled with software flow control because XON/XOFF can consume binary data.",
@@ -1117,6 +1119,50 @@
     "newGroupRootHint": "最上位に作成",
     "noAuthentication": "なし",
     "noAuthenticationDescription": "パスワードや鍵なしで接続します。SSH サーバーが許可している場合や対話的に要求する場合にのみ使用してください。",
+    "ftpAnonymousLogin": "匿名ログイン",
+    "ftpAnonymousHint": "匿名ログインでは保存済みのパスワードを送信しません。サーバーが匿名アクセスを許可している場合にのみ使用してください。",
+    "ftpAuthModeUnsupported": "FTP はパスワードまたは匿名ログインのみ対応しています。",
+    "ftpPassiveModeInvalid": "FTP パッシブモードが無効です。",
+    "ftpFilenameEncodingInvalid": "有効な FTP ファイル名文字セットを選択してください。",
+    "ftpConnectTimeoutInvalid": "FTP 接続タイムアウトは %{min}～%{max} ミリ秒の範囲で指定してください。",
+    "ftpPasswordRequired": "パスワードを入力するか、匿名ログインを選択してください。",
+    "ftpPassiveMode": "パッシブモード",
+    "ftpPassiveAuto": "自動",
+    "ftpPassivePasv": "PASV（パッシブ）",
+    "ftpPassiveEpsv": "EPSV（拡張パッシブ）",
+    "ftpInitialDirectory": "リモート開始フォルダー",
+    "ftpLocalInitialDirectory": "ローカル開始フォルダー",
+    "ftpConnectTimeout": "接続タイムアウト（ミリ秒）",
+    "ftpAdvancedHint": "開始フォルダーが空の場合はサーバーまたはローカルの既定値を使用します。 FTP 転送は先頭から開始し、権限やタイムスタンプを保持しません。",
+    "ftpAsciiMode": "ASCII モード",
+    "ftpAsciiModeHint": "アップロード時にローカルの改行を CRLF に変換し、ダウンロード時にローカルの改行へ戻します。テキストファイル専用です。",
+    "ftpFtps": "FTPS（明示的 TLS）",
+    "ftpFtpsHint": "AUTH TLS で制御接続とデータ接続を暗号化します。サーバーが明示的 FTPS に対応している必要があります。",
+    "ftpSecurityMode": "セキュリティモード",
+    "ftpSecurityNone": "なし",
+    "ftpSecurityExplicit": "明示的 FTPS",
+    "ftpSecurityImplicit": "暗黙的 FTPS",
+    "ftpImplicitFtpsHint": "接続直後に TLS ハンドシェイクを行います。通常はポート 990 を使用します。",
+    "ftpTlsVersion": "TLS バージョン",
+    "ftpTlsAuto": "自動（システム既定）",
+    "ftpTlsSsl3": "SSL 3.0",
+    "ftpTls10": "TLS 1.0",
+    "ftpTls11": "TLS 1.1",
+    "ftpTls12": "TLS 1.2",
+    "ftpTls13": "TLS 1.3",
+    "ftpTlsVersionHint": "SSL 2.0 はサポートされません。SSL 3.0、TLS 1.0、TLS 1.1 は非推奨で、システムポリシーにより拒否される場合があります。",
+    "ftpNetworkRouteDescription": "ジャンプホストを選択するとジャンプが優先され、このページのプロキシは使用されません。ジャンプへの接続に必要なプロキシはその SSH 接続で設定してください。",
+    "ftpNetworkPlaintextDescription": "プロキシとジャンプの設定は接続と一緒に保存されます。",
+    "ftpSecurityModeInvalid": "FTP のセキュリティモードが無効です。",
+    "ftpTlsVersionInvalid": "FTP の TLS バージョンが無効です。",
+    "filenameEncodingTitle": "サーバーはファイル名に次の文字セットを使用します：",
+    "filenameEncodingAuto": "自動検出",
+    "filenameEncodingAutoHint": "サーバーが UTF-8 を宣言している場合は UTF-8、それ以外は本機のシステムエンコーディングを使用します。",
+    "filenameEncodingForceUtf8": "UTF-8 を強制",
+    "filenameEncodingCustom": "カスタム文字セットを使用",
+    "filenameEncodingLabel": "エンコーディング",
+    "filenameEncodingWarning": "誤った文字セットを使用するとファイル名が正しく表示されない場合があります。",
+    "filenameEncodingScope": "サーバー上のファイル名とパスのみに影響し、ファイル内容には影響しません。",
     "noKeys": "鍵がありません",
     "noOtp": "なし",
     "noOtpEntries": "OTP エントリがありません",
@@ -1274,6 +1320,8 @@
     "workingDirectorySelected": "作業ディレクトリ: %{path}",
     "workingDirectorySelectionCancelled": "作業ディレクトリの選択をキャンセルしました。",
     "x11Forwarding": "X11 転送",
+    "allowShortRsaHostKeys": "短い RSA ホスト鍵を許可",
+    "allowShortRsaHostKeysDesc": "512～1023 ビットの RSA ホスト鍵を許可します。安全性が低いため、旧式の機器でのみ有効にしてください。ホストの識別と署名は検証します。",
     "sshCompatibilityMode": "互換モード",
     "sshCompatibilityModeDesc": "この接続のリモートリソース監視、プロセス管理、Docker などのバックグラウンド検出を無効にし、追加コマンドによる古い SSH サーバーの切断を防ぎます。ターミナル、SFTP、SSH トンネルには影響しません。",
     "dynamicTabTitle": "動的タブタイトル",
@@ -1455,7 +1503,6 @@
   "fileExplorer": {
     "clipboardEmpty": "ファイルのクリップボードは空か、置き換えられています",
     "clipboardMoving": "切り取った項目を移動中です。完了するまでお待ちください",
-
     "transferSourceUnavailable": "接続元を利用できません。再接続して再試行してください。",
     "transferBackendUnsupported": "この接続はファイル転送に対応していません。",
     "transferInvalidDestination": "転送先が無効か、ファイル名を表現できません。",
@@ -1572,9 +1619,15 @@
     "mtime": "更新日時",
     "name": "名前",
     "newFile": "新しいファイル",
-    "newFileName": "新しいファイル名:",
+    "newFileName": "ファイル名",
+    "newFileNamePlaceholder": "例：config.yaml",
+    "newFolderNamePlaceholder": "例：my-folder",
+    "permRead": "読み取り R",
+    "permWrite": "書き込み W",
+    "permExecute": "実行 X",
+    "specialPermissions": "特殊権限",
     "newFolder": "新しいフォルダー",
-    "newFolderName": "新しいフォルダー名:",
+    "newFolderName": "ディレクトリ名",
     "newSymlink": "新しいシンボリックリンク",
     "noFavorites": "お気に入りがありません",
     "noChildDirectories": "子ディレクトリがありません",
@@ -1641,6 +1694,14 @@
     "uploadPrompt": "リモートファイルが変更されました。変更をアップロードしますか？"
   },
   "fileManager": {
+    "leftSide": "左側",
+    "rightSide": "右側",
+    "copyToPane": "%{side}にコピー（%{target}）",
+    "moveToPane": "%{side}に移動（%{target}）",
+    "new": "新規作成",
+    "copyFullPath": "フルパスをコピー",
+    "copyName": "ファイル名をコピー",
+    "copyParent": "親ディレクトリをコピー",
     "connected": "接続済み",
     "skipped": "スキップ済み",
     "copy": "コピー",
@@ -1690,7 +1751,9 @@
     "openLeft": "左側で開く",
     "openRight": "右側で開く",
     "openWorkspace": "ワークスペースでファイルマネージャーを開く",
-    "goHome": "ホーム"
+    "goHome": "ホーム",
+    "goBack": "戻る",
+    "goForward": "進む"
   },
   "fileTransfer": {
     "scanning": "ファイルをスキャン中…",
@@ -1699,6 +1762,7 @@
     "cancelAll": "すべてキャンセル",
     "cancelled": "キャンセルしました",
     "clearAll": "すべて消去",
+    "clear": "クリア",
     "clearCompleted": "完了分を消去",
     "completed": "完了",
     "cancelling": "キャンセル中",
@@ -1934,6 +1998,81 @@
     "ungrouped": "グループなし",
     "ungroupedConnections": "グループなし"
   },
+  "networktools": {
+    "common": {
+      "panel": {
+        "listening": "%{addr} で待機中",
+        "notRunning": "停止中",
+        "configure": "設定",
+        "start": "サーバーを開始",
+        "stop": "サーバーを停止"
+      },
+      "action": {
+        "reset": "リセット",
+        "browse": "参照"
+      },
+      "bind": {
+        "allInterfaces": "すべてのインターフェース",
+        "loopback": "ループバック",
+        "savedUnavailable": "保存値（このマシンでは未検出）"
+      },
+      "field": {
+        "bindAddress": "バインドアドレス",
+        "port": "ポート",
+        "rootDir": "サービスディレクトリ",
+        "timeout": "タイムアウト（秒）",
+        "concurrency": "最大同時転送数"
+      },
+      "section": {
+        "basic": "基本設定",
+        "limits": "転送制限",
+        "permissions": "権限"
+      },
+      "hint": {
+        "firewall": "他のマシンから接続するには、システムファイアウォールでこの UDP ポートを許可してください。",
+        "security": "選択したディレクトリのみを共有します。信頼できるネットワークで使用してください。"
+      },
+      "error": {
+        "bind": "有効な IP アドレスを入力してください",
+        "port": "ポートは 1～65535 の範囲で指定してください",
+        "timeout": "タイムアウトは 1～255 秒の範囲で指定してください",
+        "concurrency": "同時実行数は 1～%{max} の範囲で指定してください",
+        "rootDirRequired": "サービスディレクトリを選択してください",
+        "rootDirUnreadable": "ディレクトリが存在しないか、読み取れません",
+        "invalid": "設定が無効です: %{message}"
+      },
+      "status": {
+        "saveHint": "変更は次回サービスの起動時に反映されます。",
+        "saveAndRestart": "保存してサービスを再起動",
+        "restartFailed": "保存しましたが、%{service} サービスの再起動に失敗しました: %{message}",
+        "saveFailed": "ネットワークツールの設定を保存できませんでした",
+        "serviceFailed": "%{service} · %{message}"
+      },
+      "transfer": {
+        "started": "%{service} · 転送を開始: %{file}",
+        "finished": "%{service} · 転送完了: %{file}（%{bytes} バイト）",
+        "failed": "%{service} · %{file}: %{message}",
+        "failedUnknown": "不明なエラー"
+      }
+    },
+    "tftp": {
+      "title": "TFTP サーバー",
+      "shortName": "TFTP",
+      "description": "このマシンで TFTP によるファイル共有と受信を行います。",
+      "field": {
+        "blockSize": "ネゴシエーションの最大ブロックサイズ",
+        "allowUpload": "アップロードを許可",
+        "allowOverwrite": "ファイルの上書きを許可"
+      },
+      "hint": {
+        "blockSize": "クライアントが blksize を要求した場合の DATA ペイロード上限（8–65464 バイト）。\n要求値とこの上限の小さい方を使用します。\nblksize を要求しない場合は常に 512 バイトを使用します。",
+        "upload": "クライアントはサービスディレクトリに書き込めます"
+      },
+      "error": {
+        "blockSize": "ブロックサイズは 8～65464 の範囲で指定してください"
+      }
+    }
+  },
   "otp": {
     "cancel": "キャンセル",
     "cancelled": "認証をキャンセルしました",
@@ -2040,6 +2179,7 @@
     "fileTransfer": "転送",
     "gpuMonitor": "NVIDIA GPU",
     "network": "ネットワーク",
+    "networktools": "ネットワークツール",
     "npuMonitor": "Ascend NPU",
     "noActiveSessions": "アクティブなセッションがありません",
     "noCommandsYet": "コマンドがまだありません",
@@ -2331,6 +2471,7 @@
     "emptyCommand": "コマンドが空です",
     "errorCommandRequired": "コマンドは必須です",
     "errorLabelRequired": "ラベルは必須です",
+    "errorSegmentedIntervalInvalid": "送信間隔は 0～60 秒の数値で入力してください。",
     "executeHint": "コマンドを送信してすぐに実行します。",
     "executeImmediately": "今すぐ実行",
     "executionMode": "モード",
@@ -2375,6 +2516,11 @@
     "search": "コマンドを検索...",
     "searchOrCreateCategory": "検索または作成...",
     "selectIcon": "アイコン",
+    "segmentedCommandPlaceholder": "行または文字単位で分割します。変数には {{varName}} を使います。\\r、\\n、\\t、\\p を解釈します。文字をそのまま送るには原文送信を有効にしてください。",
+    "segmentedSend": "分割送信",
+    "segmentedSendBadge": "分割",
+    "segmentedSendHint": "行単位では各行を実行します。文字単位では末尾を自動実行しません。\\p ごとに1秒待機します。原文送信では改行を追加しません。",
+    "segmentedLegacyHint": "旧バージョンは分割設定を無視し、追加入力として送信します。内部の改行でコマンドが実行される場合があり、保存時に設定が失われることがあります。",
     "send": "送信",
     "sendToAll": "すべてに送信",
     "sort": "並べ替え",
@@ -2493,6 +2639,11 @@
     "usersMeaning": "システムに記録されたログインセッションです。すべての SSH 接続ではありません。"
   },
   "savedConnections": {
+    "openFileManager": "ファイルマネージャーを開く",
+    "openFileManagerSftpDisabled": "ファイルマネージャーを開く（SFTP 無効）",
+    "fileManagerConnectionUnavailable": "この保存済み接続は利用できなくなりました。",
+    "fileManagerRequiresSsh": "ファイルマネージャーを開くには SSH 接続が必要です。",
+    "fileManagerSftpDisabled": "この SSH 接続では SFTP が無効になっています。",
     "dropRoot": "ルートへ移動",
     "sessionImportTitle": "セッションをインポート",
     "restoreBackupTitle": "NyaTerm バックアップを復元",
@@ -2574,7 +2725,7 @@
     "ungroupedConnections": "グループなし",
     "user": "ユーザー",
     "windtermMasterPasswordTitle": "WindTerm マスターパスワード",
-    "windtermMasterPasswordDesc": "この WindTerm プロファイルにはマスターパスワードが設定されています。保存された自動ログイン情報を復号するには入力してください。",
+    "windtermMasterPasswordDesc": "この WindTerm プロファイルは自動ログインまたは OneKey アカウントをマスターパスワードで暗号化しています。保存された認証情報を復号するには入力してください。",
     "windtermMasterPasswordConfirm": "インポート",
     "windtermMasterPasswordRequired": "WindTerm マスターパスワードを入力してください",
     "windtermAccountsTitle": "WindTerm アカウント",
@@ -2722,6 +2873,7 @@
     "submit": "続行"
   },
   "serialPrompt": {
+    "chooseDevice": "デバイスを選択…",
     "alreadyOpen": "開いているシリアル選択を先に完了してください。",
     "baudRateInvalid": "ボーレートは 1〜4000000 の範囲で指定してください。",
     "baudRatePlaceholder": "115200",
@@ -2825,6 +2977,12 @@
     "unread": "未読"
   },
   "settings": {
+    "themeMode": "テーマモード",
+    "themeModeManual": "手動で選択",
+    "themeModeSystem": "システムに従う",
+    "systemLightTheme": "システムがライトのとき",
+    "systemDarkTheme": "システムがダークのとき",
+    "themeInUse": "使用中",
     "configurationSessionInAnotherWindow": "別のウィンドウでリモート接続が実行中または開始中です。設定を置き換える前に切断してください。",
     "configurationReplacementInProgress": "設定を置き換えています。完了後に接続を再試行してください。",
     "configurationRefreshRequired": "設定の再読み込みが完了していません。接続またはインポート・同期を再試行して設定を再読み込みしてください。",
@@ -3035,6 +3193,16 @@
     "dataDirectoryRestoreTitle": "現在のデータを既定のフォルダーに戻す",
     "dataDirectoryRestoreDesc": "%{path} の既存のデータベース、プラグイン、録画を履歴バックアップに保存してから、現在のデータをコピーして再起動します。コピー元とバックアップは保持されます。",
     "dataDirectoryUseHistory": "以前のデータを使用",
+    "dataDirectoryRecoveryOpen": "データフォルダーを開く",
+    "dataDirectoryRecoveryRebuild": "退避して再作成…",
+    "dataDirectoryRecoveryRebuildConfirm": "%{path} に空のデータベースを作成して再起動しますか？接続と設定は空になります。既存のデータベースは手動復元用にこのフォルダーへ退避します。他のファイルと鍵情報は保持します。",
+    "dataDirectoryRepairedDatabase": "データベースを修復し、保存データを読み込みました。",
+    "dataDirectoryCreatedDatabase": "確認に基づき、%{path} に空のデータベースを作成しました。",
+    "dataDirectoryErrorDatabaseMissing": "データベースがありません。復元して再試行するか、既存のフォルダーを選ぶか、空のデータベースの作成を選択してください。",
+    "dataDirectoryErrorDatabaseCorrupt": "データベースが破損しています。バックアップを復元するか、退避して空のデータベースを作成してください。",
+    "dataDirectoryErrorDatabaseDataInvalid": "保存データを解析できません。データベースは保持され、再作成は無効です。互換性のあるデータを復元してください。",
+    "dataDirectoryErrorDatabaseUpgrade": "データベースの更新が必要です。データベースは保持され、再作成は無効です。",
+    "dataDirectoryErrorDatabaseInitialization": "データベースの初期化に失敗しました。データベースは保持され、再作成は無効です。",
     "dataDirectoryRecoveryTitle": "データフォルダーの復旧",
     "dataDirectoryRecoveryDesc": "選択したフォルダーを開けません。ワークスペースと自動同期は開始していません。ディスクを接続して再試行するか、既存のデータフォルダーを選択してください。",
     "dataDirectoryRecoveryRetry": "選択したフォルダーを再試行",
@@ -3049,6 +3217,8 @@
     "dataDirectoryAutoHint": "親フォルダーを選択してください。NyaTerm はその中の %{dir} 子フォルダーを自動的に使用または作成します。上のパスが実際に使用される場所です。",
     "dataDirectoryRestartRequired": "ディレクトリの変更を保存しました。NyaTerm を再起動します。",
     "dataDirectoryNotice": "起動時の通知：",
+    "dataDirectoryRecreatedDatabase": "使用可能なデータベースが見つからないため、%{path} に新しい空のデータベースを作成しました。元のファイルは %{archive} として保持されています。",
+    "dataDirectoryCreateDatabaseFailed": "%{path} にデータベースを作成できませんでした：%{reason}。フォルダの権限または空き容量を確認してください。",
     "dataDirectorySyncWarning": "同期フォルダー（%{client}）を検出しました。NyaTerm の実行中に同期ツールがデータベースをコピーすると破損する可能性があります。同期の前に NyaTerm を終了するか、ポータブルスナップショットを使用してください。",
     "dataDirectoryMigrateTitle": "新しいディレクトリへ移行",
     "dataDirectoryMigrateDesc": "現在のデータベースとプラグインを %{path} にコピーします。元のディレクトリは削除されません。保存後、NyaTerm はすぐに再起動して新しいディレクトリで動作します。",
@@ -3172,7 +3342,7 @@
     "groupTransfer": "転送",
     "groupWorkspace": "ワークスペース",
     "zebraStripes": "ターミナルの行ストライプ",
-    "zebraStripesDesc": "シェルの入力領域とクリックした行を強調表示します。行ごとに背景色を交互に表示することもできます。",
+    "zebraStripesDesc": "シェルの入力領域とクリックした行を強調表示します。行ごとに背景色を交互に表示することもできます。無効にしてもコマンドの折りたたみと移動は利用できます。",
     "zebraStripesByRow": "行ごとに表示",
     "zebraStripesByRowDesc": "ターミナルの表示行ごとに背景色を交互に表示します。",
     "syncHistory": {
@@ -3271,6 +3441,8 @@
     "keepAliveInterval": "キープアライブ間隔（秒）",
     "reconnectRestoreCwd": "再接続後に作業ディレクトリを復元",
     "reconnectRestoreCwdDesc": "SSH セッションを最後に信頼された作業ディレクトリへ戻します。",
+    "serialReconnectEnter": "シリアル再接続後にEnterを送信",
+    "serialReconnectEnterDesc": "シリアルセッションの再接続後、コンソールがすぐプロンプトを表示するようEnterを1回送信します。",
     "keepAliveIntervalDesc": "X 秒ごとに SSH キープアライブパケットを送信します。0 で無効。",
     "keepAliveMode": "キープアライブモード",
     "keepAliveModeCompatible": "互換",
@@ -3732,8 +3904,8 @@
     "testSearchEngine": "テスト",
     "theme": "UI テーマ",
     "themeDesc": "アプリのカラーテーマを選択します。",
-    "timestampFormat": "タイムスタンプ形式",
-    "timestampFormatDesc": "例：HH:mm:ss または YYYY-MM-DD HH:mm:ss。",
+    "timestampFormat": "ターミナルのタイムスタンプ表示形式",
+    "timestampFormatDesc": "ターミナルの各出力行の時刻形式を設定します。例：HH:mm:ss または YYYY-MM-DD HH:mm:ss。上部メニューの「ターミナル > 表示」で「タイムスタンプを表示」を有効にすると適用されます。",
     "timestampFormatHelp": "HH:mm:ss、[HH:mm:ss.SSS]、または YYYY-MM-DD HH:mm:ss を使用します。対応トークン: YYYY, YY, MM, M, DD, D, HH, H, mm, m, ss, s, SSS, SS, S。",
     "title": "設定",
     "transfer": "転送",
@@ -4629,5 +4801,16 @@
     "tmuxCommandFailed": "tmux コマンドが失敗しました",
     "details": "詳細（%{count}）",
     "repeated": "発生回数：%{count}"
+  },
+  "ftpErrors": {
+    "connection": "FTP 接続に失敗しました。",
+    "authentication": "FTP 認証に失敗しました。",
+    "timeout": "FTP 操作がタイムアウトしました。再接続してください。",
+    "unavailable": "FTP セッションを利用できません。再接続してください。",
+    "unsupportedSettings": "FTP はこれらの転送設定に対応していません。",
+    "limitExceeded": "FTP ファイルがプレビューまたはエディターのサイズ制限を超えています。",
+    "notFound": "FTP ファイルが見つかりません。",
+    "backupRetained": "ファイルを保存しました。以前のバックアップは %{backup} に残っています。",
+    "recoveryRequired": "サーバーが置換を確認しませんでした。復元のため、新しいファイル %{temporary} とバックアップ %{backup} を保持してください。"
   }
 }

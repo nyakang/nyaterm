@@ -1,10 +1,15 @@
+use crate::features::terminal::terminal_runtime::StagedCommandInput;
+use futures::{FutureExt as _, StreamExt as _};
 use gpui::Context;
+use nyaterm_core::send_command::{SendCommandPlan, TextInterpretation};
 use nyaterm_core::{AiCommandCard, AppendAiAuditRequest, QuickCommand, QuickCommandCategory, uuid};
 use nyaterm_store::StoreDomain;
+use std::time::{Duration, Instant};
 
 use crate::features::NyaTermApp;
-use crate::features::commands::staged::StagedCommandHistory;
+use crate::features::commands::staged::{StagedCommandHistory, StagedQuickCommandTarget};
 use crate::models::QuickCommandVariablePromptState;
+use crate::send_command::{SendCommandLineEnding, SendCommandMode, target_line_ending};
 
 use super::escapes::{
     QuickCommandChunk, plan_literal_quick_command, plan_quick_command, quick_command_needs_staging,
@@ -14,15 +19,38 @@ use super::helpers::{
 };
 use super::variables::parse_quick_command_variables;
 
+#[derive(Clone)]
+pub(super) struct QuickCommandSendOptions {
+    pub execute: bool,
+    pub send_to_all: bool,
+    pub segmented_send: Option<nyaterm_core::QuickCommandSegmentedSend>,
+}
+
 struct QuickCommandSendPlan {
     chunks: Vec<QuickCommandChunk>,
     literal: bool,
+    segmented: bool,
+    execute: bool,
+    send_to_all: bool,
+    segmented_source: Option<(String, nyaterm_core::QuickCommandSegmentedSend)>,
 }
 
-struct StagedQuickCommandTarget {
-    session_id: String,
-    source_session_id: Option<String>,
-    history: StagedCommandHistory,
+impl QuickCommandSendPlan {
+    fn new(
+        chunks: Vec<QuickCommandChunk>,
+        literal: bool,
+        segmented: bool,
+        options: QuickCommandSendOptions,
+    ) -> Self {
+        Self {
+            chunks,
+            literal,
+            segmented,
+            execute: options.execute,
+            send_to_all: options.send_to_all,
+            segmented_source: None,
+        }
+    }
 }
 
 impl NyaTermApp {
@@ -108,6 +136,7 @@ impl NyaTermApp {
                         icon_tag: Some("terminal".to_string()),
                         pinned: Some(false),
                         execution_mode: Some("append".to_string()),
+                        segmented_send: None,
                         raw_send: None,
                         source: Some("ai".to_string()),
                         risk_level: card.risk_level.clone(),
@@ -115,6 +144,7 @@ impl NyaTermApp {
                         created_at: None,
                         use_count: None,
                         sort_order: None,
+                        extra: Default::default(),
                     },
                     new_category,
                 )?;
@@ -224,19 +254,37 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
-        let execute = quick_command_executes(&command);
+        let options = QuickCommandSendOptions {
+            execute: quick_command_executes(&command),
+            send_to_all,
+            segmented_send: command.segmented_send.clone(),
+        };
+        if let Some(send) = options.segmented_send.as_ref()
+            && let Err(error) = send.validate()
+        {
+            self.shell.set_status(error);
+            cx.notify();
+            return;
+        }
         if command.raw_send.unwrap_or_default() {
-            self.send_quick_command_plan(
-                command.id,
-                command.label,
-                QuickCommandSendPlan {
-                    chunks: plan_literal_quick_command(&command_text, execute),
-                    literal: true,
-                },
-                execute,
-                send_to_all,
-                cx,
-            );
+            if options.segmented_send.is_some() {
+                self.send_segmented_quick_command(
+                    command.id,
+                    command.label,
+                    command_text,
+                    true,
+                    options,
+                    cx,
+                );
+            } else {
+                let chunks = plan_literal_quick_command(&command_text, options.execute);
+                self.send_quick_command_plan(
+                    command.id,
+                    command.label,
+                    QuickCommandSendPlan::new(chunks, true, false, options),
+                    cx,
+                );
+            }
             return;
         }
         let variables = parse_quick_command_variables(&command_text);
@@ -246,8 +294,9 @@ impl NyaTermApp {
                     command_id: command.id,
                     label: command.label,
                     command: command_text,
-                    execute,
-                    send_to_all,
+                    execute: options.execute,
+                    send_to_all: options.send_to_all,
+                    segmented_send: options.segmented_send,
                     variables,
                 });
             self.shell
@@ -255,16 +304,16 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
-        self.send_resolved_quick_command(
+        self.send_resolved_quick_command_with_segmented(
             command.id,
             command.label,
             command_text,
-            execute,
-            send_to_all,
+            options,
             cx,
         );
     }
 
+    #[cfg(test)]
     pub(in crate::features) fn send_resolved_quick_command(
         &mut self,
         command_id: String,
@@ -274,20 +323,59 @@ impl NyaTermApp {
         send_to_all: bool,
         cx: &mut Context<Self>,
     ) {
-        // `\r \n \t \p \\` are interpreted here rather than at save time: the
-        // stored script keeps the escapes, so what the panel shows is what the
-        // user wrote.
+        self.send_resolved_quick_command_with_segmented(
+            command_id,
+            label,
+            command_text,
+            QuickCommandSendOptions {
+                execute,
+                send_to_all,
+                segmented_send: None,
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn send_resolved_quick_command_with_segmented(
+        &mut self,
+        command_id: String,
+        label: String,
+        command_text: String,
+        options: QuickCommandSendOptions,
+        cx: &mut Context<Self>,
+    ) {
+        if options.segmented_send.is_some() {
+            self.send_segmented_quick_command(command_id, label, command_text, false, options, cx);
+            return;
+        }
+        let chunks = plan_quick_command(&command_text, options.execute);
         self.send_quick_command_plan(
             command_id,
             label,
-            QuickCommandSendPlan {
-                chunks: plan_quick_command(&command_text, execute),
-                literal: false,
-            },
-            execute,
-            send_to_all,
+            QuickCommandSendPlan::new(chunks, false, false, options),
             cx,
         );
+    }
+
+    fn send_segmented_quick_command(
+        &mut self,
+        command_id: String,
+        label: String,
+        text: String,
+        literal: bool,
+        options: QuickCommandSendOptions,
+        cx: &mut Context<Self>,
+    ) {
+        let send = options.segmented_send.clone().expect("segmented options");
+        if let Err(error) = send.validate() {
+            self.shell.set_status(error);
+            cx.notify();
+            return;
+        }
+        self.queue_quick_command_use_count(command_id);
+        let mut plan = QuickCommandSendPlan::new(Vec::new(), literal, true, options);
+        plan.segmented_source = Some((text, send));
+        self.send_staged_quick_command(label, plan, cx);
     }
 
     fn send_quick_command_plan(
@@ -295,20 +383,22 @@ impl NyaTermApp {
         command_id: String,
         label: String,
         plan: QuickCommandSendPlan,
-        execute: bool,
-        send_to_all: bool,
         cx: &mut Context<Self>,
     ) {
+        self.queue_quick_command_use_count(command_id);
+
+        if quick_command_needs_staging(&plan.chunks) {
+            self.send_staged_quick_command(label, plan, cx);
+            return;
+        }
         let QuickCommandSendPlan {
             mut chunks,
             literal,
+            segmented,
+            execute,
+            send_to_all,
+            segmented_source: _,
         } = plan;
-        self.queue_quick_command_use_count(command_id);
-
-        if quick_command_needs_staging(&chunks) {
-            self.send_staged_quick_command(label, chunks, execute, send_to_all, cx);
-            return;
-        }
 
         // The common case is one chunk, which goes through the ordinary input
         // path exactly as before. The staging gate above already excluded any
@@ -366,7 +456,9 @@ impl NyaTermApp {
             self.send_terminal_input(command_bytes, cx)
         };
         if sent {
-            self.shell.set_status(if execute {
+            self.shell.set_status(if segmented {
+                format!("sent quick command '{label}' in segments")
+            } else if execute {
                 format!("ran quick command '{label}'")
             } else {
                 format!("inserted quick command '{label}'")
@@ -375,7 +467,7 @@ impl NyaTermApp {
         }
     }
 
-    /// Send a script that `\p` split into several writes.
+    /// Send a script split into timed writes.
     ///
     /// The target sessions are pinned once, here, when the user runs the
     /// command: the rest of the script must keep arriving at what was clicked
@@ -383,11 +475,17 @@ impl NyaTermApp {
     fn send_staged_quick_command(
         &mut self,
         label: String,
-        chunks: Vec<QuickCommandChunk>,
-        execute: bool,
-        send_to_all: bool,
+        plan: QuickCommandSendPlan,
         cx: &mut Context<Self>,
     ) {
+        let QuickCommandSendPlan {
+            chunks,
+            literal,
+            segmented,
+            execute,
+            send_to_all,
+            segmented_source,
+        } = plan;
         if !send_to_all && self.active_terminal_input_blocked() {
             return;
         }
@@ -426,128 +524,256 @@ impl NyaTermApp {
                 self.commands.staged.mark_receiver(id, run_id);
             }
         }
+        let mut wake = self.commands.staged.take_wake_receiver(run_id);
         let targets = targets
             .into_iter()
-            .map(|session_id| StagedQuickCommandTarget {
-                source_session_id: source_session_id.clone(),
-                session_id,
-                history: StagedCommandHistory::default(),
+            .map(|session_id| {
+                let kind = self
+                    .session
+                    .session_info(&session_id)
+                    .map(|session| session.kind);
+                (session_id, kind)
             })
             .collect::<Vec<_>>();
-        let steps = chunks.len();
         self.shell
-            .set_status(format!("sending quick command '{label}' in {steps} steps"));
+            .set_status(format!("sending quick command '{label}'"));
         cx.notify();
-
         cx.spawn(async move |this, cx| {
-            let mut live = targets;
-            let total = live.len();
+            let mut targets = cx
+                .background_executor()
+                .spawn(async move {
+                    let shared_legacy = SendCommandPlan::from_chunks(chunks);
+                    let mut cache: Vec<(SendCommandLineEnding, SendCommandPlan)> = Vec::new();
+                    targets
+                        .into_iter()
+                        .map(|(session_id, kind)| {
+                            let mut plan = if let Some((text, send)) = &segmented_source {
+                                let ending = target_line_ending(kind, SendCommandLineEnding::Crlf);
+                                if let Some((_, plan)) =
+                                    cache.iter().find(|(cached, _)| *cached == ending)
+                                {
+                                    plan.clone()
+                                } else {
+                                    let plan =
+                                        segmented_quick_command_plan(text, send, kind, literal);
+                                    cache.push((ending, plan.clone()));
+                                    plan
+                                }
+                            } else {
+                                shared_legacy.clone()
+                            };
+                            let pending = plan.next_batch(16 * 1024);
+                            StagedQuickCommandTarget {
+                                source_session_id: source_session_id.clone(),
+                                session_id,
+                                history: StagedCommandHistory::default(),
+                                plan,
+                                pending,
+                                ready_at: Instant::now(),
+                                finished: false,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let now = cx.background_executor().now();
+            for target in &mut targets {
+                target.ready_at = now
+                    + target
+                        .pending
+                        .as_ref()
+                        .map_or(Duration::ZERO, |batch| batch.delay);
+            }
+            let total = targets.len();
             let mut cancelled = false;
-            for chunk in chunks {
-                if !chunk.delay.is_zero() {
-                    cx.background_executor().timer(chunk.delay).await;
-                }
-                let Ok((survivors, interrupted)) = this.update(cx, |this, cx| {
-                    let survivors = this.write_quick_command_chunk(live, run_id, &chunk.bytes, cx);
-                    cx.notify();
-                    survivors
+            loop {
+                let Ok((done, interrupted, wait, _)) = this.update(cx, |this, cx| {
+                    this.poll_quick_command_targets(
+                        &mut targets,
+                        run_id,
+                        if literal {
+                            StagedCommandInput::Literal
+                        } else {
+                            StagedCommandInput::Text
+                        },
+                        true,
+                        cx,
+                    )
                 }) else {
-                    // The window went away, so there is no one left to report to.
                     return;
                 };
                 cancelled |= interrupted;
-                live = survivors;
-                if live.is_empty() {
+                if done {
                     break;
                 }
+                // A nonzero timer yields even when every configured interval is zero.
+                let timer = cx
+                    .background_executor()
+                    .timer(wait.max(Duration::from_millis(1)))
+                    .fuse();
+                let notification = wake.next().fuse();
+                futures::pin_mut!(timer, notification);
+                futures::select_biased! { _ = notification => {}, _ = timer => {} }
             }
-            let failed = total - live.len();
-            let delivered = live.len();
+            let delivered = targets
+                .iter()
+                .filter(|target| target.finished && target.pending.is_none())
+                .count();
             let _ = this.update(cx, |this, cx| {
-                for target in &live {
+                for target in &targets {
                     this.commands.staged.finish(&target.session_id, run_id);
                 }
-                // A superseded task must not replace the newer input's status.
-                if cancelled {
-                    return;
+                this.commands.staged.end_run(run_id);
+                if !cancelled {
+                    this.shell.set_status(quick_command_delivery_status(
+                        &label,
+                        execute,
+                        segmented,
+                        send_to_all,
+                        delivered,
+                        total - delivered,
+                    ));
                 }
-                this.shell.set_status(quick_command_delivery_status(
-                    &label,
-                    execute,
-                    send_to_all,
-                    delivered,
-                    failed,
-                ));
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// Keep history and liveness per pinned target; the active editor may now
-    /// belong to an unrelated tab and must never supply this script's history.
-    fn write_quick_command_chunk(
+    pub(in crate::features) fn stop_quick_command_sends(&mut self, cx: &mut Context<Self>) {
+        self.commands.stop_staged_sends();
+        self.shell.set_status("quick command send stopped");
+        cx.notify();
+    }
+
+    pub(in crate::features) fn poll_quick_command_targets(
         &mut self,
-        targets: Vec<StagedQuickCommandTarget>,
+        targets: &mut [StagedQuickCommandTarget],
         run_id: u64,
-        bytes: &[u8],
+        input: StagedCommandInput,
+        release_completed: bool,
         cx: &mut Context<Self>,
-    ) -> (Vec<StagedQuickCommandTarget>, bool) {
-        let mut survivors = Vec::with_capacity(targets.len());
+    ) -> (bool, bool, Duration, u64) {
+        let started = Instant::now();
+        let mut bytes_left = 16 * 1024;
         let mut cancelled = false;
-        let mut submissions: Vec<(Vec<String>, Vec<String>)> = Vec::new();
-        for mut target in targets {
+        let mut progress = 0;
+        let mut active = false;
+        let mut wait = Duration::from_secs(60);
+        for target in targets.iter_mut().filter(|target| !target.finished) {
             let session_id = &target.session_id;
-            if !self.commands.staged.owns(session_id, run_id) {
-                cancelled = true;
-                continue;
-            }
             let allowed = match target.source_session_id.as_deref() {
                 Some(source) if source == session_id => self.terminal_sync_session(session_id),
                 Some(source) => self.sync_peer_session_ids(source).contains(session_id),
                 None => self.sync_target_allowed(session_id),
             };
-            if !allowed {
+            if !self.commands.staged.owns(session_id, run_id)
+                || !allowed
+                || self.security.screen_locked()
+            {
                 self.commands.staged.finish(session_id, run_id);
+                target.finished = true;
                 cancelled = true;
                 continue;
             }
-            let sensitive = self.recording_input_is_sensitive(session_id);
-            if self.session.is_disconnected(session_id)
-                || self
-                    .write_staged_quick_command_input(session_id, bytes, run_id)
-                    .is_err()
-            {
-                self.commands.staged.finish(session_id, run_id);
+            let Some(batch) = target.pending.as_ref() else {
+                target.finished = true;
+                if release_completed {
+                    self.commands.staged.finish(session_id, run_id);
+                }
+                continue;
+            };
+            let now = cx.background_executor().now();
+            if now < target.ready_at {
+                active = true;
+                wait = wait.min(target.ready_at - now);
                 continue;
             }
-            let submitted = target.history.push(bytes, sensitive);
+            if batch.bytes.len() > bytes_left
+                || (bytes_left < 16 * 1024 && started.elapsed() >= Duration::from_millis(2))
+            {
+                active = true;
+                wait = Duration::from_millis(1);
+                continue;
+            }
+            let sensitive = self.recording_input_is_sensitive(session_id);
+            match self.try_write_staged_quick_command_input(session_id, &batch.bytes, run_id, input) {
+                Ok(()) => {},
+                Err(crate::features::terminal::terminal_runtime::StagedQuickCommandWriteError::Backpressure) => {
+                    target.ready_at = now + Duration::from_millis(5); active = true; wait = wait.min(Duration::from_millis(5)); continue;
+                }
+                Err(_) => { self.commands.staged.finish(session_id, run_id); target.finished = true; continue; }
+            }
+            bytes_left -= batch.bytes.len();
+            progress += batch.units;
+            let submitted = if input == StagedCommandInput::Bytes {
+                Vec::new()
+            } else {
+                target.history.push(&batch.bytes, sensitive)
+            };
             if !submitted.is_empty() {
-                if let Some((_, sessions)) = submissions
-                    .iter_mut()
-                    .find(|(lines, _)| *lines == submitted)
-                {
-                    sessions.push(session_id.clone());
-                } else {
-                    submissions.push((submitted, vec![session_id.clone()]));
+                self.record_submitted_command_history(&[session_id.as_str()], submitted);
+            }
+            target.pending = target.plan.next_batch(16 * 1024);
+            if let Some(next) = &target.pending {
+                target.ready_at = cx.background_executor().now() + next.delay;
+                active = true;
+                wait = wait.min(next.delay);
+            } else {
+                target.finished = true;
+                if release_completed {
+                    self.commands.staged.finish(session_id, run_id);
                 }
             }
-            survivors.push(target);
         }
-        for (submitted, sessions) in submissions {
-            let session_refs = sessions.iter().map(String::as_str).collect::<Vec<_>>();
-            self.record_submitted_command_history(&session_refs, submitted);
-        }
-        if !survivors.is_empty() {
+        targets.rotate_left(usize::from(!targets.is_empty()));
+        if bytes_left < 16 * 1024 {
+            self.commands.staged.note_progress(run_id, progress);
             self.arm_terminal_input_wake(cx);
+            cx.notify();
         }
-        (survivors, cancelled)
+        (!active, cancelled, wait, progress)
     }
+}
+
+fn segmented_quick_command_plan(
+    text: &str,
+    send: &nyaterm_core::QuickCommandSegmentedSend,
+    session_kind: Option<nyaterm_transport::SessionKind>,
+    literal: bool,
+) -> SendCommandPlan {
+    let mode = match send.mode {
+        nyaterm_core::QuickCommandSegmentedSendMode::Line => SendCommandMode::Line,
+        nyaterm_core::QuickCommandSegmentedSendMode::Character => SendCommandMode::Character,
+    };
+    SendCommandPlan::text(
+        text,
+        mode,
+        target_line_ending(session_kind, SendCommandLineEnding::Crlf),
+        if literal {
+            TextInterpretation::Literal
+        } else {
+            TextInterpretation::Script
+        },
+        Duration::from_millis(send.interval_ms),
+    )
+}
+
+#[cfg(test)]
+fn plan_segmented_quick_command(
+    text: &str,
+    send: nyaterm_core::QuickCommandSegmentedSend,
+    session_kind: Option<nyaterm_transport::SessionKind>,
+    literal: bool,
+) -> Result<Vec<QuickCommandChunk>, String> {
+    send.validate()?;
+    Ok(segmented_quick_command_plan(text, &send, session_kind, literal).collect())
 }
 
 fn quick_command_delivery_status(
     label: &str,
     execute: bool,
+    segmented: bool,
     send_to_all: bool,
     delivered: usize,
     failed: usize,
@@ -562,7 +788,9 @@ fn quick_command_delivery_status(
     if failed > 0 {
         return format!("quick command '{label}' failed on {failed} session(s)");
     }
-    if execute {
+    if segmented {
+        format!("sent quick command '{label}' in segments")
+    } else if execute {
         format!("ran quick command '{label}'")
     } else {
         format!("inserted quick command '{label}'")
@@ -570,7 +798,7 @@ fn quick_command_delivery_status(
 }
 
 fn quick_command_executes(command: &QuickCommand) -> bool {
-    command.execution_mode.as_deref() != Some("append")
+    command.segmented_send.is_none() && command.execution_mode.as_deref() != Some("append")
 }
 
 #[cfg(test)]

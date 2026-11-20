@@ -110,7 +110,7 @@ impl NyaTermApp {
         let duplicate_resolver = (duplicate_policy == SftpDuplicatePolicy::Ask).then(|| {
             self.session.prompt_duplicate_broker() as std::sync::Arc<dyn SftpDuplicateResolver>
         });
-        let options = SftpPathTransferOptions::new(
+        let options = crate::features::transfers::transfer_options::path_options(
             duplicate_policy,
             duplicate_resolver,
             self.sftp_transfer_options(),
@@ -263,6 +263,20 @@ fn run_send_to(
     };
     let requested_target_path = file_browser_join(target_service.kind(), &target_dir, &entry_name);
 
+    let options = if matches!(
+        source_service,
+        nyaterm_files::file_browser::FileBrowserService::Ftp(_)
+    ) || matches!(
+        target_service,
+        nyaterm_files::file_browser::FileBrowserService::Ftp(_)
+    ) {
+        options.with_ftp_capabilities(matches!(
+            target_service,
+            nyaterm_files::file_browser::FileBrowserService::Ftp(_)
+        ))
+    } else {
+        options
+    };
     let request = FileCopyRequest {
         source: source_service.transfer_endpoint(&source_remote),
         destination: target_service
@@ -283,6 +297,7 @@ fn run_send_to(
         .unwrap_or_default();
 
     Ok(TransferJobOutput::Sent {
+        retained_backups: summary.retained_backups,
         source_path: source_remote.display_path,
         source_parent_path: None,
         source_entries: None,

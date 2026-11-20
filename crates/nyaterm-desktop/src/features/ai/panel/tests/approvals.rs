@@ -184,8 +184,9 @@ fn native_approval_stays_in_collapsed_history_and_deny_is_keyboard_accessible() 
                 .count(),
             1
         );
-        // The execution disclosure precedes the authorization buttons.
+        // The user's copy button and execution disclosure precede authorization.
         window.blur(cx);
+        window.focus_next(cx);
         window.focus_next(cx);
         window.focus_next(cx);
         window.draw(cx).clear(cx);

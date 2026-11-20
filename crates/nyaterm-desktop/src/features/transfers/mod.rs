@@ -21,7 +21,7 @@ pub(in crate::features) use state::{BrowserFilterCache, BrowserFilterKey};
 mod transfer_events;
 mod transfer_feedback;
 pub(in crate::features) mod transfer_jobs;
-mod transfer_options;
+pub(in crate::features) mod transfer_options;
 mod transfer_paths;
 mod transfer_widgets;
 mod tree_runtime;
@@ -181,6 +181,17 @@ impl NyaTermApp {
         &mut self,
         session_id: &str,
     ) -> anyhow::Result<FileBrowserService> {
+        if self
+            .session
+            .session_info(session_id)
+            .is_some_and(|info| info.kind == nyaterm_transport::SessionKind::Ftp)
+        {
+            return self
+                .ftp
+                .service(session_id)
+                .map(FileBrowserService::Ftp)
+                .ok_or_else(|| anyhow::anyhow!("the FTP connection is not ready"));
+        }
         match self.session.file_browser_backend_for_session(session_id) {
             Some(nyaterm_files::file_browser::FileBrowserBackendKind::Adb) => self
                 .android_config_for_session(session_id)

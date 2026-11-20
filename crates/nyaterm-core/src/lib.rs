@@ -37,6 +37,7 @@ pub mod raw_cli_capture;
 pub mod remote_preview;
 pub mod runtime;
 pub mod secret;
+pub mod send_command;
 pub mod session_import;
 pub mod ssh_keys;
 pub mod sync_schema;

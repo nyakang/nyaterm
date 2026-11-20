@@ -1362,6 +1362,13 @@ fn set_connection_editor_kind_updates_default_ports_and_clears_error() {
     assert_eq!(editor.port, "23");
     assert_eq!(editor.focused_field, ConnectionEditorField::Name);
     assert_eq!(editor.error, None);
+
+    let mut draft = Some(editor);
+    assert!(set_connection_editor_kind(
+        &mut draft,
+        ConnectionKindTab::Ftp
+    ));
+    assert_eq!(draft.as_ref().unwrap().port, "21");
 }
 
 #[test]
@@ -2386,6 +2393,7 @@ fn saved_connection(
         auth: None,
         recording: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -2433,6 +2441,15 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         username: "root".to_string(),
         domain: String::new(),
         auth_mode: "password".to_string(),
+        ftp_initial_directory: String::new(),
+        ftp_local_initial_directory: String::new(),
+        ftp_passive_mode: "auto".to_string(),
+        ftp_filename_encoding_mode: "auto".to_string(),
+        ftp_filename_encoding: "UTF-8".to_string(),
+        ftp_ascii_mode: false,
+        ftp_security_mode: "none".to_string(),
+        ftp_tls_version: "auto".to_string(),
+        ftp_connect_timeout_ms: "15000".to_string(),
         rdp_backend: "builtin".to_string(),
         rdp_security: Default::default(),
         rdp_display: Default::default(),
@@ -2472,6 +2489,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         agent_preview_loading: false,
         backspace_mode: "del".to_string(),
         encoding: "global".to_string(),
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,

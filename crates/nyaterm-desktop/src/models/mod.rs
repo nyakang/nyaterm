@@ -27,8 +27,7 @@ pub(crate) use navigation::*;
 pub(crate) use network::*;
 pub(crate) use prompts::*;
 pub(crate) use recording::{
-    RecordingEventReceiver, RecordingHistorySearchEvent, RecordingHistorySearchKey,
-    RecordingWriteEvent, RecordingWriteHandle, RecordingWritePipeline,
+    RecordingEventReceiver, RecordingWriteEvent, RecordingWriteHandle, RecordingWritePipeline,
 };
 pub(crate) use remote::*;
 pub(crate) use security::*;

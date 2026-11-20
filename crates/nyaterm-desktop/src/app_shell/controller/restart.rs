@@ -2,7 +2,7 @@ use std::process::{Command, Stdio};
 
 use gpui::{AppContext as _, Context, Task};
 use nyaterm_core::app_identity::AppFlavor;
-use nyaterm_core::data_directory::PreparedSwitch;
+use nyaterm_core::data_directory::{PreparedDatabaseRebuild, PreparedSwitch};
 use nyaterm_store::data_directory::{queue_prepared_switch, read_location, write_location};
 
 use crate::app_shell::DesktopController;
@@ -40,6 +40,7 @@ impl DesktopController {
     pub(in crate::app_shell) fn restart_from_recovery(
         &mut self,
         choice: Option<PreparedSwitch>,
+        rebuild: Option<PreparedDatabaseRebuild>,
         cx: &mut Context<Self>,
     ) {
         if self.process_quitting
@@ -51,6 +52,15 @@ impl DesktopController {
         self.restart.recovery_launching = true;
         let runtime = self.runtime.clone();
         let task = cx.background_spawn(async move {
+            if let Some(rebuild) = rebuild {
+                nyaterm_store::data_directory::commit_database_rebuild(
+                    runtime.local_dir(),
+                    runtime.data_dir(),
+                    &rebuild,
+                    AppFlavor::current(),
+                )
+                .map_err(|error| error.to_string())?;
+            }
             prepare_recovery_restart(&runtime, choice.as_ref(), launch_successor)
         });
         cx.spawn(async move |this, cx| {

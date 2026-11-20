@@ -1,4 +1,5 @@
 //! Tauri-compatible theme documents and UI-independent color policies.
+pub mod appearance;
 pub mod management;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

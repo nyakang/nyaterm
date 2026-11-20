@@ -1,22 +1,21 @@
 //! Rendering for the Ports and Services panels. Pure presentation: every value
 //! comes from the panel entity, nothing is read from the app.
 
+use super::HostToolsAppearance;
 use super::jobs::Lane;
 use super::state::{
     BindKind, PortProtocolFilter, PortRow, PortScopeFilter, PortSortKey, ServiceSortKey,
     ServiceStateFilter, SortDirection, bind_kind, count_services, well_known_service,
 };
 use super::{HostResolution, HostToolsPanel, LoadState};
-use crate::features::pages::remote::panels::PanelChrome;
-use crate::features::shell::gpui_code_font_family;
-use crate::theme::ThemePalette;
-use crate::widgets::empty_panel_with_icon;
 use gpui::{
     AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, list,
     prelude::*, px, rgb, svg,
 };
 use nyaterm_remote_ops::ports::PortExposure;
 use nyaterm_remote_ops::services::{ServiceAction, ServiceEntry, ServiceStartup, ServiceState};
+use nyaterm_ui::ThemePalette;
+use nyaterm_ui::empty_panel_with_icon;
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaInputShell, NyaMenuItem, NyaScrollable,
     NyaSearchInput, NyaSelect, NyaSelectOption, NyaTooltip,
@@ -98,10 +97,10 @@ fn chip(
         .into_any_element()
 }
 
-fn badge(label: impl Into<SharedString>, color: u32) -> AnyElement {
+fn badge(code_font_family: &'static str, label: impl Into<SharedString>, color: u32) -> AnyElement {
     div()
         .flex_none()
-        .font_family(gpui_code_font_family())
+        .font_family(code_font_family)
         .text_size(px(10.5))
         .font_weight(FontWeight(600.))
         .text_color(rgb(color))
@@ -142,7 +141,11 @@ fn startup_label(startup: ServiceStartup) -> Option<String> {
     )
 }
 
-fn message(chrome: PanelChrome, text: impl Into<SharedString>, icon: &'static str) -> AnyElement {
+fn message(
+    chrome: HostToolsAppearance,
+    text: impl Into<SharedString>,
+    icon: &'static str,
+) -> AnyElement {
     div()
         .size_full()
         .bg(chrome.transparent_surface)
@@ -153,7 +156,7 @@ fn message(chrome: PanelChrome, text: impl Into<SharedString>, icon: &'static st
 /// The states every panel shares before it has anything to list.
 fn guard(
     panel: &HostToolsPanel,
-    chrome: PanelChrome,
+    chrome: HostToolsAppearance,
     icon: &'static str,
     has_data: bool,
     cx: &mut Context<HostToolsPanel>,
@@ -356,7 +359,7 @@ fn status_line(panel: &HostToolsPanel, palette: ThemePalette) -> Option<AnyEleme
     )
 }
 
-fn frame(chrome: PanelChrome, children: Vec<AnyElement>) -> AnyElement {
+fn frame(chrome: HostToolsAppearance, children: Vec<AnyElement>) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -415,7 +418,7 @@ fn sort_control(
 
 pub(super) fn ports_panel(
     panel: &mut HostToolsPanel,
-    chrome: PanelChrome,
+    chrome: HostToolsAppearance,
     _window: &mut Window,
     cx: &mut Context<HostToolsPanel>,
 ) -> AnyElement {
@@ -572,6 +575,7 @@ pub(super) fn ports_panel(
         .size_full();
         div()
             .id("host-tools-ports-scroll")
+            .debug_selector(|| "host-tools-ports-scroll".to_string())
             .relative()
             .size_full()
             .overflow_hidden()
@@ -652,7 +656,7 @@ fn port_row(
             div()
                 .w(px(58.))
                 .flex_none()
-                .font_family(gpui_code_font_family())
+                .font_family(panel.code_font_family())
                 .text_size(px(15.))
                 .font_weight(FontWeight(700.))
                 .text_color(rgb(palette.text))
@@ -684,7 +688,11 @@ fn port_row(
                         .child(detail),
                 ),
         )
-        .child(badge(exposure_label, exposure_color))
+        .child(badge(
+            panel.code_font_family(),
+            exposure_label,
+            exposure_color,
+        ))
         .child(div().flex_none().child(port_menu(panel, &entry, cx)))
         .into_any_element();
     card(palette, selected, header, details)
@@ -698,48 +706,8 @@ impl HostToolsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let panel = cx.weak_entity();
-        let epoch = self.jobs.epoch;
-        let Some(app) = self.app.upgrade() else {
-            return;
-        };
-        let title = if force {
-            t!("hostTools.killTitle").to_string()
-        } else {
-            t!("hostTools.stopTitle").to_string()
-        };
-        let description = t!(
-            if force {
-                "hostTools.confirmKill"
-            } else {
-                "hostTools.confirmStop"
-            },
-            pid = pid
-        )
-        .to_string();
-        let confirm = if force {
-            t!("hostTools.killProcess").to_string()
-        } else {
-            t!("hostTools.stopProcess").to_string()
-        };
-        app.update(cx, |app, cx| {
-            app.open_confirm_dialog(
-                (
-                    title,
-                    description,
-                    confirm,
-                    true,
-                    move |_app, _window, cx| {
-                        let _ = panel.update(cx, |panel, cx| {
-                            panel.kill_pid_for_epoch(epoch, pid, force, cx)
-                        });
-                        true
-                    },
-                ),
-                window,
-                cx,
-            );
-        });
+        let request = self.confirmation_request(pid, force, cx);
+        (self.confirmation)(request, window, cx);
     }
 }
 
@@ -747,7 +715,7 @@ impl HostToolsPanel {
 
 pub(super) fn services_panel(
     panel: &mut HostToolsPanel,
-    chrome: PanelChrome,
+    chrome: HostToolsAppearance,
     _window: &mut Window,
     cx: &mut Context<HostToolsPanel>,
 ) -> AnyElement {
@@ -879,6 +847,7 @@ pub(super) fn services_panel(
         .size_full();
         div()
             .id("host-tools-services-scroll")
+            .debug_selector(|| "host-tools-services-scroll".to_string())
             .relative()
             .size_full()
             .overflow_hidden()
@@ -952,7 +921,7 @@ fn service_row(
                 .child(
                     div()
                         .truncate()
-                        .font_family(gpui_code_font_family())
+                        .font_family(panel.code_font_family())
                         .text_size(px(12.))
                         .font_weight(FontWeight(700.))
                         .text_color(rgb(palette.text))
@@ -1063,7 +1032,7 @@ fn logs_drawer(
                 .overflow_y_scrollbar()
                 .px_2()
                 .py_1()
-                .font_family(gpui_code_font_family())
+                .font_family(panel.code_font_family())
                 .text_size(px(10.5))
                 .text_color(rgb(palette.terminal_fg))
                 .children(if loading {
@@ -1101,10 +1070,8 @@ fn kv(palette: ThemePalette, label: String, value: impl IntoElement) -> AnyEleme
         .into_any_element()
 }
 
-fn mono(text: impl Into<SharedString>) -> gpui::Div {
-    div()
-        .font_family(gpui_code_font_family())
-        .child(text.into())
+fn mono(code_font_family: &'static str, text: impl Into<SharedString>) -> gpui::Div {
+    div().font_family(code_font_family).child(text.into())
 }
 
 /// A list row and, when selected, its details. Flat like the Processes rows: a
@@ -1418,7 +1385,7 @@ fn port_details_block(panel: &HostToolsPanel, palette: ThemePalette) -> Option<A
         body.push(kv(
             palette,
             t!("hostTools.detailCommand").to_string(),
-            mono(command.clone()).text_size(px(10.5)),
+            mono(panel.code_font_family(), command.clone()).text_size(px(10.5)),
         ));
     } else if loading {
         body.push(kv(
@@ -1445,7 +1412,10 @@ fn port_details_block(panel: &HostToolsPanel, palette: ThemePalette) -> Option<A
             div()
                 .flex()
                 .flex_col()
-                .child(mono(format!("{shown}:{}", row.port)).font_weight(FontWeight(700.)))
+                .child(
+                    mono(panel.code_font_family(), format!("{shown}:{}", row.port))
+                        .font_weight(FontWeight(700.)),
+                )
                 .child(
                     div()
                         .text_size(px(10.5))
@@ -1481,7 +1451,7 @@ fn service_details_block(
     let mut body = vec![kv(
         palette,
         t!("hostTools.sortName").to_string(),
-        mono(entry.name.clone()).font_weight(FontWeight(700.)),
+        mono(panel.code_font_family(), entry.name.clone()).font_weight(FontWeight(700.)),
     )];
     if !entry.description.is_empty() {
         body.push(kv(
@@ -1523,7 +1493,7 @@ fn service_details_block(
         body.push(kv(
             palette,
             t!("hostTools.detailDomain").to_string(),
-            mono(entry.scope.clone()),
+            mono(panel.code_font_family(), entry.scope.clone()),
         ));
     }
 

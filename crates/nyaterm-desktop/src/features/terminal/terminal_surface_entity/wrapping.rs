@@ -181,7 +181,7 @@ impl TerminalSurface {
                     .is_some_and(|layout| layout.summary(row).is_some());
                 let marker =
                     if !summary && snapshot.row(source).is_some_and(|row| row.wraps_to_next) {
-                        "↪"
+                        "↩"
                     } else {
                         ""
                     };

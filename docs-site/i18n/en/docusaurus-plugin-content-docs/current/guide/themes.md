@@ -11,6 +11,14 @@ In **Settings → Appearance**, you can configure these separately:
 
 If you just want a quick theme switch, you can also use **View → Theme** from the top menu.
 
+### Follow system appearance
+
+Choose **Follow system** under **Settings → Appearance → Theme mode**, then select the themes for **When the system is light** and **When the system is dark**. The default pair is GitHub Light / GitHub Dark. Appearance changes take effect immediately without restarting the app.
+
+Terminals set to **Follow UI Theme** switch with the interface. An explicitly selected terminal theme keeps its colors. Switching to **Manual** restores your previous manual theme. Choosing a specific theme from **View → Theme** also switches to manual mode; choose **Follow system** to enable automatic switching again.
+
+Appearance settings still use **Apply / Cancel** to save or discard edits. Existing configurations remain in manual mode, preserving their colors after an upgrade. Sync and backups store the mode and the two theme preferences; each device resolves them using its own system appearance. Automatic appearance changes do not write settings or trigger sync.
+
 The built-in **WindTerm Dark** (`windterm-dark`) and **WindTerm Light** (`windterm-light`) themes are based on [WindTerm](https://github.com/kingToolbox/WindTerm)'s `dige-black` and `dige-white` palettes. They retain the 16 ANSI colors and adapt UI state colors for NyaTerm. Select either independently for the UI or terminal, or let the terminal follow the UI. To see the original terminal colors, turn off minimum contrast enhancement below; some ANSI colors in the light theme have low contrast on white.
 
 The built-in **Dracula** (`dracula`) and **Dracula Light** (`dracula-light`) are based on the [official Dracula specification](https://draculatheme.com/spec): the dark theme uses Dracula Classic and the light theme uses Alucard Classic (cream background). The specification also defines Alucard's 16 ANSI colors, but its ANSI black (`#fffbeb`) is nearly invisible on a light terminal background. NyaTerm intentionally adapts ANSI black to `#1f1f1f` and ANSI white to `#6c664b` for readability; these two values therefore differ from the official ANSI mapping. The dark theme's bright black (`#6272a4`) is fairly dim; turn on minimum contrast if you need it more legible.
@@ -30,7 +38,7 @@ The editor separates UI and terminal colors, with visual pickers and color input
 
 **Save changes** persists the theme immediately. Saving an active theme refreshes every place using it. **Apply to UI / terminal** changes that scope only; **Apply to both** makes the terminal follow the UI. Unsaved edits can be saved and applied in one operation. Canceling settings does not undo confirmed manager operations. Appearance selectors and other settings still use the settings **Apply / Cancel** workflow.
 
-Creation, duplication, and import produce drafts until saved. Leaving an edited draft offers Save, Discard, or Keep editing. Deletion requires confirmation: an affected UI falls back to GitHub Dark, and terminals explicitly using the deleted theme follow the UI. Deletion cannot be undone.
+Creation, duplication, and import produce drafts until saved. Leaving an edited draft offers Save, Discard, or Keep editing. Deletion requires confirmation: an affected manual UI theme falls back to GitHub Dark; automatic light and dark theme references fall back to GitHub Light and GitHub Dark, respectively. Terminals explicitly using the deleted theme follow the UI. Deletion cannot be undone.
 
 JSON import and export remain compatible with Tauri single-theme files. Conflicting imported IDs receive a new ID. Exporting a valid draft does not save or apply it. Unknown fields and unsupported records are preserved. Concurrent edits produce a conflict while preserving the draft; export it, or discard and reload before retrying.
 

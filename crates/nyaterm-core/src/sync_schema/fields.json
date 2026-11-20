@@ -19,6 +19,7 @@
       "ssh_algorithms": "portable:ssh_algorithms",
       "ssh_profile": "portable:terminal",
       "ssh_compatibility_mode": "portable:terminal",
+      "allow_short_rsa_host_keys": "portable:terminal",
       "terminal_type": "portable:terminal",
       "sftp": "split",
       "asset": "split",
@@ -71,7 +72,16 @@
       "view_only": "local",
       "device": "portable:endpoint",
       "directory": "portable:android",
-      "screen": "portable:android"
+      "screen": "portable:android",
+      "initial_directory": "portable:ftp",
+      "local_initial_directory": "local",
+      "passive_mode": "portable:ftp",
+      "ftp_filename_encoding_mode": "portable:ftp",
+      "ftp_filename_encoding": "portable:ftp",
+      "ftp_ascii_mode": "portable:ftp",
+      "ftp_security_mode": "portable:ftp",
+      "ftp_tls_version": "portable:ftp",
+      "connect_timeout_ms": "local"
     }
   },
   "ProxyConfig": {
@@ -231,6 +241,8 @@
       "icon_tag": "portable:icon_tag",
       "pinned": "portable:pinned",
       "execution_mode": "portable:execution_mode",
+      "segmented_send": "portable:segmented_send",
+      "extra": "unsupported",
       "raw_send": "portable:raw_send",
       "source": "local",
       "risk_level": "local",
@@ -290,6 +302,9 @@
     "source": "models/settings.rs",
     "fields": {
       "theme": "conditional:preference",
+      "theme_mode": "conditional:preference",
+      "light_theme": "conditional:preference",
+      "dark_theme": "conditional:preference",
       "custom_themes": "local",
       "background_image_path": "local",
       "background_image_fit": "local",
@@ -324,6 +339,7 @@
       "terminal_show_multi_line_paste_dialog": "local",
       "terminal_paste_image_as_path": "local",
       "terminal_reconnect_restore_cwd": "local",
+      "terminal_serial_reconnect_send_enter": "local",
       "terminal_low_latency_mode": "local",
       "terminal_zebra_stripes_enabled": "local",
       "terminal_zebra_stripes_by_row": "local",

@@ -23,8 +23,7 @@ use super::terminal_surface_entity::TerminalSurface;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
 use crate::models::recording::ExecutionRecordingEvent;
 use crate::models::{
-    ActionLinkMenuState, ActionLinkTooltipState, RecordingHistorySearchEvent,
-    RecordingHistorySearchKey, TerminalFrameEvent, TerminalFramePipeline, TerminalSearchMode,
+    ActionLinkMenuState, ActionLinkTooltipState, TerminalFrameEvent, TerminalFramePipeline,
     TerminalSelection, TerminalSelectionTextError, TerminalViewState,
 };
 
@@ -47,20 +46,19 @@ pub(in crate::features) struct TerminalFeatureFocus {
     pub terminal: FocusHandle,
 }
 
-/// In-terminal find bar and recording history search.
+/// In-terminal find bar. Inactive panes retain their query when switching tabs.
 pub(super) struct TerminalSearchState {
     pub(super) open: bool,
     pub(super) query: String,
-    pub(super) mode: TerminalSearchMode,
     pub(super) case_sensitive: bool,
     pub(super) regex: bool,
     pub(super) whole_word: bool,
-    /// Runtime-only per-session preference; missing sessions use the default `true`.
-    pub(super) wrap_around_by_session: HashMap<String, bool>,
     pub(super) active_index: usize,
+    pub(super) inactive_queries: HashMap<String, String>,
+    pub(super) refresh_task: Option<Task<()>>,
+    pub(super) generation: u64,
+    pub(super) initial_anchor: Option<(usize, usize)>,
     pub(super) full_search_ready_at: Instant,
-    pub(super) history_pending_key: Option<RecordingHistorySearchKey>,
-    pub(super) history_result: Option<RecordingHistorySearchEvent>,
 }
 
 /// Live terminal views, their surfaces, and the frame/scroll pipeline.
@@ -87,6 +85,38 @@ pub(super) struct TerminalInputState {
     pub(super) focus_active: bool,
     pub(super) focus_subscriptions: Vec<Subscription>,
     pub(super) ime: TerminalImeState,
+    serial_reconnect_enters: HashMap<String, u64>,
+    next_serial_reconnect_enter: u64,
+}
+
+impl TerminalFeatureState {
+    pub(in crate::features) fn begin_serial_reconnect_enter(&mut self, session_id: String) -> u64 {
+        self.input.next_serial_reconnect_enter =
+            self.input.next_serial_reconnect_enter.wrapping_add(1);
+        let token = self.input.next_serial_reconnect_enter;
+        self.input.serial_reconnect_enters.insert(session_id, token);
+        token
+    }
+
+    pub(in crate::features) fn take_serial_reconnect_enter(
+        &mut self,
+        session_id: &str,
+        token: u64,
+    ) -> bool {
+        if self.input.serial_reconnect_enters.get(session_id) != Some(&token) {
+            return false;
+        }
+        self.input.serial_reconnect_enters.remove(session_id);
+        true
+    }
+
+    pub(in crate::features) fn cancel_serial_reconnect_enter(&mut self, session_id: &str) {
+        self.input.serial_reconnect_enters.remove(session_id);
+    }
+
+    pub(in crate::features) fn cancel_all_serial_reconnect_enters(&mut self) {
+        self.input.serial_reconnect_enters.clear();
+    }
 }
 
 /// Dedicated multi-line paste editor state backed by gpui-kit's editor.
@@ -405,15 +435,15 @@ impl TerminalFeatureState {
             search: TerminalSearchState {
                 open: false,
                 query: String::new(),
-                mode: TerminalSearchMode::Buffer,
                 case_sensitive: false,
                 regex: false,
                 whole_word: false,
-                wrap_around_by_session: HashMap::new(),
                 active_index: 0,
+                inactive_queries: HashMap::new(),
+                refresh_task: None,
+                generation: 0,
+                initial_anchor: None,
                 full_search_ready_at: Instant::now(),
-                history_pending_key: None,
-                history_result: None,
             },
             view: TerminalViewRuntimeState {
                 views: HashMap::new(),
@@ -435,6 +465,8 @@ impl TerminalFeatureState {
                 focus_active: false,
                 focus_subscriptions: Vec::new(),
                 ime: TerminalImeState::default(),
+                serial_reconnect_enters: HashMap::new(),
+                next_serial_reconnect_enter: 0,
             },
             paste: TerminalPasteReviewState::new(),
             assist: TerminalAssistState::new(),
@@ -488,40 +520,9 @@ impl TerminalFeatureState {
         }
     }
 
-    pub(in crate::features) fn set_search_mode(&mut self, mode: TerminalSearchMode) {
-        self.search.mode = mode;
-    }
-
-    pub(in crate::features) fn search_wrap_around(&self, session_id: Option<&str>) -> bool {
-        session_id
-            .filter(|session_id| !session_id.is_empty())
-            .and_then(|session_id| self.search.wrap_around_by_session.get(session_id).copied())
-            .unwrap_or(true)
-    }
-
-    pub(in crate::features) fn toggle_search_wrap_around(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> bool {
-        let Some(session_id) = session_id.filter(|session_id| !session_id.is_empty()) else {
-            return true;
-        };
-        let enabled = !self.search_wrap_around(Some(session_id));
-        if enabled {
-            self.search.wrap_around_by_session.remove(session_id);
-        } else {
-            self.search
-                .wrap_around_by_session
-                .insert(session_id.to_string(), false);
-        }
-        enabled
-    }
-
     pub(in crate::features) fn move_search_session_state(&mut self, from: &str, to: &str) {
-        if let Some(wrap_around) = self.search.wrap_around_by_session.remove(from) {
-            self.search
-                .wrap_around_by_session
-                .insert(to.to_string(), wrap_around);
+        if let Some(query) = self.search.inactive_queries.remove(from) {
+            self.search.inactive_queries.insert(to.into(), query);
         }
     }
 
@@ -530,19 +531,11 @@ impl TerminalFeatureState {
             .commands
             .path_completion
             .cancel_session(session_id);
-        self.search.wrap_around_by_session.remove(session_id);
     }
 
     #[cfg(test)]
     pub(in crate::features) fn buffer_search_is_open(&self) -> bool {
-        self.search.open && self.search.mode == TerminalSearchMode::Buffer
-    }
-
-    /// Raise the find-bar flag without the focus and text-input choreography
-    /// `NyaTermApp::open_terminal_search` performs, which needs a `Window`.
-    #[cfg(test)]
-    pub(in crate::features) fn open_search_for_test(&mut self) {
-        self.search.open = true;
+        self.search.open
     }
 
     pub(in crate::features) fn input_focus(&self) -> &FocusHandle {
@@ -771,7 +764,7 @@ mod tests {
     use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 
     use super::{LostTerminalSelectionRecovery, TerminalFeatureFocus, TerminalFeatureState};
-    use crate::models::{TerminalFramePipeline, TerminalSearchMode};
+    use crate::models::TerminalFramePipeline;
 
     fn terminal_state() -> TerminalFeatureState {
         let cx = TestAppContext::single();
@@ -796,34 +789,11 @@ mod tests {
         let mut state = terminal_state();
         state.menus.actions_open = true;
         state.search.open = true;
-        state.set_search_mode(TerminalSearchMode::History);
 
         let overlays = state.overlay_visibility();
         assert!(!overlays.paste_review);
         assert!(overlays.actions);
-        assert!(!state.buffer_search_is_open());
-
-        state.set_search_mode(TerminalSearchMode::Buffer);
         assert!(state.buffer_search_is_open());
-    }
-
-    #[test]
-    fn terminal_search_wrap_around_is_session_local_and_runtime_only() {
-        let mut state = terminal_state();
-
-        assert!(state.search_wrap_around(Some("session-a")));
-        assert!(state.search_wrap_around(Some("session-b")));
-        assert!(!state.toggle_search_wrap_around(Some("session-a")));
-        assert!(!state.search_wrap_around(Some("session-a")));
-        assert!(state.search_wrap_around(Some("session-b")));
-
-        state.move_search_session_state("session-a", "session-c");
-        assert!(state.search_wrap_around(Some("session-a")));
-        assert!(!state.search_wrap_around(Some("session-c")));
-
-        state.remove_search_session_state("session-c");
-        assert!(state.search_wrap_around(Some("session-c")));
-        assert!(state.search_wrap_around(None));
     }
 
     #[test]

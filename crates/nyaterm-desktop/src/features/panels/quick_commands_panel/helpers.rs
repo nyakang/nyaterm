@@ -47,7 +47,7 @@ where
         .when(show_badge, |this| {
             this.child(quick_command_execution_badge(
                 palette,
-                execution_mode == "append",
+                execution_mode,
                 badge_label,
             ))
         })
@@ -76,14 +76,14 @@ where
 /// its localized name, rather than a colored `exec` / `append` tag.
 fn quick_command_execution_badge(
     palette: crate::theme::ThemePalette,
-    append: bool,
+    execution_mode: &str,
     label: impl Into<SharedString>,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
-    let icon = if append {
-        "icons/keyboard-return.svg"
-    } else {
-        "icons/conn/flash.svg"
+    let icon = match execution_mode {
+        "segmented" => "icons/send.svg",
+        "append" => "icons/keyboard-return.svg",
+        _ => "icons/conn/flash.svg",
     };
     div()
         .flex_none()

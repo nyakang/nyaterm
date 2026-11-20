@@ -933,7 +933,7 @@ mod tests {
             assert!(!left.iter().any(|id| id == "keyManagement"));
             assert_eq!(
                 app.shell.activity_bar_layout().hidden_items,
-                vec!["securityAuth".to_string()]
+                vec!["securityAuth".to_string(), "networktools".to_string()]
             );
             assert!(
                 app.activity_entries_for_zone(crate::models::ActivityBarZone::LeftTop)

@@ -7,7 +7,7 @@ use gpui::{
 };
 use nyaterm_core::ai::{AiAgentStepStatus, AiCommandCard, AiMessage, AiMessageRole, RiskLevel};
 use nyaterm_ui::chat::{NyaDisclosure, NyaShimmerText, running_indicator};
-use nyaterm_ui::{NyaButton, NyaButtonVariant};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton};
 use rust_i18n::t;
 
 use crate::features::ai::is_agent_command_card;
@@ -17,8 +17,10 @@ use crate::features::ai::panel::tool_call::{AiToolCallView, tool_call_title};
 use crate::features::ai::panel::transcript::AiTranscriptRow;
 use crate::features::ai::panel::{AiAgentStepPresentation, AiPanel, AiPanelSnapshot};
 use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiResponsePhase};
+use crate::features::formatting::format_ai_message_time;
 use crate::features::runtime_jobs::AiAgentStepView;
 use crate::features::shell::gpui_code_font_family;
+use crate::theme::ThemePalette;
 
 pub(super) fn localized_risk(risk: Option<&RiskLevel>) -> String {
     t!(match risk {
@@ -222,6 +224,62 @@ fn secondary(
                 .height(px(24.))
                 .variant(variant)
                 .on_click(on_click),
+        )
+        .into_any_element()
+}
+
+fn message_footer(
+    id: &str,
+    text: &str,
+    timestamp: Option<String>,
+    palette: ThemePalette,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap_2()
+        .when_some(timestamp, |row, timestamp| {
+            row.child(
+                div()
+                    .relative()
+                    // A glyph's optical center sits above its line-box center,
+                    // so nudge it down to meet the icon's middle.
+                    .top(px(2.))
+                    .text_size(px(10.))
+                    // Match the 20px copy button height so the glyphs share
+                    // its vertical center instead of hanging near the top.
+                    .line_height(px(20.))
+                    // Main text at reduced alpha: a middle step between the
+                    // theme's muted and dimmed tiers that follows the theme.
+                    .text_color(rgb(palette.text).opacity(0.8))
+                    .child(timestamp),
+            )
+        })
+        .child(copy_message_button(id, text, palette))
+        .into_any_element()
+}
+
+fn copy_message_button(id: &str, text: &str, palette: ThemePalette) -> AnyElement {
+    let content = text.to_string();
+    let selector = format!("ai-copy-{id}");
+    div()
+        .debug_selector(move || selector.clone())
+        .child(
+            NyaIconButton::new(format!("ai-copy-{id}"), "icons/copy.svg")
+                .icon_size(px(12.))
+                .size(px(20.))
+                .color(rgb(palette.text).opacity(0.8))
+                .tooltip(t!("ai.copy"))
+                .on_click(move |_, window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
+                    window.notify_operation(
+                        "copy-ai-message",
+                        NyaNotificationKind::Success,
+                        t!("common.copied").to_string(),
+                        cx,
+                    );
+                }),
         )
         .into_any_element()
 }
@@ -525,7 +583,10 @@ impl AiPanel {
             && message.command_cards.iter().all(|card| {
                 !card.explanation.trim().is_empty() && card.explanation.trim() == display.trim()
             });
-        if !reasoning_only && !display.is_empty() && !duplicate_explanation {
+        let show_answer = !reasoning_only && !display.is_empty() && !duplicate_explanation;
+        // Copy the displayed answer's Markdown, excluding hidden reasoning.
+        let timestamp = format_ai_message_time(&message.created_at);
+        if show_answer {
             body = body.child(if is_user {
                 self.selectable_text(TextOwner::Message(message.id.clone()), "answer", false, cx)
             } else {
@@ -545,32 +606,46 @@ impl AiPanel {
                     .into_any_element()
             });
         }
-        let mut shown = HashSet::new();
-        for card in &message.command_cards {
-            if shown.insert(&card.id) && snapshot.card_owner(&card.id) == Some(message.id.as_str())
-            {
-                body = body.child(if activity {
-                    self.ai_execution_command_view(snapshot, card.clone(), cx)
-                } else {
-                    self.ai_command_card_view(snapshot, card.clone(), cx)
-                });
+        if !reasoning_only {
+            // A reasoning-only row exists beside the full FinalMessage for the
+            // same message; cards and steps render once, on the final row.
+            let mut shown = HashSet::new();
+            for card in &message.command_cards {
+                if shown.insert(&card.id)
+                    && snapshot.card_owner(&card.id) == Some(message.id.as_str())
+                {
+                    body = body.child(if activity {
+                        self.ai_execution_command_view(snapshot, card.clone(), cx)
+                    } else {
+                        self.ai_command_card_view(snapshot, card.clone(), cx)
+                    });
+                }
             }
-        }
-        for step in snapshot.message_steps(&message.id) {
-            body = body.child(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
+            for step in snapshot.message_steps(&message.id) {
+                body =
+                    body.child(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
+            }
         }
         if is_user {
             // The transcript already leaves 8px under every row. A user bubble
             // needs a little more air so it separates from the turns around it.
-            return div()
+            let mut row = div()
                 .w_full()
                 .min_w_0()
                 .pt(px(6.))
                 .pb(px(6.))
                 .flex()
-                .justify_end()
-                .child(body)
-                .into_any_element();
+                .flex_col()
+                .items_end()
+                .gap_1()
+                .child(body);
+            if show_answer {
+                row = row.child(message_footer(&message.id, display, timestamp, palette));
+            }
+            return row.into_any_element();
+        }
+        if show_answer {
+            body = body.child(message_footer(&message.id, display, timestamp, palette));
         }
         body.into_any_element()
     }

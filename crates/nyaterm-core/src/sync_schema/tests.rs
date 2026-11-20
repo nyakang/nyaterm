@@ -5,6 +5,41 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 #[test]
+fn system_theme_preferences_sync_without_device_appearance_state() {
+    let settings = json!({"appearance":{
+        "theme":"dracula", "theme_mode":"system", "light_theme":"github-light", "dark_theme":"nord"
+    }});
+    let entities = BTreeMap::from([("settings".into(), settings.to_string())]);
+    let projection = project_entities(
+        &entities,
+        &SyncScope {
+            preferences: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for (key, expected) in [
+        ("theme_mode", "system"),
+        ("light_theme", "github-light"),
+        ("dark_theme", "nord"),
+    ] {
+        let resource = SyncResourceId::new("preference", format!("appearance/{key}"));
+        let field = SyncFieldId::new(resource, "value");
+        assert_eq!(
+            projection.values[&field.key()].decode().unwrap(),
+            json!(expected)
+        );
+    }
+    assert!(projection.values.keys().all(|key| {
+        !SyncFieldId::from_key(key)
+            .unwrap()
+            .resource
+            .id
+            .contains("system_appearance")
+    }));
+}
+
+#[test]
 fn ai_scope_excludes_keys_headers_permissions_paths_and_discovery() {
     let mut ai = serde_json::to_value(crate::ai::AiSettings::default()).unwrap();
     ai["provider_credentials"] = json!([{"id":"custom","name":"Provider","provider_kind":"openai","base_url":"https://example.com/v1/","api_key":"private-key-fixture","extra_headers":[{"name":"Authorization","value":"private-header-fixture"}],"enabled":true,"future_secret":"future-fixture"}]);
@@ -95,6 +130,71 @@ fn local_shell_and_serial_port_are_not_portable() {
 }
 
 #[test]
+fn serial_connect_prompt_sync_preserves_flags_and_local_extensions() {
+    let original = json!({
+        "type":"serial", "name":"Serial", "port_name":"COM9", "baud_rate":115200,
+        "connect_prompt":{"port":true,"baud_rate":true,"future_local":{"keep":true}}
+    });
+    let mut projected = project_record("connection", &original).unwrap();
+    assert_eq!(
+        projected["serial"]["connect_prompt"],
+        json!({"port":true,"baud_rate":true})
+    );
+    let field = SyncFieldId::new(SyncResourceId::new("connection", "serial"), "serial");
+    assert!(crate::sync_schema::valid_fixed_cloud_sync_value(
+        &field,
+        &projected["serial"]
+    ));
+    projected["serial"]["connect_prompt"] = json!({"baud_rate":false});
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["port_name"], "COM9");
+    assert_eq!(
+        applied["connect_prompt"],
+        json!({"baud_rate":false,"future_local":{"keep":true}})
+    );
+    projected["serial"]
+        .as_object_mut()
+        .unwrap()
+        .remove("connect_prompt");
+    let cleared = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(
+        cleared["connect_prompt"],
+        json!({"future_local":{"keep":true}})
+    );
+    assert_eq!(cleared["port_name"], "COM9");
+}
+
+#[test]
+fn fixed_serial_values_accept_only_known_boolean_connect_prompt_flags() {
+    let field = SyncFieldId::new(SyncResourceId::new("connection", "serial"), "serial");
+    for prompt in [
+        json!({}),
+        json!({"port":true}),
+        json!({"baud_rate":true}),
+        json!({"port":true,"baud_rate":true}),
+        json!({"port":false,"baud_rate":false}),
+    ] {
+        assert!(crate::sync_schema::valid_fixed_cloud_sync_value(
+            &field,
+            &json!({"connect_prompt":prompt})
+        ));
+    }
+    for prompt in [
+        json!({"future":true}),
+        json!({"port":"true"}),
+        json!({"baud_rate":1}),
+        json!({"port":{"nested":true}}),
+        json!(true),
+        json!(null),
+    ] {
+        assert!(!crate::sync_schema::valid_fixed_cloud_sync_value(
+            &field,
+            &json!({"connect_prompt":prompt})
+        ));
+    }
+}
+
+#[test]
 fn settings_allowlist_excludes_unknown_security_and_device_values() {
     let entities = BTreeMap::from([("settings".into(), json!({"appearance":{"theme":"dark","font_size":14,"window_material":"mica","future_secret":"secret"},"cloud_sync":{"access_token":"secret"},"security":{"master_password":"secret"}}).to_string())]);
     let scope = SyncScope {
@@ -144,6 +244,23 @@ fn applying_portable_fields_preserves_device_and_unknown_fields() {
     assert_eq!(applied["future"], original["future"]);
     assert_eq!(applied["asset"]["cpu_model"], "local");
     assert_eq!(applied["name"], "new");
+}
+
+#[test]
+fn segmented_quick_command_options_survive_sync_projection() {
+    let original = json!({
+        "label": "Deploy",
+        "command": "one\ntwo",
+        "execution_mode": "append",
+        "segmented_send": {"mode": "character", "interval_ms": 20},
+        "future_local": "retained"
+    });
+    let projected = project_record("command", &original).unwrap();
+    assert_eq!(projected["segmented_send"], original["segmented_send"]);
+    assert!(projected.get("future_local").is_none());
+    let applied = apply_record("command", &original, &projected).unwrap();
+    assert_eq!(applied["segmented_send"], original["segmented_send"]);
+    assert_eq!(applied["future_local"], "retained");
 }
 
 #[test]
@@ -357,6 +474,32 @@ fn android_projection_includes_portable_device_and_screen_but_no_runtime_fields(
 }
 
 #[test]
+fn serial_reconnect_enter_remains_local_when_preferences_are_synced() {
+    let base = BTreeMap::from([("settings".into(), json!({"terminal": {}}).to_string())]);
+    for enabled in [true, false] {
+        let changed = BTreeMap::from([(
+            "settings".into(),
+            json!({
+                "terminal": {"serial_reconnect_send_enter": enabled}
+            })
+            .to_string(),
+        )]);
+        for scope in [
+            SyncScope::default(),
+            SyncScope {
+                preferences: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                project_entities(&base, &scope).unwrap(),
+                project_entities(&changed, &scope).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
 fn default_session_settings_remain_local_in_the_existing_v4_projection() {
     let settings = json!({"ui":{"language":"en"}});
     let base = BTreeMap::from([("settings".into(), settings.to_string())]);
@@ -375,4 +518,77 @@ fn default_session_settings_remain_local_in_the_existing_v4_projection() {
             project_entities(&changed, &scope).unwrap()
         );
     }
+}
+#[test]
+fn short_rsa_opt_in_syncs_per_connection_and_can_be_cleared() {
+    let original = json!({"type":"ssh", "name":"SSH", "host":"example.test",
+        "allow_short_rsa_host_keys":true, "ssh_profile":"standard", "future_local":"retained"});
+    let mut projection = project_record("connection", &original).unwrap();
+    assert_eq!(projection["terminal"]["allow_short_rsa_host_keys"], true);
+    for enabled in [false, true] {
+        projection["terminal"]["allow_short_rsa_host_keys"] = json!(enabled);
+        let applied = apply_record("connection", &original, &projection).unwrap();
+        assert_eq!(applied["allow_short_rsa_host_keys"], enabled);
+        assert_eq!(applied["future_local"], "retained");
+    }
+    projection["terminal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("allow_short_rsa_host_keys");
+    let applied = apply_record("connection", &original, &projection).unwrap();
+    assert!(applied.get("allow_short_rsa_host_keys").is_none());
+}
+
+#[test]
+fn ftp_projection_round_trips_portable_settings_and_preserves_local_extensions() {
+    let original = json!({
+        "type":"ftp", "id":"ftp-legacy", "name":"FTP", "host":"example.com", "port":21, "username":"u",
+        "initial_directory":"/remote", "local_initial_directory":"C:/private", "connect_timeout_ms":15000,
+        "passive_mode":"epsv", "ftp_filename_encoding_mode":"custom", "ftp_filename_encoding":"gbk",
+        "ftp_ascii_mode":true, "ftp_security_mode":"implicit", "ftp_tls_version":"tls12",
+        "auth":{"password":"local-secret", "mode":"password"}, "future_ftp":{"keep":true}
+    });
+    let projected = project_record("connection", &original).unwrap();
+    assert_eq!(
+        projected["endpoint"],
+        json!({"type":"ftp","host":"example.com","port":21,"username":"u"})
+    );
+    for field in [
+        "initial_directory",
+        "passive_mode",
+        "ftp_filename_encoding_mode",
+        "ftp_filename_encoding",
+        "ftp_ascii_mode",
+        "ftp_security_mode",
+        "ftp_tls_version",
+    ] {
+        assert_eq!(projected["ftp"][field], original[field]);
+    }
+    assert!(!projected.to_string().contains("local-secret"));
+    assert!(!projected.to_string().contains("C:/private"));
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["auth"], original["auth"]);
+    assert_eq!(applied["future_ftp"], original["future_ftp"]);
+    assert_eq!(
+        applied["local_initial_directory"],
+        original["local_initial_directory"]
+    );
+    assert_eq!(project_record("connection", &applied).unwrap(), projected);
+    let mut cleared = projected.clone();
+    cleared.as_object_mut().unwrap().remove("ftp");
+    let applied = apply_record("connection", &original, &cleared).unwrap();
+    assert!(applied.get("ftp_ascii_mode").is_none());
+    assert_eq!(applied["future_ftp"], original["future_ftp"]);
+    assert_eq!(applied["auth"], original["auth"]);
+}
+
+#[test]
+fn legacy_ftp_without_new_settings_stays_compatible_and_rejects_cloud_extensions() {
+    let original = json!({"type":"ftp","name":"legacy","host":"example","port":21,"username":"anonymous", "future_ftp":"local"});
+    let mut projected = project_record("connection", &original).unwrap();
+    assert_eq!(projected["ftp"], json!({}));
+    projected["ftp"]["future_ftp"] = json!("cloud");
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["future_ftp"], "local");
+    assert!(applied.get("ftp_security_mode").is_none());
 }

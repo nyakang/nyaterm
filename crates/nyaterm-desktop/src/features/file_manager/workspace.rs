@@ -66,6 +66,19 @@ impl FileManagerWorkspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let observation = cx.observe(&app, |this, app, cx| {
+            for pane in [&mut this.left, &mut this.right] {
+                if let Some(super::pane::PanePathMenu::Children {
+                    access_generation, ..
+                }) = &pane.path_menu
+                    && *access_generation
+                        != pane
+                            .endpoint
+                            .session_id()
+                            .and_then(|id| app.read(cx).file_access_generation(id))
+                {
+                    pane.path_menu = None;
+                }
+            }
             let can_bind = [&this.left, &this.right].into_iter().any(|pane| {
                 if let PaneEndpoint::OfflineConnection(id) = &pane.endpoint {
                     app.read(cx)
@@ -132,6 +145,8 @@ impl FileManagerWorkspace {
         self.right.generation = self.right.generation.wrapping_add(1);
         self.left.loading = false;
         self.right.loading = false;
+        self.left.path_menu = None;
+        self.right.path_menu = None;
         cx.notify();
     }
 
@@ -169,6 +184,8 @@ impl FileManagerWorkspace {
         self.right.generation = generation;
         self.left.loading = false;
         self.right.loading = false;
+        self.left.path_menu = None;
+        self.right.path_menu = None;
         self.left.path_editing = false;
         self.right.path_editing = false;
         self.active = self.active.other();

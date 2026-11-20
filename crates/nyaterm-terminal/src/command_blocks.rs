@@ -1,7 +1,18 @@
-//! Shell-proven command regions. Coordinates describe the original retained grid.
+//! Evidence-backed command regions. Coordinates describe the original retained grid.
 //! Snapshot blocks are ordered by both start row and monotonically allocated identity.
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+mod inference;
+
+pub(crate) use inference::InferredCommand;
+
+/// The weakest boundary evidence in a command region. This grants no execution status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CommandBoundarySource {
+    ShellIntegration,
+    ConfirmedPrompt,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommandBlockId(u64);
@@ -12,8 +23,12 @@ pub struct CommandBlock {
     pub rows: Range<usize>,
     /// Only whole output rows may be hidden; mixed input/output rows stay visible.
     pub output: Range<usize>,
+    /// Structurally closed; an inferred boundary does not prove process completion.
     pub complete: bool,
     pub output_lines: usize,
+    pub source: CommandBoundarySource,
+    /// Changes when a provisional fold is revoked, even if frames coalesce.
+    pub collapse_revision: u64,
 }
 
 impl CommandBlock {
@@ -29,6 +44,10 @@ pub(crate) struct TrackedCommand {
     pub output: Option<i64>,
     pub end: Option<i64>,
     pub output_lines: usize,
+    pub start_source: CommandBoundarySource,
+    pub output_source: Option<CommandBoundarySource>,
+    pub end_source: Option<CommandBoundarySource>,
+    pub collapse_revision: u64,
 }
 
 #[derive(Debug, Default)]
@@ -38,10 +57,25 @@ pub(crate) struct CommandBlocks {
 
 impl CommandBlocks {
     pub fn start(&mut self, line: i64) {
+        self.start_with_source(line, CommandBoundarySource::ShellIntegration);
+    }
+
+    pub fn start_fallback(&mut self, line: i64) {
+        self.start_with_source(line, CommandBoundarySource::ConfirmedPrompt);
+    }
+
+    fn start_with_source(&mut self, line: i64, source: CommandBoundarySource) {
+        if let Some(block) = self.entries.last_mut().filter(|block| block.start == line) {
+            block.start_source = block.start_source.min(source);
+            return;
+        }
         if self.entries.last().is_some_and(|block| block.start >= line) {
             return;
         }
-        self.finish(line);
+        if let Some(block) = self.entries.last_mut().filter(|block| block.end.is_none()) {
+            block.end = Some(line.max(block.start + 1));
+            block.end_source = Some(source);
+        }
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         self.entries.push(TrackedCommand {
             id: CommandBlockId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
@@ -49,18 +83,24 @@ impl CommandBlocks {
             output: None,
             end: None,
             output_lines: 0,
+            start_source: source,
+            output_source: None,
+            end_source: None,
+            collapse_revision: 0,
         });
     }
 
     pub fn output(&mut self, line: i64) {
         if let Some(block) = self.entries.last_mut().filter(|block| block.end.is_none()) {
             block.output = Some(line.max(block.start + 1));
+            block.output_source = Some(CommandBoundarySource::ShellIntegration);
         }
     }
 
     pub fn finish(&mut self, end: i64) {
         if let Some(block) = self.entries.last_mut().filter(|block| block.end.is_none()) {
             block.end = Some(end.max(block.start + 1));
+            block.end_source = Some(CommandBoundarySource::ShellIntegration);
         }
     }
 
@@ -93,6 +133,11 @@ impl CommandBlocks {
                     output: output..end,
                     complete: block.end.is_some(),
                     output_lines: block.output_lines,
+                    source: block
+                        .start_source
+                        .max(block.output_source.unwrap_or(block.start_source))
+                        .max(block.end_source.unwrap_or(block.start_source)),
+                    collapse_revision: block.collapse_revision,
                 })
             })
             .collect()

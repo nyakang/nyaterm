@@ -7,6 +7,10 @@ pub(in crate::features) use nyaterm_terminal_gpui::geometry::{
     TerminalVisualScrollGeometry, terminal_effective_visual_scroll_offset_px,
     terminal_snapshot_anchor_row_for_display_offset, terminal_snapshot_covers_display_offset,
 };
+use nyaterm_terminal_gpui::gutter::{
+    TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
+    terminal_timestamp_format_width_chars,
+};
 use nyaterm_terminal_gpui::keywords::{
     precompute_terminal_keyword_highlights_for_ranges_with_stats_and_cancel,
     terminal_keyword_highlight_expanded_ranges,
@@ -14,10 +18,6 @@ use nyaterm_terminal_gpui::keywords::{
 use nyaterm_terminal_gpui::stripes::{TerminalStripeMode, terminal_row_stripe_color};
 
 use crate::features::NyaTermApp;
-use crate::features::formatting::{
-    TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
-    terminal_timestamp_format_width_chars,
-};
 use crate::features::terminal::terminal_runtime::{
     TerminalScrollVisualState, TerminalScrollWheelStateResult, terminal_display_offset_from_state,
     terminal_local_scroll_delta_lines_from_state, terminal_scroll_needs_text_first_repaint,

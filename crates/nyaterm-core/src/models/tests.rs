@@ -507,6 +507,7 @@ fn local_terminal_endpoint_uses_shell_and_working_dir() {
         icon_auto_detect: None,
         auth: None,
         ssh_algorithms: None,
+        allow_short_rsa_host_keys: false,
         ssh_compatibility_mode: false,
         ssh_profile: Default::default(),
         terminal_type: None,
@@ -846,6 +847,7 @@ fn quick_command(id: &str, category: Option<&str>, pinned: bool, order: i32) -> 
         icon_tag: None,
         pinned: pinned.then_some(true),
         execution_mode: None,
+        segmented_send: None,
         raw_send: None,
         source: None,
         risk_level: None,
@@ -853,6 +855,7 @@ fn quick_command(id: &str, category: Option<&str>, pinned: bool, order: i32) -> 
         created_at: None,
         use_count: None,
         sort_order: Some(order),
+        extra: Default::default(),
     }
 }
 
@@ -1608,4 +1611,91 @@ fn ssh_compatibility_mode_defaults_and_round_trips_without_resurrecting_cleared_
             .get("ssh_compatibility_mode")
             .is_none()
     );
+}
+
+#[test]
+fn short_rsa_opt_in_defaults_off_and_clears_without_resurrecting_extensions() {
+    let mut connection: SavedConnection = serde_json::from_value(serde_json::json!({
+        "name":"old device", "type":"ssh", "host":"example.invalid", "ssh_profile":"network_device", "future_field":{"v":7}
+    })).unwrap();
+    assert!(!connection.allow_short_rsa_host_keys);
+    assert!(
+        serde_json::to_value(&connection)
+            .unwrap()
+            .get("allow_short_rsa_host_keys")
+            .is_none()
+    );
+    connection.allow_short_rsa_host_keys = true;
+    let value = serde_json::to_value(&connection).unwrap();
+    assert_eq!(value["allow_short_rsa_host_keys"], true);
+    connection = serde_json::from_value(value).unwrap();
+    assert!(connection.allow_short_rsa_host_keys);
+    connection.allow_short_rsa_host_keys = false;
+    let value = serde_json::to_value(&connection).unwrap();
+    assert!(value.get("allow_short_rsa_host_keys").is_none());
+    assert_eq!(value["future_field"]["v"], 7);
+    assert!(
+        !serde_json::from_value::<SavedConnection>(value)
+            .unwrap()
+            .allow_short_rsa_host_keys
+    );
+}
+
+#[test]
+fn ftp_ascii_and_tls_settings_default_and_round_trip() {
+    let legacy = serde_json::json!({
+        "name":"Legacy FTP", "type":"ftp", "host":"ftp.example.test", "port":21
+    });
+    let connection: SavedConnection = serde_json::from_value(legacy).unwrap();
+    let ConnectionType::Ftp {
+        ftp_ascii_mode,
+        ftp_security_mode,
+        ftp_tls_version,
+        ..
+    } = &connection.config
+    else {
+        panic!("expected FTP connection");
+    };
+    assert!(!ftp_ascii_mode);
+    assert_eq!(ftp_security_mode, "none");
+    assert_eq!(ftp_tls_version, "auto");
+    let encoded = serde_json::to_value(&connection).unwrap();
+    for key in ["ftp_ascii_mode", "ftp_security_mode", "ftp_tls_version"] {
+        assert!(
+            encoded.get(key).is_none(),
+            "default value must not be serialized: {key}"
+        );
+    }
+
+    for (ascii, security, tls) in [
+        (true, "none", "auto"),
+        (false, "explicit", "tls12"),
+        (true, "explicit", "tls13"),
+        (false, "explicit", "ssl3"),
+        (false, "implicit", "tls12"),
+        (true, "implicit", "auto"),
+    ] {
+        let mut document = serde_json::to_value(&connection).unwrap();
+        document["ftp_ascii_mode"] = ascii.into();
+        document["ftp_security_mode"] = security.into();
+        document["ftp_tls_version"] = tls.into();
+        let decoded: SavedConnection = serde_json::from_value(document).unwrap();
+        let ConnectionType::Ftp {
+            ftp_ascii_mode,
+            ftp_security_mode,
+            ftp_tls_version,
+            ..
+        } = &decoded.config
+        else {
+            panic!("expected FTP connection");
+        };
+        assert_eq!(*ftp_ascii_mode, ascii);
+        assert_eq!(ftp_security_mode, security);
+        assert_eq!(ftp_tls_version, tls);
+        assert_eq!(
+            serde_json::from_value::<SavedConnection>(serde_json::to_value(&decoded).unwrap())
+                .unwrap(),
+            decoded
+        );
+    }
 }

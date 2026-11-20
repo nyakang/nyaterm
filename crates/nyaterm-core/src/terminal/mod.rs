@@ -12,6 +12,7 @@ pub mod file_drop;
 pub mod input_fanout;
 pub mod input_tracker;
 pub mod mouse;
+pub mod prompt;
 pub mod resize;
 pub mod shell_prompt;
 pub mod windows_terminal;

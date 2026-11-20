@@ -23,6 +23,7 @@ pub(in crate::features) struct QuickCommandCardContent<'a> {
 #[derive(Clone)]
 pub(in crate::features) struct QuickCommandCardExecutionMode {
     pub append: bool,
+    pub segmented: bool,
     pub label: Cow<'static, str>,
 }
 
@@ -102,7 +103,9 @@ pub(in crate::features) fn quick_command_detail_card(
                                     .child(
                                         svg()
                                             .size(px(12.))
-                                            .path(if mode.append {
+                                            .path(if mode.segmented {
+                                                "icons/send.svg"
+                                            } else if mode.append {
                                                 "icons/keyboard-return.svg"
                                             } else {
                                                 "icons/conn/flash.svg"

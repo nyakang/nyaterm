@@ -22,6 +22,15 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
   coordination, service adapters, and GPUI Entity stores.
+* `crates/nyaterm-executor`: UI-independent bounded blocking executor, cancellation,
+  task results, metrics and worker shutdown. No workspace or GPUI dependencies,
+  including tests. Desktop owns executor instances, scheduling and shutdown coordination.
+* `crates/nyaterm-host-tools-gpui`: Ports/Services panel entities, presentation,
+  filtering, refresh clocks and task application. May depend on core, executor,
+  i18n, remote-ops and ui; never desktop, store or gpui-kit directly, including tests.
+  Desktop resolves hosts and SSH leases, pushes appearance and visibility, and
+  presents confirmation requests. Its default-off `test-support` exposes only
+  controlled fixtures and observations for integration tests.
 * `crates/nyaterm-i18n`: shared translation catalogs, locale normalization and
   one-time preload. No workspace dependencies, including tests. Desktop retains
   language settings and component-label updates, using the public rust-i18n
@@ -70,7 +79,7 @@ must include explicit conversion logic and tests.
   ownership and shutdown scheduling. Transferred frame sessions are opaque;
   its default-off `test-support` feature exposes only integration fixtures.
 * `crates/nyaterm-terminal-gpui`: GPUI-specific terminal layout, input,
-  highlighting, images, and painting. Its `scrollbar`, `decorations` and `ime`
+  highlighting, images, and painting. Its `scrollbar`, `decorations`, `gutter` and `ime`
   modules own reusable presentation; desktop retains drag/session routing,
   action-link cache selection and composition editing state.
 * `crates/nyaterm-transport`: local PTY, SSH authentication and channels, Telnet,
@@ -138,7 +147,7 @@ must include explicit conversion logic and tests.
   `alacritty` (`alacritty_terminal`), `gpui-kit`, `IronRDP`
   (`ironrdp-client`, `ironrdp-connector`), `russh`, `russh-sftp`, `sspi-rs`,
   `picky-rs` (Picky and its ASN.1 crates),
-  `vnc-rs`, `zed` (`gpui`, `gpui_platform`), and `zmodem2`. Each branch carries
+  `suppaftp`, `vnc-rs`, `zed` (`gpui`, `gpui_platform`), and `zmodem2`. Each branch carries
   a `NYATERM.md` recording its base revision, its patches, and how they were
   validated.
 * `temp/vendor/`: untracked, read-only copies of those sources, kept only so
@@ -372,6 +381,12 @@ type-only splits that leave coupling behind.
 ## Testing Guidelines
 
 Add tests beside the behavior being changed.
+
+* Blocking executor queue, cancellation, panic and shutdown tests belong in
+  `nyaterm-executor`; application shutdown integration remains in desktop.
+* Ports/Services panel state, jobs and rendering tests belong in
+  `nyaterm-host-tools-gpui`; application navigation, host resolution and
+  confirmation-dialog integration tests remain in desktop.
 
 * Frame queue, search worker, ingress routing, recording order and shutdown tests
   belong in `nyaterm-terminal-runtime`; GPUI event-application tests stay in desktop.

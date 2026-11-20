@@ -118,6 +118,8 @@ impl NyaTermApp {
                     || clipboard.source == crate::features::transfers::file_operations::FileOperationEndpoint::Local && self.session.active_file_browser_backend() == Some(nyaterm_files::file_browser::FileBrowserBackendKind::Local))
         }).map(|clipboard| clipboard.entries.iter().map(|entry| entry.identity_key()).collect()).unwrap_or_default();
         let browser = TransferBrowserPresentation {
+            upload_shortcut: self.display_shortcut_for("fileExplorer.upload", "F3"),
+            download_shortcut: self.display_shortcut_for("fileExplorer.downloadSelected", "F4"),
             cut_paths,
             view_mode,
             tree,

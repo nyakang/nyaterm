@@ -52,6 +52,7 @@ pub(in crate::features) struct SettingsFeatureFocus {
 
 pub(in crate::features) struct SettingsFeatureInit {
     pub summary: AppSettingsSummary,
+    pub system_appearance: nyaterm_core::themes::appearance::SystemAppearance,
     pub keyword_config: KeywordHighlightConfig,
     pub store_path: String,
     pub store_message: String,
@@ -110,6 +111,7 @@ impl SettingsFeatureState {
     pub(in crate::features) fn new(init: SettingsFeatureInit, focus: SettingsFeatureFocus) -> Self {
         let SettingsFeatureInit {
             summary,
+            system_appearance,
             keyword_config,
             store_path,
             store_message,
@@ -119,8 +121,10 @@ impl SettingsFeatureState {
         } = init;
         crate::i18n::apply_locale(&summary.language);
         let master_password = SettingsMasterPasswordState::new(summary.has_master_password);
-        let palette = nyaterm_ui::resolve_theme_palette(&summary.theme, &summary.custom_themes);
-        let terminal_palette = Self::resolve_terminal_palette(&summary);
+        let effective =
+            nyaterm_core::themes::appearance::effective_theme_id(&summary, system_appearance);
+        let palette = nyaterm_ui::resolve_theme_palette(effective, &summary.custom_themes);
+        let terminal_palette = Self::resolve_terminal_palette(&summary, effective);
         let theme_options = nyaterm_ui::available_themes(&summary.custom_themes).into();
         let theme_diagnostics = summary.custom_themes.diagnostics().into();
         Self {
@@ -145,6 +149,8 @@ impl SettingsFeatureState {
                 focus: focus.keyword_highlight,
             },
             appearance: AppearanceSettingsState {
+                system_appearance,
+                subscription: None,
                 palette,
                 theme_options,
                 theme_diagnostics,

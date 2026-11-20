@@ -1,8 +1,7 @@
 use crate::models::WorkspaceSplitDirection;
 use crate::models::{
     TerminalFrameSearchKey, TerminalFrameSearchPurpose, TerminalFrameSearchResult,
-    TerminalPresentation, TerminalSearchMode, TerminalViewState, TerminalWindowNode,
-    TerminalWorkPolicy,
+    TerminalPresentation, TerminalViewState, TerminalWindowNode, TerminalWorkPolicy,
 };
 use nyaterm_terminal::{TerminalClipboardLoad, TerminalEffects};
 use std::sync::Arc;
@@ -32,7 +31,7 @@ fn search_key(query: &str) -> TerminalFrameSearchKey {
 }
 
 #[test]
-fn dropped_find_request_becomes_retryable_and_old_revision_does_not_block() {
+fn dropped_find_request_becomes_retryable_and_output_joins_the_pending_scan() {
     let key = search_key("needle");
     let now = Instant::now();
     assert!(terminal_find_request_still_pending(
@@ -51,7 +50,7 @@ fn dropped_find_request_becomes_retryable_and_old_revision_does_not_block() {
         7,
         now + Duration::from_millis(500),
     ));
-    assert!(!terminal_find_request_still_pending(
+    assert!(terminal_find_request_still_pending(
         Some(&key),
         7,
         Some(now),
@@ -154,7 +153,6 @@ fn terminal_search_frame_notify_targets_active_visible_buffer_query() {
         true,
         Some("active"),
         true,
-        TerminalSearchMode::Buffer,
         TerminalFrameSearchKeys {
             current: Some(&key),
             result: &key,
@@ -180,7 +178,6 @@ fn terminal_search_frame_notify_ignores_non_visible_or_stale_queries() {
             true,
             Some("active"),
             true,
-            TerminalSearchMode::Buffer,
             TerminalFrameSearchKeys {
                 current: Some(&key),
                 result: &key,
@@ -192,7 +189,6 @@ fn terminal_search_frame_notify_ignores_non_visible_or_stale_queries() {
             false,
             Some("active"),
             true,
-            TerminalSearchMode::Buffer,
             TerminalFrameSearchKeys {
                 current: Some(&key),
                 result: &key,
@@ -204,7 +200,6 @@ fn terminal_search_frame_notify_ignores_non_visible_or_stale_queries() {
             true,
             Some("active"),
             true,
-            TerminalSearchMode::Buffer,
             TerminalFrameSearchKeys {
                 current: Some(&key),
                 result: &key,
@@ -216,19 +211,6 @@ fn terminal_search_frame_notify_ignores_non_visible_or_stale_queries() {
             true,
             Some("active"),
             true,
-            TerminalSearchMode::History,
-            TerminalFrameSearchKeys {
-                current: Some(&key),
-                result: &key,
-            },
-        ),
-        terminal_search_frame_apply_result(
-            "active".to_string(),
-            true,
-            true,
-            Some("active"),
-            true,
-            TerminalSearchMode::Buffer,
             TerminalFrameSearchKeys {
                 current: Some(&other),
                 result: &key,
@@ -349,10 +331,8 @@ fn terminal_search_results_keep_find_and_selected_occurrence_slots_independent()
         Some(&selected.key)
     );
 
-    let replacement_find = TerminalFrameSearchResult {
-        key: search_key("replacement"),
-        ..find.clone()
-    };
+    let mut replacement_find = find.clone();
+    replacement_find.key = search_key("replacement");
     assert!(terminal_apply_search_result_to_view(
         &mut view,
         TerminalFrameSearchPurpose::Find,
@@ -651,6 +631,7 @@ fn terminal_color_queries_follow_theme_preview_and_draft_cancellation_without_vi
     use crate::features::NyaTermApp;
     use crate::test_support::TestConfigDir;
     use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::themes::appearance::{SystemAppearance, ThemeMode};
     use nyaterm_core::{AppRuntime, RuntimeMode};
     use nyaterm_terminal_runtime::frame::TerminalFrameEvent;
 
@@ -695,6 +676,23 @@ fn terminal_color_queries_follow_theme_preview_and_draft_cancellation_without_vi
         (background >> 8) & 0xff,
         background & 0xff
     );
+    assert_eq!(ask(), initial);
+    app.update(&mut cx, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.update_theme_mode(ThemeMode::System, cx);
+        app.system_appearance_changed(SystemAppearance::Dark, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:0d0d/1111/1717\x07");
+    app.update(&mut cx, |app, cx| {
+        app.system_appearance_changed(SystemAppearance::Light, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:ffff/ffff/ffff\x07");
+    app.update(&mut cx, |app, cx| {
+        app.set_terminal_theme(Some("dracula"), cx);
+        app.system_appearance_changed(SystemAppearance::Dark, cx);
+    });
+    assert_eq!(ask(), "\x1b]11;rgb:2828/2a2a/3636\x07");
+    app.update(&mut cx, |app, cx| app.cancel_settings(cx));
     assert_eq!(ask(), initial);
     app.update(&mut cx, |app, cx| {
         app.begin_settings_draft(cx);

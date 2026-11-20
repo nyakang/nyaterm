@@ -148,6 +148,9 @@ impl NyaTermApp {
             TitleMenuCommand::ViewLogs => self.reveal_log_dir(cx),
             TitleMenuCommand::About => self.open_about(window, cx),
             TitleMenuCommand::SetTheme(theme) => self.update_appearance_theme(theme, cx),
+            TitleMenuCommand::FollowSystemTheme => {
+                self.update_theme_mode(nyaterm_core::themes::appearance::ThemeMode::System, cx)
+            }
             TitleMenuCommand::SetTerminalTheme(theme) => {
                 self.set_terminal_theme(theme.as_deref(), cx)
             }
@@ -174,6 +177,7 @@ impl NyaTermApp {
                 }
             }
             TitleMenuCommand::TogglePadding => self.toggle_terminal_workspace_padding(cx),
+            TitleMenuCommand::ToggleWrapMarkers => self.toggle_terminal_wrap_markers(cx),
             TitleMenuCommand::ToggleLineNumbers => self.toggle_terminal_line_numbers(cx),
             TitleMenuCommand::ToggleTimestamps => self.toggle_terminal_timestamps(cx),
             TitleMenuCommand::SmartSplit(mode) => self.apply_smart_split(*mode, cx),
@@ -454,18 +458,28 @@ impl NyaTermApp {
 
     fn title_theme_menu_items(&self, _cx: &App) -> Vec<TitleMenuDefinition> {
         let current = self.settings.summary().theme.as_str();
-        self.settings
-            .theme_options()
-            .iter()
-            .cloned()
-            .map(|(theme, name)| {
-                let selected =
-                    current == theme || (current == "catppuccin" && theme == "catppuccin-mocha");
-                TitleMenuDefinition::action(name)
-                    .checked(selected)
-                    .command(TitleMenuCommand::SetTheme(theme.to_string()))
-            })
-            .collect()
+        let system = self.settings.summary().theme_mode
+            == nyaterm_core::themes::appearance::ThemeMode::System;
+        let mut items = vec![
+            TitleMenuDefinition::action(t!("settings.themeModeSystem"))
+                .checked(system)
+                .command(TitleMenuCommand::FollowSystemTheme),
+            TitleMenuDefinition::separator(),
+        ];
+        items.extend(
+            self.settings
+                .theme_options()
+                .iter()
+                .cloned()
+                .map(|(theme, name)| {
+                    let selected = current == theme
+                        || (current == "catppuccin" && theme == "catppuccin-mocha");
+                    TitleMenuDefinition::action(name)
+                        .checked(!system && selected)
+                        .command(TitleMenuCommand::SetTheme(theme.to_string()))
+                }),
+        );
+        items
     }
 
     fn title_terminal_theme_menu_items(
@@ -598,6 +612,9 @@ impl NyaTermApp {
             TitleMenuDefinition::action(t!("settings.showWorkspacePadding"))
                 .checked(self.settings.summary().terminal_show_workspace_padding)
                 .command(TitleMenuCommand::TogglePadding),
+            TitleMenuDefinition::action(t!("settings.showWrapMarkers"))
+                .checked(self.settings.summary().terminal_show_wrap_markers)
+                .command(TitleMenuCommand::ToggleWrapMarkers),
             TitleMenuDefinition::action(t!("settings.showLineNumbers"))
                 .checked(self.settings.summary().terminal_show_line_numbers)
                 .command(TitleMenuCommand::ToggleLineNumbers),
@@ -829,13 +846,71 @@ mod tests {
     }
 
     #[test]
+    fn terminal_display_menu_commands_update_checks_and_cancel_with_settings_draft() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = menu_app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_show_workspace_padding = false;
+            settings.terminal_show_wrap_markers = false;
+            settings.terminal_show_line_numbers = false;
+            settings.terminal_show_timestamps = false;
+            app.settings.replace_summary(settings);
+            app.begin_settings_draft(cx);
+        });
+        let commands = [
+            TitleMenuCommand::TogglePadding,
+            TitleMenuCommand::ToggleWrapMarkers,
+            TitleMenuCommand::ToggleLineNumbers,
+            TitleMenuCommand::ToggleTimestamps,
+        ];
+        let window = cx.add_window(|_, _| MenuCommandWindow);
+        window
+            .update(&mut cx, |_, window, cx| {
+                app.update(cx, |app, cx| {
+                    let items = app.title_terminal_display_menu_items(cx);
+                    assert_eq!(items.len(), commands.len());
+                    for (item, command) in items.iter().zip(&commands) {
+                        assert_eq!(item.kind, TitleMenuKind::Action(Some(command.clone())));
+                        assert!(!item.checked);
+                        app.execute_title_menu_command(command, window, cx);
+                        let items = app.title_terminal_display_menu_items(cx);
+                        assert!(items.iter().any(|item| {
+                            item.kind == TitleMenuKind::Action(Some(command.clone()))
+                                && item.checked
+                        }));
+                    }
+                    let settings = app.settings.summary();
+                    assert!(settings.terminal_show_workspace_padding);
+                    assert!(settings.terminal_show_wrap_markers);
+                    assert!(settings.terminal_show_line_numbers);
+                    assert!(settings.terminal_show_timestamps);
+                    assert!(app.settings_draft_dirty());
+                    app.cancel_settings(cx);
+                    assert!(
+                        app.title_terminal_display_menu_items(cx)
+                            .iter()
+                            .all(|item| !item.checked)
+                    );
+                });
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn commands_recheck_lock_state_instead_of_executing_a_stale_enabled_menu() {
         let mut cx = TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
         let app = menu_app(&mut cx);
-        assert!(cx.read_entity(&app, |app, cx| {
-            app.title_menu_command_enabled(&TitleMenuCommand::ToggleLineNumbers, cx)
-        }));
+        for command in [
+            TitleMenuCommand::ToggleLineNumbers,
+            TitleMenuCommand::ToggleWrapMarkers,
+        ] {
+            assert!(cx.read_entity(&app, |app, cx| {
+                app.title_menu_command_enabled(&command, cx)
+            }));
+        }
         cx.update_entity(&app, |app, _| {
             app.security.activate_screen_lock(String::new())
         });
@@ -848,7 +923,13 @@ mod tests {
                         window,
                         cx,
                     );
+                    app.execute_title_menu_command(
+                        &TitleMenuCommand::ToggleWrapMarkers,
+                        window,
+                        cx,
+                    );
                     assert!(!app.settings.summary().terminal_show_line_numbers);
+                    assert!(!app.settings.summary().terminal_show_wrap_markers);
                     assert!(!app.title_menu_command_enabled(&TitleMenuCommand::NewWindow, cx));
                     assert!(app.title_menu_command_enabled(&TitleMenuCommand::About, cx));
                 });
@@ -1057,7 +1138,12 @@ mod tests {
                 .iter()
                 .map(NyaMenuItem::test_label)
                 .collect::<Vec<_>>(),
-            vec!["Show Padding", "Line Numbers", "Show Timestamps"]
+            vec![
+                "Show Padding",
+                "Show wrap markers",
+                "Line Numbers",
+                "Show Timestamps"
+            ]
         );
         assert!(submenu.iter().all(|item| !item.test_presentation().4));
     }
@@ -1103,6 +1189,14 @@ mod tests {
             .expect("left panel submenu");
         assert!(left.iter().any(|item| item.test_label() == "Files"));
         assert!(left.iter().any(|item| item.test_label() == "Notes"));
-        assert!(left.iter().all(|item| item.test_presentation().4));
+        assert!(left.iter().any(|item| item.test_label() == "Network Tools"));
+        for item in left {
+            assert_eq!(
+                item.test_presentation().4,
+                item.test_label() != "Network Tools",
+                "default visibility for {}",
+                item.test_label()
+            );
+        }
     }
 }

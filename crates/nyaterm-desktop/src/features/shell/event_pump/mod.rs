@@ -620,8 +620,7 @@ mod tests {
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::models::{
-        GithubGistAuthEvent, GithubGistAuthJobEvent, RecordingHistorySearchEvent,
-        RecordingWriteEvent, SessionLaunchConfig, SessionRuntimeMetadata, TerminalSearchMode,
+        GithubGistAuthEvent, GithubGistAuthJobEvent, SessionLaunchConfig, SessionRuntimeMetadata,
     };
 
     use super::helpers::{
@@ -972,48 +971,6 @@ mod tests {
                 Some(rust_i18n::t!("settings.githubGistSlowDown").as_ref()),
                 "the polling event should already be applied"
             );
-        });
-    }
-
-    /// The recording-history reply path, which used to lean on a quiet-gate term.
-    /// Delivery wiring is covered by the gist test above; what is specific here is
-    /// which replies get applied.
-    #[test]
-    fn recording_history_replies_apply_only_for_the_outstanding_query() {
-        let mut cx = TestAppContext::single();
-        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
-        let app = quiet_app_with_visible_session(&mut cx);
-        cx.update_entity(&app, |app, cx| {
-            app.terminal.open_search_for_test();
-            app.terminal.set_search_mode(TerminalSearchMode::History);
-            app.apply_terminal_search_query("needle".to_string(), cx);
-            let key = app
-                .terminal_history_search_key()
-                .expect("the fixture should arm a history search");
-
-            let mut stale_key = key.clone();
-            stale_key.query = "haystack".to_string();
-            assert!(
-                !app.apply_recording_write_event(RecordingWriteEvent::HistorySearch(
-                    RecordingHistorySearchEvent {
-                        key: stale_key,
-                        result: Err("stale".to_string()),
-                    }
-                )),
-                "a reply for a query the user has moved on from must be dropped"
-            );
-            assert!(app.terminal_history_search_pending_for_current_query());
-
-            assert!(
-                app.apply_recording_write_event(RecordingWriteEvent::HistorySearch(
-                    RecordingHistorySearchEvent {
-                        key,
-                        result: Err("no recordings".to_string()),
-                    }
-                )),
-                "the outstanding query's reply must settle it"
-            );
-            assert!(!app.terminal_history_search_pending_for_current_query());
         });
     }
 }

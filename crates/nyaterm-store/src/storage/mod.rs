@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use nyaterm_core::models::networktools::NetworkToolsSettings;
 use nyaterm_core::{
     AiSettings, AssetMetadata, ConnectionType, CredentialCrypto, CredentialCryptoError, Group,
     KeywordHighlightConfig, KeywordHighlightImportResult, KeywordHighlightRule,
@@ -88,6 +89,7 @@ const LEGACY_TEXT_KNOWN_HOSTS: &str = "known_hosts";
 const SETTINGS_DEFAULT: &str = "settings/default";
 const SETTINGS_AI_FIELD: &str = "ai";
 const SETTINGS_TRANSLATION_FIELD: &str = "translation";
+const SETTINGS_NETWORKTOOLS_FIELD: &str = "networktools";
 const SETTINGS_AI_HISTORY: &str = "settings/doc/ai-history";
 const SETTINGS_AI_AUDIT: &str = "settings/doc/ai-audit";
 const SETTINGS_TUNNEL_GROUPS: &str = "settings/doc/tunnel-groups";
@@ -132,6 +134,21 @@ const PROXY_SECRET_PREFIX: &str = "nyaterm-proxy-secret-v4:";
 
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("database is missing: {0}")]
+    MissingDatabase(PathBuf),
+    #[error("database is empty: {0}")]
+    EmptyDatabase(PathBuf),
+    #[error("invalid redb file header: {0}")]
+    InvalidDatabaseHeader(PathBuf),
+    #[error("database is not a regular file: {0}")]
+    NotRegularDatabase(PathBuf),
+    #[error("unsupported NyaTerm database layout: {0}")]
+    UnsupportedDatabaseLayout(PathBuf),
+    #[error("failed to inspect database {path}: {source}")]
+    InspectDatabase {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to create storage directory {path}: {source}")]
     CreateDir {
         path: PathBuf,
@@ -207,6 +224,7 @@ pub struct ConnectionStore {
     portable_key_path: Option<PathBuf>,
     completion_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     history_retention: std::sync::Mutex<history_retention::RetentionState>,
+    repaired_on_open: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -253,6 +271,7 @@ impl ConnectionStore {
             portable_key_path,
             completion_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             history_retention: std::sync::Mutex::new(history_retention::RetentionState::default()),
+            repaired_on_open: false,
         };
         store.ensure_tables()?;
         store.initialize_completion_history()?;
@@ -266,28 +285,71 @@ impl ConnectionStore {
     /// Opens only existing user data. Never initializes a missing/empty file.
     pub fn open_existing(config_dir: &Path) -> Result<Self, StorageError> {
         let path = config_dir.join(DATABASE_FILE);
-        let db = Self::validate_existing_file(&path)?;
-        Self::from_database(db, path, None)
+        let (db, repaired) = Self::validate_existing_file_status(&path)?;
+        let mut store = Self::from_database(db, path, None)?;
+        store.repaired_on_open = repaired;
+        Ok(store)
+    }
+
+    pub fn repaired_on_open(&self) -> bool {
+        self.repaired_on_open
     }
 
     pub(crate) fn validate_existing_file(path: &Path) -> Result<Database, StorageError> {
-        if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0) {
-            return Err(StorageError::InvalidData(
-                "existing database is missing or not a regular file".into(),
-            ));
+        Self::validate_existing_file_status(path).map(|(db, _)| db)
+    }
+
+    fn validate_existing_file_status(path: &Path) -> Result<(Database, bool), StorageError> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                StorageError::MissingDatabase(path.into())
+            } else {
+                StorageError::InspectDatabase {
+                    path: path.into(),
+                    source,
+                }
+            }
+        })?;
+        if !metadata.is_file() {
+            return Err(StorageError::NotRegularDatabase(path.into()));
         }
-        let mut db = Database::open(path).map_err(|source| StorageError::Open {
+        if metadata.len() == 0 {
+            return Err(StorageError::EmptyDatabase(path.into()));
+        }
+        let db = Database::open(path).map_err(|source| {
+            // redb reports its magic mismatch as I/O InvalidData. Independently
+            // confirm that fixed file marker rather than matching error strings
+            // or treating every I/O/record decoding failure as corruption.
+            if matches!(&source, redb::DatabaseError::Storage(redb::StorageError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData) {
+                use std::io::Read as _;
+                let header = (|| {
+                    let mut file = std::fs::File::open(path)?;
+                    let mut marker = [0u8; 9];
+                    match file.read_exact(&mut marker) {
+                        Ok(()) => Ok(marker != [b'r', b'e', b'd', b'b', 0x1A, 0x0A, 0xA9, 0x0D, 0x0A]),
+                        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(true),
+                        Err(error) => Err(error),
+                    }
+                })();
+                match header {
+                    Ok(true) => return StorageError::InvalidDatabaseHeader(path.into()),
+                    Err(source) => return StorageError::InspectDatabase { path: path.into(), source },
+                    Ok(false) => {}
+                }
+            }
+            StorageError::Open { path: path.into(), source }
+        })?;
+        Self::validate_opened_database(db, path)
+    }
+
+    fn validate_opened_database(
+        mut db: Database,
+        path: &Path,
+    ) -> Result<(Database, bool), StorageError> {
+        let repaired = !db.check_integrity().map_err(|source| StorageError::Open {
             path: path.into(),
             source,
         })?;
-        if !db.check_integrity().map_err(|source| StorageError::Open {
-            path: path.into(),
-            source,
-        })? {
-            return Err(StorageError::InvalidData(
-                "database integrity check required repair".into(),
-            ));
-        }
         let txn = db.begin_read()?;
         let tables = txn
             .list_tables()?
@@ -297,9 +359,7 @@ impl ConnectionStore {
             .iter()
             .any(|name| matches!(name.as_str(), "settings" | "connections" | "text_docs"))
         {
-            return Err(StorageError::InvalidData(
-                "unsupported NyaTerm database layout".into(),
-            ));
+            return Err(StorageError::UnsupportedDatabaseLayout(path.into()));
         }
         for definition in [
             GROUPS_TABLE,
@@ -331,7 +391,7 @@ impl ConnectionStore {
             }
         }
         drop(txn);
-        Ok(db)
+        Ok((db, repaired))
     }
 
     /// Content identity excludes redb's mutable allocator/header bookkeeping.
@@ -1064,6 +1124,42 @@ impl ConnectionStore {
         );
         self.save_settings_value(&value)?;
         Ok(merged)
+    }
+
+    pub fn load_networktools_settings(&self) -> Result<NetworkToolsSettings, StorageError> {
+        let value = self.load_settings_value()?;
+        let settings = value
+            .get(SETTINGS_NETWORKTOOLS_FIELD)
+            .cloned()
+            .map(serde_json::from_value::<NetworkToolsSettings>)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(settings)
+    }
+
+    /// Merge only the known `networktools` fields, leaving unknown keys inside
+    /// the subtree (and every other settings key) untouched.
+    pub fn save_networktools_settings(
+        &self,
+        next: NetworkToolsSettings,
+    ) -> Result<NetworkToolsSettings, StorageError> {
+        next.validate()
+            .map_err(|error| StorageError::InvalidData(error.to_string()))?;
+        let mut value = self.load_settings_value()?;
+        let object = value.as_object_mut().ok_or_else(|| {
+            StorageError::InvalidData("settings document must be an object".into())
+        })?;
+        let subtree = object
+            .entry(SETTINGS_NETWORKTOOLS_FIELD)
+            .or_insert_with(|| serde_json::json!({}));
+        if !subtree.is_object() || subtree.get("tftp").is_some_and(|tftp| !tftp.is_object()) {
+            return Err(StorageError::InvalidData(
+                "unsupported networktools settings format".into(),
+            ));
+        }
+        merge_json_objects(subtree, serde_json::to_value(&next)?);
+        self.save_settings_value(&value)?;
+        Ok(next)
     }
 
     pub fn load_keyword_highlights(&self) -> Result<KeywordHighlightConfig, StorageError> {
@@ -2357,6 +2453,9 @@ fn default_settings_value() -> serde_json::Value {
         },
         "appearance": {
             "theme": "github-dark",
+            "theme_mode": "manual",
+            "light_theme": "github-light",
+            "dark_theme": "github-dark",
             "font_family": "JetBrains Mono",
             "font_size": 16.0
         },
@@ -2440,6 +2539,26 @@ fn set_nested_json_value(
     }
     if let Some(key) = path.last() {
         current[*key] = new_value;
+    }
+}
+
+/// Recursively overlay `source` onto `target`. Known fields from the typed
+/// settings replace their values; keys the current build does not know about
+/// survive so a newer build's data is never silently discarded.
+fn merge_json_objects(target: &mut serde_json::Value, source: serde_json::Value) {
+    let (serde_json::Value::Object(target), serde_json::Value::Object(source)) = (target, source)
+    else {
+        return;
+    };
+    for (key, value) in source {
+        match (target.get_mut(&key), value) {
+            (Some(existing), value) if existing.is_object() && value.is_object() => {
+                merge_json_objects(existing, value);
+            }
+            (_, value) => {
+                target.insert(key, value);
+            }
+        }
     }
 }
 
