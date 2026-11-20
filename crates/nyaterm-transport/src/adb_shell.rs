@@ -307,10 +307,7 @@ mod tests {
         };
         assert!(manager.create_adb_session(config.clone()).is_err());
         assert!(manager.list_sessions().unwrap().is_empty());
-        let client = AdbClient {
-            executable: "must-not-start-adb-during-shell-open".into(),
-            server,
-        };
+        let client = AdbClient::new("must-not-start-adb-during-shell-open".into(), server);
         config.binding = client
             .bind(
                 &AdbDeviceSelector::Usb {

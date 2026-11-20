@@ -76,10 +76,10 @@ pub(crate) fn android_session_config_for_test(
             transport_id: Some(7),
             generation: 1,
         },
-        client: nyaterm_android::adb::client::AdbClient {
-            executable: "unused".into(),
-            server: "127.0.0.1:1".parse().unwrap(),
-        },
+        client: nyaterm_android::adb::client::AdbClient::new(
+            "unused".into(),
+            "127.0.0.1:1".parse().unwrap(),
+        ),
         cols: 80,
         rows: 24,
     }

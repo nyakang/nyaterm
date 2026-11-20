@@ -1038,10 +1038,7 @@ mod tests {
         let mut owned = spawn(&format!("scid={scid}"));
         let mut unrelated = spawn(&format!("scid={scid}0"));
         let cleanup = CleanupSpec {
-            client: AdbClient {
-                executable: "unused".into(),
-                server: "127.0.0.1:1".parse().unwrap(),
-            },
+            client: AdbClient::new("unused".into(), "127.0.0.1:1".parse().unwrap()),
             binding: DeviceBinding {
                 server: "127.0.0.1:1".parse().unwrap(),
                 serial: "fixture".into(),

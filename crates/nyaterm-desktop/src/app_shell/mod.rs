@@ -1,5 +1,7 @@
 //! Root GPUI shell boundary.
 
+pub(crate) mod android_shutdown;
+
 use nyaterm_core::activation::ParsedActivationRequest;
 
 pub(crate) mod configuration_replacement;

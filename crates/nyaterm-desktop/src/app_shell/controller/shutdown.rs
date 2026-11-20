@@ -1,7 +1,6 @@
 use super::DesktopController;
 use crate::features::WorkspaceCloseSnapshot;
 use crate::features::shell::tray::show_window as show_tray_window;
-use gpui::AppContext as _;
 use gpui::Context;
 use gpui::Task;
 use nyaterm_core::DeviceWindowManifest;
@@ -676,7 +675,11 @@ impl DesktopController {
             "shutdown stage started"
         );
         let store_runtime = self.startup.shared_store_runtime();
-        let cleanup = cx.background_spawn(async move {
+        let android_cleanup = crate::app_shell::android_shutdown::AndroidShutdown::begin(
+            self.session_hub.read(cx).android_devices(),
+        );
+        let cleanup = crate::app_shell::android_shutdown::spawn_cleanup(cx, move || {
+            android_cleanup.finish();
             cleanup();
             if let Some(store) = store_runtime {
                 let _ = store.close_blocking();

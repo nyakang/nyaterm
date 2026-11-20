@@ -5,99 +5,17 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use nyaterm_core::models::android::AdbDeviceSelector;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AdbError, AdbResult};
+use crate::operation::AdbOperationControl;
 
 const REQUEST_LIMIT: usize = 65_535;
 const COMMAND_OUTPUT_LIMIT: u64 = 64 * 1024;
 pub const SERVER_PROTOCOL_VERSION: u32 = 41;
-
-/// One adb server that this process started itself via `start-server`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct StartedServer {
-    executable: PathBuf,
-    server: SocketAddr,
-}
-
-fn started_server_registry() -> &'static Mutex<Vec<StartedServer>> {
-    static REGISTRY: std::sync::OnceLock<Mutex<Vec<StartedServer>>> = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-fn record_started_server(executable: &Path, server: SocketAddr) {
-    if let Ok(mut registry) = started_server_registry().lock() {
-        let record = StartedServer {
-            executable: executable.to_path_buf(),
-            server,
-        };
-        if !registry.contains(&record) {
-            registry.push(record);
-        }
-    }
-}
-
-fn take_started_servers() -> Vec<StartedServer> {
-    started_server_registry()
-        .lock()
-        .map(|mut registry| std::mem::take(&mut *registry))
-        .unwrap_or_default()
-}
-
-/// Serializes every test that runs `ensure_server`: the started-server
-/// registry is process-global and the fake-server tests otherwise pollute
-/// each other's assertions.
-#[cfg(test)]
-pub(crate) static STARTED_SERVER_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-/// The adb servers this process started itself, as `(executable, address)`
-/// pairs in start order. Servers that were already running when the app first
-/// connected are not included.
-pub fn started_servers() -> Vec<(PathBuf, SocketAddr)> {
-    started_server_registry()
-        .lock()
-        .map(|registry| {
-            registry
-                .iter()
-                .map(|record| (record.executable.clone(), record.server))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Runs `kill-server` against every adb server this process started itself,
-/// and clears the records. Best effort: a missing executable or an already
-/// dead server is ignored. Returns the number of shutdown attempts.
-pub fn shutdown_started_servers() -> usize {
-    let records = take_started_servers();
-    let attempts = records.len();
-    for record in records {
-        let mut command = Command::new(record.executable);
-        // Mirror `AdbClient::process`: the default server must be addressed by
-        // its local spelling, remote hosts need the explicit `-H` form.
-        if record.server.ip() != std::net::Ipv4Addr::LOCALHOST {
-            command.args(["-H", &record.server.ip().to_string()]);
-        }
-        command
-            .args(["-P", &record.server.port().to_string()])
-            .args(["kill-server"]);
-        command.env_remove("ADB_SERVER_SOCKET");
-        command.stdin(Stdio::null());
-        command.stdout(Stdio::null());
-        command.stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let _ = command.status();
-    }
-    attempts
-}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -129,14 +47,28 @@ pub struct DeviceBinding {
 pub struct AdbClient {
     pub executable: PathBuf,
     pub server: SocketAddr,
+    servers: crate::adb::server::AdbServerManager,
 }
 
 impl AdbClient {
+    pub fn new(executable: PathBuf, server: SocketAddr) -> Self {
+        Self {
+            executable,
+            server,
+            servers: crate::adb::server::default_manager().clone(),
+        }
+    }
+
+    pub fn with_server_manager(mut self, servers: crate::adb::server::AdbServerManager) -> Self {
+        self.servers = servers;
+        self
+    }
+
     pub fn local(custom: Option<&Path>) -> AdbResult<Self> {
-        Ok(Self {
-            executable: resolve_executable(custom)?,
-            server: SocketAddr::from(([127, 0, 0, 1], 5037)),
-        })
+        Ok(Self::new(
+            resolve_executable(custom)?,
+            SocketAddr::from(([127, 0, 0, 1], 5037)),
+        ))
     }
 
     fn connect(&self) -> AdbResult<TcpStream> {
@@ -152,37 +84,26 @@ impl AdbClient {
     }
 
     pub fn ensure_server(&self) -> AdbResult<()> {
-        self.ensure_server_with_connection(TcpStream::connect_timeout(
-            &self.server,
-            Duration::from_secs(2),
-        ))
+        self.ensure_server_with_control(&AdbOperationControl::default())
     }
 
+    pub fn ensure_server_with_control(&self, control: &AdbOperationControl) -> AdbResult<()> {
+        self.servers.ensure(self, control)
+    }
+
+    #[cfg(test)]
     fn ensure_server_with_connection(
         &self,
         connection: std::io::Result<TcpStream>,
     ) -> AdbResult<()> {
-        match connection {
-            Ok(stream) => {
-                let mut stream = Self::configure_stream(stream)?;
-                return Self::check_server_version(Self::read_version(&mut stream)?);
-            }
-            // Only a TCP connect failure permits startup. A connected server's
-            // handshake/read timeout must never trigger adb's replacement logic.
-            Err(error) if server_unreachable(&error) => {}
-            Err(error) => return Err(error.into()),
-        }
-        // Never invoke start-server against an existing incompatible server:
-        // adb itself would terminate it, disturbing other applications.
-        self.command(&["start-server"])?;
-        // The server now running was started by this process, so the
-        // application may shut it down again on exit. Servers that were
-        // already running when the app connected are never recorded.
-        record_started_server(&self.executable, self.server);
-        Self::check_server_version(self.version()?)
+        crate::adb::server::ServerRegistry::default().ensure_with_connection(
+            self,
+            &AdbOperationControl::default(),
+            connection,
+        )
     }
 
-    fn check_server_version(version: u32) -> AdbResult<()> {
+    pub(super) fn check_server_version(version: u32) -> AdbResult<()> {
         if version == SERVER_PROTOCOL_VERSION {
             Ok(())
         } else {
@@ -195,7 +116,7 @@ impl AdbClient {
         Self::read_version(&mut stream)
     }
 
-    fn read_version(stream: &mut TcpStream) -> AdbResult<u32> {
+    fn read_version(stream: &mut (impl Read + Write)) -> AdbResult<u32> {
         request(stream, b"host:version")?;
         let data = read_host_payload(stream)?;
         u32::from_str_radix(
@@ -216,6 +137,21 @@ impl AdbClient {
         request(&mut stream, b"host:track-devices-l")?;
         stream.set_read_timeout(Some(Duration::from_millis(200)))?;
         Ok(stream)
+    }
+
+    pub(crate) fn tracker_with_control(
+        &self,
+        control: &AdbOperationControl,
+    ) -> AdbResult<TcpStream> {
+        let stream = crate::adb::server::connect(self.server, control)?;
+        controlled::host_request(stream, b"host:track-devices-l", control)
+    }
+
+    pub(super) fn version_on_stream(
+        stream: TcpStream,
+        control: &AdbOperationControl,
+    ) -> AdbResult<()> {
+        Self::check_server_version(controlled::version(stream, control)?)
     }
 
     pub fn bind(&self, selector: &AdbDeviceSelector, generation: u64) -> AdbResult<DeviceBinding> {
@@ -325,6 +261,8 @@ impl AdbClient {
         // Native channels and subprocesses must address the same explicit
         // server; an inherited socket override would silently split the binding.
         command.env_remove("ADB_SERVER_SOCKET");
+        command.env_remove("ANDROID_ADB_SERVER_ADDRESS");
+        command.env_remove("ANDROID_ADB_SERVER_PORT");
         command.stdin(Stdio::null());
         #[cfg(windows)]
         {
@@ -359,10 +297,10 @@ impl AdbClient {
 /// Whether a TCP connect failure permits attempting ADB server startup.
 ///
 /// A closed port usually refuses at once, but on hosts where a socket filter
-/// delays the refusal the 2s connect deadline expires first and surfaces as
+/// delays the refusal the connect deadline expires first and surfaces as
 /// `TimedOut`, so both kinds have to lead to `start-server`.
 /// Never apply this classification to handshake or established-channel errors.
-fn server_unreachable(error: &std::io::Error) -> bool {
+pub(super) fn server_unreachable(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
         std::io::ErrorKind::ConnectionRefused
@@ -562,12 +500,10 @@ pub fn parse_devices(data: &[u8]) -> AdbResult<Vec<AdbDevice>> {
 mod tests {
     use crate::adb::client::{
         AdbClient, DeviceStatus, parse_devices, resolve_executable, server_unreachable,
-        started_servers, take_started_servers,
     };
     use crate::error::AdbError;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::path::PathBuf;
 
     #[test]
     fn a_slow_refusal_counts_as_no_server() {
@@ -609,10 +545,7 @@ mod tests {
                 socket.write_all(&[*byte]).unwrap();
             }
         });
-        let client = AdbClient {
-            executable: "missing-fixture-adb".into(),
-            server,
-        };
+        let client = AdbClient::new("missing-fixture-adb".into(), server);
         assert!(matches!(
             client.ensure_server(),
             Err(AdbError::IncompatibleServer)
@@ -621,10 +554,7 @@ mod tests {
     }
     #[test]
     fn local_daemon_startup_uses_adb_local_socket_semantics() {
-        let client = AdbClient {
-            executable: "fixture-adb".into(),
-            server: "127.0.0.1:12345".parse().unwrap(),
-        };
+        let client = AdbClient::new("fixture-adb".into(), "127.0.0.1:12345".parse().unwrap());
         let command = client.process(&["start-server"]);
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(args, ["-P", "12345", "start-server"]);
@@ -705,10 +635,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("nyaterm-adb-pipe-{}", uuid::Uuid::new_v4()));
         std::fs::write(&path, "#!/bin/sh\nsleep 2 &\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let client = AdbClient {
-            executable: path.clone(),
-            server: "127.0.0.1:5037".parse().unwrap(),
-        };
+        let client = AdbClient::new(path.clone(), "127.0.0.1:5037".parse().unwrap());
         let started = std::time::Instant::now();
         assert!(matches!(
             client.command_with_control(
@@ -719,73 +646,5 @@ mod tests {
         ));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         std::fs::remove_file(path).unwrap();
-    }
-
-    fn fake_adb_executable() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "nyaterm-adb-record-{}{}",
-            uuid::Uuid::new_v4(),
-            if cfg!(windows) { ".cmd" } else { "" }
-        ));
-        #[cfg(windows)]
-        std::fs::write(&path, "@echo off\r\nexit /b 0\r\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        path
-    }
-
-    #[test]
-    fn servers_the_process_started_are_recorded_and_shutdown_clears_them() {
-        let _guard = crate::adb::client::STARTED_SERVER_TEST_LOCK.lock().unwrap();
-        take_started_servers();
-        // A port that was bound and released: connecting to it fails with a
-        // reachable-host refusal, which is the only case that may start a server.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = listener.local_addr().unwrap();
-        drop(listener);
-        let executable = fake_adb_executable();
-        let client = AdbClient {
-            executable: executable.clone(),
-            server,
-        };
-        // start-server succeeds (fixture exits 0), the following version probe
-        // still fails because no real server exists.
-        assert!(client.ensure_server().is_err());
-        assert_eq!(started_servers(), vec![(executable.clone(), server)]);
-
-        take_started_servers();
-        assert!(started_servers().is_empty());
-        std::fs::remove_file(executable).unwrap();
-    }
-
-    #[test]
-    fn servers_that_were_already_running_are_never_recorded() {
-        let _guard = crate::adb::client::STARTED_SERVER_TEST_LOCK.lock().unwrap();
-        take_started_servers();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = listener.local_addr().unwrap();
-        let worker = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-                .unwrap();
-            let mut request = [0; 16];
-            socket.read_exact(&mut request).unwrap();
-            assert_eq!(&request, b"000chost:version");
-            for byte in b"OKAY00040029" {
-                socket.write_all(&[*byte]).unwrap();
-            }
-        });
-        let client = AdbClient {
-            executable: "missing-fixture-adb".into(),
-            server,
-        };
-        assert!(client.ensure_server().is_ok());
-        worker.join().unwrap();
-        assert!(started_servers().is_empty());
     }
 }
