@@ -6,10 +6,7 @@ use gpui::{
     SharedString, Window, div, prelude::*, px, rgb, rgba, svg,
 };
 use nyaterm_core::truncate_preview;
-use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaPopover, NyaScrollable, NyaSwitch, NyaTabItem, NyaTabs,
-    NyaTabsVariant,
-};
+use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaPopover, NyaScrollable, NyaSwitch};
 
 use super::{
     QuickCommandEditorFieldSpec, quick_command_color, quick_command_editor_field,
@@ -66,6 +63,8 @@ impl NyaTermApp {
         let command_script_label = t!("quickCommands.commandScript");
         let command_placeholder = if editor.raw_send {
             t!("quickCommands.rawCommandPlaceholder")
+        } else if editor.execution_mode == "segmented" {
+            t!("quickCommands.segmentedCommandPlaceholder")
         } else {
             t!("quickCommands.commandPlaceholder")
         };
@@ -86,6 +85,47 @@ impl NyaTermApp {
             .error
             .clone()
             .filter(|_| editor.error_field.is_none());
+        let segmented_interval_error = field_error(QuickCommandEditorField::SegmentedInterval);
+        let execution_mode_select = self.form_select_control(
+            "quick-command-editor-execution-mode",
+            vec![
+                nyaterm_ui::NyaSelectOption::new("execute", execute_label),
+                nyaterm_ui::NyaSelectOption::new("append", append_label),
+                nyaterm_ui::NyaSelectOption::new("segmented", t!("quickCommands.segmentedSend")),
+            ],
+            Some(editor.execution_mode.clone()),
+            false,
+            cx,
+        );
+        let segmented_mode_select = self.form_select_control(
+            "quick-command-editor-segmented-mode",
+            vec![
+                nyaterm_ui::NyaSelectOption::new("line", t!("serialSend.lineByLine")),
+                nyaterm_ui::NyaSelectOption::new(
+                    "character",
+                    t!("serialSend.characterByCharacter"),
+                ),
+            ],
+            Some(
+                match editor.segmented_send_mode {
+                    nyaterm_core::QuickCommandSegmentedSendMode::Line => "line",
+                    nyaterm_core::QuickCommandSegmentedSendMode::Character => "character",
+                }
+                .to_string(),
+            ),
+            false,
+            cx,
+        );
+        let segmented_interval_input = self.number_input_box(
+            "quick-command.editor.segmented-interval",
+            &editor.segmented_send_interval_input,
+            nyaterm_ui::NyaNumberInputOptions::default()
+                .range(0.0, 60.0)
+                .step(0.001)
+                .decimal_places(3)
+                .suffix(t!("serialSend.seconds")),
+            cx,
+        );
         // Built before the card, which reads `self` all the way down: creating
         // an input needs it mutably.
         let label_input = quick_command_editor_field(
@@ -568,38 +608,76 @@ impl NyaTermApp {
                                             .text_color(rgb(palette.text_muted))
                                             .child(execution_mode_label),
                                     )
-                                    .child(
-                                        div().mt_2().child(
-                                            NyaTabs::new("quick-command-editor-execution-mode")
-                                                .variant(NyaTabsVariant::Segmented)
-                                                .full_width(true)
-                                                .items([
-                                                    NyaTabItem::new(execute_label),
-                                                    NyaTabItem::new(append_label),
-                                                ])
-                                                .selected_index(usize::from(
-                                                    editor.execution_mode == "append",
-                                                ))
-                                                .on_select(cx.listener(
-                                                    |this, index: &usize, _, cx| {
-                                                        let mode = if *index == 1 {
-                                                            "append"
-                                                        } else {
-                                                            "execute"
-                                                        };
-                                                        this.set_quick_command_editor_execution_mode(
-                                                            mode, cx,
-                                                        );
-                                                    },
-                                                )),
-                                        ),
-                                    )
+                                    .child(div().mt_2().child(execution_mode_select))
+                                    .when(editor.execution_mode == "segmented", |this| {
+                                        this.child(
+                                            div()
+                                                .mt_3()
+                                                .flex()
+                                                .items_start()
+                                                .gap_3()
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .flex_1()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(10.))
+                                                                .text_color(rgb(palette.text_muted))
+                                                                .child(t!("serialSend.sendMode")),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .mt_1()
+                                                                .debug_selector(|| {
+                                                                    "quick-command-editor-segmented-mode".into()
+                                                                })
+                                                                .child(segmented_mode_select),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .flex_1()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(10.))
+                                                                .text_color(rgb(palette.text_muted))
+                                                                .child(t!("serialSend.interval")),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .mt_1()
+                                                                .debug_selector(|| {
+                                                                    "quick-command.editor.segmented-interval".into()
+                                                                })
+                                                                .child(segmented_interval_input),
+                                                        )
+                                                        .when_some(
+                                                            segmented_interval_error,
+                                                            |this, error| {
+                                                                this.child(
+                                                                    div()
+                                                                        .mt_1()
+                                                                        .text_size(px(10.))
+                                                                        .text_color(rgb(
+                                                                            palette.danger,
+                                                                        ))
+                                                                        .child(error),
+                                                                )
+                                                            },
+                                                        ),
+                                                ),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .mt_1()
                                             .text_size(px(10.))
                                             .text_color(rgb(palette.text_muted))
-                                            .child(if editor.execution_mode == "append" {
+                                            .child(if editor.execution_mode == "segmented" {
+                                                format!("{}\n{}", t!("quickCommands.segmentedSendHint"), t!("quickCommands.segmentedLegacyHint")).into()
+                                            } else if editor.execution_mode == "append" {
                                                 append_hint
                                             } else {
                                                 execute_hint

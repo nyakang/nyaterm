@@ -55,18 +55,21 @@ impl NyaTermApp {
             let list_header_command_id = command.id.clone();
             let detail_command_id = command.id.clone();
             let menu_items = self.quick_command_row_menu_items(command.id.clone(), cx);
-            let execution_mode = if command.execution_mode.as_deref() == Some("append") {
+            let execution_mode = if command.segmented_send.is_some() {
+                "segmented"
+            } else if command.execution_mode.as_deref() == Some("append") {
                 "append"
             } else {
                 "execute"
             };
-            let badge_label = if execution_mode == "append" {
-                t!("quickCommands.appendOnlyBadge")
-            } else {
-                t!("quickCommands.executeImmediately")
+            let badge_label = match execution_mode {
+                "segmented" => t!("quickCommands.segmentedSendBadge"),
+                "append" => t!("quickCommands.appendOnlyBadge"),
+                _ => t!("quickCommands.executeImmediately"),
             };
             let badge_mode = QuickCommandCardExecutionMode {
                 append: execution_mode == "append",
+                segmented: execution_mode == "segmented",
                 label: badge_label.clone(),
             };
             // Flattened once per row: the preview lines are `.truncate()`d, and GPUI

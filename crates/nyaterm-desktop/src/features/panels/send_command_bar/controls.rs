@@ -103,8 +103,8 @@ impl NyaTermApp {
             &state.send.interval_input,
             NyaNumberInputOptions::default()
                 .range(0.0, 60.0)
-                .step(0.01)
-                .decimal_places(2)
+                .step(0.001)
+                .decimal_places(3)
                 .suffix(t!("serialSend.seconds"))
                 .disabled(is_sending),
             cx,

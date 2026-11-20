@@ -45,6 +45,64 @@ fn literal_json_import_rejects_invalid_switch_types_and_blank_commands() {
 }
 
 #[test]
+fn segmented_json_export_import_preserves_options_and_safe_legacy_mode() {
+    let raw = r#"{"commands":[{
+        "id":"segmented",
+        "label":"Segmented",
+        "command":"one\ntwo",
+        "execution_mode":"execute",
+        "segmented_send":{"mode":"character","interval_ms":20}
+    }]}"#;
+    let mut config = QuickCommandsConfig::default();
+    merge_import(&mut config, parse_nyaterm_import(raw).unwrap()).unwrap();
+    assert_eq!(config.commands[0].execution_mode.as_deref(), Some("append"));
+    assert_eq!(
+        config.commands[0].segmented_send.as_ref().unwrap().mode,
+        crate::QuickCommandSegmentedSendMode::Character
+    );
+    assert_eq!(
+        config.commands[0]
+            .segmented_send
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        20
+    );
+
+    let exported = crate::models::quick_commands::export_quick_commands_json(config).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(value["commands"][0]["execution_mode"], "append");
+    assert_eq!(value["commands"][0]["segmented_send"]["mode"], "character");
+    let mut restored = QuickCommandsConfig::default();
+    merge_import(&mut restored, parse_nyaterm_import(&exported).unwrap()).unwrap();
+    assert_eq!(
+        restored.commands[0]
+            .segmented_send
+            .as_ref()
+            .unwrap()
+            .interval_ms,
+        20
+    );
+}
+
+#[test]
+fn segmented_json_import_rejects_invalid_mode_and_interval() {
+    for segmented_send in [
+        serde_json::json!({"mode":"byte","interval_ms":20}),
+        serde_json::json!({"mode":"line","interval_ms":60001}),
+        serde_json::json!({"mode":"line","interval_ms":-1}),
+    ] {
+        let raw = serde_json::json!([{
+            "label":"Bad",
+            "command":"pwd",
+            "segmented_send":segmented_send
+        }])
+        .to_string();
+        assert!(parse_nyaterm_import(&raw).is_err());
+    }
+}
+
+#[test]
 fn imports_config_and_array_shapes() {
     let config = parse_nyaterm_import(
         r#"{"categories":[{"id":"ops","name":"Ops"}],"commands":[{"id":"c1","label":"List","command":"ls","category_id":"ops"}]}"#,

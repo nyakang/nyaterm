@@ -7,70 +7,16 @@ pub(crate) enum SendCommandTarget {
     Group(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SendCommandDataType {
-    Text,
-    Hex,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SendCommandMode {
-    Line,
-    Character,
-    Packet,
-    Byte,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SendCommandLineEnding {
-    None,
-    Cr,
-    Lf,
-    Crlf,
-}
-
+pub(crate) use nyaterm_core::send_command::{
+    SendCommandDataType, SendCommandLineEnding, SendCommandMode,
+};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SendCommandControlFocus {
     Count,
     Interval,
 }
 
-impl SendCommandLineEnding {
-    fn as_str(self) -> &'static str {
-        match self {
-            SendCommandLineEnding::None => "",
-            SendCommandLineEnding::Cr => "\r",
-            SendCommandLineEnding::Lf => "\n",
-            SendCommandLineEnding::Crlf => "\r\n",
-        }
-    }
-}
-
-fn normalize_send_command_text(value: &str) -> String {
-    value.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-pub(crate) fn parse_send_command_hex(value: &str) -> Result<Vec<u8>, String> {
-    let cleaned: String = value.chars().filter(|ch| !ch.is_whitespace()).collect();
-    if cleaned.is_empty() {
-        return Ok(Vec::new());
-    }
-    if !cleaned.len().is_multiple_of(2) {
-        return Err("invalid hex input: odd number of digits".to_string());
-    }
-    if !cleaned.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("invalid hex input: use 0-9 and A-F".to_string());
-    }
-
-    let mut bytes = Vec::with_capacity(cleaned.len() / 2);
-    for index in (0..cleaned.len()).step_by(2) {
-        let byte = u8::from_str_radix(&cleaned[index..index + 2], 16)
-            .map_err(|error| format!("invalid hex input: {error}"))?;
-        bytes.push(byte);
-    }
-    Ok(bytes)
-}
-
+#[cfg(test)]
 pub(crate) fn build_send_command_units_for(
     draft: &str,
     data_type: SendCommandDataType,
@@ -78,60 +24,41 @@ pub(crate) fn build_send_command_units_for(
     line_ending: SendCommandLineEnding,
     session_kind: Option<SessionKind>,
 ) -> Result<Vec<Vec<u8>>, String> {
-    match data_type {
-        SendCommandDataType::Hex => {
-            let bytes = parse_send_command_hex(draft)?;
-            if bytes.is_empty() {
-                return Ok(Vec::new());
-            }
-            if mode == SendCommandMode::Byte {
-                Ok(bytes.into_iter().map(|byte| vec![byte]).collect())
-            } else {
-                Ok(vec![bytes])
-            }
-        }
-        SendCommandDataType::Text => {
-            if draft.is_empty() {
-                return Ok(Vec::new());
-            }
-            let shell_target = matches!(
-                session_kind,
-                Some(SessionKind::LocalPty | SessionKind::Ssh | SessionKind::Telnet) | None
-            );
-            let normalized = normalize_send_command_text(draft);
-            if mode == SendCommandMode::Character {
-                return Ok(normalized
-                    .chars()
-                    .map(|ch| {
-                        if shell_target && ch == '\n' {
-                            b"\r".to_vec()
-                        } else {
-                            ch.to_string().into_bytes()
-                        }
-                    })
-                    .collect());
-            }
+    use nyaterm_core::send_command::{SendCommandPlan, TextInterpretation};
+    let plan = match data_type {
+        SendCommandDataType::Hex => SendCommandPlan::hex(draft, mode, std::time::Duration::ZERO)?,
+        SendCommandDataType::Text => SendCommandPlan::text(
+            draft,
+            mode,
+            target_line_ending(session_kind, line_ending),
+            TextInterpretation::Plain,
+            std::time::Duration::ZERO,
+        ),
+    };
+    Ok(plan.map(|chunk| chunk.bytes).collect())
+}
 
-            let line_ending = if shell_target {
-                "\r"
-            } else {
-                line_ending.as_str()
-            };
-            Ok(normalized
-                .split('\n')
-                .map(|line| format!("{line}{line_ending}").into_bytes())
-                .collect())
-        }
+pub(crate) fn target_line_ending(
+    session_kind: Option<SessionKind>,
+    configured: SendCommandLineEnding,
+) -> SendCommandLineEnding {
+    if matches!(
+        session_kind,
+        Some(SessionKind::LocalPty | SessionKind::Ssh | SessionKind::Telnet) | None
+    ) {
+        SendCommandLineEnding::Cr
+    } else {
+        configured
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nyaterm_core::send_command::parse_send_command_hex;
     use nyaterm_transport::SessionKind;
 
     use super::{
         SendCommandDataType, SendCommandLineEnding, SendCommandMode, build_send_command_units_for,
-        parse_send_command_hex,
     };
 
     #[test]

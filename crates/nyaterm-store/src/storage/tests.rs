@@ -6442,6 +6442,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(false),
                 execution_mode: Some("append".to_string()),
+                segmented_send: None,
                 raw_send: None,
                 source: Some("ai".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Low),
@@ -6449,6 +6450,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 created_at: Some(111),
                 use_count: Some(7),
                 sort_order: Some(3),
+                extra: Default::default(),
             },
             Some(QuickCommandCategory {
                 id: "cat-shell".to_string(),
@@ -6475,6 +6477,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 icon_tag: Some("terminal".to_string()),
                 pinned: Some(true),
                 execution_mode: Some("append".to_string()),
+                segmented_send: None,
                 raw_send: None,
                 source: Some("manual".to_string()),
                 risk_level: Some(nyaterm_core::RiskLevel::Medium),
@@ -6482,6 +6485,7 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
                 created_at: Some(999),
                 use_count: Some(99),
                 sort_order: Some(3),
+                extra: Default::default(),
             },
             Some(QuickCommandCategory {
                 id: "cat-shell".to_string(),
@@ -6519,14 +6523,15 @@ fn quick_commands_round_trip_and_upsert_preserves_created_use_count() {
 }
 
 #[test]
-fn quick_command_literal_mode_survives_storage_backup_and_sync_with_legacy_commands() {
-    let dir = unique_temp_dir("quick-command-literal");
+fn quick_command_options_survive_storage_backup_and_sync_with_legacy_commands() {
+    let dir = unique_temp_dir("quick-command-options");
     let store = ConnectionStore::open(&dir).unwrap();
     let config: QuickCommandsConfig = serde_json::from_value(serde_json::json!({
         "commands": [
             {"id":"legacy", "label":"Legacy", "command":"pwd"},
             {"id":"null", "label":"Null", "command":"pwd", "raw_send":null},
-            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true}
+            {"id":"literal", "label":"Literal", "command":"  {{变量}} C:\\temp\\p\n下一行  ", "raw_send":true},
+            {"id":"segmented", "label":"Segmented", "command":"one\ntwo", "execution_mode":"append", "segmented_send":{"mode":"character","interval_ms":20}}
         ]
     })).unwrap();
     // Seed the legacy document as written by older versions, before a typed save.
@@ -6585,6 +6590,7 @@ fn quick_commands_export_matches_tauri_json_shape() {
             icon_tag: Some("terminal".to_string()),
             pinned: Some(true),
             execution_mode: Some("append".to_string()),
+            segmented_send: None,
             raw_send: None,
             source: Some("manual".to_string()),
             risk_level: Some(nyaterm_core::RiskLevel::Low),
@@ -6592,6 +6598,7 @@ fn quick_commands_export_matches_tauri_json_shape() {
             created_at: Some(111),
             use_count: Some(7),
             sort_order: Some(3),
+            extra: Default::default(),
         }],
     })
     .expect("export serializes");
@@ -9567,6 +9574,51 @@ fn successfully_repaired_database_is_validated_and_keeps_saved_connections() {
     assert!(repaired);
     let store = ConnectionStore::from_database(database, path, None).unwrap();
     assert_eq!(store.list_connections().unwrap()[0].id, "retained");
+}
+
+#[test]
+fn quick_command_future_settings_survive_usage_updates_and_backups() {
+    let dir = unique_temp_dir("quick-command-future-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let source = serde_json::json!({"commands":[{"id":"future","label":"Future","command":"never","execution_mode":"append","segmented_send":{"version":2,"mode":"future","interval_ms":1,"extension":{"keep":true}},"future_property":{"keep":true}},{"id":"ordinary","label":"Ordinary","command":"pwd"}],"categories":[]});
+    let config: QuickCommandsConfig = serde_json::from_value(source.clone()).unwrap();
+    store.save_quick_commands(config).unwrap();
+    store.increment_quick_command_use_count("ordinary").unwrap();
+    let value = serde_json::to_value(store.load_quick_commands().unwrap()).unwrap();
+    assert_eq!(
+        value["commands"][0]["segmented_send"],
+        source["commands"][0]["segmented_send"]
+    );
+    assert_eq!(
+        value["commands"][0]["future_property"],
+        source["commands"][0]["future_property"]
+    );
+    for kind in [
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Backup,
+        nyaterm_core::portable_snapshot::PortableSnapshotKind::Sync,
+    ] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "future-test", "2.0.6")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        let encoded = crate::portable_codec::encode_raw_portable_snapshot(&snapshot).unwrap();
+        let decoded = crate::portable_codec::decode_raw_portable_snapshot(&encoded).unwrap();
+        store
+            .save_quick_commands(QuickCommandsConfig::default())
+            .unwrap();
+        store.apply_raw_portable_snapshot(&decoded).unwrap();
+        let restored = serde_json::to_value(store.load_quick_commands().unwrap()).unwrap();
+        assert_eq!(
+            restored["commands"][0]["segmented_send"],
+            source["commands"][0]["segmented_send"]
+        );
+        assert_eq!(
+            restored["commands"][0]["future_property"],
+            source["commands"][0]["future_property"]
+        );
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

@@ -212,6 +212,23 @@ fn applying_portable_fields_preserves_device_and_unknown_fields() {
 }
 
 #[test]
+fn segmented_quick_command_options_survive_sync_projection() {
+    let original = json!({
+        "label": "Deploy",
+        "command": "one\ntwo",
+        "execution_mode": "append",
+        "segmented_send": {"mode": "character", "interval_ms": 20},
+        "future_local": "retained"
+    });
+    let projected = project_record("command", &original).unwrap();
+    assert_eq!(projected["segmented_send"], original["segmented_send"]);
+    assert!(projected.get("future_local").is_none());
+    let applied = apply_record("command", &original, &projected).unwrap();
+    assert_eq!(applied["segmented_send"], original["segmented_send"]);
+    assert_eq!(applied["future_local"], "retained");
+}
+
+#[test]
 fn field_identity_cannot_alias_separator_containing_names() {
     let a = SyncFieldId::new(SyncResourceId::new("a/b", "c"), "d");
     let b = SyncFieldId::new(SyncResourceId::new("a", "b/c"), "d");
