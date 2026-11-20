@@ -255,20 +255,18 @@ fn child_window_target(
         handle
             .update(cx, |_, window, cx| {
                 let display = window.display(cx);
-                // `window_bounds()` is a *restore* descriptor: while the parent
-                // is fullscreen or maximised it reports the pre-fullscreen /
-                // pre-maximised rectangle (on Windows it is read back from
-                // `GetWindowPlacement`'s `rcNormalPosition`). Centring on that
-                // would drop the child at where the parent *used to be*, not
-                // where it is now, so those states read the live bounds
-                // instead. Windowed windows keep `window_bounds()`: for a
-                // minimised parent it still yields the sensible restored
-                // rectangle, whereas `bounds()` would return the minimised
-                // position.
-                let restored_state = window.is_fullscreen()
-                    || window.is_simple_fullscreen()
-                    || window.is_maximized();
-                let parent_bounds = if restored_state {
+                // `window_bounds()` is a *restore* descriptor, not the window's
+                // current geometry: fullscreen and maximised read back the
+                // pre-fullscreen / pre-maximised rectangle (on Windows it comes
+                // from `GetWindowPlacement`'s `rcNormalPosition`), and a window
+                // snapped to a half of the screen keeps its pre-snap rect there
+                // too. Centring on it would drop the child at where the parent
+                // *used to be*, not where it is now, so anything still being
+                // presented uses the live `bounds()`. Only a minimised parent
+                // falls back to `window_bounds()`: its live origin is the
+                // minimise position (far off-screen) and the restored rectangle
+                // is the only sensible place to centre beside.
+                let parent_bounds = if window.visibility().is_visible() {
                     window.bounds()
                 } else {
                     window.window_bounds().get_bounds()
