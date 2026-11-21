@@ -4,12 +4,14 @@ use nyaterm_android::devices::SharedDeviceService;
 use nyaterm_android::ipc::Frame;
 use nyaterm_android::screen::{CleanupTicket, ScreenHandle};
 use nyaterm_core::models::android::AndroidViewKind;
+use nyaterm_core::models::android::gesture::ScreenGesture;
 use nyaterm_files::adb::AdbFileService;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+mod input;
 pub(in crate::features) mod labels;
 mod runtime;
 mod settings;
@@ -75,7 +77,7 @@ pub(super) struct ScreenState {
     bounds_generation: u64,
     generation: u64,
     dimensions: (u32, u32),
-    drag: bool,
+    gesture: Option<ScreenGesture>,
     error: Option<labels::AndroidError>,
     start_control: nyaterm_android::operation::AdbOperationControl,
     visible: bool,
@@ -109,7 +111,7 @@ impl ScreenState {
             bounds_generation: 0,
             generation: 0,
             dimensions: (0, 0),
-            drag: false,
+            gesture: None,
             error: None,
             start_control,
             visible: true,
@@ -206,7 +208,7 @@ impl AndroidFeatureState {
         if let Some(screen) = self.screens.get_mut(id) {
             screen.start_control.cancel();
             screen.attempt = next_generation();
-            screen.drag = false;
+            screen.gesture = None;
             screen.pan_drag = None;
             screen.paste_shortcut = false;
             screen.physical_keys.clear();
@@ -218,7 +220,7 @@ impl AndroidFeatureState {
     }
     pub(in crate::features) fn release_inputs(&mut self, id: &str) {
         if let Some(screen) = self.screens.get_mut(id) {
-            screen.drag = false;
+            screen.gesture = None;
             screen.pan_drag = None;
             screen.paste_shortcut = false;
             screen.physical_keys.clear();

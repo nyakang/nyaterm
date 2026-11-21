@@ -540,6 +540,24 @@ fn android_split_screens_have_distinct_focus_and_release_only_the_blurred_screen
     });
     window.run_until_parked();
     window.update(|_, cx| {
+        app.update(cx, |app, _| {
+            assert!(app.android.screens["first"].physical_keys.is_empty());
+            assert!(app.android.screens["second"].physical_keys.contains(&29));
+            app.android.screens.get_mut("second").unwrap().gesture =
+                Some(nyaterm_core::models::android::gesture::ScreenGesture::Pinch);
+        });
+    });
+    window.simulate_event(gpui::MouseMoveEvent {
+        position: gpui::point(gpui::px(-10.), gpui::px(-10.)),
+        pressed_button: Some(gpui::MouseButton::Left),
+        modifiers: Default::default(),
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        app.update(cx, |app, _| {
+            assert!(app.android.screens["second"].gesture.is_none());
+            assert!(app.android.screens["second"].physical_keys.is_empty());
+        });
         cx.write_to_clipboard(gpui::ClipboardItem::new_string("synthetic paste".into()));
         app.update(cx, |app, _| {
             app.android
@@ -547,7 +565,7 @@ fn android_split_screens_have_distinct_focus_and_release_only_the_blurred_screen
                 .get_mut("second")
                 .unwrap()
                 .physical_keys
-                .extend([113, 117]);
+                .extend([29, 113, 117]);
         });
     });
     window.simulate_keystrokes("ctrl-v");
@@ -558,7 +576,9 @@ fn android_split_screens_have_distinct_focus_and_release_only_the_blurred_screen
     window.update(|_, cx| {
         app.update(cx, |app, _| {
             assert!(app.android.screens["first"].physical_keys.is_empty());
-            assert!(app.android.screens["second"].physical_keys.contains(&29));
+            // This fixture has no helper. A failed paste now releases all held
+            // inputs as well as the shortcut modifiers.
+            assert!(app.android.screens["second"].physical_keys.is_empty());
             assert!(!app.android.screens["second"].physical_keys.contains(&113));
             assert!(!app.android.screens["second"].physical_keys.contains(&117));
             assert!(!app.android.screens["second"].paste_shortcut);

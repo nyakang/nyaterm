@@ -1,5 +1,5 @@
 //! scrcpy 5.0.1 server protocol. This module is never linked by the application.
-use nyaterm_android::ipc::{Control, MAX_TEXT_BYTES};
+use nyaterm_android::ipc::{Control, MAX_TEXT_BYTES, TouchPointer};
 use std::io::{self, Read};
 
 pub const MAX_MEDIA_BYTES: usize = 8 * 1024 * 1024;
@@ -95,35 +95,29 @@ pub fn encode(control: &Control) -> io::Result<Vec<u8>> {
         }
         Control::Touch {
             action,
-            x,
-            y,
+            points,
             width,
             height,
             ..
         } => {
-            if ![0, 1, 2, 3].contains(action) {
-                return Err(invalid("touch action"));
+            control
+                .validate_input()
+                .map_err(|_| invalid("touch event"))?;
+            for point in points {
+                let mouse = point.pointer == TouchPointer::Mouse;
+                let pointer_id = match point.pointer {
+                    TouchPointer::Mouse => u64::MAX,
+                    TouchPointer::Finger => u64::MAX - 1,
+                    TouchPointer::VirtualFinger => u64::MAX - 2,
+                };
+                bytes.extend_from_slice(&[2, *action]);
+                bytes.extend_from_slice(&pointer_id.to_be_bytes());
+                position(&mut bytes, point.x, point.y, *width, *height)?;
+                bytes
+                    .extend_from_slice(&(if *action == 1 { 0u16 } else { u16::MAX }).to_be_bytes());
+                bytes.extend_from_slice(&u32::from(mouse && *action <= 1).to_be_bytes());
+                bytes.extend_from_slice(&u32::from(mouse && *action != 1).to_be_bytes());
             }
-            bytes.extend_from_slice(&[2, *action]);
-            bytes.extend_from_slice(&u64::MAX.to_be_bytes()); // scrcpy POINTER_ID_MOUSE
-            position(&mut bytes, *x, *y, *width, *height)?;
-            bytes.extend_from_slice(
-                &(if *action == 1 || *action == 3 {
-                    0u16
-                } else {
-                    u16::MAX
-                })
-                .to_be_bytes(),
-            );
-            bytes.extend_from_slice(&(if *action <= 1 { 1u32 } else { 0u32 }).to_be_bytes());
-            bytes.extend_from_slice(
-                &(if *action == 1 || *action == 3 {
-                    0u32
-                } else {
-                    1u32
-                })
-                .to_be_bytes(),
-            );
         }
         Control::Scroll {
             x,
@@ -252,8 +246,11 @@ mod tests {
     fn touch_and_scroll_follow_official_control_message_reader_fixtures() {
         let touch = encode(&Control::Touch {
             action: 0,
-            x: 100,
-            y: 200,
+            points: vec![nyaterm_android::ipc::TouchPoint {
+                pointer: nyaterm_android::ipc::TouchPointer::Mouse,
+                x: 100,
+                y: 200,
+            }],
             width: 1080,
             height: 2400,
             generation: 1,
@@ -281,5 +278,47 @@ mod tests {
         .unwrap();
         assert_eq!(&scroll[13..17], &[0x08, 0x00, 0xf8, 0x00]);
         assert_eq!(scroll.len(), 21);
+    }
+
+    #[test]
+    fn two_fingers_encode_distinct_ids_pressure_and_no_mouse_buttons() {
+        use nyaterm_android::ipc::{TouchPoint, TouchPointer};
+        for action in [0, 2, 1] {
+            let bytes = encode(&Control::Touch {
+                action,
+                points: vec![
+                    TouchPoint {
+                        pointer: TouchPointer::Finger,
+                        x: 10,
+                        y: 20,
+                    },
+                    TouchPoint {
+                        pointer: TouchPointer::VirtualFinger,
+                        x: 89,
+                        y: 179,
+                    },
+                ],
+                width: 100,
+                height: 200,
+                generation: 1,
+            })
+            .unwrap();
+            assert_eq!(bytes.len(), 64);
+            for (index, (id, x, y)) in [(u64::MAX - 1, 10u32, 20u32), (u64::MAX - 2, 89, 179)]
+                .into_iter()
+                .enumerate()
+            {
+                let packet = &bytes[index * 32..(index + 1) * 32];
+                assert_eq!(&packet[..2], &[2, action]);
+                assert_eq!(&packet[2..10], &id.to_be_bytes());
+                assert_eq!(&packet[10..14], &x.to_be_bytes());
+                assert_eq!(&packet[14..18], &y.to_be_bytes());
+                assert_eq!(
+                    &packet[22..24],
+                    &(if action == 1 { 0u16 } else { u16::MAX }).to_be_bytes()
+                );
+                assert_eq!(&packet[24..], &[0; 8]);
+            }
+        }
     }
 }
