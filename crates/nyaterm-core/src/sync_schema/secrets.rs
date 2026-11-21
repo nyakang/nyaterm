@@ -28,6 +28,7 @@ pub fn payload_fields(kind: &str) -> &'static [&'static str] {
             "otp_type",
             "issuer",
             "username",
+            "prompt_regex",
             "secret",
             "algorithm",
             "digits",

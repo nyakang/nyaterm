@@ -1,9 +1,11 @@
 //! Isolated scrcpy 5.0.1 video and control runtime.
 mod decoder;
+mod inputs;
 mod protocol;
 
-use std::collections::{HashSet, VecDeque};
-use std::io::{self, Read, Write};
+use crate::inputs::Inputs;
+use std::collections::VecDeque;
+use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -349,92 +351,6 @@ fn video_loop(
     }
 }
 
-struct Inputs {
-    keys: HashSet<u32>,
-    touch: Option<Control>,
-    socket: TcpStream,
-    geometry: Geometry,
-}
-
-impl Inputs {
-    fn send(&mut self, control: &Control) -> io::Result<()> {
-        if let Control::Touch {
-            width,
-            height,
-            generation,
-            ..
-        }
-        | Control::Scroll {
-            width,
-            height,
-            generation,
-            ..
-        } = control
-        {
-            let current = *self.geometry.lock().unwrap_or_else(|p| p.into_inner());
-            if current != (*width, *height, *generation) {
-                self.release()?;
-                return Ok(());
-            }
-        }
-        let bytes = protocol::encode(control)?;
-        self.socket.write_all(&bytes)?;
-        match control {
-            Control::Key {
-                action: 0, keycode, ..
-            } => {
-                self.keys.insert(*keycode);
-            }
-            Control::Key {
-                action: 1, keycode, ..
-            } => {
-                self.keys.remove(keycode);
-            }
-            Control::Touch { action: 0 | 2, .. } => self.touch = Some(control.clone()),
-            Control::Touch { action: 1 | 3, .. } => self.touch = None,
-            _ => {}
-        }
-        Ok(())
-    }
-    fn release(&mut self) -> io::Result<()> {
-        let socket = &mut self.socket;
-        for keycode in self.keys.drain() {
-            socket.write_all(&protocol::encode(&Control::Key {
-                action: 1,
-                keycode,
-                repeat: 0,
-                metastate: 0,
-            })?)?;
-        }
-        if let Some(Control::Touch {
-            x,
-            y,
-            width,
-            height,
-            generation,
-            ..
-        }) = self.touch.take()
-        {
-            socket.write_all(&protocol::encode(&Control::Touch {
-                action: 3,
-                x,
-                y,
-                width,
-                height,
-                generation,
-            })?)?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for Inputs {
-    fn drop(&mut self) {
-        let _ = self.release();
-        let _ = self.socket.shutdown(Shutdown::Both);
-    }
-}
-
 fn run() -> io::Result<()> {
     ffmpeg_next::init().map_err(io::Error::other)?;
     ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Quiet);
@@ -560,12 +476,7 @@ fn run() -> io::Result<()> {
                 std::thread::sleep(Duration::from_millis(100));
             }
         })?;
-    let mut inputs = Inputs {
-        keys: HashSet::new(),
-        touch: None,
-        socket: control,
-        geometry,
-    };
+    let mut inputs = Inputs::new(control, geometry);
     let result = (|| {
         while let Some(packet) = read_packet(&mut stdin)? {
             let Packet::Control(control) = packet else {
@@ -577,7 +488,12 @@ fn run() -> io::Result<()> {
             match control {
                 Control::Ping { sequence } => output.control(Control::Pong { sequence }),
                 Control::FrameAck { sequence } => output.acknowledge(sequence),
-                Control::Presentation { visible } => output.presentation(visible),
+                Control::Presentation { visible } => {
+                    if !visible {
+                        inputs.release()?;
+                    }
+                    output.presentation(visible);
+                }
                 Control::RefreshPresentation => output.refresh(),
                 Control::FrameFormat { format } => output.format(format),
                 Control::ReleaseInputs => inputs.release()?,

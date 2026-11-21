@@ -28,8 +28,12 @@ impl NyaTermApp {
                 self.android_key(id, code, 0, 0, cx);
                 self.android_key(id, code, 1, 0, cx);
             }
-            Action::Rotate => self.android_send(id, Control::Rotate, cx),
+            Action::Rotate => {
+                self.android.release_inputs(id);
+                self.android_send(id, Control::Rotate, cx);
+            }
             Action::Fit => {
+                self.android.release_inputs(id);
                 if let Some(screen) = self.android.screens.get_mut(id) {
                     screen.viewport = Default::default();
                     screen.bounds = None;

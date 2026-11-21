@@ -4,11 +4,26 @@ use nyaterm_core::models::android::AndroidScreenSettings;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_CAPTURE_EDGE: u32 = 2560;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_CONTROL_BYTES: usize = 128 * 1024;
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TouchPointer {
+    Mouse,
+    Finger,
+    VirtualFinger,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TouchPoint {
+    pub pointer: TouchPointer,
+    pub x: u32,
+    pub y: u32,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -33,10 +48,11 @@ pub enum Control {
         repeat: u32,
         metastate: u32,
     },
+    /// One atomic mouse update, or an ordered main/virtual finger pair.
+    /// Actions are Android DOWN (0), UP (1), and MOVE (2).
     Touch {
         action: u8,
-        x: u32,
-        y: u32,
+        points: Vec<TouchPoint>,
         width: u32,
         height: u32,
         generation: u64,
@@ -149,7 +165,28 @@ impl Control {
                 }
             }
             Self::Key { action, .. } if *action > 1 => return Err(InputRejection::InvalidInput),
-            Self::Touch { action, .. } if *action > 3 => return Err(InputRejection::InvalidInput),
+            Self::Touch {
+                action,
+                points,
+                width,
+                height,
+                ..
+            } => {
+                if *action > 2
+                    || points.is_empty()
+                    || points.len() > 2
+                    || *width == 0
+                    || *height == 0
+                    || *width > 4096
+                    || *height > 4096
+                    || points.iter().any(|p| p.x >= *width || p.y >= *height)
+                    || (points.len() == 2
+                        && (points[0].pointer != TouchPointer::Finger
+                            || points[1].pointer != TouchPointer::VirtualFinger))
+                {
+                    return Err(InputRejection::InvalidInput);
+                }
+            }
             Self::Scroll {
                 horizontal,
                 vertical,
@@ -159,14 +196,7 @@ impl Control {
             }
             _ => {}
         }
-        if let Self::Touch {
-            x,
-            y,
-            width,
-            height,
-            ..
-        }
-        | Self::Scroll {
+        if let Self::Scroll {
             x,
             y,
             width,
@@ -665,5 +695,75 @@ mod video_tests {
         );
         assert!(PixelFormat::I420.layout(u32::MAX, 1).is_none());
         assert!(PixelFormat::I420.layout(0, 1).is_none());
+    }
+}
+
+#[cfg(test)]
+mod touch_tests {
+    use crate::ipc::{Control, Packet, TouchPoint, TouchPointer, read_packet, write_packet};
+
+    fn point(pointer: TouchPointer) -> TouchPoint {
+        TouchPoint {
+            pointer,
+            x: 10,
+            y: 20,
+        }
+    }
+    fn touch(points: Vec<TouchPoint>) -> Control {
+        Control::Touch {
+            action: 0,
+            points,
+            width: 100,
+            height: 200,
+            generation: 1,
+        }
+    }
+    #[test]
+    fn grouped_touch_round_trips_with_both_identities_and_geometry() {
+        let control = touch(vec![
+            point(TouchPointer::Finger),
+            point(TouchPointer::VirtualFinger),
+        ]);
+        let expected = serde_json::to_value(&control).unwrap();
+        let mut wire = Vec::new();
+        write_packet(&mut wire, &Packet::Control(control)).unwrap();
+        let Some(Packet::Control(decoded)) = read_packet(&mut wire.as_slice()).unwrap() else {
+            panic!("expected control");
+        };
+        assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
+    }
+    #[test]
+    fn invalid_touch_groups_are_rejected_before_injection() {
+        let finger = point(TouchPointer::Finger);
+        let virtual_finger = point(TouchPointer::VirtualFinger);
+        let mouse = point(TouchPointer::Mouse);
+        for points in [
+            vec![],
+            vec![finger, finger],
+            vec![mouse, virtual_finger],
+            vec![virtual_finger, finger],
+            vec![finger, virtual_finger, mouse],
+            vec![TouchPoint { x: 100, ..finger }],
+            vec![TouchPoint { y: 200, ..finger }],
+        ] {
+            assert!(touch(points).validate_input().is_err());
+        }
+        for action in [3, 4, u8::MAX] {
+            let mut control = touch(vec![finger]);
+            if let Control::Touch { action: value, .. } = &mut control {
+                *value = action;
+            }
+            assert!(control.validate_input().is_err());
+        }
+        for (width, height) in [(0, 200), (100, 0), (4097, 200), (100, 4097)] {
+            let control = Control::Touch {
+                action: 0,
+                points: vec![finger],
+                width,
+                height,
+                generation: 1,
+            };
+            assert!(control.validate_input().is_err());
+        }
     }
 }

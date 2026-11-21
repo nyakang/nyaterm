@@ -93,6 +93,11 @@ mod tests;
 mod tab_actions;
 
 impl SessionFeatureState {
+    /// The OTP provider the security prompts use; credential autofill reuses it
+    /// so a picked OTP entry generates its code from the same source.
+    pub(in crate::features) fn otp_provider(&self) -> Arc<NativeOtpProvider> {
+        self.prompts.otp_provider()
+    }
     pub(in crate::features) fn ssh_connection_pool(&self) -> SshConnectionPool {
         self.ssh_connections.clone()
     }

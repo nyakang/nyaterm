@@ -48,7 +48,7 @@ impl SettingsPanel {
             .child(appearance_form_section_with_action(
                 palette,
                 t!("themeDesigner.sectionTitle"),
-                t!("themeDesigner.sectionDesc"),
+                None,
                 manage_themes,
                 div()
                     .flex()
@@ -58,7 +58,7 @@ impl SettingsPanel {
                     .child(appearance_settings_field(
                         palette,
                         t!("settings.terminalTheme"),
-                        Some(SharedString::from(t!("settings.terminalThemeDesc"))),
+                        None,
                         self.appearance_theme_select(true, cx),
                     ))
                     .child(appearance_settings_field(
@@ -314,7 +314,7 @@ impl SettingsPanel {
             ));
         }
 
-        appearance_form_section_with_action(palette, title, desc, add_action, content)
+        appearance_form_section_with_action(palette, title, Some(desc.into()), add_action, content)
     }
 
     fn appearance_font_stack_rows(
@@ -674,12 +674,11 @@ type AppearanceClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + '
 fn appearance_form_section_with_action(
     palette: ThemePalette,
     title: impl Into<SharedString>,
-    desc: impl Into<SharedString>,
+    desc: Option<SharedString>,
     action: impl IntoElement,
     content: impl IntoElement,
 ) -> impl IntoElement {
     let title: SharedString = title.into();
-    let desc: SharedString = desc.into();
     div()
         .rounded_lg()
         .border_1()
@@ -707,13 +706,15 @@ fn appearance_form_section_with_action(
                                 .text_color(rgb(palette.text))
                                 .child(title),
                         )
-                        .child(
-                            div()
-                                .mt_1()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .child(desc),
-                        ),
+                        .when_some(desc, |this, desc| {
+                            this.child(
+                                div()
+                                    .mt_1()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.text_dimmed))
+                                    .child(desc),
+                            )
+                        }),
                 )
                 .child(action),
         )

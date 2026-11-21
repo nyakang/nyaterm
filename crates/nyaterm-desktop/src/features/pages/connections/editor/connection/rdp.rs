@@ -21,12 +21,11 @@ fn rdp_switch_row(
     palette: crate::theme::ThemePalette,
     id: &'static str,
     label: impl Into<SharedString>,
-    description: impl Into<SharedString>,
+    description: Option<SharedString>,
     checked: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     let label: SharedString = label.into();
-    let description: SharedString = description.into();
     div()
         .rounded_md()
         .border_1()
@@ -42,13 +41,15 @@ fn rdp_switch_row(
                 .min_w_0()
                 .flex_1()
                 .child(div().text_xs().font_weight(FontWeight(500.)).child(label))
-                .child(
-                    div()
-                        .mt_1()
-                        .text_size(px(10.))
-                        .text_color(rgb(palette.text_muted))
-                        .child(description),
-                ),
+                .when_some(description, |this, description| {
+                    this.child(
+                        div()
+                            .mt_1()
+                            .text_size(px(10.))
+                            .text_color(rgb(palette.text_muted))
+                            .child(description),
+                    )
+                }),
         )
         .child(
             NyaSwitch::new(id)
@@ -194,7 +195,7 @@ fn rdp_security(
             palette,
             "connection-rdp-use-nla",
             t!("dialog.rdpUseNla"),
-            t!("dialog.rdpUseNlaDesc"),
+            Some(t!("dialog.rdpUseNlaDesc").into()),
             editor.rdp_security.use_nla,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpUseNla, cx)
@@ -204,7 +205,7 @@ fn rdp_security(
             palette,
             "connection-rdp-administrative-session",
             t!("dialog.rdpAdministrativeSession"),
-            t!("dialog.rdpAdministrativeSessionDesc"),
+            Some(t!("dialog.rdpAdministrativeSessionDesc").into()),
             editor.rdp_security.administrative_session,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(
@@ -329,7 +330,7 @@ fn rdp_display(
             palette,
             "connection-rdp-display-wallpaper",
             t!("dialog.rdpWallpaper"),
-            t!("dialog.rdpWallpaperDesc"),
+            None,
             editor.rdp_display.display_wallpaper,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpDisplayWallpaper, cx)
@@ -339,7 +340,7 @@ fn rdp_display(
             palette,
             "connection-rdp-display-themes",
             t!("dialog.rdpThemes"),
-            t!("dialog.rdpThemesDesc"),
+            None,
             editor.rdp_display.display_themes,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpDisplayThemes, cx)
@@ -349,7 +350,7 @@ fn rdp_display(
             palette,
             "connection-rdp-font-smoothing",
             t!("dialog.rdpFontSmoothing"),
-            t!("dialog.rdpFontSmoothingDesc"),
+            None,
             editor.rdp_display.enable_font_smoothing,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpFontSmoothing, cx)
@@ -359,7 +360,7 @@ fn rdp_display(
             palette,
             "connection-rdp-desktop-composition",
             t!("dialog.rdpDesktopComposition"),
-            t!("dialog.rdpDesktopCompositionDesc"),
+            Some(t!("dialog.rdpDesktopCompositionDesc").into()),
             editor.rdp_display.enable_desktop_composition,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(
@@ -372,7 +373,7 @@ fn rdp_display(
             palette,
             "connection-rdp-disable-full-window-drag",
             t!("dialog.rdpDisableFullWindowDrag"),
-            t!("dialog.rdpDisableFullWindowDragDesc"),
+            Some(t!("dialog.rdpDisableFullWindowDragDesc").into()),
             editor.rdp_display.disable_full_window_drag,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpFullWindowDrag, cx)
@@ -382,7 +383,7 @@ fn rdp_display(
             palette,
             "connection-rdp-disable-menu-animations",
             t!("dialog.rdpDisableMenuAnimations"),
-            t!("dialog.rdpDisableMenuAnimationsDesc"),
+            None,
             editor.rdp_display.disable_menu_animations,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpMenuAnimations, cx)
@@ -392,7 +393,7 @@ fn rdp_display(
             palette,
             "connection-rdp-disable-cursor-shadow",
             t!("dialog.rdpDisableCursorShadow"),
-            t!("dialog.rdpDisableCursorShadowDesc"),
+            None,
             editor.rdp_display.disable_cursor_shadow,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpCursorShadow, cx)
@@ -402,7 +403,7 @@ fn rdp_display(
             palette,
             "connection-rdp-disable-cursor-blinking",
             t!("dialog.rdpDisableCursorBlinking"),
-            t!("dialog.rdpDisableCursorBlinkingDesc"),
+            None,
             editor.rdp_display.disable_cursor_blinking,
             cx.listener(|this, _, _, cx| {
                 this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpCursorBlinking, cx)
@@ -450,7 +451,7 @@ fn rdp_session(
                 palette,
                 "connection-rdp-auto-reconnect",
                 t!("dialog.rdpAutoReconnect"),
-                t!("dialog.rdpAutoReconnectDesc"),
+                Some(t!("dialog.rdpAutoReconnectDesc").into()),
                 editor.rdp_reconnect.enabled,
                 cx.listener(|this, _, _, cx| {
                     this.toggle_connection_editor_flag(ConnectionEditorToggle::RdpReconnect, cx)

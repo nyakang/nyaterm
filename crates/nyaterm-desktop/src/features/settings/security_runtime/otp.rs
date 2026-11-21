@@ -100,6 +100,7 @@ fn security_otp_from_uri(uri: &str) -> Result<SecurityOtpEditorState, String> {
             otp_type: "totp".to_string(),
             issuer: totp.issuer().to_string(),
             username: totp.label().to_string(),
+            prompt_regex: String::new(),
             secret: totp.secret().into_base32().into(),
             algorithm: totp.alg().to_string(),
             digits: totp.digits().to_string(),
@@ -116,6 +117,7 @@ fn security_otp_from_uri(uri: &str) -> Result<SecurityOtpEditorState, String> {
             otp_type: "hotp".to_string(),
             issuer: hotp.issuer().to_string(),
             username: hotp.label().to_string(),
+            prompt_regex: String::new(),
             secret: hotp.secret().into_base32().into(),
             algorithm: hotp.alg().to_string(),
             digits: hotp.digits().to_string(),
@@ -167,6 +169,7 @@ impl NyaTermApp {
                 otp_type: entry.otp_type,
                 issuer: entry.issuer,
                 username: entry.username,
+                prompt_regex: entry.prompt_regex.unwrap_or_default(),
                 secret: nyaterm_core::SecretString::default(),
                 algorithm: entry.algorithm,
                 digits: entry.digits.to_string(),
@@ -181,6 +184,7 @@ impl NyaTermApp {
                 otp_type: "totp".to_string(),
                 issuer: String::new(),
                 username: String::new(),
+                prompt_regex: String::new(),
                 secret: nyaterm_core::SecretString::default(),
                 algorithm: "SHA1".to_string(),
                 digits: "6".to_string(),
@@ -312,6 +316,14 @@ impl NyaTermApp {
         let digits = editor.digits.trim().parse::<u8>().unwrap_or(6).clamp(4, 10);
         let period = editor.period.trim().parse::<u64>().unwrap_or(30).max(1);
         let counter = editor.counter.trim().parse::<u64>().unwrap_or(0);
+        let prompt_regex = editor.prompt_regex.trim().to_string();
+        if !prompt_regex.is_empty() && !nyaterm_core::validate_prompt_regex(&prompt_regex) {
+            if let Some(editor) = self.security.otp_editor_mut() {
+                editor.error = Some("invalid prompt regular expression".to_string());
+            }
+            cx.notify();
+            return;
+        }
 
         let entry = OtpEntry {
             id: editor.id.clone().unwrap_or_default(),
@@ -322,6 +334,7 @@ impl NyaTermApp {
             },
             issuer: editor.issuer.trim().to_string(),
             username: editor.username.trim().to_string(),
+            prompt_regex: (!prompt_regex.is_empty()).then_some(prompt_regex),
             secret: if editor.secret.trim().is_empty() {
                 None
             } else {
