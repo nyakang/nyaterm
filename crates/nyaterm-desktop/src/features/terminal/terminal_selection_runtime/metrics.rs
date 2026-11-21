@@ -326,6 +326,7 @@ impl NyaTermApp {
             ),
             self.settings.summary().terminal_show_line_numbers,
             self.terminal_line_number_digits_for_session(session_id, snapshot.as_ref()),
+            self.settings.summary().terminal_show_command_blocks,
         )
         .total_width()
     }
@@ -496,6 +497,7 @@ impl NyaTermApp {
             ),
             self.settings.summary().terminal_show_line_numbers,
             self.terminal_line_number_digits_for_session(session_id, snapshot.as_ref()),
+            self.settings.summary().terminal_show_command_blocks,
         )
         .total_width();
         Some(TerminalHitTestGeometry {

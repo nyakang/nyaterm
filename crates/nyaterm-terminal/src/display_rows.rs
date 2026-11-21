@@ -91,6 +91,10 @@ impl TerminalDisplayRows {
             })
     }
 
+    pub fn has_folds(&self) -> bool {
+        !self.folds.is_empty()
+    }
+
     pub fn rows(&self) -> usize {
         self.rows
     }

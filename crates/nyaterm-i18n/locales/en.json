@@ -3742,6 +3742,7 @@
       "zoomOut": "Zoom Out"
     },
     "showInSearchMenu": "Show in search menu",
+    "showCommandBlocks": "Show command block rail",
     "showLineNumbers": "Line Numbers",
     "showLineNumbersDesc": "Display line numbers in the terminal gutter.",
     "showTimestamps": "Show Timestamps",

@@ -3742,6 +3742,7 @@
       "zoomOut": "縮小"
     },
     "showInSearchMenu": "在搜尋選單顯示",
+    "showCommandBlocks": "顯示命令區塊欄",
     "showLineNumbers": "顯示行號",
     "showLineNumbersDesc": "在終端側邊欄顯示每行的行號。",
     "showTimestamps": "顯示時間戳",

@@ -9,12 +9,75 @@ use nyaterm_terminal::TerminalSnapshot;
 use nyaterm_terminal_gpui::command_blocks::{COMMAND_RAIL_WIDTH, command_rail_row};
 
 impl NyaTermApp {
+    /// Reconcile all sessions, including hidden tabs, for menu changes and settings reloads.
+    pub(in crate::features) fn apply_terminal_command_blocks_setting(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = self.settings.summary().terminal_show_command_blocks;
+        let mut expanded_sessions = Vec::new();
+        if !enabled {
+            for (session_id, view) in &mut self.terminal.view.views {
+                if !view.command_blocks.expand_all() {
+                    continue;
+                }
+                // Scroll offsets refer to source rows. Keep the visible source anchor
+                // while removing folds, and preserve bottom-following at offset zero.
+                let offset = view
+                    .frame_snapshot
+                    .as_ref()
+                    .map_or(view.scroll_offset, |snapshot| {
+                        if view.scroll_offset == 0 {
+                            return 0;
+                        }
+                        let source = snapshot.display_rows.as_ref().map(|index| {
+                            index.source_row(index.top(view.scroll_offset, snapshot.viewport_rows))
+                        });
+                        source.map_or(view.scroll_offset, |source| {
+                            (snapshot.history.scrollback_len + snapshot.viewport_rows)
+                                .saturating_sub(snapshot.viewport_rows)
+                                .saturating_sub(source)
+                        })
+                    });
+                view.clear_scrollback_query_caches();
+                view.frame_action_links = None;
+                if let Some(snapshot) = view.frame_snapshot.take() {
+                    view.frame_snapshot = Some(
+                        crate::models::terminal::command_blocks::expanded_command_snapshot(
+                            snapshot,
+                        ),
+                    );
+                }
+                view.screen.set_collapsed_commands(Default::default());
+                expanded_sessions.push((session_id.clone(), offset));
+            }
+        }
+        for (session_id, offset) in expanded_sessions {
+            self.terminal
+                .view
+                .frame_pipeline
+                .set_collapsed_commands(session_id.clone(), Default::default());
+            self.set_terminal_scroll_offset_for_session_state_only(Some(&session_id), offset);
+            self.clear_terminal_scroll_residual_for_session(Some(&session_id));
+            self.request_terminal_frame_snapshot_for_user_scroll(&session_id, offset);
+        }
+        self.clear_terminal_selection(cx);
+        let sessions = self.terminal.view.views.keys().cloned().collect::<Vec<_>>();
+        for session_id in sessions {
+            self.notify_terminal_surface_only(Some(&session_id), cx);
+        }
+        cx.notify();
+    }
+
     pub(in crate::features) fn terminal_command_block_action(
         &mut self,
         session_id: &str,
         action: CommandBlockAction,
         cx: &mut Context<Self>,
     ) {
+        if !self.settings.summary().terminal_show_command_blocks {
+            return;
+        }
         let Some(view) = self.terminal.view.views.get_mut(session_id) else {
             return;
         };
@@ -169,6 +232,7 @@ impl TerminalSurface {
                     head,
                     tail,
                     collapsed,
+                    enabled,
                     color,
                     self.palette.terminal_bg,
                 )
@@ -347,6 +411,71 @@ mod tests {
             app.reveal_terminal_absolute_line(1, cx);
             assert!(!app.terminal.view.views["s1"].command_blocks.collapsed.contains(&id));
         }));
+    }
+
+    #[gpui::test]
+    fn command_rail_disable_expands_hidden_sessions_and_rejects_new_folds(cx: &mut TestAppContext) {
+        use crate::models::terminal::command_blocks::CommandBlockAction;
+        let dir = TestConfigDir::new("nyaterm-command-rail-disable");
+        let _cleanup = TestAppCleanup::new(cx);
+        cx.update(nyaterm_ui::init_components);
+        let app = app_with_visible_local_session(cx, dir.path(), "s1");
+        app.update(cx, |app, cx| {
+            let text = "$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07";
+            for session in ["s1", "background"] {
+                app.terminal.seed_session_view(session.into(), text.into(), "UTF-8");
+                let pipeline = &app.terminal.view.frame_pipeline;
+                pipeline.seed_session(session, text, "UTF-8", 1000);
+                pipeline.request_snapshot(session, 0, false, Default::default());
+                pipeline.flush_for_test();
+                let mut events = VecDeque::new();
+                pipeline.drain_events_into(&mut events, usize::MAX);
+                let snapshot = events.into_iter().filter_map(|event| match event {
+                    TerminalFrameEvent::Snapshot(frame) => Some(frame.snapshot), _ => None,
+                }).next_back().unwrap();
+                let id = snapshot.command_blocks[0].id;
+                let view = app.terminal.view.views.get_mut(session).unwrap();
+                assert!(view.command_blocks.apply(CommandBlockAction::Toggle(id), &snapshot.command_blocks, snapshot.cursor.row));
+                pipeline.set_collapsed_commands(session.into(), view.command_blocks.collapsed.clone());
+                pipeline.request_snapshot(session, 0, false, Default::default());
+                pipeline.flush_for_test();
+                let mut events = VecDeque::new();
+                pipeline.drain_events_into(&mut events, usize::MAX);
+                let folded = events.into_iter().filter_map(|event| match event {
+                    TerminalFrameEvent::Snapshot(frame) => Some(frame.snapshot), _ => None,
+                }).next_back().unwrap();
+                assert!(folded.display_rows.as_ref().unwrap().has_folds());
+                view.frame_snapshot = Some(folded);
+            }
+            // Settings reload must take the same path as the display-menu toggle.
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_show_command_blocks = false;
+            app.apply_gpui_settings(settings, cx);
+            assert_eq!(app.terminal_gutter_width_px_for_session(Some("s1")), 0.0);
+            for session in ["s1", "background"] {
+                let view = &app.terminal.view.views[session];
+                assert!(view.command_blocks.collapsed.is_empty());
+                assert!(view.frame_snapshot.as_ref().unwrap().display_rows.is_none());
+                let id = view.frame_snapshot.as_ref().unwrap().command_blocks[0].id;
+                app.terminal_command_block_action(session, CommandBlockAction::Toggle(id), cx);
+                assert!(app.terminal.view.views[session].command_blocks.collapsed.is_empty());
+                app.terminal.view.frame_pipeline.request_snapshot(session, 0, false, Default::default());
+            }
+            app.terminal.view.frame_pipeline.flush_for_test();
+            let mut events = VecDeque::new();
+            app.terminal.view.frame_pipeline.drain_events_into(&mut events, usize::MAX);
+            let snapshots = events.into_iter().filter_map(|event| match event {
+                TerminalFrameEvent::Snapshot(frame) => Some(frame), _ => None,
+            }).collect::<Vec<_>>();
+            for session in ["s1", "background"] {
+                assert!(snapshots.iter().any(|frame| frame.session_id == session && frame.snapshot.display_rows.is_none()));
+            }
+            let mut settings = app.settings.summary().clone();
+            settings.terminal_show_command_blocks = true;
+            app.apply_gpui_settings(settings, cx);
+            assert_eq!(app.terminal_gutter_width_px_for_session(Some("s1")), 19.0);
+            assert!(app.terminal.view.views.values().all(|view| view.command_blocks.collapsed.is_empty()));
+        });
     }
 
     #[gpui::test]

@@ -332,6 +332,7 @@
       "terminal_timestamp_format": "local",
       "terminal_hardware_acceleration": "local",
       "terminal_show_workspace_padding": "local",
+      "terminal_show_command_blocks": "local",
       "terminal_show_line_numbers": "local",
       "terminal_show_timestamps": "local",
       "terminal_wrap_mode": "local",

@@ -8,6 +8,7 @@ pub fn command_rail_row(
     head: bool,
     tail: bool,
     collapsed: bool,
+    can_collapse: bool,
     color: u32,
     background: u32,
 ) -> Div {
@@ -43,7 +44,7 @@ pub fn command_rail_row(
                 .bg(rgb(color)),
         );
     }
-    if head {
+    if head && can_collapse {
         let mut button = div()
             .absolute()
             .left(px(2.0))

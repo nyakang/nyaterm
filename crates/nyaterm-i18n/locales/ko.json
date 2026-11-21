@@ -3742,6 +3742,7 @@
       "zoomOut": "축소"
     },
     "showInSearchMenu": "검색 메뉴에 표시",
+    "showCommandBlocks": "명령 블록 표시줄 표시",
     "showLineNumbers": "줄 번호",
     "showLineNumbersDesc": "터미널 여백에 줄 번호를 표시합니다.",
     "showTimestamps": "타임스탬프 표시",

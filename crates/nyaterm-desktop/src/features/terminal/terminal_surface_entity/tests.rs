@@ -319,6 +319,15 @@ fn rendered_terminal_wrapping_grid_bounds(
     show_markers: bool,
     mode: nyaterm_core::models::settings::TerminalWrapMode,
 ) -> gpui::Bounds<gpui::Pixels> {
+    rendered_terminal_grid_with_command_rail(show_line_numbers, show_markers, mode, true)
+}
+
+fn rendered_terminal_grid_with_command_rail(
+    show_line_numbers: bool,
+    show_markers: bool,
+    mode: nyaterm_core::models::settings::TerminalWrapMode,
+    show_command_blocks: bool,
+) -> gpui::Bounds<gpui::Pixels> {
     let mut cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let surface = cx.new(|_| TerminalSurface::new("session"));
@@ -329,6 +338,7 @@ fn rendered_terminal_wrapping_grid_bounds(
     let rows = snapshot.row_count();
     let history = snapshot.history;
     cx.update_entity(&surface, |surface, _cx| {
+        surface.show_command_blocks = show_command_blocks;
         surface.show_line_numbers = show_line_numbers;
         surface.show_wrap_markers = show_markers;
         surface.wrap_mode = mode;
@@ -563,11 +573,34 @@ fn painted_hit_test_grid_bounds_match_the_rendered_grid_layout() {
 }
 
 #[test]
+fn hidden_command_rail_reclaims_rendered_width_in_both_wrap_modes() {
+    use nyaterm_core::models::settings::TerminalWrapMode;
+    for mode in [TerminalWrapMode::Character, TerminalWrapMode::None] {
+        for numbers in [false, true] {
+            let shown = rendered_terminal_grid_with_command_rail(numbers, false, mode, true);
+            let hidden = rendered_terminal_grid_with_command_rail(numbers, false, mode, false);
+            assert_eq!(shown.left() - hidden.left(), px(19.0));
+            assert_eq!(hidden.size.width - shown.size.width, px(19.0));
+            assert_eq!(hidden.right(), shown.right());
+            if !numbers {
+                assert_eq!(hidden.left(), px(0.0));
+            }
+        }
+    }
+}
+
+#[test]
 fn painted_hit_test_grid_bounds_start_after_the_rendered_gutter() {
     let snapshot = TerminalScreen::default().viewport_snapshot(0);
-    let expected_gutter =
-        terminal_gutter_metrics(8.0, false, 10, true, terminal_line_number_digits(&snapshot))
-            .total_width();
+    let expected_gutter = terminal_gutter_metrics(
+        8.0,
+        false,
+        10,
+        true,
+        terminal_line_number_digits(&snapshot),
+        true,
+    )
+    .total_width();
     let grid_bounds = rendered_terminal_grid_bounds(true);
 
     assert_eq!(grid_bounds.origin, point(px(expected_gutter), px(0.0)));

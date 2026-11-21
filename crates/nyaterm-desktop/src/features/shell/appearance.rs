@@ -29,6 +29,8 @@ impl NyaTermApp {
         settings: AppSettingsSummary,
         cx: &mut Context<Self>,
     ) {
+        let command_blocks_changed = self.settings.summary().terminal_show_command_blocks
+            != settings.terminal_show_command_blocks;
         let users_changed = self.settings.summary().ui_remote_stats_show_users
             != settings.ui_remote_stats_show_users;
         let terminal_font_changed = {
@@ -47,6 +49,9 @@ impl NyaTermApp {
             settings.diagnostics_retention_days,
         );
         self.settings.replace_summary(settings);
+        if command_blocks_changed {
+            self.apply_terminal_command_blocks_setting(cx);
+        }
         // Settings reload and draft cancellation must update existing surfaces,
         // which cache this flag independently of their compiled rule list.
         self.terminal

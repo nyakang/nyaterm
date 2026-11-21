@@ -479,6 +479,8 @@ pub struct AppSettingsSummary {
     /// Retained only to round-trip legacy settings; GPUI owns renderer selection.
     pub terminal_hardware_acceleration: bool,
     pub terminal_show_workspace_padding: bool,
+    #[serde(default = "default_true")]
+    pub terminal_show_command_blocks: bool,
     pub terminal_show_line_numbers: bool,
     pub terminal_show_timestamps: bool,
     #[serde(default)]
@@ -803,6 +805,7 @@ impl Default for AppSettingsSummary {
             terminal_timestamp_format: default_terminal_timestamp_format(),
             terminal_hardware_acceleration: true,
             terminal_show_workspace_padding: false,
+            terminal_show_command_blocks: true,
             terminal_show_line_numbers: false,
             terminal_show_timestamps: false,
             terminal_wrap_mode: TerminalWrapMode::Character,
@@ -1281,6 +1284,8 @@ mod tests {
 
         let summary: AppSettingsSummary =
             serde_json::from_str(json).expect("legacy summary deserializes");
+        assert!(summary.terminal_show_command_blocks);
+        assert!(AppSettingsSummary::default().terminal_show_command_blocks);
         assert_eq!(
             summary.ui_activity_bar_hidden_items,
             crate::models::settings::panel_visibility::default_hidden_items()
