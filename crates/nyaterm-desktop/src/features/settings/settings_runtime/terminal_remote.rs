@@ -97,6 +97,13 @@ impl NyaTermApp {
         self.save_terminal_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_terminal_command_blocks(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.settings.summary().terminal_show_command_blocks;
+        self.settings.set_terminal_command_blocks(enabled);
+        self.apply_terminal_command_blocks_setting(cx);
+        self.save_terminal_settings(cx);
+    }
+
     pub(in crate::features) fn toggle_terminal_line_numbers(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_terminal_line_numbers();
         self.save_terminal_settings(cx);

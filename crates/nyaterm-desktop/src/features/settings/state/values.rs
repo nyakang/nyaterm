@@ -203,6 +203,9 @@ impl SettingsFeatureState {
         self.summary.terminal_show_workspace_padding =
             !self.summary.terminal_show_workspace_padding;
     }
+    pub(in crate::features) fn set_terminal_command_blocks(&mut self, enabled: bool) {
+        self.summary.terminal_show_command_blocks = enabled;
+    }
     pub(in crate::features) fn toggle_terminal_line_numbers(&mut self) {
         self.summary.terminal_show_line_numbers = !self.summary.terminal_show_line_numbers;
     }

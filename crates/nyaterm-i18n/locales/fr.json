@@ -3743,6 +3743,7 @@
       "zoomOut": "Zoom arrière"
     },
     "showInSearchMenu": "Afficher dans le menu de recherche",
+    "showCommandBlocks": "Afficher la barre des blocs de commandes",
     "showLineNumbers": "Numéros de ligne",
     "showLineNumbersDesc": "Afficher les numéros de ligne dans la gouttière du terminal.",
     "showTimestamps": "Afficher les horodatages",

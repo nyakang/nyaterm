@@ -166,6 +166,7 @@ pub fn terminal_gutter_metrics(
     timestamp_width_chars: usize,
     show_line_numbers: bool,
     line_number_digits: usize,
+    show_command_blocks: bool,
 ) -> TerminalGutterMetrics {
     let cell_width = cell_width.max(1.0);
     let timestamp_width = if show_timestamps {
@@ -186,7 +187,11 @@ pub fn terminal_gutter_metrics(
     } else {
         0.0
     };
-    let trailing_padding_width = crate::command_blocks::COMMAND_RAIL_WIDTH;
+    let trailing_padding_width = if show_command_blocks {
+        crate::command_blocks::COMMAND_RAIL_WIDTH
+    } else {
+        0.0
+    };
 
     TerminalGutterMetrics {
         timestamp_width,
@@ -404,7 +409,7 @@ mod tests {
     }
     #[test]
     fn gutter_metrics_use_same_widths_for_ms_timestamps_and_total_hit_area() {
-        let metrics = terminal_gutter_metrics(8.0, true, 14, true, 5);
+        let metrics = terminal_gutter_metrics(8.0, true, 14, true, 5, true);
 
         assert_eq!(metrics.timestamp_width, 114.0);
         assert_eq!(metrics.line_number_width, 42.0);
@@ -413,8 +418,23 @@ mod tests {
         assert_eq!(metrics.total_width(), 183.0);
     }
     #[test]
+    fn command_rail_width_is_independent_of_optional_metadata_columns() {
+        for timestamps in [false, true] {
+            for numbers in [false, true] {
+                let hidden = terminal_gutter_metrics(8.0, timestamps, 14, numbers, 5, false);
+                let shown = terminal_gutter_metrics(8.0, timestamps, 14, numbers, 5, true);
+                assert_eq!(shown.total_width() - hidden.total_width(), 19.0);
+                assert_eq!(hidden.trailing_padding_width, 0.0);
+                if !timestamps && !numbers {
+                    assert_eq!(hidden.total_width(), 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn gutter_metrics_expand_with_large_terminal_font() {
-        let metrics = terminal_gutter_metrics(18.0, true, 10, true, 5);
+        let metrics = terminal_gutter_metrics(18.0, true, 10, true, 5, true);
 
         assert!(metrics.timestamp_width > 120.0);
         assert!(metrics.line_number_width > 70.0);

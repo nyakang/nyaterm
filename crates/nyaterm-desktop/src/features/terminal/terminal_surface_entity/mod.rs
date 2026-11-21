@@ -293,6 +293,7 @@ pub(in crate::features) struct TerminalSurfacePaintChrome {
     pub minimum_contrast_ratio: f32,
     pub cell_width: f32,
     pub cell_height: f32,
+    pub show_command_blocks: bool,
     pub show_line_numbers: bool,
     pub max_line_number_digits: usize,
     pub show_timestamps: bool,
@@ -429,6 +430,7 @@ pub(in crate::features) struct TerminalSurface {
     cursor_blink_basis: Option<TerminalCursorBlinkBasis>,
     cursor_style: String,
     layout_cache: Arc<Mutex<NyaTerminalLayoutCache>>,
+    show_command_blocks: bool,
     show_line_numbers: bool,
     max_line_number_digits: usize,
     show_timestamps: bool,
@@ -519,6 +521,7 @@ impl TerminalSurface {
             cursor_blink_basis: None,
             cursor_style: "block".to_string(),
             layout_cache: Arc::new(Mutex::new(NyaTerminalLayoutCache::default())),
+            show_command_blocks: true,
             show_line_numbers: false,
             max_line_number_digits: 1,
             show_timestamps: false,
@@ -1781,6 +1784,7 @@ impl TerminalSurface {
             minimum_contrast_ratio,
             cell_width,
             cell_height,
+            show_command_blocks,
             show_line_numbers,
             max_line_number_digits,
             show_timestamps,
@@ -1801,6 +1805,7 @@ impl TerminalSurface {
             && self.minimum_contrast_ratio == minimum_contrast_ratio
             && (self.cell_width - cell_width).abs() < f32::EPSILON * 8.0
             && (self.cell_height - cell_height).abs() < f32::EPSILON * 8.0
+            && self.show_command_blocks == show_command_blocks
             && self.show_line_numbers == show_line_numbers
             && self.max_line_number_digits == max_line_number_digits
             && self.wrap_mode == wrap_mode
@@ -1824,6 +1829,7 @@ impl TerminalSurface {
         self.minimum_contrast_ratio = minimum_contrast_ratio;
         self.cell_width = cell_width;
         self.cell_height = cell_height;
+        self.show_command_blocks = show_command_blocks;
         self.show_line_numbers = show_line_numbers;
         self.max_line_number_digits = max_line_number_digits;
         if self.wrap_mode != wrap_mode {
@@ -3344,7 +3350,8 @@ impl Render for TerminalSurface {
                 "terminal surface geometry"
             );
         }
-        let gutter_enabled = true;
+        let gutter_enabled =
+            self.show_command_blocks || self.show_line_numbers || self.show_timestamps;
         let previous_grid_bounds = self
             .painted_hit_test_geometry
             .and_then(|geometry| geometry.grid_bounds);
@@ -3443,6 +3450,7 @@ impl Render for TerminalSurface {
                 self.show_line_numbers,
                 self.max_line_number_digits
                     .max(terminal_line_number_digits(snapshot.as_ref())),
+                self.show_command_blocks,
             );
             let timestamp_formatter = TerminalTimestampFormatter::new(&self.timestamp_format);
             let line_number_digits = self
@@ -3535,7 +3543,7 @@ impl Render for TerminalSurface {
                         .line_height(px(cell_h))
                         .gap(px(gutter_metrics.gap_width))
                         .flex_none()
-                        .pr(px(19.))
+                        .pr(px(gutter_metrics.trailing_padding_width))
                         .text_color(rgb(palette.text_dimmed))
                         .when_some(zebra_color, |this, color| this.bg(color))
                         .font(surface_font.clone())
@@ -3557,7 +3565,9 @@ impl Render for TerminalSurface {
                     .flex_none()
                     .overflow_hidden()
                     .child(gutter_rows)
-                    .child(self.command_rail(&snapshot, visual_y_offset, cell_h, cx)),
+                    .when(self.show_command_blocks, |this| {
+                        this.child(self.command_rail(&snapshot, visual_y_offset, cell_h, cx))
+                    }),
             )
         } else {
             None

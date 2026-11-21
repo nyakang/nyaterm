@@ -985,6 +985,18 @@ impl NyaTermApp {
         if !self.session.has_session(&session_id) {
             return TerminalFrameApplyResult::default();
         }
+        let snapshot = if !self.settings.summary().terminal_show_command_blocks
+            || self
+                .terminal
+                .view
+                .views
+                .get(&session_id)
+                .is_some_and(|view| view.command_blocks.collapsed.is_empty())
+        {
+            snapshot.map(crate::models::terminal::command_blocks::expanded_command_snapshot)
+        } else {
+            snapshot
+        };
         let has_snapshot = snapshot.is_some();
         if terminal_geometry_diagnostics_enabled() {
             tracing::info!(
@@ -1235,6 +1247,17 @@ impl NyaTermApp {
         mut frame: TerminalFrameSnapshotEvent,
         cx: &mut Context<Self>,
     ) -> TerminalFrameApplyResult {
+        if !self.settings.summary().terminal_show_command_blocks
+            || self
+                .terminal
+                .view
+                .views
+                .get(&frame.session_id)
+                .is_some_and(|view| view.command_blocks.collapsed.is_empty())
+        {
+            frame.snapshot =
+                crate::models::terminal::command_blocks::expanded_command_snapshot(frame.snapshot);
+        }
         let current_revision = {
             let Some(view) = self.terminal.view.views.get_mut(&frame.session_id) else {
                 return TerminalFrameApplyResult::default();
@@ -2201,6 +2224,49 @@ fn collect_workspace_pane_node_visible_session_ids<'a>(
 
 #[cfg(test)]
 mod frame_event_queue_tests {
+    #[test]
+    fn late_folded_snapshot_cannot_hide_output_after_disabling_command_rail() {
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::models::{TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose};
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+        use gpui::{AppContext, TestAppContext};
+        use nyaterm_terminal::TerminalScreen;
+        use std::sync::Arc;
+        use std::time::Duration;
+        let dir = TestConfigDir::new("nyaterm-late-command-fold");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            let mut screen = TerminalScreen::new(20, 8);
+            screen.advance(b"$ \x1b]133;B\x07run\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ");
+            let id = screen.snapshot().command_blocks[0].id;
+            screen.set_collapsed_commands([id].into());
+            let snapshot = Arc::new(screen.viewport_snapshot(0));
+            assert!(snapshot.display_rows.as_ref().unwrap().has_folds());
+            app.terminal.view.views.get_mut("s1").unwrap().screen.resize(20, 8);
+            app.settings.set_terminal_command_blocks(false);
+            for enabled in [false, true] {
+                app.settings.set_terminal_command_blocks(enabled);
+                app.apply_terminal_snapshot_frame(TerminalFrameSnapshotEvent {
+                    session_id: "s1".into(),
+                    offset: 0,
+                    snapshot: snapshot.clone(),
+                    action_links: None,
+                    revision: 100,
+                    purpose: TerminalFrameSnapshotPurpose::Paint,
+                    snapshot_duration: Duration::ZERO,
+                    snapshot_stats: Default::default(),
+                    action_link_stats: Default::default(),
+                    process_duration: Duration::ZERO,
+                }, cx);
+                let applied = app.terminal.view.views["s1"].frame_snapshot.as_ref().unwrap();
+                assert!(applied.display_rows.is_none());
+                assert_eq!(applied.rows(), snapshot.rows());
+            }
+        });
+    }
+
     use nyaterm_terminal::action_links::prepare_terminal_frame_action_links;
     #[test]
     fn manual_wheel_at_live_bottom_and_input_end_same_screen_navigation() {

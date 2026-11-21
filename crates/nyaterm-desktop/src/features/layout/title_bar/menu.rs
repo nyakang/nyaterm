@@ -183,6 +183,7 @@ impl NyaTermApp {
             }
             TitleMenuCommand::TogglePadding => self.toggle_terminal_workspace_padding(cx),
             TitleMenuCommand::ToggleWrapMarkers => self.toggle_terminal_wrap_markers(cx),
+            TitleMenuCommand::ToggleCommandBlocks => self.toggle_terminal_command_blocks(cx),
             TitleMenuCommand::ToggleLineNumbers => self.toggle_terminal_line_numbers(cx),
             TitleMenuCommand::ToggleTimestamps => self.toggle_terminal_timestamps(cx),
             TitleMenuCommand::SmartSplit(mode) => self.apply_smart_split(*mode, cx),
@@ -624,6 +625,9 @@ impl NyaTermApp {
             TitleMenuDefinition::action(t!("settings.showWrapMarkers"))
                 .checked(self.settings.summary().terminal_show_wrap_markers)
                 .command(TitleMenuCommand::ToggleWrapMarkers),
+            TitleMenuDefinition::action(t!("settings.showCommandBlocks"))
+                .checked(self.settings.summary().terminal_show_command_blocks)
+                .command(TitleMenuCommand::ToggleCommandBlocks),
             TitleMenuDefinition::action(t!("settings.showLineNumbers"))
                 .checked(self.settings.summary().terminal_show_line_numbers)
                 .command(TitleMenuCommand::ToggleLineNumbers),
@@ -861,6 +865,7 @@ mod tests {
         let app = menu_app(&mut cx);
         cx.update_entity(&app, |app, cx| {
             let mut settings = app.settings.summary().clone();
+            settings.terminal_show_command_blocks = false;
             settings.terminal_show_workspace_padding = false;
             settings.terminal_show_wrap_markers = false;
             settings.terminal_show_line_numbers = false;
@@ -871,6 +876,7 @@ mod tests {
         let commands = [
             TitleMenuCommand::TogglePadding,
             TitleMenuCommand::ToggleWrapMarkers,
+            TitleMenuCommand::ToggleCommandBlocks,
             TitleMenuCommand::ToggleLineNumbers,
             TitleMenuCommand::ToggleTimestamps,
         ];
@@ -891,6 +897,7 @@ mod tests {
                         }));
                     }
                     let settings = app.settings.summary();
+                    assert!(settings.terminal_show_command_blocks);
                     assert!(settings.terminal_show_workspace_padding);
                     assert!(settings.terminal_show_wrap_markers);
                     assert!(settings.terminal_show_line_numbers);
@@ -1151,11 +1158,17 @@ mod tests {
             vec![
                 "Show Padding",
                 "Show wrap markers",
+                "Show command block rail",
                 "Line Numbers",
                 "Show Timestamps"
             ]
         );
-        assert!(submenu.iter().all(|item| !item.test_presentation().4));
+        for item in submenu {
+            assert_eq!(
+                item.test_presentation().4,
+                item.test_label() == "Show command block rail"
+            );
+        }
     }
 
     #[test]

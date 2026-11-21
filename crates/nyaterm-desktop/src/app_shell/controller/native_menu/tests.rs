@@ -191,6 +191,7 @@ fn secondary_windows_disable_workspace_commands_and_keep_application_commands_av
         TitleMenuCommand::RefitTerminals,
         TitleMenuCommand::TogglePadding,
         TitleMenuCommand::ToggleWrapMarkers,
+        TitleMenuCommand::ToggleCommandBlocks,
     ] {
         assert!(native_item(&menus, &command).is_disabled());
     }
@@ -218,6 +219,7 @@ fn locked_and_unready_menu_projections_reject_business_commands() {
         TitleMenuCommand::ImportConfig,
         TitleMenuCommand::ToggleBroadcast,
         TitleMenuCommand::ToggleWrapMarkers,
+        TitleMenuCommand::ToggleCommandBlocks,
     ] {
         assert!(!snapshot.command_enabled(&command));
     }

@@ -3743,6 +3743,7 @@
       "zoomOut": "缩小"
     },
     "showInSearchMenu": "在搜索菜单显示",
+    "showCommandBlocks": "显示命令块栏",
     "showLineNumbers": "显示行号",
     "showLineNumbersDesc": "在终端侧边栏显示每行的行号。",
     "showTimestamps": "显示时间戳",

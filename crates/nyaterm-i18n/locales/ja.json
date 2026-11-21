@@ -3743,6 +3743,7 @@
       "zoomOut": "縮小"
     },
     "showInSearchMenu": "検索メニューに表示",
+    "showCommandBlocks": "コマンドブロック欄を表示",
     "showLineNumbers": "行番号",
     "showLineNumbersDesc": "ターミナルのガターに行番号を表示します。",
     "showTimestamps": "タイムスタンプを表示",

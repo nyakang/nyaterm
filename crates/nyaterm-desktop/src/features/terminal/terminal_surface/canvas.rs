@@ -318,7 +318,8 @@ impl NyaTermApp {
         let timestamp_format = self.settings.summary().terminal_timestamp_format.clone();
         let timestamp_width_chars = terminal_timestamp_format_width_chars(&timestamp_format);
         let timestamp_formatter = TerminalTimestampFormatter::new(&timestamp_format);
-        let gutter_enabled = show_line_numbers || show_timestamps;
+        let show_command_blocks = self.settings.summary().terminal_show_command_blocks;
+        let gutter_enabled = show_command_blocks || show_line_numbers || show_timestamps;
         // Prefer remote cursor visibility/shape from the terminal model; settings
         // supply the default paint style when the model reports a block cursor.
         let remote_cursor_visible = snapshot.cursor.visible
@@ -500,16 +501,27 @@ impl NyaTermApp {
                 timestamp_width_chars,
                 show_line_numbers,
                 line_number_digits,
+                show_command_blocks,
             );
             let ts_w = gutter_metrics.timestamp_width;
             let ln_w = gutter_metrics.line_number_width;
             let mut gutter = div()
+                .relative()
+                .w(px(gutter_metrics.total_width()))
                 .flex()
                 .flex_col()
                 .flex_none()
-                .mr(px(10.))
-                .border_r_1()
-                .border_color(rgb(palette.border));
+                .when(show_command_blocks, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .right(px(10.0))
+                            .top_0()
+                            .w(px(1.0))
+                            .h_full()
+                            .bg(rgb(palette.border)),
+                    )
+                });
             let gutter_row_count = terminal_gutter_row_count(snapshot.as_ref());
             for line_index in 0..line_count.min(gutter_row_count) {
                 let snapshot_row = snapshot.row(line_index);
@@ -530,7 +542,7 @@ impl NyaTermApp {
                         .line_height(px(cell_h))
                         .gap(px(gutter_metrics.gap_width))
                         .flex_none()
-                        .pr(px(8.))
+                        .pr(px(gutter_metrics.trailing_padding_width))
                         .text_color(rgb(palette.text_dimmed))
                         .font(terminal_gpui_font.clone())
                         .font_weight(FontWeight(

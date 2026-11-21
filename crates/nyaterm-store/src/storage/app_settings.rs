@@ -260,6 +260,11 @@ impl ConnectionStore {
                 &["terminal", "show_workspace_padding"],
                 false,
             ),
+            terminal_show_command_blocks: json_bool(
+                &value,
+                &["terminal", "show_command_blocks"],
+                true,
+            ),
             terminal_show_line_numbers: json_bool(
                 &value,
                 &["terminal", "show_line_numbers"],
@@ -1469,6 +1474,16 @@ impl ConnectionStore {
             &["terminal", "show_workspace_padding"],
             serde_json::Value::Bool(settings.terminal_show_workspace_padding),
         );
+        // Preserve unsupported future values on unrelated settings saves.
+        let unsupported_command_blocks = json_path(&value, &["terminal", "show_command_blocks"])
+            .is_some_and(|raw| !raw.is_boolean());
+        if !unsupported_command_blocks || !settings.terminal_show_command_blocks {
+            set_nested_json_value(
+                &mut value,
+                &["terminal", "show_command_blocks"],
+                settings.terminal_show_command_blocks.into(),
+            );
+        }
         set_nested_json_value(
             &mut value,
             &["terminal", "show_line_numbers"],

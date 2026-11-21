@@ -9092,6 +9092,59 @@ fn serial_reconnect_enter_defaults_off_and_preserves_saved_values_and_unknown_fi
 }
 
 #[test]
+fn terminal_command_rail_settings_preserve_legacy_and_unknown_data() {
+    let dir = unique_temp_dir("terminal-command-rail-settings");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .save_settings_value(&serde_json::json!({"terminal": {"future": 42}}))
+            .unwrap();
+        let mut settings = store.load_app_settings_summary().unwrap();
+        assert!(settings.terminal_show_command_blocks);
+        for enabled in [false, true, false] {
+            settings.terminal_show_command_blocks = enabled;
+            store.save_terminal_settings(&settings).unwrap();
+            assert_eq!(
+                store
+                    .load_app_settings_summary()
+                    .unwrap()
+                    .terminal_show_command_blocks,
+                enabled
+            );
+            assert_eq!(
+                store.load_settings_value().unwrap()["terminal"]["future"],
+                42
+            );
+        }
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(
+        !store
+            .load_app_settings_summary()
+            .unwrap()
+            .terminal_show_command_blocks
+    );
+    store.save_settings_value(&serde_json::json!({"terminal": {"show_command_blocks": {"future": true}, "other": 42}})).unwrap();
+    let mut fallback = store.load_app_settings_summary().unwrap();
+    assert!(fallback.terminal_show_command_blocks);
+    store.save_terminal_settings(&fallback).unwrap();
+    assert_eq!(
+        store.load_settings_value().unwrap()["terminal"]["show_command_blocks"],
+        serde_json::json!({"future": true})
+    );
+    fallback.terminal_show_command_blocks = false;
+    store.save_terminal_settings(&fallback).unwrap();
+    assert_eq!(
+        store.load_settings_value().unwrap()["terminal"]["show_command_blocks"],
+        false
+    );
+    assert_eq!(
+        store.load_settings_value().unwrap()["terminal"]["other"],
+        42
+    );
+}
+
+#[test]
 fn terminal_wrapping_settings_load_legacy_and_round_trip_without_downgrading_unknown_values() {
     use nyaterm_core::models::settings::TerminalWrapMode;
     let dir = unique_temp_dir("terminal-wrapping-settings");

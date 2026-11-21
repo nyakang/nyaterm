@@ -15,7 +15,29 @@ pub(crate) enum CommandBlockAction {
     Toggle(CommandBlockId),
 }
 
+/// Late worker frames may still carry folds after the user disables the rail.
+/// Keep their physical rows and no-wrap index, but remove the obsolete projection.
+pub(crate) fn expanded_command_snapshot(
+    mut snapshot: std::sync::Arc<nyaterm_terminal::TerminalSnapshot>,
+) -> std::sync::Arc<nyaterm_terminal::TerminalSnapshot> {
+    if snapshot
+        .display_rows
+        .as_ref()
+        .is_some_and(|index| index.has_folds())
+    {
+        std::sync::Arc::make_mut(&mut snapshot).display_rows = None;
+    }
+    snapshot
+}
+
 impl TerminalCommandBlockState {
+    pub fn expand_all(&mut self) -> bool {
+        let changed = !self.collapsed.is_empty();
+        self.collapsed.clear();
+        self.collapsed_revisions.clear();
+        changed
+    }
+
     pub fn retain(&mut self, blocks: &[CommandBlock]) {
         let retained =
             |id: &CommandBlockId| blocks.binary_search_by_key(id, |block| block.id).is_ok();
@@ -98,6 +120,31 @@ mod tests {
         ));
         state.retain(&screen.snapshot().command_blocks);
         assert!(state.collapsed.contains(&id));
+    }
+
+    #[test]
+    fn expanding_late_command_snapshots_preserves_text_and_no_wrap_metadata() {
+        use super::expanded_command_snapshot;
+        use std::sync::Arc;
+        for no_wrap in [false, true] {
+            let mut screen = TerminalScreen::new(20, 8);
+            screen.set_logical_line_snapshots(no_wrap);
+            screen.advance(b"$ \x1b]133;B\x07run\r\n\x1b]133;C\x07one\r\ntwo\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ");
+            let snapshot = screen.snapshot();
+            let id = snapshot.command_blocks[0].id;
+            screen.set_collapsed_commands([id].into());
+            let folded = Arc::new(screen.viewport_snapshot(0));
+            assert!(folded.display_rows.as_ref().unwrap().has_folds());
+            let expanded = expanded_command_snapshot(folded.clone());
+            assert!(expanded.display_rows.is_none());
+            assert_eq!(expanded.rows(), folded.rows());
+            assert_eq!(expanded.logical_lines.is_some(), no_wrap);
+            assert!(Arc::ptr_eq(
+                &expanded,
+                &expanded_command_snapshot(expanded.clone())
+            ));
+            assert!(folded.display_rows.as_ref().unwrap().has_folds());
+        }
     }
 
     #[test]
