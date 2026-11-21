@@ -841,6 +841,7 @@
     "dismiss": "Ignorer",
     "fill": "Remplir",
     "passwordTitle": "Mot de passe",
+    "otpBadge": "OTP",
     "select": "Sélectionner",
     "usernameTitle": "Nom d'utilisateur"
   },
@@ -2109,6 +2110,8 @@
     "hideCodes": "Masquer les codes",
     "issuerPlaceholder": "Émetteur, ex. GitHub",
     "issuerLabel": "Émetteur",
+    "promptRegex": "Motif d'invite",
+    "promptRegexPlaceholder": "ex. Code de vérification :",
     "newTitle": "Nouvel OTP",
     "noEntries": "Aucune entrée OTP",
     "noActiveTerminal": "Aucun terminal accessible en écriture n'est connecté",

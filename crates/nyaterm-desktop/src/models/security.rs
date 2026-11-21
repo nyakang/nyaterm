@@ -90,6 +90,7 @@ pub(crate) struct SecurityOtpEditorState {
     pub(crate) otp_type: String,
     pub(crate) issuer: String,
     pub(crate) username: String,
+    pub(crate) prompt_regex: String,
     pub(crate) secret: nyaterm_core::SecretString,
     pub(crate) algorithm: String,
     pub(crate) digits: String,
