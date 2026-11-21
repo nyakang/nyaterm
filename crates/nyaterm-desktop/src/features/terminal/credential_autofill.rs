@@ -528,6 +528,19 @@ impl NyaTermApp {
             self.activate_session_id_with_surface_sync(session_id, cx);
         }
         let generation = self.terminal.assist.credential_autofill_generation;
+        // A click may race the detection tick. Never renew authorization if
+        // the frame has already moved beyond the offered prompt.
+        self.sync_credential_autofill_from_active_snapshot(cx);
+        if !self
+            .terminal
+            .assist
+            .credential_fill_is_current(self.credential_autofill_enabled(), generation)
+        {
+            self.shell
+                .set_status("credential fill cancelled because the prompt changed");
+            cx.notify();
+            return;
+        }
         let credential_name = credential_autofill_target_display_name(target);
         match (kind, target) {
             (CredentialPromptKind::Username, CredentialAutofillTarget::Vault(credential)) => {
@@ -550,10 +563,14 @@ impl NyaTermApp {
                         store.load_decrypted_credential_by_id(&credential_id)
                     }),
                     move |this, event, cx| {
+                        this.sync_credential_autofill_from_active_snapshot(cx);
                         if !this.terminal.assist.credential_fill_is_current(
                             this.credential_autofill_enabled(),
                             generation,
                         ) {
+                            this.shell
+                                .set_status("credential fill cancelled because the prompt changed");
+                            cx.notify();
                             return;
                         }
                         if this.session.active_id() != Some(session_id.as_str()) {
@@ -609,62 +626,77 @@ impl NyaTermApp {
                 }
             }
             (CredentialPromptKind::Password, CredentialAutofillTarget::Otp(otp)) => {
-                // The panel never holds a code: it is generated here, so what
-                // gets typed is always from the current step.
                 let otp_id = otp.id.clone();
-                let closure_name = credential_name.clone();
                 let session_id = session_id.to_string();
                 let provider = self.session.otp_provider();
-                let task = self
-                    .blocking_jobs
-                    .submit_task("credential-autofill-otp", move |_| {
-                        provider.preview_otp_code(&otp_id)
-                    });
+                let submit = move |this: &mut Self| {
+                    let provider = provider.clone();
+                    let otp_id = otp_id.clone();
+                    this.blocking_jobs
+                        .submit_task("credential-autofill-otp", move |_| {
+                            provider.preview_otp_code(&otp_id)
+                        })
+                };
+                let mut task = submit(self);
                 self.shell
                     .set_status(format!("generating code from '{credential_name}'"));
                 cx.spawn(async move |this, cx| {
-                    let result = await_blocking_job(task).await.and_then(|result| result);
-                    let _ = this.update(cx, |this, cx| {
-                        if !this.terminal.assist.credential_fill_is_current(
-                            this.credential_autofill_enabled(),
-                            generation,
-                        ) {
-                            return;
-                        }
-                        if this.session.active_id() != Some(session_id.as_str()) {
-                            this.shell.set_status(
-                                "credential fill cancelled because the active session changed"
-                                    .to_string(),
-                            );
-                            cx.notify();
-                            return;
-                        }
-                        if this.session.is_disconnected(&session_id) {
-                            this.shell.set_status(
-                                "session disconnected - reconnect before filling credentials"
-                                    .to_string(),
-                            );
-                            cx.notify();
-                            return;
-                        }
-                        match result {
-                            Ok(Some(preview)) => {
-                                let mut payload = preview.code.into_bytes();
-                                payload.push(b'\r');
-                                if this.send_credential_input(payload, cx) {
-                                    this.shell
-                                        .set_status(format!("filled code from '{closure_name}'"));
-                                }
+                    // Refresh an expired TOTP without renewing the original
+                    // authorization. HOTP consumes a counter and never retries.
+                    for attempt in 0..3 {
+                        let result = await_blocking_job(task).await.and_then(|result| result);
+                        let retry = this.update(cx, |this, cx| {
+                            this.sync_credential_autofill_from_active_snapshot(cx);
+                            if !this.terminal.assist.credential_fill_is_current(
+                                this.credential_autofill_enabled(),
+                                generation,
+                            ) || this.session.active_id() != Some(session_id.as_str())
+                                || this.session.is_disconnected(&session_id)
+                            {
+                                this.shell.set_status(
+                                    "credential fill cancelled because the prompt or session changed",
+                                );
+                                cx.notify();
+                                return None;
                             }
-                            Ok(None) => this
-                                .shell
-                                .set_status(format!("OTP entry '{closure_name}' was not found")),
-                            Err(error) => this.shell.set_status(format!(
-                                "failed to generate code from '{closure_name}': {error}"
-                            )),
-                        }
-                        cx.notify();
-                    });
+                            match result {
+                                Ok(Some(preview)) => {
+                                    if !preview.is_current_at(Self::now_unix_ms() / 1000) {
+                                        if attempt < 2 {
+                                            return Some(submit(this));
+                                        }
+                                        this.shell.set_status(
+                                            "OTP code expired before it could be sent; select the entry again"
+                                                .to_string(),
+                                        );
+                                        this.terminal.assist.credential_autofill_recent = None;
+                                        this.terminal.assist.credential_autofill_detection_pending = true;
+                                        cx.notify();
+                                        return None;
+                                    }
+                                    let mut payload = preview.code.into_bytes();
+                                    payload.push(b'\r');
+                                    if this.send_credential_input(payload, cx) {
+                                        this.shell.set_status(format!(
+                                            "filled code from '{credential_name}'"
+                                        ));
+                                    }
+                                }
+                                Ok(None) => this.shell.set_status(format!(
+                                    "OTP entry '{credential_name}' was not found"
+                                )),
+                                Err(error) => this.shell.set_status(format!(
+                                    "failed to generate code from '{credential_name}': {error}"
+                                )),
+                            }
+                            cx.notify();
+                            None
+                        }).ok().flatten();
+                        let Some(next) = retry else {
+                            break;
+                        };
+                        task = next;
+                    }
                 })
                 .detach();
             }
@@ -703,6 +735,7 @@ impl NyaTermApp {
         if !self.credential_autofill_enabled() {
             return;
         }
+        self.sync_credential_autofill_from_active_snapshot(cx);
         let Some(state) = self.terminal.assist.credential_suggestions.clone() else {
             return;
         };
@@ -1767,7 +1800,7 @@ mod tests {
     }
     #[test]
     fn credential_fills_skip_sync_peers_history_and_recording_without_prompt_detection() {
-        use nyaterm_core::SecretString;
+        use nyaterm_core::{OtpEntry, SecretString};
         use nyaterm_recording::recording::{
             ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
             RecordingRotationPolicy,
@@ -1786,6 +1819,21 @@ mod tests {
         vault.username = "fixture-user".into();
         vault.password = Some(SecretString::from("vault-fixture"));
         store.save_credential(vault.clone()).unwrap();
+        let otp = OtpEntry {
+            id: "otp-fixture".into(),
+            otp_type: "hotp".into(),
+            issuer: "fixture".into(),
+            username: "fixture-user".into(),
+            prompt_regex: Some("Verification code:".into()),
+            secret: Some(SecretString::from("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+            counter: 0,
+            has_secret: true,
+        };
+        store.save_otp_entry(otp.clone()).unwrap();
+        let otp_target = crate::models::otp_prompt_target(&otp).unwrap();
         let connection = ssh_connection(
             "fixture-user",
             Some(ConnectionAuth {
@@ -1872,11 +1920,14 @@ mod tests {
         for (kind, target) in [
             (CredentialPromptKind::Username, &vault_target),
             (CredentialPromptKind::Password, &vault_target),
+            (CredentialPromptKind::Password, &otp_target),
         ] {
             let expected_status = format!(
                 "filled {} from '{}'",
                 if kind == CredentialPromptKind::Username {
                     "username"
+                } else if target.is_otp() {
+                    "code"
                 } else {
                     "password"
                 },
@@ -1907,6 +1958,59 @@ mod tests {
                 assert!(!app.terminal.assist.credential_prompt_awaiting_output);
             });
         }
+        // A stale click must not send a username or authorize a later password.
+        for (kind, target, prompt) in [
+            (CredentialPromptKind::Username, &vault_target, "Username:"),
+            (
+                CredentialPromptKind::Password,
+                &otp_target,
+                "Verification code:",
+            ),
+        ] {
+            cx.update_entity(&app, |app, cx| {
+                let view = app.terminal.view.views.get_mut(&ids[0]).unwrap();
+                view.screen.advance(format!("\r\n{prompt} ").as_bytes());
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                app.show_credential_panel(kind, vec![target.clone()], prompt.into(), cx);
+                let view = app.terminal.view.views.get_mut(&ids[0]).unwrap();
+                view.screen.advance(b"\r\n$ ");
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.select_credential_suggestion(target.clone(), cx);
+                assert!(app.terminal.assist.credential_suggestions.is_none());
+                assert!(app.terminal.assist.credential_autofill_pending.is_none());
+            });
+        }
+        // Finish the prompt before the asynchronous result can apply. Do not
+        // run a detection tick: the fill callback must check the latest frame.
+        for target in [&vault_target, &otp_target] {
+            cx.update_entity(&app, |app, cx| {
+                let view = app.terminal.view.views.get_mut(&ids[0]).unwrap();
+                view.screen.advance(b"\r\nVerification code: ");
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                app.send_credential_value(target, CredentialPromptKind::Password, &ids[0], cx);
+                let view = app.terminal.view.views.get_mut(&ids[0]).unwrap();
+                view.screen.advance(b"\r\n$ ");
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                cx.run_until_parked();
+                if cx.update_entity(&app, |app, _| {
+                    app.shell
+                        .status()
+                        .starts_with("credential fill cancelled because")
+                }) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "stale fill callback did not complete"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         cx.update_entity(&app, |app, _| {
             for id in &ids {
                 assert!(
@@ -1935,7 +2039,7 @@ mod tests {
                 .is_empty()
         );
         for (stream, expected) in streams.iter_mut().zip([
-            b"fixture-user\rvault-fixture\rEND".as_slice(),
+            b"fixture-user\rvault-fixture\r755224\rEND".as_slice(),
             b"END".as_slice(),
         ]) {
             let mut received = vec![0; expected.len()];

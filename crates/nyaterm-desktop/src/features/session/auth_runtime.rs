@@ -256,6 +256,15 @@ pub(in crate::features) struct NativeOtpCodePreview {
     pub(in crate::features) time_step: Option<u64>,
 }
 
+impl NativeOtpCodePreview {
+    pub(in crate::features) fn is_current_at(&self, now: u64) -> bool {
+        if self.otp_type.eq_ignore_ascii_case("hotp") {
+            return true;
+        }
+        self.period > 0 && self.time_step == Some(now / self.period)
+    }
+}
+
 impl NativeOtpProvider {
     pub(in crate::features) fn preview_otp_code(
         &self,
@@ -1051,7 +1060,7 @@ fn agent_prompt_id() -> String {
 mod prompt_state_debug_tests {
     use super::{
         AgentPromptBroker, AgentPromptState, CredentialPromptState, KeyboardInteractivePromptState,
-        NativeOtpProvider, TotpUseRecord, TransportSshAgentPromptRequest,
+        NativeOtpCodePreview, NativeOtpProvider, TotpUseRecord, TransportSshAgentPromptRequest,
     };
     use nyaterm_transport::{
         SshAgentPrompt, SshAgentPromptAction, SshAgentPromptPhase, SshCredentialPrompt,
@@ -1062,6 +1071,25 @@ mod prompt_state_debug_tests {
     use std::time::Duration;
 
     use crate::test_support::{TestConfigDir, blocking_test_store};
+
+    #[test]
+    fn otp_preview_validity_tracks_totp_boundaries_but_not_hotp_time() {
+        let mut preview = NativeOtpCodePreview {
+            code: String::new(),
+            otp_type: "totp".into(),
+            period: 30,
+            time_step: Some(42),
+        };
+        assert!(preview.is_current_at(1260));
+        assert!(preview.is_current_at(1289));
+        assert!(!preview.is_current_at(1290));
+        assert!(!preview.is_current_at(1259));
+        preview.period = 0;
+        assert!(!preview.is_current_at(1260));
+        preview.otp_type = "hotp".into();
+        preview.time_step = None;
+        assert!(preview.is_current_at(u64::MAX));
+    }
 
     fn agent_prompt() -> SshAgentPrompt {
         SshAgentPrompt {

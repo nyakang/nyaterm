@@ -1082,6 +1082,17 @@ fn legacy_secret_projection_is_read_only_and_replaces_master_key_material_with_v
     let store = ConnectionStore::open(dir.path()).unwrap();
     store.save_master_password(Some("password")).unwrap();
     store
+        .save_otp_entry(
+            serde_json::from_value(json!({
+                "id": "otp-pattern-fixture",
+                "otp_type": "totp",
+                "secret": "JBSWY3DPEHPK3PXP",
+                "prompt_regex": "Verification code:"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    store
         .save_password(
             serde_json::from_value(
                 json!({"id":"account","name":"Account","password":"legacy-fixture-password"}),
@@ -1101,6 +1112,23 @@ fn legacy_secret_projection_is_read_only_and_replaces_master_key_material_with_v
     assert_eq!(projection.complete.len(), 6);
     assert!(!objects.is_empty());
     let codec = nyaterm_core::sync_schema::secrets::SecretValueCodec::new("password").unwrap();
+    let otp_object = objects
+        .values()
+        .find(|object| object.reference.resource.kind == "otp")
+        .unwrap();
+    let otp_payload = codec
+        .open(&otp_object.reference, otp_object)
+        .unwrap()
+        .decode()
+        .unwrap();
+    assert_eq!(otp_payload["prompt_regex"], "Verification code:");
+    assert_eq!(otp_payload["secret"], "JBSWY3DPEHPK3PXP");
+    assert!(
+        !otp_object
+            .ciphertext
+            .windows(b"Verification code:".len())
+            .any(|window| window == b"Verification code:")
+    );
     let object = objects
         .values()
         .find(|object| object.reference.resource.kind == "password")

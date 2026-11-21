@@ -2786,11 +2786,13 @@ fn load_decrypted_otp_entry_reads_legacy_otp_store() {
             .expect("meta")
             .insert(META_MASTER_KEY, master_key_token.as_str())
             .expect("insert master");
+        let mut legacy = serde_json::to_value(&entry).expect("legacy entry");
+        legacy.as_object_mut().unwrap().remove("prompt_regex");
         write_json_in_txn(
             &txn,
             OTP_ACCOUNTS_TABLE,
             &entity_key(OTP_PREFIX, "otp-1"),
-            &entry,
+            &legacy,
         )
         .expect("write otp");
         txn.commit().expect("commit");
@@ -2805,12 +2807,26 @@ fn load_decrypted_otp_entry_reads_legacy_otp_store() {
         .expect("entry");
     assert_eq!(decrypted.secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
     assert_eq!(decrypted.period, 30);
+    assert_eq!(decrypted.prompt_regex, None);
+    let pattern = "(?i)Verification code:";
+    let mut updated = listed[0].clone();
+    updated.prompt_regex = Some(pattern.into());
+    // An editor update without a replacement secret must retain the old secret.
+    updated.secret = None;
+    store.save_otp_entry(updated).expect("update pattern");
+    let updated = store
+        .load_decrypted_otp_entry_by_id("otp-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.prompt_regex.as_deref(), Some(pattern));
+    assert_eq!(updated.secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
     store.increment_otp_counter("otp-1").expect("increment");
     let incremented = store
         .load_otp_entry_by_id("otp-1")
         .expect("load incremented")
         .expect("entry");
     assert_eq!(incremented.counter, 1);
+    assert_eq!(incremented.prompt_regex.as_deref(), Some(pattern));
 
     std::fs::remove_dir_all(dir).ok();
 }
