@@ -188,6 +188,7 @@ pub use keyword_highlight_presets::{
     builtin_keyword_rule_swatch_ansi, get_builtin_keyword_rules,
     get_builtin_keyword_rules_with_ansi, keyword_highlight_color_palette,
     merge_keyword_highlight_rules_for_paint, merge_keyword_highlight_rules_for_paint_with_ansi,
+    overlay_resolved_keyword_highlight_rules,
 };
 pub use models::*;
 pub use natural_order::natural_compare;

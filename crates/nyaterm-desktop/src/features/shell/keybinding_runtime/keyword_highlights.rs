@@ -31,7 +31,7 @@ impl NyaTermApp {
         self.save_appearance_settings(cx);
     }
 
-    fn save_keyword_highlights(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn save_keyword_highlights(&mut self, cx: &mut Context<Self>) {
         self.invalidate_paint_theme_caches();
         self.settings.mark_keyword_persistence_dirty();
         if self.defer_settings_persistence(cx) {

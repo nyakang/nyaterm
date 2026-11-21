@@ -9,9 +9,10 @@ use crate::shortcuts::{
     OpenNewSessionMenu, OpenSettings, PreviousTab, PreviousTerminalGroup, QuickSwitch, RenameFile,
     ResetZoom, ShortcutId, ShortcutInvocation, ShowAllCommands, ShowCommandSuggestions,
     SwitchToTab, TemporarySshLink, TerminalClear, TerminalClearAll, TerminalCommandNext,
-    TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalFind, TerminalPaste,
-    TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar, ToggleNativeFullscreen,
-    TogglePaneFocus, ToggleRecording, ToggleRightSidebar, UploadFile, ZoomIn, ZoomOut,
+    TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalFind, TerminalLocalMode,
+    TerminalPaste, TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar,
+    ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording, ToggleRightSidebar, UploadFile,
+    ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
@@ -158,6 +159,7 @@ impl NyaTermApp {
             ShortcutId::TerminalSelectAll => {
                 self.execute_title_menu_command(&TitleMenuCommand::TerminalSelectAll, window, cx)
             }
+            ShortcutId::TerminalLocalMode => self.toggle_terminal_local_mode(cx),
             ShortcutId::ManageSyncGroups => {
                 self.execute_title_menu_command(&TitleMenuCommand::ManageSyncGroups, window, cx)
             }
@@ -316,6 +318,7 @@ impl NyaTermApp {
                 TerminalCommandSelect
             ))
             .on_action(direct_handler!(TerminalSelectAll, TerminalSelectAll))
+            .on_action(direct_handler!(TerminalLocalMode, TerminalLocalMode))
             .on_action(direct_handler!(ManageSyncGroups, ManageSyncGroups))
             .on_action(direct_handler!(
                 ShowCommandSuggestions,

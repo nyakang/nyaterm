@@ -24,6 +24,7 @@ use crate::contrast::{
     TerminalContrastCache, TerminalContrastOverlays, apply_contrast, contrast_excluded,
     normalize_ratio,
 };
+use crate::decorations::terminal_snapshot_absolute_range;
 use crate::glyphs::{
     CellGlyph, CellGlyphPaintPlan, is_cell_glyph, push_cell_background, push_cell_glyphs,
 };
@@ -415,6 +416,7 @@ pub struct NyaTerminalElement {
     keyword_highlights: Option<Arc<TerminalKeywordHighlightSnapshot>>,
     decorations: Arc<[TerminalLineDecorations]>,
     selection: Option<TerminalGridSelection>,
+    local_mode_cursor: Option<TerminalBufferCellPos>,
     layout_cache: Option<Arc<Mutex<NyaTerminalLayoutCache>>>,
     show_cursor: bool,
     cursor_style: String,
@@ -516,6 +518,7 @@ impl NyaTerminalElement {
             keyword_highlights: None,
             decorations: decorations.into(),
             selection: None,
+            local_mode_cursor: None,
             layout_cache: None,
             show_cursor,
             cursor_style: cursor_style.into(),
@@ -585,6 +588,11 @@ impl NyaTerminalElement {
 
     pub fn with_selection(mut self, selection: Option<TerminalGridSelection>) -> Self {
         self.selection = selection;
+        self
+    }
+
+    pub fn with_local_mode_cursor(mut self, cursor: Option<TerminalBufferCellPos>) -> Self {
+        self.local_mode_cursor = cursor;
         self
     }
 
@@ -2419,50 +2427,65 @@ impl Element for NyaTerminalElement {
             }
         }
 
-        let cursor_geometry = self.unwrapped.as_ref().and_then(|layout| {
-            layout.display_position(self.snapshot.cursor.row, self.snapshot.cursor.col)
-        });
-        let cursor_in_view = if self.unwrapped.is_some() {
+        // Local Mode moves the caret away from the PTY cursor; reuse the exact
+        // same cursor_style/terminal_cursor paint path so configured shape,
+        // colour and reverse-glyph behaviour all carry over.
+        let (absolute_start, _) = terminal_snapshot_absolute_range(&self.snapshot);
+        let (cursor_row, cursor_col) = self.local_mode_cursor.map_or(
+            (self.snapshot.cursor.row, self.snapshot.cursor.col),
+            |position| {
+                if position.line >= absolute_start
+                    && position.line < absolute_start.saturating_add(self.snapshot.row_count())
+                {
+                    (position.line - absolute_start, position.col)
+                } else {
+                    (self.snapshot.cursor.row, self.snapshot.cursor.col)
+                }
+            },
+        );
+        let cursor_geometry = self
+            .unwrapped
+            .as_ref()
+            .and_then(|layout| layout.display_position(cursor_row, cursor_col));
+        let cursor_in_view = if self.unwrapped.is_some() && self.local_mode_cursor.is_none() {
             cursor_geometry.is_some_and(|(_, col)| col >= -1.0 && col < self.snapshot.cols as f32)
         } else {
-            self.snapshot.cursor.row >= visible_row_start
-                && self.snapshot.cursor.row < visible_row_end
+            cursor_row >= visible_row_start && cursor_row < visible_row_end
         };
         let cursor_paint_geometry = if let Some((display_row, display_col)) = cursor_geometry {
             TerminalPaintGeometry {
                 bounds: Bounds::new(
                     point(
-                        bounds.left()
-                            + px((display_col - self.snapshot.cursor.col as f32) * cell_w),
+                        bounds.left() + px((display_col - cursor_col as f32) * cell_w),
                         bounds.top(),
                     ),
                     bounds.size,
                 ),
-                visual_y_offset: (display_row as f32 - self.snapshot.cursor.row as f32) * cell_h,
+                visual_y_offset: (display_row as f32 - cursor_row as f32) * cell_h,
                 cell_width: cell_w,
                 cell_height: cell_h,
             }
         } else {
             paint_geometry
         };
-        if self.show_cursor
-            && self.snapshot.cursor.row < self.snapshot.row_count()
-            && self.snapshot.cursor.col < self.snapshot.cols.max(1)
+        if (self.show_cursor || self.local_mode_cursor.is_some())
+            && cursor_row < self.snapshot.row_count()
+            && cursor_col < self.snapshot.cols.max(1)
             && cursor_in_view
         {
             let left = (f32::from(cursor_paint_geometry.bounds.left())
-                + self.snapshot.cursor.col as f32 * cell_w)
+                + cursor_col as f32 * cell_w)
                 .floor();
             let top = (f32::from(bounds.top())
                 + cursor_paint_geometry.visual_y_offset
-                + self.snapshot.cursor.row as f32 * cell_h)
+                + cursor_row as f32 * cell_h)
                 .floor();
             let right = (f32::from(cursor_paint_geometry.bounds.left())
-                + (self.snapshot.cursor.col + 1) as f32 * cell_w)
+                + (cursor_col + 1) as f32 * cell_w)
                 .ceil();
             let bottom = (f32::from(bounds.top())
                 + cursor_paint_geometry.visual_y_offset
-                + (self.snapshot.cursor.row + 1) as f32 * cell_h)
+                + (cursor_row + 1) as f32 * cell_h)
                 .ceil();
             let x = px(left);
             let y = px(top);
@@ -2480,18 +2503,18 @@ impl Element for NyaTerminalElement {
                 && self.cursor_style.as_str() != "underline"
                 && !terminal_cursor_cell_hidden(&self.snapshot)
             {
-                let cursor_line = self.snapshot.line(self.snapshot.cursor.row).unwrap_or("");
-                let cursor_text = terminal_cell_text_at_col(cursor_line, self.snapshot.cursor.col);
+                let cursor_line = self.snapshot.line(cursor_row).unwrap_or("");
+                let cursor_text = terminal_cell_text_at_col(cursor_line, cursor_col);
                 if let Some(ch) =
                     cursor_cell_glyph(&cursor_text).filter(|_| self.cell_glyph_rendering_enabled())
                 {
                     push_cell_glyphs(
                         &[CellGlyph {
-                            col: self.snapshot.cursor.col,
+                            col: cursor_col,
                             ch,
                             color: self.palette.terminal_bg,
                         }],
-                        self.snapshot.cursor.row,
+                        cursor_row,
                         cursor_paint_geometry,
                         scale_factor,
                         &mut plan.cursor_cell_glyphs,

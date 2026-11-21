@@ -315,6 +315,27 @@ fn terminal_view_append_anchors_scrollback_when_output_adds_history() {
 }
 
 #[test]
+fn terminal_view_local_mode_freezes_output_follow_at_bottom() {
+    let mut view = TerminalViewState::from_output(terminal_output_lines(120));
+    let old_len = view.scrollback_len_for_ui();
+    assert!(old_len > 32);
+    view.scroll_offset = 0;
+    view.local_mode_scroll_locked = true;
+
+    view.append_text("new local-mode line\n");
+
+    let delta = view.scrollback_len_for_ui().saturating_sub(old_len);
+    assert!(delta > 0);
+    assert_eq!(view.scroll_offset, delta);
+    assert!(view.has_new_while_scrolled);
+
+    view.local_mode_scroll_locked = false;
+    let before_unlocked_append = view.scroll_offset;
+    view.append_text("follows again\n");
+    assert!(view.scroll_offset > before_unlocked_append);
+}
+
+#[test]
 fn terminal_view_frame_apply_anchors_scrolled_offset() {
     let old_screen = screen_from_line_count(120);
     let mut view = TerminalViewState::new();

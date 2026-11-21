@@ -67,13 +67,13 @@ impl ConnectionEditorChoice {
     }
 }
 
-pub(super) struct ConnectionEditorRenderContext<'a, 'cx> {
+pub(in crate::features) struct ConnectionEditorRenderContext<'a, 'cx> {
     pub palette: crate::theme::ThemePalette,
     pub fields: &'a ConnectionEditorFields,
     pub cx: &'a mut Context<'cx, NyaTermApp>,
 }
 
-pub(super) fn connection_editor_select(
+pub(in crate::features) fn connection_editor_select(
     render: ConnectionEditorRenderContext<'_, '_>,
     id: &'static str,
     label: impl Into<FieldLabel>,
@@ -112,7 +112,7 @@ pub(super) fn connection_editor_select(
         )
 }
 
-pub(super) fn editor_switch_row(
+pub(in crate::features) fn editor_switch_row(
     palette: crate::theme::ThemePalette,
     id: &'static str,
     label: impl Into<SharedString>,
@@ -523,7 +523,7 @@ mod tests {
 /// Sections receive this rather than the app, because they are free functions
 /// that already hold a `Context` — reading the app entity again from inside its
 /// own update panics.
-pub(super) struct ConnectionEditorFields {
+pub(in crate::features) struct ConnectionEditorFields {
     pub(super) account: Option<nyaterm_core::SavedPassword>,
     pub(super) account_password_locked: bool,
     pub(super) errors: HashMap<ConnectionEditorField, String>,
@@ -595,7 +595,7 @@ impl ConnectionEditorFields {
 
 /// A field's caption, and whether it carries the required marker.
 #[derive(Clone, Default)]
-pub(super) struct FieldLabel {
+pub(in crate::features) struct FieldLabel {
     text: SharedString,
     required: bool,
 }
@@ -643,14 +643,14 @@ impl From<SharedString> for FieldLabel {
 }
 
 /// Mark a caption as required, so it renders with the red asterisk.
-pub(super) fn required(label: impl Into<FieldLabel>) -> FieldLabel {
+pub(in crate::features) fn required(label: impl Into<FieldLabel>) -> FieldLabel {
     let mut label = label.into();
     label.required = true;
     label
 }
 
 /// The caption above an input or a select.
-pub(super) fn field_caption(
+pub(in crate::features) fn field_caption(
     palette: crate::theme::ThemePalette,
     label: &FieldLabel,
 ) -> impl IntoElement {
@@ -667,14 +667,14 @@ pub(super) fn field_caption(
 }
 
 /// The height every input, select and stepper in the editor shares.
-pub(super) const EDITOR_CONTROL_HEIGHT_PX: f32 = NYA_FORM_CONTROL_HEIGHT_PX;
+pub(in crate::features) const EDITOR_CONTROL_HEIGHT_PX: f32 = NYA_FORM_CONTROL_HEIGHT_PX;
 
 /// A caption above one editable field.
 ///
 /// Tauri puts the caption above the box rather than inside it; a box that also
 /// holds its label has half the room for what is typed into it, which is what
 /// made long hosts and paths unreadable here.
-pub(super) fn editor_field(
+pub(in crate::features) fn editor_field(
     palette: crate::theme::ThemePalette,
     label: impl Into<FieldLabel>,
     field: ConnectionEditorField,
@@ -811,7 +811,7 @@ pub(super) fn forwarding_endpoint_editor_field(
 }
 
 /// The bordered box holding one field, without a caption.
-pub(super) fn editor_field_box(
+pub(in crate::features) fn editor_field_box(
     palette: crate::theme::ThemePalette,
     field: ConnectionEditorField,
     fields: &ConnectionEditorFields,
@@ -873,7 +873,7 @@ pub(super) fn editor_field_box(
 }
 
 /// A numeric field backed by gpui-kit's spinner control.
-pub(super) fn editor_stepper_field(
+pub(in crate::features) fn editor_stepper_field(
     palette: crate::theme::ThemePalette,
     label: impl Into<FieldLabel>,
     field: ConnectionEditorField,

@@ -95,6 +95,10 @@ impl NyaTermApp {
             return;
         }
         self.mark_user_activity();
+        if self.handle_terminal_local_mode_key(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let smart_input_selection = self
             .terminal
             .selection
@@ -339,6 +343,12 @@ impl NyaTermApp {
         let terminal_selection = is_active
             .then_some(self.terminal.selection.selection)
             .flatten();
+        let local_mode_cursor = self
+            .terminal
+            .local_mode
+            .is_active_for(Some(session_id.as_str()))
+            .then_some(self.terminal.local_mode.cursor);
+        let local_mode_active = local_mode_cursor.is_some();
         let (
             line_decorations,
             search_mapping_duration,
@@ -601,6 +611,7 @@ impl NyaTermApp {
                 .with_bold_default_foreground(self.settings.summary().bold_default_foreground)
                 .with_minimum_contrast_ratio(self.settings.terminal_minimum_contrast_ratio())
                 .with_selection(terminal_selection.map(TerminalGridSelection::from_selection))
+                .with_local_mode_cursor(local_mode_cursor)
                 .with_font_fallbacks(terminal_font_fallbacks.clone());
             if let Some(cache) = layout_cache {
                 grid = grid.with_layout_cache(cache);
@@ -629,6 +640,7 @@ impl NyaTermApp {
                 .with_bold_default_foreground(self.settings.summary().bold_default_foreground)
                 .with_minimum_contrast_ratio(self.settings.terminal_minimum_contrast_ratio())
                 .with_selection(terminal_selection.map(TerminalGridSelection::from_selection))
+                .with_local_mode_cursor(local_mode_cursor)
                 .with_font_fallbacks(terminal_font_fallbacks.clone());
             if let Some(cache) = layout_cache {
                 grid = grid.with_layout_cache(cache);
@@ -874,6 +886,14 @@ impl NyaTermApp {
                                             this.activate_workspace_pane(session_id.clone(), cx);
                                             window.focus(&this.terminal.input.focus, cx);
                                             this.close_action_link_menu(cx);
+                                            if this.handle_terminal_local_mode_mouse_down(
+                                                Some(session_id.as_str()),
+                                                event,
+                                                cx,
+                                            ) {
+                                                cx.stop_propagation();
+                                                return;
+                                            }
                                             this.terminal.selection.block_gesture = None;
                                             this.terminal.selection.suppress_action_link_click = false;
                                             let mods = event.modifiers;
@@ -990,6 +1010,10 @@ impl NyaTermApp {
                                         window.focus(&this.terminal.input.focus, cx);
                                         let modifiers = event.modifiers();
                                         if let ClickEvent::Mouse(mouse) = event
+                                            && !this
+                                                .terminal
+                                                .local_mode
+                                                .is_active_for(Some(session_id.as_str()))
                                             && !this.terminal.selection.confirm_block_drag(mouse.up.position)
                                         {
                                             this.clear_terminal_selection(cx);
@@ -1017,6 +1041,10 @@ impl NyaTermApp {
                                             }
                                         }
                                         if this.terminal.selection.selection.is_none()
+                                            && !this
+                                                .terminal
+                                                .local_mode
+                                                .is_active_for(Some(session_id.as_str()))
                                             && this.shell.status() != "terminal focused"
                                         {
                                             this.shell.set_status("terminal focused".to_string());
@@ -1105,6 +1133,28 @@ impl NyaTermApp {
                                             ),
                                     )
                                 })
+                                .when(local_mode_active, |this| {
+                                    this.child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "terminal-local-mode-{session_id}"
+                                            )))
+                                            .absolute()
+                                            .right(px(8.))
+                                            .top(px(4.))
+                                            .rounded_md()
+                                            .bg(rgba((palette.link << 8) | 0xd9))
+                                            .px_2()
+                                            .py(px(2.))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight(700.))
+                                                    .text_color(rgb(palette.terminal_bg))
+                                                    .child(t!("terminalCtx.localModeBadge")),
+                                            ),
+                                    )
+                                })
                                 .when(show_sync_action_overlay, |this| {
                                     let pause_session_id = output_session_id.clone();
                                     let leave_session_id = output_session_id.clone();
@@ -1116,7 +1166,7 @@ impl NyaTermApp {
                                         )))
                                         .absolute()
                                         .right(px(8.))
-                                        .top(px(4.))
+                                        .top(if local_mode_active { px(32.) } else { px(4.) })
                                         .flex()
                                         .items_center()
                                         .gap_1()

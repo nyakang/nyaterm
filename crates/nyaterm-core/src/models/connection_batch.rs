@@ -7,8 +7,9 @@ use super::{
     ConnectionRecordingSettings, ConnectionType, ConnectionUsernameSource, RecordingMode,
     SavedConnection, SerialFlowControl, SftpCwdFollowMode, SftpSettings, SshAgentEndpoint,
     SshAgentForwardingConfig, SshAgentForwardingPolicy, SshAlgorithmMode, SshAlgorithmPreferences,
-    SshProfile, SshTerminalType, default_rdp_certificate_policy, default_ssh_port,
-    default_ssh_user, default_vnc_security_mode,
+    SshProfile, SshTerminalType,
+    android::{AndroidScreenSettings, CaptureOrientation, ScreenQualityPreset},
+    default_rdp_certificate_policy, default_ssh_port, default_ssh_user, default_vnc_security_mode,
 };
 
 /// One batch-editable field with an explicit three-way state.
@@ -98,6 +99,8 @@ pub struct ConnectionBatchEdit {
     pub ssh_profile: BatchField<SshProfile>,
     pub terminal_type: BatchField<SshTerminalType>,
     pub dynamic_tab_title: BatchField<bool>,
+    /// SSH terminal compatibility mode; local shells and other protocols ignore it.
+    pub ssh_compatibility_mode: BatchField<bool>,
 
     pub sftp_enabled: BatchField<bool>,
     pub sftp_compatibility_mode: BatchField<bool>,
@@ -118,6 +121,8 @@ pub struct ConnectionBatchEdit {
     pub ssh_ciphers: BatchField<Vec<String>>,
     pub ssh_macs: BatchField<Vec<String>>,
     pub ssh_host_keys: BatchField<Vec<String>>,
+    /// Opt-in for RSA host keys shorter than modern minimums; SSH only.
+    pub allow_short_rsa_host_keys: BatchField<bool>,
 
     pub rdp_use_nla: BatchField<bool>,
     pub rdp_certificate_policy: BatchField<String>,
@@ -172,6 +177,24 @@ pub struct ConnectionBatchEdit {
     pub serial_stop_bits: BatchField<String>,
     pub serial_flow_control: BatchField<SerialFlowControl>,
 
+    pub adb_directory: BatchField<String>,
+    pub adb_screen_quality: BatchField<ScreenQualityPreset>,
+    pub adb_screen_max_size: BatchField<u32>,
+    pub adb_screen_max_fps: BatchField<u32>,
+    pub adb_screen_bit_rate: BatchField<u32>,
+    pub adb_screen_power_on: BatchField<bool>,
+    pub adb_screen_orientation: BatchField<CaptureOrientation>,
+
+    pub ftp_initial_directory: BatchField<String>,
+    pub ftp_local_initial_directory: BatchField<String>,
+    pub ftp_passive_mode: BatchField<String>,
+    pub ftp_filename_encoding_mode: BatchField<String>,
+    pub ftp_filename_encoding: BatchField<String>,
+    pub ftp_ascii_mode: BatchField<bool>,
+    pub ftp_security_mode: BatchField<String>,
+    pub ftp_tls_version: BatchField<String>,
+    pub ftp_connect_timeout_ms: BatchField<u64>,
+
     pub rdp_domain: BatchField<String>,
     pub rdp_backend: BatchField<String>,
     pub rdp_display_mode: BatchField<String>,
@@ -211,6 +234,7 @@ impl ConnectionBatchEdit {
             && self.ssh_profile.is_unchanged()
             && self.terminal_type.is_unchanged()
             && self.dynamic_tab_title.is_unchanged()
+            && self.ssh_compatibility_mode.is_unchanged()
             && self.sftp_enabled.is_unchanged()
             && self.sftp_compatibility_mode.is_unchanged()
             && self.sftp_cwd_follow_mode.is_unchanged()
@@ -227,6 +251,7 @@ impl ConnectionBatchEdit {
             && self.ssh_ciphers.is_unchanged()
             && self.ssh_macs.is_unchanged()
             && self.ssh_host_keys.is_unchanged()
+            && self.allow_short_rsa_host_keys.is_unchanged()
             && self.rdp_use_nla.is_unchanged()
             && self.rdp_certificate_policy.is_unchanged()
             && self.rdp_administrative_session.is_unchanged()
@@ -273,6 +298,22 @@ impl ConnectionBatchEdit {
             && self.serial_parity.is_unchanged()
             && self.serial_stop_bits.is_unchanged()
             && self.serial_flow_control.is_unchanged()
+            && self.adb_directory.is_unchanged()
+            && self.adb_screen_quality.is_unchanged()
+            && self.adb_screen_max_size.is_unchanged()
+            && self.adb_screen_max_fps.is_unchanged()
+            && self.adb_screen_bit_rate.is_unchanged()
+            && self.adb_screen_power_on.is_unchanged()
+            && self.adb_screen_orientation.is_unchanged()
+            && self.ftp_initial_directory.is_unchanged()
+            && self.ftp_local_initial_directory.is_unchanged()
+            && self.ftp_passive_mode.is_unchanged()
+            && self.ftp_filename_encoding_mode.is_unchanged()
+            && self.ftp_filename_encoding.is_unchanged()
+            && self.ftp_ascii_mode.is_unchanged()
+            && self.ftp_security_mode.is_unchanged()
+            && self.ftp_tls_version.is_unchanged()
+            && self.ftp_connect_timeout_ms.is_unchanged()
             && self.rdp_domain.is_unchanged()
             && self.rdp_backend.is_unchanged()
             && self.rdp_display_mode.is_unchanged()
@@ -506,7 +547,11 @@ pub fn apply_connection_batch_edit(
     let is_ssh = matches!(connection.config, ConnectionType::Ssh { .. });
     let is_rdp = matches!(connection.config, ConnectionType::Rdp { .. });
     let is_vnc = matches!(connection.config, ConnectionType::Vnc { .. });
-    let endpoint_ok = supports_endpoint(&connection.config);
+    let is_ftp = matches!(connection.config, ConnectionType::Ftp { .. });
+    let is_adb = matches!(connection.config, ConnectionType::Adb { .. });
+    // FTP shares the endpoint, username and credential contract even though it
+    // has no proxy or host-key alias.
+    let endpoint_ok = supports_endpoint(&connection.config) || is_ftp;
     let rdp_reason = rdp_batch_field_skip_reason(
         &connection.config,
         edit,
@@ -565,7 +610,8 @@ pub fn apply_connection_batch_edit(
                 ConnectionType::Ssh { port: slot, .. }
                 | ConnectionType::Telnet { port: slot, .. }
                 | ConnectionType::Rdp { port: slot, .. }
-                | ConnectionType::Vnc { port: slot, .. } => *slot = port,
+                | ConnectionType::Vnc { port: slot, .. }
+                | ConnectionType::Ftp { port: slot, .. } => *slot = port,
                 _ => {}
             }
         }
@@ -582,7 +628,8 @@ pub fn apply_connection_batch_edit(
                 ConnectionType::Ssh { username: slot, .. }
                 | ConnectionType::Telnet { username: slot, .. }
                 | ConnectionType::Rdp { username: slot, .. }
-                | ConnectionType::Vnc { username: slot, .. } => *slot = username,
+                | ConnectionType::Vnc { username: slot, .. }
+                | ConnectionType::Ftp { username: slot, .. } => *slot = username,
                 _ => {}
             }
         }
@@ -687,6 +734,14 @@ pub fn apply_connection_batch_edit(
         }
     }
 
+    if !edit.ssh_compatibility_mode.is_unchanged() {
+        // Only SSH stores this switch; other connection kinds report it skipped.
+        apply(is_ssh, true, &mut report);
+        if is_ssh {
+            connection.ssh_compatibility_mode = flag_value(&edit.ssh_compatibility_mode, false);
+        }
+    }
+
     if !edit.sftp_enabled.is_unchanged()
         || !edit.sftp_compatibility_mode.is_unchanged()
         || !edit.sftp_cwd_follow_mode.is_unchanged()
@@ -759,6 +814,7 @@ pub fn apply_connection_batch_edit(
         || !edit.ssh_ciphers.is_unchanged()
         || !edit.ssh_macs.is_unchanged()
         || !edit.ssh_host_keys.is_unchanged()
+        || !edit.allow_short_rsa_host_keys.is_unchanged()
     {
         let touched = [
             !edit.ssh_algorithm_mode.is_unchanged(),
@@ -766,12 +822,17 @@ pub fn apply_connection_batch_edit(
             !edit.ssh_ciphers.is_unchanged(),
             !edit.ssh_macs.is_unchanged(),
             !edit.ssh_host_keys.is_unchanged(),
+            !edit.allow_short_rsa_host_keys.is_unchanged(),
         ];
         for touched in touched {
             apply(is_ssh, touched, &mut report);
         }
         if is_ssh {
             apply_ssh_algorithms(&mut connection.ssh_algorithms, edit);
+            if !edit.allow_short_rsa_host_keys.is_unchanged() {
+                connection.allow_short_rsa_host_keys =
+                    flag_value(&edit.allow_short_rsa_host_keys, false);
+            }
         }
     }
 
@@ -957,6 +1018,17 @@ pub fn apply_connection_batch_edit(
             }
         }
     }
+    // Anonymous FTP has no password contract: selecting it clears whatever
+    // inline password the record still carried.
+    if is_ftp
+        && matches!(&edit.auth_mode, BatchField::Set(mode) if mode == "none")
+        && let Some(auth) = connection.auth.as_mut()
+    {
+        auth.password = None;
+        auth.password_id = None;
+        auth.has_password = false;
+        auth.password_source = Some(ConnectionPasswordSource::Connection);
+    }
     if !edit.key_id.is_unchanged() {
         apply(is_ssh, true, &mut report);
         if is_ssh {
@@ -1041,7 +1113,7 @@ pub fn apply_connection_batch_edit(
         }
     }
 
-    let network_ok = endpoint_ok;
+    let network_ok = supports_endpoint(&connection.config);
     if !edit.proxy_id.is_unchanged() {
         apply(network_ok, true, &mut report);
         if network_ok {
@@ -1257,6 +1329,156 @@ pub fn apply_connection_batch_edit(
             *flow_control = match edit.serial_flow_control {
                 BatchField::Set(value) => value,
                 BatchField::Clear => SerialFlowControl::default(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+    }
+
+    let adb_fields = [
+        !edit.adb_directory.is_unchanged(),
+        !edit.adb_screen_quality.is_unchanged(),
+        !edit.adb_screen_max_size.is_unchanged(),
+        !edit.adb_screen_max_fps.is_unchanged(),
+        !edit.adb_screen_bit_rate.is_unchanged(),
+        !edit.adb_screen_power_on.is_unchanged(),
+        !edit.adb_screen_orientation.is_unchanged(),
+    ];
+    for touched in adb_fields {
+        apply(is_adb, touched, &mut report);
+    }
+    if is_adb
+        && adb_fields.iter().any(|touched| *touched)
+        && let ConnectionType::Adb {
+            directory, screen, ..
+        } = &mut connection.config
+    {
+        if !edit.adb_directory.is_unchanged() {
+            *directory = match &edit.adb_directory {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => super::android::default_android_directory(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        // A preset expands to the three quality values; an explicit edit of any
+        // of them afterwards keeps the stream custom.
+        if !edit.adb_screen_quality.is_unchanged() {
+            match &edit.adb_screen_quality {
+                BatchField::Set(preset) => preset.apply(screen),
+                BatchField::Clear => {
+                    let defaults = AndroidScreenSettings::default();
+                    screen.max_size = defaults.max_size;
+                    screen.max_fps = defaults.max_fps;
+                    screen.bit_rate = defaults.bit_rate;
+                }
+                BatchField::Unchanged => unreachable!(),
+            }
+        }
+        if !edit.adb_screen_max_size.is_unchanged() {
+            screen.max_size = match edit.adb_screen_max_size {
+                BatchField::Set(value) => value,
+                BatchField::Clear => AndroidScreenSettings::default().max_size,
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.adb_screen_max_fps.is_unchanged() {
+            screen.max_fps = match edit.adb_screen_max_fps {
+                BatchField::Set(value) => value,
+                BatchField::Clear => AndroidScreenSettings::default().max_fps,
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.adb_screen_bit_rate.is_unchanged() {
+            screen.bit_rate = match edit.adb_screen_bit_rate {
+                BatchField::Set(value) => value,
+                BatchField::Clear => AndroidScreenSettings::default().bit_rate,
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.adb_screen_power_on.is_unchanged() {
+            screen.power_on = flag_value(&edit.adb_screen_power_on, false);
+        }
+        if !edit.adb_screen_orientation.is_unchanged() {
+            screen.capture_orientation = match edit.adb_screen_orientation {
+                BatchField::Set(value) => value,
+                BatchField::Clear => CaptureOrientation::default(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+    }
+
+    let ftp_fields = [
+        !edit.ftp_initial_directory.is_unchanged(),
+        !edit.ftp_local_initial_directory.is_unchanged(),
+        !edit.ftp_passive_mode.is_unchanged(),
+        !edit.ftp_filename_encoding_mode.is_unchanged(),
+        !edit.ftp_filename_encoding.is_unchanged(),
+        !edit.ftp_ascii_mode.is_unchanged(),
+        !edit.ftp_security_mode.is_unchanged(),
+        !edit.ftp_tls_version.is_unchanged(),
+        !edit.ftp_connect_timeout_ms.is_unchanged(),
+    ];
+    for touched in ftp_fields {
+        apply(is_ftp, touched, &mut report);
+    }
+    if is_ftp
+        && ftp_fields.iter().any(|touched| *touched)
+        && let ConnectionType::Ftp {
+            initial_directory,
+            local_initial_directory,
+            passive_mode,
+            ftp_filename_encoding_mode,
+            ftp_filename_encoding,
+            ftp_ascii_mode,
+            ftp_security_mode,
+            ftp_tls_version,
+            connect_timeout_ms,
+            ..
+        } = &mut connection.config
+    {
+        if !edit.ftp_initial_directory.is_unchanged() {
+            *initial_directory = plain_string_value(&edit.ftp_initial_directory);
+        }
+        if !edit.ftp_local_initial_directory.is_unchanged() {
+            *local_initial_directory = plain_string_value(&edit.ftp_local_initial_directory);
+        }
+        if !edit.ftp_passive_mode.is_unchanged() {
+            *passive_mode = match &edit.ftp_passive_mode {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => super::default_ftp_passive_mode(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.ftp_filename_encoding_mode.is_unchanged() {
+            *ftp_filename_encoding_mode = match &edit.ftp_filename_encoding_mode {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => super::default_ftp_filename_encoding_mode(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.ftp_filename_encoding.is_unchanged() {
+            *ftp_filename_encoding = plain_string_value(&edit.ftp_filename_encoding);
+        }
+        if !edit.ftp_ascii_mode.is_unchanged() {
+            *ftp_ascii_mode = flag_value(&edit.ftp_ascii_mode, false);
+        }
+        if !edit.ftp_security_mode.is_unchanged() {
+            *ftp_security_mode = match &edit.ftp_security_mode {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => super::default_ftp_security_mode(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.ftp_tls_version.is_unchanged() {
+            *ftp_tls_version = match &edit.ftp_tls_version {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => super::default_ftp_tls_version(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.ftp_connect_timeout_ms.is_unchanged() {
+            *connect_timeout_ms = match edit.ftp_connect_timeout_ms {
+                BatchField::Set(value) => value,
+                BatchField::Clear => super::default_ftp_connect_timeout_ms(),
                 BatchField::Unchanged => unreachable!(),
             };
         }
@@ -1619,6 +1841,20 @@ pub fn validate_connection_batch_edit(edit: &ConnectionBatchEdit) -> Result<(), 
         ("serial_port_name", &edit.serial_port_name),
         ("serial_parity", &edit.serial_parity),
         ("serial_stop_bits", &edit.serial_stop_bits),
+        ("adb_directory", &edit.adb_directory),
+        ("ftp_initial_directory", &edit.ftp_initial_directory),
+        (
+            "ftp_local_initial_directory",
+            &edit.ftp_local_initial_directory,
+        ),
+        ("ftp_passive_mode", &edit.ftp_passive_mode),
+        (
+            "ftp_filename_encoding_mode",
+            &edit.ftp_filename_encoding_mode,
+        ),
+        ("ftp_filename_encoding", &edit.ftp_filename_encoding),
+        ("ftp_security_mode", &edit.ftp_security_mode),
+        ("ftp_tls_version", &edit.ftp_tls_version),
         ("rdp_domain", &edit.rdp_domain),
         ("rdp_backend", &edit.rdp_backend),
         ("rdp_display_mode", &edit.rdp_display_mode),
@@ -1708,6 +1944,26 @@ pub fn validate_connection_batch_edit(edit: &ConnectionBatchEdit) -> Result<(), 
         && !matches!(value, 5..=8)
     {
         return Err("serial data bits must be between 5 and 8".to_string());
+    }
+    if let BatchField::Set(value) = edit.adb_screen_max_size
+        && !(128..=2560).contains(&value)
+    {
+        return Err("Android screen maximum edge must be between 128 and 2560".to_string());
+    }
+    if let BatchField::Set(value) = edit.adb_screen_max_fps
+        && !(1..=120).contains(&value)
+    {
+        return Err("Android screen maximum FPS must be between 1 and 120".to_string());
+    }
+    if let BatchField::Set(value) = edit.adb_screen_bit_rate
+        && !(100_000..=100_000_000).contains(&value)
+    {
+        return Err("Android screen bit rate must be between 100000 and 100000000".to_string());
+    }
+    if let BatchField::Set(value) = edit.ftp_connect_timeout_ms
+        && !(1_000..=120_000).contains(&value)
+    {
+        return Err("FTP connect timeout must be between 1000 and 120000 ms".to_string());
     }
     for (label, field) in [
         (

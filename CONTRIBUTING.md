@@ -25,6 +25,24 @@ which crate owns the resulting state. Do not put filesystem, database, network,
 SSH, SFTP, subprocess, or image-decoding work in a render path or a long-running
 GPUI update callback.
 
+### Connection editor parity
+
+The connection editor and the asset batch editor must keep the same surface.
+When adding, removing, or renaming a connection setting:
+
+- add the field to the connection editor section that owns it;
+- give the batch editor a row with the same label, the same section, and the
+  same default value used for a new connection;
+- keep `BATCH_FIELDS_BY_SECTION` exhaustive; a batch field that no protocol
+  section renders is a parity bug;
+- run the `editor_surface_parity` tests in `nyaterm-desktop`, which check field
+  coverage, section reachability, and that `Restore default` writes the same
+  value a new connection starts with.
+
+Protocol-specific editors compose shared `editor_surface` primitives instead of
+painting their own control shells. Do not copy a control layout into a batch
+section to make a field fit.
+
 ## Local checks
 
 Run focused checks while iterating:

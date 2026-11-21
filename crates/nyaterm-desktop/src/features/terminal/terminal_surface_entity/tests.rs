@@ -4904,3 +4904,51 @@ fn highlight_requests_distinguish_fold_gaps_with_the_same_outer_window() {
     }
     assert_ne!(keys[0], keys[1]);
 }
+
+#[test]
+fn session_keyword_rules_overlay_global_without_mutating_global() {
+    use super::terminal_keyword_rules_with_session;
+    use nyaterm_core::{KeywordHighlightRule, ResolvedKeywordHighlightRule};
+
+    let global = Arc::new(vec![ResolvedKeywordHighlightRule {
+        id: "kh-shared".into(),
+        name: "Shared".into(),
+        patterns: vec!["error".into()],
+        color: "#111111".into(),
+        enabled: true,
+    }]);
+    let session = vec![
+        KeywordHighlightRule {
+            id: "kh-shared".into(),
+            name: "Session override".into(),
+            patterns: vec!["error".into()],
+            color_dark: "#ff0000".into(),
+            color_light: "#aa0000".into(),
+            enabled: true,
+        },
+        KeywordHighlightRule {
+            id: "kh-session-only".into(),
+            name: "Session only".into(),
+            patterns: vec!["warn".into()],
+            color_dark: "#00ff00".into(),
+            color_light: "#00aa00".into(),
+            enabled: true,
+        },
+    ];
+
+    let merged = terminal_keyword_rules_with_session(&global, &session, true);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].color, "#ff0000", "session rule wins on same id");
+    assert_eq!(merged[1].color, "#00ff00", "session-only rule appended");
+    // Global rules must not be mutated by the overlay.
+    assert_eq!(global[0].color, "#111111");
+
+    let light = terminal_keyword_rules_with_session(&global, &session, false);
+    assert_eq!(light[0].color, "#aa0000");
+
+    let no_session = terminal_keyword_rules_with_session(&global, &[], true);
+    assert!(
+        Arc::ptr_eq(&no_session, &global),
+        "empty session reuses the Arc"
+    );
+}

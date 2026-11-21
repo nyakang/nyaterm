@@ -398,6 +398,9 @@ impl NyaTermApp {
                 if this.maybe_send_terminal_any_motion_report(event, cx) {
                     return;
                 }
+                if this.update_terminal_local_mode_selection_drag(event, cx) {
+                    return;
+                }
                 this.update_terminal_selection_drag(event, cx);
                 if event.dragging() {
                     this.update_terminal_scrollbar_drag(event, cx);
@@ -415,7 +418,9 @@ impl NyaTermApp {
                     this.finish_bottom_panel_resize(cx);
                     this.finish_panel_stack_resize(cx);
                     this.finish_workspace_split_resize(cx);
-                    this.finish_terminal_selection(event, cx);
+                    if !this.finish_terminal_local_mode_selection(event, cx) {
+                        this.finish_terminal_selection(event, cx);
+                    }
                     this.finish_terminal_scrollbar_drag(cx);
                     this.clear_terminal_window_drop(cx);
                     this.clear_session_tab_drag(cx);

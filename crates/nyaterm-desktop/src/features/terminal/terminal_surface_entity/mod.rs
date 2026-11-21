@@ -35,7 +35,7 @@ use crate::features::terminal::terminal_surface::{
     terminal_scrollbar_track_bounds_tracker, terminal_scrollbar_track_color, track_height,
 };
 use crate::models::{
-    TerminalPerformanceOverlay, TerminalProtocolState, TerminalSelection,
+    TerminalBufferCellPos, TerminalPerformanceOverlay, TerminalProtocolState, TerminalSelection,
     terminal_geometry_diagnostics_enabled,
 };
 use crate::terminal::{
@@ -229,6 +229,21 @@ fn empty_terminal_keyword_rules() -> Arc<Vec<nyaterm_core::ResolvedKeywordHighli
     Arc::clone(RULES.get_or_init(|| Arc::new(Vec::new())))
 }
 
+fn terminal_keyword_rules_with_session(
+    global: &Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    session_rules: &[nyaterm_core::models::KeywordHighlightRule],
+    is_dark: bool,
+) -> Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
+    if session_rules.is_empty() {
+        return Arc::clone(global);
+    }
+    Arc::new(nyaterm_core::overlay_resolved_keyword_highlight_rules(
+        global,
+        session_rules,
+        is_dark,
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::features) struct TerminalPaintedHitTestGeometry {
     pub(in crate::features) grid_bounds: Option<gpui::Bounds<gpui::Pixels>>,
@@ -378,6 +393,10 @@ pub(in crate::features) struct TerminalSurface {
     retained_rows: BTreeMap<usize, TerminalRetainedRow>,
     retained_row_estimated_bytes: usize,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    /// Session-scoped highlight rules are stored as raw rules (both theme
+    /// colours) and overlaid onto `keyword_rules` for this surface only.
+    /// Borrowed by the popup editor; dropped with the surface on session close.
+    session_keyword_rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
     /// Cached `ui_highlight_line_roles`; the highlight path runs inside
     /// `app.update`, where reading the app entity would borrow it twice.
     line_roles: bool,
@@ -394,6 +413,7 @@ pub(in crate::features) struct TerminalSurface {
     decorations: Arc<[TerminalLineDecorations]>,
     selection_visual: Option<TerminalSelection>,
     selection_visual_history: nyaterm_terminal::TerminalHistoryState,
+    local_mode_cursor: Option<TerminalBufferCellPos>,
     palette: ThemePalette,
     font_family: String,
     font_fallbacks: Option<FontFallbacks>,
@@ -471,6 +491,7 @@ impl TerminalSurface {
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
             keyword_rules: Arc::new(Vec::new()),
+            session_keyword_rules: Vec::new(),
             line_roles: true,
             keyword_highlights: None,
             keyword_highlight_generation: 0,
@@ -485,6 +506,7 @@ impl TerminalSurface {
             decorations: Arc::from(Vec::<TerminalLineDecorations>::new()),
             selection_visual: None,
             selection_visual_history: Default::default(),
+            local_mode_cursor: None,
             palette: crate::theme::theme_palette("github-dark"),
             font_family: "monospace".to_string(),
             font_fallbacks: None,
@@ -1942,6 +1964,7 @@ impl TerminalSurface {
         if allow_empty_stale && decorations.is_empty() && !self.decorations.is_empty() {
             let show_cursor = show_cursor && !self.visual_scroll_active();
             let cursor_style = cursor_style.into();
+            let keyword_rules = self.keyword_rules_with_session(&keyword_rules);
             let rules_changed =
                 !terminal_keyword_rule_sets_equal(&self.keyword_rules, &keyword_rules);
             let changed = rules_changed
@@ -1967,6 +1990,7 @@ impl TerminalSurface {
     ) -> bool {
         let show_cursor = show_cursor && !self.visual_scroll_active();
         let cursor_style = cursor_style.into();
+        let keyword_rules = self.keyword_rules_with_session(&keyword_rules);
         let rules_changed = !terminal_keyword_rule_sets_equal(&self.keyword_rules, &keyword_rules);
         let decorations_changed = !Arc::ptr_eq(&self.decorations, &decorations)
             && self.decorations.as_ref() != decorations.as_ref();
@@ -2256,6 +2280,53 @@ impl TerminalSurface {
         }
     }
 
+    /// True when the terminal background is dark; matches
+    /// `ShellState::terminal_theme_is_dark` so session rules pick the same
+    /// light/dark colour as the globally resolved rules.
+    fn keyword_highlight_theme_is_dark(&self) -> bool {
+        let bg = self.palette.terminal_bg;
+        let r = ((bg >> 16) & 0xff) as f32;
+        let g = ((bg >> 8) & 0xff) as f32;
+        let b = (bg & 0xff) as f32;
+        let lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+        lum < 0.5
+    }
+
+    /// Overlay this surface's session rules on the globally resolved rules.
+    fn keyword_rules_with_session(
+        &self,
+        global: &Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    ) -> Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
+        terminal_keyword_rules_with_session(
+            global,
+            &self.session_keyword_rules,
+            self.keyword_highlight_theme_is_dark(),
+        )
+    }
+
+    /// Replace the session-scoped highlight rules for this surface and
+    /// invalidate/refresh highlighting so the change becomes visible at once.
+    pub(in crate::features) fn set_session_keyword_rules(
+        &mut self,
+        rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session_keyword_rules == rules {
+            return;
+        }
+        self.session_keyword_rules = rules;
+        let merged = self.keyword_rules_with_session(&self.keyword_rules);
+        self.keyword_rules = merged;
+        self.invalidate_keyword_highlight_config();
+        self.schedule_keyword_highlights(false, self.keyword_highlight_output_pressure, cx);
+    }
+
+    pub(in crate::features) fn session_keyword_rules(
+        &self,
+    ) -> &[nyaterm_core::models::KeywordHighlightRule] {
+        &self.session_keyword_rules
+    }
+
     fn invalidate_keyword_highlight_config(&mut self) {
         self.keyword_highlight_generation = self.keyword_highlight_generation.saturating_add(1);
         self.keyword_highlight_cancel_epoch
@@ -2292,6 +2363,18 @@ impl TerminalSurface {
         }
         self.selection_visual = selection;
         self.selection_visual_history = self.history;
+        self.revision = self.revision.saturating_add(1);
+        true
+    }
+
+    pub(in crate::features) fn set_local_mode_cursor(
+        &mut self,
+        cursor: Option<TerminalBufferCellPos>,
+    ) -> bool {
+        if self.local_mode_cursor == cursor {
+            return false;
+        }
+        self.local_mode_cursor = cursor;
         self.revision = self.revision.saturating_add(1);
         true
     }
@@ -3352,7 +3435,8 @@ impl Render for TerminalSurface {
             .with_unwrapped_layout(self.painted_unwrapped.clone())
             .with_visual_y_offset(visual_y_offset)
             .with_zebra_stripes(zebra_stripes_visible, target_line)
-            .with_zebra_stripes_by_row(self.zebra_stripes_by_row);
+            .with_zebra_stripes_by_row(self.zebra_stripes_by_row)
+            .with_local_mode_cursor(self.local_mode_cursor);
         if let Some(highlights) = self.keyword_highlights.clone() {
             grid = grid.with_keyword_highlights(highlights);
         }

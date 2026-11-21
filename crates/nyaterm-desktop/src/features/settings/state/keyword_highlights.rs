@@ -169,4 +169,11 @@ impl SettingsFeatureState {
         self.keyword_config.rules.push(rule);
         self.begin_keyword_highlight_edit(id, KeywordHighlightEditorField::Name);
     }
+    /// Replace the whole set of global custom rules (used by the popup editor).
+    pub(in crate::features) fn replace_keyword_highlight_rules(
+        &mut self,
+        rules: Vec<KeywordHighlightRule>,
+    ) {
+        self.keyword_config.rules = rules;
+    }
 }

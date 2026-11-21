@@ -52,6 +52,8 @@ pub fn connection_kind_counts(
         ConnectionBatchKind::Serial,
         ConnectionBatchKind::Rdp,
         ConnectionBatchKind::Vnc,
+        ConnectionBatchKind::Adb,
+        ConnectionBatchKind::Ftp,
     ]
     .into_iter()
     .filter_map(|kind| counts.get(&kind).map(|count| (kind, *count)))

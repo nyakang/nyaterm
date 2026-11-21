@@ -1,5 +1,5 @@
 use super::draft::{AssetBatchEditDraft, BatchEditMode};
-use super::fields::{BatchFieldId, DISPLAY_FIELDS, EDITABLE_FIELDS, FieldBasis};
+use super::fields::{BatchFieldKey, DISPLAY_FIELDS, EDITABLE_FIELDS, FieldBasis};
 pub(in crate::features) use nyaterm_core::models::connection_batch::basis::BatchFieldApplicability;
 pub(super) use nyaterm_core::models::connection_batch::basis::connection_kind_counts as asset_batch_kind_counts;
 use nyaterm_core::models::connection_batch::basis::{self as domain_basis, BatchValueBasis};
@@ -53,25 +53,25 @@ fn match_endpoint_label(endpoint: &nyaterm_core::SshAgentEndpoint) -> String {
 /// inapplicable fields have no selection at all.
 pub(super) fn select_initial_value(
     draft: &AssetBatchEditDraft,
-    field: BatchFieldId,
+    field: BatchFieldKey,
 ) -> Option<String> {
     if draft.mode(field) == BatchEditMode::Keep && draft.basis(field) != FieldBasis::Uniform {
         return None;
     }
     let value = draft.value(field);
     match field {
-        BatchFieldId::Group => Some(value.to_string()),
-        BatchFieldId::Encoding => Some(if value.is_empty() {
+        BatchFieldKey::Group => Some(value.to_string()),
+        BatchFieldKey::Encoding => Some(if value.is_empty() {
             "global".to_string()
         } else {
             value.to_string()
         }),
-        BatchFieldId::SftpFilenameEncoding => Some(if value.is_empty() {
+        BatchFieldKey::SftpFilenameEncoding => Some(if value.is_empty() {
             "terminal".to_string()
         } else {
             value.to_string()
         }),
-        BatchFieldId::RdpBackend => Some(
+        BatchFieldKey::RdpBackend => Some(
             match value {
                 "internal" | "auto" => "builtin",
                 "active-x" => "windows",
@@ -79,7 +79,7 @@ pub(super) fn select_initial_value(
             }
             .to_string(),
         ),
-        BatchFieldId::RdpDisplayMode => Some(
+        BatchFieldKey::RdpDisplayMode => Some(
             match value {
                 "fixed" | "native" => "fixed",
                 _ => "fit-window",
@@ -88,13 +88,13 @@ pub(super) fn select_initial_value(
         ),
         // Keep the original reference/default sentinel for display lookup. Empty
         // options are filtered from Set mode; removing a value requires Clear.
-        BatchFieldId::Account
-        | BatchFieldId::Key
-        | BatchFieldId::Otp
-        | BatchFieldId::Proxy
-        | BatchFieldId::ProxyJump
-        | BatchFieldId::TerminalType
-        | BatchFieldId::SftpPipelineDepth => Some(value.to_string()),
+        BatchFieldKey::Account
+        | BatchFieldKey::Key
+        | BatchFieldKey::Otp
+        | BatchFieldKey::Proxy
+        | BatchFieldKey::ProxyJump
+        | BatchFieldKey::TerminalType
+        | BatchFieldKey::SftpPipelineDepth => Some(value.to_string()),
         _ if value.is_empty() => None,
         _ => Some(value.to_string()),
     }
@@ -141,18 +141,15 @@ fn is_network_kind(kind: ConnectionBatchKind) -> bool {
 }
 
 /// Fields whose meaning does not depend on the protocol.
-pub(in crate::features) fn is_kind_independent(field: BatchFieldId) -> bool {
+pub(in crate::features) fn is_kind_independent(field: BatchFieldKey) -> bool {
     matches!(
         field,
-        BatchFieldId::Group
-            | BatchFieldId::Description
-            | BatchFieldId::Icon
-            | BatchFieldId::IconAutoDetect
-            | BatchFieldId::Name
-            | BatchFieldId::Tags
-            | BatchFieldId::RecordingUseGlobal
-            | BatchFieldId::RecordingAutoStart
-            | BatchFieldId::RecordingMode
+        BatchFieldKey::Group
+            | BatchFieldKey::Description
+            | BatchFieldKey::Icon
+            | BatchFieldKey::IconAutoDetect
+            | BatchFieldKey::Name
+            | BatchFieldKey::Tags
     )
 }
 
@@ -160,119 +157,146 @@ pub(in crate::features) fn is_kind_independent(field: BatchFieldId) -> bool {
 /// do not exist are skipped; they never add an extra row.
 pub(in crate::features) fn batch_field_in_kind(
     kind: ConnectionBatchKind,
-    field: BatchFieldId,
+    field: BatchFieldKey,
 ) -> bool {
     use ConnectionBatchKind::{LocalTerminal, Rdp, Serial, Ssh, Telnet, Vnc};
     if is_kind_independent(field) {
         return true;
     }
     match field {
-        BatchFieldId::Host | BatchFieldId::Port | BatchFieldId::Username => is_network_kind(kind),
-        BatchFieldId::Account | BatchFieldId::Password | BatchFieldId::AuthMode => {
+        BatchFieldKey::Host | BatchFieldKey::Port => {
             is_network_kind(kind)
+                || matches!(kind, ConnectionBatchKind::Ftp | ConnectionBatchKind::Adb)
         }
-        BatchFieldId::Otp
-        | BatchFieldId::OtpAutoFill
-        | BatchFieldId::Key
-        | BatchFieldId::SshAuthAgentEndpoint
-        | BatchFieldId::SshAuthAgentEnvironment
-        | BatchFieldId::SshAuthAgentSocket => kind == Ssh,
-        BatchFieldId::Proxy | BatchFieldId::ProxyJump => is_network_kind(kind),
-        BatchFieldId::ShellPath | BatchFieldId::ShellArgs | BatchFieldId::WorkingDir => {
+        BatchFieldKey::Username => is_network_kind(kind) || kind == ConnectionBatchKind::Ftp,
+        BatchFieldKey::Account | BatchFieldKey::Password | BatchFieldKey::AuthMode => {
+            is_network_kind(kind) || kind == ConnectionBatchKind::Ftp
+        }
+        BatchFieldKey::Otp
+        | BatchFieldKey::OtpAutoFill
+        | BatchFieldKey::Key
+        | BatchFieldKey::SshAuthAgentEndpoint
+        | BatchFieldKey::SshAuthAgentEnvironment
+        | BatchFieldKey::SshAuthAgentSocket => kind == Ssh,
+        BatchFieldKey::Proxy | BatchFieldKey::ProxyJump => is_network_kind(kind),
+        BatchFieldKey::ShellPath | BatchFieldKey::ShellArgs | BatchFieldKey::WorkingDir => {
             kind == LocalTerminal
         }
-        BatchFieldId::SerialPort
-        | BatchFieldId::BaudRate
-        | BatchFieldId::DataBits
-        | BatchFieldId::Parity
-        | BatchFieldId::StopBits
-        | BatchFieldId::FlowControl => kind == Serial,
-        BatchFieldId::TelnetRawTcp
-        | BatchFieldId::TelnetKeepAlive
-        | BatchFieldId::TelnetLocalEcho
-        | BatchFieldId::TelnetLocalLineEdit
-        | BatchFieldId::TelnetForceChar
-        | BatchFieldId::TelnetSendNaws
-        | BatchFieldId::TelnetSendSga
-        | BatchFieldId::TelnetEnterMode
-        | BatchFieldId::TelnetAutoLoginEnabled
-        | BatchFieldId::TelnetAutoLoginWake
-        | BatchFieldId::TelnetAutoLoginTimeout
-        | BatchFieldId::TelnetAutoLoginRetries
-        | BatchFieldId::TelnetAutoLoginUserPrompt
-        | BatchFieldId::TelnetAutoLoginPasswordPrompt
-        | BatchFieldId::TelnetAutoLoginSuccessPrompt
-        | BatchFieldId::TelnetAutoLoginFailurePrompt => kind == Telnet,
-        BatchFieldId::RdpDomain
-        | BatchFieldId::RdpBackend
-        | BatchFieldId::RdpDisplayMode
-        | BatchFieldId::RdpWidth
-        | BatchFieldId::RdpHeight
-        | BatchFieldId::RdpWallpaper
-        | BatchFieldId::RdpThemes
-        | BatchFieldId::RdpFontSmoothing
-        | BatchFieldId::RdpDesktopComposition
-        | BatchFieldId::RdpDisableFullWindowDrag
-        | BatchFieldId::RdpDisableMenuAnimations
-        | BatchFieldId::RdpDisableCursorShadow
-        | BatchFieldId::RdpDisableCursorBlinking
-        | BatchFieldId::RdpAutoReconnect
-        | BatchFieldId::RdpReconnectAttempts => kind == Rdp,
-        BatchFieldId::VncScaleMode
-        | BatchFieldId::VncClipboard
-        | BatchFieldId::VncShared
-        | BatchFieldId::VncViewOnly
-        | BatchFieldId::VncReconnect
-        | BatchFieldId::VncReconnectAttempts => kind == Vnc,
-        BatchFieldId::Encoding => matches!(kind, Ssh | LocalTerminal | Telnet | Serial),
-        BatchFieldId::Backspace => matches!(kind, Ssh | Telnet | Serial),
-        BatchFieldId::DynamicTabTitle => matches!(kind, Ssh | LocalTerminal),
-        BatchFieldId::SshProfile | BatchFieldId::TerminalType => kind == Ssh,
-        BatchFieldId::SftpEnabled
-        | BatchFieldId::SftpCompatibility
-        | BatchFieldId::SftpCwdFollow
-        | BatchFieldId::SftpShellTimeout
-        | BatchFieldId::SftpFilenameEncoding
-        | BatchFieldId::SftpPipelineDepth
-        | BatchFieldId::X11
-        | BatchFieldId::AgentForwarding
-        | BatchFieldId::PostLoginEnabled
-        | BatchFieldId::PostLoginCommand
-        | BatchFieldId::PostLoginDelay
-        | BatchFieldId::SshAlgorithmMode
-        | BatchFieldId::SshKex
-        | BatchFieldId::SshCiphers
-        | BatchFieldId::SshMacs
-        | BatchFieldId::SshHostKeys
-        | BatchFieldId::AgentExternal
-        | BatchFieldId::AgentStoredKeys
-        | BatchFieldId::AgentPolicy
-        | BatchFieldId::AgentEndpoints => kind == Ssh,
-        BatchFieldId::RdpUseNla
-        | BatchFieldId::RdpCertificatePolicy
-        | BatchFieldId::RdpAdminSession => kind == Rdp,
-        BatchFieldId::VncSecurityMode => kind == Vnc,
-        BatchFieldId::Group
-        | BatchFieldId::Description
-        | BatchFieldId::Icon
-        | BatchFieldId::IconAutoDetect
-        | BatchFieldId::Name
-        | BatchFieldId::Tags
-        | BatchFieldId::RecordingUseGlobal
-        | BatchFieldId::RecordingAutoStart
-        | BatchFieldId::RecordingMode => true,
+        BatchFieldKey::SerialPort
+        | BatchFieldKey::BaudRate
+        | BatchFieldKey::DataBits
+        | BatchFieldKey::Parity
+        | BatchFieldKey::StopBits
+        | BatchFieldKey::FlowControl => kind == Serial,
+        BatchFieldKey::TelnetRawTcp
+        | BatchFieldKey::TelnetKeepAlive
+        | BatchFieldKey::TelnetLocalEcho
+        | BatchFieldKey::TelnetLocalLineEdit
+        | BatchFieldKey::TelnetForceChar
+        | BatchFieldKey::TelnetSendNaws
+        | BatchFieldKey::TelnetSendSga
+        | BatchFieldKey::TelnetEnterMode
+        | BatchFieldKey::TelnetAutoLoginEnabled
+        | BatchFieldKey::TelnetAutoLoginWake
+        | BatchFieldKey::TelnetAutoLoginTimeout
+        | BatchFieldKey::TelnetAutoLoginRetries
+        | BatchFieldKey::TelnetAutoLoginUserPrompt
+        | BatchFieldKey::TelnetAutoLoginPasswordPrompt
+        | BatchFieldKey::TelnetAutoLoginSuccessPrompt
+        | BatchFieldKey::TelnetAutoLoginFailurePrompt => kind == Telnet,
+        BatchFieldKey::RdpDomain
+        | BatchFieldKey::RdpBackend
+        | BatchFieldKey::RdpDisplayMode
+        | BatchFieldKey::RdpWidth
+        | BatchFieldKey::RdpHeight
+        | BatchFieldKey::RdpWallpaper
+        | BatchFieldKey::RdpThemes
+        | BatchFieldKey::RdpFontSmoothing
+        | BatchFieldKey::RdpDesktopComposition
+        | BatchFieldKey::RdpDisableFullWindowDrag
+        | BatchFieldKey::RdpDisableMenuAnimations
+        | BatchFieldKey::RdpDisableCursorShadow
+        | BatchFieldKey::RdpDisableCursorBlinking
+        | BatchFieldKey::RdpAutoReconnect
+        | BatchFieldKey::RdpReconnectAttempts => kind == Rdp,
+        BatchFieldKey::VncScaleMode
+        | BatchFieldKey::VncClipboard
+        | BatchFieldKey::VncShared
+        | BatchFieldKey::VncViewOnly
+        | BatchFieldKey::VncReconnect
+        | BatchFieldKey::VncReconnectAttempts => kind == Vnc,
+        BatchFieldKey::Encoding => matches!(kind, Ssh | LocalTerminal | Telnet | Serial),
+        BatchFieldKey::Backspace => matches!(kind, Ssh | Telnet | Serial),
+        BatchFieldKey::DynamicTabTitle => matches!(kind, Ssh | LocalTerminal),
+        BatchFieldKey::SshProfile
+        | BatchFieldKey::TerminalType
+        | BatchFieldKey::SshCompatibility => kind == Ssh,
+        BatchFieldKey::SftpEnabled
+        | BatchFieldKey::SftpCompatibility
+        | BatchFieldKey::SftpCwdFollow
+        | BatchFieldKey::SftpShellTimeout
+        | BatchFieldKey::SftpFilenameEncoding
+        | BatchFieldKey::SftpPipelineDepth
+        | BatchFieldKey::X11
+        | BatchFieldKey::AgentForwarding
+        | BatchFieldKey::PostLoginEnabled
+        | BatchFieldKey::PostLoginCommand
+        | BatchFieldKey::PostLoginDelay
+        | BatchFieldKey::SshAlgorithmMode
+        | BatchFieldKey::SshKex
+        | BatchFieldKey::SshCiphers
+        | BatchFieldKey::SshMacs
+        | BatchFieldKey::SshHostKeys
+        | BatchFieldKey::AllowShortRsaHostKeys
+        | BatchFieldKey::AgentExternal
+        | BatchFieldKey::AgentStoredKeys
+        | BatchFieldKey::AgentPolicy
+        | BatchFieldKey::AgentEndpoints => kind == Ssh,
+        BatchFieldKey::RdpUseNla
+        | BatchFieldKey::RdpCertificatePolicy
+        | BatchFieldKey::RdpAdminSession => kind == Rdp,
+        BatchFieldKey::VncSecurityMode => kind == Vnc,
+        BatchFieldKey::AdbDirectory
+        | BatchFieldKey::AdbSerial
+        | BatchFieldKey::AdbScreenQuality
+        | BatchFieldKey::AdbScreenMaxSize
+        | BatchFieldKey::AdbScreenFps
+        | BatchFieldKey::AdbScreenBitRate
+        | BatchFieldKey::AdbScreenPowerOn
+        | BatchFieldKey::AdbScreenOrientation => kind == ConnectionBatchKind::Adb,
+        BatchFieldKey::FtpInitialDirectory
+        | BatchFieldKey::FtpLocalInitialDirectory
+        | BatchFieldKey::FtpPassiveMode
+        | BatchFieldKey::FtpFilenameEncodingMode
+        | BatchFieldKey::FtpFilenameEncoding
+        | BatchFieldKey::FtpAsciiMode
+        | BatchFieldKey::FtpSecurityMode
+        | BatchFieldKey::FtpTlsVersion
+        | BatchFieldKey::FtpConnectTimeout => kind == ConnectionBatchKind::Ftp,
+        BatchFieldKey::Group
+        | BatchFieldKey::Description
+        | BatchFieldKey::Icon
+        | BatchFieldKey::IconAutoDetect
+        | BatchFieldKey::Name
+        | BatchFieldKey::Tags => true,
+        BatchFieldKey::RecordingUseGlobal
+        | BatchFieldKey::RecordingAutoStart
+        | BatchFieldKey::RecordingMode => matches!(kind, Ssh | LocalTerminal | Telnet | Serial),
     }
 }
 
-fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Option<String> {
+pub(in crate::features) fn field_display_value(
+    connection: &SavedConnection,
+    field: BatchFieldKey,
+) -> Option<String> {
     let is_ssh = matches!(&connection.config, ConnectionType::Ssh { .. });
     match field {
-        BatchFieldId::Name => Some(connection.name.clone()),
-        BatchFieldId::Tags => Some(connection.tags.join(", ")),
-        BatchFieldId::Host => {
+        BatchFieldKey::Name => Some(connection.name.clone()),
+        BatchFieldKey::Tags => Some(connection.tags.join(", ")),
+        BatchFieldKey::Host => {
             endpoint_values(&connection.config).map(|(host, _, _)| host.to_string())
         }
-        BatchFieldId::Account => Some(
+        BatchFieldKey::Account => Some(
             connection
                 .auth
                 .as_ref()
@@ -280,7 +304,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .unwrap_or_default()
                 .to_string(),
         ),
-        BatchFieldId::Password => Some(match connection.auth.as_ref() {
+        BatchFieldKey::Password => Some(match connection.auth.as_ref() {
             Some(auth)
                 if auth
                     .password_id
@@ -293,7 +317,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
             }
             _ => t!("assets.batch.passwordUnset").to_string(),
         }),
-        BatchFieldId::AuthMode => Some(
+        BatchFieldKey::AuthMode => Some(
             connection
                 .auth
                 .as_ref()
@@ -301,7 +325,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .filter(|mode| !mode.is_empty())
                 .unwrap_or_else(|| "password".to_string()),
         ),
-        BatchFieldId::Otp => Some(
+        BatchFieldKey::Otp => Some(
             connection
                 .auth
                 .as_ref()
@@ -309,13 +333,13 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .unwrap_or_default()
                 .to_string(),
         ),
-        BatchFieldId::OtpAutoFill => Some(bool_text(
+        BatchFieldKey::OtpAutoFill => Some(bool_text(
             connection
                 .auth
                 .as_ref()
                 .is_some_and(|auth| auth.auto_fill_otp),
         )),
-        BatchFieldId::Key => Some(
+        BatchFieldKey::Key => Some(
             connection
                 .auth
                 .as_ref()
@@ -323,7 +347,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .unwrap_or_default()
                 .to_string(),
         ),
-        BatchFieldId::SshAuthAgentEndpoint => match &connection.config {
+        BatchFieldKey::SshAuthAgentEndpoint => match &connection.config {
             ConnectionType::Ssh {
                 auth_agent_endpoint,
                 ..
@@ -345,7 +369,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
         // Both text fields stay applicable for SSH even when the endpoint type
         // currently selects the other one: the user may switch the type and the
         // value has to be editable in the same draft.
-        BatchFieldId::SshAuthAgentEnvironment => match &connection.config {
+        BatchFieldKey::SshAuthAgentEnvironment => match &connection.config {
             ConnectionType::Ssh {
                 auth_agent_endpoint,
                 ..
@@ -355,7 +379,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
             }),
             _ => None,
         },
-        BatchFieldId::SshAuthAgentSocket => match &connection.config {
+        BatchFieldKey::SshAuthAgentSocket => match &connection.config {
             ConnectionType::Ssh {
                 auth_agent_endpoint,
                 ..
@@ -365,7 +389,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
             }),
             _ => None,
         },
-        BatchFieldId::Proxy => Some(
+        BatchFieldKey::Proxy => Some(
             connection
                 .network
                 .as_ref()
@@ -373,7 +397,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .unwrap_or_default()
                 .to_string(),
         ),
-        BatchFieldId::ProxyJump => Some(
+        BatchFieldKey::ProxyJump => Some(
             connection
                 .network
                 .as_ref()
@@ -381,223 +405,321 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .unwrap_or_default()
                 .to_string(),
         ),
-        BatchFieldId::ShellPath => match &connection.config {
+        BatchFieldKey::ShellPath => match &connection.config {
             ConnectionType::LocalTerminal { shell_path, .. } => Some(shell_path.clone()),
             _ => None,
         },
-        BatchFieldId::ShellArgs => match &connection.config {
+        BatchFieldKey::ShellArgs => match &connection.config {
             ConnectionType::LocalTerminal { shell_args, .. } => Some(shell_args.clone()),
             _ => None,
         },
-        BatchFieldId::WorkingDir => match &connection.config {
+        BatchFieldKey::WorkingDir => match &connection.config {
             ConnectionType::LocalTerminal { working_dir, .. } => {
                 Some(working_dir.clone().unwrap_or_default())
             }
             _ => None,
         },
-        BatchFieldId::SerialPort => match &connection.config {
+        BatchFieldKey::SerialPort => match &connection.config {
             ConnectionType::Serial { port_name, .. } => Some(port_name.clone()),
             _ => None,
         },
-        BatchFieldId::BaudRate => match &connection.config {
+        BatchFieldKey::BaudRate => match &connection.config {
             ConnectionType::Serial { baud_rate, .. } => Some(baud_rate.to_string()),
             _ => None,
         },
-        BatchFieldId::DataBits => match &connection.config {
+        BatchFieldKey::DataBits => match &connection.config {
             ConnectionType::Serial { data_bits, .. } => Some(data_bits.to_string()),
             _ => None,
         },
-        BatchFieldId::Parity => match &connection.config {
+        BatchFieldKey::Parity => match &connection.config {
             ConnectionType::Serial { parity, .. } => Some(parity.clone()),
             _ => None,
         },
-        BatchFieldId::StopBits => match &connection.config {
+        BatchFieldKey::StopBits => match &connection.config {
             ConnectionType::Serial { stop_bits, .. } => Some(stop_bits.clone()),
             _ => None,
         },
-        BatchFieldId::FlowControl => match &connection.config {
+        BatchFieldKey::FlowControl => match &connection.config {
             ConnectionType::Serial { flow_control, .. } => Some(flow_control.as_str().to_string()),
             _ => None,
         },
-        BatchFieldId::TelnetRawTcp => match &connection.config {
+        BatchFieldKey::TelnetRawTcp => match &connection.config {
             ConnectionType::Telnet { raw_tcp_cli, .. } => Some(bool_text(*raw_tcp_cli)),
             _ => None,
         },
-        BatchFieldId::TelnetKeepAlive => match &connection.config {
+        BatchFieldKey::TelnetKeepAlive => match &connection.config {
             ConnectionType::Telnet {
                 keep_alive_interval_secs,
                 ..
             } => Some(keep_alive_interval_secs.to_string()),
             _ => None,
         },
-        BatchFieldId::TelnetLocalEcho => match &connection.config {
+        BatchFieldKey::TelnetLocalEcho => match &connection.config {
             ConnectionType::Telnet { local_echo, .. } => Some(bool_text(*local_echo)),
             _ => None,
         },
-        BatchFieldId::TelnetLocalLineEdit => match &connection.config {
+        BatchFieldKey::TelnetLocalLineEdit => match &connection.config {
             ConnectionType::Telnet {
                 local_line_edit, ..
             } => Some(bool_text(*local_line_edit)),
             _ => None,
         },
-        BatchFieldId::TelnetForceChar => match &connection.config {
+        BatchFieldKey::TelnetForceChar => match &connection.config {
             ConnectionType::Telnet {
                 force_character_at_a_time,
                 ..
             } => Some(bool_text(*force_character_at_a_time)),
             _ => None,
         },
-        BatchFieldId::TelnetSendNaws => match &connection.config {
+        BatchFieldKey::TelnetSendNaws => match &connection.config {
             ConnectionType::Telnet { send_naws, .. } => Some(bool_text(*send_naws)),
             _ => None,
         },
-        BatchFieldId::TelnetSendSga => match &connection.config {
+        BatchFieldKey::TelnetSendSga => match &connection.config {
             ConnectionType::Telnet { send_sga, .. } => Some(bool_text(*send_sga)),
             _ => None,
         },
-        BatchFieldId::TelnetEnterMode => match &connection.config {
+        BatchFieldKey::TelnetEnterMode => match &connection.config {
             ConnectionType::Telnet { enter_mode, .. } => Some(enter_mode.clone()),
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginEnabled => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginEnabled => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => Some(bool_text(auto_login.enabled)),
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginWake => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginWake => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => {
                 Some(bool_text(auto_login.send_wake_enter))
             }
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginTimeout => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginTimeout => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => Some(auto_login.timeout_ms.to_string()),
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginRetries => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginRetries => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => Some(auto_login.max_retries.to_string()),
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginUserPrompt => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginUserPrompt => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => {
                 Some(auto_login.username_prompt_regex.clone().unwrap_or_default())
             }
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginPasswordPrompt => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginPasswordPrompt => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => {
                 Some(auto_login.password_prompt_regex.clone().unwrap_or_default())
             }
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginSuccessPrompt => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginSuccessPrompt => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => {
                 Some(auto_login.success_prompt_regex.clone().unwrap_or_default())
             }
             _ => None,
         },
-        BatchFieldId::TelnetAutoLoginFailurePrompt => match &connection.config {
+        BatchFieldKey::TelnetAutoLoginFailurePrompt => match &connection.config {
             ConnectionType::Telnet { auto_login, .. } => {
                 Some(auto_login.failure_prompt_regex.clone().unwrap_or_default())
             }
             _ => None,
         },
-        BatchFieldId::RdpDomain => match &connection.config {
+        BatchFieldKey::RdpDomain => match &connection.config {
             ConnectionType::Rdp { domain, .. } => Some(domain.clone()),
             _ => None,
         },
-        BatchFieldId::RdpBackend => match &connection.config {
+        BatchFieldKey::RdpBackend => match &connection.config {
             ConnectionType::Rdp { backend, .. } => Some(backend.clone()),
             _ => None,
         },
-        BatchFieldId::RdpDisplayMode => match &connection.config {
+        BatchFieldKey::RdpDisplayMode => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(display.mode.clone()),
             _ => None,
         },
-        BatchFieldId::RdpWidth => match &connection.config {
+        BatchFieldKey::RdpWidth => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(display.width.to_string()),
             _ => None,
         },
-        BatchFieldId::RdpHeight => match &connection.config {
+        BatchFieldKey::RdpHeight => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(display.height.to_string()),
             _ => None,
         },
-        BatchFieldId::RdpWallpaper => match &connection.config {
+        BatchFieldKey::RdpWallpaper => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(bool_text(display.display_wallpaper)),
             _ => None,
         },
-        BatchFieldId::RdpThemes => match &connection.config {
+        BatchFieldKey::RdpThemes => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(bool_text(display.display_themes)),
             _ => None,
         },
-        BatchFieldId::RdpFontSmoothing => match &connection.config {
+        BatchFieldKey::RdpFontSmoothing => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(bool_text(display.enable_font_smoothing)),
             _ => None,
         },
-        BatchFieldId::RdpDesktopComposition => match &connection.config {
+        BatchFieldKey::RdpDesktopComposition => match &connection.config {
             ConnectionType::Rdp { display, .. } => {
                 Some(bool_text(display.enable_desktop_composition))
             }
             _ => None,
         },
-        BatchFieldId::RdpDisableFullWindowDrag => match &connection.config {
+        BatchFieldKey::RdpDisableFullWindowDrag => match &connection.config {
             ConnectionType::Rdp { display, .. } => {
                 Some(bool_text(display.disable_full_window_drag))
             }
             _ => None,
         },
-        BatchFieldId::RdpDisableMenuAnimations => match &connection.config {
+        BatchFieldKey::RdpDisableMenuAnimations => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(bool_text(display.disable_menu_animations)),
             _ => None,
         },
-        BatchFieldId::RdpDisableCursorShadow => match &connection.config {
+        BatchFieldKey::RdpDisableCursorShadow => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(bool_text(display.disable_cursor_shadow)),
             _ => None,
         },
-        BatchFieldId::RdpDisableCursorBlinking => match &connection.config {
+        BatchFieldKey::RdpDisableCursorBlinking => match &connection.config {
             ConnectionType::Rdp { display, .. } => Some(bool_text(display.disable_cursor_blinking)),
             _ => None,
         },
-        BatchFieldId::RdpAutoReconnect => match &connection.config {
+        BatchFieldKey::RdpAutoReconnect => match &connection.config {
             ConnectionType::Rdp { reconnect, .. } => Some(bool_text(reconnect.enabled)),
             _ => None,
         },
-        BatchFieldId::RdpReconnectAttempts => match &connection.config {
+        BatchFieldKey::RdpReconnectAttempts => match &connection.config {
             ConnectionType::Rdp { reconnect, .. } => Some(reconnect.max_attempts.to_string()),
             _ => None,
         },
-        BatchFieldId::VncScaleMode => match &connection.config {
+        BatchFieldKey::VncScaleMode => match &connection.config {
             ConnectionType::Vnc { display, .. } => Some(display.scale_mode.clone()),
             _ => None,
         },
-        BatchFieldId::VncClipboard => match &connection.config {
+        BatchFieldKey::VncClipboard => match &connection.config {
             ConnectionType::Vnc { clipboard, .. } => Some(bool_text(clipboard.enabled)),
             _ => None,
         },
-        BatchFieldId::VncShared => match &connection.config {
+        BatchFieldKey::VncShared => match &connection.config {
             ConnectionType::Vnc { shared, .. } => Some(bool_text(*shared)),
             _ => None,
         },
-        BatchFieldId::VncViewOnly => match &connection.config {
+        BatchFieldKey::VncViewOnly => match &connection.config {
             ConnectionType::Vnc { view_only, .. } => Some(bool_text(*view_only)),
             _ => None,
         },
-        BatchFieldId::VncReconnect => match &connection.config {
+        BatchFieldKey::VncReconnect => match &connection.config {
             ConnectionType::Vnc { reconnect, .. } => Some(bool_text(reconnect.enabled)),
             _ => None,
         },
-        BatchFieldId::VncReconnectAttempts => match &connection.config {
+        BatchFieldKey::VncReconnectAttempts => match &connection.config {
             ConnectionType::Vnc { reconnect, .. } => Some(reconnect.max_attempts.to_string()),
             _ => None,
         },
-        BatchFieldId::RecordingUseGlobal => Some(bool_text(connection.recording.is_none())),
-        BatchFieldId::RecordingAutoStart => Some(bool_text(
+        BatchFieldKey::AdbSerial => match &connection.config {
+            ConnectionType::Adb { device, .. } => Some(device.serial()),
+            _ => None,
+        },
+        BatchFieldKey::AdbDirectory => match &connection.config {
+            ConnectionType::Adb { directory, .. } => Some(directory.clone()),
+            _ => None,
+        },
+        BatchFieldKey::AdbScreenQuality => match &connection.config {
+            ConnectionType::Adb { screen, .. } => Some(
+                nyaterm_core::models::android::ScreenQualityPreset::ALL
+                    .into_iter()
+                    .find(|preset| preset.matches(*screen))
+                    .map(|preset| match preset {
+                        nyaterm_core::models::android::ScreenQualityPreset::Smooth => "smooth",
+                        nyaterm_core::models::android::ScreenQualityPreset::Balanced => "balanced",
+                        nyaterm_core::models::android::ScreenQualityPreset::Sharp => "sharp",
+                    })
+                    .unwrap_or("custom")
+                    .to_string(),
+            ),
+            _ => None,
+        },
+        BatchFieldKey::AdbScreenMaxSize => match &connection.config {
+            ConnectionType::Adb { screen, .. } => Some(screen.max_size.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::AdbScreenFps => match &connection.config {
+            ConnectionType::Adb { screen, .. } => Some(screen.max_fps.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::AdbScreenBitRate => match &connection.config {
+            ConnectionType::Adb { screen, .. } => Some(screen.bit_rate.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::AdbScreenPowerOn => match &connection.config {
+            ConnectionType::Adb { screen, .. } => Some(bool_text(screen.power_on)),
+            _ => None,
+        },
+        BatchFieldKey::AdbScreenOrientation => match &connection.config {
+            ConnectionType::Adb { screen, .. } => {
+                Some(screen.capture_orientation.server_value().to_string())
+            }
+            _ => None,
+        },
+        BatchFieldKey::FtpInitialDirectory => match &connection.config {
+            ConnectionType::Ftp {
+                initial_directory, ..
+            } => Some(initial_directory.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpLocalInitialDirectory => match &connection.config {
+            ConnectionType::Ftp {
+                local_initial_directory,
+                ..
+            } => Some(local_initial_directory.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpPassiveMode => match &connection.config {
+            ConnectionType::Ftp { passive_mode, .. } => Some(passive_mode.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpFilenameEncodingMode => match &connection.config {
+            ConnectionType::Ftp {
+                ftp_filename_encoding_mode,
+                ..
+            } => Some(ftp_filename_encoding_mode.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpFilenameEncoding => match &connection.config {
+            ConnectionType::Ftp {
+                ftp_filename_encoding,
+                ..
+            } => Some(ftp_filename_encoding.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpAsciiMode => match &connection.config {
+            ConnectionType::Ftp { ftp_ascii_mode, .. } => Some(bool_text(*ftp_ascii_mode)),
+            _ => None,
+        },
+        BatchFieldKey::FtpSecurityMode => match &connection.config {
+            ConnectionType::Ftp {
+                ftp_security_mode, ..
+            } => Some(ftp_security_mode.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpTlsVersion => match &connection.config {
+            ConnectionType::Ftp {
+                ftp_tls_version, ..
+            } => Some(ftp_tls_version.clone()),
+            _ => None,
+        },
+        BatchFieldKey::FtpConnectTimeout => match &connection.config {
+            ConnectionType::Ftp {
+                connect_timeout_ms, ..
+            } => Some(connect_timeout_ms.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::RecordingUseGlobal => Some(bool_text(connection.recording.is_none())),
+        BatchFieldKey::RecordingAutoStart => Some(bool_text(
             connection
                 .recording
                 .as_ref()
                 .and_then(|recording| recording.auto_start)
                 .unwrap_or(false),
         )),
-        BatchFieldId::RecordingMode => Some(
+        BatchFieldKey::RecordingMode => Some(
             match connection
                 .recording
                 .as_ref()
@@ -608,13 +730,13 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
             }
             .to_string(),
         ),
-        BatchFieldId::AgentExternal => {
+        BatchFieldKey::AgentExternal => {
             agent_forwarding_value(connection, |sources, _| bool_text(sources.external_agent))
         }
-        BatchFieldId::AgentStoredKeys => {
+        BatchFieldKey::AgentStoredKeys => {
             agent_forwarding_value(connection, |sources, _| bool_text(sources.stored_keys))
         }
-        BatchFieldId::AgentPolicy => agent_forwarding_value(connection, |_, config| {
+        BatchFieldKey::AgentPolicy => agent_forwarding_value(connection, |_, config| {
             match config.policy {
                 nyaterm_core::SshAgentForwardingPolicy::All => "all",
                 nyaterm_core::SshAgentForwardingPolicy::Allowlist { .. } => "allowlist",
@@ -623,7 +745,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
         }),
         // The endpoint list is a composite read-only surface, so it keeps a
         // descriptive summary instead of a single scalar control value.
-        BatchFieldId::AgentEndpoints => agent_forwarding_value(connection, |sources, _| {
+        BatchFieldKey::AgentEndpoints => agent_forwarding_value(connection, |sources, _| {
             sources
                 .external_agent_endpoints
                 .iter()
@@ -631,24 +753,24 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .collect::<Vec<_>>()
                 .join(", ")
         }),
-        BatchFieldId::Group => Some(connection.group_id.clone().unwrap_or_default()),
-        BatchFieldId::Description => Some(connection.description.clone().unwrap_or_default()),
-        BatchFieldId::Icon => Some(
+        BatchFieldKey::Group => Some(connection.group_id.clone().unwrap_or_default()),
+        BatchFieldKey::Description => Some(connection.description.clone().unwrap_or_default()),
+        BatchFieldKey::Icon => Some(
             connection
                 .icon
                 .clone()
                 .unwrap_or_else(|| super::options::default_icon_value().unwrap_or_default()),
         ),
-        BatchFieldId::IconAutoDetect => Some(bool_text(connection.icon_auto_detect_enabled())),
-        BatchFieldId::Port => {
+        BatchFieldKey::IconAutoDetect => Some(bool_text(connection.icon_auto_detect_enabled())),
+        BatchFieldKey::Port => {
             endpoint_values(&connection.config).map(|(_, port, _)| port.to_string())
         }
-        BatchFieldId::Username => {
+        BatchFieldKey::Username => {
             endpoint_values(&connection.config).map(|(_, _, username)| username.to_string())
         }
-        BatchFieldId::Encoding => config_encoding(&connection.config).map(str::to_string),
-        BatchFieldId::Backspace => config_backspace(&connection.config).map(str::to_string),
-        BatchFieldId::SshProfile => {
+        BatchFieldKey::Encoding => config_encoding(&connection.config).map(str::to_string),
+        BatchFieldKey::Backspace => config_backspace(&connection.config).map(str::to_string),
+        BatchFieldKey::SshProfile => {
             if !is_ssh {
                 return None;
             }
@@ -657,7 +779,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 SshProfile::NetworkDevice => "network_device".to_string(),
             })
         }
-        BatchFieldId::TerminalType => {
+        BatchFieldKey::TerminalType => {
             if !is_ssh {
                 return None;
             }
@@ -669,22 +791,28 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                     .to_string(),
             )
         }
-        BatchFieldId::DynamicTabTitle => {
+        BatchFieldKey::SshCompatibility => {
+            if !is_ssh {
+                return None;
+            }
+            Some(bool_text(connection.ssh_compatibility_mode))
+        }
+        BatchFieldKey::DynamicTabTitle => {
             config_dynamic_tab_title(&connection.config).map(bool_text)
         }
-        BatchFieldId::SftpEnabled => {
+        BatchFieldKey::SftpEnabled => {
             if !is_ssh {
                 return None;
             }
             Some(bool_text(connection.sftp.enabled))
         }
-        BatchFieldId::SftpCompatibility => {
+        BatchFieldKey::SftpCompatibility => {
             if !is_ssh {
                 return None;
             }
             Some(bool_text(connection.sftp.compatibility_mode))
         }
-        BatchFieldId::SftpCwdFollow => {
+        BatchFieldKey::SftpCwdFollow => {
             if !is_ssh {
                 return None;
             }
@@ -697,19 +825,19 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .to_string(),
             )
         }
-        BatchFieldId::SftpShellTimeout => {
+        BatchFieldKey::SftpShellTimeout => {
             if !is_ssh {
                 return None;
             }
             Some(connection.sftp.shell_detection_timeout_ms.to_string())
         }
-        BatchFieldId::SftpFilenameEncoding => {
+        BatchFieldKey::SftpFilenameEncoding => {
             if !is_ssh {
                 return None;
             }
             Some(connection.sftp.filename_encoding.clone())
         }
-        BatchFieldId::SftpPipelineDepth => {
+        BatchFieldKey::SftpPipelineDepth => {
             if !is_ssh {
                 return None;
             }
@@ -721,11 +849,11 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                     .unwrap_or_default(),
             )
         }
-        BatchFieldId::X11 => match &connection.config {
+        BatchFieldKey::X11 => match &connection.config {
             ConnectionType::Ssh { x11_forwarding, .. } => Some(bool_text(*x11_forwarding)),
             _ => None,
         },
-        BatchFieldId::AgentForwarding => match &connection.config {
+        BatchFieldKey::AgentForwarding => match &connection.config {
             ConnectionType::Ssh {
                 agent_forwarding_config,
                 legacy_agent_forwarding,
@@ -739,7 +867,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
             )),
             _ => None,
         },
-        BatchFieldId::PostLoginEnabled => {
+        BatchFieldKey::PostLoginEnabled => {
             if !is_ssh {
                 return None;
             }
@@ -750,7 +878,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                     .is_some_and(|login| login.enabled),
             ))
         }
-        BatchFieldId::PostLoginCommand => {
+        BatchFieldKey::PostLoginCommand => {
             if !is_ssh {
                 return None;
             }
@@ -762,7 +890,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                     .unwrap_or_default(),
             )
         }
-        BatchFieldId::PostLoginDelay => {
+        BatchFieldKey::PostLoginDelay => {
             if !is_ssh {
                 return None;
             }
@@ -775,7 +903,7 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                     .to_string(),
             )
         }
-        BatchFieldId::SshAlgorithmMode => {
+        BatchFieldKey::SshAlgorithmMode => {
             if !is_ssh {
                 return None;
             }
@@ -793,29 +921,35 @@ fn field_display_value(connection: &SavedConnection, field: BatchFieldId) -> Opt
                 .to_string(),
             )
         }
-        BatchFieldId::SshKex => ssh_algorithm_list(connection, |algorithms| &algorithms.kex),
-        BatchFieldId::SshCiphers => {
+        BatchFieldKey::SshKex => ssh_algorithm_list(connection, |algorithms| &algorithms.kex),
+        BatchFieldKey::SshCiphers => {
             ssh_algorithm_list(connection, |algorithms| &algorithms.ciphers)
         }
-        BatchFieldId::SshMacs => ssh_algorithm_list(connection, |algorithms| &algorithms.macs),
-        BatchFieldId::SshHostKeys => {
+        BatchFieldKey::SshMacs => ssh_algorithm_list(connection, |algorithms| &algorithms.macs),
+        BatchFieldKey::SshHostKeys => {
             ssh_algorithm_list(connection, |algorithms| &algorithms.host_keys)
         }
-        BatchFieldId::RdpUseNla => match &connection.config {
+        BatchFieldKey::AllowShortRsaHostKeys => {
+            if !is_ssh {
+                return None;
+            }
+            Some(bool_text(connection.allow_short_rsa_host_keys))
+        }
+        BatchFieldKey::RdpUseNla => match &connection.config {
             ConnectionType::Rdp { security, .. } => Some(bool_text(security.use_nla)),
             _ => None,
         },
-        BatchFieldId::RdpCertificatePolicy => match &connection.config {
+        BatchFieldKey::RdpCertificatePolicy => match &connection.config {
             ConnectionType::Rdp { security, .. } => Some(security.certificate_policy.clone()),
             _ => None,
         },
-        BatchFieldId::RdpAdminSession => match &connection.config {
+        BatchFieldKey::RdpAdminSession => match &connection.config {
             ConnectionType::Rdp { security, .. } => {
                 Some(bool_text(security.administrative_session))
             }
             _ => None,
         },
-        BatchFieldId::VncSecurityMode => match &connection.config {
+        BatchFieldKey::VncSecurityMode => match &connection.config {
             ConnectionType::Vnc { security, .. } => Some(security.mode.clone()),
             _ => None,
         },
@@ -838,15 +972,15 @@ fn ssh_algorithm_list(
 }
 
 type BatchBasis = (
-    HashMap<BatchFieldId, FieldBasis>,
-    HashMap<BatchFieldId, String>,
-    HashMap<BatchFieldId, bool>,
+    HashMap<BatchFieldKey, FieldBasis>,
+    HashMap<BatchFieldKey, String>,
+    HashMap<BatchFieldKey, bool>,
 );
 
 pub(super) fn compute_rdp_field_basis(
     connections: &[SavedConnection],
     targets: &[(String, ConnectionBatchKind)],
-    field: BatchFieldId,
+    field: BatchFieldKey,
     edit: &ConnectionBatchEdit,
 ) -> (FieldBasis, Option<String>, BatchFieldApplicability) {
     let (basis, applicability) = domain_basis::rdp_field_basis(
@@ -939,11 +1073,13 @@ pub(super) fn compute_batch_basis(
     (basis, values, bool_values)
 }
 
-pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 6] = [
+pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 8] = [
     ConnectionBatchKind::Ssh,
     ConnectionBatchKind::Telnet,
     ConnectionBatchKind::Rdp,
     ConnectionBatchKind::Vnc,
+    ConnectionBatchKind::Adb,
+    ConnectionBatchKind::Ftp,
     ConnectionBatchKind::LocalTerminal,
     ConnectionBatchKind::Serial,
 ];

@@ -1,48 +1,57 @@
 use super::ASSET_BATCH_SELECT_PREFIX;
 use super::basis::{asset_batch_kind_counts_label, batch_skip_reasons_label};
-use super::fields::{BatchFieldId, DISPLAY_FIELDS, EDITABLE_FIELDS, FieldBasis};
-use super::options::batch_kind_label;
+use super::fields::{
+    BatchFieldAction, BatchFieldKey, BatchFieldSpec, BatchRowLayout, FieldBasis, batch_rows,
+};
 use crate::features::NyaTermApp;
 use crate::features::assets::BatchEditMode;
 use gpui::{AnyElement, Context, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaInputShell, NyaScrollable, NyaSelect, NyaTabItem, NyaTabs,
+    NyaButton, NyaButtonVariant, NyaInputShell, NyaScrollable, NyaSelect, NyaSwitch, NyaTabItem,
+    NyaTabs,
 };
 use rust_i18n::t;
-fn batch_field_is_select(field: BatchFieldId) -> bool {
+fn batch_field_is_select(field: BatchFieldKey) -> bool {
     matches!(
         field,
-        BatchFieldId::AuthMode
-            | BatchFieldId::Group
-            | BatchFieldId::Icon
-            | BatchFieldId::Encoding
-            | BatchFieldId::Backspace
-            | BatchFieldId::SshProfile
-            | BatchFieldId::TerminalType
-            | BatchFieldId::SftpCwdFollow
-            | BatchFieldId::SftpFilenameEncoding
-            | BatchFieldId::SftpPipelineDepth
-            | BatchFieldId::SshAlgorithmMode
-            | BatchFieldId::RdpCertificatePolicy
-            | BatchFieldId::VncSecurityMode
-            | BatchFieldId::SshAuthAgentEndpoint
-            | BatchFieldId::Account
-            | BatchFieldId::Key
-            | BatchFieldId::Otp
-            | BatchFieldId::Proxy
-            | BatchFieldId::ProxyJump
-            | BatchFieldId::SerialPort
-            | BatchFieldId::BaudRate
-            | BatchFieldId::DataBits
-            | BatchFieldId::Parity
-            | BatchFieldId::StopBits
-            | BatchFieldId::FlowControl
-            | BatchFieldId::TelnetEnterMode
-            | BatchFieldId::RdpBackend
-            | BatchFieldId::RdpDisplayMode
-            | BatchFieldId::VncScaleMode
-            | BatchFieldId::RecordingMode
-            | BatchFieldId::AgentPolicy
+        BatchFieldKey::AuthMode
+            | BatchFieldKey::Group
+            | BatchFieldKey::Icon
+            | BatchFieldKey::Encoding
+            | BatchFieldKey::Backspace
+            | BatchFieldKey::SshProfile
+            | BatchFieldKey::TerminalType
+            | BatchFieldKey::SftpCwdFollow
+            | BatchFieldKey::SftpFilenameEncoding
+            | BatchFieldKey::SftpPipelineDepth
+            | BatchFieldKey::SshAlgorithmMode
+            | BatchFieldKey::RdpCertificatePolicy
+            | BatchFieldKey::VncSecurityMode
+            | BatchFieldKey::SshAuthAgentEndpoint
+            | BatchFieldKey::Account
+            | BatchFieldKey::Key
+            | BatchFieldKey::Otp
+            | BatchFieldKey::Proxy
+            | BatchFieldKey::ProxyJump
+            | BatchFieldKey::SerialPort
+            | BatchFieldKey::BaudRate
+            | BatchFieldKey::DataBits
+            | BatchFieldKey::Parity
+            | BatchFieldKey::StopBits
+            | BatchFieldKey::FlowControl
+            | BatchFieldKey::TelnetEnterMode
+            | BatchFieldKey::RdpBackend
+            | BatchFieldKey::RdpDisplayMode
+            | BatchFieldKey::VncScaleMode
+            | BatchFieldKey::RecordingMode
+            | BatchFieldKey::AgentPolicy
+            | BatchFieldKey::AdbScreenQuality
+            | BatchFieldKey::AdbScreenOrientation
+            | BatchFieldKey::FtpPassiveMode
+            | BatchFieldKey::FtpFilenameEncodingMode
+            | BatchFieldKey::FtpFilenameEncoding
+            | BatchFieldKey::FtpSecurityMode
+            | BatchFieldKey::FtpTlsVersion
     )
 }
 
@@ -54,33 +63,34 @@ impl NyaTermApp {
     ) -> AnyElement {
         let palette = self.theme_palette();
         let draft = self.start_workspace.asset_batch();
-        let kinds = draft
-            .counts()
-            .iter()
-            .map(|(kind, _)| *kind)
-            .collect::<Vec<_>>();
         let selected = draft
             .display_kind()
-            .and_then(|kind| kinds.iter().position(|k| *k == kind))
-            .map(|index| index + 1)
+            .and_then(|kind| {
+                crate::models::ConnectionKindTab::from_batch_kind(kind).position_in_all()
+            })
             .unwrap_or(0);
-        let mut tabs = vec![NyaTabItem::new(t!(
-            "assets.batch.commonScope",
-            count = draft.ids().len()
-        ))];
-        tabs.extend(draft.counts().iter().map(|(kind, count)| {
-            NyaTabItem::new(format!("{} ({count})", batch_kind_label(*kind)))
-        }));
+        let tabs = crate::models::ConnectionKindTab::ALL
+            .into_iter()
+            .map(|tab| {
+                let count = draft
+                    .counts()
+                    .iter()
+                    .find(|(kind, _)| *kind == tab.batch_kind())
+                    .map(|(_, count)| *count)
+                    .unwrap_or(0);
+                NyaTabItem::new(format!("{} ({count})", tab.label())).disabled(count == 0)
+            })
+            .collect::<Vec<_>>();
         let kind_control = if viewport.0 >= 760. {
             NyaTabs::new("asset-batch-scopes")
                 .items(tabs)
                 .selected_index(selected)
                 .full_width(true)
                 .on_select(cx.listener(move |this, index: &usize, _, cx| {
-                    this.set_asset_batch_scope(
-                        index.checked_sub(1).and_then(|i| kinds.get(i).copied()),
-                        cx,
-                    );
+                    let kind = crate::models::ConnectionKindTab::ALL
+                        .get(*index)
+                        .map(|tab| tab.batch_kind());
+                    this.set_asset_batch_scope(kind, cx);
                 }))
                 .into_any_element()
         } else {
@@ -96,28 +106,105 @@ impl NyaTermApp {
                 )
                 .into_any_element()
         };
-        let (connections, fields) = draft.summary();
-        let summary = t!(
-            "assets.batch.summary",
-            connections = connections,
-            fields = fields
-        )
-        .to_string();
+        let (_, changed_fields) = draft.summary();
+        let summary = t!("assets.batch.changeSummary", count = changed_fields).to_string();
         let counts = asset_batch_kind_counts_label(draft.counts());
         let total = draft.ids().len();
         let error = draft.error().cloned();
         let saving = draft.saving();
-        let apply_disabled = saving || !draft.has_edits() || draft.build_edits().is_err();
+        let has_connections =
+            !draft.ids().is_empty() && draft.counts().iter().any(|(_, count)| *count > 0);
+        let apply_disabled =
+            saving || !has_connections || !draft.has_edits() || draft.build_edits().is_err();
         let scroll_handle = draft.scroll().clone();
-        let rows = DISPLAY_FIELDS
-            .into_iter()
-            .chain(EDITABLE_FIELDS)
-            .filter(|field| {
-                draft.basis(*field) != FieldBasis::Inapplicable
-                    || draft.rdp_applicability(*field).is_some()
+        let kind_tab = draft
+            .display_kind()
+            .map(crate::models::ConnectionKindTab::from_batch_kind)
+            .unwrap_or(crate::models::ConnectionKindTab::Ssh);
+        let sections = crate::models::ConnectionEditorSection::for_kind(kind_tab, false);
+        let active_section = draft
+            .section()
+            .filter(|section| sections.contains(section))
+            .unwrap_or(sections[0]);
+        // Mirror the connection editor's left rail: one vertical column of voice
+        // buttons, 180 px wide when the dialog is wide and 128 px otherwise.
+        let nav_width = if viewport.0 >= 760. { 180. } else { 128. };
+        let mut nav = div()
+            .id("asset-batch-navigation-rail")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_3()
+            .w(px(nav_width))
+            .flex_none()
+            .overflow_y_scrollbar();
+        if let Some(focus) = draft.navigation_focus().cloned() {
+            nav = nav.track_focus(&focus).on_key_down(cx.listener(
+                |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if this.asset_batch_navigation_key(event, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ));
+        }
+        let nav = nav.children(sections.iter().copied().map(|section| {
+            NyaButton::new(
+                format!("asset-batch-section-{}", section.id()),
+                section.label().to_string(),
+            )
+            .variant(NyaButtonVariant::Ghost)
+            .full_width()
+            .height(px(40.))
+            .label_left()
+            .tooltip(section.label())
+            .selected(section == active_section)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select_asset_batch_section(section, cx);
+                this.focus_asset_batch_navigation(window, cx);
+            }))
+        }));
+        let section_nav = div()
+            .debug_selector(|| "asset-batch-navigation".to_string())
+            .w(px(nav_width))
+            .h_full()
+            .min_h_0()
+            .flex_none()
+            .child(nav.size_full());
+        let rows = batch_rows(kind_tab, active_section)
+            .iter()
+            .filter_map(|row| {
+                let visible = row
+                    .fields
+                    .iter()
+                    .filter(|spec| {
+                        draft.basis(spec.key) != FieldBasis::Inapplicable
+                            || draft.rdp_applicability(spec.key).is_some()
+                    })
+                    .collect::<Vec<_>>();
+                if visible.is_empty() {
+                    return None;
+                }
+                debug_assert!(
+                    visible
+                        .iter()
+                        .all(|spec| spec.key.section() == active_section),
+                    "batch row table must agree with BatchFieldKey::section"
+                );
+                Some(self.asset_batch_row(row.layout, &visible, cx))
             })
-            .map(|field| self.asset_batch_mode_row(field, cx))
             .collect::<Vec<_>>();
+        let rows = if has_connections {
+            rows
+        } else {
+            vec![
+                div()
+                    .py_8()
+                    .text_sm()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("assets.batch.kindEmpty"))
+                    .into_any_element(),
+            ]
+        };
         div()
             .id("asset-batch-panel")
             .size_full()
@@ -128,6 +215,7 @@ impl NyaTermApp {
                 div()
                     .flex_none()
                     .p_4()
+                    .pb_0()
                     .flex()
                     .flex_col()
                     .gap_2()
@@ -151,24 +239,32 @@ impl NyaTermApp {
             )
             .child(
                 div()
-                    .relative()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .vertical_scrollbar(&scroll_handle)
+                    .flex()
+                    .child(section_nav)
                     .child(
                         div()
-                            .id("asset-batch-scroll")
-                            .size_full()
+                            .relative()
+                            .flex_1()
                             .min_h_0()
                             .min_w_0()
-                            .overflow_y_scroll()
-                            .track_scroll(&scroll_handle)
-                            .p_4()
-                            .flex()
-                            .flex_col()
-                            .gap_4()
-                            .children(rows),
+                            .vertical_scrollbar(&scroll_handle)
+                            .child(
+                                div()
+                                    .id("asset-batch-scroll")
+                                    .size_full()
+                                    .min_h_0()
+                                    .min_w_0()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&scroll_handle)
+                                    .p_4()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_4()
+                                    .children(rows),
+                            ),
                     ),
             )
             .when_some(error, |this, error| {
@@ -199,7 +295,7 @@ impl NyaTermApp {
                             ),
                     )
                     .child(
-                        NyaButton::new("asset-batch-apply", t!("assets.batch.apply"))
+                        NyaButton::new("asset-batch-save", t!("common.save"))
                             .variant(NyaButtonVariant::Primary)
                             .disabled(apply_disabled)
                             .on_click(cx.listener(|this, _, _, cx| this.save_asset_batch_edit(cx))),
@@ -207,14 +303,104 @@ impl NyaTermApp {
             )
             .into_any_element()
     }
-    fn asset_batch_mode_row(&self, field: BatchFieldId, cx: &mut Context<Self>) -> AnyElement {
+    /// One row of the batch form. Fields that the connection editor places on
+    /// the same line stay on one line here, with the editor's column ratios.
+    fn asset_batch_row(
+        &self,
+        layout: BatchRowLayout,
+        specs: &[&BatchFieldSpec],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match layout {
+            BatchRowLayout::Stack => {
+                let mut column = div().w_full().min_w_0().flex().flex_col().gap_2();
+                for spec in specs {
+                    column = column.child(self.asset_batch_mode_row(spec.key, spec.action, cx));
+                }
+                column.into_any_element()
+            }
+            BatchRowLayout::Columns | BatchRowLayout::ThreeColumns => {
+                let mut row = div().w_full().min_w_0().flex().items_start().gap_3();
+                for spec in specs {
+                    row = row.child(div().min_w_0().flex_1().child(self.asset_batch_mode_row(
+                        spec.key,
+                        spec.action,
+                        cx,
+                    )));
+                }
+                row.into_any_element()
+            }
+            BatchRowLayout::HostPort | BatchRowLayout::HostPortWide => {
+                let fixed = if layout == BatchRowLayout::HostPort {
+                    132.
+                } else {
+                    150.
+                };
+                let last = specs.len().saturating_sub(1);
+                let mut row = div().w_full().min_w_0().flex().items_start().gap_3();
+                for (index, spec) in specs.iter().enumerate() {
+                    let cell = self.asset_batch_mode_row(spec.key, spec.action, cx);
+                    row = row.child(if index == last {
+                        div().w(px(fixed)).flex_none().child(cell)
+                    } else {
+                        div().min_w_0().flex_1().child(cell)
+                    });
+                }
+                row.into_any_element()
+            }
+        }
+    }
+
+    fn asset_batch_mode_row(
+        &self,
+        field: BatchFieldKey,
+        action: BatchFieldAction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let draft = self.start_workspace.asset_batch();
         let palette = self.theme_palette();
         let mode = draft.mode(field);
         let editable = field.is_editable();
+        let basis = draft.basis(field);
+        let dirty = mode != BatchEditMode::Keep;
         let applicability = draft.rdp_applicability(field);
-        let control = if editable && mode == BatchEditMode::Set {
-            if field.is_bool() || batch_field_is_select(field) {
+        debug_assert_eq!(action, field.action(), "batch table action drift");
+        let control = if editable {
+            if field.is_bool() {
+                // The connection editor uses a switch for every boolean, so the
+                // batch row does too; the first toggle is the edit.
+                div()
+                    .w_full()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        NyaSwitch::new(SharedString::from(format!(
+                            "asset-batch-bool-{}",
+                            field.key()
+                        )))
+                        .checked(draft.bool_value(field))
+                        .disabled(draft.saving() || !draft.field_available(field))
+                        .on_click(cx.listener(
+                            move |this, value: &bool, _, cx| {
+                                this.set_asset_batch_bool_value(field, *value, cx)
+                            },
+                        )),
+                    )
+                    .when(
+                        basis == FieldBasis::Mixed && !draft.current_bool_is_set(field),
+                        |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(palette.text_muted))
+                                    .child(t!("assets.batch.keepPlaceholder")),
+                            )
+                        },
+                    )
+                    .into_any_element()
+            } else if batch_field_is_select(field) {
                 div()
                     .w_full()
                     .h(px(32.))
@@ -227,7 +413,7 @@ impl NyaTermApp {
             } else {
                 let multi_line = matches!(
                     field,
-                    BatchFieldId::Description | BatchFieldId::PostLoginCommand
+                    BatchFieldKey::Description | BatchFieldKey::PostLoginCommand
                 );
                 div()
                     .w_full()
@@ -247,36 +433,8 @@ impl NyaTermApp {
                     .into_any_element()
             }
         } else {
-            let text = if mode == BatchEditMode::Clear {
-                match field {
-                    BatchFieldId::Port => draft
-                        .display_kind()
-                        .map(|kind| {
-                            t!("assets.batch.restoreDefault", value = kind.default_port())
-                                .to_string()
-                        })
-                        .unwrap_or_default(),
-                    BatchFieldId::RecordingUseGlobal
-                    | BatchFieldId::RecordingAutoStart
-                    | BatchFieldId::RecordingMode => t!("assets.batch.clearRecording").to_string(),
-                    BatchFieldId::Encoding => t!("assets.batch.clearEncoding").to_string(),
-                    BatchFieldId::SftpFilenameEncoding => {
-                        t!("assets.batch.clearFilenameEncoding").to_string()
-                    }
-                    BatchFieldId::Group
-                    | BatchFieldId::Description
-                    | BatchFieldId::Icon
-                    | BatchFieldId::Tags
-                    | BatchFieldId::Account
-                    | BatchFieldId::Password
-                    | BatchFieldId::Key
-                    | BatchFieldId::Otp
-                    | BatchFieldId::Proxy
-                    | BatchFieldId::ProxyJump
-                    | BatchFieldId::ShellArgs
-                    | BatchFieldId::WorkingDir => t!("assets.batch.clearValue").to_string(),
-                    _ => t!("assets.batch.clearMeaning").to_string(),
-                }
+            let text = if basis == FieldBasis::Mixed {
+                t!("assets.batch.keepPlaceholder").to_string()
             } else {
                 draft.disabled_text(field)
             };
@@ -294,6 +452,92 @@ impl NyaTermApp {
                 .child(text)
                 .into_any_element()
         };
+        let default_value = field.default_value(
+            draft
+                .display_kind()
+                .and_then(|kind| {
+                    crate::models::ConnectionKindTab::ALL
+                        .into_iter()
+                        .find(|tab| tab.batch_kind() == kind)
+                })
+                .unwrap_or(crate::models::ConnectionKindTab::Ssh),
+        );
+        let at_default = default_value.is_some_and(|default| {
+            if field.is_bool() {
+                draft.bool_value(field).to_string() == default
+            } else {
+                !dirty && draft.value(field) == default
+            }
+        });
+        let action_button = |id: String, label: String| {
+            NyaButton::new(id, label)
+                .variant(NyaButtonVariant::Ghost)
+                .height(px(22.))
+                .text_size(px(12.))
+        };
+        let mut actions = Vec::new();
+        if editable {
+            match action {
+                BatchFieldAction::ClearPassword => {
+                    if basis != FieldBasis::Inapplicable {
+                        actions.push(
+                            action_button(
+                                format!("asset-batch-clear-password-{}", field.key()),
+                                t!("assets.batch.clearSavedPassword").to_string(),
+                            )
+                            .disabled(draft.saving() || !draft.field_available(field))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.clear_asset_batch_password(cx)),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                }
+                BatchFieldAction::ResetDefault => {
+                    actions.push(
+                        action_button(
+                            format!("asset-batch-reset-{}", field.key()),
+                            t!("assets.batch.resetDefault").to_string(),
+                        )
+                        .disabled(draft.saving() || !draft.field_available(field) || at_default)
+                        .tooltip(t!("assets.batch.resetDefaultTooltip").to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reset_asset_batch_field(field, cx)
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                BatchFieldAction::None if basis == FieldBasis::Mixed && !dirty => {
+                    actions.push(
+                        action_button(
+                            format!("asset-batch-clear-{}", field.key()),
+                            t!("assets.batch.clearField").to_string(),
+                        )
+                        .disabled(draft.saving() || !draft.field_available(field))
+                        .tooltip(t!("assets.batch.clearFieldTooltip").to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reset_asset_batch_field(field, cx)
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                BatchFieldAction::None => {}
+            }
+            if dirty {
+                actions.push(
+                    action_button(
+                        format!("asset-batch-undo-{}", field.key()),
+                        t!("assets.batch.undoEdit").to_string(),
+                    )
+                    .disabled(draft.saving())
+                    .tooltip(t!("assets.batch.undoEditTooltip").to_string())
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.undo_asset_batch_field(field, cx)),
+                    )
+                    .into_any_element(),
+                );
+            }
+        }
         div()
             .id(format!("asset-batch-field-{}", field.key()))
             .debug_selector(move || format!("asset-batch-field-{}", field.key()))
@@ -305,51 +549,17 @@ impl NyaTermApp {
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
                     .items_center()
-                    .gap_2()
+                    .gap_1()
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(140.))
+                            .min_w_0()
+                            .truncate()
                             .text_sm()
                             .child(t!(field.label_key())),
                     )
-                    .when(editable, |this| {
-                        this.children(
-                            [
-                                (BatchEditMode::Keep, "assets.batch.modeKeep"),
-                                (BatchEditMode::Set, "assets.batch.modeSet"),
-                                (BatchEditMode::Clear, "assets.batch.modeClear"),
-                            ]
-                            .into_iter()
-                            .map(|(choice, label)| {
-                                div()
-                                    .debug_selector(move || {
-                                        format!("asset-batch-mode-{}-{choice:?}", field.key())
-                                    })
-                                    .child(
-                                        NyaButton::new(
-                                            format!("asset-batch-mode-{}-{choice:?}", field.key()),
-                                            t!(label),
-                                        )
-                                        .variant(NyaButtonVariant::Ghost)
-                                        .selected(mode == choice)
-                                        .disabled(
-                                            draft.saving()
-                                                || (choice != BatchEditMode::Keep
-                                                    && !draft.field_available(field)),
-                                        )
-                                        .height(px(28.))
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.set_asset_batch_mode(field, choice, cx)
-                                            }),
-                                        ),
-                                    )
-                            }),
-                        )
-                    }),
+                    .children(actions),
             )
             .when_some(applicability, |this, applicability| {
                 let reasons = batch_skip_reasons_label(applicability.skipped_reasons);
@@ -373,25 +583,35 @@ impl NyaTermApp {
                 })
             })
             .child(control)
-            .when(editable && mode == BatchEditMode::Set, |this| {
-                let empty = if field.is_bool() {
-                    !draft.current_bool_is_set(field)
-                } else if field == BatchFieldId::Password {
-                    draft.replacement_password().is_empty()
-                } else {
-                    draft.value(field).trim().is_empty()
-                };
-                this.when(empty, |this| {
-                    this.child(div().text_xs().text_color(rgb(palette.text_muted)).child(
-                        if field.is_bool() {
-                            t!("assets.batch.chooseBoolean").to_string()
-                        } else {
-                            t!("assets.batch.errorUseClear", field = t!(field.label_key()))
-                                .to_string()
-                        },
-                    ))
-                })
-            })
+            .when(
+                field == BatchFieldKey::Password && mode == BatchEditMode::Clear,
+                |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(palette.text_muted))
+                            .child(t!("assets.batch.passwordCleared")),
+                    )
+                },
+            )
+            .when(
+                editable && mode == BatchEditMode::Set && !field.is_bool(),
+                |this| {
+                    let empty = if field == BatchFieldKey::Password {
+                        draft.replacement_password().is_empty()
+                    } else {
+                        draft.value(field).trim().is_empty()
+                    };
+                    this.when(empty && field != BatchFieldKey::Password, |this| {
+                        this.child(
+                            div().text_xs().text_color(rgb(palette.text_muted)).child(
+                                t!("assets.batch.errorUseClear", field = t!(field.label_key()))
+                                    .to_string(),
+                            ),
+                        )
+                    })
+                },
+            )
             .into_any_element()
     }
 }
