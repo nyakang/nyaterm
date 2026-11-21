@@ -2772,6 +2772,7 @@ fn load_decrypted_otp_entry_reads_legacy_otp_store() {
         otp_type: "totp".to_string(),
         issuer: "Example".to_string(),
         username: "deploy".to_string(),
+        prompt_regex: None,
         secret: Some(encrypt_for_test(b"JBSWY3DPEHPK3PXP", &master_key).into()),
         algorithm: "SHA1".to_string(),
         digits: 6,
@@ -2785,11 +2786,13 @@ fn load_decrypted_otp_entry_reads_legacy_otp_store() {
             .expect("meta")
             .insert(META_MASTER_KEY, master_key_token.as_str())
             .expect("insert master");
+        let mut legacy = serde_json::to_value(&entry).expect("legacy entry");
+        legacy.as_object_mut().unwrap().remove("prompt_regex");
         write_json_in_txn(
             &txn,
             OTP_ACCOUNTS_TABLE,
             &entity_key(OTP_PREFIX, "otp-1"),
-            &entry,
+            &legacy,
         )
         .expect("write otp");
         txn.commit().expect("commit");
@@ -2804,12 +2807,26 @@ fn load_decrypted_otp_entry_reads_legacy_otp_store() {
         .expect("entry");
     assert_eq!(decrypted.secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
     assert_eq!(decrypted.period, 30);
+    assert_eq!(decrypted.prompt_regex, None);
+    let pattern = "(?i)Verification code:";
+    let mut updated = listed[0].clone();
+    updated.prompt_regex = Some(pattern.into());
+    // An editor update without a replacement secret must retain the old secret.
+    updated.secret = None;
+    store.save_otp_entry(updated).expect("update pattern");
+    let updated = store
+        .load_decrypted_otp_entry_by_id("otp-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.prompt_regex.as_deref(), Some(pattern));
+    assert_eq!(updated.secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
     store.increment_otp_counter("otp-1").expect("increment");
     let incremented = store
         .load_otp_entry_by_id("otp-1")
         .expect("load incremented")
         .expect("entry");
     assert_eq!(incremented.counter, 1);
+    assert_eq!(incremented.prompt_regex.as_deref(), Some(pattern));
 
     std::fs::remove_dir_all(dir).ok();
 }
@@ -3471,12 +3488,14 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     summary.startup_restore_window_layout = false;
     summary.minimize_to_tray = true;
     summary.confirm_on_close = false;
+    summary.open_new_connection_after_save = true;
     summary.language = "zh-CN".to_string();
     let saved = store.save_general_settings(&summary).expect("save general");
     assert!(saved.startup_mode.restores_last_session());
     assert!(!saved.startup_restore_window_layout);
     assert!(saved.minimize_to_tray);
     assert!(!saved.confirm_on_close);
+    assert!(saved.open_new_connection_after_save);
     assert_eq!(saved.language, "zh-CN");
 
     summary = saved;
@@ -3493,6 +3512,10 @@ fn save_general_and_diagnostics_settings_roundtrip() {
     let raw = store.load_settings_value().expect("raw");
     assert_eq!(
         raw["general"]["minimize_to_tray"],
+        serde_json::Value::Bool(true)
+    );
+    assert_eq!(
+        raw["general"]["open_new_connection_after_save"],
         serde_json::Value::Bool(true)
     );
     assert_eq!(
@@ -3620,6 +3643,7 @@ fn mac_matcher_loads_legacy_defaults_and_round_trips_without_losing_unknown_opti
         let summary = store.load_app_settings_summary().unwrap();
         assert!(summary.terminal_action_links_matchers.mac);
         assert!(!summary.terminal_action_links_enabled);
+        assert!(!summary.terminal_action_links_insert_commands);
     }
     store.save_settings_value(&serde_json::json!({"terminal": {
         "future_terminal_option": "keep",
@@ -3642,6 +3666,13 @@ fn mac_matcher_loads_legacy_defaults_and_round_trips_without_losing_unknown_opti
             serde_json::json!({"enabled": true})
         );
         assert_eq!(raw["terminal"]["future_terminal_option"], "keep");
+    }
+    for insert in [true, false] {
+        summary.terminal_action_links_insert_commands = insert;
+        let loaded = store.save_terminal_settings(&summary).unwrap();
+        assert_eq!(loaded.terminal_action_links_insert_commands, insert);
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["terminal"]["action_links_insert_commands"], insert);
     }
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
@@ -4174,6 +4205,9 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert!(!summary.interaction_command_suggestions_enabled);
     // The stored fixture predates the field, so it must default on.
     assert!(summary.interaction_credential_autofill_enabled);
+    // The new connection switch is opt-in: the fixture keeps saving without
+    // opening.
+    assert!(!summary.open_new_connection_after_save);
     assert_eq!(summary.interaction_command_suggestion_min_chars, 3);
     assert_eq!(summary.interaction_command_suggestion_max_chars, 80);
     assert_eq!(summary.interaction_word_separators, " .,:");

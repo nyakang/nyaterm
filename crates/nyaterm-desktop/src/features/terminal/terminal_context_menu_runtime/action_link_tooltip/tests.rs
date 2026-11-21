@@ -64,7 +64,7 @@ fn built_in_tooltips_describe_the_actual_default_execution_targets() {
         ),
     ] {
         let default = default_action(value);
-        let presentation = ActionLinkTooltipPresentation::for_action(&default);
+        let presentation = ActionLinkTooltipPresentation::for_action(&default, false);
         assert_eq!(default.target, target, "{value}");
         assert_eq!(presentation.title(&default, "zh-CN"), title);
         assert_eq!(
@@ -89,11 +89,37 @@ fn built_in_tooltips_describe_the_actual_default_execution_targets() {
 }
 
 #[test]
+fn command_tooltip_mode_tracks_settings_without_changing_other_actions() {
+    crate::preload_i18n().unwrap();
+    for value in [
+        "assets.zip",
+        "192.0.2.1",
+        "example.com:8080",
+        "https://example.com",
+        "aa-bb-cc-dd-ee-ff",
+    ] {
+        for action in actions(value) {
+            let execute = ActionLinkTooltipPresentation::for_action(&action, false);
+            let insert = ActionLinkTooltipPresentation::for_action(&action, true);
+            assert_eq!(execute.title_key, insert.title_key);
+            assert_eq!(execute.icon_path, insert.icon_path);
+            if matches!(action.target, ActionLinkTarget::ExecuteCommand(_)) {
+                assert_eq!(execute.hint(false, false, "zh-CN"), "Ctrl + 单击 执行");
+                assert_eq!(insert.hint(false, false, "zh-CN"), "Ctrl + 单击 插入");
+                assert_eq!(insert.hint(false, true, "en"), "⌘ + click Insert");
+            } else {
+                assert_eq!(execute.activation_key, insert.activation_key);
+            }
+        }
+    }
+}
+
+#[test]
 fn tooltip_verbs_follow_targets_and_unknown_actions_keep_their_labels() {
     crate::preload_i18n().unwrap();
     let mut action = default_action("assets.zip");
     action.target = ActionLinkTarget::CopyText("unzip assets.zip".into());
-    let presentation = ActionLinkTooltipPresentation::for_action(&action);
+    let presentation = ActionLinkTooltipPresentation::for_action(&action, false);
     assert_eq!(presentation.title(&action, "en"), action.label);
     assert_eq!(presentation.hint(false, false, "en"), "Ctrl + click Copy");
 
@@ -104,14 +130,14 @@ fn tooltip_verbs_follow_targets_and_unknown_actions_keep_their_labels() {
                 && matches!(action.target, ActionLinkTarget::PasteText(_))
         })
         .unwrap();
-    let presentation = ActionLinkTooltipPresentation::for_action(&insert);
+    let presentation = ActionLinkTooltipPresentation::for_action(&insert, false);
     assert_eq!(presentation.title(&insert, "en"), "Insert MAC address");
     assert_eq!(presentation.hint(false, true, "en"), "⌘ + click Insert");
 
     action.id = "future-action".into();
     action.label = "Future action".into();
     action.target = ActionLinkTarget::ExecuteCommand("echo 'CopyText'".into());
-    let presentation = ActionLinkTooltipPresentation::for_action(&action);
+    let presentation = ActionLinkTooltipPresentation::for_action(&action, false);
     assert_eq!(presentation.title(&action, "en"), "Future action");
     assert_eq!(presentation.hint(false, false, "en"), "Ctrl + click Run");
 }
@@ -130,36 +156,39 @@ fn every_catalog_translates_tooltip_titles_and_both_modifier_hints() {
             "aa-bb-cc-dd-ee-ff",
         ] {
             let default = default_action(value);
-            let presentation = ActionLinkTooltipPresentation::for_action(&default);
-            let title_key = presentation
-                .title_key
-                .unwrap()
-                .strip_prefix("terminal.")
-                .unwrap();
-            assert_eq!(
-                presentation.title(&default, locale),
-                nyaterm_i18n::SharedCatalogBackend
-                    .translate(locale, &format!("terminal.{title_key}"))
+            for insert_commands in [false, true] {
+                let presentation =
+                    ActionLinkTooltipPresentation::for_action(&default, insert_commands);
+                let title_key = presentation
+                    .title_key
                     .unwrap()
-            );
-            for is_macos in [false, true] {
-                let hint = presentation.hint(true, is_macos, locale);
-                assert!(!hint.contains("%{"), "{locale}: {hint}");
-                assert!(!hint.contains("terminal."), "{locale}: {hint}");
-                let verb_key = presentation
-                    .activation_key
                     .strip_prefix("terminal.")
                     .unwrap();
-                assert!(
-                    hint.contains(
-                        nyaterm_i18n::SharedCatalogBackend
-                            .translate(locale, &format!("terminal.{verb_key}"))
-                            .unwrap()
-                            .as_ref()
-                    )
+                assert_eq!(
+                    presentation.title(&default, locale),
+                    nyaterm_i18n::SharedCatalogBackend
+                        .translate(locale, &format!("terminal.{title_key}"))
+                        .unwrap()
                 );
-                assert!(hint.contains(if is_macos { "Option" } else { "Alt" }));
-                assert!(hint.contains(if is_macos { "⌘" } else { "Ctrl" }));
+                for is_macos in [false, true] {
+                    let hint = presentation.hint(true, is_macos, locale);
+                    assert!(!hint.contains("%{"), "{locale}: {hint}");
+                    assert!(!hint.contains("terminal."), "{locale}: {hint}");
+                    let verb_key = presentation
+                        .activation_key
+                        .strip_prefix("terminal.")
+                        .unwrap();
+                    assert!(
+                        hint.contains(
+                            nyaterm_i18n::SharedCatalogBackend
+                                .translate(locale, &format!("terminal.{verb_key}"))
+                                .unwrap()
+                                .as_ref()
+                        )
+                    );
+                    assert!(hint.contains(if is_macos { "Option" } else { "Alt" }));
+                    assert!(hint.contains(if is_macos { "⌘" } else { "Ctrl" }));
+                }
             }
         }
     }
@@ -191,6 +220,7 @@ impl Render for TooltipHost {
                 rgb(palette.surface_elevated),
                 window.viewport_size().width.into(),
                 &self.locale,
+                false,
             )))
     }
 }

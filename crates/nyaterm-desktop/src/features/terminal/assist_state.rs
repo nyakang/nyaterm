@@ -94,6 +94,9 @@ impl TerminalAssistState {
             return false;
         }
         self.credential_prompt_instance = instance;
+        // Secret reads may finish after this prompt has returned to a shell.
+        // Retain the username/password flow, but revoke in-flight fills.
+        self.credential_autofill_generation = self.credential_autofill_generation.saturating_add(1);
         let had_panel = self.dismiss_credential_suggestions();
         self.credential_autofill_recent = None;
         had_panel
@@ -208,6 +211,20 @@ mod tests {
         // Re-enabling cannot authorize a password read started before cancellation.
         assert!(!state.credential_fill_is_current(true, generation));
         assert!(state.credential_fill_is_current(true, state.credential_autofill_generation));
+    }
+
+    #[test]
+    fn prompt_changes_invalidate_in_flight_fills_even_when_text_is_reused() {
+        let mut state = TerminalAssistState::new();
+        state.observe_credential_prompt_instance(instance(3, 1));
+        let generation = state.credential_autofill_generation;
+        state.observe_credential_prompt_instance(instance(3, 1));
+        assert!(state.credential_fill_is_current(true, generation));
+        state.observe_credential_prompt_instance(instance(3, 2));
+        assert!(!state.credential_fill_is_current(true, generation));
+        let generation = state.credential_autofill_generation;
+        state.observe_credential_prompt_instance(instance(4, 2));
+        assert!(!state.credential_fill_is_current(true, generation));
     }
 
     #[test]

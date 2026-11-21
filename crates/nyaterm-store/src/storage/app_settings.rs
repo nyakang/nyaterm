@@ -312,6 +312,11 @@ impl ConnectionStore {
                 &["terminal", "action_links_enabled"],
                 false,
             ),
+            terminal_action_links_insert_commands: json_bool(
+                &value,
+                &["terminal", "action_links_insert_commands"],
+                false,
+            ),
             terminal_action_links_matchers: load_action_links_matchers(&value),
             search_custom_engines: load_search_engines(&value),
             ui_remote_stats_interval: json_u32(&value, &["ui", "remote_stats_interval"], 3)
@@ -693,6 +698,11 @@ impl ConnectionStore {
             ),
             minimize_to_tray: json_bool(&value, &["general", "minimize_to_tray"], false),
             confirm_on_close: json_bool(&value, &["general", "confirm_on_close"], true),
+            open_new_connection_after_save: json_bool(
+                &value,
+                &["general", "open_new_connection_after_save"],
+                false,
+            ),
             enable_screen_lock: json_bool(
                 &value,
                 &["security", "enable_startup_lock"],
@@ -1525,6 +1535,11 @@ impl ConnectionStore {
             &["terminal", "action_links_enabled"],
             serde_json::Value::Bool(settings.terminal_action_links_enabled),
         );
+        set_nested_json_value(
+            &mut value,
+            &["terminal", "action_links_insert_commands"],
+            serde_json::Value::Bool(settings.terminal_action_links_insert_commands),
+        );
         // Update only known keys so future matcher options survive older readers.
         for (key, enabled) in [
             ("mac", settings.terminal_action_links_matchers.mac),
@@ -1733,6 +1748,11 @@ impl ConnectionStore {
             &mut value,
             &["general", "confirm_on_close"],
             serde_json::Value::Bool(settings.confirm_on_close),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["general", "open_new_connection_after_save"],
+            serde_json::Value::Bool(settings.open_new_connection_after_save),
         );
         // UI language lives under ui.language (Tauri UiConfig.language).
         let language = match settings.language.as_str() {

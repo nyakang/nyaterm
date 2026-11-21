@@ -14,6 +14,12 @@ in `docs-site/src/data/changelogData.ts`; update both locations when preparing a
 
 ## [Unreleased]
 
+### Added
+
+- **connections:** Add an "Open new connections after saving" preference so a newly created connection starts as soon as it is saved; editing an existing connection is unaffected.
+- **terminal:** Add an action-link option that inserts command actions into the terminal input line instead of running them. Opening links, copy and paste actions keep their behavior.
+- **credentials:** Suggest OTP entries whose prompt pattern matches and generate the code when picked.
+
 ### Changed
 
 - **credentials:** Offer only credentials whose prompt regex matches the prompt; an unmatched password prompt now shows no suggestion instead of every saved credential, and password autofill no longer offers the session's connection password.

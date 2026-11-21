@@ -122,6 +122,10 @@ impl SettingsFeatureState {
             !self.summary.interaction_command_suggestions_enabled;
         self.summary.interaction_command_suggestions_enabled
     }
+    pub(in crate::features) fn toggle_open_new_connection_after_save(&mut self) -> bool {
+        self.summary.open_new_connection_after_save = !self.summary.open_new_connection_after_save;
+        self.summary.open_new_connection_after_save
+    }
     pub(in crate::features) fn toggle_credential_autofill(&mut self) -> bool {
         self.summary.interaction_credential_autofill_enabled =
             !self.summary.interaction_credential_autofill_enabled;
@@ -245,6 +249,11 @@ impl SettingsFeatureState {
     }
     pub(in crate::features) fn toggle_terminal_action_links(&mut self) {
         self.summary.terminal_action_links_enabled = !self.summary.terminal_action_links_enabled;
+    }
+    pub(in crate::features) fn toggle_terminal_action_links_insert_commands(&mut self) -> bool {
+        self.summary.terminal_action_links_insert_commands =
+            !self.summary.terminal_action_links_insert_commands;
+        self.summary.terminal_action_links_insert_commands
     }
     pub(in crate::features) fn toggle_terminal_action_link_matcher(&mut self, which: &str) -> bool {
         let matcher = &mut self.summary.terminal_action_links_matchers;

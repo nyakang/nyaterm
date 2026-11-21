@@ -579,7 +579,15 @@ impl NyaTermApp {
         }
         match target {
             ActionLinkTarget::ExecuteCommand(command) => {
-                self.execute_action_link_command(command, cx)
+                if self
+                    .settings
+                    .summary()
+                    .terminal_action_links_insert_commands
+                {
+                    self.insert_action_link_command(command, cx)
+                } else {
+                    self.execute_action_link_command(command, cx)
+                }
             }
             ActionLinkTarget::OpenUrl(url) => self.open_external_url_for_ui(&url, cx),
             ActionLinkTarget::CopyText(text) => {
@@ -646,6 +654,9 @@ fn terminal_bounds_contains(bounds: Bounds<Pixels>, position: Point<Pixels>) -> 
 
 #[cfg(test)]
 mod mac_tests;
+
+#[cfg(test)]
+mod command_tests;
 
 #[cfg(test)]
 mod tests {

@@ -51,6 +51,9 @@ fn mac_copy_has_no_wire_effect_and_insert_preserves_paste_framing_and_sync(
     let app = app_with_visible_local_session(cx, root.path(), "fixture");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let (manager, ids) = app.update(cx, |app, _| {
+        let mut settings = app.settings.summary().clone();
+        settings.terminal_action_links_insert_commands = true;
+        app.settings.replace_summary(settings);
         let manager = app.session.manager_handle();
         let metadata = app.session.metadata("fixture").unwrap().clone();
         app.sync_input.create_group();
