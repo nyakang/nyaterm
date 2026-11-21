@@ -60,8 +60,11 @@ fn main() -> Result<()> {
     let initial = next_frame(&screen, 1)?;
     let touch = |action, x, y| Control::Touch {
         action,
-        x,
-        y,
+        points: vec![nyaterm_android::ipc::TouchPoint {
+            pointer: nyaterm_android::ipc::TouchPointer::Mouse,
+            x,
+            y,
+        }],
         width: initial.capture_width,
         height: initial.capture_height,
         generation: initial.generation,

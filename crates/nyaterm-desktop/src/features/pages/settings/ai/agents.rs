@@ -435,22 +435,19 @@ impl SettingsPanel {
             _ => t!("ai.mcp.disabled"),
         };
         let helper_ready = status.mcp_helper_path.is_some();
-        let helper_label = if helper_ready {
-            t!("ai.mcp.helperAvailable")
-        } else {
-            t!("ai.mcp.helperMissing")
-        };
         let mcp = div()
             .child(self.mcp_background_tasks_content(cx))
             .flex()
             .flex_col()
             .gap_4()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(helper_label),
-            )
+            .when(!helper_ready, |this| {
+                this.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.warning))
+                        .child(t!("ai.mcp.helperMissing")),
+                )
+            })
             .child(settings_form_row(
                 palette,
                 t!("ai.externalMcpEnabled"),
@@ -482,7 +479,18 @@ impl SettingsPanel {
                     .child(ai_field(
                         palette,
                         t!("ai.mcp.terminalExecution"),
-                        Some(t!("ai.mcp.terminalExecutionDesc").into()),
+                        Some(
+                            match settings.external_mcp.terminal_execution_mode {
+                                McpTerminalExecutionMode::Auto => t!("ai.mcp.executionAutoHint"),
+                                McpTerminalExecutionMode::Inline => {
+                                    t!("ai.mcp.executionInlineHint")
+                                }
+                                McpTerminalExecutionMode::Background => {
+                                    t!("ai.mcp.executionBackgroundHint")
+                                }
+                            }
+                            .into(),
+                        ),
                         execution_mode,
                     ))
                     .child(ai_field(

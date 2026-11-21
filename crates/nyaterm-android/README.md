@@ -147,6 +147,23 @@ pointer. Ordinary wheel and left-button gestures control the device. Image and
 input coordinates use the same clipped transform; pan is constrained to the image.
 Each split screen owns its focus and releases held input independently.
 
+Hold a modifier before pressing the left mouse button to simulate two fingers:
+
+| Modifier + left drag | Device gesture |
+| --- | --- |
+| Ctrl | Pinch/rotate, with the second finger mirrored through the capture center |
+| Shift | Vertical two-finger slide, mirrored across the vertical center line |
+| Ctrl + Shift | Horizontal two-finger slide, mirrored across the horizontal center line |
+
+The gesture is latched on press until release, even if modifiers change mid-drag.
+These gestures change content inside apps that support them; Ctrl/Cmd + wheel
+still changes only NyaTerm's local image scale. Cmd alone does not simulate Ctrl.
+Moving outside the visible image, losing focus, hiding the screen, changing its
+geometry or local transform, or an input failure ends the gesture. Press again
+to start a new one. All active fingers are released together on interruption.
+The application and Android helper must both use IPC version 5; older helpers
+are rejected by the existing version handshake. Saved settings are unchanged.
+
 Unicode uses explicit paste or the device input method. Host IME does not
 automatically replace the device clipboard. A clipboard acknowledgement proves
 request handling, not insertion into an input field.

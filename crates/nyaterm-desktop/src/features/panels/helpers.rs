@@ -3,7 +3,7 @@ use std::borrow::Cow;
 
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
 use nyaterm_core::{QuickCommand, QuickCommandCategory, quick_command_category_sibling_order};
-use nyaterm_ui::NyaSwitch;
+use nyaterm_ui::{NyaSwitch, NyaTooltip};
 use rust_i18n::t;
 
 use crate::features::{
@@ -294,6 +294,7 @@ pub(in crate::features::panels) fn quick_command_editor_script_field(
     app: &mut NyaTermApp,
     spec: QuickCommandEditorFieldSpec,
     raw_send: bool,
+    syntax_help: Option<SharedString>,
     cx: &mut Context<NyaTermApp>,
 ) -> gpui::AnyElement {
     let toggle = div()
@@ -304,6 +305,14 @@ pub(in crate::features::panels) fn quick_command_editor_script_field(
         .gap_2()
         .text_xs()
         .text_color(rgb(app.theme_palette().text_muted))
+        .when_some(syntax_help, |this, help| {
+            this.child(
+                div()
+                    .id("quick-command-syntax-help")
+                    .child(svg().size(px(14.)).path("icons/menu/info.svg"))
+                    .tooltip(move |window, cx| NyaTooltip::new(help.clone()).build(window, cx)),
+            )
+        })
         .child(t!("quickCommands.rawSend"))
         .child(
             NyaSwitch::new("quick-command-editor-raw-send")

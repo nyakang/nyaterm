@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod gesture;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AdbDeviceSelector {

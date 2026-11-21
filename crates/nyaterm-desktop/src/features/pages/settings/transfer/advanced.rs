@@ -60,7 +60,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.preserveTimestamps"),
-                    Some(SharedString::from(t!("settings.preserveTimestampsDesc"))),
+                    None,
                     settings_switch(
                         palette,
                         "settings-transfer-preserve-timestamps",
@@ -73,7 +73,7 @@ impl SettingsPanel {
                 .child(settings_form_row(
                     palette,
                     t!("settings.resumeBrokenTransfer"),
-                    Some(SharedString::from(t!("settings.resumeBrokenTransferDesc"))),
+                    None,
                     settings_switch(
                         palette,
                         "settings-transfer-resume-broken",

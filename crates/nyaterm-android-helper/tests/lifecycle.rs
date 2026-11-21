@@ -1,5 +1,7 @@
 use nyaterm_android::adb::client::DeviceBinding;
-use nyaterm_android::ipc::{Control, PROTOCOL_VERSION, Packet, read_packet, write_packet};
+use nyaterm_android::ipc::{
+    Control, PROTOCOL_VERSION, Packet, TouchPoint, TouchPointer, read_packet, write_packet,
+};
 use nyaterm_android::process::reap;
 use nyaterm_core::models::android::AndroidScreenSettings;
 use std::io::{Read, Write};
@@ -46,6 +48,17 @@ fn handshake_control_input_idle_video_heartbeat_and_normal_disconnect() {
         let mut key = [0; 14];
         control.read_exact(&mut key).unwrap();
         assert_eq!(key, [0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // A grouped press reaches the server as two distinct fingers. Disconnect
+        // releases both with UP before releasing held keys.
+        for action in [0, 1] {
+            for id in [u64::MAX - 1, u64::MAX - 2] {
+                let mut touch = [0; 32];
+                control.read_exact(&mut touch).unwrap();
+                assert_eq!(&touch[..2], &[2, action]);
+                assert_eq!(&touch[2..10], &id.to_be_bytes());
+                assert_eq!(&touch[24..], &[0; 8]);
+            }
+        }
         // Disconnect releases held keys through the always-enabled control channel.
         control.read_exact(&mut key).unwrap();
         assert_eq!(key, [0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0]);
@@ -68,14 +81,14 @@ fn handshake_control_input_idle_video_heartbeat_and_normal_disconnect() {
         }),
     )
     .unwrap();
-    assert!(matches!(
-        read_packet(child.stdout.as_mut().unwrap()).unwrap(),
-        Some(Packet::Control(Control::Ready {
-            width: 8,
-            height: 8,
-            ..
-        }))
-    ));
+    let Some(Packet::Control(Control::Ready {
+        width: 8,
+        height: 8,
+        generation,
+    })) = read_packet(child.stdout.as_mut().unwrap()).unwrap()
+    else {
+        panic!("expected ready geometry");
+    };
     write_packet(
         child.stdin.as_mut().unwrap(),
         &Packet::Control(Control::Ping { sequence: 17 }),
@@ -123,6 +136,28 @@ fn handshake_control_input_idle_video_heartbeat_and_normal_disconnect() {
             keycode: 4,
             repeat: 0,
             metastate: 0,
+        }),
+    )
+    .unwrap();
+    write_packet(
+        child.stdin.as_mut().unwrap(),
+        &Packet::Control(Control::Touch {
+            action: 0,
+            points: vec![
+                TouchPoint {
+                    pointer: TouchPointer::Finger,
+                    x: 1,
+                    y: 2,
+                },
+                TouchPoint {
+                    pointer: TouchPointer::VirtualFinger,
+                    x: 6,
+                    y: 5,
+                },
+            ],
+            width: 8,
+            height: 8,
+            generation,
         }),
     )
     .unwrap();

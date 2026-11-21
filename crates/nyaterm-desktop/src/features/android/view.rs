@@ -6,7 +6,8 @@ use gpui::{
     Window, canvas, div, prelude::*, px, rgb,
 };
 use nyaterm_android::ipc::Control;
-use nyaterm_core::models::android::{AndroidViewKind, screen_point};
+use nyaterm_core::models::android::AndroidViewKind;
+use nyaterm_core::models::android::gesture::ScreenGesture;
 use rust_i18n::t;
 use std::time::{Duration, Instant};
 
@@ -87,7 +88,7 @@ impl NyaTermApp {
                     generation,
                 } if generation > screen.generation => {
                     let _ = handle.send(Control::ReleaseInputs);
-                    screen.drag = false;
+                    screen.gesture = None;
                     screen.physical_keys.clear();
                     screen.bounds = None;
                     screen.generation = generation;
@@ -106,7 +107,7 @@ impl NyaTermApp {
                 }
                 Control::Fatal { code } => {
                     screen.error = Some(AndroidError::Fatal(code));
-                    screen.drag = false;
+                    screen.gesture = None;
                     screen.physical_keys.clear();
                     changed = true;
                 }
@@ -115,6 +116,8 @@ impl NyaTermApp {
                     changed = true;
                 }
                 Control::Disconnected => {
+                    screen.gesture = None;
+                    screen.physical_keys.clear();
                     screen.error = Some(AndroidError::Disconnected);
                     changed = true;
                 }
@@ -130,7 +133,7 @@ impl NyaTermApp {
             }
             if frame.generation != screen.generation {
                 let _ = handle.send(Control::ReleaseInputs);
-                screen.drag = false;
+                screen.gesture = None;
                 screen.physical_keys.clear();
                 screen.bounds = None;
                 screen.layout_epoch += 1;
@@ -185,6 +188,15 @@ impl NyaTermApp {
                 && self.shell.selected_nav() == crate::models::NavItem::Workspace;
             if screen.visible != next {
                 screen.visible = next;
+                if !next {
+                    screen.gesture = None;
+                    screen.pan_drag = None;
+                    screen.physical_keys.clear();
+                    screen.paste_shortcut = false;
+                    if let Some(handle) = &screen.handle {
+                        let _ = handle.send(Control::ReleaseInputs);
+                    }
+                }
                 if let Some(handle) = &screen.handle {
                     if handle
                         .send(Control::Presentation { visible: next })
@@ -335,6 +347,16 @@ impl NyaTermApp {
                                 .viewport_bounds
                                 .is_some_and(|previous| f32::from(previous.size.width) < 440.);
                             let is_narrow = f32::from(bounds.size.width) < 440.;
+                            if screen.gesture.is_some()
+                                && (screen.viewport_bounds != Some(bounds)
+                                    || screen.bounds != Some(image))
+                            {
+                                screen.gesture = None;
+                                screen.physical_keys.clear();
+                                if let Some(handle) = &screen.handle {
+                                    let _ = handle.send(Control::ReleaseInputs);
+                                }
+                            }
                             screen.viewport_bounds = Some(bounds);
                             screen.bounds = Some(image);
                             if was_narrow != is_narrow {
@@ -346,7 +368,43 @@ impl NyaTermApp {
                 });
                 image
             },
-            move |_, image, window, cx| {
+            move |bounds, image, window, cx| {
+                // Element mouse-move listeners only run while hovered. Observe the
+                // capture phase as well so leaving the viewport ends held touches.
+                let move_app = paint_app.clone();
+                let move_id = paint_id.clone();
+                window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                    if phase == gpui::DispatchPhase::Capture
+                        && (!bounds.contains(&event.position) || !image.contains(&event.position))
+                    {
+                        let _ = move_app.update(cx, |app, _| {
+                            if app
+                                .android
+                                .screens
+                                .get(&move_id)
+                                .is_some_and(|screen| screen.gesture.is_some())
+                            {
+                                app.android.release_inputs(&move_id);
+                            }
+                        });
+                    }
+                });
+                let exit_app = paint_app.clone();
+                let exit_id = paint_id.clone();
+                window.on_mouse_event(move |_: &gpui::MouseExitEvent, phase, _, cx| {
+                    if phase == gpui::DispatchPhase::Capture {
+                        let _ = exit_app.update(cx, |app, _| {
+                            if app
+                                .android
+                                .screens
+                                .get(&exit_id)
+                                .is_some_and(|screen| screen.gesture.is_some())
+                            {
+                                app.android.release_inputs(&exit_id);
+                            }
+                        });
+                    }
+                });
                 if let Some(texture) = texture
                     && texture.paint(image, window).is_err()
                 {
@@ -441,14 +499,23 @@ impl NyaTermApp {
                     cx.stop_propagation();
                     app.activate_workspace_pane(down.clone(), cx);
                     app.focus_android_screen(&down, window, cx);
-                    app.android_pointer(&down, event.position, 0, cx);
+                    app.android_pointer(
+                        &down,
+                        event.position,
+                        0,
+                        Some(ScreenGesture::from_modifiers(
+                            event.modifiers.control,
+                            event.modifiers.shift,
+                        )),
+                        cx,
+                    );
                 }),
             )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |app, event: &gpui::MouseUpEvent, _, cx| {
                     cx.stop_propagation();
-                    app.android_pointer(&up, event.position, 1, cx);
+                    app.android_pointer(&up, event.position, 1, None, cx);
                 }),
             )
             .on_mouse_up_out(
@@ -478,8 +545,13 @@ impl NyaTermApp {
                         cx.notify();
                         return;
                     }
-                    if app.android.screens.get(&movement).is_some_and(|s| s.drag) {
-                        app.android_pointer(&movement, event.position, 2, cx);
+                    if app
+                        .android
+                        .screens
+                        .get(&movement)
+                        .is_some_and(|s| s.gesture.is_some())
+                    {
+                        app.android_pointer(&movement, event.position, 2, None, cx);
                     }
                 }),
             )
@@ -683,11 +755,8 @@ impl NyaTermApp {
         rejection: Option<nyaterm_android::ipc::InputRejection>,
         cx: &mut Context<Self>,
     ) {
+        self.android.release_inputs(id);
         if let Some(screen) = self.android.screens.get_mut(id) {
-            if queue_full {
-                screen.drag = false;
-                screen.physical_keys.clear();
-            }
             if screen
                 .last_input_notice
                 .is_some_and(|last| last.elapsed() < Duration::from_secs(2))
@@ -745,56 +814,23 @@ impl NyaTermApp {
         id: &str,
         position: Point<Pixels>,
     ) -> Option<(u32, u32, u32, u32, u64)> {
-        let screen = self.android.screens.get(id)?;
-        if screen.pan_drag.is_some() {
-            return None;
-        }
-        if screen.bounds_generation != screen.generation {
-            return None;
-        }
-        let bounds = screen.bounds?;
-        if !screen.viewport_bounds?.contains(&position) {
-            return None;
-        }
-        let (width, height) = screen.dimensions;
-        let (x, y) = screen_point(
-            f32::from(position.x - bounds.origin.x),
-            f32::from(position.y - bounds.origin.y),
-            f32::from(bounds.size.width),
-            f32::from(bounds.size.height),
-            width,
-            height,
-        )?;
-        Some((x, y, width, height, screen.generation))
+        self.android.screens.get(id)?.position(position)
     }
     fn android_pointer(
         &mut self,
         id: &str,
         position: Point<Pixels>,
         action: u8,
+        begin: Option<ScreenGesture>,
         cx: &mut Context<Self>,
     ) {
-        if let Some((x, y, width, height, generation)) = self.android_position(id, position) {
-            if let Some(screen) = self.android.screens.get_mut(id) {
-                screen.drag = action != 1;
-            }
-            self.android_send(
-                id,
-                Control::Touch {
-                    action,
-                    x,
-                    y,
-                    width,
-                    height,
-                    generation,
-                },
-                cx,
-            );
-        } else if action == 1 {
-            self.android_send(id, Control::ReleaseInputs, cx);
-            if let Some(screen) = self.android.screens.get_mut(id) {
-                screen.drag = false;
-            }
+        let control = self
+            .android
+            .screens
+            .get_mut(id)
+            .and_then(|screen| screen.pointer_input(position, action, begin));
+        if let Some(control) = control {
+            self.android_send(id, control, cx);
         }
     }
 }
