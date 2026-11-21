@@ -509,6 +509,11 @@ impl ConnectionStore {
                 &["interaction", "mouse_events_require_alt"],
                 false,
             ),
+            interaction_alternate_scroll: json_bool(
+                &value,
+                &["interaction", "alternate_scroll"],
+                true,
+            ),
             interaction_terminal_zoom_enabled: json_bool(
                 &value,
                 &["interaction", "terminal_zoom_enabled"],
@@ -1635,6 +1640,11 @@ impl ConnectionStore {
             &mut value,
             &["interaction", "mouse_events_require_alt"],
             serde_json::Value::Bool(settings.interaction_mouse_events_require_alt),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["interaction", "alternate_scroll"],
+            serde_json::Value::Bool(settings.interaction_alternate_scroll),
         );
         set_nested_json_value(
             &mut value,

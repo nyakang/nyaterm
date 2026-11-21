@@ -3660,6 +3660,8 @@
     "terminalRightClickPaste": "粘贴",
     "mouseEventsRequireAlt": "鼠标报告需按 Alt",
     "mouseEventsRequireAltDesc": "仅在按住 Alt 时向终端程序发送鼠标事件。",
+    "alternateScroll": "全屏程序中滚轮发送方向键",
+    "alternateScrollDesc": "在备用屏幕（tmux、screen、less、vim）且未启用鼠标报告时，将鼠标滚轮作为上/下方向键发送。关闭后滚轮不会翻动 shell 历史。",
     "enableStartupLock": "启动时锁定",
     "enableStartupLockDesc": "应用启动时锁定。",
     "enableIdleLock": "空闲时锁定",

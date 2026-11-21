@@ -3660,6 +3660,8 @@
     "terminalRightClickPaste": "貼り付け",
     "mouseEventsRequireAlt": "マウス報告に Alt が必要",
     "mouseEventsRequireAltDesc": "Alt キーを押している間だけマウスイベントをターミナルアプリに送信します。",
+    "alternateScroll": "全画面アプリでホイールが矢印キーを送信",
+    "alternateScrollDesc": "マウス報告がない代替画面（tmux、screen、less、vim）で、マウスホイールを上/下キーとして送信します。オフにするとホイールでシェル履歴が切り替わらなくなります。",
     "enableStartupLock": "起動時にロック",
     "enableStartupLockDesc": "アプリの起動時にロックします。",
     "enableIdleLock": "アイドル時にロック",

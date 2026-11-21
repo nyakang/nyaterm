@@ -341,6 +341,8 @@ fn settings_migrate_right_click_and_lock_keys_without_losing_unknown_fields() {
         .save_settings_value(&raw)
         .expect("seed mixed settings");
     let mixed = store.load_app_settings_summary().expect("load mixed");
+    // Data written before the setting existed keeps the xterm-compatible wheel.
+    assert!(mixed.interaction_alternate_scroll);
     assert_eq!(
         mixed.interaction_terminal_right_click_action,
         TerminalRightClickAction::None
@@ -351,6 +353,7 @@ fn settings_migrate_right_click_and_lock_keys_without_losing_unknown_fields() {
     let mut updated = mixed;
     updated.interaction_terminal_right_click_action = TerminalRightClickAction::Menu;
     updated.interaction_mouse_events_require_alt = true;
+    updated.interaction_alternate_scroll = false;
     updated.enable_startup_lock = true;
     updated.enable_idle_lock = false;
     updated.transfer_internal_editor_display = InternalEditorDisplay::Workspace;
@@ -368,6 +371,7 @@ fn settings_migrate_right_click_and_lock_keys_without_losing_unknown_fields() {
         TerminalRightClickAction::Menu
     );
     assert!(saved.interaction_mouse_events_require_alt);
+    assert!(!saved.interaction_alternate_scroll);
     assert!(saved.enable_startup_lock);
     assert!(!saved.enable_idle_lock);
     assert_eq!(

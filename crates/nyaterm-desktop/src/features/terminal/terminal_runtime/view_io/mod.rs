@@ -563,12 +563,24 @@ impl NyaTermApp {
         &self,
         session_id: &str,
     ) -> TerminalProtocolState {
-        self.terminal
+        let state = self
+            .terminal
             .view
             .views
             .get(session_id)
             .map(|view| view.protocol_state)
-            .unwrap_or_else(|| TerminalProtocolState::from_screen(&self.terminal.view.screen))
+            .unwrap_or_else(|| TerminalProtocolState::from_screen(&self.terminal.view.screen));
+        self.apply_alternate_scroll_setting(state)
+    }
+
+    /// DECSET 1007 is honoured only while the user keeps the setting on; the
+    /// view's own state keeps tracking the remote's mode untouched.
+    fn apply_alternate_scroll_setting(
+        &self,
+        mut state: TerminalProtocolState,
+    ) -> TerminalProtocolState {
+        state.alternate_scroll &= self.settings.summary().interaction_alternate_scroll;
+        state
     }
 
     pub(in crate::features) fn open_terminal_actions(
@@ -880,7 +892,7 @@ impl NyaTermApp {
         let has_new = view.has_new_while_scrolled;
         let performance_overlay = view.performance_overlay;
         let skipped = view.skipped_output_chars;
-        let protocol_state = view.protocol_state;
+        let protocol_state = self.apply_alternate_scroll_setting(view.protocol_state);
         let search_matches = if is_active && !input_latency_active && self.terminal.search.open {
             self.terminal_find_highlights()
         } else {
@@ -1130,7 +1142,8 @@ impl NyaTermApp {
         let has_new = view.map(|v| v.has_new_while_scrolled).unwrap_or(false);
         let performance_overlay = view.and_then(|v| v.performance_overlay);
         let skipped = view.map(|v| v.skipped_output_chars).unwrap_or(0);
-        let protocol_state = view.map(|v| v.protocol_state).unwrap_or_default();
+        let protocol_state =
+            self.apply_alternate_scroll_setting(view.map(|v| v.protocol_state).unwrap_or_default());
         let target_line = view.and_then(|v| v.target_line);
         let command_blocks = view.map(|v| v.command_blocks.clone()).unwrap_or_default();
         let zebra_stripes_enabled = self.settings.summary().terminal_zebra_stripes_enabled;
