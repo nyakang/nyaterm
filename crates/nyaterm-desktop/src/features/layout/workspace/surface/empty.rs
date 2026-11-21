@@ -1,7 +1,7 @@
 use rust_i18n::t;
 
-use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, rgb, svg};
-use nyaterm_core::truncate_preview;
+use crate::features::view_widgets::connection_failure::FailedConnectionTarget;
+use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, rgb};
 
 use crate::features::NyaTermApp;
 use crate::features::view_widgets::{
@@ -133,10 +133,9 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn failed_workspace_state(
-        &self,
+        &mut self,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let palette = self.theme_palette();
         let request_id = self.session.active_failed_request_id().map(str::to_string);
         let cancelled = request_id
             .as_deref()
@@ -147,72 +146,11 @@ impl NyaTermApp {
             .map(|failed| failed.error.clone())
             .or_else(|| self.shell.last_connect_failure_error().map(str::to_string))
             .unwrap_or_default();
-        let show_error = !cancelled || error != t!("terminal.connectionCancelled").as_ref();
-
-        div()
-            .debug_selector(|| "failed-workspace-state".into())
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .bg(self.shell_terminal_surface_color(self.theme_palette().ui_terminal_bg))
-            .child(
-                svg()
-                    .size(px(32.))
-                    .path("icons/session/disconnect.svg")
-                    .text_color(rgb(if cancelled {
-                        palette.text_muted
-                    } else {
-                        palette.danger
-                    })),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "failed-workspace-message".into())
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_1()
-                    .px_6()
-                    .text_center()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight(600.))
-                            .text_color(rgb(palette.text))
-                            .child(if cancelled {
-                                t!("terminal.connectionCancelled")
-                            } else {
-                                t!("terminal.connectionFailed")
-                            }),
-                    )
-                    .when(show_error, |this| {
-                        this.child(
-                            div()
-                                .max_w(px(320.))
-                                .text_size(px(11.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .child(truncate_preview(&error, 160)),
-                        )
-                    }),
-            )
-            .when_some(request_id, |this, request_id| {
-                this.child(
-                    div()
-                        .debug_selector(|| "failed-session-reconnect-target".into())
-                        .child(nyaterm_ui::small_button(
-                            palette,
-                            "failed-session-reconnect",
-                            t!("tabCtx.reconnect"),
-                            cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.retry_failed_session_start(request_id.clone(), window, cx);
-                            }),
-                        )),
-                )
-            })
+        self.connection_failure_state(
+            request_id.map(FailedConnectionTarget::Start),
+            error,
+            cancelled,
+            cx,
+        )
     }
 }

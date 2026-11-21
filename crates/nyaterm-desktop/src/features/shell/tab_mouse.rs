@@ -476,6 +476,7 @@ impl NyaTermApp {
             let id = id.to_string();
             if ended.is_some() {
                 self.select_failed_session_start(id, cx);
+                window.focus(self.terminal.input_focus(), cx);
             } else {
                 self.select_pending_session_start(id, cx);
             }

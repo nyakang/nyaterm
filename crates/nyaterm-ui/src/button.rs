@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, App, ClickEvent, FontWeight, Hsla, IntoElement, ParentElement as _, Pixels,
-    RenderOnce, SharedString, Styled as _, Window, div, prelude::FluentBuilder as _,
+    AnyElement, App, ClickEvent, FocusHandle, FontWeight, Hsla, IntoElement, ParentElement as _,
+    Pixels, RenderOnce, SharedString, Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Disableable, Icon, Selectable, Sizable};
@@ -37,6 +37,7 @@ pub struct NyaButton {
     disabled: bool,
     loading: bool,
     autofocus: bool,
+    focus_handle: Option<FocusHandle>,
     tooltip: Option<SharedString>,
     on_click: Option<NyaButtonClickHandler>,
 }
@@ -62,6 +63,7 @@ impl NyaButton {
             disabled: false,
             loading: false,
             autofocus: false,
+            focus_handle: None,
             tooltip: None,
             on_click: None,
         }
@@ -150,6 +152,12 @@ impl NyaButton {
         self
     }
 
+    /// Use the caller's handle for keyboard activation and focus restoration.
+    pub fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
+        self.focus_handle = Some(focus_handle.clone());
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
@@ -172,12 +180,18 @@ impl RenderOnce for NyaButton {
             // Render it in this scope below so its focus ring and keyboard clicks
             // use this handle too. Keyed state expires when the button disappears.
             window.use_keyed_state(self.id.clone(), cx, |window, cx| {
-                let focus = cx.focus_handle();
+                let focus = self
+                    .focus_handle
+                    .clone()
+                    .unwrap_or_else(|| cx.focus_handle());
                 window.focus(&focus, cx);
                 focus
             });
         }
         let mut button = Button::new(self.id).loading(self.loading);
+        if let Some(focus) = self.focus_handle {
+            button = button.track_focus(&focus);
+        }
         if icon_only {
             // An empty label would create a second content slot and offset the icon.
             if let Some(tooltip) = &self.tooltip {

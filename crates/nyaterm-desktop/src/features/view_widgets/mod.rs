@@ -1,4 +1,5 @@
 mod chrome;
+pub(in crate::features) mod connection_failure;
 pub(in crate::features) use chrome::{
     APP_OVERLAY_PRIORITY, bounded_dialog_width, child_window_header,
     conversation_panel_header_with_actions, dialog_action_button, full_window_input_layer,
