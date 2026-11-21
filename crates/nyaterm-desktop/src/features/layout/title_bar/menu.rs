@@ -46,6 +46,7 @@ impl NyaTermApp {
                 | TitleMenuCommand::TerminalPaste
                 | TitleMenuCommand::TerminalFind
                 | TitleMenuCommand::TerminalSelectAll
+                | TitleMenuCommand::TerminalLocalMode
         ))
     }
 
@@ -71,6 +72,7 @@ impl NyaTermApp {
                     | TitleMenuCommand::TerminalFind
                     | TitleMenuCommand::TerminalSelectAll
                     | TitleMenuCommand::TerminalClear
+                    | TitleMenuCommand::TerminalLocalMode
                     | TitleMenuCommand::ToggleBroadcast => return,
                     _ => {}
                 }
@@ -88,7 +90,9 @@ impl NyaTermApp {
                         }
                         return;
                     }
-                    TitleMenuCommand::TerminalClear | TitleMenuCommand::ToggleBroadcast => return,
+                    TitleMenuCommand::TerminalClear
+                    | TitleMenuCommand::TerminalLocalMode
+                    | TitleMenuCommand::ToggleBroadcast => return,
                     TitleMenuCommand::ZoomIn => {
                         self.adjust_transfer_internal_editor_font_size(1, cx);
                         return;
@@ -136,6 +140,7 @@ impl NyaTermApp {
             TitleMenuCommand::ToggleTerminalZoom => self.toggle_terminal_zoom_enabled(cx),
             TitleMenuCommand::ToggleBroadcast => self.toggle_broadcast_to_all(cx),
             TitleMenuCommand::TerminalClear => self.send_terminal_clear_screen(cx),
+            TitleMenuCommand::TerminalLocalMode => self.toggle_terminal_local_mode(cx),
             TitleMenuCommand::RefitTerminals => {
                 self.resize_all_known_terminal_surfaces_for_menu(cx)
             }
@@ -392,6 +397,10 @@ impl NyaTermApp {
                 .checked(self.sync_input.broadcast_to_all())
                 .command(TitleMenuCommand::ToggleBroadcast),
             TitleMenuDefinition::separator(),
+            TitleMenuDefinition::action(t!("settings.shortcutLabels.localMode"))
+                .icon("icons/mouse.svg")
+                .shortcut(self.display_shortcut_for("terminal.localMode", "Ctrl+Enter"))
+                .command(TitleMenuCommand::TerminalLocalMode),
             TitleMenuDefinition::action(t!("menu.clearTerminal"))
                 .icon("icons/fe/delete.svg")
                 .shortcut(self.display_shortcut_for("terminal.clear", "Ctrl+L"))
@@ -1099,6 +1108,7 @@ mod tests {
         assert!(labels.contains(&"Unsplit"));
         assert!(labels.contains(&"Sync Input"));
         assert!(labels.contains(&"Broadcast All"));
+        assert!(labels.contains(&"Toggle local mode"));
         assert!(labels.contains(&"Clear Terminal"));
         assert!(labels.contains(&"Refit Terminal Size"));
 

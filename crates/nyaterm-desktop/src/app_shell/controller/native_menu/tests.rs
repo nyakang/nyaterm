@@ -124,6 +124,7 @@ fn native_menu_contains_every_window_menu_command_and_existing_extra_commands() 
         TitleMenuCommand::TerminalPaste,
         TitleMenuCommand::TerminalFind,
         TitleMenuCommand::TerminalSelectAll,
+        TitleMenuCommand::TerminalLocalMode,
     ] {
         native_item(&menus, &command);
     }

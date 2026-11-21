@@ -8,10 +8,22 @@ use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_surface::terminal_snapshot_absolute_range;
 use gpui::{Context, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
 use nyaterm_terminal::local_mode::{
-    LocalModeMotion, LocalModeViewport, local_mode_insertion_col, move_local_mode_cursor,
+    LocalModeMotion, LocalModeViewport, local_mode_insertion_col, local_mode_scroll_delta,
+    move_local_mode_cursor,
 };
 use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelection};
 use rust_i18n::t;
+
+/// Insertion-point column just after the last non-empty cell of a snapshot
+/// row. Used both for keyboard End/BufferEnd and for mouse clicks so the caret
+/// never lands in the blank margin past a line's content.
+fn row_content_end(row: &nyaterm_terminal::TerminalSnapshotRow) -> usize {
+    row.cells
+        .iter()
+        .rposition(|cell| !cell.text().is_empty())
+        .map(|index| index + row.cells[index].width.max(1) as usize)
+        .unwrap_or(0)
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn toggle_terminal_local_mode(&mut self, cx: &mut Context<Self>) {
@@ -164,19 +176,62 @@ impl NyaTermApp {
         let snapshot = self.terminal_snapshot_for_session(Some(&session_id), offset);
         let (absolute_start, absolute_end) = terminal_snapshot_absolute_range(&snapshot);
         let page_rows = self.active_terminal_page_rows();
+        // Navigate over the whole buffer, not just the current viewport. The
+        // viewport's first/last line used to clamp PageUp/PageDown to the
+        // visible window, so the caret never left it and the view never
+        // followed. Using the full buffer lets the caret move out and makes
+        // `reveal` scroll the viewport to keep it visible.
         let viewport = LocalModeViewport {
-            first_line: absolute_start,
-            last_line: absolute_end.saturating_sub(1).max(absolute_start),
+            first_line: 0,
+            last_line: snapshot.total_rows.saturating_sub(1),
             page_rows,
             cols: snapshot.cols,
         };
-        let line_len = |line: usize| {
+        let content_end = |line: usize| {
             let row = line.saturating_sub(absolute_start);
-            snapshot.row(row).map_or(1, |r| r.cells.len().max(1))
+            // Lines outside the current snapshot (e.g. a whole page away) have
+            // no measurable content end yet. Return the full width so the
+            // motion keeps the caret's column; it is clamped against the real
+            // content end once `reveal` has scrolled the target line on screen.
+            snapshot.row(row).map_or(snapshot.cols, row_content_end)
         };
 
         let current = self.terminal.local_mode.cursor;
-        let next = move_local_mode_cursor(current, motion, viewport, line_len);
+        let moved = move_local_mode_cursor(current, motion, viewport, content_end);
+
+        // Page motions are full-screen navigations: scroll the viewport by the
+        // exact number of lines the caret moved so the display follows the page
+        // flip and the caret keeps its screen row. Other motions only get a
+        // minimal reveal to pull the caret back inside the visible window.
+        let follow_lines = match motion {
+            LocalModeMotion::PageUp(_) | LocalModeMotion::PageDown(_) => {
+                Some(current.line as i32 - moved.line as i32)
+            }
+            _ => None,
+        };
+        let scroll_delta =
+            local_mode_scroll_delta(follow_lines, moved.line, absolute_start, absolute_end);
+        self.reveal_terminal_local_mode_cursor(&session_id, scroll_delta, cx);
+        let next_offset = self
+            .terminal
+            .view
+            .views
+            .get(&session_id)
+            .map(|view| view.scroll_offset)
+            .unwrap_or(0);
+        let next_snapshot = self.terminal_snapshot_for_session(Some(&session_id), next_offset);
+        let (next_start, _) = terminal_snapshot_absolute_range(&next_snapshot);
+        let next_row = moved.line.saturating_sub(next_start);
+        let next_content_end = next_snapshot.row(next_row).map_or(1, row_content_end);
+        // End/BufferEnd may target a line outside the pre-scroll snapshot, so
+        // their column was clamped against a placeholder. Recompute it against
+        // the snapshot that now contains the target line.
+        let next_col = match motion {
+            LocalModeMotion::End | LocalModeMotion::BufferEnd => next_content_end,
+            _ => moved.col.min(next_content_end),
+        }
+        .min(next_snapshot.cols);
+        let next = TerminalBufferCellPos::new(moved.line, next_col);
 
         if shift {
             let anchor = self.terminal.local_mode.anchor.unwrap_or(current);
@@ -202,13 +257,6 @@ impl NyaTermApp {
         }
 
         self.terminal.local_mode.cursor = next;
-        self.reveal_terminal_local_mode_cursor(
-            &session_id,
-            next.line,
-            absolute_start,
-            absolute_end,
-            cx,
-        );
         self.sync_terminal_local_mode_cursor(&session_id, cx);
         true
     }
@@ -225,23 +273,11 @@ impl NyaTermApp {
     fn reveal_terminal_local_mode_cursor(
         &mut self,
         session_id: &str,
-        line: usize,
-        absolute_start: usize,
-        absolute_end: usize,
+        scroll_delta: i32,
         cx: &mut Context<Self>,
     ) {
-        if line < absolute_start {
-            self.scroll_terminal_by_for_session(
-                Some(session_id),
-                absolute_start.saturating_sub(line) as i32,
-                cx,
-            );
-        } else if absolute_end > absolute_start && line >= absolute_end {
-            self.scroll_terminal_by_for_session(
-                Some(session_id),
-                absolute_end.saturating_sub(line + 1) as i32,
-                cx,
-            );
+        if scroll_delta != 0 {
+            self.scroll_terminal_by_for_session(Some(session_id), scroll_delta, cx);
         }
     }
 

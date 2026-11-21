@@ -73,6 +73,7 @@ impl NyaTermApp {
         let find_sc = shortcut("terminal.find", "Ctrl+Shift+F");
         let clear_sc = shortcut("terminal.clear", "Ctrl+L");
         let select_all_sc = shortcut("terminal.selectAll", "Ctrl+Shift+A");
+        let local_mode_sc = shortcut("terminal.localMode", "Ctrl+Enter");
         let recording_sc = shortcut("terminal.recording.toggle", "Ctrl+Shift+R");
         let mut items = Vec::new();
 
@@ -271,6 +272,16 @@ impl NyaTermApp {
                             popup_selected.clone(),
                             cx,
                         );
+                    }
+                })),
+            NyaMenuItem::action(t!("settings.shortcutLabels.localMode"))
+                .icon("icons/mouse.svg")
+                .shortcut(local_mode_sc)
+                .on_click(cx.listener({
+                    let local_mode_session_id = select_all_session_id.clone();
+                    move |this, _, _, cx| {
+                        this.activate_workspace_pane(local_mode_session_id.clone(), cx);
+                        this.toggle_terminal_local_mode(cx);
                     }
                 })),
             NyaMenuItem::separator(),
@@ -608,6 +619,7 @@ mod tests {
                 "Recording Logs",
                 "",
                 "Keyword Highlight...",
+                "Toggle local mode",
                 "",
                 "Select All",
             ]
@@ -624,6 +636,7 @@ mod tests {
                 "Recording Logs",
                 "",
                 "Keyword Highlight...",
+                "Toggle local mode",
                 "",
                 "Select All",
             ]
