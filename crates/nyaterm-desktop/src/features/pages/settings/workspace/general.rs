@@ -82,7 +82,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.headerStatus"),
-                        Some(SharedString::from(t!("settings.headerStatusDesc"))),
+                        None,
                         self.settings_select_control(
                             "settings.general.header-status",
                             std::iter::once(NyaSelectOption::new(
@@ -139,7 +139,7 @@ impl SettingsPanel {
             .child(settings_form_section(
                 palette,
                 Some(t!("settings.diagnostics")),
-                Some(t!("settings.diagnosticsDesc")),
+                None,
                 div()
                     .flex()
                     .flex_col()
@@ -147,7 +147,7 @@ impl SettingsPanel {
                     .child(settings_form_row(
                         palette,
                         t!("settings.logLevel"),
-                        Some(SharedString::from(t!("settings.logLevelDesc"))),
+                        None,
                         self.settings_select_control(
                             "settings.general.diagnostics-level",
                             vec![

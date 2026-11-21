@@ -239,7 +239,7 @@ impl SettingsPanel {
                 self.settings_select_field(
                     "settings.interaction.default-encoding",
                     t!("settings.defaultEncoding"),
-                    Some(SharedString::from(t!("settings.defaultEncodingDesc"))),
+                    None,
                     (
                         nyaterm_core::character_encoding::CharacterEncoding::ALL
                             .into_iter()

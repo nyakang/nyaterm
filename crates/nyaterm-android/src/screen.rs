@@ -714,8 +714,25 @@ impl ScreenHandle {
             return Ok(());
         }
         // Only adjacent move events may merge: never move a drag across Down/Up.
-        if matches!(control, Control::Touch { action: 2, .. })
-            && matches!(state.input.back(), Some(Control::Touch { action: 2, .. }))
+        if let Control::Touch {
+            action: 2,
+            points,
+            width,
+            height,
+            generation,
+        } = &control
+            && let Some(Control::Touch {
+                action: 2,
+                points: previous,
+                width: old_width,
+                height: old_height,
+                generation: old_generation,
+            }) = state.input.back()
+            && (width, height, generation) == (old_width, old_height, old_generation)
+            && points
+                .iter()
+                .map(|p| p.pointer)
+                .eq(previous.iter().map(|p| p.pointer))
         {
             state.input.pop_back();
         }
@@ -964,8 +981,11 @@ mod tests {
         let handle = handle();
         let touch = |action, x| Control::Touch {
             action,
-            x,
-            y: 1,
+            points: vec![crate::ipc::TouchPoint {
+                pointer: crate::ipc::TouchPointer::Mouse,
+                x,
+                y: 1,
+            }],
             width: 8,
             height: 8,
             generation: 1,
@@ -983,15 +1003,106 @@ mod tests {
         let state = handle.mailbox.state.lock().unwrap();
         assert_eq!(state.input.len(), 5);
         assert!(matches!(
-            state.input[1],
-            Control::Touch {
-                action: 2,
-                x: 3,
-                ..
-            }
+            &state.input[1],
+            Control::Touch { action: 2, points, .. } if points[0].x == 3
         ));
         assert!(matches!(state.input[2], Control::Touch { action: 1, .. }));
         assert!(matches!(state.input[3], Control::Touch { action: 0, .. }));
+    }
+    #[test]
+    fn grouped_moves_merge_atomically_without_crossing_identity_geometry_or_release() {
+        use crate::ipc::{TouchPoint, TouchPointer};
+        let handle = handle();
+        let touch = |action, x, generation| Control::Touch {
+            action,
+            points: vec![
+                TouchPoint {
+                    pointer: TouchPointer::Finger,
+                    x,
+                    y: 1,
+                },
+                TouchPoint {
+                    pointer: TouchPointer::VirtualFinger,
+                    x: 99 - x,
+                    y: 98,
+                },
+            ],
+            width: 100,
+            height: 100,
+            generation,
+        };
+        for control in [
+            touch(0, 10, 1),
+            touch(2, 20, 1),
+            touch(2, 30, 1),
+            touch(2, 40, 2),
+            Control::Touch {
+                action: 2,
+                points: vec![TouchPoint {
+                    pointer: TouchPointer::Mouse,
+                    x: 5,
+                    y: 5,
+                }],
+                width: 100,
+                height: 100,
+                generation: 2,
+            },
+            Control::ReleaseInputs,
+            touch(2, 50, 2),
+            touch(1, 50, 2),
+        ] {
+            handle.send(control).unwrap();
+        }
+        let state = handle.mailbox.state.lock().unwrap();
+        assert_eq!(state.input.len(), 7);
+        assert!(matches!(&state.input[1], Control::Touch { points, .. }
+            if points.len() == 2 && points[0].x == 30 && points[1].x == 69));
+        assert!(matches!(
+            state.input[2],
+            Control::Touch { generation: 2, .. }
+        ));
+        assert!(matches!(state.input[4], Control::ReleaseInputs));
+        assert!(matches!(state.input[6], Control::Touch { action: 1, .. }));
+    }
+    #[test]
+    fn touch_overflow_releases_the_whole_gesture_and_rejects_invalid_groups() {
+        use crate::ipc::{TouchPoint, TouchPointer};
+        let handle = handle();
+        let touch = |action| Control::Touch {
+            action,
+            points: vec![
+                TouchPoint {
+                    pointer: TouchPointer::Finger,
+                    x: 10,
+                    y: 20,
+                },
+                TouchPoint {
+                    pointer: TouchPointer::VirtualFinger,
+                    x: 89,
+                    y: 79,
+                },
+            ],
+            width: 100,
+            height: 100,
+            generation: 1,
+        };
+        for index in 0..INPUT_LIMIT {
+            handle.send(touch((index % 2) as u8)).unwrap();
+        }
+        assert_eq!(
+            handle.send(touch(2)).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        {
+            let state = handle.mailbox.state.lock().unwrap();
+            assert_eq!(state.input.len(), 1);
+            assert!(matches!(state.input[0], Control::ReleaseInputs));
+        }
+        let mut invalid = touch(0);
+        if let Control::Touch { points, .. } = &mut invalid {
+            points.clear();
+        }
+        assert!(handle.send(invalid).is_err());
     }
     #[test]
     fn invalid_text_is_rejected_before_queueing_and_screen_remains_usable() {

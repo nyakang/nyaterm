@@ -175,7 +175,7 @@ impl SettingsPanel {
             .child(ai_field(
                 palette,
                 t!("ai.requestUserAgent"),
-                Some(t!("ai.requestUserAgentDesc").into()),
+                None,
                 self.existing_text_input_box("ai.input.request-user-agent", false),
             ))
             .child(fields)
