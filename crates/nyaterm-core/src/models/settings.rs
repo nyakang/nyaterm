@@ -503,6 +503,11 @@ pub struct AppSettingsSummary {
     /// Detect clickable entities (IP/MAC/host:port/archive) in terminal output (Tauri action_links_enabled).
     #[serde(default)]
     pub terminal_action_links_enabled: bool,
+    /// Insert action-link command targets into the terminal input line instead
+    /// of submitting them immediately. Open, copy and paste actions are not
+    /// affected. Defaults off so existing click-to-run behavior is unchanged.
+    #[serde(default)]
+    pub terminal_action_links_insert_commands: bool,
     #[serde(default)]
     pub terminal_action_links_matchers: ActionLinksMatcherSettings,
     /// Online search engines for terminal selection context menu (Tauri search.custom_engines).
@@ -693,6 +698,11 @@ pub struct AppSettingsSummary {
     #[serde(default)]
     pub minimize_to_tray: bool,
     pub confirm_on_close: bool,
+    /// When true, saving a newly created connection starts it immediately.
+    /// Editing an existing connection is unaffected. Defaults off so existing
+    /// data keeps saving without opening.
+    #[serde(default)]
+    pub open_new_connection_after_save: bool,
     pub enable_screen_lock: bool,
     #[serde(default)]
     pub enable_startup_lock: bool,
@@ -801,6 +811,7 @@ impl Default for AppSettingsSummary {
             terminal_zebra_stripes_enabled: default_terminal_zebra_stripes_enabled(),
             terminal_zebra_stripes_by_row: false,
             terminal_action_links_enabled: false,
+            terminal_action_links_insert_commands: false,
             terminal_action_links_matchers: ActionLinksMatcherSettings::default(),
             search_custom_engines: default_search_engines(),
             ui_remote_stats_interval: 3,
@@ -901,6 +912,7 @@ impl Default for AppSettingsSummary {
             startup_restore_window_layout: true,
             minimize_to_tray: false,
             confirm_on_close: true,
+            open_new_connection_after_save: false,
             enable_screen_lock: false,
             enable_startup_lock: false,
             enable_idle_lock: false,
@@ -1282,11 +1294,57 @@ mod tests {
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.
         assert!(summary.interaction_credential_autofill_enabled);
+        // The new connection switch is opt-in: legacy documents keep saving
+        // without opening.
+        assert!(!summary.open_new_connection_after_save);
+        // Action-link command insertion is opt-in too; legacy documents keep
+        // submitting commands immediately.
+        assert!(!summary.terminal_action_links_insert_commands);
         assert_eq!(
             summary.diagnostics_log_shard_bytes,
             crate::diagnostics::DEFAULT_LOG_SHARD_BYTES,
             "legacy documents without a shard size must log into 10 MiB files"
         );
+    }
+
+    #[test]
+    fn new_connection_auto_open_is_opt_in() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("open_new_connection_after_save");
+        let legacy: AppSettingsSummary = serde_json::from_value(value.clone()).unwrap();
+        assert!(!legacy.open_new_connection_after_save);
+
+        for enabled in [true, false] {
+            value["open_new_connection_after_save"] = serde_json::json!(enabled);
+            let restored: AppSettingsSummary = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(restored.open_new_connection_after_save, enabled);
+            let round_trip: AppSettingsSummary =
+                serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+            assert_eq!(round_trip.open_new_connection_after_save, enabled);
+        }
+    }
+
+    #[test]
+    fn action_link_insert_commands_is_opt_in() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_action_links_insert_commands");
+        let legacy: AppSettingsSummary = serde_json::from_value(value.clone()).unwrap();
+        assert!(!legacy.terminal_action_links_insert_commands);
+
+        for enabled in [true, false] {
+            value["terminal_action_links_insert_commands"] = serde_json::json!(enabled);
+            let restored: AppSettingsSummary = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(restored.terminal_action_links_insert_commands, enabled);
+            let round_trip: AppSettingsSummary =
+                serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+            assert_eq!(round_trip.terminal_action_links_insert_commands, enabled);
+        }
     }
 
     #[test]

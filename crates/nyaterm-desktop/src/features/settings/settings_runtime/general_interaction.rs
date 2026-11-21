@@ -298,6 +298,14 @@ impl NyaTermApp {
         self.save_interaction_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_open_new_connection_after_save(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_open_new_connection_after_save();
+        self.save_general_settings(cx);
+    }
+
     pub(in crate::features) fn toggle_credential_autofill(&mut self, cx: &mut Context<Self>) {
         let autofill_enabled = self.settings.toggle_credential_autofill();
         if !autofill_enabled {
