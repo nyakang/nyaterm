@@ -3661,7 +3661,7 @@
     "mouseEventsRequireAlt": "마우스 보고에 Alt 필요",
     "mouseEventsRequireAltDesc": "Alt를 누르고 있을 때만 터미널 앱에 마우스 이벤트를 보냅니다.",
     "alternateScroll": "전체 화면 앱에서 휠이 방향키 전송",
-    "alternateScrollDesc": "마우스 보고가 없는 대체 화면(tmux, screen, less, vim)에서 마우스 휠을 위/아래 키로 전송합니다. 끄면 휠로 셸 기록이 넘어가지 않습니다.",
+    "alternateScrollDesc": "마우스 보고가 없는 대체 화면(tmux, screen, less, vim)에서 마우스 휠을 위/아래 키로 전송합니다. 끄면 휠로 셸 기록이 넘어가지 않습니다. 기존 동작과의 호환성을 위해 기본적으로 켜져 있습니다. 꺼도 tmux 기록 스크롤이 활성화되지는 않습니다.",
     "enableStartupLock": "시작 시 잠금",
     "enableStartupLockDesc": "앱이 시작될 때 잠급니다.",
     "enableIdleLock": "유휴 시 잠금",
