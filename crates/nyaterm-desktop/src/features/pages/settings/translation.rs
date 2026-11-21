@@ -54,7 +54,6 @@ impl SettingsPanel {
                 || !secret_draft.youdao_app_key.is_empty());
 
         let target_language_label = t!("settings.targetLanguage");
-        let target_language_desc = t!("settings.targetLanguageDesc");
         let providers_label = t!("settings.translationProviders");
         let providers_desc = t!("settings.translationProvidersDesc");
         let no_key_label = t!("settings.noKeyRequired");
@@ -76,7 +75,7 @@ impl SettingsPanel {
                 self.settings_select_field(
                     "settings.translation.target-language",
                     target_language_label,
-                    Some(target_language_desc.into()),
+                    None,
                     (
                         translation_target_languages()
                             .iter()

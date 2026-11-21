@@ -160,6 +160,21 @@ impl NyaTermApp {
                 error: command_error,
             },
             editor.raw_send,
+            if editor.raw_send {
+                (editor.execution_mode == "segmented")
+                    .then(|| t!("quickCommands.segmentedLegacyHint").into())
+            } else if editor.execution_mode == "segmented" {
+                Some(
+                    format!(
+                        "{}\n\n{}",
+                        t!("quickCommands.syntaxHelp"),
+                        t!("quickCommands.segmentedLegacyHint")
+                    )
+                    .into(),
+                )
+            } else {
+                Some(t!("quickCommands.syntaxHelp").into())
+            },
             cx,
         );
         let category_search_draft = self
@@ -676,7 +691,7 @@ impl NyaTermApp {
                                             .text_size(px(10.))
                                             .text_color(rgb(palette.text_muted))
                                             .child(if editor.execution_mode == "segmented" {
-                                                format!("{}\n{}", t!("quickCommands.segmentedSendHint"), t!("quickCommands.segmentedLegacyHint")).into()
+                                                t!("quickCommands.segmentedSendHint")
                                             } else if editor.execution_mode == "append" {
                                                 append_hint
                                             } else {
