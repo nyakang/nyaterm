@@ -31,6 +31,8 @@ use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
+mod failure_page;
+
 #[test]
 fn host_key_prompt_accept_and_reject_restore_terminal_input_focus() {
     let root = TestConfigDir::new("nyaterm-host-key-focus");

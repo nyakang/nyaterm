@@ -1,15 +1,12 @@
 use rust_i18n::t;
 
-use gpui::{
-    Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, relative, rgb, svg,
-};
+use gpui::{Context, FontWeight, IntoElement, SharedString, div, prelude::*, px, relative, rgb};
 
 use super::super::super::NyaTermApp;
 use crate::features::formatting::short_id;
+use crate::features::view_widgets::connection_failure::FailedConnectionTarget;
 use crate::features::view_widgets::connection_spinner;
 use crate::models::{WorkspacePaneNode, WorkspaceSplitDirection};
-use crate::widgets::small_button;
-use nyaterm_core::truncate_preview;
 
 impl NyaTermApp {
     fn workspace_reconnect_pending_state(&self, session_id: &str) -> impl IntoElement {
@@ -63,72 +60,12 @@ impl NyaTermApp {
         error: String,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let palette = self.theme_palette();
-        let reconnect_session_id = session_id.clone();
-        let serial_session_id = session_id.clone();
-        let serial = self.session.metadata(&session_id).is_some_and(|metadata| {
-            matches!(
-                metadata.launch_config,
-                crate::models::SessionLaunchConfig::Serial(_)
-            )
-        });
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .bg(self.shell_terminal_surface_color(self.theme_palette().ui_terminal_bg))
-            .child(
-                svg()
-                    .size(px(32.))
-                    .path("icons/session/disconnect.svg")
-                    .text_color(rgb(palette.danger)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_1()
-                    .px_6()
-                    .text_center()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight(600.))
-                            .text_color(rgb(palette.text))
-                            .child(t!("terminal.connectionFailed")),
-                    )
-                    .child(
-                        div()
-                            .max_w(px(320.))
-                            .text_size(px(11.))
-                            .text_color(rgb(palette.text_dimmed))
-                            .child(truncate_preview(&error, 180)),
-                    ),
-            )
-            .child(small_button(
-                palette,
-                format!("workspace-reconnect-{session_id}"),
-                t!("tabCtx.reconnect"),
-                cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.reconnect_session(reconnect_session_id.clone(), window, cx);
-                }),
-            ))
-            .when(serial, |this| {
-                this.child(small_button(
-                    palette,
-                    format!("workspace-reconnect-device-{serial_session_id}"),
-                    t!("serialPrompt.chooseDevice"),
-                    cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.open_serial_reconnect_prompt(serial_session_id.clone(), cx);
-                    }),
-                ))
-            })
+        self.connection_failure_state(
+            Some(FailedConnectionTarget::Reconnect(session_id)),
+            error,
+            false,
+            cx,
+        )
     }
 
     pub(super) fn workspace_session_content(
