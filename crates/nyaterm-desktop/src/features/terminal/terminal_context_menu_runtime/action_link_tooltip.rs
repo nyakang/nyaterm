@@ -14,7 +14,7 @@ struct ActionLinkTooltipPresentation {
 }
 
 impl ActionLinkTooltipPresentation {
-    fn for_action(action: &ActionLinkAction) -> Self {
+    fn for_action(action: &ActionLinkAction, insert_commands: bool) -> Self {
         // The execution target determines the verb; the stable action id only
         // supplies a friendlier title. Never infer behavior from command text.
         match &action.target {
@@ -55,7 +55,11 @@ impl ActionLinkTooltipPresentation {
                 };
                 Self {
                     title_key,
-                    activation_key: "terminal.actionLinkExecute",
+                    activation_key: if insert_commands {
+                        "terminal.actionLinkInsert"
+                    } else {
+                        "terminal.actionLinkExecute"
+                    },
                     icon_path,
                 }
             }
@@ -97,8 +101,10 @@ fn action_link_tooltip_card(
     background: Rgba,
     viewport_width: f32,
     locale: &str,
+    insert_commands: bool,
 ) -> impl IntoElement {
-    let presentation = ActionLinkTooltipPresentation::for_action(&tip.default_action);
+    let presentation =
+        ActionLinkTooltipPresentation::for_action(&tip.default_action, insert_commands);
     // No hitbox or focus handle: even when edge placement overlaps terminal
     // text, this passive card must let selection and modifier clicks through.
     div()
@@ -153,6 +159,7 @@ fn action_link_tooltip_layer(
     background: Rgba,
     viewport_width: f32,
     locale: &str,
+    insert_commands: bool,
 ) -> impl IntoElement {
     // Include the edge margin in the measured bounds. Anchored's margin option
     // only applies after overflow, so a card exactly touching an edge would
@@ -172,6 +179,7 @@ fn action_link_tooltip_layer(
                     background,
                     viewport_width,
                     locale,
+                    insert_commands,
                 )),
         )
 }
@@ -194,6 +202,9 @@ impl NyaTermApp {
             self.shell_surface_color(palette.surface_elevated),
             self.shell.viewport_size().0,
             rust_i18n::locale().as_ref(),
+            self.settings
+                .summary()
+                .terminal_action_links_insert_commands,
         )
         .into_any_element()
     }

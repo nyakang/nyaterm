@@ -656,6 +656,9 @@ fn terminal_bounds_contains(bounds: Bounds<Pixels>, position: Point<Pixels>) -> 
 mod mac_tests;
 
 #[cfg(test)]
+mod command_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
