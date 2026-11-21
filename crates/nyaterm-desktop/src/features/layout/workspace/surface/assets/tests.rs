@@ -905,7 +905,7 @@ fn mixed_protocol_app(cx: &mut TestAppContext, root: &TestTempDir) -> Entity<Nya
 }
 
 #[test]
-fn asset_batch_edit_opens_mixed_selection_in_common_scope_without_confirmation() {
+fn asset_batch_edit_opens_mixed_selection_on_first_protocol_without_confirmation() {
     let root = TestTempDir::new("nyaterm-assets-batch-mixed-protocols");
     let mut cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -917,7 +917,10 @@ fn asset_batch_edit_opens_mixed_selection_in_common_scope_without_confirmation()
     cx.update(|window, cx| assert!(!window.has_active_nya_dialog(cx)));
     app.read_with(cx, |app, _| {
         assert!(app.start_workspace.asset_batch_is_open());
-        assert_eq!(app.start_workspace.asset_batch().display_kind(), None);
+        assert_eq!(
+            app.start_workspace.asset_batch().display_kind(),
+            Some(nyaterm_core::ConnectionBatchKind::Ssh)
+        );
         assert_eq!(app.start_workspace.selected_asset_ids(), selected);
     });
 }
@@ -1003,9 +1006,8 @@ fn visible_selection_keeps_shift_anchor_and_preserves_hidden_items() {
 }
 
 #[test]
-fn batch_text_events_update_apply_state_and_keep_removes_patch() {
-    use crate::features::assets::BatchEditMode;
-    use crate::features::assets::BatchFieldId;
+fn batch_text_events_update_apply_state_and_undo_removes_patch() {
+    use crate::features::assets::BatchFieldKey;
     let root = TestTempDir::new("nyaterm-batch-live-input");
     let mut cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -1013,10 +1015,9 @@ fn batch_text_events_update_apply_state_and_keep_removes_patch() {
     let cx = host(&mut cx, &app);
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_asset_batch_edit(window, cx)));
     app.update(cx, |app, cx| {
-        app.set_asset_batch_mode(BatchFieldId::Description, BatchEditMode::Set, cx);
-        assert!(app.start_workspace.asset_batch().build_edits().is_err());
+        assert!(!app.start_workspace.asset_batch().has_edits());
         let input = app
-            .existing_text_input(BatchFieldId::Description.text_input_id())
+            .existing_text_input(BatchFieldKey::Description.text_input_id())
             .unwrap();
         input.update(cx, |_, cx| {
             cx.emit(NyaInputEvent::Changed("description".into()))
@@ -1024,17 +1025,18 @@ fn batch_text_events_update_apply_state_and_keep_removes_patch() {
     });
     cx.run_until_parked();
     app.read_with(cx, |app, _| {
+        assert!(app.start_workspace.asset_batch().has_edits());
         assert!(app.start_workspace.asset_batch().build_edits().is_ok())
     });
     app.update(cx, |app, cx| {
-        app.set_asset_batch_mode(BatchFieldId::Description, BatchEditMode::Keep, cx);
+        app.undo_asset_batch_field(BatchFieldKey::Description, cx);
+        assert!(!app.start_workspace.asset_batch().has_edits());
         assert!(app.start_workspace.asset_batch().build_edits().is_err());
     });
     let password = app.update(cx, |app, cx| {
         app.set_asset_batch_scope(Some(nyaterm_core::ConnectionBatchKind::Ssh), cx);
-        app.set_asset_batch_mode(BatchFieldId::Password, BatchEditMode::Set, cx);
         let input = app
-            .existing_text_input(BatchFieldId::Password.text_input_id())
+            .existing_text_input(BatchFieldKey::Password.text_input_id())
             .unwrap();
         input.update(cx, |state, cx| {
             // This offscreen field has not mounted its component yet. Queue its
@@ -1052,7 +1054,7 @@ fn batch_text_events_update_apply_state_and_keep_removes_patch() {
         )
     });
     app.update(cx, |app, cx| {
-        app.set_asset_batch_mode(BatchFieldId::Password, BatchEditMode::Keep, cx)
+        app.undo_asset_batch_field(BatchFieldKey::Password, cx)
     });
     password.read_with(cx, |input, cx| assert_eq!(input.value(cx), ""));
     app.read_with(cx, |app, _| {
@@ -1132,7 +1134,7 @@ fn stale_batch_completion_preserves_a_new_editor_and_refresh_failure_reports_sav
 
 #[test]
 fn narrow_batch_form_retains_zero_applicability_rows_and_enables_them_after_backend_change() {
-    use crate::features::assets::{BatchEditMode, BatchFieldId};
+    use crate::features::assets::{BatchEditMode, BatchFieldKey};
     use nyaterm_core::models::connection_batch::ConnectionBatchKind;
     let root = TestTempDir::new("nyaterm-batch-rdp-controls");
     let mut cx = TestAppContext::single();
@@ -1152,6 +1154,10 @@ fn narrow_batch_form_retains_zero_applicability_rows_and_enables_them_after_back
                 app.start_workspace.select_asset_only("rdp");
                 app.open_asset_batch_edit(window, cx);
                 app.set_asset_batch_scope(Some(ConnectionBatchKind::Rdp), cx);
+                app.select_asset_batch_section(
+                    crate::models::ConnectionEditorSection::Security,
+                    cx,
+                );
             });
         });
     }
@@ -1167,37 +1173,27 @@ fn narrow_batch_form_retains_zero_applicability_rows_and_enables_them_after_back
             .debug_bounds("asset-batch-field-rdp-use-nla")
             .is_some()
     );
-    let position = visual
-        .debug_bounds("asset-batch-mode-rdp-use-nla-Set")
-        .unwrap()
-        .center();
-    click(visual, position, MouseButton::Left, 1);
     app.read_with(visual, |app, _| {
         let draft = app.start_workspace.asset_batch();
-        assert_eq!(draft.mode(BatchFieldId::RdpUseNla), BatchEditMode::Keep);
-        let state = draft.rdp_applicability(BatchFieldId::RdpUseNla).unwrap();
+        assert_eq!(draft.mode(BatchFieldKey::RdpUseNla), BatchEditMode::Keep);
+        let state = draft.rdp_applicability(BatchFieldKey::RdpUseNla).unwrap();
         assert_eq!((state.applicable, state.total), (0, 1));
     });
     app.update(visual, |app, cx| {
-        app.set_asset_batch_mode(BatchFieldId::RdpBackend, BatchEditMode::Set, cx);
-        app.apply_asset_batch_select(&BatchFieldId::RdpBackend.select_id(), "builtin", cx);
+        app.apply_asset_batch_select(&BatchFieldKey::RdpBackend.select_id(), "builtin", cx);
     });
     draw(visual);
-    let position = visual
-        .debug_bounds("asset-batch-mode-rdp-use-nla-Set")
-        .unwrap()
-        .center();
-    click(visual, position, MouseButton::Left, 1);
     app.read_with(visual, |app, _| {
         let draft = app.start_workspace.asset_batch();
-        assert_eq!(draft.mode(BatchFieldId::RdpUseNla), BatchEditMode::Set);
+        assert_eq!(draft.mode(BatchFieldKey::RdpBackend), BatchEditMode::Set);
+        assert_eq!(draft.mode(BatchFieldKey::RdpUseNla), BatchEditMode::Keep);
         assert_eq!(
             draft
-                .rdp_applicability(BatchFieldId::RdpUseNla)
+                .rdp_applicability(BatchFieldKey::RdpUseNla)
                 .unwrap()
                 .applicable,
             1
         );
-        assert!(draft.field_available(BatchFieldId::RdpWidth));
+        assert!(draft.field_available(BatchFieldKey::RdpWidth));
     });
 }

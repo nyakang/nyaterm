@@ -1157,7 +1157,12 @@ impl NyaTermApp {
         let card = layout::connection_editor_frame(
             layout::ConnectionEditorFrame {
                 palette,
-                editor: &editor,
+                chrome: layout::EditorChrome {
+                    kind: editor.kind,
+                    section: editor.section,
+                    defaults_mode: editor.defaults_mode,
+                    save_enabled,
+                },
                 title,
                 content: content.into_any_element(),
                 navigation_focus: self.connection_state.editor_navigation_focus(),
@@ -1169,7 +1174,6 @@ impl NyaTermApp {
                 navigation_width,
                 protocol_select,
                 validation_error,
-                save_enabled,
             },
             cx,
         );
@@ -1302,3 +1306,84 @@ fn connection_proxy_jump_would_cycle(
 
 #[cfg(test)]
 mod tests;
+
+impl layout::EditorFrameHost for NyaTermApp {
+    fn editor_frame_select_section(
+        &mut self,
+        section: ConnectionEditorSection,
+        focus_navigation: bool,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.set_connection_editor_section(section, cx);
+        if focus_navigation {
+            window.focus(&self.connection_state.editor_navigation_focus(), cx);
+        }
+    }
+
+    fn editor_frame_select_kind(
+        &mut self,
+        kind: ConnectionKindTab,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.set_connection_editor_kind(kind, cx);
+    }
+
+    fn editor_frame_navigation_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some((kind, section, defaults_mode)) = self
+            .connection_state
+            .active_editor_draft()
+            .map(|editor| (editor.kind, editor.section, editor.defaults_mode))
+        else {
+            return false;
+        };
+        let sections = ConnectionEditorSection::for_kind(kind, defaults_mode);
+        let index = sections
+            .iter()
+            .position(|candidate| *candidate == section)
+            .unwrap_or(0);
+        let next = match event.keystroke.key.as_str() {
+            "up" => Some(index.saturating_sub(1)),
+            "down" => Some((index + 1).min(sections.len() - 1)),
+            "home" => Some(0),
+            "end" => Some(sections.len() - 1),
+            "tab" if !event.keystroke.modifiers.shift => {
+                window.focus(&self.connection_state.editor_section_focus(), cx);
+                window.focus_next(cx);
+                return true;
+            }
+            _ => return false,
+        };
+        let Some(index) = next else {
+            return false;
+        };
+        self.set_connection_editor_section(sections[index], cx);
+        true
+    }
+
+    fn editor_frame_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if event.keystroke.key != "escape" && self.connection_editor_select_is_focused(window, cx) {
+            return false;
+        }
+        self.handle_connection_editor_key_down(event, window, cx)
+    }
+
+    fn editor_frame_save(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        self.save_connection_editor(window, cx);
+    }
+
+    fn editor_frame_cancel(&mut self, _window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
+        self.close_connection_editor(cx);
+    }
+}

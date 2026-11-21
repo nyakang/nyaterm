@@ -1,9 +1,8 @@
 use super::super::super::list::EDITOR_CONTROL_HEIGHT_PX;
 use super::connection_editor_footer_button;
-use crate::features::NyaTermApp;
-use crate::models::{ConnectionEditorSection, ConnectionEditorState, ConnectionKindTab};
+use crate::models::{ConnectionEditorSection, ConnectionKindTab};
 use gpui::{
-    AnyElement, Context, Entity, FontWeight, IntoElement, KeyDownEvent, SharedString, div,
+    AnyElement, Context, Entity, FontWeight, IntoElement, KeyDownEvent, SharedString, Window, div,
     prelude::{FluentBuilder, InteractiveElement, ParentElement, Styled},
     px, rgb, rgba,
 };
@@ -12,9 +11,62 @@ use nyaterm_ui::{
 };
 use rust_i18n::t;
 
-pub(super) struct ConnectionEditorFrame<'a> {
+/// Everything the shared chrome renders from, with no application state.
+///
+/// The connection editor and the asset batch editor both produce this; the
+/// frame therefore never reads a concrete editor-state type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::features) struct EditorChrome {
+    pub kind: ConnectionKindTab,
+    pub section: ConnectionEditorSection,
+    pub defaults_mode: bool,
+    pub save_enabled: bool,
+}
+
+/// Event routing for the shared editor frame.
+///
+/// The frame owns layout only, so every interaction is forwarded to the host
+/// rather than reaching into `NyaTermApp` state from this module.
+pub(in crate::features) trait EditorFrameHost: 'static + Sized {
+    fn editor_frame_select_section(
+        &mut self,
+        section: ConnectionEditorSection,
+        focus_navigation: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    );
+
+    fn editor_frame_select_kind(
+        &mut self,
+        kind: ConnectionKindTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    );
+
+    /// Handles Up/Down/Home/End/Tab while the navigation list has focus.
+    /// Returns whether the event was consumed.
+    fn editor_frame_navigation_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool;
+
+    fn editor_frame_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool;
+
+    fn editor_frame_save(&mut self, window: &mut Window, cx: &mut Context<Self>);
+
+    fn editor_frame_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>);
+}
+
+pub(in crate::features) struct ConnectionEditorFrame {
     pub palette: crate::theme::ThemePalette,
-    pub editor: &'a ConnectionEditorState,
+    pub chrome: EditorChrome,
     pub title: std::borrow::Cow<'static, str>,
     pub content: AnyElement,
     pub navigation_focus: gpui::FocusHandle,
@@ -26,16 +78,41 @@ pub(super) struct ConnectionEditorFrame<'a> {
     pub navigation_width: f32,
     pub protocol_select: Entity<NyaSelectState>,
     pub validation_error: Option<String>,
-    pub save_enabled: bool,
 }
 
-pub(super) fn connection_editor_frame(
-    frame: ConnectionEditorFrame<'_>,
-    cx: &mut Context<NyaTermApp>,
+fn connection_kind_index(kind: ConnectionKindTab) -> usize {
+    match kind {
+        ConnectionKindTab::Ssh => 0,
+        ConnectionKindTab::Local => 1,
+        ConnectionKindTab::Telnet => 2,
+        ConnectionKindTab::Serial => 3,
+        ConnectionKindTab::Rdp => 4,
+        ConnectionKindTab::Vnc => 5,
+        ConnectionKindTab::Adb => 6,
+        ConnectionKindTab::Ftp => 7,
+    }
+}
+
+fn connection_kind_at(index: usize) -> ConnectionKindTab {
+    match index {
+        0 => ConnectionKindTab::Ssh,
+        1 => ConnectionKindTab::Local,
+        2 => ConnectionKindTab::Telnet,
+        3 => ConnectionKindTab::Serial,
+        4 => ConnectionKindTab::Rdp,
+        5 => ConnectionKindTab::Vnc,
+        6 => ConnectionKindTab::Adb,
+        _ => ConnectionKindTab::Ftp,
+    }
+}
+
+pub(in crate::features) fn connection_editor_frame<H: EditorFrameHost>(
+    frame: ConnectionEditorFrame,
+    cx: &mut Context<H>,
 ) -> AnyElement {
     let ConnectionEditorFrame {
         palette,
-        editor,
+        chrome,
         title,
         content,
         navigation_focus,
@@ -47,9 +124,8 @@ pub(super) fn connection_editor_frame(
         navigation_width,
         protocol_select,
         validation_error,
-        save_enabled,
     } = frame;
-    let sections = ConnectionEditorSection::for_kind(editor.kind, editor.defaults_mode);
+    let sections = ConnectionEditorSection::for_kind(chrome.kind, chrome.defaults_mode);
     let local_label = t!("dialog.localTerminal");
     let serial_label = t!("dialog.serial");
     let cancel_label = t!("common.cancel");
@@ -65,29 +141,7 @@ pub(super) fn connection_editor_frame(
         .flex_none()
         .overflow_y_scrollbar()
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-            let Some(editor) = this.connection_state.active_editor_draft() else {
-                return;
-            };
-            let sections = ConnectionEditorSection::for_kind(editor.kind, editor.defaults_mode);
-            let index = sections
-                .iter()
-                .position(|section| *section == editor.section)
-                .unwrap_or(0);
-            let next = match event.keystroke.key.as_str() {
-                "up" => Some(index.saturating_sub(1)),
-                "down" => Some((index + 1).min(sections.len() - 1)),
-                "home" => Some(0),
-                "end" => Some(sections.len() - 1),
-                "tab" if !event.keystroke.modifiers.shift => {
-                    window.focus(&this.connection_state.editor_section_focus(), cx);
-                    window.focus_next(cx);
-                    cx.stop_propagation();
-                    None
-                }
-                _ => None,
-            };
-            if let Some(index) = next {
-                this.set_connection_editor_section(sections[index], cx);
+            if this.editor_frame_navigation_key(event, window, cx) {
                 cx.stop_propagation();
             }
         }))
@@ -101,10 +155,9 @@ pub(super) fn connection_editor_frame(
             .height(px(40.))
             .label_left()
             .tooltip(section.label())
-            .selected(editor.section == section)
+            .selected(chrome.section == section)
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.set_connection_editor_section(section, cx);
-                window.focus(&this.connection_state.editor_navigation_focus(), cx);
+                this.editor_frame_select_section(section, true, window, cx);
             }))
         }));
     let navigation = div()
@@ -128,12 +181,7 @@ pub(super) fn connection_editor_frame(
         // field the pointer just landed on, since click follows mouse-down.
         .track_focus(&editor_focus)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-            if event.keystroke.key != "escape"
-                && this.connection_editor_select_is_focused(window, cx)
-            {
-                return;
-            }
-            if this.handle_connection_editor_key_down(event, window, cx) {
+            if this.editor_frame_key_down(event, window, cx) {
                 cx.stop_propagation();
             }
         }))
@@ -173,28 +221,13 @@ pub(super) fn connection_editor_frame(
                                         NyaTabItem::new("ADB"),
                                         NyaTabItem::new("FTP"),
                                     ])
-                                    .selected_index(match editor.kind {
-                                        ConnectionKindTab::Ssh => 0,
-                                        ConnectionKindTab::Local => 1,
-                                        ConnectionKindTab::Telnet => 2,
-                                        ConnectionKindTab::Serial => 3,
-                                        ConnectionKindTab::Rdp => 4,
-                                        ConnectionKindTab::Vnc => 5,
-                                        ConnectionKindTab::Adb => 6,
-                                        ConnectionKindTab::Ftp => 7,
-                                    })
-                                    .on_select(cx.listener(|this, index, _, cx| {
-                                        let kind = match *index {
-                                            0 => ConnectionKindTab::Ssh,
-                                            1 => ConnectionKindTab::Local,
-                                            2 => ConnectionKindTab::Telnet,
-                                            3 => ConnectionKindTab::Serial,
-                                            4 => ConnectionKindTab::Rdp,
-                                            5 => ConnectionKindTab::Vnc,
-                                            6 => ConnectionKindTab::Adb,
-                                            _ => ConnectionKindTab::Ftp,
-                                        };
-                                        this.set_connection_editor_kind(kind, cx);
+                                    .selected_index(connection_kind_index(chrome.kind))
+                                    .on_select(cx.listener(|this, index, window, cx| {
+                                        this.editor_frame_select_kind(
+                                            connection_kind_at(*index),
+                                            window,
+                                            cx,
+                                        );
                                     })),
                             )
                         })
@@ -218,7 +251,7 @@ pub(super) fn connection_editor_frame(
                 .child(content)
                 .vertical_scrollbar(&scroll),
         )
-        .when_some(editor.error.clone(), |this, error| {
+        .when_some(validation_error.clone(), |this, error| {
             this.child(
                 div()
                     .id("connection-editor-error")
@@ -258,8 +291,8 @@ pub(super) fn connection_editor_frame(
                             false,
                             true,
                             None,
-                            cx.listener(|this, _, _, cx| {
-                                this.close_connection_editor(cx);
+                            cx.listener(|this, _, window, cx| {
+                                this.editor_frame_cancel(window, cx);
                             }),
                         ))
                         .child(connection_editor_footer_button(
@@ -267,10 +300,10 @@ pub(super) fn connection_editor_frame(
                             "connection-editor-save",
                             save_label,
                             true,
-                            save_enabled,
+                            chrome.save_enabled,
                             validation_error.clone(),
                             cx.listener(|this, _, window, cx| {
-                                this.save_connection_editor(window, cx);
+                                this.editor_frame_save(window, cx);
                             }),
                         )),
                 ),

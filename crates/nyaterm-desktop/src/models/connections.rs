@@ -24,6 +24,17 @@ pub(crate) enum ConnectionKindTab {
 }
 
 impl ConnectionKindTab {
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Ssh,
+        Self::Local,
+        Self::Telnet,
+        Self::Serial,
+        Self::Rdp,
+        Self::Vnc,
+        Self::Adb,
+        Self::Ftp,
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Ssh => "SSH",
@@ -37,6 +48,10 @@ impl ConnectionKindTab {
         }
     }
 
+    pub(crate) fn position_in_all(self) -> Option<usize> {
+        Self::ALL.iter().position(|tab| *tab == self)
+    }
+
     pub(crate) fn from_connection_type(config: &nyaterm_core::ConnectionType) -> Self {
         match config {
             nyaterm_core::ConnectionType::Ssh { .. } => Self::Ssh,
@@ -47,6 +62,36 @@ impl ConnectionKindTab {
             nyaterm_core::ConnectionType::Vnc { .. } => Self::Vnc,
             nyaterm_core::ConnectionType::Adb { .. } => Self::Adb,
             nyaterm_core::ConnectionType::Ftp { .. } => Self::Ftp,
+        }
+    }
+
+    pub(crate) fn batch_kind(self) -> nyaterm_core::models::connection_batch::ConnectionBatchKind {
+        use nyaterm_core::models::connection_batch::ConnectionBatchKind;
+        match self {
+            Self::Ssh => ConnectionBatchKind::Ssh,
+            Self::Local => ConnectionBatchKind::LocalTerminal,
+            Self::Telnet => ConnectionBatchKind::Telnet,
+            Self::Serial => ConnectionBatchKind::Serial,
+            Self::Rdp => ConnectionBatchKind::Rdp,
+            Self::Vnc => ConnectionBatchKind::Vnc,
+            Self::Adb => ConnectionBatchKind::Adb,
+            Self::Ftp => ConnectionBatchKind::Ftp,
+        }
+    }
+
+    pub(crate) fn from_batch_kind(
+        kind: nyaterm_core::models::connection_batch::ConnectionBatchKind,
+    ) -> Self {
+        use nyaterm_core::models::connection_batch::ConnectionBatchKind;
+        match kind {
+            ConnectionBatchKind::Ssh => Self::Ssh,
+            ConnectionBatchKind::LocalTerminal => Self::Local,
+            ConnectionBatchKind::Telnet => Self::Telnet,
+            ConnectionBatchKind::Serial => Self::Serial,
+            ConnectionBatchKind::Rdp => Self::Rdp,
+            ConnectionBatchKind::Vnc => Self::Vnc,
+            ConnectionBatchKind::Adb => Self::Adb,
+            ConnectionBatchKind::Ftp => Self::Ftp,
         }
     }
 }

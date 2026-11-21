@@ -1,9 +1,11 @@
 use super::basis::{
     BatchFieldApplicability, asset_batch_kind_counts, compute_batch_basis, compute_rdp_field_basis,
 };
-use super::fields::{BatchFieldId, EDITABLE_FIELDS, FieldBasis};
-use gpui::{ScrollHandle, SharedString};
+use super::fields::{BatchFieldKey, EDITABLE_FIELDS, FieldBasis};
+use crate::models::ConnectionEditorSection;
+use gpui::{FocusHandle, ScrollHandle, SharedString};
 use nyaterm_core::SecretString;
+use nyaterm_core::models::android::{CaptureOrientation, ScreenQualityPreset};
 use nyaterm_core::models::connection_batch::{
     BatchField, ConnectionBatchEdit, ConnectionBatchKind, validate_connection_batch_edit,
 };
@@ -27,25 +29,25 @@ pub(in crate::features) enum BatchEditMode {
 #[derive(Clone, Default)]
 pub(in crate::features) struct BatchScopeDraft {
     kind: Option<ConnectionBatchKind>,
-    basis: HashMap<BatchFieldId, FieldBasis>,
-    values: HashMap<BatchFieldId, String>,
-    bool_values: HashMap<BatchFieldId, bool>,
-    modes: HashMap<BatchFieldId, BatchEditMode>,
-    original_values: HashMap<BatchFieldId, String>,
-    original_bools: HashMap<BatchFieldId, bool>,
+    basis: HashMap<BatchFieldKey, FieldBasis>,
+    values: HashMap<BatchFieldKey, String>,
+    bool_values: HashMap<BatchFieldKey, bool>,
+    modes: HashMap<BatchFieldKey, BatchEditMode>,
+    original_values: HashMap<BatchFieldKey, String>,
+    original_bools: HashMap<BatchFieldKey, bool>,
     password: Option<SecretString>,
-    rdp_applicability: HashMap<BatchFieldId, BatchFieldApplicability>,
+    rdp_applicability: HashMap<BatchFieldKey, BatchFieldApplicability>,
 }
 
 impl BatchScopeDraft {
     pub(in crate::features) fn rdp_applicability(
         &self,
-        field: BatchFieldId,
+        field: BatchFieldKey,
     ) -> Option<BatchFieldApplicability> {
         self.rdp_applicability.get(&field).copied()
     }
 
-    pub(in crate::features) fn field_available(&self, field: BatchFieldId) -> bool {
+    pub(in crate::features) fn field_available(&self, field: BatchFieldKey) -> bool {
         self.rdp_applicability(field)
             .is_none_or(|state| state.applicable > 0)
             && (self.basis(field) != FieldBasis::Inapplicable || self.is_edited(field))
@@ -61,8 +63,8 @@ impl BatchScopeDraft {
             }
         };
         ConnectionBatchEdit {
-            rdp_backend: field(BatchFieldId::RdpBackend),
-            rdp_display_mode: field(BatchFieldId::RdpDisplayMode),
+            rdp_backend: field(BatchFieldKey::RdpBackend),
+            rdp_display_mode: field(BatchFieldKey::RdpDisplayMode),
             ..Default::default()
         }
     }
@@ -105,28 +107,28 @@ impl BatchScopeDraft {
         }
     }
 
-    pub(in crate::features) fn basis(&self, field: BatchFieldId) -> FieldBasis {
+    pub(in crate::features) fn basis(&self, field: BatchFieldKey) -> FieldBasis {
         self.basis.get(&field).copied().unwrap_or_default()
     }
-    pub(in crate::features) fn value(&self, field: BatchFieldId) -> &str {
+    pub(in crate::features) fn value(&self, field: BatchFieldKey) -> &str {
         self.values.get(&field).map(String::as_str).unwrap_or("")
     }
-    pub(in crate::features) fn bool_value(&self, field: BatchFieldId) -> bool {
+    pub(in crate::features) fn bool_value(&self, field: BatchFieldKey) -> bool {
         self.bool_values.get(&field).copied().unwrap_or(false)
     }
-    pub(in crate::features) fn mode(&self, field: BatchFieldId) -> BatchEditMode {
+    pub(in crate::features) fn mode(&self, field: BatchFieldKey) -> BatchEditMode {
         self.modes.get(&field).copied().unwrap_or_default()
     }
-    pub(in crate::features) fn is_edited(&self, field: BatchFieldId) -> bool {
+    pub(in crate::features) fn is_edited(&self, field: BatchFieldKey) -> bool {
         self.mode(field) != BatchEditMode::Keep
     }
     fn display_kind(&self) -> Option<ConnectionBatchKind> {
         self.kind
     }
-    pub(in crate::features) fn current_bool_is_set(&self, field: BatchFieldId) -> bool {
+    pub(in crate::features) fn current_bool_is_set(&self, field: BatchFieldKey) -> bool {
         self.bool_values.contains_key(&field)
     }
-    pub(in crate::features) fn disabled_text(&self, field: BatchFieldId) -> String {
+    pub(in crate::features) fn disabled_text(&self, field: BatchFieldKey) -> String {
         if self.basis(field) == FieldBasis::Inapplicable {
             t!("assets.batch.inapplicable").to_string()
         } else if self.basis(field) == FieldBasis::Mixed {
@@ -141,14 +143,14 @@ impl BatchScopeDraft {
             self.value(field).to_string()
         }
     }
-    fn bool_field(&self, field: BatchFieldId) -> BatchField<bool> {
+    fn bool_field(&self, field: BatchFieldKey) -> BatchField<bool> {
         match self.mode(field) {
             BatchEditMode::Keep => BatchField::Unchanged,
             BatchEditMode::Clear => BatchField::Clear,
             BatchEditMode::Set => BatchField::Set(self.bool_value(field)),
         }
     }
-    fn text_field(&self, field: BatchFieldId, trim: bool) -> BatchField<String> {
+    fn text_field(&self, field: BatchFieldKey, trim: bool) -> BatchField<String> {
         match self.mode(field) {
             BatchEditMode::Keep => BatchField::Unchanged,
             BatchEditMode::Clear => BatchField::Clear,
@@ -159,13 +161,13 @@ impl BatchScopeDraft {
             }),
         }
     }
-    fn empty_is_clear(&self, field: BatchFieldId) -> bool {
+    fn empty_is_clear(&self, field: BatchFieldKey) -> bool {
         self.mode(field) == BatchEditMode::Clear
     }
-    fn invalid_option(&self, field: BatchFieldId) -> String {
+    fn invalid_option(&self, field: BatchFieldKey) -> String {
         t!("assets.batch.errorValue", field = t!(field.label_key())).to_string()
     }
-    fn require_text(&self, field: BatchFieldId) -> Result<String, String> {
+    fn require_text(&self, field: BatchFieldKey) -> Result<String, String> {
         let value = self.value(field).trim();
         if value.is_empty() {
             return Err(
@@ -174,13 +176,13 @@ impl BatchScopeDraft {
         }
         Ok(value.to_string())
     }
-    fn require_number<T: std::str::FromStr>(&self, field: BatchFieldId) -> Result<T, String> {
+    fn require_number<T: std::str::FromStr>(&self, field: BatchFieldKey) -> Result<T, String> {
         self.value(field)
             .trim()
             .parse::<T>()
             .map_err(|_| t!("assets.batch.errorNumber", field = t!(field.label_key())).to_string())
     }
-    fn list_field(&self, field: BatchFieldId) -> Result<BatchField<Vec<String>>, String> {
+    fn list_field(&self, field: BatchFieldKey) -> Result<BatchField<Vec<String>>, String> {
         Ok(BatchField::Set(
             self.require_text(field)?
                 .split(|c: char| c == ',' || c.is_whitespace())
@@ -198,51 +200,59 @@ impl BatchScopeDraft {
             }
             if self.mode(field) == BatchEditMode::Clear {
                 match field {
-                    BatchFieldId::Group => edit.group_id = BatchField::Clear,
-                    BatchFieldId::Description => edit.description = BatchField::Clear,
-                    BatchFieldId::Icon => edit.icon = BatchField::Clear,
-                    BatchFieldId::IconAutoDetect => edit.icon_auto_detect = BatchField::Clear,
-                    BatchFieldId::Port => edit.port = BatchField::Clear,
-                    BatchFieldId::Username => edit.username = BatchField::Clear,
-                    BatchFieldId::Encoding => edit.encoding = BatchField::Clear,
-                    BatchFieldId::Backspace => edit.backspace_mode = BatchField::Clear,
-                    BatchFieldId::SshProfile => edit.ssh_profile = BatchField::Clear,
-                    BatchFieldId::TerminalType => edit.terminal_type = BatchField::Clear,
-                    BatchFieldId::DynamicTabTitle => edit.dynamic_tab_title = BatchField::Clear,
-                    BatchFieldId::SftpEnabled => edit.sftp_enabled = BatchField::Clear,
-                    BatchFieldId::SftpCompatibility => {
+                    BatchFieldKey::Group => edit.group_id = BatchField::Clear,
+                    BatchFieldKey::Description => edit.description = BatchField::Clear,
+                    BatchFieldKey::Icon => edit.icon = BatchField::Clear,
+                    BatchFieldKey::IconAutoDetect => edit.icon_auto_detect = BatchField::Clear,
+                    BatchFieldKey::Port => edit.port = BatchField::Clear,
+                    BatchFieldKey::Username => edit.username = BatchField::Clear,
+                    BatchFieldKey::Encoding => edit.encoding = BatchField::Clear,
+                    BatchFieldKey::Backspace => edit.backspace_mode = BatchField::Clear,
+                    BatchFieldKey::SshProfile => edit.ssh_profile = BatchField::Clear,
+                    BatchFieldKey::TerminalType => edit.terminal_type = BatchField::Clear,
+                    BatchFieldKey::SshCompatibility => {
+                        edit.ssh_compatibility_mode = BatchField::Clear
+                    }
+                    BatchFieldKey::DynamicTabTitle => edit.dynamic_tab_title = BatchField::Clear,
+                    BatchFieldKey::SftpEnabled => edit.sftp_enabled = BatchField::Clear,
+                    BatchFieldKey::SftpCompatibility => {
                         edit.sftp_compatibility_mode = BatchField::Clear
                     }
-                    BatchFieldId::SftpCwdFollow => edit.sftp_cwd_follow_mode = BatchField::Clear,
-                    BatchFieldId::SftpShellTimeout => {
+                    BatchFieldKey::SftpCwdFollow => edit.sftp_cwd_follow_mode = BatchField::Clear,
+                    BatchFieldKey::SftpShellTimeout => {
                         edit.sftp_shell_detection_timeout_ms = BatchField::Clear
                     }
-                    BatchFieldId::SftpFilenameEncoding => {
+                    BatchFieldKey::SftpFilenameEncoding => {
                         edit.sftp_filename_encoding = BatchField::Clear
                     }
-                    BatchFieldId::SftpPipelineDepth => edit.sftp_pipeline_depth = BatchField::Clear,
-                    BatchFieldId::X11 => edit.x11_forwarding = BatchField::Clear,
-                    BatchFieldId::AgentForwarding => {
+                    BatchFieldKey::SftpPipelineDepth => {
+                        edit.sftp_pipeline_depth = BatchField::Clear
+                    }
+                    BatchFieldKey::X11 => edit.x11_forwarding = BatchField::Clear,
+                    BatchFieldKey::AgentForwarding => {
                         edit.agent_forwarding_enabled = BatchField::Clear
                     }
-                    BatchFieldId::PostLoginEnabled => edit.post_login_enabled = BatchField::Clear,
-                    BatchFieldId::PostLoginCommand => edit.post_login_command = BatchField::Clear,
-                    BatchFieldId::PostLoginDelay => edit.post_login_delay_ms = BatchField::Clear,
-                    BatchFieldId::SshAlgorithmMode => edit.ssh_algorithm_mode = BatchField::Clear,
-                    BatchFieldId::SshKex => edit.ssh_kex = BatchField::Clear,
-                    BatchFieldId::SshCiphers => edit.ssh_ciphers = BatchField::Clear,
-                    BatchFieldId::SshMacs => edit.ssh_macs = BatchField::Clear,
-                    BatchFieldId::SshHostKeys => edit.ssh_host_keys = BatchField::Clear,
-                    BatchFieldId::RdpUseNla => edit.rdp_use_nla = BatchField::Clear,
-                    BatchFieldId::RdpCertificatePolicy => {
+                    BatchFieldKey::PostLoginEnabled => edit.post_login_enabled = BatchField::Clear,
+                    BatchFieldKey::PostLoginCommand => edit.post_login_command = BatchField::Clear,
+                    BatchFieldKey::PostLoginDelay => edit.post_login_delay_ms = BatchField::Clear,
+                    BatchFieldKey::SshAlgorithmMode => edit.ssh_algorithm_mode = BatchField::Clear,
+                    BatchFieldKey::SshKex => edit.ssh_kex = BatchField::Clear,
+                    BatchFieldKey::SshCiphers => edit.ssh_ciphers = BatchField::Clear,
+                    BatchFieldKey::SshMacs => edit.ssh_macs = BatchField::Clear,
+                    BatchFieldKey::SshHostKeys => edit.ssh_host_keys = BatchField::Clear,
+                    BatchFieldKey::AllowShortRsaHostKeys => {
+                        edit.allow_short_rsa_host_keys = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpUseNla => edit.rdp_use_nla = BatchField::Clear,
+                    BatchFieldKey::RdpCertificatePolicy => {
                         edit.rdp_certificate_policy = BatchField::Clear
                     }
-                    BatchFieldId::RdpAdminSession => {
+                    BatchFieldKey::RdpAdminSession => {
                         edit.rdp_administrative_session = BatchField::Clear
                     }
-                    BatchFieldId::VncSecurityMode => edit.vnc_security_mode = BatchField::Clear,
-                    BatchFieldId::Tags => edit.tags = BatchField::Clear,
-                    BatchFieldId::Account => {
+                    BatchFieldKey::VncSecurityMode => edit.vnc_security_mode = BatchField::Clear,
+                    BatchFieldKey::Tags => edit.tags = BatchField::Clear,
+                    BatchFieldKey::Account => {
                         if matches!(
                             self.kind,
                             Some(ConnectionBatchKind::Rdp | ConnectionBatchKind::Vnc)
@@ -252,118 +262,146 @@ impl BatchScopeDraft {
                             edit.account_id = BatchField::Clear;
                         }
                     }
-                    BatchFieldId::Password => edit.password = BatchField::Clear,
-                    BatchFieldId::AuthMode => edit.auth_mode = BatchField::Clear,
-                    BatchFieldId::Otp => edit.otp_id = BatchField::Clear,
-                    BatchFieldId::OtpAutoFill => edit.auto_fill_otp = BatchField::Clear,
-                    BatchFieldId::Key => edit.key_id = BatchField::Clear,
-                    BatchFieldId::SshAuthAgentEndpoint => {
+                    BatchFieldKey::Password => edit.password = BatchField::Clear,
+                    BatchFieldKey::AuthMode => edit.auth_mode = BatchField::Clear,
+                    BatchFieldKey::Otp => edit.otp_id = BatchField::Clear,
+                    BatchFieldKey::OtpAutoFill => edit.auto_fill_otp = BatchField::Clear,
+                    BatchFieldKey::Key => edit.key_id = BatchField::Clear,
+                    BatchFieldKey::SshAuthAgentEndpoint => {
                         edit.auth_agent_endpoint = BatchField::Clear
                     }
-                    BatchFieldId::SshAuthAgentEnvironment => {
+                    BatchFieldKey::SshAuthAgentEnvironment => {
                         edit.auth_agent_endpoint = BatchField::Clear
                     }
-                    BatchFieldId::SshAuthAgentSocket => {
+                    BatchFieldKey::SshAuthAgentSocket => {
                         edit.auth_agent_endpoint = BatchField::Clear
                     }
-                    BatchFieldId::Proxy => edit.proxy_id = BatchField::Clear,
-                    BatchFieldId::ProxyJump => edit.proxy_jump_id = BatchField::Clear,
-                    BatchFieldId::AgentExternal => {
+                    BatchFieldKey::Proxy => edit.proxy_id = BatchField::Clear,
+                    BatchFieldKey::ProxyJump => edit.proxy_jump_id = BatchField::Clear,
+                    BatchFieldKey::AgentExternal => {
                         edit.agent_forwarding_external = BatchField::Clear
                     }
-                    BatchFieldId::AgentStoredKeys => {
+                    BatchFieldKey::AgentStoredKeys => {
                         edit.agent_forwarding_stored_keys = BatchField::Clear
                     }
-                    BatchFieldId::AgentPolicy => edit.agent_forwarding_policy = BatchField::Clear,
-                    BatchFieldId::ShellPath => edit.shell_path = BatchField::Clear,
-                    BatchFieldId::ShellArgs => edit.shell_args = BatchField::Clear,
-                    BatchFieldId::WorkingDir => edit.working_dir = BatchField::Clear,
-                    BatchFieldId::SerialPort => edit.serial_port_name = BatchField::Clear,
-                    BatchFieldId::BaudRate => edit.serial_baud_rate = BatchField::Clear,
-                    BatchFieldId::DataBits => edit.serial_data_bits = BatchField::Clear,
-                    BatchFieldId::Parity => edit.serial_parity = BatchField::Clear,
-                    BatchFieldId::StopBits => edit.serial_stop_bits = BatchField::Clear,
-                    BatchFieldId::FlowControl => edit.serial_flow_control = BatchField::Clear,
-                    BatchFieldId::TelnetRawTcp => edit.telnet_raw_tcp_cli = BatchField::Clear,
-                    BatchFieldId::TelnetLocalEcho => edit.telnet_local_echo = BatchField::Clear,
-                    BatchFieldId::TelnetLocalLineEdit => {
+                    BatchFieldKey::AgentPolicy => edit.agent_forwarding_policy = BatchField::Clear,
+                    BatchFieldKey::ShellPath => edit.shell_path = BatchField::Clear,
+                    BatchFieldKey::ShellArgs => edit.shell_args = BatchField::Clear,
+                    BatchFieldKey::WorkingDir => edit.working_dir = BatchField::Clear,
+                    BatchFieldKey::SerialPort => edit.serial_port_name = BatchField::Clear,
+                    BatchFieldKey::BaudRate => edit.serial_baud_rate = BatchField::Clear,
+                    BatchFieldKey::DataBits => edit.serial_data_bits = BatchField::Clear,
+                    BatchFieldKey::Parity => edit.serial_parity = BatchField::Clear,
+                    BatchFieldKey::StopBits => edit.serial_stop_bits = BatchField::Clear,
+                    BatchFieldKey::FlowControl => edit.serial_flow_control = BatchField::Clear,
+                    BatchFieldKey::TelnetRawTcp => edit.telnet_raw_tcp_cli = BatchField::Clear,
+                    BatchFieldKey::TelnetLocalEcho => edit.telnet_local_echo = BatchField::Clear,
+                    BatchFieldKey::TelnetLocalLineEdit => {
                         edit.telnet_local_line_edit = BatchField::Clear
                     }
-                    BatchFieldId::TelnetForceChar => {
+                    BatchFieldKey::TelnetForceChar => {
                         edit.telnet_force_character_at_a_time = BatchField::Clear
                     }
-                    BatchFieldId::TelnetSendNaws => edit.telnet_send_naws = BatchField::Clear,
-                    BatchFieldId::TelnetSendSga => edit.telnet_send_sga = BatchField::Clear,
-                    BatchFieldId::TelnetKeepAlive => {
+                    BatchFieldKey::TelnetSendNaws => edit.telnet_send_naws = BatchField::Clear,
+                    BatchFieldKey::TelnetSendSga => edit.telnet_send_sga = BatchField::Clear,
+                    BatchFieldKey::TelnetKeepAlive => {
                         edit.telnet_keep_alive_interval_secs = BatchField::Clear
                     }
-                    BatchFieldId::TelnetEnterMode => edit.telnet_enter_mode = BatchField::Clear,
-                    BatchFieldId::TelnetAutoLoginEnabled => {
+                    BatchFieldKey::TelnetEnterMode => edit.telnet_enter_mode = BatchField::Clear,
+                    BatchFieldKey::TelnetAutoLoginEnabled => {
                         edit.telnet_auto_login_enabled = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginWake => {
+                    BatchFieldKey::TelnetAutoLoginWake => {
                         edit.telnet_auto_login_send_wake_enter = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginTimeout => {
+                    BatchFieldKey::TelnetAutoLoginTimeout => {
                         edit.telnet_auto_login_timeout_ms = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginRetries => {
+                    BatchFieldKey::TelnetAutoLoginRetries => {
                         edit.telnet_auto_login_max_retries = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginUserPrompt => {
+                    BatchFieldKey::TelnetAutoLoginUserPrompt => {
                         edit.telnet_auto_login_username_prompt = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginPasswordPrompt => {
+                    BatchFieldKey::TelnetAutoLoginPasswordPrompt => {
                         edit.telnet_auto_login_password_prompt = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginSuccessPrompt => {
+                    BatchFieldKey::TelnetAutoLoginSuccessPrompt => {
                         edit.telnet_auto_login_success_prompt = BatchField::Clear
                     }
-                    BatchFieldId::TelnetAutoLoginFailurePrompt => {
+                    BatchFieldKey::TelnetAutoLoginFailurePrompt => {
                         edit.telnet_auto_login_failure_prompt = BatchField::Clear
                     }
-                    BatchFieldId::RdpDomain => edit.rdp_domain = BatchField::Clear,
-                    BatchFieldId::RdpBackend => edit.rdp_backend = BatchField::Clear,
-                    BatchFieldId::RdpDisplayMode => edit.rdp_display_mode = BatchField::Clear,
-                    BatchFieldId::RdpWidth => edit.rdp_display_width = BatchField::Clear,
-                    BatchFieldId::RdpHeight => edit.rdp_display_height = BatchField::Clear,
-                    BatchFieldId::RdpWallpaper => edit.rdp_display_wallpaper = BatchField::Clear,
-                    BatchFieldId::RdpThemes => edit.rdp_display_themes = BatchField::Clear,
-                    BatchFieldId::RdpFontSmoothing => edit.rdp_font_smoothing = BatchField::Clear,
-                    BatchFieldId::RdpDesktopComposition => {
+                    BatchFieldKey::RdpDomain => edit.rdp_domain = BatchField::Clear,
+                    BatchFieldKey::RdpBackend => edit.rdp_backend = BatchField::Clear,
+                    BatchFieldKey::RdpDisplayMode => edit.rdp_display_mode = BatchField::Clear,
+                    BatchFieldKey::RdpWidth => edit.rdp_display_width = BatchField::Clear,
+                    BatchFieldKey::RdpHeight => edit.rdp_display_height = BatchField::Clear,
+                    BatchFieldKey::RdpWallpaper => edit.rdp_display_wallpaper = BatchField::Clear,
+                    BatchFieldKey::RdpThemes => edit.rdp_display_themes = BatchField::Clear,
+                    BatchFieldKey::RdpFontSmoothing => edit.rdp_font_smoothing = BatchField::Clear,
+                    BatchFieldKey::RdpDesktopComposition => {
                         edit.rdp_desktop_composition = BatchField::Clear
                     }
-                    BatchFieldId::RdpDisableFullWindowDrag => {
+                    BatchFieldKey::RdpDisableFullWindowDrag => {
                         edit.rdp_disable_full_window_drag = BatchField::Clear
                     }
-                    BatchFieldId::RdpDisableMenuAnimations => {
+                    BatchFieldKey::RdpDisableMenuAnimations => {
                         edit.rdp_disable_menu_animations = BatchField::Clear
                     }
-                    BatchFieldId::RdpDisableCursorShadow => {
+                    BatchFieldKey::RdpDisableCursorShadow => {
                         edit.rdp_disable_cursor_shadow = BatchField::Clear
                     }
-                    BatchFieldId::RdpDisableCursorBlinking => {
+                    BatchFieldKey::RdpDisableCursorBlinking => {
                         edit.rdp_disable_cursor_blinking = BatchField::Clear
                     }
-                    BatchFieldId::RdpAutoReconnect => edit.rdp_auto_reconnect = BatchField::Clear,
-                    BatchFieldId::RdpReconnectAttempts => {
+                    BatchFieldKey::RdpAutoReconnect => edit.rdp_auto_reconnect = BatchField::Clear,
+                    BatchFieldKey::RdpReconnectAttempts => {
                         edit.rdp_reconnect_attempts = BatchField::Clear
                     }
-                    BatchFieldId::VncScaleMode => edit.vnc_scale_mode = BatchField::Clear,
-                    BatchFieldId::VncClipboard => edit.vnc_clipboard = BatchField::Clear,
-                    BatchFieldId::VncShared => edit.vnc_shared = BatchField::Clear,
-                    BatchFieldId::VncViewOnly => edit.vnc_view_only = BatchField::Clear,
-                    BatchFieldId::VncReconnect => edit.vnc_reconnect = BatchField::Clear,
-                    BatchFieldId::VncReconnectAttempts => {
+                    BatchFieldKey::VncScaleMode => edit.vnc_scale_mode = BatchField::Clear,
+                    BatchFieldKey::VncClipboard => edit.vnc_clipboard = BatchField::Clear,
+                    BatchFieldKey::VncShared => edit.vnc_shared = BatchField::Clear,
+                    BatchFieldKey::VncViewOnly => edit.vnc_view_only = BatchField::Clear,
+                    BatchFieldKey::VncReconnect => edit.vnc_reconnect = BatchField::Clear,
+                    BatchFieldKey::VncReconnectAttempts => {
                         edit.vnc_reconnect_attempts = BatchField::Clear
                     }
-                    BatchFieldId::RecordingUseGlobal => {
+                    BatchFieldKey::RecordingUseGlobal => {
                         edit.recording_use_global = BatchField::Clear
                     }
-                    BatchFieldId::RecordingAutoStart => {
+                    BatchFieldKey::RecordingAutoStart => {
                         edit.recording_auto_start = BatchField::Clear
                     }
-                    BatchFieldId::RecordingMode => edit.recording_mode = BatchField::Clear,
+                    BatchFieldKey::RecordingMode => edit.recording_mode = BatchField::Clear,
+                    BatchFieldKey::AdbDirectory => edit.adb_directory = BatchField::Clear,
+                    BatchFieldKey::AdbScreenQuality => edit.adb_screen_quality = BatchField::Clear,
+                    BatchFieldKey::AdbScreenMaxSize => edit.adb_screen_max_size = BatchField::Clear,
+                    BatchFieldKey::AdbScreenFps => edit.adb_screen_max_fps = BatchField::Clear,
+                    BatchFieldKey::AdbScreenBitRate => edit.adb_screen_bit_rate = BatchField::Clear,
+                    BatchFieldKey::AdbScreenPowerOn => edit.adb_screen_power_on = BatchField::Clear,
+                    BatchFieldKey::AdbScreenOrientation => {
+                        edit.adb_screen_orientation = BatchField::Clear
+                    }
+                    BatchFieldKey::FtpInitialDirectory => {
+                        edit.ftp_initial_directory = BatchField::Clear
+                    }
+                    BatchFieldKey::FtpLocalInitialDirectory => {
+                        edit.ftp_local_initial_directory = BatchField::Clear
+                    }
+                    BatchFieldKey::FtpPassiveMode => edit.ftp_passive_mode = BatchField::Clear,
+                    BatchFieldKey::FtpFilenameEncodingMode => {
+                        edit.ftp_filename_encoding_mode = BatchField::Clear
+                    }
+                    BatchFieldKey::FtpFilenameEncoding => {
+                        edit.ftp_filename_encoding = BatchField::Clear
+                    }
+                    BatchFieldKey::FtpAsciiMode => edit.ftp_ascii_mode = BatchField::Clear,
+                    BatchFieldKey::FtpSecurityMode => edit.ftp_security_mode = BatchField::Clear,
+                    BatchFieldKey::FtpTlsVersion => edit.ftp_tls_version = BatchField::Clear,
+                    BatchFieldKey::FtpConnectTimeout => {
+                        edit.ftp_connect_timeout_ms = BatchField::Clear
+                    }
                     _ => {}
                 }
                 continue;
@@ -372,7 +410,7 @@ impl BatchScopeDraft {
                 if !self.bool_values.contains_key(&field) {
                     return Err(t!("assets.batch.chooseBoolean").to_string());
                 }
-            } else if field == BatchFieldId::Password {
+            } else if field == BatchFieldKey::Password {
                 if self.password.as_ref().is_none_or(SecretString::is_empty) {
                     return Err(
                         t!("assets.batch.errorUseClear", field = t!(field.label_key())).to_string(),
@@ -382,7 +420,7 @@ impl BatchScopeDraft {
                 self.require_text(field)?;
             }
             match field {
-                BatchFieldId::Group => {
+                BatchFieldKey::Group => {
                     let value = self.value(field).trim();
                     edit.group_id = if value.is_empty() {
                         BatchField::Clear
@@ -390,20 +428,20 @@ impl BatchScopeDraft {
                         BatchField::Set(value.to_string())
                     };
                 }
-                BatchFieldId::Description => {
+                BatchFieldKey::Description => {
                     edit.description = self.text_field(field, true);
                 }
-                BatchFieldId::Icon => {
+                BatchFieldKey::Icon => {
                     edit.icon = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.value(field).to_string())
                     };
                 }
-                BatchFieldId::IconAutoDetect => {
+                BatchFieldKey::IconAutoDetect => {
                     edit.icon_auto_detect = self.bool_field(field);
                 }
-                BatchFieldId::Port => {
+                BatchFieldKey::Port => {
                     edit.port = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -414,16 +452,16 @@ impl BatchScopeDraft {
                         BatchField::Set(port)
                     };
                 }
-                BatchFieldId::Username => {
+                BatchFieldKey::Username => {
                     edit.username = self.text_field(field, false);
                 }
-                BatchFieldId::Encoding => {
+                BatchFieldKey::Encoding => {
                     edit.encoding = self.text_field(field, true);
                 }
-                BatchFieldId::Backspace => {
+                BatchFieldKey::Backspace => {
                     edit.backspace_mode = self.text_field(field, true);
                 }
-                BatchFieldId::SshProfile => {
+                BatchFieldKey::SshProfile => {
                     edit.ssh_profile = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -435,7 +473,7 @@ impl BatchScopeDraft {
                         BatchField::Set(profile)
                     };
                 }
-                BatchFieldId::TerminalType => {
+                BatchFieldKey::TerminalType => {
                     edit.terminal_type = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -451,16 +489,19 @@ impl BatchScopeDraft {
                         BatchField::Set(terminal)
                     };
                 }
-                BatchFieldId::DynamicTabTitle => {
+                BatchFieldKey::SshCompatibility => {
+                    edit.ssh_compatibility_mode = self.bool_field(field);
+                }
+                BatchFieldKey::DynamicTabTitle => {
                     edit.dynamic_tab_title = self.bool_field(field);
                 }
-                BatchFieldId::SftpEnabled => {
+                BatchFieldKey::SftpEnabled => {
                     edit.sftp_enabled = self.bool_field(field);
                 }
-                BatchFieldId::SftpCompatibility => {
+                BatchFieldKey::SftpCompatibility => {
                     edit.sftp_compatibility_mode = self.bool_field(field);
                 }
-                BatchFieldId::SftpCwdFollow => {
+                BatchFieldKey::SftpCwdFollow => {
                     edit.sftp_cwd_follow_mode = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -475,7 +516,7 @@ impl BatchScopeDraft {
                         BatchField::Set(mode)
                     };
                 }
-                BatchFieldId::SftpShellTimeout => {
+                BatchFieldKey::SftpShellTimeout => {
                     edit.sftp_shell_detection_timeout_ms = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -494,10 +535,10 @@ impl BatchScopeDraft {
                         BatchField::Set(value)
                     };
                 }
-                BatchFieldId::SftpFilenameEncoding => {
+                BatchFieldKey::SftpFilenameEncoding => {
                     edit.sftp_filename_encoding = self.text_field(field, true);
                 }
-                BatchFieldId::SftpPipelineDepth => {
+                BatchFieldKey::SftpPipelineDepth => {
                     edit.sftp_pipeline_depth = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -508,26 +549,26 @@ impl BatchScopeDraft {
                         BatchField::Set(value)
                     };
                 }
-                BatchFieldId::X11 => {
+                BatchFieldKey::X11 => {
                     edit.x11_forwarding = self.bool_field(field);
                 }
-                BatchFieldId::AgentForwarding => {
+                BatchFieldKey::AgentForwarding => {
                     edit.agent_forwarding_enabled = self.bool_field(field);
                 }
-                BatchFieldId::PostLoginEnabled => {
+                BatchFieldKey::PostLoginEnabled => {
                     edit.post_login_enabled = self.bool_field(field);
                 }
-                BatchFieldId::PostLoginCommand => {
+                BatchFieldKey::PostLoginCommand => {
                     edit.post_login_command = self.text_field(field, true);
                 }
-                BatchFieldId::PostLoginDelay => {
+                BatchFieldKey::PostLoginDelay => {
                     edit.post_login_delay_ms = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u64>(field)?)
                     };
                 }
-                BatchFieldId::SshAlgorithmMode => {
+                BatchFieldKey::SshAlgorithmMode => {
                     edit.ssh_algorithm_mode = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
@@ -540,31 +581,34 @@ impl BatchScopeDraft {
                         BatchField::Set(mode)
                     };
                 }
-                BatchFieldId::SshKex => {
+                BatchFieldKey::SshKex => {
                     edit.ssh_kex = self.list_field(field)?;
                 }
-                BatchFieldId::SshCiphers => {
+                BatchFieldKey::SshCiphers => {
                     edit.ssh_ciphers = self.list_field(field)?;
                 }
-                BatchFieldId::SshMacs => {
+                BatchFieldKey::SshMacs => {
                     edit.ssh_macs = self.list_field(field)?;
                 }
-                BatchFieldId::SshHostKeys => {
+                BatchFieldKey::SshHostKeys => {
                     edit.ssh_host_keys = self.list_field(field)?;
                 }
-                BatchFieldId::RdpUseNla => {
+                BatchFieldKey::AllowShortRsaHostKeys => {
+                    edit.allow_short_rsa_host_keys = self.bool_field(field);
+                }
+                BatchFieldKey::RdpUseNla => {
                     edit.rdp_use_nla = self.bool_field(field);
                 }
-                BatchFieldId::RdpCertificatePolicy => {
+                BatchFieldKey::RdpCertificatePolicy => {
                     edit.rdp_certificate_policy = self.text_field(field, true);
                 }
-                BatchFieldId::RdpAdminSession => {
+                BatchFieldKey::RdpAdminSession => {
                     edit.rdp_administrative_session = self.bool_field(field);
                 }
-                BatchFieldId::VncSecurityMode => {
+                BatchFieldKey::VncSecurityMode => {
                     edit.vnc_security_mode = self.text_field(field, true);
                 }
-                BatchFieldId::Tags => {
+                BatchFieldKey::Tags => {
                     let tags = self
                         .value(field)
                         .split(',')
@@ -578,7 +622,7 @@ impl BatchScopeDraft {
                         BatchField::Set(tags)
                     };
                 }
-                BatchFieldId::Account => {
+                BatchFieldKey::Account => {
                     let value = self.value(field).trim();
                     let uses_password_catalog = matches!(
                         self.display_kind(),
@@ -595,37 +639,37 @@ impl BatchScopeDraft {
                         edit.account_id = patch;
                     }
                 }
-                BatchFieldId::Password => {
+                BatchFieldKey::Password => {
                     edit.password =
                         BatchField::Set(self.password.clone().expect("validated replacement"));
                 }
-                BatchFieldId::AuthMode => {
+                BatchFieldKey::AuthMode => {
                     edit.auth_mode = self.text_field(field, true);
                 }
-                BatchFieldId::Otp => {
+                BatchFieldKey::Otp => {
                     edit.otp_id = self.text_field(field, true);
                 }
-                BatchFieldId::OtpAutoFill => {
+                BatchFieldKey::OtpAutoFill => {
                     edit.auto_fill_otp = self.bool_field(field);
                 }
-                BatchFieldId::Key => {
+                BatchFieldKey::Key => {
                     edit.key_id = self.text_field(field, true);
                 }
-                BatchFieldId::SshAuthAgentEndpoint
-                | BatchFieldId::SshAuthAgentEnvironment
-                | BatchFieldId::SshAuthAgentSocket => {
-                    if self.is_edited(BatchFieldId::SshAuthAgentEndpoint) {
-                        let endpoint = self.value(BatchFieldId::SshAuthAgentEndpoint).trim();
+                BatchFieldKey::SshAuthAgentEndpoint
+                | BatchFieldKey::SshAuthAgentEnvironment
+                | BatchFieldKey::SshAuthAgentSocket => {
+                    if self.is_edited(BatchFieldKey::SshAuthAgentEndpoint) {
+                        let endpoint = self.value(BatchFieldKey::SshAuthAgentEndpoint).trim();
                         edit.auth_agent_endpoint = match endpoint {
                             "environment" => BatchField::Set(SshAgentEndpoint::Environment {
                                 variable: self
-                                    .value(BatchFieldId::SshAuthAgentEnvironment)
+                                    .value(BatchFieldKey::SshAuthAgentEnvironment)
                                     .trim()
                                     .to_string(),
                             }),
                             "unix_socket" => BatchField::Set(SshAgentEndpoint::UnixSocket {
                                 path: self
-                                    .value(BatchFieldId::SshAuthAgentSocket)
+                                    .value(BatchFieldKey::SshAuthAgentSocket)
                                     .trim()
                                     .to_string(),
                             }),
@@ -634,8 +678,8 @@ impl BatchScopeDraft {
                             "windows_openssh" => BatchField::Set(SshAgentEndpoint::WindowsOpenSsh),
                             _ => BatchField::Clear,
                         };
-                    } else if self.is_edited(BatchFieldId::SshAuthAgentEnvironment) {
-                        let variable = self.value(BatchFieldId::SshAuthAgentEnvironment).trim();
+                    } else if self.is_edited(BatchFieldKey::SshAuthAgentEnvironment) {
+                        let variable = self.value(BatchFieldKey::SshAuthAgentEnvironment).trim();
                         edit.auth_agent_endpoint = if variable.is_empty() {
                             BatchField::Clear
                         } else {
@@ -643,8 +687,8 @@ impl BatchScopeDraft {
                                 variable: variable.to_string(),
                             })
                         };
-                    } else if self.is_edited(BatchFieldId::SshAuthAgentSocket) {
-                        let path = self.value(BatchFieldId::SshAuthAgentSocket).trim();
+                    } else if self.is_edited(BatchFieldKey::SshAuthAgentSocket) {
+                        let path = self.value(BatchFieldKey::SshAuthAgentSocket).trim();
                         edit.auth_agent_endpoint = if path.is_empty() {
                             BatchField::Clear
                         } else {
@@ -654,19 +698,19 @@ impl BatchScopeDraft {
                         };
                     }
                 }
-                BatchFieldId::Proxy => {
+                BatchFieldKey::Proxy => {
                     edit.proxy_id = self.text_field(field, true);
                 }
-                BatchFieldId::ProxyJump => {
+                BatchFieldKey::ProxyJump => {
                     edit.proxy_jump_id = self.text_field(field, true);
                 }
-                BatchFieldId::AgentExternal => {
+                BatchFieldKey::AgentExternal => {
                     edit.agent_forwarding_external = self.bool_field(field);
                 }
-                BatchFieldId::AgentStoredKeys => {
+                BatchFieldKey::AgentStoredKeys => {
                     edit.agent_forwarding_stored_keys = self.bool_field(field);
                 }
-                BatchFieldId::AgentPolicy => {
+                BatchFieldKey::AgentPolicy => {
                     edit.agent_forwarding_policy = match self.value(field).trim() {
                         "all" => BatchField::Set(SshAgentForwardingPolicy::All),
                         "allowlist" => BatchField::Set(SshAgentForwardingPolicy::Allowlist {
@@ -675,39 +719,39 @@ impl BatchScopeDraft {
                         _ => BatchField::Clear,
                     };
                 }
-                BatchFieldId::ShellPath => {
+                BatchFieldKey::ShellPath => {
                     edit.shell_path = self.text_field(field, true);
                 }
-                BatchFieldId::ShellArgs => {
+                BatchFieldKey::ShellArgs => {
                     edit.shell_args = self.text_field(field, true);
                 }
-                BatchFieldId::WorkingDir => {
+                BatchFieldKey::WorkingDir => {
                     edit.working_dir = self.text_field(field, true);
                 }
-                BatchFieldId::SerialPort => {
+                BatchFieldKey::SerialPort => {
                     edit.serial_port_name = self.text_field(field, true);
                 }
-                BatchFieldId::BaudRate => {
+                BatchFieldKey::BaudRate => {
                     edit.serial_baud_rate = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
                 }
-                BatchFieldId::DataBits => {
+                BatchFieldKey::DataBits => {
                     edit.serial_data_bits = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.value(field).trim().parse::<u8>().unwrap_or(0))
                     };
                 }
-                BatchFieldId::Parity => {
+                BatchFieldKey::Parity => {
                     edit.serial_parity = self.text_field(field, true);
                 }
-                BatchFieldId::StopBits => {
+                BatchFieldKey::StopBits => {
                     edit.serial_stop_bits = self.text_field(field, true);
                 }
-                BatchFieldId::FlowControl => {
+                BatchFieldKey::FlowControl => {
                     edit.serial_flow_control = match self.value(field).trim() {
                         "hardware" => BatchField::Set(SerialFlowControl::Hardware),
                         "software" => BatchField::Set(SerialFlowControl::Software),
@@ -715,152 +759,271 @@ impl BatchScopeDraft {
                         _ => BatchField::Clear,
                     };
                 }
-                BatchFieldId::TelnetRawTcp => {
+                BatchFieldKey::TelnetRawTcp => {
                     edit.telnet_raw_tcp_cli = self.bool_field(field);
                 }
-                BatchFieldId::TelnetLocalEcho => {
+                BatchFieldKey::TelnetLocalEcho => {
                     edit.telnet_local_echo = self.bool_field(field);
                 }
-                BatchFieldId::TelnetLocalLineEdit => {
+                BatchFieldKey::TelnetLocalLineEdit => {
                     edit.telnet_local_line_edit = self.bool_field(field);
                 }
-                BatchFieldId::TelnetForceChar => {
+                BatchFieldKey::TelnetForceChar => {
                     edit.telnet_force_character_at_a_time = self.bool_field(field);
                 }
-                BatchFieldId::TelnetSendNaws => {
+                BatchFieldKey::TelnetSendNaws => {
                     edit.telnet_send_naws = self.bool_field(field);
                 }
-                BatchFieldId::TelnetSendSga => {
+                BatchFieldKey::TelnetSendSga => {
                     edit.telnet_send_sga = self.bool_field(field);
                 }
-                BatchFieldId::TelnetKeepAlive => {
+                BatchFieldKey::TelnetKeepAlive => {
                     edit.telnet_keep_alive_interval_secs = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
                 }
-                BatchFieldId::TelnetEnterMode => {
+                BatchFieldKey::TelnetEnterMode => {
                     edit.telnet_enter_mode = self.text_field(field, true);
                 }
-                BatchFieldId::TelnetAutoLoginEnabled => {
+                BatchFieldKey::TelnetAutoLoginEnabled => {
                     edit.telnet_auto_login_enabled = self.bool_field(field);
                 }
-                BatchFieldId::TelnetAutoLoginWake => {
+                BatchFieldKey::TelnetAutoLoginWake => {
                     edit.telnet_auto_login_send_wake_enter = self.bool_field(field);
                 }
-                BatchFieldId::TelnetAutoLoginTimeout => {
+                BatchFieldKey::TelnetAutoLoginTimeout => {
                     edit.telnet_auto_login_timeout_ms = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.value(field).trim().parse::<u64>().unwrap_or(0))
                     };
                 }
-                BatchFieldId::TelnetAutoLoginRetries => {
+                BatchFieldKey::TelnetAutoLoginRetries => {
                     edit.telnet_auto_login_max_retries = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.value(field).trim().parse::<u8>().unwrap_or(0))
                     };
                 }
-                BatchFieldId::TelnetAutoLoginUserPrompt => {
+                BatchFieldKey::TelnetAutoLoginUserPrompt => {
                     edit.telnet_auto_login_username_prompt = self.text_field(field, true);
                 }
-                BatchFieldId::TelnetAutoLoginPasswordPrompt => {
+                BatchFieldKey::TelnetAutoLoginPasswordPrompt => {
                     edit.telnet_auto_login_password_prompt = self.text_field(field, true);
                 }
-                BatchFieldId::TelnetAutoLoginSuccessPrompt => {
+                BatchFieldKey::TelnetAutoLoginSuccessPrompt => {
                     edit.telnet_auto_login_success_prompt = self.text_field(field, true);
                 }
-                BatchFieldId::TelnetAutoLoginFailurePrompt => {
+                BatchFieldKey::TelnetAutoLoginFailurePrompt => {
                     edit.telnet_auto_login_failure_prompt = self.text_field(field, true);
                 }
-                BatchFieldId::RdpDomain => {
+                BatchFieldKey::RdpDomain => {
                     edit.rdp_domain = self.text_field(field, true);
                 }
-                BatchFieldId::RdpBackend => {
+                BatchFieldKey::RdpBackend => {
                     edit.rdp_backend = self.text_field(field, true);
                 }
-                BatchFieldId::RdpDisplayMode => {
+                BatchFieldKey::RdpDisplayMode => {
                     edit.rdp_display_mode = self.text_field(field, true);
                 }
-                BatchFieldId::RdpWidth => {
+                BatchFieldKey::RdpWidth => {
                     edit.rdp_display_width = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
                 }
-                BatchFieldId::RdpHeight => {
+                BatchFieldKey::RdpHeight => {
                     edit.rdp_display_height = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
                 }
-                BatchFieldId::RdpWallpaper => {
+                BatchFieldKey::RdpWallpaper => {
                     edit.rdp_display_wallpaper = self.bool_field(field);
                 }
-                BatchFieldId::RdpThemes => {
+                BatchFieldKey::RdpThemes => {
                     edit.rdp_display_themes = self.bool_field(field);
                 }
-                BatchFieldId::RdpFontSmoothing => {
+                BatchFieldKey::RdpFontSmoothing => {
                     edit.rdp_font_smoothing = self.bool_field(field);
                 }
-                BatchFieldId::RdpDesktopComposition => {
+                BatchFieldKey::RdpDesktopComposition => {
                     edit.rdp_desktop_composition = self.bool_field(field);
                 }
-                BatchFieldId::RdpDisableFullWindowDrag => {
+                BatchFieldKey::RdpDisableFullWindowDrag => {
                     edit.rdp_disable_full_window_drag = self.bool_field(field);
                 }
-                BatchFieldId::RdpDisableMenuAnimations => {
+                BatchFieldKey::RdpDisableMenuAnimations => {
                     edit.rdp_disable_menu_animations = self.bool_field(field);
                 }
-                BatchFieldId::RdpDisableCursorShadow => {
+                BatchFieldKey::RdpDisableCursorShadow => {
                     edit.rdp_disable_cursor_shadow = self.bool_field(field);
                 }
-                BatchFieldId::RdpDisableCursorBlinking => {
+                BatchFieldKey::RdpDisableCursorBlinking => {
                     edit.rdp_disable_cursor_blinking = self.bool_field(field);
                 }
-                BatchFieldId::RdpAutoReconnect => {
+                BatchFieldKey::RdpAutoReconnect => {
                     edit.rdp_auto_reconnect = self.bool_field(field);
                 }
-                BatchFieldId::RdpReconnectAttempts => {
+                BatchFieldKey::RdpReconnectAttempts => {
                     edit.rdp_reconnect_attempts = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
                 }
-                BatchFieldId::VncScaleMode => {
+                BatchFieldKey::VncScaleMode => {
                     edit.vnc_scale_mode = self.text_field(field, true);
                 }
-                BatchFieldId::VncClipboard => {
+                BatchFieldKey::VncClipboard => {
                     edit.vnc_clipboard = self.bool_field(field);
                 }
-                BatchFieldId::VncShared => {
+                BatchFieldKey::VncShared => {
                     edit.vnc_shared = self.bool_field(field);
                 }
-                BatchFieldId::VncViewOnly => {
+                BatchFieldKey::VncViewOnly => {
                     edit.vnc_view_only = self.bool_field(field);
                 }
-                BatchFieldId::VncReconnect => {
+                BatchFieldKey::VncReconnect => {
                     edit.vnc_reconnect = self.bool_field(field);
                 }
-                BatchFieldId::VncReconnectAttempts => {
+                BatchFieldKey::VncReconnectAttempts => {
                     edit.vnc_reconnect_attempts = if self.empty_is_clear(field) {
                         BatchField::Clear
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
                 }
-                BatchFieldId::RecordingUseGlobal => {
+                BatchFieldKey::AdbDirectory => {
+                    edit.adb_directory = self.text_field(field, true);
+                }
+                BatchFieldKey::AdbScreenQuality => {
+                    edit.adb_screen_quality = if self.empty_is_clear(field) {
+                        BatchField::Clear
+                    } else {
+                        let preset = match self.value(field).trim() {
+                            "smooth" => ScreenQualityPreset::Smooth,
+                            "balanced" => ScreenQualityPreset::Balanced,
+                            "sharp" => ScreenQualityPreset::Sharp,
+                            _ => return Err(self.invalid_option(field)),
+                        };
+                        BatchField::Set(preset)
+                    };
+                }
+                BatchFieldKey::AdbScreenMaxSize => {
+                    edit.adb_screen_max_size = if self.empty_is_clear(field) {
+                        BatchField::Clear
+                    } else {
+                        let value = self.require_number::<u32>(field)?;
+                        if !(128..=2560).contains(&value) {
+                            return Err(t!(
+                                "assets.batch.errorAndroidMaxSize",
+                                min = 128,
+                                max = 2560
+                            )
+                            .to_string());
+                        }
+                        BatchField::Set(value)
+                    };
+                }
+                BatchFieldKey::AdbScreenFps => {
+                    edit.adb_screen_max_fps = if self.empty_is_clear(field) {
+                        BatchField::Clear
+                    } else {
+                        let value = self.require_number::<u32>(field)?;
+                        if !(1..=120).contains(&value) {
+                            return Err(t!("assets.batch.errorAndroidMaxFps", min = 1, max = 120)
+                                .to_string());
+                        }
+                        BatchField::Set(value)
+                    };
+                }
+                BatchFieldKey::AdbScreenBitRate => {
+                    edit.adb_screen_bit_rate = if self.empty_is_clear(field) {
+                        BatchField::Clear
+                    } else {
+                        let value = self.require_number::<u32>(field)?;
+                        if !(100_000..=100_000_000).contains(&value) {
+                            return Err(t!(
+                                "assets.batch.errorAndroidBitRate",
+                                min = 100_000,
+                                max = 100_000_000
+                            )
+                            .to_string());
+                        }
+                        BatchField::Set(value)
+                    };
+                }
+                BatchFieldKey::AdbScreenPowerOn => {
+                    edit.adb_screen_power_on = self.bool_field(field);
+                }
+                BatchFieldKey::AdbScreenOrientation => {
+                    edit.adb_screen_orientation = if self.empty_is_clear(field) {
+                        BatchField::Clear
+                    } else {
+                        let orientation = match self.value(field).trim() {
+                            "0" => CaptureOrientation::FollowDevice,
+                            "@" => CaptureOrientation::LockInitial,
+                            "@0" => CaptureOrientation::Degrees0,
+                            "@90" => CaptureOrientation::Degrees90,
+                            "@180" => CaptureOrientation::Degrees180,
+                            "@270" => CaptureOrientation::Degrees270,
+                            _ => return Err(self.invalid_option(field)),
+                        };
+                        BatchField::Set(orientation)
+                    };
+                }
+                BatchFieldKey::FtpInitialDirectory => {
+                    edit.ftp_initial_directory = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpLocalInitialDirectory => {
+                    edit.ftp_local_initial_directory = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpPassiveMode => {
+                    edit.ftp_passive_mode = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpFilenameEncodingMode => {
+                    edit.ftp_filename_encoding_mode = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpFilenameEncoding => {
+                    edit.ftp_filename_encoding = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpAsciiMode => {
+                    edit.ftp_ascii_mode = self.bool_field(field);
+                }
+                BatchFieldKey::FtpSecurityMode => {
+                    edit.ftp_security_mode = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpTlsVersion => {
+                    edit.ftp_tls_version = self.text_field(field, true);
+                }
+                BatchFieldKey::FtpConnectTimeout => {
+                    edit.ftp_connect_timeout_ms = if self.empty_is_clear(field) {
+                        BatchField::Clear
+                    } else {
+                        let value = self.require_number::<u64>(field)?;
+                        if !(1_000..=120_000).contains(&value) {
+                            return Err(t!(
+                                "assets.batch.errorFtpTimeout",
+                                min = 1_000,
+                                max = 120_000
+                            )
+                            .to_string());
+                        }
+                        BatchField::Set(value)
+                    };
+                }
+                BatchFieldKey::RecordingUseGlobal => {
                     edit.recording_use_global = self.bool_field(field);
                 }
-                BatchFieldId::RecordingAutoStart => {
+                BatchFieldKey::RecordingAutoStart => {
                     edit.recording_auto_start = self.bool_field(field);
                 }
-                BatchFieldId::RecordingMode => {
+                BatchFieldKey::RecordingMode => {
                     edit.recording_mode = match self.value(field).trim() {
                         "raw" => BatchField::Set(RecordingMode::Raw),
                         "transcript" => BatchField::Set(RecordingMode::Transcript),
@@ -894,6 +1057,8 @@ pub(in crate::features) struct AssetBatchEditDraft {
     scopes: HashMap<Option<ConnectionBatchKind>, BatchScopeDraft>,
     window: ChildWindowSlot,
     scroll: ScrollHandle,
+    section: Option<ConnectionEditorSection>,
+    navigation_focus: Option<FocusHandle>,
 }
 impl std::ops::Deref for AssetBatchEditDraft {
     type Target = BatchScopeDraft;
@@ -904,6 +1069,10 @@ impl std::ops::Deref for AssetBatchEditDraft {
 impl AssetBatchEditDraft {
     pub(in crate::features) fn is_open(&self) -> bool {
         self.open
+    }
+    /// Focus handle for the vertical section rail; mirrors the connection editor.
+    pub(in crate::features) fn navigation_focus(&self) -> Option<&FocusHandle> {
+        self.navigation_focus.as_ref()
     }
     pub(in crate::features) fn ids(&self) -> &[String] {
         &self.ids
@@ -941,12 +1110,12 @@ impl AssetBatchEditDraft {
         {
             return false;
         }
-        let next = self
-            .scopes
-            .remove(&kind)
-            .expect("all scopes initialized at open");
+        let Some(next) = self.scopes.remove(&kind) else {
+            return false;
+        };
         let old = std::mem::replace(&mut self.current, next);
         self.scopes.insert(old.kind, old);
+        self.section = None;
         true
     }
     #[cfg(test)]
@@ -960,7 +1129,7 @@ impl AssetBatchEditDraft {
             .chain(self.scopes.values().flat_map(|scope| scope.modes.values()))
             .any(|mode| *mode != BatchEditMode::Keep)
     }
-    pub(in crate::features) fn set_mode(&mut self, field: BatchFieldId, mode: BatchEditMode) {
+    pub(in crate::features) fn set_mode(&mut self, field: BatchFieldKey, mode: BatchEditMode) {
         if self.saving
             || (mode != BatchEditMode::Keep
                 && self
@@ -983,7 +1152,7 @@ impl AssetBatchEditDraft {
                 self.current.bool_values.remove(&field);
             }
         }
-        if field == BatchFieldId::Password && mode != BatchEditMode::Set {
+        if field == BatchFieldKey::Password && mode != BatchEditMode::Set {
             self.current.password = None;
         }
     }
@@ -994,9 +1163,8 @@ impl AssetBatchEditDraft {
             .map(SecretString::expose_secret)
             .unwrap_or("")
     }
-    pub(in crate::features) fn set_value(&mut self, field: BatchFieldId, value: String) {
+    pub(in crate::features) fn set_value(&mut self, field: BatchFieldKey, value: String) {
         if self.saving
-            || self.mode(field) != BatchEditMode::Set
             || self
                 .current
                 .rdp_applicability(field)
@@ -1004,22 +1172,40 @@ impl AssetBatchEditDraft {
         {
             return;
         }
-        if field == BatchFieldId::Password {
+        if field == BatchFieldKey::Password {
+            self.current.modes.insert(field, BatchEditMode::Set);
             self.current.password = Some(SecretString::new(value));
-        } else {
-            self.current.values.insert(field, value);
+            return;
         }
+        // Deleting the content is the documented way to clear a text field;
+        // anything else is an explicit replacement.
+        let mode = if value.is_empty() {
+            BatchEditMode::Clear
+        } else {
+            BatchEditMode::Set
+        };
+        self.current.modes.insert(field, mode);
+        self.current.values.insert(field, value);
     }
-    pub(in crate::features) fn set_bool_value(&mut self, field: BatchFieldId, value: bool) {
-        if !self.saving
-            && self.mode(field) == BatchEditMode::Set
-            && self
+    pub(in crate::features) fn set_bool_value(&mut self, field: BatchFieldKey, value: bool) {
+        if self.saving
+            || self
                 .current
                 .rdp_applicability(field)
-                .is_none_or(|state| state.applicable > 0)
+                .is_some_and(|state| state.applicable == 0)
         {
-            self.current.bool_values.insert(field, value);
+            return;
         }
+        self.current.modes.insert(field, BatchEditMode::Set);
+        self.current.bool_values.insert(field, value);
+    }
+    /// Reverts one row to its original value without producing a patch.
+    pub(in crate::features) fn undo_field(&mut self, field: BatchFieldKey) {
+        self.set_mode(field, BatchEditMode::Keep);
+    }
+    /// Restores the documented default by writing `Clear`.
+    pub(in crate::features) fn reset_field(&mut self, field: BatchFieldKey) {
+        self.set_mode(field, BatchEditMode::Clear);
     }
     pub(in crate::features) fn clear(&mut self) {
         let generation = self.generation.wrapping_add(1);
@@ -1031,15 +1217,17 @@ impl AssetBatchEditDraft {
     pub(in crate::features) fn start(
         &mut self,
         ids: Vec<String>,
-        basis: HashMap<BatchFieldId, FieldBasis>,
-        values: HashMap<BatchFieldId, String>,
-        bool_values: HashMap<BatchFieldId, bool>,
+        basis: HashMap<BatchFieldKey, FieldBasis>,
+        values: HashMap<BatchFieldKey, String>,
+        bool_values: HashMap<BatchFieldKey, bool>,
+        navigation_focus: Option<FocusHandle>,
     ) {
         let generation = self.generation.wrapping_add(1);
         *self = Self {
             open: true,
             ids,
             generation,
+            navigation_focus,
             current: BatchScopeDraft {
                 original_values: values.clone(),
                 original_bools: bool_values.clone(),
@@ -1078,6 +1266,13 @@ impl AssetBatchEditDraft {
                     ..Default::default()
                 },
             );
+        }
+        // The tab strip never offers the protocol-independent scope, so open on
+        // the first protocol that actually has selected connections.
+        if let Some(&(kind, _)) = self.counts.iter().find(|(_, count)| *count > 0)
+            && let Some(scope) = self.scopes.remove(&Some(kind))
+        {
+            self.current = scope;
         }
         self.refresh_rdp_basis(connections);
     }
@@ -1138,5 +1333,15 @@ impl AssetBatchEditDraft {
     }
     pub(in crate::features) fn scroll(&self) -> &ScrollHandle {
         &self.scroll
+    }
+    pub(in crate::features) fn section(&self) -> Option<ConnectionEditorSection> {
+        self.section
+    }
+    pub(in crate::features) fn set_section(&mut self, section: ConnectionEditorSection) -> bool {
+        if self.section == Some(section) {
+            return false;
+        }
+        self.section = Some(section);
+        true
     }
 }

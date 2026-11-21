@@ -550,6 +550,52 @@ fn agent_forwarding_policy_keeps_existing_fingerprints() {
 }
 
 #[test]
+fn allow_short_rsa_host_keys_applies_only_to_ssh() {
+    let mut connection = ssh_connection();
+    connection.allow_short_rsa_host_keys = false;
+    let edit = ConnectionBatchEdit {
+        allow_short_rsa_host_keys: BatchField::Set(true),
+        ..Default::default()
+    };
+
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+
+    assert!(connection.allow_short_rsa_host_keys);
+    assert_eq!(report.applied_fields, 1);
+    assert_eq!(report.skipped_fields, 0);
+
+    let original = local_connection();
+    let mut connection = original.clone();
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 0);
+    assert_eq!(report.skipped_fields, 1);
+    assert_eq!(connection, original);
+}
+
+#[test]
+fn ssh_compatibility_mode_applies_only_to_ssh() {
+    let mut connection = ssh_connection();
+    connection.ssh_compatibility_mode = false;
+    let edit = ConnectionBatchEdit {
+        ssh_compatibility_mode: BatchField::Set(true),
+        ..Default::default()
+    };
+
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+
+    assert!(connection.ssh_compatibility_mode);
+    assert_eq!(report.applied_fields, 1);
+    assert_eq!(report.skipped_fields, 0);
+
+    let original = local_connection();
+    let mut connection = original.clone();
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 0);
+    assert_eq!(report.skipped_fields, 1);
+    assert_eq!(connection, original);
+}
+
+#[test]
 fn proxy_and_local_startup_fields_apply() {
     let mut connection = ssh_connection();
     let edit = ConnectionBatchEdit {
@@ -1222,7 +1268,11 @@ fn batch_kind_counts_keep_supported_order_and_ignore_missing_or_android_targets(
     let ids = ["rdp", "android", "missing", "ssh", "ssh"].map(str::to_string);
     assert_eq!(
         connection_kind_counts(&[rdp, android, ssh], &ids),
-        vec![(ConnectionBatchKind::Ssh, 2), (ConnectionBatchKind::Rdp, 1)]
+        vec![
+            (ConnectionBatchKind::Ssh, 2),
+            (ConnectionBatchKind::Rdp, 1),
+            (ConnectionBatchKind::Adb, 1),
+        ]
     );
 }
 
@@ -1294,6 +1344,309 @@ fn serial_batch_values_disable_only_the_corresponding_connect_prompt() {
         };
         assert_eq!(restored_prompt, *connect_prompt);
     }
+}
+
+fn adb_connection() -> SavedConnection {
+    SavedConnection {
+        config: ConnectionType::Adb {
+            device: crate::models::android::AdbDeviceSelector::Usb {
+                serial: "device-1".to_string(),
+            },
+            directory: crate::models::android::default_android_directory(),
+            screen: crate::models::android::AndroidScreenSettings::default(),
+        },
+        ..ssh_connection()
+    }
+}
+
+fn ftp_connection() -> SavedConnection {
+    SavedConnection {
+        config: ConnectionType::Ftp {
+            host: "10.0.0.5".to_string(),
+            port: 21,
+            username: "anonymous".to_string(),
+            initial_directory: String::new(),
+            local_initial_directory: String::new(),
+            passive_mode: "auto".to_string(),
+            ftp_filename_encoding_mode: "auto".to_string(),
+            ftp_filename_encoding: String::new(),
+            ftp_ascii_mode: false,
+            ftp_security_mode: "none".to_string(),
+            ftp_tls_version: "auto".to_string(),
+            connect_timeout_ms: 15_000,
+        },
+        ..ssh_connection()
+    }
+}
+
+#[test]
+fn adb_batch_fields_apply_and_clear_to_screen_defaults() {
+    use crate::models::android::{AndroidScreenSettings, CaptureOrientation, ScreenQualityPreset};
+
+    let mut connection = adb_connection();
+    let edit = ConnectionBatchEdit {
+        adb_directory: BatchField::Set("/sdcard/Download".to_string()),
+        adb_screen_quality: BatchField::Set(ScreenQualityPreset::Sharp),
+        adb_screen_power_on: BatchField::Set(true),
+        adb_screen_orientation: BatchField::Set(CaptureOrientation::Degrees90),
+        ..Default::default()
+    };
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 4);
+    let ConnectionType::Adb {
+        directory, screen, ..
+    } = &connection.config
+    else {
+        panic!("expected adb");
+    };
+    assert_eq!(directory, "/sdcard/Download");
+    assert_eq!(
+        *screen,
+        AndroidScreenSettings {
+            max_size: 1920,
+            max_fps: 30,
+            bit_rate: 12_000_000,
+            power_on: true,
+            capture_orientation: CaptureOrientation::Degrees90,
+        }
+    );
+
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            adb_directory: BatchField::Clear,
+            adb_screen_quality: BatchField::Clear,
+            adb_screen_power_on: BatchField::Clear,
+            adb_screen_orientation: BatchField::Clear,
+            ..Default::default()
+        },
+    );
+    let ConnectionType::Adb {
+        directory, screen, ..
+    } = &connection.config
+    else {
+        panic!("expected adb");
+    };
+    assert_eq!(
+        directory,
+        &crate::models::android::default_android_directory()
+    );
+    assert_eq!(*screen, AndroidScreenSettings::default());
+}
+
+#[test]
+fn adb_screen_dimension_edits_stay_custom() {
+    use crate::models::android::{AndroidScreenSettings, ScreenQualityPreset};
+
+    let mut connection = adb_connection();
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            adb_screen_quality: BatchField::Set(ScreenQualityPreset::Smooth),
+            adb_screen_max_size: BatchField::Set(800),
+            ..Default::default()
+        },
+    );
+    let ConnectionType::Adb { screen, .. } = &connection.config else {
+        panic!("expected adb");
+    };
+    assert_eq!(screen.max_size, 800);
+    assert_eq!(screen.max_fps, 60);
+    assert_eq!(screen.bit_rate, 8_000_000);
+    assert_ne!(*screen, {
+        let mut preset = *screen;
+        ScreenQualityPreset::Balanced.apply(&mut preset);
+        preset
+    });
+    assert_eq!(
+        AndroidScreenSettings::default().capture_orientation,
+        screen.capture_orientation
+    );
+}
+
+#[test]
+fn ftp_batch_fields_apply_and_clear_to_defaults() {
+    let mut connection = ftp_connection();
+    let edit = ConnectionBatchEdit {
+        ftp_initial_directory: BatchField::Set("/incoming".to_string()),
+        ftp_local_initial_directory: BatchField::Set("C:/downloads".to_string()),
+        ftp_passive_mode: BatchField::Set("epsv".to_string()),
+        ftp_filename_encoding_mode: BatchField::Set("custom".to_string()),
+        ftp_filename_encoding: BatchField::Set("GBK".to_string()),
+        ftp_ascii_mode: BatchField::Set(true),
+        ftp_security_mode: BatchField::Set("explicit".to_string()),
+        ftp_tls_version: BatchField::Set("tls1.3".to_string()),
+        ftp_connect_timeout_ms: BatchField::Set(30_000),
+        ..Default::default()
+    };
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 9);
+    let ConnectionType::Ftp {
+        initial_directory,
+        local_initial_directory,
+        passive_mode,
+        ftp_filename_encoding_mode,
+        ftp_filename_encoding,
+        ftp_ascii_mode,
+        ftp_security_mode,
+        ftp_tls_version,
+        connect_timeout_ms,
+        ..
+    } = &connection.config
+    else {
+        panic!("expected ftp");
+    };
+    assert_eq!(initial_directory, "/incoming");
+    assert_eq!(local_initial_directory, "C:/downloads");
+    assert_eq!(passive_mode, "epsv");
+    assert_eq!(ftp_filename_encoding_mode, "custom");
+    assert_eq!(ftp_filename_encoding, "GBK");
+    assert!(*ftp_ascii_mode);
+    assert_eq!(ftp_security_mode, "explicit");
+    assert_eq!(ftp_tls_version, "tls1.3");
+    assert_eq!(*connect_timeout_ms, 30_000);
+
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            ftp_initial_directory: BatchField::Clear,
+            ftp_local_initial_directory: BatchField::Clear,
+            ftp_passive_mode: BatchField::Clear,
+            ftp_filename_encoding_mode: BatchField::Clear,
+            ftp_filename_encoding: BatchField::Clear,
+            ftp_ascii_mode: BatchField::Clear,
+            ftp_security_mode: BatchField::Clear,
+            ftp_tls_version: BatchField::Clear,
+            ftp_connect_timeout_ms: BatchField::Clear,
+            ..Default::default()
+        },
+    );
+    let ConnectionType::Ftp {
+        initial_directory,
+        local_initial_directory,
+        passive_mode,
+        ftp_filename_encoding_mode,
+        ftp_filename_encoding,
+        ftp_ascii_mode,
+        ftp_security_mode,
+        ftp_tls_version,
+        connect_timeout_ms,
+        ..
+    } = &connection.config
+    else {
+        panic!("expected ftp");
+    };
+    assert!(initial_directory.is_empty());
+    assert!(local_initial_directory.is_empty());
+    assert_eq!(passive_mode, "auto");
+    assert_eq!(ftp_filename_encoding_mode, "auto");
+    assert!(ftp_filename_encoding.is_empty());
+    assert!(!*ftp_ascii_mode);
+    assert_eq!(ftp_security_mode, "none");
+    assert_eq!(ftp_tls_version, "auto");
+    assert_eq!(*connect_timeout_ms, 15_000);
+}
+
+#[test]
+fn ftp_shares_endpoint_and_credentials_without_proxy() {
+    let mut connection = ftp_connection();
+    let report = apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            port: BatchField::Set(2121),
+            username: BatchField::Set("file-user".to_string()),
+            proxy_id: BatchField::Set("proxy-1".to_string()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(report.applied_fields, 2);
+    assert_eq!(report.skipped_fields, 1);
+    match &connection.config {
+        ConnectionType::Ftp { port, username, .. } => {
+            assert_eq!(*port, 2121);
+            assert_eq!(username, "file-user");
+        }
+        _ => panic!("expected ftp"),
+    }
+    assert!(
+        connection.network.is_none() || connection.network.as_ref().unwrap().proxy_id.is_none()
+    );
+}
+
+#[test]
+fn anonymous_ftp_clears_the_stored_password() {
+    let mut connection = ftp_connection();
+    connection.auth = Some(ConnectionAuth {
+        password: Some(SecretString::new("stored")),
+        has_password: true,
+        password_id: Some("saved".to_string()),
+        ..Default::default()
+    });
+    apply_connection_batch_edit(
+        &mut connection,
+        &ConnectionBatchEdit {
+            auth_mode: BatchField::Set("none".to_string()),
+            ..Default::default()
+        },
+    );
+    let auth = connection.auth.as_ref().expect("auth");
+    assert_eq!(auth.mode, "none");
+    assert!(auth.password.is_none());
+    assert!(auth.password_id.is_none());
+    assert!(!auth.has_password);
+}
+
+#[test]
+fn adb_and_ftp_fields_are_skipped_for_other_protocols() {
+    let original = ssh_connection();
+    let mut connection = original.clone();
+    let edit = ConnectionBatchEdit {
+        adb_directory: BatchField::Set("/sdcard/".to_string()),
+        adb_screen_quality: BatchField::Clear,
+        ftp_initial_directory: BatchField::Set("/incoming".to_string()),
+        ftp_connect_timeout_ms: BatchField::Set(30_000),
+        ..Default::default()
+    };
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 0);
+    assert_eq!(report.skipped_fields, 4);
+    assert_eq!(connection, original);
+}
+
+#[test]
+fn validation_rejects_invalid_adb_screen_and_ftp_timeout() {
+    for edit in [
+        ConnectionBatchEdit {
+            adb_screen_max_size: BatchField::Set(64),
+            ..Default::default()
+        },
+        ConnectionBatchEdit {
+            adb_screen_max_fps: BatchField::Set(0),
+            ..Default::default()
+        },
+        ConnectionBatchEdit {
+            adb_screen_bit_rate: BatchField::Set(1),
+            ..Default::default()
+        },
+        ConnectionBatchEdit {
+            ftp_connect_timeout_ms: BatchField::Set(999),
+            ..Default::default()
+        },
+        ConnectionBatchEdit {
+            ftp_security_mode: BatchField::Set("  ".to_string()),
+            ..Default::default()
+        },
+    ] {
+        assert!(validate_connection_batch_edit(&edit).is_err());
+    }
+    assert!(
+        validate_connection_batch_edit(&ConnectionBatchEdit {
+            adb_screen_quality: BatchField::Set(crate::models::android::ScreenQualityPreset::Sharp),
+            ftp_connect_timeout_ms: BatchField::Set(120_000),
+            ..Default::default()
+        })
+        .is_ok()
+    );
 }
 
 #[test]

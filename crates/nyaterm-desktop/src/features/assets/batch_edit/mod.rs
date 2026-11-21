@@ -7,7 +7,7 @@ mod runtime;
 mod view;
 mod window;
 pub(in crate::features) use draft::{AssetBatchEditDraft, BatchEditMode};
-pub(in crate::features) use fields::{BatchFieldId, FieldBasis};
+pub(in crate::features) use fields::{BatchFieldKey, FieldBasis};
 #[cfg(test)]
 pub(in crate::features) use runtime::AssetBatchSaveSummary;
 pub(in crate::features) const ASSET_BATCH_SELECT_PREFIX: &str = "asset-batch.select.";
