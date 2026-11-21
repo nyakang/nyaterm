@@ -8,9 +8,8 @@ use gpui::{
     Context, FontWeight, IntoElement, SharedString, UniformListScrollHandle, div, prelude::*, px,
     rgb, uniform_list,
 };
-use nyaterm_core::truncate_preview;
 use nyaterm_remote_ops::docker::{DockerImage, DockerNetwork, DockerVolume};
-use nyaterm_ui::NyaScrollable;
+use nyaterm_ui::{NyaScrollable, NyaTooltip};
 use std::sync::Arc;
 
 const DOCKER_RESOURCE_ROW_PX: f32 = 64.;
@@ -292,6 +291,8 @@ pub(in crate::features::pages::remote) fn docker_resource_row(
     title: String,
     detail: String,
 ) -> gpui::Div {
+    let title_tooltip = title.clone();
+    let detail_tooltip = detail.clone();
     // ~64px Tauri SIMPLE_ROW_HEIGHT-ish dense resource row (slightly tighter chrome).
     div()
         .h(px(58.))
@@ -313,19 +314,31 @@ pub(in crate::features::pages::remote) fn docker_resource_row(
                 .gap(px(2.))
                 .child(
                     div()
+                        .id(SharedString::from(format!(
+                            "resource-title-{title}-{detail}"
+                        )))
                         .text_size(px(12.))
                         .font_weight(FontWeight(600.))
                         .text_color(rgb(palette.text))
-                        .overflow_hidden()
-                        .child(truncate_preview(&title, 48)),
+                        .truncate()
+                        .tooltip(move |window, cx| {
+                            NyaTooltip::new(title_tooltip.clone()).build(window, cx)
+                        })
+                        .child(title.clone()),
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!(
+                            "resource-detail-{title}-{detail}"
+                        )))
                         .font_family(gpui_code_font_family())
                         .text_size(px(10.))
                         .text_color(rgb(palette.text_dimmed))
-                        .overflow_hidden()
-                        .child(truncate_preview(&detail, 72)),
+                        .truncate()
+                        .tooltip(move |window, cx| {
+                            NyaTooltip::new(detail_tooltip.clone()).build(window, cx)
+                        })
+                        .child(detail),
                 ),
         )
 }
