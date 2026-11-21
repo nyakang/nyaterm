@@ -2538,6 +2538,13 @@ impl TerminalSurface {
             self.wheel_zoom = TerminalWheelZoom::default();
             return;
         }
+        // Settings drafts can change wheel routing before a new frame refreshes
+        // this cache. Read the same effective protocol as the deferred app path,
+        // including when alternate scrolling is re-enabled without terminal output.
+        self.set_protocol_state(
+            app.read(cx)
+                .terminal_protocol_state_for_session(&session_id),
+        );
         if let Some(delta) = self.wheel_zoom.handle_event(
             event,
             app.read(cx)

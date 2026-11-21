@@ -280,6 +280,14 @@ impl NyaTermApp {
         self.save_interaction_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_interaction_alternate_scroll(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.toggle_interaction_alternate_scroll();
+        self.save_interaction_settings(cx);
+    }
+
     pub(in crate::features) fn toggle_mouse_events_require_alt(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_mouse_events_require_alt();
         self.save_interaction_settings(cx);

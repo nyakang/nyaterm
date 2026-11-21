@@ -2823,6 +2823,163 @@ fn local_surface_wheel_respects_protocol_scroll_modes() {
 }
 
 #[test]
+fn alternate_scroll_draft_routes_surface_wheel_after_toggle_and_cancel() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestConfigDir;
+
+    let root = TestConfigDir::new("nyaterm-alternate-scroll-surface-draft");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let session_id = "alternate-scroll";
+    let app = app_with_visible_local_session(&mut cx, root.path(), session_id);
+    let surface = cx.update_entity(&app, |app, cx| {
+        app.terminal.seed_session_view(
+            session_id.to_string(),
+            terminal_test_output_lines(80),
+            "UTF-8",
+        );
+        app.terminal
+            .view
+            .views
+            .get_mut(session_id)
+            .unwrap()
+            .protocol_state = TerminalProtocolState {
+            alternate_screen: true,
+            alternate_scroll: true,
+            ..TerminalProtocolState::default()
+        };
+        app.begin_settings_draft(cx);
+        app.ensure_terminal_surface(session_id, cx)
+    });
+
+    assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, false);
+    for local in [true, false, true] {
+        cx.update_entity(&app, |app, cx| app.toggle_interaction_alternate_scroll(cx));
+        // No output or paint refresh between changing the draft and scrolling.
+        assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, local);
+    }
+    cx.update_entity(&app, |app, cx| app.cancel_settings(cx));
+    assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, false);
+
+    // The application's negotiated DECSET 1007 state survives all draft edits.
+    cx.read_entity(&app, |app, _| {
+        assert!(
+            app.terminal.view.views[session_id]
+                .protocol_state
+                .alternate_scroll
+        );
+        assert!(app.settings.summary().interaction_alternate_scroll);
+    });
+
+    // Remote mouse reporting retains priority, regardless of the preference.
+    cx.update_entity(&app, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.terminal
+            .view
+            .views
+            .get_mut(session_id)
+            .unwrap()
+            .protocol_state
+            .mouse_reporting = true;
+    });
+    assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, false);
+    cx.update_entity(&app, |app, cx| app.toggle_interaction_alternate_scroll(cx));
+    assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, false);
+
+    // Enabling the preference must not override the remote's DECRST 1007.
+    cx.update_entity(&app, |app, cx| {
+        app.cancel_settings(cx);
+        let protocol = &mut app
+            .terminal
+            .view
+            .views
+            .get_mut(session_id)
+            .unwrap()
+            .protocol_state;
+        protocol.mouse_reporting = false;
+        protocol.alternate_scroll = false;
+    });
+    assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, true);
+
+    cx.update_entity(&app, |app, _| {
+        app.terminal
+            .view
+            .views
+            .get_mut(session_id)
+            .unwrap()
+            .protocol_state
+            .alternate_scroll = true;
+    });
+    for enabled in [false, true] {
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.toggle_interaction_alternate_scroll(cx);
+            app.apply_settings_draft(false, cx);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if cx.read_entity(&app, |app, _| !app.settings_draft_dirty()) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "alternate scroll save did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, !enabled);
+        cx.update_entity(&app, |app, cx| {
+            let saved = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap();
+            assert_eq!(saved.interaction_alternate_scroll, enabled);
+            app.begin_settings_draft(cx);
+            app.toggle_interaction_alternate_scroll(cx);
+        });
+        assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, enabled);
+        cx.update_entity(&app, |app, cx| app.cancel_settings(cx));
+        assert_alternate_scroll_surface_wheel(&mut cx, &app, &surface, !enabled);
+    }
+}
+
+fn assert_alternate_scroll_surface_wheel(
+    cx: &mut TestAppContext,
+    app: &Entity<NyaTermApp>,
+    surface: &Entity<TerminalSurface>,
+    local: bool,
+) {
+    let expected_protocol = cx.read_entity(app, |app, _| {
+        assert_eq!(
+            app.terminal_local_scroll_enabled_for_session("alternate-scroll"),
+            local
+        );
+        app.terminal_protocol_state_for_session("alternate-scroll")
+    });
+    cx.update_entity(surface, |surface, cx| {
+        // Retained history makes the immediate local route observable; protocol
+        // handling must leave it untouched until the surface lease is released.
+        surface.scroll_offset = 0;
+        surface.scroll_residual_lines = 0.0;
+        surface.scrollback_len = 10;
+        surface.handle_scroll_wheel(
+            &ScrollEvent {
+                position: point(px(8.), px(8.)),
+                delta: ScrollDelta::Lines(point(0., 1.)),
+                ..ScrollEvent::default()
+            },
+            cx,
+        );
+        assert_eq!(surface.protocol_state, expected_protocol);
+        assert_eq!(surface.scroll_offset > 0, local);
+    });
+    cx.run_until_parked();
+}
+
+#[test]
 fn protocol_scroll_wheel_defers_parent_update_until_surface_lease_is_released() {
     let mut cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);

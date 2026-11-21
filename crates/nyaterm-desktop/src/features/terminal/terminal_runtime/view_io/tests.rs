@@ -2278,3 +2278,56 @@ fn in_place_output_keeps_retained_immutable_history_available() {
             .unwrap();
     assert!(Arc::ptr_eq(&painted, &retained));
 }
+
+#[test]
+fn alternate_scroll_setting_gates_wheel_arrow_keys_without_losing_remote_mode() {
+    let root = TestConfigDir::new("nyaterm-alternate-scroll-setting");
+    let mut cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let session_id = "alt-scroll";
+    let app = app_with_visible_local_session(&mut cx, root.path(), session_id);
+    cx.update_entity(&app, |app, _| {
+        // tmux/screen with mouse off: alternate screen, DECSET 1007 left on.
+        app.terminal.view.views.insert(
+            session_id.to_string(),
+            TerminalViewState::from_output("\x1b[?1049h".to_string()),
+        );
+        let view = app.terminal.view.views.get_mut(session_id).unwrap();
+        view.protocol_state.alternate_screen = true;
+        view.protocol_state.alternate_scroll = true;
+
+        assert!(app.settings.summary().interaction_alternate_scroll);
+        assert_eq!(
+            app.terminal_protocol_state_for_session(session_id)
+                .alternate_scroll_payload(1),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert!(!app.terminal_local_scroll_enabled_for_session(session_id));
+
+        let mut settings = app.settings.summary().clone();
+        settings.interaction_alternate_scroll = false;
+        app.settings.replace_summary(settings);
+
+        assert_eq!(
+            app.terminal_protocol_state_for_session(session_id)
+                .alternate_scroll_payload(1),
+            None
+        );
+        assert_eq!(
+            app.terminal_protocol_state_for_session(session_id)
+                .alternate_scroll_payload(-3),
+            None
+        );
+        assert!(app.terminal_local_scroll_enabled_for_session(session_id));
+        // The remote's negotiated mode is preserved for when the user re-enables.
+        assert!(
+            app.terminal
+                .view
+                .views
+                .get(session_id)
+                .unwrap()
+                .protocol_state
+                .alternate_scroll
+        );
+    });
+}

@@ -11,9 +11,8 @@ use gpui::{
     Context, FontWeight, IntoElement, MouseButton, SharedString, UniformListScrollHandle, div,
     prelude::*, px, rgb, rgba, uniform_list,
 };
-use nyaterm_core::truncate_preview;
 use nyaterm_remote_ops::docker::DockerContainer;
-use nyaterm_ui::NyaScrollable;
+use nyaterm_ui::{NyaScrollable, NyaTooltip};
 use rust_i18n::t;
 use std::sync::Arc;
 
@@ -154,6 +153,8 @@ fn docker_container_row(
     let can_stop = can_stop_docker_container(&state);
     let accent = docker_state_border_color(palette, &state);
     let short = compact_id(&container.id);
+    let name_tooltip = container.name.clone();
+    let image_tooltip = container.image.clone();
 
     div()
         .id(SharedString::from(format!("docker-container-{short}")))
@@ -181,48 +182,65 @@ fn docker_container_row(
             div()
                 .size_full()
                 .px_3()
-                .py_2()
+                .py(px(6.))
                 .pl(px(12.))
                 .pr(px(36.))
                 .flex()
                 .flex_col()
                 .justify_center()
-                .gap(px(6.))
+                // Keep both single-line rows inside the fixed virtual-list item height.
+                .line_height(px(16.))
+                .gap(px(4.))
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_none()
                         .flex()
                         .items_center()
                         .gap_2()
                         .child(
                             div()
+                                .id("container-name")
                                 .min_w_0()
                                 .flex_1()
                                 .text_size(px(12.))
                                 .font_weight(FontWeight(600.))
                                 .text_color(rgb(palette.text))
-                                .overflow_hidden()
-                                .child(truncate_preview(&container.name, 40)),
+                                .truncate()
+                                .tooltip(move |window, cx| {
+                                    NyaTooltip::new(name_tooltip.clone()).build(window, cx)
+                                })
+                                .child(container.name.clone()),
                         )
-                        .child(status_pill(
+                        .child(div().flex_none().whitespace_nowrap().child(status_pill(
                             labels.state_label(&container.state),
                             docker_state_color(palette, &container.state),
                             rgb(0x17233a),
-                        )),
+                        ))),
                 )
                 .child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_none()
                         .flex()
                         .items_center()
                         .gap_2()
                         .font_family(gpui_code_font_family())
                         .text_size(px(10.))
+                        .line_height(px(14.))
                         .text_color(rgb(palette.text_dimmed))
                         .child(
                             div()
+                                .id("container-image")
                                 .min_w_0()
                                 .flex_1()
-                                .overflow_hidden()
-                                .child(truncate_preview(&container.image, 48)),
+                                .truncate()
+                                .tooltip(move |window, cx| {
+                                    NyaTooltip::new(image_tooltip.clone()).build(window, cx)
+                                })
+                                .child(container.image.clone()),
                         )
                         .child(div().flex_none().child(short.clone())),
                 ),

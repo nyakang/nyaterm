@@ -109,6 +109,9 @@ impl SettingsFeatureState {
         self.summary.interaction_right_click_paste =
             action == nyaterm_core::TerminalRightClickAction::Paste;
     }
+    pub(in crate::features) fn toggle_interaction_alternate_scroll(&mut self) {
+        self.summary.interaction_alternate_scroll = !self.summary.interaction_alternate_scroll;
+    }
     pub(in crate::features) fn toggle_mouse_events_require_alt(&mut self) {
         self.summary.interaction_mouse_events_require_alt =
             !self.summary.interaction_mouse_events_require_alt;

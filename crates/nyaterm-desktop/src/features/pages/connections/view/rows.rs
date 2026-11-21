@@ -71,13 +71,25 @@ impl RenderOnce for ConnectionDetailsHoverCard {
     fn render(self, _: &mut Window, _: &mut gpui::App) -> impl IntoElement {
         let mut grid = div().flex().flex_col().gap(px(6.));
         for (index, row) in self.rows.iter().enumerate() {
+            // connection_detail_rows always places the description last.
+            let is_description = index + 1 == self.rows.len();
             let value = div()
                 .min_w_0()
                 .flex_1()
+                .when(is_description, |this| {
+                    let selector = format!("connection-detail-description-{}", self.connection_id);
+                    this.debug_selector(move || selector.clone())
+                        .whitespace_normal()
+                        .line_height(px(16.))
+                        .line_clamp(3)
+                        .text_ellipsis()
+                })
                 .text_size(px(11.))
                 .text_color(rgb(self.palette.text))
-                .when(row.multiline, |this| this.whitespace_normal())
-                .when(!row.multiline, |this| {
+                .when(!is_description && row.multiline, |this| {
+                    this.whitespace_normal()
+                })
+                .when(!is_description && !row.multiline, |this| {
                     this.whitespace_nowrap().line_clamp(1).text_ellipsis()
                 })
                 .child(row.value.clone());
@@ -109,14 +121,14 @@ impl RenderOnce for ConnectionDetailsHoverCard {
                             }),
                     )
             });
-            // connection_detail_rows always places the description last.
-            let action = if index + 1 == self.rows.len() {
+            let action = if is_description {
                 let share_id = format!("connection-detail-share-{}", self.connection_id);
                 let share_selector = share_id.clone();
                 let share_text = self.share_text.clone();
                 div()
                     .id(SharedString::from(share_id.clone()))
                     .debug_selector(move || share_selector.clone())
+                    .self_center()
                     .size(px(20.))
                     .flex_none()
                     .flex()
@@ -151,20 +163,17 @@ impl RenderOnce for ConnectionDetailsHoverCard {
                     .children(copy)
                     .into_any_element()
             };
+            let label = div()
+                .text_size(px(11.))
+                .text_color(rgb(self.palette.text_dimmed))
+                .child(row.label.clone());
             grid = grid.child(
                 div()
                     .min_w_0()
                     .flex()
                     .items_start()
                     .gap_2()
-                    .child(
-                        div()
-                            .w(px(64.))
-                            .flex_none()
-                            .text_size(px(11.))
-                            .text_color(rgb(self.palette.text_dimmed))
-                            .child(row.label.clone()),
-                    )
+                    .child(label.w(px(64.)).flex_none())
                     .child(value)
                     .child(action),
             );
@@ -696,7 +705,7 @@ mod hover_card_tests {
     use gpui::{
         AppContext as _, ClipboardItem, Context, InteractiveElement as _, KeyDownEvent, KeyUpEvent,
         Keystroke, Modifiers, ParentElement as _, Render, StatefulInteractiveElement as _,
-        Styled as _, TestAppContext, Window, div, px,
+        Styled as _, TestAppContext, Window, div, prelude::FluentBuilder as _, px,
     };
     use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
 
@@ -704,10 +713,11 @@ mod hover_card_tests {
 
     use super::{ConnectionDetailRow, ConnectionDetailsHoverCard};
 
-    const SHARE_TEXT: &str = "Name: Production\nType: SSH\nHost: example.com\nDescription: Production server with a long description that wraps onto several lines\nSecond line";
+    const SHARE_TEXT: &str = "Name: Production\nType: SSH\nHost: example.com\nDescription: Production server with a long description that wraps onto several lines\nSecond line\nThird line\nFourth line\nFifth line";
 
     struct HoverCardHarness {
         parent_clicks: Rc<Cell<usize>>,
+        at_right_edge: bool,
     }
 
     impl Render for HoverCardHarness {
@@ -722,7 +732,7 @@ mod hover_card_tests {
                 ConnectionDetailRow {
                     label: "Description".to_string(),
                     value:
-                        "Production server with a long description that wraps onto several lines\nSecond line"
+                        "Production server with a long description that wraps onto several lines\nSecond line\nThird line\nFourth line\nFifth line"
                             .to_string(),
                     copy_value: None,
                     multiline: false,
@@ -730,15 +740,15 @@ mod hover_card_tests {
             ]
             .into();
             let parent_clicks = self.parent_clicks.clone();
-            // Left-aligned host, so the card has room on its preferred side and
-            // the assertions below read the un-flipped placement.
+            // Exercise both preferred placement and flipping at the right edge.
             div()
                 .id("connection-share-parent")
                 .tab_group()
                 .size_full()
                 .flex()
                 .items_center()
-                .justify_start()
+                .when(!self.at_right_edge, |this| this.justify_start())
+                .when(self.at_right_edge, |this| this.justify_end())
                 .on_click(move |_, _, _| parent_clicks.set(parent_clicks.get() + 1))
                 .child(
                     NyaHoverCard::new(
@@ -778,6 +788,7 @@ mod hover_card_tests {
             window.activate_window();
             let view = cx.new(|_| HoverCardHarness {
                 parent_clicks: parent_clicks.clone(),
+                at_right_edge: false,
             });
             nyaterm_ui::nya_root(view, window, cx)
         });
@@ -798,10 +809,23 @@ mod hover_card_tests {
         let content = cx
             .debug_bounds(content_selector)
             .expect("opened hover-card content");
+        assert_eq!(content.size.width, px(220.));
+        let description = cx
+            .debug_bounds("connection-detail-description-test")
+            .expect("description body");
+        assert!(description.size.height > px(22.), "description must wrap");
         assert!(
-            content.size.height < px(80.),
-            "a long description must remain on one line"
+            description.size.height <= px(48.),
+            "description is capped at three lines: {:?}",
+            description.size.height
         );
+        let share = cx
+            .debug_bounds("connection-detail-share-test")
+            .expect("share button beside description");
+        assert_eq!(description.left(), content.left() + px(9. + 64. + 8.));
+        assert_eq!(description.right() + px(8.), share.left());
+        assert_eq!(share.right(), content.right() - px(9.));
+        assert_eq!(share.center().y, description.center().y);
         // Beside the row, not under it: a card below would cover the
         // neighbouring connections in the list.
         assert_eq!(content.left(), trigger.right() + px(6.));
@@ -867,5 +891,43 @@ mod hover_card_tests {
             0,
             "copy actions must not activate the row"
         );
+    }
+
+    #[gpui::test]
+    fn connection_hover_card_flips_at_right_window_edge(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            apply_component_theme(
+                theme_palette("github-dark"),
+                gpui::font("Inter"),
+                px(16.),
+                cx,
+            )
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            window.activate_window();
+            let view = cx.new(|_| HoverCardHarness {
+                parent_clicks: Rc::new(Cell::new(0)),
+                at_right_edge: true,
+            });
+            nyaterm_ui::nya_root(view, window, cx)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let trigger = cx
+            .debug_bounds("connection-details-hover-card-trigger-test")
+            .expect("trigger");
+        cx.simulate_mouse_move(trigger.center(), None, Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(10));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.draw(cx).clear(cx);
+        });
+        let content = cx
+            .debug_bounds("connection-details-hover-card-content-test")
+            .expect("content");
+        assert_eq!(content.size.width, px(220.));
+        assert_eq!(content.right(), trigger.left() - px(6.));
+        assert!(content.left() >= px(0.));
+        assert_eq!(content.center().y, trigger.center().y);
     }
 }

@@ -278,8 +278,8 @@ mod tests {
                 Some("production host")
             );
             assert!(
-                !rows.last().expect("description row").multiline,
-                "description must use single-line ellipsis presentation"
+                rows.last().expect("description row").copy_value.is_none(),
+                "the description section shares the full summary instead of copying a field"
             );
             let expected_copy_count = match connection.kind_label() {
                 "SSH" | "Telnet" | "RDP" => 3,

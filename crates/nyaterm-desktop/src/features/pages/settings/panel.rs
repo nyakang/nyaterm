@@ -1991,6 +1991,7 @@ forward_app_action!(
     toggle_credential_autofill,
     toggle_cursor_blink,
     toggle_bold_default_foreground,
+    toggle_interaction_alternate_scroll,
     toggle_interaction_copy_on_select,
     toggle_mouse_events_require_alt,
     toggle_keyword_highlights,
