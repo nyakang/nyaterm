@@ -481,6 +481,8 @@ fn commands_in_a_su_root_shell_without_integration_stay_foldable_for_unix_prompt
             "Jakubs-MacBook-Pro:~ root# ",
         ),
         ("bash-3.2$ ", "bash-3.2# "),
+        ("[jakub@rocky ~]$ ", "[root@rocky ~]# "),
+        ("[jakub@rocky ~]$ ", "[root@rocky /var/log]# "),
     ] {
         let mut screen = TerminalScreen::new(100, 40);
         // The original shell has integration; `sudo su -` starts a root shell without it.
