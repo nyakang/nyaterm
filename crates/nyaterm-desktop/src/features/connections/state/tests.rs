@@ -2462,6 +2462,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         vnc_reconnect: Default::default(),
         vnc_shared: true,
         vnc_view_only: false,
+        spice: Default::default(),
         password_source: ConnectionEditorPasswordSource::Direct,
         password_id: None,
         account_id: None,

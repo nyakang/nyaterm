@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "recipe_revision": "2b986b74ba46eb6d37b56176d0f8dcef6795ecf8",
+  "unix_git": {
+    "repository": "https://gitlab.freedesktop.org/spice/spice-gtk.git",
+    "revision": "02377912fe173e4af7714aef036d0555ee7531bc",
+    "base_tag": "v0.43",
+    "reason": "Unmodified upstream revision containing the macOS DRM header fix; all coroutines remain on the GLib owner thread.",
+    "submodules": {
+      "subprojects/spice-common": {
+        "repository": "https://gitlab.freedesktop.org/spice/spice-common.git",
+        "revision": "492c22f4447eec9d430a7c737bdd20cbe93263c4"
+      },
+      "subprojects/keycodemapdb": {
+        "repository": "https://gitlab.com/keycodemap/keycodemapdb.git",
+        "revision": "14cdba29ecd7448310fe4ff890e67830b1a40f64"
+      }
+    }
+  },
+  "sources": {
+    "openh264": {
+      "version": "2.6.0",
+      "url": "https://github.com/cisco/openh264/archive/refs/tags/v2.6.0.tar.gz",
+      "sha256": "558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69"
+    },
+    "gst-plugins-bad-focal": {
+      "version": "1.16.3",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.16.3.tar.xz",
+      "sha256": "84efe57011658f0a53a5d5b20f64ef109f5105dccb0808c21e069e946673514d"
+    },
+    "cyrus-sasl": {
+      "version": "2.1.28",
+      "url": "https://github.com/cyrusimap/cyrus-sasl/releases/download/cyrus-sasl-2.1.28/cyrus-sasl-2.1.28.tar.gz",
+      "sha256": "7ccfc6abd01ed67c1a0924b353e526f1b766b21f42d4562ee635a8ebfc5bb38c"
+    },
+    "glib": {
+      "version": "2.88.4",
+      "url": "https://download.gnome.org/sources/glib/2.88/glib-2.88.4.tar.xz",
+      "sha256": "25fd169f3b2f91fe2391ad297883ce0fcf30c69fc789ffd1c9672d1332b1c5a8"
+    },
+    "spice-protocol": {
+      "version": "0.14.5",
+      "url": "https://www.spice-space.org/download/releases/spice-protocol-0.14.5.tar.xz",
+      "sha256": "baf58449f6e89d19f475899ad5fb9196fdc46c03cc53233f4e39cf2978f9cff7"
+    },
+    "spice-gtk": {
+      "version": "0.43",
+      "url": "https://www.spice-space.org/download/gtk/spice-gtk-0.43.tar.xz",
+      "sha256": "cee26e5b2d22909f35b40a94398d1e863ca3962ee46494ca97aab206abc3203b"
+    },
+    "ca-certificates": {
+      "version": "20260816",
+      "url": "https://ftp.debian.org/debian/pool/main/c/ca-certificates/ca-certificates_20260816+nmu1.tar.xz",
+      "sha256": "914416a1e44a25733aff51092fe4e27fdec1c9f6e8d1db0b8364922486153134"
+    },
+    "gstreamer": {
+      "version": "1.28.9",
+      "url": "https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.28.9.tar.xz",
+      "sha256": "6dbf744f583131a34845cc641e803843766a9ba80ce00378a9043fd6d8d5fb38"
+    },
+    "gst-plugins-base": {
+      "version": "1.28.9",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.9.tar.xz",
+      "sha256": "c1fda668b520e6aef763c0eb962c032c9fe52bce322e8b00c69b4e9e847bddc1"
+    },
+    "gst-plugins-good": {
+      "version": "1.28.9",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.9.tar.xz",
+      "sha256": "e518cd97483706a252e95e60312a22d23dec6f5e7673af6f5bde719c3a9ca7f4"
+    },
+    "gst-plugins-bad": {
+      "version": "1.28.9",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.28.9.tar.xz",
+      "sha256": "4a4e0b7bf84f868378c48f143a7ac3a98923b488a5b74f1a35ba46bc3c43f6b1"
+    },
+    "libvpx": {
+      "version": "1.17.0",
+      "url": "https://github.com/webmproject/libvpx/archive/v1.17.0/libvpx-1.17.0.tar.gz",
+      "sha256": "1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a"
+    },
+    "lz4": {
+      "version": "1.11.1",
+      "url": "https://github.com/lz4/lz4/archive/v1.11.1/lz4-1.11.1.tar.gz",
+      "sha256": "683fed08a844ad012196381e40badf80c0bbe4962959761416d41c9e67d77ec7"
+    },
+    "libidn2": {
+      "version": "2.3.8",
+      "url": "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+      "sha256": "f557911bf6171621e1f72ff35f5b1825bb35b52ed45325dcdee931e5d3c0787a"
+    },
+    "pcre2": {
+      "version": "10.49",
+      "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.bz2",
+      "sha256": "53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384"
+    },
+    "libffi": {
+      "version": "3.8.1",
+      "url": "https://github.com/libffi/libffi/releases/download/v3.8.1/libffi-3.8.1.tar.gz",
+      "sha256": "81e879c094cc5ec3186c48510c6385ac6b3e866192e8bc71a35245703757ee40"
+    },
+    "gettext": {
+      "version": "1.0",
+      "url": "https://ftpmirror.gnu.org/gettext/gettext-1.0.tar.gz",
+      "sha256": "85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a"
+    },
+    "pixman": {
+      "version": "0.46.4",
+      "url": "https://cairographics.org/releases/pixman-0.46.4.tar.gz",
+      "sha256": "d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c"
+    },
+    "openssl": {
+      "version": "3.5.9",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+      "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"
+    },
+    "jpeg-turbo": {
+      "version": "3.2.1",
+      "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz",
+      "sha256": "c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f"
+    },
+    "json-glib": {
+      "version": "1.10.8",
+      "url": "https://download.gnome.org/sources/json-glib/1.10/json-glib-1.10.8.tar.xz",
+      "sha256": "55c5c141a564245b8f8fbe7698663c87a45a7333c2a2c56f06f811ab73b212dd"
+    },
+    "opus": {
+      "version": "1.6.1",
+      "url": "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz",
+      "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
+    },
+    "orc": {
+      "version": "0.4.44",
+      "url": "https://gstreamer.freedesktop.org/src/orc/orc-0.4.44.tar.xz",
+      "sha256": "4aeb97aea2b58224029dc2b23d7d064cfa990cb4fb8c4da440bcbe9c95bc5d2d"
+    }
+  }
+}

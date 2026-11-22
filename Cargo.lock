@@ -254,6 +254,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "alsa"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "812947049edcd670a82cd5c73c3661d2e58468577ba8489de58e1a73c04cbd5d"
+dependencies = [
+ "alsa-sys",
+ "bitflags 2.13.2",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "alsa-sys"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad7569085a265dd3f607ebecce7458eaab2132a84393534c95b18dcbc3f31e04"
+dependencies = [
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -924,7 +946,7 @@ dependencies = [
 [[package]]
 name = "bench_metrics"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1579,7 +1601,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "gpui_util",
  "indexmap 2.14.2",
@@ -1775,6 +1797,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "coreaudio-rs"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5d7dca3ebcf65a035582c9ad4385371a9d9ee6537474d2a278f4e1e475bb58"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
+ "objc2-audio-toolbox",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "cosmic-text"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,6 +1832,36 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "cpal"
+version = "0.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
+dependencies = [
+ "alsa",
+ "block2 0.6.2",
+ "coreaudio-rs",
+ "dasp_sample",
+ "jni",
+ "js-sys",
+ "libc",
+ "mach2 0.6.0",
+ "ndk",
+ "ndk-context",
+ "num-derive 0.4.2",
+ "num-traits",
+ "objc2 0.6.4",
+ "objc2-audio-toolbox",
+ "objc2-avf-audio",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "web-sys",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -2276,6 +2342,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasp_sample"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
+
+[[package]]
 name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2464,7 +2536,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3858,7 +3930,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3930,7 +4002,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c3e573ae50640dffff9f9778efa1f0829e814f94#c3e573ae50640dffff9f9778efa1f0829e814f94"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3971,7 +4043,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c3e573ae50640dffff9f9778efa1f0829e814f94#c3e573ae50640dffff9f9778efa1f0829e814f94"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4047,7 +4119,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c3e573ae50640dffff9f9778efa1f0829e814f94#c3e573ae50640dffff9f9778efa1f0829e814f94"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -4058,7 +4130,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c3e573ae50640dffff9f9778efa1f0829e814f94#c3e573ae50640dffff9f9778efa1f0829e814f94"
 dependencies = [
  "gpui",
  "gpui-base",
@@ -4072,7 +4144,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.9.1"
-source = "git+https://github.com/nyakang/gpui-kit?rev=9a0429b92d80f0dd9618fdcd721f69008d2ede7f#9a0429b92d80f0dd9618fdcd721f69008d2ede7f"
+source = "git+https://github.com/nyakang/gpui-kit?rev=c3e573ae50640dffff9f9778efa1f0829e814f94#c3e573ae50640dffff9f9778efa1f0829e814f94"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4086,7 +4158,7 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4125,7 +4197,7 @@ dependencies = [
 [[package]]
 name = "gpui_ios"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -4146,7 +4218,7 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4191,7 +4263,7 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4232,7 +4304,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4243,7 +4315,7 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4259,7 +4331,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "schemars 1.2.2",
  "serde",
@@ -4269,7 +4341,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "log",
@@ -4279,7 +4351,7 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4308,7 +4380,7 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4336,7 +4408,7 @@ dependencies = [
 [[package]]
 name = "gpui_windows"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4798,7 +4870,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6650,6 +6722,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndk"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3f42e7bbe13d351b6bead8286a43aac9534b82bd3cc43e47037f012ebfd62d4"
+dependencies = [
+ "bitflags 2.13.2",
+ "jni-sys 0.3.1",
+ "log",
+ "ndk-sys",
+ "num_enum",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ndk-context"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+
+[[package]]
 name = "ndk-sys"
 version = "0.6.0+11769913"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6994,6 +7086,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_enum"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0bca838442ec211fa11de3a8b0e0e8f3a4522575b5c4c06ed722e005036f26"
+dependencies = [
+ "num_enum_derive",
+ "rustversion",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "num_threads"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7214,6 +7328,7 @@ dependencies = [
  "regex",
  "russh",
  "rust-i18n",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -7454,6 +7569,28 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "nyaterm-spice-helper"
+version = "2.0.8"
+dependencies = [
+ "base64 0.22.1",
+ "cpal",
+ "libc",
+ "libloading 0.8.9",
+ "nyaterm-core",
+ "nyaterm-remote-desktop",
+ "percent-encoding",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
  "zeroize",
 ]
 
@@ -7717,6 +7854,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-audio-toolbox"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6948501a91121d6399b79abaa33a8aa4ea7857fe019f341b8c23ad6e81b79b08"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-avf-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-cloud-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7725,6 +7888,29 @@ dependencies = [
  "bitflags 2.13.2",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-core-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1eebcea8b0dbff5f7c8504f3107c68fc061a3eb44932051c8cf8a68d969c3b2"
+dependencies = [
+ "dispatch2",
+ "objc2 0.6.4",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-core-audio-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a89f2ec274a0cf4a32642b2991e8b351a404d290da87bb6a9a9d8632490bd1c"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2 0.6.4",
 ]
 
 [[package]]
@@ -9818,7 +10004,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "derive_refineable",
 ]
@@ -10661,7 +10847,7 @@ dependencies = [
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "async-task",
  "backtrace",
@@ -11600,7 +11786,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "heapless",
  "rayon",
@@ -15511,7 +15697,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -15520,7 +15706,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=468bc1eb8e31d8f802af766a4d2d74d2d08ea46a#468bc1eb8e31d8f802af766a4d2d74d2d08ea46a"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 
 [[package]]
 name = "zune-core"

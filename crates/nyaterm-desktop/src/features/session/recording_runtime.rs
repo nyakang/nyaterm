@@ -511,6 +511,9 @@ fn recording_launch_context(
             Some(config.port),
             Some(config.username.clone()),
         ),
+        SessionLaunchConfig::Spice(config) => {
+            (config.name.clone(), "spice".into(), None, None, None)
+        }
         SessionLaunchConfig::Vnc(config) => (
             config.name.clone(),
             "vnc".to_string(),

@@ -32,6 +32,7 @@ impl NyaTermApp {
         // submission while uploads remain stopped.
         let _ = self.remote_desktop.manager.close_detached(session_id);
         let _ = self.remote_desktop.vnc_manager.close_detached(session_id);
+        let _ = self.remote_desktop.spice_manager.close_detached(session_id);
     }
 
     pub(super) fn reset_rdp_framebuffer(
@@ -266,50 +267,13 @@ impl NyaTermApp {
         {
             return;
         }
-        let dimensions = size(
-            DevicePixels(presentation.width as i32),
-            DevicePixels(presentation.height as i32),
-        );
-        if session
-            .texture
-            .is_some_and(|texture| texture.size() != dimensions)
-            && let Some(texture) = session.texture.take()
-        {
-            window.remove_dynamic_texture(texture);
-        }
-        let result = if let Some(texture) = session.texture {
-            let updates = presentation
-                .regions
-                .iter()
-                .map(|region| gpui::DynamicTextureUpdate {
-                    bounds: Bounds::new(
-                        point(
-                            DevicePixels(region.rect.x as i32),
-                            DevicePixels(region.rect.y as i32),
-                        ),
-                        size(
-                            DevicePixels(region.rect.width as i32),
-                            DevicePixels(region.rect.height as i32),
-                        ),
-                    ),
-                    bytes: std::sync::Arc::new(region.pixels.clone()),
-                    bytes_per_row: region.rect.width * 4,
-                })
-                .collect();
-            window.update_dynamic_texture_owned_batch(texture, updates)
-        } else if presentation.full && presentation.regions.len() == 1 {
-            window
-                .create_dynamic_texture_owned(
-                    dimensions,
-                    std::sync::Arc::new(presentation.regions[0].pixels.clone()),
-                )
-                .map(|texture| session.texture = Some(texture))
-        } else {
+        let result = upload_prepared_frame(window, &mut session.texture, &presentation);
+        if matches!(result, Ok(false)) {
             self.remote_desktop
                 .vnc_manager
                 .invalidate_presentation(session_id);
             return;
-        };
+        }
         if let Err(error) = result {
             self.stop_remote_desktop_uploads(
                 session_id,
@@ -398,7 +362,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         cx.observe_window_visibility(window, |this, visibility, window, cx| {
+            this.reconcile_spice_pointer(window, cx);
             this.sync_vnc_presentation_visibility(window);
+            this.sync_spice_presentation_visibility(window);
             if visibility.is_visible() {
                 this.resume_remote_desktop_uploads(window, cx);
             }
@@ -616,4 +582,50 @@ pub(super) fn upload_rdp_rect(
     }
     let packed = pack_rect_rows(framebuffer.pixels(), stride, rect, staging)?;
     window.update_dynamic_texture(texture, bounds, packed, row_bytes as u32)
+}
+
+/// Uploads reference-counted, background-packed regions without a UI-side pixel copy.
+pub(super) fn upload_prepared_frame(
+    window: &mut Window,
+    texture: &mut Option<gpui::DynamicTexture>,
+    frame: &nyaterm_remote_desktop::presentation::RemotePresentation,
+) -> anyhow::Result<bool> {
+    let dimensions = size(
+        DevicePixels(frame.width as i32),
+        DevicePixels(frame.height as i32),
+    );
+    if texture.is_some_and(|t| t.size() != dimensions)
+        && let Some(old) = texture.take()
+    {
+        window.remove_dynamic_texture(old);
+    }
+    if let Some(texture) = *texture {
+        let updates = frame
+            .regions
+            .iter()
+            .map(|region| gpui::DynamicTextureUpdate {
+                bounds: Bounds::new(
+                    point(
+                        DevicePixels(region.rect.x as i32),
+                        DevicePixels(region.rect.y as i32),
+                    ),
+                    size(
+                        DevicePixels(region.rect.width as i32),
+                        DevicePixels(region.rect.height as i32),
+                    ),
+                ),
+                bytes: std::sync::Arc::new(region.pixels.clone()),
+                bytes_per_row: region.rect.width * 4,
+            })
+            .collect();
+        window.update_dynamic_texture_owned_batch(texture, updates)?;
+    } else if frame.full && frame.regions.len() == 1 {
+        *texture = Some(window.create_dynamic_texture_owned(
+            dimensions,
+            std::sync::Arc::new(frame.regions[0].pixels.clone()),
+        )?);
+    } else {
+        return Ok(false);
+    }
+    Ok(true)
 }

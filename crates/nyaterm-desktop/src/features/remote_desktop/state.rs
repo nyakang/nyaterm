@@ -1,5 +1,6 @@
 pub(super) mod frame_source;
 pub(super) mod resize;
+pub(super) mod spice;
 use frame_source::RemoteDesktopFrameSource;
 use nyaterm_remote_desktop::presentation::VncPresentationConfig;
 
@@ -23,6 +24,9 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
         HashMap<String, Arc<nyaterm_transport::network_route::NetworkRoute>>,
     pub(super) manager: Arc<RdpSessionManager>,
     pub(super) vnc_manager: Arc<VncSessionManager>,
+    pub(super) spice_manager: Arc<nyaterm_remote_desktop::spice::session::SpiceSessionManager>,
+    pub(super) spice_routes:
+        HashMap<String, Vec<Arc<nyaterm_transport::network_route::NetworkRoute>>>,
     pub(super) sessions: HashMap<String, RemoteDesktopSessionState>,
     pub(super) focus: FocusHandle,
     pub(in crate::features) restore_pending: Option<String>,
@@ -36,6 +40,7 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     pub(super) metrics_frame_updates: usize,
     pub(super) pending_texture_removals: Vec<DynamicTexture>,
     pub(super) focus_subscriptions: Vec<Subscription>,
+    pub(super) spice_pointer_capture: Option<spice::SpicePointerCapture>,
     /// Signalled by both session managers after they enqueue. Taken once by
     /// `NyaTermApp::start_remote_desktop_event_drain`.
     wake: EventWake,
@@ -59,6 +64,7 @@ pub(super) struct RemoteModifierState {
 }
 
 pub(super) struct RemoteDesktopSessionState {
+    pub(super) spice: Option<spice::SpiceViewState>,
     pub(super) start_token: String,
     pub(super) start_attempt: nyaterm_transport::connection_attempt::ConnectionAttempt,
     pub(super) state: RemoteDesktopViewState,
@@ -119,6 +125,7 @@ pub(super) struct RemoteDesktopSessionState {
 impl Default for RemoteDesktopSessionState {
     fn default() -> Self {
         Self {
+            spice: None,
             start_token: nyaterm_core::uuid(),
             start_attempt: Default::default(),
             state: RemoteDesktopViewState::Connecting,
@@ -166,6 +173,19 @@ impl Default for RemoteDesktopSessionState {
 }
 
 impl RemoteDesktopFeatureState {
+    pub(in crate::features) fn take_spice_shutdown(&mut self) -> impl FnOnce() + Send + 'static {
+        for session in self.sessions.values_mut().filter(|s| s.spice.is_some()) {
+            session.start_attempt.cancel();
+            session.reconnect_at = None;
+        }
+        let manager = self.spice_manager.clone();
+        let routes = std::mem::take(&mut self.spice_routes);
+        move || {
+            manager.shutdown();
+            drop(routes);
+        }
+    }
+
     #[cfg(windows)]
     pub(in crate::features) fn take_native_hosts_for_shutdown(
         &mut self,
@@ -216,6 +236,7 @@ impl RemoteDesktopFeatureState {
         !self.helper_launches.is_empty()
             || self.restore_pending.is_some()
             || !self.routes.is_empty()
+            || !self.spice_routes.is_empty()
             || self.sessions.iter().any(|(id, session)| {
                 let pending = session.deferred_start.is_some()
                     || session.reconnect_at.is_some()
@@ -237,6 +258,7 @@ impl RemoteDesktopFeatureState {
                     // close_detached; until then it still owns backend resources.
                     || self.manager.state(id).is_some()
                     || self.vnc_manager.state(id).is_some()
+                    || self.spice_manager.contains(id)
             })
     }
 
@@ -275,7 +297,17 @@ impl RemoteDesktopFeatureState {
         vnc_manager.set_queue_waker(Arc::new(move || {
             vnc_wake.signal(ANY_INTEREST);
         }));
+        let spice_manager = Arc::new(
+            nyaterm_remote_desktop::spice::session::SpiceSessionManager::with_presentation_pipeline(
+            ),
+        );
+        let spice_wake = wake.clone();
+        spice_manager.set_queue_waker(Arc::new(move || {
+            spice_wake.signal(ANY_INTEREST);
+        }));
         Self {
+            spice_manager,
+            spice_routes: HashMap::new(),
             helper_launches: HashMap::new(),
             routes: HashMap::new(),
             manager,
@@ -293,6 +325,7 @@ impl RemoteDesktopFeatureState {
             metrics_frame_updates: 0,
             pending_texture_removals: Vec::new(),
             focus_subscriptions: Vec::new(),
+            spice_pointer_capture: None,
             wake,
             wake_rx: Some(wake_rx),
             periodic_clock_armed: false,
@@ -424,6 +457,7 @@ impl RemoteDesktopFeatureState {
         self.inputs.remove(session_id);
         self.surfaces.remove(session_id);
         self.routes.remove(session_id);
+        self.spice_routes.remove(session_id);
         if let Some(mut session) = self.sessions.remove(session_id) {
             session.start_attempt.cancel();
             if let Some(texture) = session.texture.take() {

@@ -107,6 +107,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         self.sync_vnc_presentation_visibility(window);
+        self.sync_spice_presentation_visibility(window);
         for texture in self.remote_desktop.pending_texture_removals.drain(..) {
             window.remove_dynamic_texture(texture);
         }
@@ -126,6 +127,13 @@ impl NyaTermApp {
         let mut root_dirty = false;
         for session_id in ids {
             self.remote_desktop.drain_cursor = self.remote_desktop.drain_cursor.wrapping_add(1);
+            let spice_dirty = self.drain_spice_events(&session_id, window, cx);
+            if spice_dirty {
+                dirty = true;
+                if let Some(surface) = self.remote_desktop.surfaces.get(&session_id) {
+                    surface.update(cx, |_, cx| cx.notify());
+                }
+            }
             let drain = self.remote_desktop.manager.drain_batch(&session_id);
             let vnc_drain = self.remote_desktop.vnc_manager.drain_batch(&session_id);
             let presentation = self
@@ -140,6 +148,9 @@ impl NyaTermApp {
                 && vnc_drain.cursors.is_empty()
                 && presentation.is_none()
             {
+                if started.elapsed() >= Duration::from_millis(4) {
+                    break;
+                }
                 continue;
             }
             if self.remote_desktop.metrics_enabled {
@@ -344,6 +355,7 @@ impl NyaTermApp {
             {
                 let _ = self.remote_desktop.manager.close_detached(id);
                 let _ = self.remote_desktop.vnc_manager.close_detached(id);
+                let _ = self.remote_desktop.spice_manager.close_detached(id);
             }
         }
         self.drive_rdp_pointer_flush();
@@ -360,6 +372,7 @@ impl NyaTermApp {
         let mut dirty = false;
         dirty |= self.drive_deferred_rdp_starts(cx);
         dirty |= self.drive_rdp_resize_debounce();
+        self.drive_spice_resize();
         dirty |= self.drive_rdp_reconnects(cx);
         self.settle_remote_desktop_restore(cx);
         self.sync_rdp_keyboard_capture(window);

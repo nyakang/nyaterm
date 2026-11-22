@@ -79,6 +79,7 @@ pub(in crate::features) fn session_kind_label(kind: SessionKind) -> std::borrow:
         SessionKind::Serial => "serial".into(),
         SessionKind::Rdp => "rdp".into(),
         SessionKind::Vnc => "vnc".into(),
+        SessionKind::Spice => "spice".into(),
         SessionKind::AdbShell => rust_i18n::t!("android.shell"),
         SessionKind::AdbFiles => rust_i18n::t!("android.files"),
         SessionKind::AdbScreen => rust_i18n::t!("android.screen"),

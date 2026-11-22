@@ -1,3 +1,5 @@
+pub(crate) mod spice;
+
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
 use nyaterm_core::CredentialPromptKind;
@@ -19,18 +21,20 @@ pub(crate) enum ConnectionKindTab {
     Serial,
     Rdp,
     Vnc,
+    Spice,
     Adb,
     Ftp,
 }
 
 impl ConnectionKindTab {
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Ssh,
         Self::Local,
         Self::Telnet,
         Self::Serial,
         Self::Rdp,
         Self::Vnc,
+        Self::Spice,
         Self::Adb,
         Self::Ftp,
     ];
@@ -43,6 +47,7 @@ impl ConnectionKindTab {
             Self::Serial => "serial",
             Self::Rdp => "rdp",
             Self::Vnc => "vnc",
+            Self::Spice => "spice",
             Self::Adb => "adb",
             Self::Ftp => "ftp",
         }
@@ -90,6 +95,7 @@ impl ConnectionKindTab {
             Self::Serial => "Serial",
             Self::Rdp => "RDP",
             Self::Vnc => "VNC",
+            Self::Spice => "SPICE",
             Self::Adb => "Android (ADB)",
             Self::Ftp => "FTP",
         }
@@ -107,6 +113,7 @@ impl ConnectionKindTab {
             nyaterm_core::ConnectionType::Serial { .. } => Self::Serial,
             nyaterm_core::ConnectionType::Rdp { .. } => Self::Rdp,
             nyaterm_core::ConnectionType::Vnc { .. } => Self::Vnc,
+            nyaterm_core::ConnectionType::Spice { .. } => Self::Spice,
             nyaterm_core::ConnectionType::Adb { .. } => Self::Adb,
             nyaterm_core::ConnectionType::Ftp { .. } => Self::Ftp,
         }
@@ -121,6 +128,7 @@ impl ConnectionKindTab {
             Self::Serial => ConnectionBatchKind::Serial,
             Self::Rdp => ConnectionBatchKind::Rdp,
             Self::Vnc => ConnectionBatchKind::Vnc,
+            Self::Spice => ConnectionBatchKind::Spice,
             Self::Adb => ConnectionBatchKind::Adb,
             Self::Ftp => ConnectionBatchKind::Ftp,
         }
@@ -137,6 +145,7 @@ impl ConnectionKindTab {
             ConnectionBatchKind::Serial => Self::Serial,
             ConnectionBatchKind::Rdp => Self::Rdp,
             ConnectionBatchKind::Vnc => Self::Vnc,
+            ConnectionBatchKind::Spice => Self::Spice,
             ConnectionBatchKind::Adb => Self::Adb,
             ConnectionBatchKind::Ftp => Self::Ftp,
         }
@@ -161,7 +170,8 @@ mod connection_type_layout_tests {
             [
                 ConnectionKindTab::Ftp,
                 ConnectionKindTab::Local,
-                ConnectionKindTab::Rdp
+                ConnectionKindTab::Rdp,
+                ConnectionKindTab::Spice
             ]
         );
         assert_eq!(
@@ -175,7 +185,8 @@ mod connection_type_layout_tests {
                 ConnectionKindTab::Vnc,
                 ConnectionKindTab::Ssh,
                 ConnectionKindTab::Local,
-                ConnectionKindTab::Rdp
+                ConnectionKindTab::Rdp,
+                ConnectionKindTab::Spice
             ]
         );
         let defaults = ConnectionKindTab::editor_types(&layout, true, &[]);
@@ -240,7 +251,7 @@ impl ConnectionEditorSection {
                 Self::Terminal,
                 Self::Compatibility,
             ],
-            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => &[
+            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc | ConnectionKindTab::Spice => &[
                 Self::Basic,
                 Self::Network,
                 Self::Security,
@@ -419,6 +430,12 @@ pub(crate) enum ConnectionEditorField {
     RdpDisplayHeight,
     RdpReconnectAttempts,
     VncReconnectAttempts,
+    SpiceTcpPort,
+    SpiceTlsPort,
+    SpiceProxy,
+    SpiceCaPem,
+    SpiceCertificateSubject,
+    SpiceReconnectAttempts,
     FtpInitialDirectory,
     FtpLocalInitialDirectory,
     FtpConnectTimeout,
@@ -469,6 +486,10 @@ impl ConnectionEditorField {
             | Self::TelnetAutoLoginSuccessPrompt
             | Self::TelnetAutoLoginFailurePrompt
             | Self::TelnetAutoLoginMaxRetries => ConnectionEditorSection::AutoLogin,
+            Self::SpiceTcpPort | Self::SpiceTlsPort => ConnectionEditorSection::Basic,
+            Self::SpiceProxy => ConnectionEditorSection::Network,
+            Self::SpiceCaPem | Self::SpiceCertificateSubject => ConnectionEditorSection::Security,
+            Self::SpiceReconnectAttempts => ConnectionEditorSection::Session,
             Self::RdpDisplayWidth | Self::RdpDisplayHeight => ConnectionEditorSection::Display,
             Self::RdpReconnectAttempts | Self::VncReconnectAttempts => {
                 ConnectionEditorSection::Session
@@ -606,6 +627,7 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) rdp_clipboard: nyaterm_core::RdpClipboardSettings,
     pub(crate) rdp_reconnect: nyaterm_core::RdpReconnectSettings,
 
+    pub(crate) spice: spice::SpiceEditorDraft,
     pub(crate) vnc_security: nyaterm_core::VncSecuritySettings,
     pub(crate) vnc_display: nyaterm_core::VncDisplaySettings,
     pub(crate) vnc_clipboard: nyaterm_core::VncClipboardSettings,
@@ -740,6 +762,7 @@ impl ConnectionEditorState {
             ConnectionKindTab::Telnet => "23",
             ConnectionKindTab::Rdp => "3389",
             ConnectionKindTab::Vnc => "5900",
+            ConnectionKindTab::Spice => "5901",
             ConnectionKindTab::Adb => "5555",
             _ => "",
         };
@@ -821,7 +844,9 @@ impl ConnectionEditorState {
     pub(crate) fn password_account_id(&self) -> Option<&str> {
         match self.kind {
             ConnectionKindTab::Ssh | ConnectionKindTab::Telnet => self.account_id.as_deref(),
-            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => self.password_id.as_deref(),
+            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc | ConnectionKindTab::Spice => {
+                self.password_id.as_deref()
+            }
             _ => None,
         }
         .filter(|id| !id.is_empty())

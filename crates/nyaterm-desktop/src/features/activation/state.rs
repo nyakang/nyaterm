@@ -6,6 +6,11 @@ use nyaterm_core::models::ssh_runtime::SshRuntimeMode;
 
 #[derive(Clone)]
 pub(super) enum ExternalDialog {
+    Spice {
+        imported: std::sync::Arc<super::spice_file::ImportedSpiceFile>,
+        delete_source: bool,
+        fullscreen: bool,
+    },
     Choose {
         request: ExternalConnectionRequest,
         connections: Vec<SavedConnection>,
@@ -22,6 +27,7 @@ pub(in crate::features) struct ActivationFeatureState {
     pub(super) dialog: Option<ExternalDialog>,
     pub(super) clock_armed: bool,
     pub(super) waiting_for_start: bool,
+    pub(super) spice_loading: Option<String>,
 }
 
 impl ActivationFeatureState {
@@ -34,12 +40,16 @@ impl ActivationFeatureState {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.pending.is_empty() && self.dialog.is_none() && !self.waiting_for_start
+        self.pending.is_empty()
+            && self.dialog.is_none()
+            && !self.waiting_for_start
+            && self.spice_loading.is_none()
     }
     pub(in crate::features) fn clear(&mut self) {
         self.pending.clear();
         self.dialog = None;
         self.waiting_for_start = false;
+        self.spice_loading = None;
     }
 }
 

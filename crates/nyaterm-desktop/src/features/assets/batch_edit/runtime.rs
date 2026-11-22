@@ -263,6 +263,18 @@ impl NyaTermApp {
 
     fn seed_asset_batch_inputs(&mut self, groups: &[nyaterm_core::Group], cx: &mut Context<Self>) {
         for (field, hint) in [
+            (BatchFieldKey::SpiceTcpPort, t!("spice.tcpPort")),
+            (BatchFieldKey::SpiceTlsPort, t!("spice.tlsPort")),
+            (BatchFieldKey::SpiceHttpProxy, t!("spice.httpProxy")),
+            (BatchFieldKey::SpiceCaPem, t!("spice.caPem")),
+            (
+                BatchFieldKey::SpiceCertificateSubject,
+                t!("spice.certificateSubject"),
+            ),
+            (
+                BatchFieldKey::SpiceReconnectAttempts,
+                t!("spice.reconnectAttempts"),
+            ),
             (
                 BatchFieldKey::Description,
                 t!("assets.batch.placeholderDescription"),
@@ -965,6 +977,21 @@ fn prepare_asset_batch_updates(
             summary.skipped_reasons.merge(report.skipped_reasons);
         }
         if connection != original {
+            if let nyaterm_core::models::ConnectionType::Spice {
+                endpoint, settings, ..
+            } = &connection.config
+            {
+                settings.security.validate(endpoint).map_err(|_| {
+                    nyaterm_store::StorageError::InvalidData(
+                        t!("spice.validation.security").to_string(),
+                    )
+                })?;
+                endpoint.validate_persistent_identity().map_err(|_| {
+                    nyaterm_store::StorageError::InvalidData(
+                        t!("spice.validation.identity").to_string(),
+                    )
+                })?;
+            }
             changed.push(connection);
             summary.updated_connections += 1;
         } else {
@@ -988,12 +1015,100 @@ mod tests {
     use nyaterm_store::ConnectionStore;
     use std::collections::HashMap;
 
+    #[test]
+    fn spice_batch_open_seeds_editable_connection_fields_and_reseeds_after_undo() {
+        use crate::features::assets::batch_edit::basis::{compute_batch_basis, parse_batch_kind};
+        use crate::features::assets::batch_edit::fields::BatchFieldKey;
+        use crate::features::test_support::app_with_visible_local_session;
+        use crate::test_support::{TestAppCleanup, TestConfigDir};
+        use gpui::TestAppContext;
+
+        let dir = TestConfigDir::new("nyaterm-spice-batch-inputs");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+        let connections: Vec<SavedConnection> = vec![serde_json::from_value(serde_json::json!({
+            "id":"spice", "name":"SPICE", "type":"spice",
+            "endpoint":{"host":"guest","port":5900,"tls_port":5901},
+            "settings":{"security":{"ca_pem":"certificate\nsecond line","certificate_subject":"CN=guest"}}
+        })).unwrap()];
+        app.update(&mut cx, |app, cx| {
+            let ids = vec!["spice".into()];
+            let (basis, values, bools) = compute_batch_basis(&connections, &ids, None);
+            app.start_workspace
+                .start_asset_batch_edit(ids, basis, values, bools, None);
+            app.start_workspace
+                .asset_batch_mut()
+                .initialize_scopes(&connections);
+            app.seed_asset_batch_inputs(&[], cx);
+            for field in [
+                BatchFieldKey::SpiceTcpPort,
+                BatchFieldKey::SpiceTlsPort,
+                BatchFieldKey::SpiceHttpProxy,
+                BatchFieldKey::SpiceCaPem,
+                BatchFieldKey::SpiceCertificateSubject,
+                BatchFieldKey::SpiceReconnectAttempts,
+            ] {
+                assert!(
+                    app.existing_text_input(field.text_input_id()).is_some(),
+                    "{field:?}"
+                );
+            }
+            let field = BatchFieldKey::SpiceTlsPort;
+            let input = app.existing_text_input(field.text_input_id()).unwrap();
+            assert_eq!(input.read(cx).value(cx), "5901");
+            input.update(cx, |state, cx| state.set_content_silent("5999", cx));
+            app.start_workspace
+                .asset_batch_mut()
+                .set_value(field, "5999".into());
+            app.undo_asset_batch_field(field, cx);
+            assert_eq!(input.read(cx).value(cx), "5901");
+            let ca = app
+                .existing_text_input(BatchFieldKey::SpiceCaPem.text_input_id())
+                .unwrap();
+            assert_eq!(ca.read(cx).value(cx), "certificate\nsecond line");
+        });
+        assert_eq!(parse_batch_kind("spice"), Some(ConnectionBatchKind::Spice));
+    }
+
     fn rdp(id: &str, backend: &str) -> SavedConnection {
         serde_json::from_value(serde_json::json!({
             "id": id, "name": id, "type": "rdp", "host": "example.test", "username": "user",
             "backend": backend, "description": "original", "future-option": { "enabled": true }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn spice_batch_preparation_rejects_invalid_port_tls_combinations_before_any_write() {
+        let dir = TestTempDir::new("nyaterm-batch-spice-tls");
+        let store = ConnectionStore::open(dir.path()).unwrap();
+        let original: SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"spice", "name":"SPICE", "type":"spice",
+            "endpoint":{"host":"guest","port":5900,"tls_port":5901}
+        }))
+        .unwrap();
+        store.save_connections_atomic(&[original]).unwrap();
+        let before = store.get_connection("spice").unwrap().unwrap();
+        let targets = vec![("spice".into(), ConnectionBatchKind::Spice)];
+        let edit = ConnectionBatchEdit {
+            spice: nyaterm_core::models::connection_batch::spice::SpiceBatchEdit {
+                tls_port: BatchField::Clear,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut edits = HashMap::from([(Some(ConnectionBatchKind::Spice), edit)]);
+        assert!(prepare_asset_batch_updates(&store, &targets, &edits).is_err());
+        assert_eq!(store.get_connection("spice").unwrap().unwrap(), before);
+        edits
+            .get_mut(&Some(ConnectionBatchKind::Spice))
+            .unwrap()
+            .spice
+            .require_tls = BatchField::Set(false);
+        let prepared = prepare_asset_batch_updates(&store, &targets, &edits).unwrap();
+        assert_eq!(prepared.connections.len(), 1);
+        assert_eq!(store.get_connection("spice").unwrap().unwrap(), before);
     }
 
     #[test]

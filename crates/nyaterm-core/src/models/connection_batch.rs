@@ -1,4 +1,5 @@
 pub mod basis;
+pub mod spice;
 
 use crate::SecretString;
 
@@ -49,6 +50,7 @@ pub enum ConnectionBatchKind {
     Serial,
     Rdp,
     Vnc,
+    Spice,
     Ftp,
 }
 
@@ -62,6 +64,7 @@ impl ConnectionBatchKind {
             ConnectionType::Serial { .. } => Self::Serial,
             ConnectionType::Rdp { .. } => Self::Rdp,
             ConnectionType::Vnc { .. } => Self::Vnc,
+            ConnectionType::Spice { .. } => Self::Spice,
             ConnectionType::Ftp { .. } => Self::Ftp,
         }
     }
@@ -72,6 +75,7 @@ impl ConnectionBatchKind {
             Self::Telnet => super::default_telnet_port(),
             Self::Rdp => super::default_rdp_port(),
             Self::Vnc => super::default_vnc_port(),
+            Self::Spice => 5901,
             Self::Ftp => super::default_ftp_port(),
             Self::LocalTerminal | Self::Serial | Self::Adb => 0,
         }
@@ -85,6 +89,7 @@ impl ConnectionBatchKind {
 /// unknown (`extensions`/`extra`) data is never rewritten.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConnectionBatchEdit {
+    pub spice: spice::SpiceBatchEdit,
     pub group_id: BatchField<String>,
     pub description: BatchField<String>,
     pub icon: BatchField<String>,
@@ -222,7 +227,8 @@ pub struct ConnectionBatchEdit {
 impl ConnectionBatchEdit {
     /// Whether every field is still `Unchanged`.
     pub fn is_empty(&self) -> bool {
-        self.group_id.is_unchanged()
+        self.spice.is_empty()
+            && self.group_id.is_unchanged()
             && self.description.is_unchanged()
             && self.icon.is_unchanged()
             && self.icon_auto_detect.is_unchanged()
@@ -486,6 +492,13 @@ fn endpoint_port_default(config: &ConnectionType) -> u16 {
         ConnectionType::Telnet { .. } => super::default_telnet_port(),
         ConnectionType::Rdp { .. } => super::default_rdp_port(),
         ConnectionType::Vnc { .. } => super::default_vnc_port(),
+        ConnectionType::Spice { settings, .. } => {
+            if settings.security.require_tls {
+                5901
+            } else {
+                5900
+            }
+        }
         ConnectionType::Ftp { .. } => super::default_ftp_port(),
         ConnectionType::LocalTerminal { .. } | ConnectionType::Serial { .. } => 0,
     }
@@ -507,6 +520,7 @@ fn supports_endpoint(config: &ConnectionType) -> bool {
             | ConnectionType::Telnet { .. }
             | ConnectionType::Rdp { .. }
             | ConnectionType::Vnc { .. }
+            | ConnectionType::Spice { .. }
     )
 }
 
@@ -536,6 +550,7 @@ pub fn apply_connection_batch_edit(
     edit: &ConnectionBatchEdit,
 ) -> ConnectionBatchApplyReport {
     let mut report = ConnectionBatchApplyReport::default();
+    edit.spice.apply(&mut connection.config, &mut report);
 
     let apply = |condition: bool, touched: bool, report: &mut ConnectionBatchApplyReport| {
         report.record(
@@ -612,6 +627,15 @@ pub fn apply_connection_batch_edit(
                 | ConnectionType::Rdp { port: slot, .. }
                 | ConnectionType::Vnc { port: slot, .. }
                 | ConnectionType::Ftp { port: slot, .. } => *slot = port,
+                ConnectionType::Spice {
+                    endpoint, settings, ..
+                } => {
+                    if settings.security.require_tls {
+                        endpoint.tls_port = Some(port);
+                    } else {
+                        endpoint.port = Some(port);
+                    }
+                }
                 _ => {}
             }
         }
@@ -629,6 +653,7 @@ pub fn apply_connection_batch_edit(
                 | ConnectionType::Telnet { username: slot, .. }
                 | ConnectionType::Rdp { username: slot, .. }
                 | ConnectionType::Vnc { username: slot, .. }
+                | ConnectionType::Spice { username: slot, .. }
                 | ConnectionType::Ftp { username: slot, .. } => *slot = username,
                 _ => {}
             }
@@ -1796,6 +1821,7 @@ fn list_value(field: &BatchField<Vec<String>>) -> Vec<String> {
 
 /// Validation shared by the desktop form and the store job.
 pub fn validate_connection_batch_edit(edit: &ConnectionBatchEdit) -> Result<(), String> {
+    edit.spice.validate()?;
     if !edit.has_changes() {
         return Err("no fields selected".to_string());
     }

@@ -18,6 +18,10 @@ impl RecentConnectionRequests {
         let mut hasher = self.hasher.build_hasher();
         std::mem::discriminant(request).hash(&mut hasher);
         match request {
+            ExternalConnectionRequest::SpiceFile { path } => match path {
+                super::RawActivationArg::Bytes(bytes) => bytes.hash(&mut hasher),
+                super::RawActivationArg::Wide(units) => units.hash(&mut hasher),
+            },
             ExternalConnectionRequest::Local { cwd } => cwd.hash(&mut hasher),
             ExternalConnectionRequest::Telnet { host, port } => {
                 host.hash(&mut hasher);

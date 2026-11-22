@@ -154,18 +154,29 @@ impl NyaTermApp {
                 active,
                 endpoint: self.session.metadata(&session.id).and_then(|metadata| {
                     match &metadata.launch_config {
-                        SessionLaunchConfig::Ssh(config) => Some((&config.host, config.port)),
-                        SessionLaunchConfig::Telnet(config) => Some((&config.host, config.port)),
-                        SessionLaunchConfig::Rdp(config) => Some((&config.host, config.port)),
-                        SessionLaunchConfig::Vnc(config) => Some((&config.host, config.port)),
-                        SessionLaunchConfig::Ftp(config) => Some((&config.host, config.port)),
+                        SessionLaunchConfig::Ssh(config) => {
+                            Some((config.host.as_str(), config.port))
+                        }
+                        SessionLaunchConfig::Telnet(config) => {
+                            Some((config.host.as_str(), config.port))
+                        }
+                        SessionLaunchConfig::Rdp(config) => {
+                            Some((config.host.as_str(), config.port))
+                        }
+                        SessionLaunchConfig::Spice(config) => config.public_endpoint(),
+                        SessionLaunchConfig::Vnc(config) => {
+                            Some((config.host.as_str(), config.port))
+                        }
+                        SessionLaunchConfig::Ftp(config) => {
+                            Some((config.host.as_str(), config.port))
+                        }
                         SessionLaunchConfig::AdbShell(_)
                         | SessionLaunchConfig::AdbFiles(_)
                         | SessionLaunchConfig::AdbScreen(_)
                         | SessionLaunchConfig::Local(_)
                         | SessionLaunchConfig::Serial(_) => None,
                     }
-                    .map(|(host, port)| (host.clone(), port))
+                    .map(|(host, port)| (host.to_owned(), port))
                 }),
             });
         }

@@ -1036,7 +1036,7 @@ impl NyaTermApp {
                     .set_status("use the FTP file browser to upload files".to_string());
                 cx.notify();
             }
-            Some(SessionKind::Rdp | SessionKind::Vnc) => {
+            Some(SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice) => {
                 self.shell.set_status(
                     "file drop is not supported for remote desktop sessions".to_string(),
                 );

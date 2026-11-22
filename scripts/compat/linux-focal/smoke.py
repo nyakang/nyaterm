@@ -18,6 +18,39 @@ import tempfile
 import time
 
 
+def spice_probe(application):
+    root = application.parent
+    scripts = Path(__file__).resolve().parents[2]
+    environment = dict(os.environ)
+    for name in ("LD_LIBRARY_PATH", "NYATERM_SPICE_RUNTIME", "NYATERM_TEST_SPICE_RUNTIME"):
+        environment.pop(name, None)
+    subprocess.run([sys.executable, str(scripts / "ci/probe_spice_runtime.py"), str(root / "spice")],
+                   check=True, timeout=60, env=environment)
+    protocol_source = scripts.parent / "crates/nyaterm-remote-desktop/src/spice/protocol.rs"
+    protocol = int(re.search(r"pub const SPICE_PROTOCOL_VERSION: u16 = (\d+);",
+                            protocol_source.read_text(encoding="utf-8"))[1])
+    def packet(value):
+        data = json.dumps(value).encode()
+        return b"\x01" + struct.pack("<I", len(data)) + data
+    result = subprocess.run([str(root / "nyaterm-spice-helper")],
+                            input=packet({"kind": "hello", "version": protocol})
+                            + packet({"kind": "ping", "sequence": 42})
+                            + packet({"kind": "disconnect"}), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, check=True, timeout=15, env=environment)
+    data, packets = result.stdout, []
+    while data:
+        if len(data) < 5 or data[0] != 1:
+            raise RuntimeError("invalid SPICE helper packet")
+        length = struct.unpack("<I", data[1:5])[0]
+        if length > 128 * 1024 or len(data) < length + 5:
+            raise RuntimeError("invalid SPICE helper packet length")
+        packets.append(json.loads(data[5:5 + length]))
+        data = data[5 + length:]
+    if packets != [{"kind": "hello_ack", "version": protocol}, {"kind": "pong", "sequence": 42},
+                   {"kind": "state", "state": "Disconnected"}]:
+        raise RuntimeError("SPICE helper handshake/disconnect failed")
+
+
 def android_probe(application):
     root = application.parent
     manifest = json.loads((root / "android-resources.json").read_text())
@@ -92,7 +125,7 @@ def probe_android_helper(helper, environment):
 
 def main():
     output = Path(sys.argv[1]).resolve()
-    for name in ("workbench.xwd", "workbench.png", "window-tree.txt", "wm-class.txt", "android-runtime.txt"):
+    for name in ("workbench.xwd", "workbench.png", "window-tree.txt", "wm-class.txt", "android-runtime.txt", "spice-runtime.txt"):
         (output / name).unlink(missing_ok=True)
     dist = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("dist")
     archives = list(dist.glob("NyaTerm_*_linux_x64_glibc231.tar.gz"))
@@ -104,6 +137,7 @@ def main():
             archive.extractall(directory)
         application = next(Path(directory).glob("*/nyaterm"))
         android_probe(application)
+        spice_probe(application)
         debs = list(dist.glob("NyaTerm_*_linux_x64_glibc231.deb"))
         if debs:
             if len(debs) != 1:
@@ -111,7 +145,9 @@ def main():
             installed = Path(directory) / "installed"
             subprocess.run(["dpkg-deb", "--extract", str(debs[0]), str(installed)], check=True)
             android_probe(installed / "opt/nyaterm-compat/nyaterm")
+            spice_probe(installed / "opt/nyaterm-compat/nyaterm")
         (output / "android-runtime.txt").write_text("PASS: packaged ADB, FFmpeg loader, helper IPC and checksums\n")
+        (output / "spice-runtime.txt").write_text("PASS: packaged SPICE libraries, video elements, helper IPC and checksums\n")
         with (output / "application.log").open("w") as log:
             launcher = application.with_name("start-nyaterm.sh")
             process = subprocess.Popen(["dbus-run-session", "--", str(launcher), "--software"],

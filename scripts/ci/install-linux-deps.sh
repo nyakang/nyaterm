@@ -24,6 +24,7 @@ packages=(
   clang
   libclang-dev
   libgtk-3-dev
+  libasound2-dev
   libayatana-appindicator3-dev
   libdbus-1-dev
   libfontconfig1-dev

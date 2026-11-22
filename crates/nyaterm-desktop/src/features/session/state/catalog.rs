@@ -127,6 +127,14 @@ pub(super) fn session_info_from_metadata(
             cols: u16::try_from(config.display.width).unwrap_or(u16::MAX),
             rows: u16::try_from(config.display.height).unwrap_or(u16::MAX),
         },
+        SessionLaunchConfig::Spice(config) => SessionInfo {
+            id: session_id.to_string(),
+            name: config.name.clone(),
+            kind: SessionKind::Spice,
+            working_dir: None,
+            cols: 80,
+            rows: 24,
+        },
         SessionLaunchConfig::Vnc(config) => SessionInfo {
             id: session_id.to_string(),
             name: config.name.clone(),
@@ -857,6 +865,9 @@ impl SessionFeatureState {
             )),
             SessionLaunchConfig::Rdp(config) => Some(format!("{}:{}", config.host, config.port)),
             SessionLaunchConfig::Vnc(config) => Some(format!("{}:{}", config.host, config.port)),
+            SessionLaunchConfig::Spice(config) => config
+                .public_endpoint()
+                .map(|(host, port)| format!("{host}:{port}")),
             SessionLaunchConfig::Ftp(config) => Some(format!("{}:{}", config.host, config.port)),
         }
     }
@@ -904,6 +915,7 @@ impl SessionFeatureState {
                     crate::models::SessionLaunchConfig::Local(_)
                         | crate::models::SessionLaunchConfig::Rdp(_)
                         | crate::models::SessionLaunchConfig::Vnc(_)
+                        | crate::models::SessionLaunchConfig::Spice(_)
                 )
         })
     }

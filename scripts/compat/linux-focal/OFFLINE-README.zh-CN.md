@@ -1,6 +1,6 @@
 # Ubuntu 20.04 定制环境离线版
 
-此包在 Ubuntu 20.04 x86-64 原生构建，主程序与 MCP/RDP/VNC/Android 辅助程序、ADB 和 FFmpeg 都经过
+此包在 Ubuntu 20.04 x86-64 原生构建，主程序与 MCP/RDP/VNC/Android/SPICE 辅助程序、ADB 和 FFmpeg 都经过
 GLIBC ≤ 2.31、GLIBCXX ≤ 3.4.28、CXXABI ≤ 1.3.12 检查，以及 focal 上的
 `ldd -r` 检查。附带独立的 OpenGL 软件渲染库及其所需 C++ 库，所有附带库也检查
 GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动。
@@ -9,7 +9,7 @@ GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动�
 
 1. 在摆渡前和摆渡后，在压缩包所在目录执行 `sha256sum -c *.tar.gz.sha256`。
 2. 解压到当前用户可写目录，例如 `~/apps/`。无需 root、apt、Rust、Python、FUSE
-   或联网下载。保留主程序、四个辅助程序、`adb/` 和 `android-libs/` 的相对位置。
+   或联网下载。保留主程序、五个辅助程序、`adb/`、`android-libs/` 和 `spice/` 的相对位置。
 3. 从目标电脑的 X11 桌面终端进入解压目录，执行 `bash diagnose.sh`。
 4. 执行 **`./start-nyaterm.sh`**，默认使用系统图形栈，优先选择可用的硬件 GPU。
    首次启动会在包内生成 `data/`，包含设置和凭据，迁移前请备份。
@@ -17,6 +17,11 @@ GLIBC ≤ 2.31。不替换系统 glibc、动态加载器、GTK 或显卡驱动�
 
 此构建使用项目原有配置/备份格式。便携版数据与已安装版数据隔离，导入已有配置时
 使用应用支持的备份/恢复功能。不要把凭据或 `data/` 连同程序重新分发。
+
+SPICE 所需解码器、认证和视频模块已放在独立 `spice/` 目录，无需在目标机安装
+开发包。支持保存连接及导入临时 `.vv` 文件；导入后请手动清理可能含临时密码的
+来源文件。剪贴簿、文件传送和动态分辨率需要客体安装 SPICE agent。无 agent 的
+控制台可点击捕获鼠标，按 Shift+F12 释放；宿主截获的快捷键可通过“发送组合键”发送。
 
 新构建的 deb 使用独立的 `~/.nyaterm-compat/`，预览版使用
 `~/.nyaterm-compat-preview/`；缓存、日志、单实例锁和 MCP 发现文件也隔离。

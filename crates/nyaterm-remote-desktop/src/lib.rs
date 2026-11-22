@@ -10,6 +10,7 @@ pub mod pixel_memory;
 pub mod presentation;
 mod protocol;
 mod session;
+pub mod spice;
 mod vnc;
 pub mod vnc_trust;
 

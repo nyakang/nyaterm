@@ -27,6 +27,7 @@ pub enum SessionKind {
     Serial,
     Rdp,
     Vnc,
+    Spice,
     Ftp,
 }
 

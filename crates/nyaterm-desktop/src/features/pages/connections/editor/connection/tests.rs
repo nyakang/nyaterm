@@ -352,6 +352,10 @@ fn protocol_selectors(kind: ConnectionKindTab) -> (&'static str, &'static str) {
             "connection-editor-rdp-section",
             "connection-editor-rdp-advanced",
         ),
+        ConnectionKindTab::Spice => (
+            "connection-editor-spice-section",
+            "connection-editor-spice-security",
+        ),
         ConnectionKindTab::Vnc => (
             "connection-editor-vnc-section",
             "connection-editor-vnc-advanced",
@@ -419,6 +423,7 @@ fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> Connectio
         vnc_reconnect: Default::default(),
         vnc_shared: true,
         vnc_view_only: false,
+        spice: Default::default(),
         password_source: ConnectionEditorPasswordSource::Ask,
         password_id: None,
         account_id: None,

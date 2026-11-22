@@ -128,6 +128,10 @@ impl NyaTermApp {
                 t!("android.errors.directoryInvalid").into()
             }
             ConnectionEditorValidationError::HostRequired => t!("dialog.hostRequired").into(),
+            ConnectionEditorValidationError::SpiceInvalid(reason) => {
+                let key = format!("spice.validation.{reason}");
+                t!(&key).to_string()
+            }
             ConnectionEditorValidationError::PortInvalid => t!("dialog.portInvalid").into(),
             ConnectionEditorValidationError::TelnetKeepAliveIntervalInvalid => {
                 t!("dialog.telnetKeepAliveIntervalInvalid").into()
@@ -297,6 +301,7 @@ impl NyaTermApp {
             vnc_reconnect: VncReconnectSettings::default(),
             vnc_shared: true,
             vnc_view_only: false,
+            spice: Default::default(),
             password_source: ConnectionEditorPasswordSource::Ask,
             password_id: None,
             account_id: None,
@@ -1208,6 +1213,7 @@ impl NyaTermApp {
                 ConnectionKindTab::Serial => &t!("dialog.serial"),
                 ConnectionKindTab::Rdp => "RDP",
                 ConnectionKindTab::Vnc => "VNC",
+                ConnectionKindTab::Spice => "SPICE",
                 ConnectionKindTab::Adb => "Android",
                 ConnectionKindTab::Ftp => "FTP",
             };

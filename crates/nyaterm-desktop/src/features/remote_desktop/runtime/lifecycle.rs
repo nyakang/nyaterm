@@ -117,6 +117,9 @@ impl NyaTermApp {
                                         crate::models::SessionLaunchConfig::Vnc(config) => {
                                             config.password = Some(password.into())
                                         }
+                                        crate::models::SessionLaunchConfig::Spice(config) => {
+                                            config.session.password = password.into()
+                                        }
                                         _ => return true,
                                     }
                                 } else {
@@ -172,6 +175,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if self.remote_desktop.start_is_pending(session_id) {
+            return;
+        }
+        if self.session.metadata(session_id).is_some_and(|m| {
+            matches!(
+                m.launch_config,
+                crate::models::SessionLaunchConfig::Spice(_)
+            )
+        }) {
+            self.retry_spice_runtime(session_id, cx);
             return;
         }
         self.remote_desktop.renew_start(session_id);
@@ -443,6 +455,15 @@ impl NyaTermApp {
         reset_attempts: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.session.metadata(session_id).is_some_and(|m| {
+            matches!(
+                m.launch_config,
+                crate::models::SessionLaunchConfig::Spice(_)
+            )
+        }) {
+            self.restart_spice_runtime(session_id, reset_attempts, cx);
+            return;
+        }
         if self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
@@ -718,9 +739,14 @@ impl NyaTermApp {
                     crate::models::SessionLaunchConfig::Vnc(config) if vnc => {
                         config.password = Some(password);
                     }
+                    crate::models::SessionLaunchConfig::Spice(config) => {
+                        config.session.password = password;
+                    }
                     _ => return,
                 }
-                if vnc {
+                if this.is_spice_session(&response_session_id) {
+                    this.restart_spice_runtime(&response_session_id, reset_attempts, cx);
+                } else if vnc {
                     this.restart_vnc_runtime(&response_session_id, reset_attempts, cx);
                 } else {
                     this.restart_rdp_runtime(&response_session_id, reset_attempts, cx);
@@ -740,6 +766,22 @@ impl NyaTermApp {
             .metadata(session_id)
             .map(|metadata| &metadata.launch_config)
         {
+            Some(crate::models::SessionLaunchConfig::Spice(_)) => {
+                if self.session.active_id() == Some(session_id) {
+                    crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
+                        self.remote_desktop.manager.clone(),
+                        self.remote_desktop.vnc_manager.clone(),
+                        self.remote_desktop.spice_manager.clone(),
+                        None,
+                    );
+                }
+                self.release_remote_keys(session_id);
+                self.remote_desktop.remove_session(session_id);
+                self.remote_desktop
+                    .spice_manager
+                    .close_detached(session_id)
+                    .map_err(|error| anyhow::anyhow!("{:?}", error))
+            }
             Some(crate::models::SessionLaunchConfig::Vnc(_)) => self
                 .close_vnc_runtime(session_id)
                 .map_err(anyhow::Error::from),
@@ -757,6 +799,7 @@ impl NyaTermApp {
             crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
                 self.remote_desktop.manager.clone(),
                 self.remote_desktop.vnc_manager.clone(),
+                self.remote_desktop.spice_manager.clone(),
                 None,
             );
             self.release_remote_keys(session_id);
@@ -787,6 +830,7 @@ impl NyaTermApp {
             crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
                 self.remote_desktop.manager.clone(),
                 self.remote_desktop.vnc_manager.clone(),
+                self.remote_desktop.spice_manager.clone(),
                 None,
             );
             self.release_remote_keys(session_id);
@@ -871,6 +915,15 @@ impl NyaTermApp {
         for session_id in &due {
             if self.remote_start_blocked_by_configuration_replacement(cx) {
                 break;
+            }
+            if self.session.metadata(session_id).is_some_and(|m| {
+                matches!(
+                    m.launch_config,
+                    crate::models::SessionLaunchConfig::Spice(_)
+                )
+            }) {
+                self.restart_spice_runtime(session_id, false, cx);
+                continue;
             }
             if self.retry_saved_remote_desktop(session_id, false, cx) {
                 continue;

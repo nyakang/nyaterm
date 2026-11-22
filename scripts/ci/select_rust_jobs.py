@@ -23,7 +23,7 @@ KNOWN_CRATES = frozenset({
     "nyaterm-android", "nyaterm-desktop", "nyaterm-mcp",
     "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
     "nyaterm-mcp-host", "nyaterm-mcp-protocol", "nyaterm-otp", "nyaterm-plugin-api",
-    "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-windows-rdp",
+    "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-spice-helper", "nyaterm-windows-rdp",
     "nyaterm-remote-desktop", "nyaterm-store", "nyaterm-sync", "nyaterm-terminal",
     "nyaterm-terminal-gpui", "nyaterm-terminal-runtime", "nyaterm-transport", "nyaterm-ui", "nyaterm-vnc-helper",
     "nyaterm-android-helper",

@@ -21,6 +21,7 @@ use crate::models::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConnectionEditorValidationError {
     HostRequired,
+    SpiceInvalid(&'static str),
     AndroidSettings(nyaterm_core::models::android::AndroidScreenValidationError),
     AndroidDeviceRequired,
     AndroidHostInvalid,
@@ -210,6 +211,7 @@ pub(super) fn connection_editor_from_saved(
         vnc_reconnect: VncReconnectSettings::default(),
         vnc_shared: true,
         vnc_view_only: false,
+        spice: Default::default(),
         password_source,
         username_source: if uses_accounts {
             match auth.username_source {
@@ -468,6 +470,17 @@ pub(super) fn connection_editor_from_saved(
             editor.rdp_display = display;
             editor.rdp_clipboard = clipboard;
             editor.rdp_reconnect = reconnect;
+        }
+        ConnectionType::Spice {
+            endpoint,
+            username,
+            settings,
+        } => {
+            editor.host = endpoint.host.expose_secret().to_owned();
+            editor.username = username;
+            editor.spice = crate::models::connections::spice::SpiceEditorDraft::from_saved(
+                &endpoint, settings,
+            );
         }
         ConnectionType::Vnc {
             username,
@@ -795,6 +808,17 @@ pub(super) fn build_saved_connection_from_editor(
                 screen: editor.android_screen,
             }
         }
+        ConnectionKindTab::Spice => {
+            let (endpoint, settings) = editor
+                .spice
+                .build(&editor.host)
+                .map_err(ConnectionEditorValidationError::SpiceInvalid)?;
+            ConnectionType::Spice {
+                endpoint,
+                username: editor.username.trim().to_owned(),
+                settings,
+            }
+        }
         ConnectionKindTab::Vnc => {
             let host = editor.host.trim().to_string();
             if host.is_empty() {
@@ -981,6 +1005,7 @@ pub(super) fn build_saved_connection_from_editor(
             } => crate::models::serial_connection_name(port_name, &baud_rate.to_string())
                 .unwrap_or_else(|| crate::models::SERIAL_FALLBACK_NAME.to_string()),
             ConnectionType::Adb { device, .. } => device.serial(),
+            ConnectionType::Spice { endpoint, .. } => endpoint.host.expose_secret().to_owned(),
         }
     } else {
         editor.name.trim().to_string()
@@ -991,6 +1016,7 @@ pub(super) fn build_saved_connection_from_editor(
         | ConnectionKindTab::Telnet
         | ConnectionKindTab::Rdp
         | ConnectionKindTab::Vnc
+        | ConnectionKindTab::Spice
         | ConnectionKindTab::Ftp => {
             // Whitespace is part of the secret, including at either end.
             let entered_password = editor.password.clone();
@@ -1097,6 +1123,7 @@ pub(super) fn build_saved_connection_from_editor(
         | ConnectionKindTab::Telnet
         | ConnectionKindTab::Rdp
         | ConnectionKindTab::Vnc
+        | ConnectionKindTab::Spice
         | ConnectionKindTab::Ftp => {
             let proxy_id = editor
                 .proxy_id
@@ -2745,6 +2772,14 @@ pub(in crate::features) enum ConnectionEditorToggle {
     VncReconnect,
     VncShared,
     VncViewOnly,
+    SpiceRequireTls,
+    SpiceDynamicResolution,
+    SpiceFitWindow,
+    SpiceViewOnly,
+    SpiceAudio,
+    SpiceFileTransfer,
+    SpiceClipboardToGuest,
+    SpiceClipboardFromGuest,
     RecordingUseGlobal,
     RecordingAutoStart,
 }

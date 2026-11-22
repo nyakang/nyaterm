@@ -161,6 +161,7 @@ impl SavedConnection {
             ConnectionType::Serial { .. } => "Serial",
             ConnectionType::Rdp { .. } => "RDP",
             ConnectionType::Vnc { .. } => "VNC",
+            ConnectionType::Spice { .. } => "SPICE",
             ConnectionType::Ftp { .. } => "FTP",
         }
     }
@@ -220,6 +221,10 @@ impl SavedConnection {
                 format!("{account}{host}:{port}")
             }
             ConnectionType::Vnc { host, port, .. } => format!("{host}:{port}"),
+            ConnectionType::Spice { endpoint, .. } => {
+                let port = endpoint.tls_port.or(endpoint.port).unwrap_or(5901);
+                format!("{}:{port}", endpoint.host.expose_secret())
+            }
             ConnectionType::Ftp {
                 host,
                 port,
@@ -331,6 +336,11 @@ fn contains_extension_keys(output: &serde_json::Value, extensions: &serde_json::
 
 impl Serialize for SavedConnection {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let ConnectionType::Spice { endpoint, .. } = &self.config {
+            endpoint
+                .validate_persistent_identity()
+                .map_err(serde::ser::Error::custom)?;
+        }
         let mut known = SavedConnectionKnown::serialize(self, serde_json::value::Serializer)
             .map_err(serde::ser::Error::custom)?;
         // The top-level catalog is authoritative; this is an output-only compatibility mirror.
@@ -363,6 +373,11 @@ impl<'de> Deserialize<'de> for SavedConnection {
         let raw = serde_json::Value::deserialize(deserializer)?;
         let mut connection =
             SavedConnectionKnown::deserialize(raw.clone()).map_err(serde::de::Error::custom)?;
+        if let ConnectionType::Spice { endpoint, .. } = &connection.config {
+            endpoint
+                .validate_persistent_identity()
+                .map_err(serde::de::Error::custom)?;
+        }
         if connection.tags.is_empty() {
             connection.tags = connection
                 .asset

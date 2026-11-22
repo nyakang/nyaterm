@@ -1375,7 +1375,9 @@ impl NyaTermApp {
             .is_some_and(|session| {
                 !matches!(
                     session.kind,
-                    nyaterm_transport::SessionKind::Rdp | nyaterm_transport::SessionKind::Vnc
+                    nyaterm_transport::SessionKind::Rdp
+                        | nyaterm_transport::SessionKind::Vnc
+                        | nyaterm_transport::SessionKind::Spice
                 )
             });
         if !is_terminal {

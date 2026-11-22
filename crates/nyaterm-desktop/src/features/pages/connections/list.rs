@@ -1030,6 +1030,23 @@ pub(super) fn connection_detail_rows(
         .unwrap_or_else(|| t!("savedConnections.noDescription").to_string());
 
     let mut rows = match &connection.config {
+        nyaterm_core::ConnectionType::Spice {
+            endpoint, username, ..
+        } => vec![
+            copyable_text_detail_row(
+                t!("savedConnections.host").to_string(),
+                endpoint.host.expose_secret(),
+            ),
+            copyable_value_detail_row(
+                t!("spice.tcpPort").to_string(),
+                endpoint.port.map(|p| p.to_string()).unwrap_or_default(),
+            ),
+            copyable_value_detail_row(
+                t!("spice.tlsPort").to_string(),
+                endpoint.tls_port.map(|p| p.to_string()).unwrap_or_default(),
+            ),
+            copyable_text_detail_row(t!("savedConnections.user").to_string(), username),
+        ],
         nyaterm_core::ConnectionType::Adb {
             device, directory, ..
         } => vec![

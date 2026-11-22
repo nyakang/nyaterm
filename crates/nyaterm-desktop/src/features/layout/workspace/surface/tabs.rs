@@ -494,6 +494,7 @@ impl NyaTermApp {
                     nyaterm_transport::SessionKind::RawTcp => "SSH",
                     nyaterm_transport::SessionKind::Rdp => "RDP",
                     nyaterm_transport::SessionKind::Vnc => "VNC",
+                    nyaterm_transport::SessionKind::Spice => "SPICE",
                     nyaterm_transport::SessionKind::AdbShell
                     | nyaterm_transport::SessionKind::AdbFiles
                     | nyaterm_transport::SessionKind::AdbScreen => "Android",

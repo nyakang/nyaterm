@@ -48,7 +48,10 @@ def fake_pe(
 
 
 def fake_macho(cpu_type: int) -> bytes:
-    return b"\xcf\xfa\xed\xfe" + cpu_type.to_bytes(4, "little") + bytes(504)
+    data = bytearray(b"\xcf\xfa\xed\xfe" + cpu_type.to_bytes(4, "little") + bytes(504))
+    struct.pack_into("<II", data, 16, 1, 24)
+    struct.pack_into("<IIIIII", data, 32, 0x32, 24, 1, 12 << 16, 15 << 16, 0)
+    return bytes(data)
 
 
 def android_fixture(target):
@@ -77,6 +80,65 @@ def stage_android_fixture(destination, target):
     return paths
 
 
+def spice_fixture(target):
+    import prepare_spice
+    import windows_portable
+    sources = json.loads(prepare_spice.SOURCES_PATH.read_text(encoding="utf-8"))
+    windows, macos = "windows" in target, "apple" in target
+    if windows:
+        names = {name.removeprefix("spice/") for name in windows_portable.LAYOUT["spice_files"][target]} - {"SOURCE.json"}
+        native = fake_pe(0xAA64 if target.startswith("aarch64") else 0x8664)
+    else:
+        suffix = ".dylib" if macos else ".so"
+        names = {"ca-bundle.pem", "openssl.cnf", "NOTICE.txt", "licenses/fixture.txt"}
+        names |= {f"lib{name}.0.dylib" if macos else f"lib{name}.so.0"
+                  for name in ("glib-2.0", "gobject-2.0", "gio-2.0", "gstreamer-1.0")}
+        names.add("libspice-client-glib-2.0.8.dylib" if macos else "libspice-client-glib-2.0.so.8")
+        names |= {f"gstreamer-1.0/libgst{name}{suffix}" for name in prepare_spice.VIDEO_PLUGINS}
+        names |= {f"sasl2/lib{name}{suffix}" for name in prepare_spice.SASL_PLUGINS}
+        if macos:
+            native = fake_macho(0x0100000C if target.startswith("aarch64") else 0x01000007)
+        else:
+            elf = bytearray(64)
+            elf[:6] = b"\x7fELF\x02\x01"
+            elf[18:20] = (183 if target.startswith("aarch64") else 62).to_bytes(2, "little")
+            native = bytes(elf)
+    entries = {"spice/" + name: native if name.endswith((".dll", ".dylib", ".so")) or ".so." in name
+               else ("fixture: " + name).encode() for name in names}
+    manifest = {"schema": 1, "target": target, "sources_sha256": prepare_spice.sha256(prepare_spice.SOURCES_PATH.read_bytes()),
+                "files": {name.removeprefix("spice/"): hashlib.sha256(data).hexdigest() for name, data in entries.items()}}
+    if windows:
+        entry = json.loads(prepare_spice.LOCK_PATH.read_text(encoding="utf-8"))["targets"][target]
+        manifest.update(lock_sha256=prepare_spice.sha256(prepare_spice.LOCK_PATH.read_bytes()), packages=entry["packages"])
+    else:
+        manifest["native_source"] = sources["unix_git"]
+        windows_entry = json.loads(prepare_spice.LOCK_PATH.read_text(encoding="utf-8"))["targets"]["x86_64-pc-windows-msvc"]
+        manifest["ca_package"] = windows_entry["packages"][windows_entry["files"]["ca-bundle.pem"]["package"]]
+    entries["spice/SOURCE.json"] = json.dumps(manifest).encode()
+    return entries
+
+
+def fixture_spice_locked_files(target):
+    return json.loads(spice_fixture(target)["spice/SOURCE.json"])["files"]
+
+
+def stage_spice_fixture(destination, target):
+    paths = []
+    for name, data in spice_fixture(target).items():
+        path = destination / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        paths.append(path)
+    return paths
+
+
+def patch_spice_lock(test):
+    import spice_release
+    patcher = mock.patch.object(spice_release, "locked_files", side_effect=fixture_spice_locked_files)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 def newc_entry(name: str, content: bytes) -> bytes:
     encoded_name = name.encode("utf-8") + b"\0"
     fields = [0, 0, 0, 0, 1, 0, len(content), 0, 0, 0, 0, len(encoded_name), 0]
@@ -101,6 +163,7 @@ def write_portable(
     root = "NyaTerm-portable"
     with zipfile.ZipFile(path, "w") as archive:
         for name, data in android_fixture(target).items(): archive.writestr(f"{root}/{name}", data)
+        for name, data in spice_fixture(target).items(): archive.writestr(f"{root}/{name}", data)
         archive.writestr(
             f"{root}/NyaTerm.exe",
             fake_pe(machine, subsystem=2, resource_ids=application_resources),
@@ -150,6 +213,7 @@ def verify_installer_fixture(
                    for name in verify_native_package.helper_filenames(target)},
             }
             entries.update(android_fixture(target))
+            entries.update(spice_fixture(target))
             for relative in package_native.conpty_files(target):
                 if relative.as_posix() == missing_conpty:
                     continue
@@ -188,6 +252,7 @@ class VerifyNativePackageTests(unittest.TestCase):
             verify_native_package.verify_android_resources(entries.__getitem__,target)
 
     def setUp(self) -> None:
+        patch_spice_lock(self)
         # Synthetic PE fixtures only contain directory headers. Test metadata
         # comparisons separately; the Windows resource build test uses real PEs.
         patcher = mock.patch.object(verify_native_package, "windows_version_info")
@@ -387,9 +452,11 @@ class VerifyNativePackageTests(unittest.TestCase):
                     "CFBundleShortVersionString": version,
                     "CFBundleVersion": version,
                     "CFBundleURLTypes": [{"CFBundleURLSchemes": list(identity.url_schemes)}],
+                    **verify_native_package.package_native.spice_associations.macos_declarations(),
                 }
                 entries = {
                     **{f"{bundle}/Contents/MacOS/{name}": data for name, data in android_fixture("aarch64-apple-darwin").items()},
+                    **{f"{bundle}/Contents/MacOS/{name}": data for name, data in spice_fixture("aarch64-apple-darwin").items()},
                     f"{bundle}/Contents/MacOS/NyaTerm": fake_macho(0x0100000C),
                     **{f"{bundle}/Contents/MacOS/{name}": fake_macho(0x0100000C)
                        for name in verify_native_package.helper_filenames("aarch64-apple-darwin")},
@@ -412,7 +479,8 @@ class VerifyNativePackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "is missing"):
                     verify_native_package.verify_macos_archive(path, "aarch64-apple-darwin", other)
                 for field, wrong in [("CFBundleIdentifier", "wrong.id"), ("CFBundleDisplayName", "Wrong"),
-                                     ("CFBundleName", "Wrong"), ("CFBundleURLTypes", [{"CFBundleURLSchemes": ["ssh"]}])]:
+                                     ("CFBundleName", "Wrong"), ("CFBundleURLTypes", [{"CFBundleURLSchemes": ["ssh"]}]),
+                                     ("CFBundleDocumentTypes", []), ("UTImportedTypeDeclarations", [])]:
                     original = plist[field]
                     plist[field] = wrong
                     entries[f"{bundle}/Contents/Info.plist"] = plistlib.dumps(plist)
@@ -425,6 +493,7 @@ class VerifyNativePackageTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "must register URL schemes"):
             verify_native_package.verify_macos_url_scheme(
                 {
+                    **verify_native_package.package_native.spice_associations.macos_declarations(),
                     "CFBundleURLTypes": [
                         {"CFBundleURLSchemes": ["nyaterm", "ssh", "telnet", "unexpected"]}
                     ]
@@ -443,7 +512,7 @@ class VerifyNativePackageTests(unittest.TestCase):
                 "Icon=nyaterm",
                 "StartupWMClass=NyaTerm",
                 "Exec=/opt/nyaterm/nyaterm %U",
-                "MimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;",
+                "MimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;application/x-virt-viewer;",
             )
         )
         verify_native_package.verify_linux_desktop(
@@ -469,7 +538,7 @@ class VerifyNativePackageTests(unittest.TestCase):
         identity = verify_native_package.package_native.PREVIEW_IDENTITY
         desktop = "\n".join(("[Desktop Entry]", "Type=Application", "Name=NyaTerm Preview",
                              "Icon=nyaterm-preview", "StartupWMClass=NyaTerm Preview",
-                             "Exec=/opt/nyaterm-preview/nyaterm %U", "MimeType=x-scheme-handler/nyaterm-preview;"))
+                             "Exec=/opt/nyaterm-preview/nyaterm %U", "MimeType=x-scheme-handler/nyaterm-preview;application/x-virt-viewer;"))
         verify_native_package.verify_linux_desktop(desktop, "/opt/nyaterm-preview/nyaterm", "preview.desktop", identity)
         for field in ("Name", "Icon", "StartupWMClass", "MimeType"):
             broken = "\n".join(line if not line.startswith(f"{field}=") else f"{field}=stable" for line in desktop.splitlines())
@@ -506,6 +575,50 @@ class VerifyNativePackageTests(unittest.TestCase):
                 Path("nyaterm.rpm"), "/usr/share/applications/nyaterm.desktop"
             )
         self.assertEqual(actual, desktop)
+
+    def test_rpm_reader_rejects_malformed_unsafe_duplicate_and_special_entries(self) -> None:
+        trailer = newc_entry("TRAILER!!!", b"")
+        regular = newc_entry("./opt/nyaterm/spice/library.so", b"library")
+        special = bytearray(regular)
+        special[14:22] = b"0000a1ff"  # symlink mode
+        invalid_name = bytearray(regular)
+        invalid_name[110 + len("./opt/nyaterm/spice/library.so")] = ord("x")
+        invalid_header = bytearray(regular)
+        invalid_header[6] = ord("z")
+        cases = [regular + regular + trailer, regular[:-8], bytes(invalid_name) + trailer,
+                 bytes(invalid_header) + trailer, bytes(special) + trailer,
+                 newc_entry("../outside", b"bad") + trailer]
+        for payload in cases:
+            with self.subTest(payload=payload[:24]), mock.patch.object(
+                verify_native_package.shutil, "which", return_value="rpm2cpio"
+            ), mock.patch.object(verify_native_package.subprocess, "check_output", return_value=payload):
+                with self.assertRaises(RuntimeError):
+                    verify_native_package.read_rpm_payload(Path("test.rpm"))
+
+    def test_rpm_verification_decompresses_native_resources_only_once(self) -> None:
+        target = "x86_64-unknown-linux-gnu"
+        prefix = "opt/nyaterm/"
+        files = {prefix + "nyaterm": b"app", prefix + "VERSION": b"2.0.0"}
+        files.update({prefix + name: b"helper" for name in verify_native_package.helper_filenames(target)})
+        files.update({prefix + name: data for name, data in spice_fixture(target).items()})
+        files.update({prefix + name: data for name, data in android_fixture(target).items()})
+        files["usr/share/applications/nyaterm.desktop"] = (
+            b"[Desktop Entry]\nType=Application\nName=NyaTerm\nIcon=nyaterm\nStartupWMClass=NyaTerm\n"
+            b"Exec=/opt/nyaterm/nyaterm %U\nMimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;application/x-virt-viewer;\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            verify_native_package.package_native.spice_associations.write_linux_mime(root, "nyaterm")
+            files["usr/share/mime/packages/nyaterm-spice.xml"] = (root / "usr/share/mime/packages/nyaterm-spice.xml").read_bytes()
+        for size in verify_native_package.package_native.linux_icons.ICON_SIZES:
+            files[f"usr/share/icons/hicolor/{size}/apps/nyaterm.png"] = b"icon"
+        archive = b"".join(newc_entry("./" + name, data) for name, data in files.items()) + newc_entry("TRAILER!!!", b"")
+        with mock.patch.object(verify_native_package.shutil, "which", return_value="rpm2cpio"), mock.patch.object(
+            verify_native_package.subprocess, "check_output",
+            side_effect=["nyaterm|2.0.0|1|x86_64", "\n".join("/" + name for name in files), archive],
+        ) as output:
+            verify_native_package.verify_rpm(Path("test.rpm"), target, "2.0.0")
+        self.assertEqual(sum(call.args[0][0] == "rpm2cpio" for call in output.call_args_list), 1)
 
     def test_release_verification_fails_before_platform_tools_when_asset_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

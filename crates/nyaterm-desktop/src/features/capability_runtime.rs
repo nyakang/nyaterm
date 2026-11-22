@@ -1512,6 +1512,7 @@ fn session_kind_name(kind: SessionKind) -> &'static str {
         SessionKind::Serial => "serial",
         SessionKind::Rdp => "rdp",
         SessionKind::Vnc => "vnc",
+        SessionKind::Spice => "spice",
         SessionKind::AdbShell => "adb_shell",
         SessionKind::AdbFiles => "adb_files",
         SessionKind::AdbScreen => "adb_screen",
@@ -1538,9 +1539,10 @@ pub(in crate::features) fn connection_type_name(
         ConnectionType::Telnet { .. } => Some("telnet"),
         ConnectionType::Serial { .. } => Some("serial"),
         ConnectionType::Adb { .. } => Some("adb"),
-        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::Ftp { .. } => {
-            None
-        }
+        ConnectionType::Rdp { .. }
+        | ConnectionType::Vnc { .. }
+        | ConnectionType::Spice { .. }
+        | ConnectionType::Ftp { .. } => None,
     }
 }
 

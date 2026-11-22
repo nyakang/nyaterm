@@ -293,6 +293,13 @@ impl NyaTermApp {
                     },
                 ));
             }
+            SessionLaunchConfig::Spice(config) => {
+                details.push((t!("sessionInfo.launch"), "SPICE".into()));
+                if let Some((host, port)) = config.public_endpoint() {
+                    details.push((t!("sessionInfo.host"), host.to_owned()));
+                    details.push((t!("sessionInfo.port"), port.to_string()));
+                }
+            }
             SessionLaunchConfig::Vnc(config) => {
                 details.push((t!("sessionInfo.launch"), "VNC".to_string()));
                 details.push((t!("sessionInfo.host"), config.host.clone()));

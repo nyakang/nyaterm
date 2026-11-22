@@ -18,6 +18,33 @@ mod focus;
 mod specified;
 
 impl NyaTermApp {
+    fn session_allows_restore(&self, id: &str) -> bool {
+        !self.session.metadata(id).is_some_and(|metadata| matches!(
+            &metadata.launch_config,
+            SessionLaunchConfig::Spice(config)
+                if config.session.credential_lifetime == nyaterm_remote_desktop::spice::protocol::SpiceCredentialLifetime::Temporary
+        ))
+    }
+
+    fn restorable_tab_source(&self, session: &SessionInfo) -> Option<SessionInfo> {
+        if self.session_allows_restore(&session.id) {
+            return Some(session.clone());
+        }
+        self.shell
+            .workspace_pane_root(&session.id)?
+            .session_ids()
+            .into_iter()
+            .filter(|id| self.session_allows_restore(id))
+            .find_map(|id| self.session.session_info(&id))
+    }
+
+    fn restorable_tab_ids(&self) -> Vec<String> {
+        self.ordered_tab_sessions()
+            .into_iter()
+            .filter(|session| self.restorable_tab_source(session).is_some())
+            .map(|session| session.id)
+            .collect()
+    }
     fn mark_startup_restore_complete(&mut self) {
         self.session.mark_restore_complete();
     }
@@ -79,11 +106,9 @@ impl NyaTermApp {
 
         let tabs = dirty.open_tabs().then(|| self.serialize_open_tabs());
         let layout = if dirty.window_layout() {
-            let ordered = self
-                .ordered_tab_sessions()
-                .into_iter()
-                .map(|session| session.id)
-                .collect::<Vec<_>>();
+            // Keep the live root id for index mapping even when a temporary
+            // root pane is pruned and its saved sibling supplies the tab data.
+            let ordered = self.restorable_tab_ids();
             Some(self.shell.serialize_terminal_window_layout(&ordered))
         } else {
             None
@@ -95,6 +120,7 @@ impl NyaTermApp {
                 .session
                 .ordered_sessions()
                 .into_iter()
+                .filter(|session| self.session_allows_restore(&session.id))
                 .map(|session| session.id)
                 .collect::<Vec<_>>();
             self.shell
@@ -187,16 +213,28 @@ impl NyaTermApp {
         // One strip tab per tab-root; attach RestorablePaneNode when that tab is split.
         self.ordered_tab_sessions()
             .into_iter()
-            .map(|session| {
-                let mut tab = self.serialize_open_tab_for_session(&session);
+            .filter_map(|session| {
+                let source = self.restorable_tab_source(&session)?;
+                let mut tab = self.serialize_open_tab_for_session(&source);
                 if let Some(root) = self.shell.workspace_pane_root(&session.id)
                     && root.is_split()
                     && let Some(pane_root) = self.workspace_pane_to_restorable_pane(root)
                 {
+                    let active = self.active_pane_for_tab_root(&session.id);
+                    tab.active_pane_id = Some(
+                        if pane_root
+                            .collect_leaves()
+                            .iter()
+                            .any(|leaf| leaf.id == active)
+                        {
+                            active
+                        } else {
+                            source.id.clone()
+                        },
+                    );
                     tab.root = Some(pane_root);
-                    tab.active_pane_id = Some(self.active_pane_for_tab_root(&session.id));
                 }
-                tab
+                Some(tab)
             })
             .chain(self.session.unsupported_restore_tabs.clone())
             .collect()
@@ -211,6 +249,7 @@ impl NyaTermApp {
             Some(SessionLaunchConfig::Serial(_)) => "Serial",
             Some(SessionLaunchConfig::Rdp(_)) => "RDP",
             Some(SessionLaunchConfig::Vnc(_)) => "VNC",
+            Some(SessionLaunchConfig::Spice(_)) => "SPICE",
             Some(SessionLaunchConfig::AdbShell(_)) => "adb_shell",
             Some(SessionLaunchConfig::AdbFiles(_)) => "adb_files",
             Some(SessionLaunchConfig::AdbScreen(_)) => "adb_screen",
@@ -260,11 +299,20 @@ impl NyaTermApp {
         if !root.is_split() {
             return None;
         }
-        let ordered = self.session.ordered_sessions();
+        let ordered = self
+            .session
+            .ordered_sessions()
+            .into_iter()
+            .filter(|session| self.session_allows_restore(&session.id))
+            .collect::<Vec<_>>();
         if ordered.len() < 2 {
             return None;
         }
-        let split_ids = root.session_ids();
+        let split_ids = root
+            .session_ids()
+            .into_iter()
+            .filter(|id| self.session_allows_restore(id))
+            .collect::<Vec<_>>();
         if split_ids.len() != ordered.len() {
             return None;
         }
@@ -284,8 +332,13 @@ impl NyaTermApp {
         let first = ordered.first()?;
         let mut tab = self.serialize_open_tab_for_session(first);
         // Title/type from first leaf; root carries the full tree.
+        let leaves = pane_root.collect_leaves();
+        tab.active_pane_id = self
+            .session
+            .active_id_owned()
+            .filter(|id| leaves.iter().any(|leaf| &leaf.id == id))
+            .or_else(|| leaves.first().map(|leaf| leaf.id.clone()));
         tab.root = Some(pane_root);
-        tab.active_pane_id = self.session.active_id_owned();
         Some(vec![tab])
     }
 
@@ -295,6 +348,9 @@ impl NyaTermApp {
     ) -> Option<RestorablePaneNode> {
         match node {
             WorkspacePaneNode::Leaf { session_id } => {
+                if !self.session_allows_restore(session_id) {
+                    return None;
+                }
                 let session = self
                     .session
                     .ordered_sessions()
@@ -767,6 +823,47 @@ impl NyaTermApp {
                 self.settle_remote_desktop_restore(cx);
                 return true;
             }
+            if matches!(
+                connection.config,
+                nyaterm_core::ConnectionType::Spice { .. }
+            ) {
+                let Ok(SessionLaunchConfig::Spice(config)) =
+                    self.saved_remote_desktop_launch_config(&connection, None)
+                else {
+                    return false;
+                };
+                let session_id = config.session.session_id.clone();
+                self.remote_desktop.insert_disconnected(session_id.clone());
+                self.register_session(
+                    &session_id,
+                    crate::models::SessionRuntimeMetadata {
+                        confirmed_ssh_runtime_mode: None,
+                        pending_ssh_startup_command: None,
+                        ssh_config: None,
+                        ssh_multiplex_key: None,
+                        source_connection_id: Some(connection.id.clone()),
+                        ai_execution_profile: AiExecutionProfile::Disabled,
+                        launch_config: SessionLaunchConfig::Spice(config),
+                        disconnected: true,
+                    },
+                );
+                if let Some(name) = custom_name {
+                    self.session.set_custom_name(session_id.clone(), name);
+                }
+                if let Some(color) = tab_color {
+                    self.session.set_tab_color(&session_id, Some(color));
+                }
+                if tab.locked {
+                    self.session.set_tab_locked(&session_id, true);
+                }
+                if self.session.active_id().is_none() {
+                    self.activate_session_id(&session_id, cx);
+                }
+                self.remote_desktop.restore_pending = Some(session_id.clone());
+                self.retry_rdp_runtime(&session_id, cx);
+                self.settle_remote_desktop_restore(cx);
+                return true;
+            }
             return self.continue_saved_connection_start(
                 connection,
                 SavedConnectionStartOptions {
@@ -880,6 +977,102 @@ mod tests {
     };
     use nyaterm_store::ConnectionStore;
     use nyaterm_transport::SshSessionConfig;
+
+    #[test]
+    fn temporary_spice_ticket_and_tab_metadata_never_enter_restore_documents() {
+        use nyaterm_core::spice::settings::{SpiceEndpoint, SpiceSettings};
+        use nyaterm_remote_desktop::spice::protocol::{
+            SpiceCredentialLifetime, SpiceSessionConfig,
+        };
+        let root = TestConfigDir::new("nyaterm-spice-restore-isolation");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+        app.update(&mut cx, |app, _| {
+            app.register_session(
+                "temporary-spice",
+                SessionRuntimeMetadata {
+                    confirmed_ssh_runtime_mode: None,
+                    pending_ssh_startup_command: None,
+                    ssh_config: None,
+                    ssh_multiplex_key: None,
+                    source_connection_id: None,
+                    ai_execution_profile: AiExecutionProfile::Disabled,
+                    disconnected: true,
+                    launch_config: SessionLaunchConfig::Spice(
+                        crate::models::session::SpiceLaunchConfig {
+                            name: "private-provider-title".into(),
+                            session: SpiceSessionConfig {
+                                session_id: "temporary-spice".into(),
+                                endpoint: SpiceEndpoint {
+                                    extra: Default::default(),
+                                    host: "private-ticket-host".into(),
+                                    port: None,
+                                    tls_port: Some(5901),
+                                    proxy: None,
+                                },
+                                username: "private-user".into(),
+                                password: "private-password".into(),
+                                settings: SpiceSettings::default(),
+                                credential_lifetime: SpiceCredentialLifetime::Temporary,
+                                tcp_relay: None,
+                                tls_relay: None,
+                            },
+                        },
+                    ),
+                },
+            );
+            app.session
+                .set_custom_name("temporary-spice".into(), "private-custom-name".into());
+            let serialized = serde_json::to_string(&app.serialize_open_tabs()).unwrap();
+            assert!(!serialized.contains("private-"));
+            assert!(!serialized.contains("SPICE"));
+            assert_eq!(app.serialize_open_tabs().len(), 1);
+            // A temporary pane can own a tab containing persistent siblings.
+            // Its tab index must survive, while focus and metadata point only
+            // at a leaf that will actually be restored.
+            app.shell.insert_workspace_pane_root(
+                "temporary-spice".into(),
+                crate::models::WorkspacePaneNode::Split {
+                    id: "mixed-split".into(),
+                    direction: crate::models::WorkspaceSplitDirection::Horizontal,
+                    ratio_percent: 50,
+                    first: Box::new(crate::models::WorkspacePaneNode::Leaf {
+                        session_id: "temporary-spice".into(),
+                    }),
+                    second: Box::new(crate::models::WorkspacePaneNode::Leaf {
+                        session_id: "local".into(),
+                    }),
+                },
+            );
+            let tabs = app.serialize_open_tabs();
+            assert_eq!(tabs.len(), 1);
+            assert_eq!(app.restorable_tab_ids(), vec!["temporary-spice"]);
+            assert_eq!(tabs[0].active_pane_id.as_deref(), Some("local"));
+            let leaves = tabs[0].root.as_ref().unwrap().collect_leaves();
+            assert_eq!(leaves.len(), 1);
+            assert_eq!(leaves[0].id, "local");
+            assert!(!serde_json::to_string(&tabs).unwrap().contains("private-"));
+            app.shell.take_workspace_pane_root("temporary-spice");
+            if let SessionLaunchConfig::Spice(config) = &mut app
+                .session
+                .metadata_mut("temporary-spice")
+                .unwrap()
+                .launch_config
+            {
+                config.session.credential_lifetime = SpiceCredentialLifetime::Saved;
+            }
+            app.session
+                .metadata_mut("temporary-spice")
+                .unwrap()
+                .source_connection_id = Some("saved-spice".into());
+            assert_eq!(app.serialize_open_tabs().len(), 2);
+            assert_eq!(
+                app.serialize_open_tabs()[1].connection_id.as_deref(),
+                Some("saved-spice")
+            );
+        });
+    }
 
     fn register_restored_ssh(app: &mut NyaTermApp, id: &str, connection_id: &str) {
         let config = SshSessionConfig {

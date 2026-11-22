@@ -1,0 +1,2089 @@
+{
+  "schema": 1,
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "repository": "https://repo.msys2.org/mingw/clang64/",
+      "index_sha256": "50f8a4fd4d57b57b750933ca8e26e3e3ad65ef526b1a919fff0488199e5e02dd",
+      "machine": 34404,
+      "packages": {
+        "mingw-w64-clang-x86_64-brotli-1.2.1-1": {
+          "archive": "mingw-w64-clang-x86_64-brotli-1.2.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-brotli-1.2.1-1-any.pkg.tar.zst",
+          "sha256": "b1bda1ce6c6a50ae9367b9ad2acc71e1a9f0c7662da6ae70ca738b9741616f98",
+          "name": "mingw-w64-clang-x86_64-brotli",
+          "version": "1.2.1-1",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://github.com/google/brotli",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-brotli"
+        },
+        "mingw-w64-clang-x86_64-ca-certificates-20260816-6": {
+          "archive": "mingw-w64-clang-x86_64-ca-certificates-20260816-6-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-ca-certificates-20260816-6-any.pkg.tar.zst",
+          "sha256": "b5621069b356ca23ee08ed43c01dc20cf93844152aa26c9a03bb15d5e104a3ed",
+          "name": "mingw-w64-clang-x86_64-ca-certificates",
+          "version": "20260816-6",
+          "licenses": [
+            "MPL",
+            "GPL"
+          ],
+          "upstream": "https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-ca-certificates"
+        },
+        "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8": {
+          "archive": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8-any.pkg.tar.zst",
+          "sha256": "8aaa725f7ecf1bb0387d17dbd3818be033a3af4c6bb2dc343053cd10b2428977",
+          "name": "mingw-w64-clang-x86_64-cyrus-sasl",
+          "version": "2.1.28-8",
+          "licenses": [
+            "custom"
+          ],
+          "upstream": "https://www.cyrusimap.org/sasl/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-cyrus-sasl"
+        },
+        "mingw-w64-clang-x86_64-gettext-runtime-1.0-1": {
+          "archive": "mingw-w64-clang-x86_64-gettext-runtime-1.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-gettext-runtime-1.0-1-any.pkg.tar.zst",
+          "sha256": "6f22a64727816c9d9c8289bac9493a3c50691da678de22489d0545114568bb90",
+          "name": "mingw-w64-clang-x86_64-gettext-runtime",
+          "version": "1.0-1",
+          "licenses": [
+            "spdx:GPL-3.0-or-later AND LGPL-2.1-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/gettext/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gettext"
+        },
+        "mingw-w64-clang-x86_64-glib2-2.90.1-1": {
+          "archive": "mingw-w64-clang-x86_64-glib2-2.90.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-glib2-2.90.1-1-any.pkg.tar.zst",
+          "sha256": "174290215f3e5022d23c783b59c8127abed71527f648e28e429a22d9c494ae69",
+          "name": "mingw-w64-clang-x86_64-glib2",
+          "version": "2.90.1-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gitlab.gnome.org/GNOME/glib",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-glib2"
+        },
+        "mingw-w64-clang-x86_64-gst-plugins-bad-1.28.9-2": {
+          "archive": "mingw-w64-clang-x86_64-gst-plugins-bad-1.28.9-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-gst-plugins-bad-1.28.9-2-any.pkg.tar.zst",
+          "sha256": "7c7983cb3c0e748b434539fd5f98b0fd0d36ba60cd5f26936de01cf2be5bc131",
+          "name": "mingw-w64-clang-x86_64-gst-plugins-bad",
+          "version": "1.28.9-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-bad"
+        },
+        "mingw-w64-clang-x86_64-gst-plugins-bad-libs-1.28.9-2": {
+          "archive": "mingw-w64-clang-x86_64-gst-plugins-bad-libs-1.28.9-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-gst-plugins-bad-libs-1.28.9-2-any.pkg.tar.zst",
+          "sha256": "b71d2f694da0579a6bbf0a380237130ae22cef05c3a56135710bdf77ad5047a0",
+          "name": "mingw-w64-clang-x86_64-gst-plugins-bad-libs",
+          "version": "1.28.9-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-bad"
+        },
+        "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1": {
+          "archive": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1-any.pkg.tar.zst",
+          "sha256": "3f637b9a1583bcf5aa265cfaef1792a774a388a90e8b0943c1ef947b626a640d",
+          "name": "mingw-w64-clang-x86_64-gst-plugins-base",
+          "version": "1.28.9-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-base"
+        },
+        "mingw-w64-clang-x86_64-gst-plugins-good-1.28.9-1": {
+          "archive": "mingw-w64-clang-x86_64-gst-plugins-good-1.28.9-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-gst-plugins-good-1.28.9-1-any.pkg.tar.zst",
+          "sha256": "a6ec2a727c29427da1a47840117bffc30fe4a9f646e04eaf6a631f08a07b3174",
+          "name": "mingw-w64-clang-x86_64-gst-plugins-good",
+          "version": "1.28.9-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-good"
+        },
+        "mingw-w64-clang-x86_64-gstreamer-1.28.9-1": {
+          "archive": "mingw-w64-clang-x86_64-gstreamer-1.28.9-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-gstreamer-1.28.9-1-any.pkg.tar.zst",
+          "sha256": "4718b843ef283daf6e5df6c5d0ae5fb3a7256a219abf64b38766f4c4169a620c",
+          "name": "mingw-w64-clang-x86_64-gstreamer",
+          "version": "1.28.9-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gstreamer"
+        },
+        "mingw-w64-clang-x86_64-json-glib-1.10.8-2": {
+          "archive": "mingw-w64-clang-x86_64-json-glib-1.10.8-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-json-glib-1.10.8-2-any.pkg.tar.zst",
+          "sha256": "7849a55960985184fd7638ba039d2deda4cec515878d750a67042bcf0c6dbf06",
+          "name": "mingw-w64-clang-x86_64-json-glib",
+          "version": "1.10.8-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gnome.pages.gitlab.gnome.org/json-glib/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-json-glib"
+        },
+        "mingw-w64-clang-x86_64-libc++-23.1.5-1": {
+          "archive": "mingw-w64-clang-x86_64-libc++-23.1.5-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libc++-23.1.5-1-any.pkg.tar.zst",
+          "sha256": "459ac050114cd40b3cea0622643077f725c0d71403b38b6405cee44fc4a984dd",
+          "name": "mingw-w64-clang-x86_64-libc++",
+          "version": "23.1.5-1",
+          "licenses": [
+            "spdx:Apache-2.0 WITH LLVM-exception"
+          ],
+          "upstream": "https://libcxx.llvm.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libc++"
+        },
+        "mingw-w64-clang-x86_64-libcacard-2.8.1-2": {
+          "archive": "mingw-w64-clang-x86_64-libcacard-2.8.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libcacard-2.8.1-2-any.pkg.tar.zst",
+          "sha256": "93e755202c630f4db204ff9c3dfc6819e93e2d88faba6dc5832698feb9d93ac3",
+          "name": "mingw-w64-clang-x86_64-libcacard",
+          "version": "2.8.1-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gitlab.freedesktop.org/spice/libcacard",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libcacard"
+        },
+        "mingw-w64-clang-x86_64-libffi-3.8.1-1": {
+          "archive": "mingw-w64-clang-x86_64-libffi-3.8.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libffi-3.8.1-1-any.pkg.tar.zst",
+          "sha256": "e5fec035ab152a6d7b812e5665fb79cd55a958c95fe1ceaca24cc8a79da42ea9",
+          "name": "mingw-w64-clang-x86_64-libffi",
+          "version": "3.8.1-1",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://sourceware.org/libffi",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libffi"
+        },
+        "mingw-w64-clang-x86_64-libiconv-1.19.1-1": {
+          "archive": "mingw-w64-clang-x86_64-libiconv-1.19.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libiconv-1.19.1-1-any.pkg.tar.zst",
+          "sha256": "8d16ca846553838f36ea4098dc543e0261bc248f77228d6765f3419a2dfd48da",
+          "name": "mingw-w64-clang-x86_64-libiconv",
+          "version": "1.19.1-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later",
+            "documentation:spdx:GPL-3.0-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/libiconv/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libiconv"
+        },
+        "mingw-w64-clang-x86_64-libidn2-2.3.8-5": {
+          "archive": "mingw-w64-clang-x86_64-libidn2-2.3.8-5-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libidn2-2.3.8-5-any.pkg.tar.zst",
+          "sha256": "dad9fa7fc4381edabd51b2e098d6e5b8068439a9495a026097848a60a9dc8893",
+          "name": "mingw-w64-clang-x86_64-libidn2",
+          "version": "2.3.8-5",
+          "licenses": [
+            "spdx:GPL-2.0-or-later",
+            "spdx:LGPL-3.0-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/libidn/#libidn2",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libidn2"
+        },
+        "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1": {
+          "archive": "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1-any.pkg.tar.zst",
+          "sha256": "5cb26ea6e18c81e6cf8010ecfd6af7b04d5e615ca4ad19f90686ebb651723300",
+          "name": "mingw-w64-clang-x86_64-libjpeg-turbo",
+          "version": "3.2.1-1",
+          "licenses": [
+            "custom:BSD-like"
+          ],
+          "upstream": "https://libjpeg-turbo.virtualgl.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libjpeg-turbo"
+        },
+        "mingw-w64-clang-x86_64-libpsl-0.21.5-3": {
+          "archive": "mingw-w64-clang-x86_64-libpsl-0.21.5-3-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libpsl-0.21.5-3-any.pkg.tar.zst",
+          "sha256": "4c73a70283a095e53c58be5e0598e3f51a92e42d7933a0dc6983c548dbe36741",
+          "name": "mingw-w64-clang-x86_64-libpsl",
+          "version": "0.21.5-3",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://rockdaboot.github.io/libpsl/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libpsl"
+        },
+        "mingw-w64-clang-x86_64-libsoup3-3.8.1-1": {
+          "archive": "mingw-w64-clang-x86_64-libsoup3-3.8.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libsoup3-3.8.1-1-any.pkg.tar.zst",
+          "sha256": "f5c3d13fc743cdefc2c236a51c342f58321e45aa5b6e239278b352b54b99961c",
+          "name": "mingw-w64-clang-x86_64-libsoup3",
+          "version": "3.8.1-1",
+          "licenses": [
+            "spdx:LGPL-2.0-or-later"
+          ],
+          "upstream": "https://wiki.gnome.org/Projects/libsoup/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libsoup3"
+        },
+        "mingw-w64-clang-x86_64-libunistring-1.5-1": {
+          "archive": "mingw-w64-clang-x86_64-libunistring-1.5-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libunistring-1.5-1-any.pkg.tar.zst",
+          "sha256": "9ca57408572ec06ad613c432bbf980bf4932da9446cafb6c9738a0fdc382f006",
+          "name": "mingw-w64-clang-x86_64-libunistring",
+          "version": "1.5-1",
+          "licenses": [
+            "spdx:LGPL-3.0-or-later OR GPL-3.0-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/libunistring",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libunistring"
+        },
+        "mingw-w64-clang-x86_64-libusb-1.0.30-1": {
+          "archive": "mingw-w64-clang-x86_64-libusb-1.0.30-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libusb-1.0.30-1-any.pkg.tar.zst",
+          "sha256": "5aed6907ce85609ccddc82da76e1e99ba4241a76ca670c7fb4f3c59ddeef20b9",
+          "name": "mingw-w64-clang-x86_64-libusb",
+          "version": "1.0.30-1",
+          "licenses": [
+            "spdx:LGPL-2.1"
+          ],
+          "upstream": "https://libusb.info/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libusb"
+        },
+        "mingw-w64-clang-x86_64-libvpx-1.17.0-1": {
+          "archive": "mingw-w64-clang-x86_64-libvpx-1.17.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libvpx-1.17.0-1-any.pkg.tar.zst",
+          "sha256": "c03c249976710057699dd124fa27f4668df87029b06f73487555f47a4353486a",
+          "name": "mingw-w64-clang-x86_64-libvpx",
+          "version": "1.17.0-1",
+          "licenses": [
+            "spdx:BSD-3-Clause"
+          ],
+          "upstream": "https://www.webmproject.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libvpx"
+        },
+        "mingw-w64-clang-x86_64-libwinpthread-14.0.0.r598.ge3d18511f-1": {
+          "archive": "mingw-w64-clang-x86_64-libwinpthread-14.0.0.r598.ge3d18511f-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libwinpthread-14.0.0.r598.ge3d18511f-1-any.pkg.tar.zst",
+          "sha256": "117d14b88ae27e1de1374ca49f32c37cb6c3d7631507220f4396a000c4c8c48c",
+          "name": "mingw-w64-clang-x86_64-libwinpthread",
+          "version": "14.0.0.r598.ge3d18511f-1",
+          "licenses": [
+            "spdx:MIT AND BSD-3-Clause"
+          ],
+          "upstream": "https://www.mingw-w64.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-winpthreads"
+        },
+        "mingw-w64-clang-x86_64-libxml2-2.15.4-3": {
+          "archive": "mingw-w64-clang-x86_64-libxml2-2.15.4-3-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-libxml2-2.15.4-3-any.pkg.tar.zst",
+          "sha256": "10fecf310113c94e1c318b54a42647b58d6d9df4cfa5673de56a5a7ad1f7af18",
+          "name": "mingw-w64-clang-x86_64-libxml2",
+          "version": "2.15.4-3",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libxml2"
+        },
+        "mingw-w64-clang-x86_64-lz4-1.11.1-2": {
+          "archive": "mingw-w64-clang-x86_64-lz4-1.11.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-lz4-1.11.1-2-any.pkg.tar.zst",
+          "sha256": "1df75c3fabf7ceb6137deca7b93617097545f75cfa8b959a505655547a5605df",
+          "name": "mingw-w64-clang-x86_64-lz4",
+          "version": "1.11.1-2",
+          "licenses": [
+            "spdx:BSD-2-Clause AND GPL-2.0-or-later"
+          ],
+          "upstream": "https://lz4.github.io/lz4/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-lz4"
+        },
+        "mingw-w64-clang-x86_64-nghttp2-1.71.0-1": {
+          "archive": "mingw-w64-clang-x86_64-nghttp2-1.71.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-nghttp2-1.71.0-1-any.pkg.tar.zst",
+          "sha256": "f96c4285b7efae58728c8ef21675c0bbe0eee70b1192a7da5955a434c27550a9",
+          "name": "mingw-w64-clang-x86_64-nghttp2",
+          "version": "1.71.0-1",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://nghttp2.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-nghttp2"
+        },
+        "mingw-w64-clang-x86_64-nspr-4.41-1": {
+          "archive": "mingw-w64-clang-x86_64-nspr-4.41-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-nspr-4.41-1-any.pkg.tar.zst",
+          "sha256": "7c9a5afbbddc3d779956d50352e45f346bba3a41a31ebb193e70d40fd5008de0",
+          "name": "mingw-w64-clang-x86_64-nspr",
+          "version": "4.41-1",
+          "licenses": [
+            "spdx:MPL-2.0"
+          ],
+          "upstream": "https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-nspr"
+        },
+        "mingw-w64-clang-x86_64-nss-3.134-1": {
+          "archive": "mingw-w64-clang-x86_64-nss-3.134-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-nss-3.134-1-any.pkg.tar.zst",
+          "sha256": "032b7c5cf42dcd43c726f9499366771aa84977a518fe34b0e6eaf5288a9ff552",
+          "name": "mingw-w64-clang-x86_64-nss",
+          "version": "3.134-1",
+          "licenses": [
+            "spdx:MPL-2.0"
+          ],
+          "upstream": "https://firefox-source-docs.mozilla.org/security/nss/index.html",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-nss"
+        },
+        "mingw-w64-clang-x86_64-openh264-2.7.0-1": {
+          "archive": "mingw-w64-clang-x86_64-openh264-2.7.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-openh264-2.7.0-1-any.pkg.tar.zst",
+          "sha256": "b6bf041716a99af138045a6109294a4d0e20b3cb4c8ecc262b6237f00842e2e2",
+          "name": "mingw-w64-clang-x86_64-openh264",
+          "version": "2.7.0-1",
+          "licenses": [
+            "spdx:BSD-2-Clause"
+          ],
+          "upstream": "https://www.openh264.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-openh264"
+        },
+        "mingw-w64-clang-x86_64-openssl-4.1.0-1": {
+          "archive": "mingw-w64-clang-x86_64-openssl-4.1.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-openssl-4.1.0-1-any.pkg.tar.zst",
+          "sha256": "5d8e2a70399c854284f1ad695cdda68cc60b57953725e643a4d43315634c7f3f",
+          "name": "mingw-w64-clang-x86_64-openssl",
+          "version": "4.1.0-1",
+          "licenses": [
+            "spdx:Apache-2.0"
+          ],
+          "upstream": "https://openssl-library.org",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-openssl"
+        },
+        "mingw-w64-clang-x86_64-opus-1.6.1-2": {
+          "archive": "mingw-w64-clang-x86_64-opus-1.6.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-opus-1.6.1-2-any.pkg.tar.zst",
+          "sha256": "2f334ee8a4752842231fb1e42335bbb353192f03b41c8a78e5a37c59cded4867",
+          "name": "mingw-w64-clang-x86_64-opus",
+          "version": "1.6.1-2",
+          "licenses": [
+            "spdx:BSD-3-Clause"
+          ],
+          "upstream": "https://www.opus-codec.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-opus"
+        },
+        "mingw-w64-clang-x86_64-orc-0.4.44-1": {
+          "archive": "mingw-w64-clang-x86_64-orc-0.4.44-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-orc-0.4.44-1-any.pkg.tar.zst",
+          "sha256": "0af5632f5e10ad2da48d884c9a8903fd81c3089e5b84d6836fee765086f9a23f",
+          "name": "mingw-w64-clang-x86_64-orc",
+          "version": "0.4.44-1",
+          "licenses": [
+            "custom"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/projects/orc.html",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-orc"
+        },
+        "mingw-w64-clang-x86_64-pcre2-10.49-2": {
+          "archive": "mingw-w64-clang-x86_64-pcre2-10.49-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-pcre2-10.49-2-any.pkg.tar.zst",
+          "sha256": "e85d1a750adace50e929b9fcd99f41b7bf6850b50f3a2eed52684233329c9826",
+          "name": "mingw-w64-clang-x86_64-pcre2",
+          "version": "10.49-2",
+          "licenses": [
+            "spdx:BSD-3-Clause"
+          ],
+          "upstream": "https://pcre.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-pcre2"
+        },
+        "mingw-w64-clang-x86_64-phodav-3.0-5": {
+          "archive": "mingw-w64-clang-x86_64-phodav-3.0-5-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-phodav-3.0-5-any.pkg.tar.zst",
+          "sha256": "da4c35fbe2bbc1be6c9f7b525b57887b010c34c90db03f8528db979cfb8fac17",
+          "name": "mingw-w64-clang-x86_64-phodav",
+          "version": "3.0-5",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://wiki.gnome.org/phodav",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-phodav"
+        },
+        "mingw-w64-clang-x86_64-pixman-0.46.4-3": {
+          "archive": "mingw-w64-clang-x86_64-pixman-0.46.4-3-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-pixman-0.46.4-3-any.pkg.tar.zst",
+          "sha256": "1104bac77fb10bba4ddfd83c6220149e0a7e56127f9f57c7946c2d0299c9b8a3",
+          "name": "mingw-w64-clang-x86_64-pixman",
+          "version": "0.46.4-3",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://gitlab.freedesktop.org/pixman/pixman",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-pixman"
+        },
+        "mingw-w64-clang-x86_64-spice-gtk-0.43-2": {
+          "archive": "mingw-w64-clang-x86_64-spice-gtk-0.43-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-spice-gtk-0.43-2-any.pkg.tar.zst",
+          "sha256": "63137d8db803b067ed70193fd476e303d4c9a1aaeea55221ac260cc63248eaee",
+          "name": "mingw-w64-clang-x86_64-spice-gtk",
+          "version": "0.43-2",
+          "licenses": [
+            "spdx:LGPL-2.1-only"
+          ],
+          "upstream": "https://www.spice-space.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-spice-gtk"
+        },
+        "mingw-w64-clang-x86_64-sqlite-3.54.1-2": {
+          "archive": "mingw-w64-clang-x86_64-sqlite-3.54.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-sqlite-3.54.1-2-any.pkg.tar.zst",
+          "sha256": "8e6527058a7b5ac8975a7ce269527be836c4a644320c308dbc6eb2013e138d60",
+          "name": "mingw-w64-clang-x86_64-sqlite",
+          "version": "3.54.1-2",
+          "licenses": [
+            "PublicDomain"
+          ],
+          "upstream": "https://www.sqlite.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-sqlite"
+        },
+        "mingw-w64-clang-x86_64-usbredir-0.15.0-1": {
+          "archive": "mingw-w64-clang-x86_64-usbredir-0.15.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-usbredir-0.15.0-1-any.pkg.tar.zst",
+          "sha256": "31d5b23518e8208231a1d533d01b52dd76a668d25dddc39ebfb406f521aabcc4",
+          "name": "mingw-w64-clang-x86_64-usbredir",
+          "version": "0.15.0-1",
+          "licenses": [
+            "spdx:GPL-2.0-or-later AND LGPL-2.1-or-later"
+          ],
+          "upstream": "https://www.spice-space.org/usbredir.html",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-usbredir"
+        },
+        "mingw-w64-clang-x86_64-zlib-ng-compat-2.3.3-4": {
+          "archive": "mingw-w64-clang-x86_64-zlib-ng-compat-2.3.3-4-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-zlib-ng-compat-2.3.3-4-any.pkg.tar.zst",
+          "sha256": "1c8d8ef653ffd8076622017bd434a84f758fe268de4b64f86a5ab699e379ceab",
+          "name": "mingw-w64-clang-x86_64-zlib-ng-compat",
+          "version": "2.3.3-4",
+          "licenses": [
+            "spdx:Zlib"
+          ],
+          "upstream": "https://github.com/zlib-ng/zlib-ng",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-zlib-ng"
+        },
+        "mingw-w64-clang-x86_64-zstd-1.5.7-2": {
+          "archive": "mingw-w64-clang-x86_64-zstd-1.5.7-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-zstd-1.5.7-2-any.pkg.tar.zst",
+          "sha256": "2d75c4ddf8f4f7b76fe33e3f1eea16450f9b3aede14285c886462d72f0ffd87d",
+          "name": "mingw-w64-clang-x86_64-zstd",
+          "version": "1.5.7-2",
+          "licenses": [
+            "spdx:BSD-3-Clause OR GPL-2.0-or-later"
+          ],
+          "upstream": "https://facebook.github.io/zstd/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-zstd"
+        }
+      },
+      "files": {
+        "ca-bundle.pem": {
+          "package": "mingw-w64-clang-x86_64-ca-certificates-20260816-6",
+          "member": "clang64/etc/ssl/certs/ca-bundle.crt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "gstreamer-1.0/libgstapp.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgstapp.dll",
+          "sha256": "a21b441c251d78c2048c73d74c43fba62730f0fbc2899bac831f4123bdc9d853"
+        },
+        "gstreamer-1.0/libgstcoreelements.dll": {
+          "package": "mingw-w64-clang-x86_64-gstreamer-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgstcoreelements.dll",
+          "sha256": "fdba589fd9e3416e3c76d5076d00b1e3f09d93eebbb8077064ac8f74d8c58515"
+        },
+        "gstreamer-1.0/libgstjpeg.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-good-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgstjpeg.dll",
+          "sha256": "e5784314c77e1fe68d4966165b45cef0327bbd7fcd4267599f00e409e1124f4d"
+        },
+        "gstreamer-1.0/libgstopenh264.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-bad-1.28.9-2",
+          "member": "clang64/lib/gstreamer-1.0/libgstopenh264.dll",
+          "sha256": "bcbff9fb1f78922eb9159057266895cc56e50b9c9d0601a5c4f95667e61e09c8"
+        },
+        "gstreamer-1.0/libgstplayback.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgstplayback.dll",
+          "sha256": "cf38cde84b894c7f455d308643c672d5c3c0e40a0e343e00e3ba90efa36ec16d"
+        },
+        "gstreamer-1.0/libgsttypefindfunctions.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgsttypefindfunctions.dll",
+          "sha256": "b822d9ef79dbdca20edb271fee41d73cf86e1b162282e819f5e1efb16e61a023"
+        },
+        "gstreamer-1.0/libgstvideoconvertscale.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgstvideoconvertscale.dll",
+          "sha256": "d61aee452bc628b4d8b90c7e87f588de4a45071c304403f8ceea0a78898f694a"
+        },
+        "gstreamer-1.0/libgstvideoparsersbad.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-bad-1.28.9-2",
+          "member": "clang64/lib/gstreamer-1.0/libgstvideoparsersbad.dll",
+          "sha256": "32e76116b8b136f5a9eaf0d96696e8a92e19c750f2b314a52cfd4d01835904f9"
+        },
+        "gstreamer-1.0/libgstvpx.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-good-1.28.9-1",
+          "member": "clang64/lib/gstreamer-1.0/libgstvpx.dll",
+          "sha256": "3f083b625f48478834a95217f62b755ff8b66904ae6355f418b802f216e9f94c"
+        },
+        "libbrotlicommon.dll": {
+          "package": "mingw-w64-clang-x86_64-brotli-1.2.1-1",
+          "member": "clang64/bin/libbrotlicommon.dll",
+          "sha256": "43c599e593d47bb645db4704bd01a39aa94c70dbd5119ee93b3d58084b15ccf8"
+        },
+        "libbrotlidec.dll": {
+          "package": "mingw-w64-clang-x86_64-brotli-1.2.1-1",
+          "member": "clang64/bin/libbrotlidec.dll",
+          "sha256": "9bcc73149b2f4a1cf8ee60aec7a3e5a655c3b7d2cd5e730e47721599f128a107"
+        },
+        "libc++.dll": {
+          "package": "mingw-w64-clang-x86_64-libc++-23.1.5-1",
+          "member": "clang64/bin/libc++.dll",
+          "sha256": "c356e40f2f685b001b2108d5f57f4a19de24d5ecae4a714b1960696864f09f86"
+        },
+        "libcacard-0.dll": {
+          "package": "mingw-w64-clang-x86_64-libcacard-2.8.1-2",
+          "member": "clang64/bin/libcacard-0.dll",
+          "sha256": "f6d99b1bfdec2144c3eed0aa2071b16d80d03e59c72fe2dbb99e0cdd352473c8"
+        },
+        "libcrypto-4-x64.dll": {
+          "package": "mingw-w64-clang-x86_64-openssl-4.1.0-1",
+          "member": "clang64/bin/libcrypto-4-x64.dll",
+          "sha256": "d6c1b7384c7fbf6ba7b5d29a74a4775b768764bdd490f418bb29150461a13a85"
+        },
+        "libffi-8.dll": {
+          "package": "mingw-w64-clang-x86_64-libffi-3.8.1-1",
+          "member": "clang64/bin/libffi-8.dll",
+          "sha256": "80fc13e1e854eeb96a4deea8e605514e804ea4bb2d0c0fc3318e9918190a4ecb"
+        },
+        "libgio-2.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-glib2-2.90.1-1",
+          "member": "clang64/bin/libgio-2.0-0.dll",
+          "sha256": "689dbc6fcb92db4c2667c438d6876b16a0dfd44a06e562002f654c51f5878937"
+        },
+        "libglib-2.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-glib2-2.90.1-1",
+          "member": "clang64/bin/libglib-2.0-0.dll",
+          "sha256": "33e098b6ee34a397e314eda078b8ff8c3a0f3b344d2e1afe5d7f9e98b6fed970"
+        },
+        "libgmodule-2.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-glib2-2.90.1-1",
+          "member": "clang64/bin/libgmodule-2.0-0.dll",
+          "sha256": "6cab76efc49bfb6fa366a39514845b06a352879cc5e22aa2577248b2238b0e99"
+        },
+        "libgobject-2.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-glib2-2.90.1-1",
+          "member": "clang64/bin/libgobject-2.0-0.dll",
+          "sha256": "fa59cbda5c918f0ae2aeb8c8387873b334194470709a5dd94b9ff4ba22932f3a"
+        },
+        "libgstapp-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/bin/libgstapp-1.0-0.dll",
+          "sha256": "5b509226012940fb172ac880b55db088d068a906e30d60c80dc2ea2a75eee17d"
+        },
+        "libgstaudio-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/bin/libgstaudio-1.0-0.dll",
+          "sha256": "473d78692c64eabac5bf0708cb72c8e604d91b9a5eda45aa0fcdeeb5a139bc0b"
+        },
+        "libgstbase-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gstreamer-1.28.9-1",
+          "member": "clang64/bin/libgstbase-1.0-0.dll",
+          "sha256": "454be046cb504fdfdae141979ff477a206cc89d7317b80aafaef44d92cd36bf7"
+        },
+        "libgstcodecparsers-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-bad-libs-1.28.9-2",
+          "member": "clang64/bin/libgstcodecparsers-1.0-0.dll",
+          "sha256": "904fb58ec56b315deb8b01fc7f5af10761b66f2351cc4cf762a62347d9fd1d12"
+        },
+        "libgstpbutils-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/bin/libgstpbutils-1.0-0.dll",
+          "sha256": "c13e6242a77cb97055853ea0d49fee25391a39c01dcadba7ec01608340b1b73a"
+        },
+        "libgstreamer-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gstreamer-1.28.9-1",
+          "member": "clang64/bin/libgstreamer-1.0-0.dll",
+          "sha256": "1b4280d6f85a24183eae7adfec469bc00a3b9226826f623d30fa9f7d57704ed5"
+        },
+        "libgsttag-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/bin/libgsttag-1.0-0.dll",
+          "sha256": "cbacfd2c4fb1b01b99c6d99dcd44838732a25a9620abbd314be2a072d3c94cf9"
+        },
+        "libgstvideo-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-gst-plugins-base-1.28.9-1",
+          "member": "clang64/bin/libgstvideo-1.0-0.dll",
+          "sha256": "bd2184ff2abd78080b32ced0b90b9ad2a014b6d8625b433f68dbfe2b003d5bd0"
+        },
+        "libiconv-2.dll": {
+          "package": "mingw-w64-clang-x86_64-libiconv-1.19.1-1",
+          "member": "clang64/bin/libiconv-2.dll",
+          "sha256": "de91a00fc21d31a7a672ab04f44cd86db05d8711e07c873a8d5c57cd4a093d7a"
+        },
+        "libidn2-0.dll": {
+          "package": "mingw-w64-clang-x86_64-libidn2-2.3.8-5",
+          "member": "clang64/bin/libidn2-0.dll",
+          "sha256": "8e92dfa1a0cc08cc509f5c2136c9d379da5d29207827233ab3e28d5d1bdbab74"
+        },
+        "libintl-8.dll": {
+          "package": "mingw-w64-clang-x86_64-gettext-runtime-1.0-1",
+          "member": "clang64/bin/libintl-8.dll",
+          "sha256": "b648dfd190711371bedd58f36cf7bf80cc60be0ff78e574e57f3bd81135eeff5"
+        },
+        "libjpeg-8.dll": {
+          "package": "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1",
+          "member": "clang64/bin/libjpeg-8.dll",
+          "sha256": "50f2066123f52a9d49c95d278ad8f5de7200aee2a04f27f48be98ccef90621d1"
+        },
+        "libjson-glib-1.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-json-glib-1.10.8-2",
+          "member": "clang64/bin/libjson-glib-1.0-0.dll",
+          "sha256": "6712da62bcc66df11da870880b2f706433fb44e5dbb5bab45d7320232a2378dc"
+        },
+        "liblz4.dll": {
+          "package": "mingw-w64-clang-x86_64-lz4-1.11.1-2",
+          "member": "clang64/bin/liblz4.dll",
+          "sha256": "ab760c25a576451bc40cae9f56b01bc7046a55d6f99955a27a0a363f8048e802"
+        },
+        "libnghttp2-14.dll": {
+          "package": "mingw-w64-clang-x86_64-nghttp2-1.71.0-1",
+          "member": "clang64/bin/libnghttp2-14.dll",
+          "sha256": "6460952cf49b11770130c972f8453ba1c904bc26734691ece1e0b12cf239f9cd"
+        },
+        "libnspr4.dll": {
+          "package": "mingw-w64-clang-x86_64-nspr-4.41-1",
+          "member": "clang64/bin/libnspr4.dll",
+          "sha256": "5930df7ceddabed6ee6d0a3c086c3ecb1b05878aaa25e4b6c48ced3f59a6bc50"
+        },
+        "libopenh264-8.dll": {
+          "package": "mingw-w64-clang-x86_64-openh264-2.7.0-1",
+          "member": "clang64/bin/libopenh264-8.dll",
+          "sha256": "c7d45e7b45129071ac66a160bf94c27efbc2147b8fd4538a927122a78ff32f8b"
+        },
+        "libopus-0.dll": {
+          "package": "mingw-w64-clang-x86_64-opus-1.6.1-2",
+          "member": "clang64/bin/libopus-0.dll",
+          "sha256": "11832d54d183e80b68a7edda7e5000dd1065abf72ed8049ece562e425129f998"
+        },
+        "liborc-0.4-0.dll": {
+          "package": "mingw-w64-clang-x86_64-orc-0.4.44-1",
+          "member": "clang64/bin/liborc-0.4-0.dll",
+          "sha256": "66418d1529a93243afd7c365fe3ea9c8bc1830eaf381e393e0ac4f5ae874c1ae"
+        },
+        "libpcre2-8-0.dll": {
+          "package": "mingw-w64-clang-x86_64-pcre2-10.49-2",
+          "member": "clang64/bin/libpcre2-8-0.dll",
+          "sha256": "a58e4a67cf8b0669b26134a2bbc9af84c3d7b0faaed2592d5555d0e753df468a"
+        },
+        "libphodav-3.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-phodav-3.0-5",
+          "member": "clang64/bin/libphodav-3.0-0.dll",
+          "sha256": "46a47ecfc4465630b1b88ca6f3f14606b28c709de7d424d5f664fd4ed70fadaa"
+        },
+        "libpixman-1-0.dll": {
+          "package": "mingw-w64-clang-x86_64-pixman-0.46.4-3",
+          "member": "clang64/bin/libpixman-1-0.dll",
+          "sha256": "4c5428a02507d443f0f60e6220021f36b4dd0e4288014864891cb5c30526a9a5"
+        },
+        "libplc4.dll": {
+          "package": "mingw-w64-clang-x86_64-nspr-4.41-1",
+          "member": "clang64/bin/libplc4.dll",
+          "sha256": "ddf403af585b18b82a141f840a37e0918390d510f63a8748b3c6408f4c7df28b"
+        },
+        "libplds4.dll": {
+          "package": "mingw-w64-clang-x86_64-nspr-4.41-1",
+          "member": "clang64/bin/libplds4.dll",
+          "sha256": "8806e458b58c1f958a8f01b86e1f391b5228a6eaad4fc23069f1dfac7143f198"
+        },
+        "libpsl-5.dll": {
+          "package": "mingw-w64-clang-x86_64-libpsl-0.21.5-3",
+          "member": "clang64/bin/libpsl-5.dll",
+          "sha256": "54d95d2f6c617887f1d5097e4147c3d829d2ddf1434c850631bce4d01690f237"
+        },
+        "libsasl2-3.dll": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/bin/libsasl2-3.dll",
+          "sha256": "304cf9668ad1764c6dcf5d24b762d83c786b85fb6ac341e3ccc0096e565d5ed9"
+        },
+        "libsoup-3.0-0.dll": {
+          "package": "mingw-w64-clang-x86_64-libsoup3-3.8.1-1",
+          "member": "clang64/bin/libsoup-3.0-0.dll",
+          "sha256": "d1a3b560aa71d8bbf085329884d7710ad54ddbb0cc7fdd35fbe62532711d5008"
+        },
+        "libspice-client-glib-2.0-8.dll": {
+          "package": "mingw-w64-clang-x86_64-spice-gtk-0.43-2",
+          "member": "clang64/bin/libspice-client-glib-2.0-8.dll",
+          "sha256": "db60d2925bdfbdb74b5a29e34ef549b846c1824a10a27bd70c9486a1f384bf65"
+        },
+        "libsqlite3-0.dll": {
+          "package": "mingw-w64-clang-x86_64-sqlite-3.54.1-2",
+          "member": "clang64/bin/libsqlite3-0.dll",
+          "sha256": "6403eb0796604b421f21eb2dcd0c080faca5aca1fab61408d9519cf0da0aade6"
+        },
+        "libssl-4-x64.dll": {
+          "package": "mingw-w64-clang-x86_64-openssl-4.1.0-1",
+          "member": "clang64/bin/libssl-4-x64.dll",
+          "sha256": "423eebf963b5b8ed05d409571c17fc9ef2dd30d7792fbebb40823d2c7a3c728d"
+        },
+        "libunistring-5.dll": {
+          "package": "mingw-w64-clang-x86_64-libunistring-1.5-1",
+          "member": "clang64/bin/libunistring-5.dll",
+          "sha256": "2b6310e0635b3b8b6f00994420d609bf7bea08ad31caf15741e2ba8d0cdf6a93"
+        },
+        "libusb-1.0.dll": {
+          "package": "mingw-w64-clang-x86_64-libusb-1.0.30-1",
+          "member": "clang64/bin/libusb-1.0.dll",
+          "sha256": "38ab456e757339f840f62b6bb5dcb2b796ddd386a6a4df788b556d821c1af087"
+        },
+        "libusbredirhost-1.dll": {
+          "package": "mingw-w64-clang-x86_64-usbredir-0.15.0-1",
+          "member": "clang64/bin/libusbredirhost-1.dll",
+          "sha256": "607fb9c6580832e7fd0282a8626b75cde95c6d821697d9bde168d809970f9746"
+        },
+        "libusbredirparser-1.dll": {
+          "package": "mingw-w64-clang-x86_64-usbredir-0.15.0-1",
+          "member": "clang64/bin/libusbredirparser-1.dll",
+          "sha256": "3c2f56b499fec60b6e668bc196b02d9a00c0f0f9a576dceefda9d970bdbd50d1"
+        },
+        "libvpx-1.dll": {
+          "package": "mingw-w64-clang-x86_64-libvpx-1.17.0-1",
+          "member": "clang64/bin/libvpx-1.dll",
+          "sha256": "71f9d40f4a6dddf7a61a197c9c75f2f4ca9a128ac3a93ac1d2dc8a806ba575f8"
+        },
+        "libwinpthread-1.dll": {
+          "package": "mingw-w64-clang-x86_64-libwinpthread-14.0.0.r598.ge3d18511f-1",
+          "member": "clang64/bin/libwinpthread-1.dll",
+          "sha256": "be8345e0b2515333b37d4c571dcb8c4a901f80b0f1c99afa40747a1c3d7343b1"
+        },
+        "libxml2-16.dll": {
+          "package": "mingw-w64-clang-x86_64-libxml2-2.15.4-3",
+          "member": "clang64/bin/libxml2-16.dll",
+          "sha256": "ff9077e63a3e32a8371f974fdcc72cf272a2f0f05631f9a4c0d6c5e19d71a654"
+        },
+        "libz-1.dll": {
+          "package": "mingw-w64-clang-x86_64-zlib-ng-compat-2.3.3-4",
+          "member": "clang64/bin/libz-1.dll",
+          "sha256": "3f681e940fa74134302551f421c8005b2a396399374b0a673d838055912ffd1f"
+        },
+        "libzstd.dll": {
+          "package": "mingw-w64-clang-x86_64-zstd-1.5.7-2",
+          "member": "clang64/bin/libzstd.dll",
+          "sha256": "a4a29141c6dc489c59c260b5d4f781c195cea11ed231ee0cbfc6d3803b0708b7"
+        },
+        "licenses/brotli/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-brotli-1.2.1-1",
+          "member": "clang64/share/licenses/brotli/LICENSE",
+          "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+        },
+        "licenses/cyrus-sasl/COPYING": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/share/licenses/cyrus-sasl/COPYING",
+          "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b"
+        },
+        "licenses/gettext-runtime/COPYING": {
+          "package": "mingw-w64-clang-x86_64-gettext-runtime-1.0-1",
+          "member": "clang64/share/licenses/gettext-runtime/COPYING",
+          "sha256": "7ef2cdfe58e0c0460657b6598b49af29d4e03c1e41cbaf0e1da1eb8ad74b95d0"
+        },
+        "licenses/gettext-runtime/intl/COPYING.LIB": {
+          "package": "mingw-w64-clang-x86_64-gettext-runtime-1.0-1",
+          "member": "clang64/share/licenses/gettext-runtime/intl/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/gettext-runtime/libasprintf/COPYING": {
+          "package": "mingw-w64-clang-x86_64-gettext-runtime-1.0-1",
+          "member": "clang64/share/licenses/gettext-runtime/libasprintf/COPYING",
+          "sha256": "03133addae5b99a6148c538300e6d97074453089be1423b741bd081f18e2b298"
+        },
+        "licenses/gettext-runtime/libasprintf/COPYING.LIB": {
+          "package": "mingw-w64-clang-x86_64-gettext-runtime-1.0-1",
+          "member": "clang64/share/licenses/gettext-runtime/libasprintf/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/glib2/COPYING": {
+          "package": "mingw-w64-clang-x86_64-glib2-2.90.1-1",
+          "member": "clang64/share/licenses/glib2/COPYING",
+          "sha256": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+        },
+        "licenses/json-glib/COPYING": {
+          "package": "mingw-w64-clang-x86_64-json-glib-1.10.8-2",
+          "member": "clang64/share/licenses/json-glib/COPYING",
+          "sha256": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+        },
+        "licenses/libc++/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-libc++-23.1.5-1",
+          "member": "clang64/share/licenses/libc++/LICENSE",
+          "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+        },
+        "licenses/libcacard/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libcacard-2.8.1-2",
+          "member": "clang64/share/licenses/libcacard/COPYING",
+          "sha256": "48ffe9fc7f1d5462dbd19340bc4dd1d8a9e37c61ed535813e614cbe4a5f0d4df"
+        },
+        "licenses/libffi/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-libffi-3.8.1-1",
+          "member": "clang64/share/licenses/libffi/LICENSE",
+          "sha256": "17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c"
+        },
+        "licenses/libiconv/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libiconv-1.19.1-1",
+          "member": "clang64/share/licenses/libiconv/COPYING",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        "licenses/libiconv/COPYING.LIB": {
+          "package": "mingw-w64-clang-x86_64-libiconv-1.19.1-1",
+          "member": "clang64/share/licenses/libiconv/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/libiconv/README": {
+          "package": "mingw-w64-clang-x86_64-libiconv-1.19.1-1",
+          "member": "clang64/share/licenses/libiconv/README",
+          "sha256": "ff0400ffb0c3dace1a64012f4125f292a3fef58c5b8486c7f9ba0c01a0637f3c"
+        },
+        "licenses/libiconv/libcharset/COPYING.LIB": {
+          "package": "mingw-w64-clang-x86_64-libiconv-1.19.1-1",
+          "member": "clang64/share/licenses/libiconv/libcharset/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/libjpeg-turbo/LICENSE.md": {
+          "package": "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1",
+          "member": "clang64/share/licenses/libjpeg-turbo/LICENSE.md",
+          "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+        },
+        "licenses/libjpeg-turbo/README.ijg": {
+          "package": "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1",
+          "member": "clang64/share/licenses/libjpeg-turbo/README.ijg",
+          "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+        },
+        "licenses/libjpeg-turbo/README.md": {
+          "package": "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1",
+          "member": "clang64/share/licenses/libjpeg-turbo/README.md",
+          "sha256": "bd71f6ebae1c151e4b5fe7072dc2cedcf33671fa40d91ad5f9058ecdc0b01721"
+        },
+        "licenses/libjpeg-turbo/simd/jsimdext.inc": {
+          "package": "mingw-w64-clang-x86_64-libjpeg-turbo-3.2.1-1",
+          "member": "clang64/share/licenses/libjpeg-turbo/simd/jsimdext.inc",
+          "sha256": "68c5d236785edf75344cebe8b9bec36568bd35c96eb72cc67ffecd66c17dbd74"
+        },
+        "licenses/libphodav/COPYING": {
+          "package": "mingw-w64-clang-x86_64-phodav-3.0-5",
+          "member": "clang64/share/licenses/libphodav/COPYING",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        "licenses/libpsl/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libpsl-0.21.5-3",
+          "member": "clang64/share/licenses/libpsl/COPYING",
+          "sha256": "322392e6001b2b3b0fca705dc9f11f26e12441188ecde50eb1d22909980b2925"
+        },
+        "licenses/libsoup3/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libsoup3-3.8.1-1",
+          "member": "clang64/share/licenses/libsoup3/COPYING",
+          "sha256": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c"
+        },
+        "licenses/libunistring/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-libunistring-1.5-1",
+          "member": "clang64/share/licenses/libunistring/LICENSE",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        "licenses/libunistring/LICENSE.LIB": {
+          "package": "mingw-w64-clang-x86_64-libunistring-1.5-1",
+          "member": "clang64/share/licenses/libunistring/LICENSE.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        },
+        "licenses/libusb/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libusb-1.0.30-1",
+          "member": "clang64/share/licenses/libusb/COPYING",
+          "sha256": "5df07007198989c622f5d41de8d703e7bef3d0e79d62e24332ee739a452af62a"
+        },
+        "licenses/libwinpthread/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libwinpthread-14.0.0.r598.ge3d18511f-1",
+          "member": "clang64/share/licenses/libwinpthread/COPYING",
+          "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+        },
+        "licenses/libxml2/COPYING": {
+          "package": "mingw-w64-clang-x86_64-libxml2-2.15.4-3",
+          "member": "clang64/share/licenses/libxml2/COPYING",
+          "sha256": "5d4873884a890122a4b9b20ad56ac6f7da1d796a5bfcf04a427970ac96217626"
+        },
+        "licenses/nghttp2/COPYING": {
+          "package": "mingw-w64-clang-x86_64-nghttp2-1.71.0-1",
+          "member": "clang64/share/licenses/nghttp2/COPYING",
+          "sha256": "6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a"
+        },
+        "licenses/nspr/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-nspr-4.41-1",
+          "member": "clang64/share/licenses/nspr/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+        },
+        "licenses/nss/COPYING": {
+          "package": "mingw-w64-clang-x86_64-nss-3.134-1",
+          "member": "clang64/share/licenses/nss/COPYING",
+          "sha256": "a20c1a32d1f8102432360b42e932869f7c11c7cdbacf9cac554c422132af47f4"
+        },
+        "licenses/openh264/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-openh264-2.7.0-1",
+          "member": "clang64/share/licenses/openh264/LICENSE",
+          "sha256": "dd5c1c9668512530fa5a96e4c29ac4033d70a7eeb0eed7a42fddb6dd794ebdbb"
+        },
+        "licenses/openssl/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-openssl-4.1.0-1",
+          "member": "clang64/share/licenses/openssl/LICENSE",
+          "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+        },
+        "licenses/opus/COPYING": {
+          "package": "mingw-w64-clang-x86_64-opus-1.6.1-2",
+          "member": "clang64/share/licenses/opus/COPYING",
+          "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+        },
+        "licenses/orc/COPYING": {
+          "package": "mingw-w64-clang-x86_64-orc-0.4.44-1",
+          "member": "clang64/share/licenses/orc/COPYING",
+          "sha256": "4f5dabb1b44bb6fc5cd53820b1f103147ad61b395a57903991325bd1b85d97bf"
+        },
+        "licenses/pcre2/COPYING": {
+          "package": "mingw-w64-clang-x86_64-pcre2-10.49-2",
+          "member": "clang64/share/licenses/pcre2/COPYING",
+          "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507"
+        },
+        "licenses/pcre2/LICENCE.md": {
+          "package": "mingw-w64-clang-x86_64-pcre2-10.49-2",
+          "member": "clang64/share/licenses/pcre2/LICENCE.md",
+          "sha256": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811"
+        },
+        "licenses/pixman/COPYING": {
+          "package": "mingw-w64-clang-x86_64-pixman-0.46.4-3",
+          "member": "clang64/share/licenses/pixman/COPYING",
+          "sha256": "fac9270f0987b96ff4533fca3548c633e02083cbba4a0172a3b149b2e4019793"
+        },
+        "licenses/spice-gtk/COPYING": {
+          "package": "mingw-w64-clang-x86_64-spice-gtk-0.43-2",
+          "member": "clang64/share/licenses/spice-gtk/COPYING",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        "licenses/sqlite/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-sqlite-3.54.1-2",
+          "member": "clang64/share/licenses/sqlite/LICENSE",
+          "sha256": "0b76663a90e034f3d7f2af5bfada4cedec5ebc275361899eccc5c18e6f01ff1f"
+        },
+        "licenses/usbredir/COPYING": {
+          "package": "mingw-w64-clang-x86_64-usbredir-0.15.0-1",
+          "member": "clang64/share/licenses/usbredir/COPYING",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        "licenses/usbredir/COPYING.LIB": {
+          "package": "mingw-w64-clang-x86_64-usbredir-0.15.0-1",
+          "member": "clang64/share/licenses/usbredir/COPYING.LIB",
+          "sha256": "592987e8510228d546540b84a22444bde98e48d03078d3b2eefcd889bec5ce8c"
+        },
+        "licenses/zlib-ng-compat/LICENSE.md": {
+          "package": "mingw-w64-clang-x86_64-zlib-ng-compat-2.3.3-4",
+          "member": "clang64/share/licenses/zlib-ng-compat/LICENSE.md",
+          "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee"
+        },
+        "licenses/zstd/LICENSE": {
+          "package": "mingw-w64-clang-x86_64-zstd-1.5.7-2",
+          "member": "clang64/share/licenses/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        },
+        "nss3.dll": {
+          "package": "mingw-w64-clang-x86_64-nss-3.134-1",
+          "member": "clang64/bin/nss3.dll",
+          "sha256": "68fd1a46dfde166c9d0e8dd52fd7ec2168bc42778c021c3743e7680ff36a65da"
+        },
+        "nssutil3.dll": {
+          "package": "mingw-w64-clang-x86_64-nss-3.134-1",
+          "member": "clang64/bin/nssutil3.dll",
+          "sha256": "20c199fa218e16708fe3bead5a4e4905735be9adb206ce32e3dff408bdc4bbb1"
+        },
+        "sasl2/libanonymous-3.dll": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/lib/sasl2/libanonymous-3.dll",
+          "sha256": "faa9c3407a57b827cc3ba73a5c12e65b52955f7a3fd51686a244f54d81dc35d0"
+        },
+        "sasl2/libcrammd5-3.dll": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/lib/sasl2/libcrammd5-3.dll",
+          "sha256": "ffb77dadb5236a4a18e3211c43070742c4e694910d6a20cbf458958dfa76139c"
+        },
+        "sasl2/libdigestmd5-3.dll": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/lib/sasl2/libdigestmd5-3.dll",
+          "sha256": "4efd1c546f75926a96b0434ae6bf6f0d34fd66301429fbf100980396a886e11b"
+        },
+        "sasl2/libplain-3.dll": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/lib/sasl2/libplain-3.dll",
+          "sha256": "f2fccca12403662b24e1a0932bf55fa1d0f9516b55d267c0693445ac9ef64fd8"
+        },
+        "sasl2/libscram-3.dll": {
+          "package": "mingw-w64-clang-x86_64-cyrus-sasl-2.1.28-8",
+          "member": "clang64/lib/sasl2/libscram-3.dll",
+          "sha256": "c720da731da5da7a0b9e85be36fe6c0b049b898f5dcab0ea37c55418580c13df"
+        },
+        "zlib1.dll": {
+          "package": "mingw-w64-clang-x86_64-zlib-ng-compat-2.3.3-4",
+          "member": "clang64/bin/zlib1.dll",
+          "sha256": "3f681e940fa74134302551f421c8005b2a396399374b0a673d838055912ffd1f"
+        }
+      }
+    },
+    "aarch64-pc-windows-msvc": {
+      "repository": "https://repo.msys2.org/mingw/clangarm64/",
+      "index_sha256": "3150a21b213e676046a764f3ad532dadb3ff07fe11daaacf89cbb514cfa318d0",
+      "machine": 43620,
+      "packages": {
+        "mingw-w64-clang-aarch64-brotli-1.2.1-1": {
+          "archive": "mingw-w64-clang-aarch64-brotli-1.2.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-brotli-1.2.1-1-any.pkg.tar.zst",
+          "sha256": "a7553036e041cb103445d5d19e89b8720650bf2c1695ebd85dacd9e89bce2064",
+          "name": "mingw-w64-clang-aarch64-brotli",
+          "version": "1.2.1-1",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://github.com/google/brotli",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-brotli"
+        },
+        "mingw-w64-clang-aarch64-ca-certificates-20260816-6": {
+          "archive": "mingw-w64-clang-aarch64-ca-certificates-20260816-6-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-ca-certificates-20260816-6-any.pkg.tar.zst",
+          "sha256": "61b810a0c3f8e0f9174af77cbfe1b1ec9893aa4a150286bbe5ae9a11beee2432",
+          "name": "mingw-w64-clang-aarch64-ca-certificates",
+          "version": "20260816-6",
+          "licenses": [
+            "MPL",
+            "GPL"
+          ],
+          "upstream": "https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-ca-certificates"
+        },
+        "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8": {
+          "archive": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8-any.pkg.tar.zst",
+          "sha256": "55260aca4f42a48f2a721358de4cfc06445bd40854c2504e7749ce8b70e29095",
+          "name": "mingw-w64-clang-aarch64-cyrus-sasl",
+          "version": "2.1.28-8",
+          "licenses": [
+            "custom"
+          ],
+          "upstream": "https://www.cyrusimap.org/sasl/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-cyrus-sasl"
+        },
+        "mingw-w64-clang-aarch64-gettext-runtime-1.0-1": {
+          "archive": "mingw-w64-clang-aarch64-gettext-runtime-1.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-gettext-runtime-1.0-1-any.pkg.tar.zst",
+          "sha256": "b5364a7c78cc4b73273a4a28e07e3c6d9cc8ec0ce269527409d944ab1c8f5a70",
+          "name": "mingw-w64-clang-aarch64-gettext-runtime",
+          "version": "1.0-1",
+          "licenses": [
+            "spdx:GPL-3.0-or-later AND LGPL-2.1-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/gettext/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gettext"
+        },
+        "mingw-w64-clang-aarch64-glib2-2.90.1-1": {
+          "archive": "mingw-w64-clang-aarch64-glib2-2.90.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-glib2-2.90.1-1-any.pkg.tar.zst",
+          "sha256": "88fd4d41048ca769147612f539758d7cb88b2ac22baad46c686444c534df11f7",
+          "name": "mingw-w64-clang-aarch64-glib2",
+          "version": "2.90.1-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gitlab.gnome.org/GNOME/glib",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-glib2"
+        },
+        "mingw-w64-clang-aarch64-gst-plugins-bad-1.28.9-2": {
+          "archive": "mingw-w64-clang-aarch64-gst-plugins-bad-1.28.9-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-gst-plugins-bad-1.28.9-2-any.pkg.tar.zst",
+          "sha256": "e67495f60d75619c56b772d84692d2ff295e17795e4d590b123ccfbec3f0ee43",
+          "name": "mingw-w64-clang-aarch64-gst-plugins-bad",
+          "version": "1.28.9-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-bad"
+        },
+        "mingw-w64-clang-aarch64-gst-plugins-bad-libs-1.28.9-2": {
+          "archive": "mingw-w64-clang-aarch64-gst-plugins-bad-libs-1.28.9-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-gst-plugins-bad-libs-1.28.9-2-any.pkg.tar.zst",
+          "sha256": "f0d751bf3c9e4fefa52379b74fe3dee34a57ea0f3fc80b103e867786e53716b0",
+          "name": "mingw-w64-clang-aarch64-gst-plugins-bad-libs",
+          "version": "1.28.9-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-bad"
+        },
+        "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1": {
+          "archive": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1-any.pkg.tar.zst",
+          "sha256": "970ecf39ede28ab96ac6f75b354490e529c8441a56c7796c1102f1ebea436d58",
+          "name": "mingw-w64-clang-aarch64-gst-plugins-base",
+          "version": "1.28.9-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-base"
+        },
+        "mingw-w64-clang-aarch64-gst-plugins-good-1.28.9-1": {
+          "archive": "mingw-w64-clang-aarch64-gst-plugins-good-1.28.9-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-gst-plugins-good-1.28.9-1-any.pkg.tar.zst",
+          "sha256": "e64d950bcea12065b5aa096517b61452c5327a7a141480cd639e0a6e7f76b26e",
+          "name": "mingw-w64-clang-aarch64-gst-plugins-good",
+          "version": "1.28.9-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gst-plugins-good"
+        },
+        "mingw-w64-clang-aarch64-gstreamer-1.28.9-1": {
+          "archive": "mingw-w64-clang-aarch64-gstreamer-1.28.9-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-gstreamer-1.28.9-1-any.pkg.tar.zst",
+          "sha256": "effb61b153b4ba8c3bf1e0ab19af88c4ad9caee0203af296665feb60c50d6d11",
+          "name": "mingw-w64-clang-aarch64-gstreamer",
+          "version": "1.28.9-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-gstreamer"
+        },
+        "mingw-w64-clang-aarch64-json-glib-1.10.8-2": {
+          "archive": "mingw-w64-clang-aarch64-json-glib-1.10.8-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-json-glib-1.10.8-2-any.pkg.tar.zst",
+          "sha256": "05f0a70c1acb45bffcd31aa818c8284fe6a4cea0fb4f8c9a96dc2d4f7fda8136",
+          "name": "mingw-w64-clang-aarch64-json-glib",
+          "version": "1.10.8-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gnome.pages.gitlab.gnome.org/json-glib/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-json-glib"
+        },
+        "mingw-w64-clang-aarch64-libc++-23.1.5-1": {
+          "archive": "mingw-w64-clang-aarch64-libc++-23.1.5-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libc++-23.1.5-1-any.pkg.tar.zst",
+          "sha256": "1b97980cdb09ea06478e4c790b47c2eef63f9105e298cfe588ed7bac1768c02a",
+          "name": "mingw-w64-clang-aarch64-libc++",
+          "version": "23.1.5-1",
+          "licenses": [
+            "spdx:Apache-2.0 WITH LLVM-exception"
+          ],
+          "upstream": "https://libcxx.llvm.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libc++"
+        },
+        "mingw-w64-clang-aarch64-libcacard-2.8.1-2": {
+          "archive": "mingw-w64-clang-aarch64-libcacard-2.8.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libcacard-2.8.1-2-any.pkg.tar.zst",
+          "sha256": "6ff0acb0ae69632635fafe15a53aff98ee6d91ca26b8a01cfc133537324b0166",
+          "name": "mingw-w64-clang-aarch64-libcacard",
+          "version": "2.8.1-2",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://gitlab.freedesktop.org/spice/libcacard",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libcacard"
+        },
+        "mingw-w64-clang-aarch64-libffi-3.8.1-1": {
+          "archive": "mingw-w64-clang-aarch64-libffi-3.8.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libffi-3.8.1-1-any.pkg.tar.zst",
+          "sha256": "b4fda38c76e77791f596a74d089658afb20e12ac7be9e30a7f6b9b5270352b94",
+          "name": "mingw-w64-clang-aarch64-libffi",
+          "version": "3.8.1-1",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://sourceware.org/libffi",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libffi"
+        },
+        "mingw-w64-clang-aarch64-libiconv-1.19.1-1": {
+          "archive": "mingw-w64-clang-aarch64-libiconv-1.19.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libiconv-1.19.1-1-any.pkg.tar.zst",
+          "sha256": "71091b7681d3e94820422793a8c23b612d52b1a858615d95acbb389cd3dd7206",
+          "name": "mingw-w64-clang-aarch64-libiconv",
+          "version": "1.19.1-1",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later",
+            "documentation:spdx:GPL-3.0-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/libiconv/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libiconv"
+        },
+        "mingw-w64-clang-aarch64-libidn2-2.3.8-5": {
+          "archive": "mingw-w64-clang-aarch64-libidn2-2.3.8-5-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libidn2-2.3.8-5-any.pkg.tar.zst",
+          "sha256": "e6303b7156941254669f237060c90651253b66d0b5ca83bf90a6bd56ffcee2ce",
+          "name": "mingw-w64-clang-aarch64-libidn2",
+          "version": "2.3.8-5",
+          "licenses": [
+            "spdx:GPL-2.0-or-later",
+            "spdx:LGPL-3.0-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/libidn/#libidn2",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libidn2"
+        },
+        "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1": {
+          "archive": "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1-any.pkg.tar.zst",
+          "sha256": "c8fe0922759e127f349195769c5d16680bc9ab57dc78b3c7c3352cda5c0f4820",
+          "name": "mingw-w64-clang-aarch64-libjpeg-turbo",
+          "version": "3.2.1-1",
+          "licenses": [
+            "custom:BSD-like"
+          ],
+          "upstream": "https://libjpeg-turbo.virtualgl.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libjpeg-turbo"
+        },
+        "mingw-w64-clang-aarch64-libpsl-0.21.5-3": {
+          "archive": "mingw-w64-clang-aarch64-libpsl-0.21.5-3-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libpsl-0.21.5-3-any.pkg.tar.zst",
+          "sha256": "3681ab00f55b15c894d39b8656bb5e598c266cd6d365e0d7daf3b3401d3b41f0",
+          "name": "mingw-w64-clang-aarch64-libpsl",
+          "version": "0.21.5-3",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://rockdaboot.github.io/libpsl/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libpsl"
+        },
+        "mingw-w64-clang-aarch64-libsoup3-3.8.1-1": {
+          "archive": "mingw-w64-clang-aarch64-libsoup3-3.8.1-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libsoup3-3.8.1-1-any.pkg.tar.zst",
+          "sha256": "2ff9cee9322de0b7141464980576027e40e154b7b6fcc1a89d7a85b9b31d5d26",
+          "name": "mingw-w64-clang-aarch64-libsoup3",
+          "version": "3.8.1-1",
+          "licenses": [
+            "spdx:LGPL-2.0-or-later"
+          ],
+          "upstream": "https://wiki.gnome.org/Projects/libsoup/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libsoup3"
+        },
+        "mingw-w64-clang-aarch64-libunistring-1.5-1": {
+          "archive": "mingw-w64-clang-aarch64-libunistring-1.5-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libunistring-1.5-1-any.pkg.tar.zst",
+          "sha256": "d6baddb5f46f20799d13746b43aaebba53cd36fb817fd24bc459635b1b0eea21",
+          "name": "mingw-w64-clang-aarch64-libunistring",
+          "version": "1.5-1",
+          "licenses": [
+            "spdx:LGPL-3.0-or-later OR GPL-3.0-or-later"
+          ],
+          "upstream": "https://www.gnu.org/software/libunistring",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libunistring"
+        },
+        "mingw-w64-clang-aarch64-libusb-1.0.30-1": {
+          "archive": "mingw-w64-clang-aarch64-libusb-1.0.30-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libusb-1.0.30-1-any.pkg.tar.zst",
+          "sha256": "3b50e8bfff2ecfcb886ba7c410e3511f5b8b1199971579969507c20d5f31a5ed",
+          "name": "mingw-w64-clang-aarch64-libusb",
+          "version": "1.0.30-1",
+          "licenses": [
+            "spdx:LGPL-2.1"
+          ],
+          "upstream": "https://libusb.info/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libusb"
+        },
+        "mingw-w64-clang-aarch64-libvpx-1.17.0-1": {
+          "archive": "mingw-w64-clang-aarch64-libvpx-1.17.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libvpx-1.17.0-1-any.pkg.tar.zst",
+          "sha256": "56c3fe8d0c88464e3d1b766c93c2984e85dd691fb34846b553f5e5b1bf8fe7e9",
+          "name": "mingw-w64-clang-aarch64-libvpx",
+          "version": "1.17.0-1",
+          "licenses": [
+            "spdx:BSD-3-Clause"
+          ],
+          "upstream": "https://www.webmproject.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libvpx"
+        },
+        "mingw-w64-clang-aarch64-libwinpthread-14.0.0.r598.ge3d18511f-1": {
+          "archive": "mingw-w64-clang-aarch64-libwinpthread-14.0.0.r598.ge3d18511f-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libwinpthread-14.0.0.r598.ge3d18511f-1-any.pkg.tar.zst",
+          "sha256": "fc3af1aaa693a3c63d2b3e02709c5644070e5525b5ec48814d01d9ef9333f44c",
+          "name": "mingw-w64-clang-aarch64-libwinpthread",
+          "version": "14.0.0.r598.ge3d18511f-1",
+          "licenses": [
+            "spdx:MIT AND BSD-3-Clause"
+          ],
+          "upstream": "https://www.mingw-w64.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-winpthreads"
+        },
+        "mingw-w64-clang-aarch64-libxml2-2.15.4-3": {
+          "archive": "mingw-w64-clang-aarch64-libxml2-2.15.4-3-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libxml2-2.15.4-3-any.pkg.tar.zst",
+          "sha256": "e9834f865456b02022614f412c25aa998895ea241ff5977a609c260c5920fe94",
+          "name": "mingw-w64-clang-aarch64-libxml2",
+          "version": "2.15.4-3",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-libxml2"
+        },
+        "mingw-w64-clang-aarch64-lz4-1.11.1-2": {
+          "archive": "mingw-w64-clang-aarch64-lz4-1.11.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-lz4-1.11.1-2-any.pkg.tar.zst",
+          "sha256": "a08cfb56fd6a1c005697bdaa74385896d06d42533c654ea045e0646bc3cd70c9",
+          "name": "mingw-w64-clang-aarch64-lz4",
+          "version": "1.11.1-2",
+          "licenses": [
+            "spdx:BSD-2-Clause AND GPL-2.0-or-later"
+          ],
+          "upstream": "https://lz4.github.io/lz4/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-lz4"
+        },
+        "mingw-w64-clang-aarch64-nghttp2-1.71.0-1": {
+          "archive": "mingw-w64-clang-aarch64-nghttp2-1.71.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-nghttp2-1.71.0-1-any.pkg.tar.zst",
+          "sha256": "21fba5353061b39e35de6236dff1971c20da8f0019d2b7c55d25b49069b746f7",
+          "name": "mingw-w64-clang-aarch64-nghttp2",
+          "version": "1.71.0-1",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://nghttp2.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-nghttp2"
+        },
+        "mingw-w64-clang-aarch64-nspr-4.41-1": {
+          "archive": "mingw-w64-clang-aarch64-nspr-4.41-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-nspr-4.41-1-any.pkg.tar.zst",
+          "sha256": "3c5f07000e96c415f6faa5ad38ca848639e57e0fb9141563bfd96b9ac1c2a4d2",
+          "name": "mingw-w64-clang-aarch64-nspr",
+          "version": "4.41-1",
+          "licenses": [
+            "spdx:MPL-2.0"
+          ],
+          "upstream": "https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-nspr"
+        },
+        "mingw-w64-clang-aarch64-nss-3.134-1": {
+          "archive": "mingw-w64-clang-aarch64-nss-3.134-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-nss-3.134-1-any.pkg.tar.zst",
+          "sha256": "5727e933d2981e189fe52ff297c1264f0194a259c00c8568ffbe2b137c5f4eae",
+          "name": "mingw-w64-clang-aarch64-nss",
+          "version": "3.134-1",
+          "licenses": [
+            "spdx:MPL-2.0"
+          ],
+          "upstream": "https://firefox-source-docs.mozilla.org/security/nss/index.html",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-nss"
+        },
+        "mingw-w64-clang-aarch64-openh264-2.7.0-1": {
+          "archive": "mingw-w64-clang-aarch64-openh264-2.7.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-openh264-2.7.0-1-any.pkg.tar.zst",
+          "sha256": "06637a2ea9129b8ffaa7f56ee66fad6174b6014d50f53aadcf69c8a91d8ca7a1",
+          "name": "mingw-w64-clang-aarch64-openh264",
+          "version": "2.7.0-1",
+          "licenses": [
+            "spdx:BSD-2-Clause"
+          ],
+          "upstream": "https://www.openh264.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-openh264"
+        },
+        "mingw-w64-clang-aarch64-openssl-4.1.0-1": {
+          "archive": "mingw-w64-clang-aarch64-openssl-4.1.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-openssl-4.1.0-1-any.pkg.tar.zst",
+          "sha256": "3117cdcbf162d092bf01239675f0b9596dbac37b84c4f6374e6ab5283230201f",
+          "name": "mingw-w64-clang-aarch64-openssl",
+          "version": "4.1.0-1",
+          "licenses": [
+            "spdx:Apache-2.0"
+          ],
+          "upstream": "https://openssl-library.org",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-openssl"
+        },
+        "mingw-w64-clang-aarch64-opus-1.6.1-2": {
+          "archive": "mingw-w64-clang-aarch64-opus-1.6.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-opus-1.6.1-2-any.pkg.tar.zst",
+          "sha256": "bca99279b9b39ca8c2e3283781d5e0ff05be8cb338fe4e12b7f67160fd7918ec",
+          "name": "mingw-w64-clang-aarch64-opus",
+          "version": "1.6.1-2",
+          "licenses": [
+            "spdx:BSD-3-Clause"
+          ],
+          "upstream": "https://www.opus-codec.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-opus"
+        },
+        "mingw-w64-clang-aarch64-orc-0.4.44-1": {
+          "archive": "mingw-w64-clang-aarch64-orc-0.4.44-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-orc-0.4.44-1-any.pkg.tar.zst",
+          "sha256": "03851279d9697e7185c5b3a0928f66df1555224c0cd6d5655fd6bc042b645a50",
+          "name": "mingw-w64-clang-aarch64-orc",
+          "version": "0.4.44-1",
+          "licenses": [
+            "custom"
+          ],
+          "upstream": "https://gstreamer.freedesktop.org/projects/orc.html",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-orc"
+        },
+        "mingw-w64-clang-aarch64-pcre2-10.49-2": {
+          "archive": "mingw-w64-clang-aarch64-pcre2-10.49-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-pcre2-10.49-2-any.pkg.tar.zst",
+          "sha256": "aaf8c4ade10e86f702cf3e5844363826ebb4c548bef83529b40053cbc119c6c1",
+          "name": "mingw-w64-clang-aarch64-pcre2",
+          "version": "10.49-2",
+          "licenses": [
+            "spdx:BSD-3-Clause"
+          ],
+          "upstream": "https://pcre.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-pcre2"
+        },
+        "mingw-w64-clang-aarch64-phodav-3.0-5": {
+          "archive": "mingw-w64-clang-aarch64-phodav-3.0-5-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-phodav-3.0-5-any.pkg.tar.zst",
+          "sha256": "650bc8686477ad975cfe862471ee047c732d8281a1f795cf28e7061f09172bf5",
+          "name": "mingw-w64-clang-aarch64-phodav",
+          "version": "3.0-5",
+          "licenses": [
+            "spdx:LGPL-2.1-or-later"
+          ],
+          "upstream": "https://wiki.gnome.org/phodav",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-phodav"
+        },
+        "mingw-w64-clang-aarch64-pixman-0.46.4-3": {
+          "archive": "mingw-w64-clang-aarch64-pixman-0.46.4-3-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-pixman-0.46.4-3-any.pkg.tar.zst",
+          "sha256": "c9bf9c5ab01e23a3bf775703be86fc70142431433ce286b06b50956a2b1af9b8",
+          "name": "mingw-w64-clang-aarch64-pixman",
+          "version": "0.46.4-3",
+          "licenses": [
+            "spdx:MIT"
+          ],
+          "upstream": "https://gitlab.freedesktop.org/pixman/pixman",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-pixman"
+        },
+        "mingw-w64-clang-aarch64-spice-gtk-0.43-2": {
+          "archive": "mingw-w64-clang-aarch64-spice-gtk-0.43-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-spice-gtk-0.43-2-any.pkg.tar.zst",
+          "sha256": "9e3f2543ad245912c79dc1144c1b99ac626f61183a75795c664ace87e15a7137",
+          "name": "mingw-w64-clang-aarch64-spice-gtk",
+          "version": "0.43-2",
+          "licenses": [
+            "spdx:LGPL-2.1-only"
+          ],
+          "upstream": "https://www.spice-space.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-spice-gtk"
+        },
+        "mingw-w64-clang-aarch64-sqlite-3.54.1-2": {
+          "archive": "mingw-w64-clang-aarch64-sqlite-3.54.1-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-sqlite-3.54.1-2-any.pkg.tar.zst",
+          "sha256": "977b8e50ded96c5512a0835ebf4ae356f26e404ea58bbdf6ec7fc2b48583bbb5",
+          "name": "mingw-w64-clang-aarch64-sqlite",
+          "version": "3.54.1-2",
+          "licenses": [
+            "PublicDomain"
+          ],
+          "upstream": "https://www.sqlite.org/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-sqlite"
+        },
+        "mingw-w64-clang-aarch64-usbredir-0.15.0-1": {
+          "archive": "mingw-w64-clang-aarch64-usbredir-0.15.0-1-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-usbredir-0.15.0-1-any.pkg.tar.zst",
+          "sha256": "fe4de82938ce1e7ffdd7dc66619f2b690b68865c12289ce09ad6bb64b489ac52",
+          "name": "mingw-w64-clang-aarch64-usbredir",
+          "version": "0.15.0-1",
+          "licenses": [
+            "spdx:GPL-2.0-or-later AND LGPL-2.1-or-later"
+          ],
+          "upstream": "https://www.spice-space.org/usbredir.html",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-usbredir"
+        },
+        "mingw-w64-clang-aarch64-zlib-ng-compat-2.3.3-4": {
+          "archive": "mingw-w64-clang-aarch64-zlib-ng-compat-2.3.3-4-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-zlib-ng-compat-2.3.3-4-any.pkg.tar.zst",
+          "sha256": "21171bbd94be4f468d5309505fba4254b8e61ba3bd345a85225a45d11f1b5564",
+          "name": "mingw-w64-clang-aarch64-zlib-ng-compat",
+          "version": "2.3.3-4",
+          "licenses": [
+            "spdx:Zlib"
+          ],
+          "upstream": "https://github.com/zlib-ng/zlib-ng",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-zlib-ng"
+        },
+        "mingw-w64-clang-aarch64-zstd-1.5.7-2": {
+          "archive": "mingw-w64-clang-aarch64-zstd-1.5.7-2-any.pkg.tar.zst",
+          "url": "https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-zstd-1.5.7-2-any.pkg.tar.zst",
+          "sha256": "f1444d0e664c6e60b324453ca3158ea159b1e880ba57ea229fbdc58e7ba5d9d2",
+          "name": "mingw-w64-clang-aarch64-zstd",
+          "version": "1.5.7-2",
+          "licenses": [
+            "spdx:BSD-3-Clause OR GPL-2.0-or-later"
+          ],
+          "upstream": "https://facebook.github.io/zstd/",
+          "recipe": "https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-zstd"
+        }
+      },
+      "files": {
+        "ca-bundle.pem": {
+          "package": "mingw-w64-clang-aarch64-ca-certificates-20260816-6",
+          "member": "clangarm64/etc/ssl/certs/ca-bundle.crt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "gstreamer-1.0/libgstapp.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstapp.dll",
+          "sha256": "07e32b430f0a654b21f32ce42703b9b6ff7b3eaad40d477629d230d6c80b3fa5"
+        },
+        "gstreamer-1.0/libgstcoreelements.dll": {
+          "package": "mingw-w64-clang-aarch64-gstreamer-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstcoreelements.dll",
+          "sha256": "a6c98928d022d5a306ddf29842294d63c5bb90f0d5d1e806729a3d223fb37de6"
+        },
+        "gstreamer-1.0/libgstjpeg.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-good-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstjpeg.dll",
+          "sha256": "79ea10f04ceaee236ec27d9744c6b534624e3c565fea7ce2cb76525716f9c8d0"
+        },
+        "gstreamer-1.0/libgstopenh264.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-bad-1.28.9-2",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstopenh264.dll",
+          "sha256": "2a05e24edcf4223106a2199668169cf4b94bf6b55ca295fce9095a83d1cddce7"
+        },
+        "gstreamer-1.0/libgstplayback.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstplayback.dll",
+          "sha256": "54e1ef227556689eed069c396e446316bb1a4e8ab425ebd51eaed8242c843622"
+        },
+        "gstreamer-1.0/libgsttypefindfunctions.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgsttypefindfunctions.dll",
+          "sha256": "8d69ed4ac0bc89730918580d7ca19382ffe2e46c07cc4783fb05f6f7396b7292"
+        },
+        "gstreamer-1.0/libgstvideoconvertscale.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstvideoconvertscale.dll",
+          "sha256": "96f5ae695de8037ee16308d2786c45c94956369afc5a00afe56cab0678ff8299"
+        },
+        "gstreamer-1.0/libgstvideoparsersbad.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-bad-1.28.9-2",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstvideoparsersbad.dll",
+          "sha256": "bd2319b6c22d3fc8b337640e09b2c2bbd71f787d7e64742d7ccf26afc2399859"
+        },
+        "gstreamer-1.0/libgstvpx.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-good-1.28.9-1",
+          "member": "clangarm64/lib/gstreamer-1.0/libgstvpx.dll",
+          "sha256": "ca1536603122f190d2c904e58847399a88739c1a5fe585ed7a013555c5b3eb27"
+        },
+        "libbrotlicommon.dll": {
+          "package": "mingw-w64-clang-aarch64-brotli-1.2.1-1",
+          "member": "clangarm64/bin/libbrotlicommon.dll",
+          "sha256": "0fb279db2ddc0c13c1fd7778cf9ab33726246bdeacf7ec3e41888048044e1f4e"
+        },
+        "libbrotlidec.dll": {
+          "package": "mingw-w64-clang-aarch64-brotli-1.2.1-1",
+          "member": "clangarm64/bin/libbrotlidec.dll",
+          "sha256": "f04b0e3f56c7c7b8688038572bf33794bc22aaf1b5f7def27490df27fb02be23"
+        },
+        "libc++.dll": {
+          "package": "mingw-w64-clang-aarch64-libc++-23.1.5-1",
+          "member": "clangarm64/bin/libc++.dll",
+          "sha256": "494f8882d0918ce2922a6d3c585723e6f0c6f820bd391948d58db362417106fb"
+        },
+        "libcacard-0.dll": {
+          "package": "mingw-w64-clang-aarch64-libcacard-2.8.1-2",
+          "member": "clangarm64/bin/libcacard-0.dll",
+          "sha256": "f7c1519080d8550e2aff39e784f11b01a6445c9d6469bfaee12dcc9c2467f85a"
+        },
+        "libcrypto-4-arm64.dll": {
+          "package": "mingw-w64-clang-aarch64-openssl-4.1.0-1",
+          "member": "clangarm64/bin/libcrypto-4-arm64.dll",
+          "sha256": "0fc43e7df4b126fc4d3e29720b56ee99f5eef0e99f444b1cf922ea90ee1e2004"
+        },
+        "libffi-8.dll": {
+          "package": "mingw-w64-clang-aarch64-libffi-3.8.1-1",
+          "member": "clangarm64/bin/libffi-8.dll",
+          "sha256": "f23b84267c515dc4fdc38d53af7f91a95740ed98b49ec3242726127311f9a22e"
+        },
+        "libgio-2.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-glib2-2.90.1-1",
+          "member": "clangarm64/bin/libgio-2.0-0.dll",
+          "sha256": "d9b5beaa7af88d98bd2614df02f5e89e6291f997650728c74dfbcd13ce2ba0f7"
+        },
+        "libglib-2.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-glib2-2.90.1-1",
+          "member": "clangarm64/bin/libglib-2.0-0.dll",
+          "sha256": "ad0e4705dada443d9139421d42b08e3f87ff64ec63274c26a8ffe4e591f50935"
+        },
+        "libgmodule-2.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-glib2-2.90.1-1",
+          "member": "clangarm64/bin/libgmodule-2.0-0.dll",
+          "sha256": "3ba40c305776bfe4c041669a29f2f0f9876892f0116374df5800b03acb9e2cf9"
+        },
+        "libgobject-2.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-glib2-2.90.1-1",
+          "member": "clangarm64/bin/libgobject-2.0-0.dll",
+          "sha256": "104a054e1b43fdf13cd0418c77bf8d34debb57a10b254e89ed66f37f40101177"
+        },
+        "libgstapp-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/bin/libgstapp-1.0-0.dll",
+          "sha256": "9bf7b77b98a9388291647d7bf9abd20c0e858c6889690dc6d1abc04dd86abaa0"
+        },
+        "libgstaudio-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/bin/libgstaudio-1.0-0.dll",
+          "sha256": "12aa16eb79f74325ad599016a49feccc8630c1611549add23e2c5b355fbd4736"
+        },
+        "libgstbase-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gstreamer-1.28.9-1",
+          "member": "clangarm64/bin/libgstbase-1.0-0.dll",
+          "sha256": "753a369ac8f622e7761bd7062d80219410b2ed8f595db343b9730b8d02550367"
+        },
+        "libgstcodecparsers-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-bad-libs-1.28.9-2",
+          "member": "clangarm64/bin/libgstcodecparsers-1.0-0.dll",
+          "sha256": "e3eb6792a5539b21d3080632a186196d78dbb238a9b3aa766c40137ac5020af7"
+        },
+        "libgstpbutils-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/bin/libgstpbutils-1.0-0.dll",
+          "sha256": "05c5292a9df0073e078192929cb0bf307874e21cc34cc42dd83d88d2cee20e5d"
+        },
+        "libgstreamer-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gstreamer-1.28.9-1",
+          "member": "clangarm64/bin/libgstreamer-1.0-0.dll",
+          "sha256": "493c941e6bc0b8669fcea7110e0197adb6d780950377e822dac32aabecad4ee1"
+        },
+        "libgsttag-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/bin/libgsttag-1.0-0.dll",
+          "sha256": "72a72ff56809f5ae2e20701f3d4fef4c4e1873626ea6aed7bdfb8199d06e13a2"
+        },
+        "libgstvideo-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-gst-plugins-base-1.28.9-1",
+          "member": "clangarm64/bin/libgstvideo-1.0-0.dll",
+          "sha256": "ab58f243736fa3b3c56125affc5565904bb70fe8e60c66aab7bb28a7aec1d8ff"
+        },
+        "libiconv-2.dll": {
+          "package": "mingw-w64-clang-aarch64-libiconv-1.19.1-1",
+          "member": "clangarm64/bin/libiconv-2.dll",
+          "sha256": "9f9f3a2d41f19894298188881a75c5eea5d5ec043e56e672351bc496bcd7b79e"
+        },
+        "libidn2-0.dll": {
+          "package": "mingw-w64-clang-aarch64-libidn2-2.3.8-5",
+          "member": "clangarm64/bin/libidn2-0.dll",
+          "sha256": "6fa24c8243a191f36fca98e9bd51abb1c7349161f25837bcdb0579cd3a376aaa"
+        },
+        "libintl-8.dll": {
+          "package": "mingw-w64-clang-aarch64-gettext-runtime-1.0-1",
+          "member": "clangarm64/bin/libintl-8.dll",
+          "sha256": "31db0d0e7780cf28dca1309a894cb775b2ab130c4ba777c546a206970ca47320"
+        },
+        "libjpeg-8.dll": {
+          "package": "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1",
+          "member": "clangarm64/bin/libjpeg-8.dll",
+          "sha256": "4a38e19ebdb27de3e1e73e5f880de3e43cce8675282994de9242239690b6fa03"
+        },
+        "libjson-glib-1.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-json-glib-1.10.8-2",
+          "member": "clangarm64/bin/libjson-glib-1.0-0.dll",
+          "sha256": "02ae89f0492c3004694ab47743d80d4a236d7f0df019bb1ec78a6634993567f2"
+        },
+        "liblz4.dll": {
+          "package": "mingw-w64-clang-aarch64-lz4-1.11.1-2",
+          "member": "clangarm64/bin/liblz4.dll",
+          "sha256": "8b9e795841afd663f212495fd4e16b3170f6f14be86026b8b6d4fd75390b2a7d"
+        },
+        "libnghttp2-14.dll": {
+          "package": "mingw-w64-clang-aarch64-nghttp2-1.71.0-1",
+          "member": "clangarm64/bin/libnghttp2-14.dll",
+          "sha256": "5e90d98fd5af251cabd3ef72835cc5766f3c3aa469151a4ae34594284a02cd14"
+        },
+        "libnspr4.dll": {
+          "package": "mingw-w64-clang-aarch64-nspr-4.41-1",
+          "member": "clangarm64/bin/libnspr4.dll",
+          "sha256": "6787c2a9ffe6757509e9eecec32f585e1e2cb076233acc8880cb164c086ffd12"
+        },
+        "libopenh264-8.dll": {
+          "package": "mingw-w64-clang-aarch64-openh264-2.7.0-1",
+          "member": "clangarm64/bin/libopenh264-8.dll",
+          "sha256": "773f981489b093f0d038e4beba99fbb74369b4b7deb820b66bbb508a71536952"
+        },
+        "libopus-0.dll": {
+          "package": "mingw-w64-clang-aarch64-opus-1.6.1-2",
+          "member": "clangarm64/bin/libopus-0.dll",
+          "sha256": "38bc125719c86e73a4120e33fba812492035508d89c80e7c483af8304d0902dd"
+        },
+        "liborc-0.4-0.dll": {
+          "package": "mingw-w64-clang-aarch64-orc-0.4.44-1",
+          "member": "clangarm64/bin/liborc-0.4-0.dll",
+          "sha256": "dd3dec36093d4b861dd3734933d34bde394fab671ba1ecc1c71ae96d7530f592"
+        },
+        "libpcre2-8-0.dll": {
+          "package": "mingw-w64-clang-aarch64-pcre2-10.49-2",
+          "member": "clangarm64/bin/libpcre2-8-0.dll",
+          "sha256": "32fdf12e452f55266882dd7d08683b08ef89b11226e190426535199788d5f2db"
+        },
+        "libphodav-3.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-phodav-3.0-5",
+          "member": "clangarm64/bin/libphodav-3.0-0.dll",
+          "sha256": "09e92bc39e10b349adde651ed9596a785884ec7501c4686ed853ec46492a8c3f"
+        },
+        "libpixman-1-0.dll": {
+          "package": "mingw-w64-clang-aarch64-pixman-0.46.4-3",
+          "member": "clangarm64/bin/libpixman-1-0.dll",
+          "sha256": "46afdf089cc648d7523fa28c0b3679329a3e2dc4c26be9d1504dfc585966a172"
+        },
+        "libplc4.dll": {
+          "package": "mingw-w64-clang-aarch64-nspr-4.41-1",
+          "member": "clangarm64/bin/libplc4.dll",
+          "sha256": "81b202d38dd0c0e9dd143bc736f28d01f499aded81c3fe3cf19b4ebf043522a7"
+        },
+        "libplds4.dll": {
+          "package": "mingw-w64-clang-aarch64-nspr-4.41-1",
+          "member": "clangarm64/bin/libplds4.dll",
+          "sha256": "0de1a633544380c002388064e72d2fbc4b5f651e2ed040e43ea8b219d7ce877e"
+        },
+        "libpsl-5.dll": {
+          "package": "mingw-w64-clang-aarch64-libpsl-0.21.5-3",
+          "member": "clangarm64/bin/libpsl-5.dll",
+          "sha256": "95f5a1cac819829e39e21eea8b3b95ab5aa14fb4fdab8cc95b963577adea411f"
+        },
+        "libsasl2-3.dll": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/bin/libsasl2-3.dll",
+          "sha256": "ac7143dc250015465e0b468e7c5ada7cca1874961fb4cce77df92776abd8fd79"
+        },
+        "libsoup-3.0-0.dll": {
+          "package": "mingw-w64-clang-aarch64-libsoup3-3.8.1-1",
+          "member": "clangarm64/bin/libsoup-3.0-0.dll",
+          "sha256": "a3abdfb41cc2c6f44049c5ff77fc3df4f17399a975bedc17114721cea9835edd"
+        },
+        "libspice-client-glib-2.0-8.dll": {
+          "package": "mingw-w64-clang-aarch64-spice-gtk-0.43-2",
+          "member": "clangarm64/bin/libspice-client-glib-2.0-8.dll",
+          "sha256": "c7e2c82d15e57b4df4f58fd5700679b9a97276ff97994698d767cb1e7a93f784"
+        },
+        "libsqlite3-0.dll": {
+          "package": "mingw-w64-clang-aarch64-sqlite-3.54.1-2",
+          "member": "clangarm64/bin/libsqlite3-0.dll",
+          "sha256": "0e9b8cf033a3ed6afe9cfee4e85712743c8cfb623d77b1d52421f54e4b13f62e"
+        },
+        "libssl-4-arm64.dll": {
+          "package": "mingw-w64-clang-aarch64-openssl-4.1.0-1",
+          "member": "clangarm64/bin/libssl-4-arm64.dll",
+          "sha256": "157f11492549e4affcd6587545bb5a357e88f35885d694845d6342181f674af0"
+        },
+        "libunistring-5.dll": {
+          "package": "mingw-w64-clang-aarch64-libunistring-1.5-1",
+          "member": "clangarm64/bin/libunistring-5.dll",
+          "sha256": "d5bd9f03e2eb1f474578d369c0b46a73124da0051dec6c84c0f2f6b7237adfbd"
+        },
+        "libusb-1.0.dll": {
+          "package": "mingw-w64-clang-aarch64-libusb-1.0.30-1",
+          "member": "clangarm64/bin/libusb-1.0.dll",
+          "sha256": "2245afc3686034d1a8fa8d688714e582514429490f3c82274fc11a66aec3996b"
+        },
+        "libusbredirhost-1.dll": {
+          "package": "mingw-w64-clang-aarch64-usbredir-0.15.0-1",
+          "member": "clangarm64/bin/libusbredirhost-1.dll",
+          "sha256": "21437754ef6d8a60951a814321b1fbf9a249acd7d84491036b56eccd59c5f323"
+        },
+        "libusbredirparser-1.dll": {
+          "package": "mingw-w64-clang-aarch64-usbredir-0.15.0-1",
+          "member": "clangarm64/bin/libusbredirparser-1.dll",
+          "sha256": "43d728bd02c3631761b10bc015da70844ff57c5386f5bbf1d1978a7d24e41a1a"
+        },
+        "libvpx-1.dll": {
+          "package": "mingw-w64-clang-aarch64-libvpx-1.17.0-1",
+          "member": "clangarm64/bin/libvpx-1.dll",
+          "sha256": "b83adf064b6a45899388fa236c0e29ace34e81a2f95d74f177a0fed5d6346d91"
+        },
+        "libwinpthread-1.dll": {
+          "package": "mingw-w64-clang-aarch64-libwinpthread-14.0.0.r598.ge3d18511f-1",
+          "member": "clangarm64/bin/libwinpthread-1.dll",
+          "sha256": "4d0ec27c2c0b10db07b86b668b16bad6325bd8b6aaaecdfd2e8df14113693fca"
+        },
+        "libxml2-16.dll": {
+          "package": "mingw-w64-clang-aarch64-libxml2-2.15.4-3",
+          "member": "clangarm64/bin/libxml2-16.dll",
+          "sha256": "80f1272145175d1e64ebf6fd47b1f6ade9dda83bf355a7cc8c1f81b396016f32"
+        },
+        "libz-1.dll": {
+          "package": "mingw-w64-clang-aarch64-zlib-ng-compat-2.3.3-4",
+          "member": "clangarm64/bin/libz-1.dll",
+          "sha256": "59e0032ff229f490c3b84be62f3344f1eaf5db314259640ff236d93d4e6dec4b"
+        },
+        "libzstd.dll": {
+          "package": "mingw-w64-clang-aarch64-zstd-1.5.7-2",
+          "member": "clangarm64/bin/libzstd.dll",
+          "sha256": "87e871f3f06ee054cdac83f99a7ea260f306472c923a1615ef88000905bfb9f2"
+        },
+        "licenses/brotli/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-brotli-1.2.1-1",
+          "member": "clangarm64/share/licenses/brotli/LICENSE",
+          "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+        },
+        "licenses/cyrus-sasl/COPYING": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/share/licenses/cyrus-sasl/COPYING",
+          "sha256": "9d6e5d1632140a6c135b251260953650d17d87cd1124f87aaf72192aa4580d4b"
+        },
+        "licenses/gettext-runtime/COPYING": {
+          "package": "mingw-w64-clang-aarch64-gettext-runtime-1.0-1",
+          "member": "clangarm64/share/licenses/gettext-runtime/COPYING",
+          "sha256": "7ef2cdfe58e0c0460657b6598b49af29d4e03c1e41cbaf0e1da1eb8ad74b95d0"
+        },
+        "licenses/gettext-runtime/intl/COPYING.LIB": {
+          "package": "mingw-w64-clang-aarch64-gettext-runtime-1.0-1",
+          "member": "clangarm64/share/licenses/gettext-runtime/intl/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/gettext-runtime/libasprintf/COPYING": {
+          "package": "mingw-w64-clang-aarch64-gettext-runtime-1.0-1",
+          "member": "clangarm64/share/licenses/gettext-runtime/libasprintf/COPYING",
+          "sha256": "03133addae5b99a6148c538300e6d97074453089be1423b741bd081f18e2b298"
+        },
+        "licenses/gettext-runtime/libasprintf/COPYING.LIB": {
+          "package": "mingw-w64-clang-aarch64-gettext-runtime-1.0-1",
+          "member": "clangarm64/share/licenses/gettext-runtime/libasprintf/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/glib2/COPYING": {
+          "package": "mingw-w64-clang-aarch64-glib2-2.90.1-1",
+          "member": "clangarm64/share/licenses/glib2/COPYING",
+          "sha256": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+        },
+        "licenses/json-glib/COPYING": {
+          "package": "mingw-w64-clang-aarch64-json-glib-1.10.8-2",
+          "member": "clangarm64/share/licenses/json-glib/COPYING",
+          "sha256": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+        },
+        "licenses/libc++/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-libc++-23.1.5-1",
+          "member": "clangarm64/share/licenses/libc++/LICENSE",
+          "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+        },
+        "licenses/libcacard/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libcacard-2.8.1-2",
+          "member": "clangarm64/share/licenses/libcacard/COPYING",
+          "sha256": "48ffe9fc7f1d5462dbd19340bc4dd1d8a9e37c61ed535813e614cbe4a5f0d4df"
+        },
+        "licenses/libffi/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-libffi-3.8.1-1",
+          "member": "clangarm64/share/licenses/libffi/LICENSE",
+          "sha256": "17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c"
+        },
+        "licenses/libiconv/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libiconv-1.19.1-1",
+          "member": "clangarm64/share/licenses/libiconv/COPYING",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        "licenses/libiconv/COPYING.LIB": {
+          "package": "mingw-w64-clang-aarch64-libiconv-1.19.1-1",
+          "member": "clangarm64/share/licenses/libiconv/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/libiconv/README": {
+          "package": "mingw-w64-clang-aarch64-libiconv-1.19.1-1",
+          "member": "clangarm64/share/licenses/libiconv/README",
+          "sha256": "ff0400ffb0c3dace1a64012f4125f292a3fef58c5b8486c7f9ba0c01a0637f3c"
+        },
+        "licenses/libiconv/libcharset/COPYING.LIB": {
+          "package": "mingw-w64-clang-aarch64-libiconv-1.19.1-1",
+          "member": "clangarm64/share/licenses/libiconv/libcharset/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "licenses/libjpeg-turbo/LICENSE.md": {
+          "package": "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1",
+          "member": "clangarm64/share/licenses/libjpeg-turbo/LICENSE.md",
+          "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+        },
+        "licenses/libjpeg-turbo/README.ijg": {
+          "package": "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1",
+          "member": "clangarm64/share/licenses/libjpeg-turbo/README.ijg",
+          "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+        },
+        "licenses/libjpeg-turbo/README.md": {
+          "package": "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1",
+          "member": "clangarm64/share/licenses/libjpeg-turbo/README.md",
+          "sha256": "bd71f6ebae1c151e4b5fe7072dc2cedcf33671fa40d91ad5f9058ecdc0b01721"
+        },
+        "licenses/libjpeg-turbo/simd/jsimdext.inc": {
+          "package": "mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1",
+          "member": "clangarm64/share/licenses/libjpeg-turbo/simd/jsimdext.inc",
+          "sha256": "68c5d236785edf75344cebe8b9bec36568bd35c96eb72cc67ffecd66c17dbd74"
+        },
+        "licenses/libphodav/COPYING": {
+          "package": "mingw-w64-clang-aarch64-phodav-3.0-5",
+          "member": "clangarm64/share/licenses/libphodav/COPYING",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        "licenses/libpsl/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libpsl-0.21.5-3",
+          "member": "clangarm64/share/licenses/libpsl/COPYING",
+          "sha256": "322392e6001b2b3b0fca705dc9f11f26e12441188ecde50eb1d22909980b2925"
+        },
+        "licenses/libsoup3/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libsoup3-3.8.1-1",
+          "member": "clangarm64/share/licenses/libsoup3/COPYING",
+          "sha256": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c"
+        },
+        "licenses/libunistring/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-libunistring-1.5-1",
+          "member": "clangarm64/share/licenses/libunistring/LICENSE",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        "licenses/libunistring/LICENSE.LIB": {
+          "package": "mingw-w64-clang-aarch64-libunistring-1.5-1",
+          "member": "clangarm64/share/licenses/libunistring/LICENSE.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        },
+        "licenses/libusb/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libusb-1.0.30-1",
+          "member": "clangarm64/share/licenses/libusb/COPYING",
+          "sha256": "5df07007198989c622f5d41de8d703e7bef3d0e79d62e24332ee739a452af62a"
+        },
+        "licenses/libwinpthread/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libwinpthread-14.0.0.r598.ge3d18511f-1",
+          "member": "clangarm64/share/licenses/libwinpthread/COPYING",
+          "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+        },
+        "licenses/libxml2/COPYING": {
+          "package": "mingw-w64-clang-aarch64-libxml2-2.15.4-3",
+          "member": "clangarm64/share/licenses/libxml2/COPYING",
+          "sha256": "5d4873884a890122a4b9b20ad56ac6f7da1d796a5bfcf04a427970ac96217626"
+        },
+        "licenses/nghttp2/COPYING": {
+          "package": "mingw-w64-clang-aarch64-nghttp2-1.71.0-1",
+          "member": "clangarm64/share/licenses/nghttp2/COPYING",
+          "sha256": "6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a"
+        },
+        "licenses/nspr/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-nspr-4.41-1",
+          "member": "clangarm64/share/licenses/nspr/LICENSE",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+        },
+        "licenses/nss/COPYING": {
+          "package": "mingw-w64-clang-aarch64-nss-3.134-1",
+          "member": "clangarm64/share/licenses/nss/COPYING",
+          "sha256": "a20c1a32d1f8102432360b42e932869f7c11c7cdbacf9cac554c422132af47f4"
+        },
+        "licenses/openh264/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-openh264-2.7.0-1",
+          "member": "clangarm64/share/licenses/openh264/LICENSE",
+          "sha256": "dd5c1c9668512530fa5a96e4c29ac4033d70a7eeb0eed7a42fddb6dd794ebdbb"
+        },
+        "licenses/openssl/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-openssl-4.1.0-1",
+          "member": "clangarm64/share/licenses/openssl/LICENSE",
+          "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+        },
+        "licenses/opus/COPYING": {
+          "package": "mingw-w64-clang-aarch64-opus-1.6.1-2",
+          "member": "clangarm64/share/licenses/opus/COPYING",
+          "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+        },
+        "licenses/orc/COPYING": {
+          "package": "mingw-w64-clang-aarch64-orc-0.4.44-1",
+          "member": "clangarm64/share/licenses/orc/COPYING",
+          "sha256": "4f5dabb1b44bb6fc5cd53820b1f103147ad61b395a57903991325bd1b85d97bf"
+        },
+        "licenses/pcre2/COPYING": {
+          "package": "mingw-w64-clang-aarch64-pcre2-10.49-2",
+          "member": "clangarm64/share/licenses/pcre2/COPYING",
+          "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507"
+        },
+        "licenses/pcre2/LICENCE.md": {
+          "package": "mingw-w64-clang-aarch64-pcre2-10.49-2",
+          "member": "clangarm64/share/licenses/pcre2/LICENCE.md",
+          "sha256": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811"
+        },
+        "licenses/pixman/COPYING": {
+          "package": "mingw-w64-clang-aarch64-pixman-0.46.4-3",
+          "member": "clangarm64/share/licenses/pixman/COPYING",
+          "sha256": "fac9270f0987b96ff4533fca3548c633e02083cbba4a0172a3b149b2e4019793"
+        },
+        "licenses/spice-gtk/COPYING": {
+          "package": "mingw-w64-clang-aarch64-spice-gtk-0.43-2",
+          "member": "clangarm64/share/licenses/spice-gtk/COPYING",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        },
+        "licenses/sqlite/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-sqlite-3.54.1-2",
+          "member": "clangarm64/share/licenses/sqlite/LICENSE",
+          "sha256": "0b76663a90e034f3d7f2af5bfada4cedec5ebc275361899eccc5c18e6f01ff1f"
+        },
+        "licenses/usbredir/COPYING": {
+          "package": "mingw-w64-clang-aarch64-usbredir-0.15.0-1",
+          "member": "clangarm64/share/licenses/usbredir/COPYING",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        "licenses/usbredir/COPYING.LIB": {
+          "package": "mingw-w64-clang-aarch64-usbredir-0.15.0-1",
+          "member": "clangarm64/share/licenses/usbredir/COPYING.LIB",
+          "sha256": "592987e8510228d546540b84a22444bde98e48d03078d3b2eefcd889bec5ce8c"
+        },
+        "licenses/zlib-ng-compat/LICENSE.md": {
+          "package": "mingw-w64-clang-aarch64-zlib-ng-compat-2.3.3-4",
+          "member": "clangarm64/share/licenses/zlib-ng-compat/LICENSE.md",
+          "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee"
+        },
+        "licenses/zstd/LICENSE": {
+          "package": "mingw-w64-clang-aarch64-zstd-1.5.7-2",
+          "member": "clangarm64/share/licenses/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        },
+        "nss3.dll": {
+          "package": "mingw-w64-clang-aarch64-nss-3.134-1",
+          "member": "clangarm64/bin/nss3.dll",
+          "sha256": "60e5b0c423d536e85af308464e1e1f03044ca73dae78837d8580d6c583ce4824"
+        },
+        "nssutil3.dll": {
+          "package": "mingw-w64-clang-aarch64-nss-3.134-1",
+          "member": "clangarm64/bin/nssutil3.dll",
+          "sha256": "eaddf1c62fe184055ac1b343c50970da3be6ab159b3f6f4e17009bea52d95d24"
+        },
+        "sasl2/libanonymous-3.dll": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/lib/sasl2/libanonymous-3.dll",
+          "sha256": "e7ce3cf44ad27b2dfee5d212113fe0d3cae26846e10b38d2e6aea7b5bf68034d"
+        },
+        "sasl2/libcrammd5-3.dll": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/lib/sasl2/libcrammd5-3.dll",
+          "sha256": "a56482ee9e8fdb33e6f3b6f217f2d03f9e564b42456334e296fe744943c2460f"
+        },
+        "sasl2/libdigestmd5-3.dll": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/lib/sasl2/libdigestmd5-3.dll",
+          "sha256": "7b746f83e4af152770f2ca8c8209ff3f2f565388f4982db3fc4719788fd6b3b8"
+        },
+        "sasl2/libplain-3.dll": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/lib/sasl2/libplain-3.dll",
+          "sha256": "d47aeb4bda54b244d3dac0b2d4fa14d0f9f4d685dc07a2d4b3034ad3b4d4ab90"
+        },
+        "sasl2/libscram-3.dll": {
+          "package": "mingw-w64-clang-aarch64-cyrus-sasl-2.1.28-8",
+          "member": "clangarm64/lib/sasl2/libscram-3.dll",
+          "sha256": "38e7330daed7234f722f2da261e17ee0e6323152fb425c46583a14cf4f288b78"
+        },
+        "zlib1.dll": {
+          "package": "mingw-w64-clang-aarch64-zlib-ng-compat-2.3.3-4",
+          "member": "clangarm64/bin/zlib1.dll",
+          "sha256": "59e0032ff229f490c3b84be62f3344f1eaf5db314259640ff236d93d4e6dec4b"
+        }
+      }
+    }
+  }
+}

@@ -5,6 +5,74 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 #[test]
+fn spice_sync_round_trips_reusable_endpoint_and_preserves_local_settings_and_extensions() {
+    use crate::sync_schema::valid_fixed_cloud_sync_value;
+    let original = json!({
+        "id":"spice-saved", "type":"spice", "name":"Console", "username":"user",
+        "endpoint":{"host":"vm.example", "port":null, "tls_port":5901,
+                    "proxy":"http://proxy.example:3128", "future_local":"keep"},
+        "settings":{"view_only":true, "security":{"ca_pem":"local-ca"}, "future_setting":42},
+        "auth":{"mode":"password", "password":"local-secret"}
+    });
+    let projected = project_record("connection", &original).unwrap();
+    let field = SyncFieldId::new(SyncResourceId::new("connection", "spice-saved"), "endpoint");
+    assert!(valid_fixed_cloud_sync_value(&field, &projected["endpoint"]));
+    assert_eq!(projected["endpoint"]["endpoint"]["tls_port"], 5901);
+    assert_eq!(projected["endpoint"]["username"], "user");
+    for private in ["future_local", "local-secret", "local-ca", "future_setting"] {
+        assert!(!projected.to_string().contains(private));
+    }
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert_eq!(applied["settings"], original["settings"]);
+    assert_eq!(applied["auth"], original["auth"]);
+    assert_eq!(applied["endpoint"]["future_local"], "keep");
+    assert_eq!(project_record("connection", &applied).unwrap(), projected);
+    let fresh = apply_record("connection", &serde_json::Value::Null, &projected).unwrap();
+    let restored: crate::models::connection::ConnectionType =
+        serde_json::from_value(fresh).unwrap();
+    assert!(matches!(
+        restored,
+        crate::models::connection::ConnectionType::Spice { .. }
+    ));
+    let mut cleared = projected.clone();
+    cleared.as_object_mut().unwrap().remove("endpoint");
+    let applied = apply_record("connection", &original, &cleared).unwrap();
+    assert_eq!(applied["endpoint"], json!({"future_local":"keep"}));
+}
+
+#[test]
+fn spice_sync_rejects_tickets_proxy_credentials_and_unclassified_cloud_fields() {
+    use crate::sync_schema::valid_fixed_cloud_sync_value;
+    let field = SyncFieldId::new(SyncResourceId::new("connection", "saved"), "endpoint");
+    let original = json!({"type":"spice", "name":"Console",
+                          "endpoint":{"host":"vm.example", "port":5900, "tls_port":null}});
+    for endpoint in [
+        json!({"host":"pvespiceproxy:ticket", "port":5900, "tls_port":null}),
+        json!({"host":"vm.example", "port":5900, "tls_port":null, "proxy":"http://user:password@proxy"}),
+        json!({"host":"vm.example", "port":0, "tls_port":null}),
+    ] {
+        let mut record = original.clone();
+        record["endpoint"] = endpoint.clone();
+        assert!(project_record("connection", &record).is_err());
+        let mut projected = project_record("connection", &original).unwrap();
+        projected["endpoint"]["endpoint"] = endpoint;
+        assert!(!valid_fixed_cloud_sync_value(
+            &field,
+            &projected["endpoint"]
+        ));
+        assert!(apply_record("connection", &original, &projected).is_err());
+    }
+    let mut projected = project_record("connection", &original).unwrap();
+    projected["endpoint"]["endpoint"]["future_secret"] = json!("must-not-sync");
+    assert!(!valid_fixed_cloud_sync_value(
+        &field,
+        &projected["endpoint"]
+    ));
+    let applied = apply_record("connection", &original, &projected).unwrap();
+    assert!(applied["endpoint"].get("future_secret").is_none());
+}
+
+#[test]
 fn system_theme_preferences_sync_without_device_appearance_state() {
     let settings = json!({"appearance":{
         "theme":"dracula", "theme_mode":"system", "light_theme":"github-light", "dark_theme":"nord"

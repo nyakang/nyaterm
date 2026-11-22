@@ -28,6 +28,29 @@ fn started_lazy(connections: &[SavedConnection]) -> AssetBatchEditDraft {
     draft.initialize_scopes(connections);
     draft
 }
+
+#[test]
+fn spice_batch_draft_separates_ports_and_clipboard_directions() {
+    let connections: [SavedConnection; 1] = [serde_json::from_value(serde_json::json!({
+        "id":"s", "name":"SPICE", "type":"spice",
+        "endpoint":{"host":"guest", "port":5900,"tls_port":5901},
+        "settings":{"clipboard":"bidirectional"}
+    }))
+    .unwrap()];
+    let mut draft = started(&connections);
+    assert_eq!(draft.display_kind(), Some(ConnectionBatchKind::Spice));
+    draft.set_mode(BatchFieldKey::SpiceTcpPort, BatchEditMode::Clear);
+    draft.set_bool_value(BatchFieldKey::SpiceClipboardToGuest, false);
+    draft.set_mode(BatchFieldKey::SpiceReconnectAttempts, BatchEditMode::Set);
+    draft.set_value(BatchFieldKey::SpiceReconnectAttempts, "8".into());
+    let edits = draft.build_edits().unwrap();
+    let edit = &edits[&Some(ConnectionBatchKind::Spice)];
+    assert_eq!(edit.spice.tcp_port, BatchField::Clear);
+    assert_eq!(edit.spice.tls_port, BatchField::Unchanged);
+    assert_eq!(edit.spice.clipboard_to_guest, BatchField::Set(false));
+    assert_eq!(edit.spice.clipboard_from_guest, BatchField::Unchanged);
+    assert_eq!(edit.spice.reconnect_attempts, BatchField::Set(8));
+}
 #[test]
 fn scopes_preserve_drafts_and_only_apply_to_original_protocols() {
     let connections = [

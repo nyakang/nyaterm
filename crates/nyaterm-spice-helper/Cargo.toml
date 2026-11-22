@@ -1,0 +1,39 @@
+[package]
+name = "nyaterm-spice-helper"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+test-support = []
+
+[[bin]]
+name = "nyaterm-spice-fixture"
+path = "tests/fixtures/helper.rs"
+required-features = ["test-support"]
+
+[dependencies]
+base64.workspace = true
+cpal = "=0.18.2"
+libloading = "0.8.9"
+nyaterm-core.workspace = true
+nyaterm-remote-desktop = { path = "../nyaterm-remote-desktop" }
+serde.workspace = true
+serde_json.workspace = true
+percent-encoding = "2.3"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net"] }
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+nyaterm-core = { workspace = true, features = ["test-support"] }
+nyaterm-remote-desktop = { path = "../nyaterm-remote-desktop", features = ["test-support"] }
+rcgen = "0.14"
+rustls = { workspace = true, features = ["tls12"] }

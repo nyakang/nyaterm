@@ -102,6 +102,13 @@ pub(super) fn select_initial_value(
 
 fn endpoint_values(config: &ConnectionType) -> Option<(&str, u16, &str)> {
     match config {
+        ConnectionType::Spice {
+            endpoint, username, ..
+        } => Some((
+            endpoint.host.expose_secret(),
+            endpoint.tls_port.or(endpoint.port).unwrap_or(0),
+            username,
+        )),
         ConnectionType::Ssh {
             host,
             port,
@@ -143,6 +150,7 @@ fn is_network_kind(kind: ConnectionBatchKind) -> bool {
             | ConnectionBatchKind::Telnet
             | ConnectionBatchKind::Rdp
             | ConnectionBatchKind::Vnc
+            | ConnectionBatchKind::Spice
     )
 }
 
@@ -171,9 +179,24 @@ pub(in crate::features) fn batch_field_in_kind(
     }
     match field {
         BatchFieldKey::Host | BatchFieldKey::Port => {
-            is_network_kind(kind)
+            (is_network_kind(kind)
+                && !(field == BatchFieldKey::Port && kind == ConnectionBatchKind::Spice))
                 || matches!(kind, ConnectionBatchKind::Ftp | ConnectionBatchKind::Adb)
         }
+        BatchFieldKey::SpiceTcpPort
+        | BatchFieldKey::SpiceTlsPort
+        | BatchFieldKey::SpiceHttpProxy
+        | BatchFieldKey::SpiceCaPem
+        | BatchFieldKey::SpiceCertificateSubject
+        | BatchFieldKey::SpiceRequireTls
+        | BatchFieldKey::SpiceDynamicResolution
+        | BatchFieldKey::SpiceFitWindow
+        | BatchFieldKey::SpiceViewOnly
+        | BatchFieldKey::SpiceClipboardToGuest
+        | BatchFieldKey::SpiceClipboardFromGuest
+        | BatchFieldKey::SpiceAudioPlayback
+        | BatchFieldKey::SpiceFileTransfer
+        | BatchFieldKey::SpiceReconnectAttempts => kind == ConnectionBatchKind::Spice,
         BatchFieldKey::Username => is_network_kind(kind) || kind == ConnectionBatchKind::Ftp,
         BatchFieldKey::Account | BatchFieldKey::Password | BatchFieldKey::AuthMode => {
             is_network_kind(kind) || kind == ConnectionBatchKind::Ftp
@@ -298,6 +321,122 @@ pub(in crate::features) fn field_display_value(
     let is_ssh = matches!(&connection.config, ConnectionType::Ssh { .. });
     match field {
         BatchFieldKey::Name => Some(connection.name.clone()),
+        BatchFieldKey::SpiceTcpPort => match &connection.config {
+            ConnectionType::Spice { endpoint, .. } => {
+                Some(endpoint.port.map(|p| p.to_string()).unwrap_or_default())
+            }
+            _ => None,
+        },
+        BatchFieldKey::SpiceTlsPort => match &connection.config {
+            ConnectionType::Spice { endpoint, .. } => {
+                Some(endpoint.tls_port.map(|p| p.to_string()).unwrap_or_default())
+            }
+            _ => None,
+        },
+        BatchFieldKey::SpiceHttpProxy => match &connection.config {
+            ConnectionType::Spice { endpoint, .. } => Some(
+                endpoint
+                    .proxy
+                    .as_ref()
+                    .map(|p| p.expose_secret().to_owned())
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        },
+        BatchFieldKey::SpiceCaPem => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(settings.security.ca_pem.clone().unwrap_or_default()),
+            _ => None,
+        },
+        BatchFieldKey::SpiceCertificateSubject => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(
+                settings
+                    .security
+                    .certificate_subject
+                    .clone()
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        },
+        BatchFieldKey::SpiceRequireTls => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.security.require_tls)),
+            _ => None,
+        },
+        BatchFieldKey::SpiceDynamicResolution => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.dynamic_resolution)),
+            _ => None,
+        },
+        BatchFieldKey::SpiceFitWindow => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.fit_window)),
+            _ => None,
+        },
+        BatchFieldKey::SpiceViewOnly => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.view_only)),
+            _ => None,
+        },
+        BatchFieldKey::SpiceClipboardToGuest => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.clipboard.can_send())),
+            _ => None,
+        },
+        BatchFieldKey::SpiceClipboardFromGuest => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.clipboard.can_receive())),
+            _ => None,
+        },
+        BatchFieldKey::SpiceAudioPlayback => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.audio_playback)),
+            _ => None,
+        },
+        BatchFieldKey::SpiceFileTransfer => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(bool_text(settings.file_transfer)),
+            _ => None,
+        },
+        BatchFieldKey::SpiceReconnectAttempts => match &connection.config {
+            ConnectionType::Spice {
+                endpoint: _,
+                settings,
+                ..
+            } => Some(settings.reconnect_attempts.to_string()),
+            _ => None,
+        },
         BatchFieldKey::Tags => Some(connection.tags.join(", ")),
         BatchFieldKey::Host => {
             endpoint_values(&connection.config).map(|(host, _, _)| host.to_string())
@@ -1087,11 +1226,12 @@ pub(super) fn compute_batch_basis_indexed(
     (basis, values, bool_values)
 }
 
-pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 8] = [
+pub(in crate::features) const BATCH_KINDS: [ConnectionBatchKind; 9] = [
     ConnectionBatchKind::Ssh,
     ConnectionBatchKind::Telnet,
     ConnectionBatchKind::Rdp,
     ConnectionBatchKind::Vnc,
+    ConnectionBatchKind::Spice,
     ConnectionBatchKind::Adb,
     ConnectionBatchKind::Ftp,
     ConnectionBatchKind::LocalTerminal,
@@ -1104,6 +1244,7 @@ pub(in crate::features) fn batch_kind_value(kind: ConnectionBatchKind) -> &'stat
         ConnectionBatchKind::Telnet => "telnet",
         ConnectionBatchKind::Rdp => "rdp",
         ConnectionBatchKind::Vnc => "vnc",
+        ConnectionBatchKind::Spice => "spice",
         ConnectionBatchKind::Adb => "adb",
         ConnectionBatchKind::LocalTerminal => "local",
         ConnectionBatchKind::Serial => "serial",

@@ -10,6 +10,7 @@ use crate::models::SessionLaunchConfig;
 enum HelperManager {
     Rdp(Arc<RdpSessionManager>),
     Vnc(Arc<VncSessionManager>),
+    Spice(Arc<nyaterm_remote_desktop::spice::session::SpiceSessionManager>),
 }
 
 /// A successful launch is owned by its result until the window accepts it.
@@ -38,6 +39,16 @@ impl Drop for HelperStartResult {
                             let _ = manager.close(&id);
                         },
                     );
+                }
+            }
+            HelperManager::Spice(manager) => {
+                if manager.close_detached(&self.session_id).is_err() {
+                    let manager = manager.clone();
+                    let id = self.session_id.clone();
+                    let _ =
+                        nyaterm_core::runtime::worker::spawn("spice-cleanup".into(), move || {
+                            manager.close(&id)
+                        });
                 }
             }
             HelperManager::Vnc(manager) => {
@@ -76,6 +87,9 @@ impl NyaTermApp {
             .insert(session_id.to_string(), token.clone());
         let manager = match &config {
             SessionLaunchConfig::Rdp(_) => HelperManager::Rdp(self.remote_desktop.manager.clone()),
+            SessionLaunchConfig::Spice(_) => {
+                HelperManager::Spice(self.remote_desktop.spice_manager.clone())
+            }
             SessionLaunchConfig::Vnc(_) => {
                 HelperManager::Vnc(self.remote_desktop.vnc_manager.clone())
             }
@@ -101,6 +115,13 @@ impl NyaTermApp {
                             .create_session_with_id(id.clone(), config)
                             .map(|_| ())
                             .map_err(Into::into),
+                        (HelperManager::Spice(manager), SessionLaunchConfig::Spice(mut config)) => {
+                            config.session.session_id = id.clone();
+                            manager
+                                .create_session(config.session)
+                                .map(|_| ())
+                                .map_err(super::spice::spice_error)
+                        }
                         _ => unreachable!("matching helper manager"),
                     }
                 };
@@ -127,6 +148,7 @@ impl NyaTermApp {
                         started.accepted = true;
                         if let Err(error) = &started.result {
                             this.remote_desktop.routes.remove(&id);
+                            this.remote_desktop.spice_routes.remove(&id);
                             this.shell.set_status(format!(
                                 "remote desktop connection failed: {}",
                                 error.message
@@ -152,6 +174,7 @@ impl NyaTermApp {
                     }
                     Err(error) => {
                         this.remote_desktop.routes.remove(&id);
+                        this.remote_desktop.spice_routes.remove(&id);
                         this.shell
                             .set_status(format!("remote desktop connection failed: {error}"));
                         this.remote_desktop.insert_failed_session(

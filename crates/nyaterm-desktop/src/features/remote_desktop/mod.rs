@@ -3,6 +3,7 @@ mod keyboard_capture;
 #[cfg(windows)]
 mod native;
 mod runtime;
+mod spice_view;
 mod state;
 mod surface;
 mod view;

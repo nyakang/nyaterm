@@ -23,9 +23,20 @@ RUN --mount=type=secret,id=proxy_ca,mode=0444 \
       libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-render0-dev \
       libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xinerama0-dev \
       libxkbcommon-dev libxkbcommon-x11-dev libzstd-dev libvulkan1 \
+      python3-pip python3-pyparsing ninja-build nasm libasound2-dev \
+      libpixman-1-dev libjpeg-dev libjson-glib-dev libgstreamer1.0-dev libffi-dev libpcre2-dev \
+      libgstreamer-plugins-base1.0-dev liblz4-dev libsasl2-dev libopus-dev \
+      libsasl2-modules gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+      gstreamer1.0-plugins-bad \
       mesa-vulkan-drivers libgl1-mesa-dri xvfb xauth x11-utils x11-apps dbus-x11 \
       fonts-dejavu-core && \
     rm -f /etc/apt/apt.conf.d/99-build-ca && rm -rf /var/lib/apt/lists/*
+
+# Focal's Meson 0.53 cannot build the pinned spice-gtk. This version supports
+# Python 3.8 and changes only build tooling, never the target's libc baseline.
+RUN --mount=type=secret,id=proxy_ca,mode=0444 \
+    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca; fi; \
+    pip3 install --no-cache-dir meson==1.5.2 zstandard==0.22.0
 
 ENV CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup
 ENV PATH=/opt/cargo/bin:$PATH

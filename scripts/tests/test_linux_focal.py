@@ -13,7 +13,7 @@ import tempfile
 import textwrap
 import unittest
 from unittest import mock
-from scripts.tests.test_verify_native_package import stage_android_fixture
+from scripts.tests.test_verify_native_package import stage_android_fixture, stage_spice_fixture, fixture_spice_locked_files
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "compat/linux-focal/package.py"
@@ -46,6 +46,9 @@ class FocalAbiTests(unittest.TestCase):
             desktop = (extracted / "usr/share/applications/nyaterm-compat.desktop").read_text()
             self.assertIn("StartupWMClass=NyaTerm\n", desktop)
             self.assertIn("Exec=/usr/bin/nyaterm-compat %U\n", desktop)
+            self.assertIn("MimeType=application/x-virt-viewer;", desktop)
+            focal.spice_associations.verify_linux_mime(
+                (extracted / "usr/share/mime/packages/nyaterm-compat-spice.xml").read_bytes())
             self.assertIn("Actions=SoftwareRendering;\n", desktop)
             self.assertIn("[Desktop Action SoftwareRendering]\n", desktop)
             self.assertIn("Exec=/usr/bin/nyaterm-compat --software %U\n", desktop)
@@ -185,9 +188,12 @@ print(count.value)
             runtime = root / "opengl"
             runtime.mkdir()
             stage_android_fixture(root, "x86_64-unknown-linux-gnu")
+            stage_spice_fixture(root, "x86_64-unknown-linux-gnu")
             with mock.patch.object(focal.os, "confstr", return_value="glibc 2.31"), \
                     mock.patch.object(focal, "audit", side_effect=lambda p, **kwargs: {"name": p.name}), \
                     mock.patch.object(focal.subprocess, "run"), \
+                    mock.patch.object(focal.spice_release, "locked_files", side_effect=fixture_spice_locked_files), \
+                    mock.patch.object(focal, "command", side_effect=spice_elf_output), \
                     mock.patch.object(focal, "audit_opengl", return_value=[]):
                 previous_umask = os.umask(0o077)
                 try:
@@ -210,14 +216,52 @@ print(count.value)
                              "android-resources.json", "android-libs/libavcodec.so.62"):
                     self.assertIn(prefix + name, handle.getnames())
                 report = json.load(handle.extractfile(prefix + "abi-report.json"))
-                self.assertEqual(len(report["binaries"]), 5)
+                self.assertIn(prefix + "spice/libspice-client-glib-2.0.so.8", handle.getnames())
+                self.assertIn(prefix + "spice/SOURCE.json", handle.getnames())
+                self.assertEqual(len(report["binaries"]), 6)
                 self.assertEqual(len(report["android_runtime"]), 5)
+                self.assertGreater(len(report["spice_runtime"]), 10)
             self.assertTrue(archive.with_name(archive.name + ".sha256").is_file())
 
     def test_packaging_refuses_validation_on_newer_host(self):
         with mock.patch.object(focal.os, "confstr", return_value="glibc 2.41", create=True):
             with self.assertRaisesRegex(ValueError, "glibc 2.31"):
                 focal.create_package(Path("missing"), Path("dist"), "2.0.0", Path("missing"))
+
+    def test_spice_private_closure_rejects_new_abi_external_dependencies_and_build_paths(self):
+        cases = (
+            ("Name: GLIBC_2.34", None, None, "exceeds focal"),
+            (None, "(RUNPATH) Library runpath: [/builder/lib]", None, "non-relocatable"),
+            (None, "(RUNPATH) Library runpath: [$ORIGIN/..]\n(NEEDED) Shared library: [libmissing.so.1]", None, "incomplete SPICE"),
+            (None, None, "undefined symbol: g_memdup2", "unresolved SPICE"),
+        )
+        for version, dynamic, linkage, error in cases:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                stage_spice_fixture(root, "x86_64-unknown-linux-gnu")
+                def output(*args, **kwargs):
+                    if args[0] == "ldd" and linkage is not None:
+                        return linkage
+                    if "--version-info" in args and version is not None:
+                        return "Version needs section\n" + version
+                    if "--dynamic" in args and dynamic is not None:
+                        return dynamic
+                    return spice_elf_output(*args, **kwargs)
+                with mock.patch.object(focal.spice_release, "locked_files", side_effect=fixture_spice_locked_files), \
+                        mock.patch.object(focal, "command", side_effect=output), self.assertRaisesRegex(ValueError, error):
+                    focal.stage_spice(root, root / "stage")
+
+
+def spice_elf_output(*args, **kwargs):
+    if "--version-info" in args:
+        return "Version needs section\nName: GLIBC_2.31"
+    if "--dynamic" in args:
+        path = Path(args[-1])
+        origin = "$ORIGIN" if path.parent.name == "spice" else "$ORIGIN/.."
+        return "(RUNPATH) Library runpath: [" + origin + "]\n(NEEDED) Shared library: [libc.so.6]"
+    if args[0] == "ldd":
+        return "libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6"
+    raise AssertionError(args)
 
 
 @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "POSIX bash required")

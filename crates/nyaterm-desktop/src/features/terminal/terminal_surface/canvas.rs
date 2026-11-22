@@ -1429,6 +1429,7 @@ fn terminal_canvas_session_kind_label(config: &SessionLaunchConfig) -> &'static 
         SessionLaunchConfig::Serial(_) => "Serial",
         SessionLaunchConfig::Rdp(_) => "RDP",
         SessionLaunchConfig::Vnc(_) => "VNC",
+        SessionLaunchConfig::Spice(_) => "SPICE",
         SessionLaunchConfig::Ftp(_) => "FTP",
         SessionLaunchConfig::AdbShell(_)
         | SessionLaunchConfig::AdbFiles(_)

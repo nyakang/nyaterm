@@ -25,7 +25,7 @@ def copy_icons(root: Path, source: Path, desktop_id: str) -> None:
         destination.chmod(0o644)
 
 
-def write_postinst(path: Path, desktop_id: str) -> None:
+def write_postinst(path: Path, desktop_id: str, extra_commands: str = "") -> None:
     # Only the package's explicit regular icon files may be repaired. Missing
     # sizes and repeated configure calls are safe; unrelated icons are untouched.
     icons = " ".join("/usr/share/icons/hicolor/{}/apps/{}.png".format(size, desktop_id)
@@ -41,7 +41,7 @@ def write_postinst(path: Path, desktop_id: str) -> None:
         "    if command -v gtk-update-icon-cache >/dev/null 2>&1; then\n"
         "        gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true\n"
         "    fi\n"
-        "fi\n\nexit 0\n",
+        + extra_commands + "fi\n\nexit 0\n",
         encoding="utf-8",
     )
     path.chmod(0o755)

@@ -107,7 +107,30 @@ pub(crate) enum SessionLaunchConfig {
     Serial(SerialSessionConfig),
     Rdp(RdpSessionConfig),
     Vnc(VncSessionConfig),
+    Spice(SpiceLaunchConfig),
     Ftp(FtpSessionConfig),
+}
+
+#[derive(Clone)]
+pub(crate) struct SpiceLaunchConfig {
+    pub(crate) name: String,
+    pub(crate) session: nyaterm_remote_desktop::spice::protocol::SpiceSessionConfig,
+}
+
+impl SpiceLaunchConfig {
+    pub(crate) fn public_endpoint(&self) -> Option<(&str, u16)> {
+        use nyaterm_remote_desktop::spice::protocol::SpiceCredentialLifetime;
+        if self.session.credential_lifetime == SpiceCredentialLifetime::Temporary {
+            return None;
+        }
+        let endpoint = &self.session.endpoint;
+        let port = if self.session.settings.security.require_tls {
+            endpoint.tls_port
+        } else {
+            endpoint.port.or(endpoint.tls_port)
+        }?;
+        Some((endpoint.host.expose_secret(), port))
+    }
 }
 
 /// Blocking FTP launch settings; credentials never live in the stored model.
@@ -146,6 +169,7 @@ impl SessionLaunchConfig {
                 | (Self::Serial(_), ConnectionType::Serial { .. })
                 | (Self::Rdp(_), ConnectionType::Rdp { .. })
                 | (Self::Vnc(_), ConnectionType::Vnc { .. })
+                | (Self::Spice(_), ConnectionType::Spice { .. })
                 | (Self::Ftp(_), ConnectionType::Ftp { .. })
                 | (
                     Self::AdbShell(_) | Self::AdbFiles(_) | Self::AdbScreen(_),
@@ -196,7 +220,7 @@ impl SessionLaunchConfig {
             Self::Telnet(config) => Some(&config.encoding),
             Self::Serial(config) => Some(&config.encoding),
             Self::Rdp(_) => None,
-            Self::Vnc(_) => None,
+            Self::Vnc(_) | Self::Spice(_) => None,
             Self::Ftp(_) => None,
         }
     }

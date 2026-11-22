@@ -52,6 +52,34 @@ impl Drop for RawActivationArg {
 }
 
 impl RawActivationArg {
+    /// Preserve native filenames when opening externally supplied documents.
+    pub fn to_os_string(&self) -> Option<OsString> {
+        match self {
+            Self::Bytes(bytes) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStringExt as _;
+                    Some(OsString::from_vec(bytes.clone()))
+                }
+                #[cfg(not(unix))]
+                {
+                    String::from_utf8(bytes.clone()).ok().map(OsString::from)
+                }
+            }
+            Self::Wide(units) => {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::ffi::OsStringExt as _;
+                    Some(OsString::from_wide(units))
+                }
+                #[cfg(not(windows))]
+                {
+                    String::from_utf16(units).ok().map(OsString::from)
+                }
+            }
+        }
+    }
+
     pub fn from_os_string(value: OsString) -> Self {
         #[cfg(windows)]
         {
@@ -89,6 +117,19 @@ impl ActivationRequest {
             request_id,
             args: args
                 .into_iter()
+                .map(|arg| {
+                    let path = std::path::Path::new(&arg);
+                    if path.is_relative()
+                        && path
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("vv"))
+                        && !arg.to_string_lossy().contains("://")
+                        && let Ok(directory) = std::env::current_dir()
+                    {
+                        return directory.join(path).into_os_string();
+                    }
+                    arg
+                })
                 .map(RawActivationArg::from_os_string)
                 .collect(),
         }

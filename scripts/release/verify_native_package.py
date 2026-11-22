@@ -20,6 +20,7 @@ from pathlib import Path, PurePosixPath
 import package_native
 import windows_msi
 import windows_portable
+from native_headers import elf_machine, macho_cpu_type, pe_header_offset, pe_machine
 
 
 MIN_ARTIFACT_SIZE = 1024
@@ -52,20 +53,6 @@ def verify_tar_paths(archive: tarfile.TarFile) -> set[str]:
         if item.issym() or item.islnk():
             require_safe_archive_path(item.linkname)
     return names
-
-
-def pe_machine(data: bytes) -> int:
-    pe_offset = pe_header_offset(data)
-    return struct.unpack_from("<H", data, pe_offset + 4)[0]
-
-
-def pe_header_offset(data: bytes) -> int:
-    if len(data) < 64 or data[:2] != b"MZ":
-        raise RuntimeError("Windows executable is missing the MZ header")
-    pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
-    if len(data) < pe_offset + 6 or data[pe_offset : pe_offset + 4] != b"PE\0\0":
-        raise RuntimeError("Windows executable is missing the PE header")
-    return pe_offset
 
 
 def pe_optional_header(data: bytes) -> tuple[int, int, int]:
@@ -178,30 +165,13 @@ def verify_windows_application_version(path: Path, version: str) -> None:
             )
 
 
-def elf_machine(data: bytes) -> int:
-    if len(data) < 20 or data[:4] != b"\x7fELF":
-        raise RuntimeError("Linux executable is missing the ELF header")
-    byte_order = "little" if data[5] == 1 else "big"
-    return int.from_bytes(data[18:20], byte_order)
-
-
-def macho_cpu_type(data: bytes) -> int:
-    if len(data) < 8:
-        raise RuntimeError("macOS executable is too short")
-    magic = data[:4]
-    if magic == b"\xcf\xfa\xed\xfe":
-        byte_order = "little"
-    elif magic == b"\xfe\xed\xfa\xcf":
-        byte_order = "big"
-    else:
-        raise RuntimeError("macOS executable is not a 64-bit Mach-O file")
-    return int.from_bytes(data[4:8], byte_order)
-
-
 def verify_macos_url_scheme(
     plist: dict[str, object], artifact: str,
     identity: package_native.PackageIdentity = package_native.STABLE_IDENTITY,
 ) -> None:
+    for key, value in package_native.spice_associations.macos_declarations().items():
+        if plist.get(key) != value:
+            raise RuntimeError(f"{artifact} contains invalid SPICE document declaration {key}")
     url_types = plist.get("CFBundleURLTypes")
     if not isinstance(url_types, list) or len(url_types) != 1:
         raise RuntimeError(f"{artifact} must register exactly one macOS URL type")
@@ -237,7 +207,8 @@ def verify_linux_desktop(
         "Icon": identity.desktop_id,
         "StartupWMClass": identity.display_name,
         "Exec": f"{expected_executable} %U",
-        "MimeType": "".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes),
+        "MimeType": "".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes)
+        + package_native.spice_associations.MIME_TYPE + ";",
     }
     for key, value in expected.items():
         if fields.get(key) != value:
@@ -246,12 +217,13 @@ def verify_linux_desktop(
             )
 
 
-def read_rpm_member(path: Path, member: str) -> bytes:
+def read_rpm_payload(path: Path) -> dict[str, bytes]:
     rpm2cpio = shutil.which("rpm2cpio")
     if not rpm2cpio:
         raise RuntimeError("rpm2cpio is required to verify RPM contents")
     archive = subprocess.check_output([rpm2cpio, str(path)])
     offset = 0
+    files = {}
     while offset < len(archive):
         header = archive[offset : offset + 110]
         if len(header) != 110 or header[:6] not in (b"070701", b"070702"):
@@ -269,19 +241,54 @@ def read_rpm_member(path: Path, member: str) -> bytes:
         name_size = fields[11]
         offset += 110
         name_end = offset + name_size
-        if name_size < 1 or name_end > len(archive):
+        if name_size < 1 or name_end > len(archive) or archive[name_end - 1] != 0:
             raise RuntimeError(f"{path.name} contains an invalid RPM cpio name")
-        name = archive[offset : name_end - 1].decode("utf-8")
+        try:
+            name = archive[offset : name_end - 1].decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f"{path.name} contains an invalid RPM cpio name") from error
+        if "\0" in name:
+            raise RuntimeError(f"{path.name} contains an invalid RPM cpio name")
         offset = (name_end + 3) & ~3
         data_end = offset + file_size
         if data_end > len(archive):
             raise RuntimeError(f"{path.name} contains a truncated RPM cpio entry")
         if name == "TRAILER!!!":
-            break
-        if name.removeprefix("./") == member.removeprefix("/"):
-            return archive[offset:data_end]
+            return files
+        name = name.removeprefix("./")
+        require_safe_archive_path(name)
+        mode = fields[1] & 0o170000
+        if mode not in (0, 0o100000, 0o040000):
+            raise RuntimeError(f"{path.name} contains an unsupported RPM cpio entry")
+        if mode != 0o040000:
+            if name in files:
+                raise RuntimeError(f"{path.name} contains a duplicate RPM cpio entry")
+            files[name] = archive[offset:data_end]
         offset = (data_end + 3) & ~3
-    raise RuntimeError(f"{path.name} is missing {member}")
+    raise RuntimeError(f"{path.name} contains a truncated RPM cpio payload")
+
+
+def read_rpm_member(path: Path, member: str) -> bytes:
+    try:
+        return read_rpm_payload(path)[member.removeprefix("/")]
+    except KeyError as error:
+        raise RuntimeError(f"{path.name} is missing {member}") from error
+
+
+def spice_file_names(root: Path) -> list[str]:
+    names = []
+    for path in [root / "spice", *(root / "spice").rglob("*")]:
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise RuntimeError("SPICE artifact contains a filesystem link")
+        if path.is_file():
+            names.append(path.relative_to(root).as_posix())
+    return names
+
+
+def verify_native_resources(read, target: str, *, names=None) -> None:
+    import spice_release
+    verify_android_resources(read, target)
+    spice_release.verify_resources(read, target, names=names)
 
 
 def verify_android_resources(read, target: str) -> None:
@@ -352,7 +359,8 @@ def verify_windows_portable(path: Path, target: str, version: str) -> None:
         packaged_version = archive.read(f"{root}/VERSION").decode("utf-8").strip()
         if packaged_version != version:
             raise RuntimeError(f"{path.name} contains version {packaged_version}, expected {version}")
-        verify_android_resources(lambda name: archive.read(f"{root}/{name}"), target)
+        verify_native_resources(lambda name: archive.read(f"{root}/{name}"), target,
+                                names=[item.filename.removeprefix(root + "/") for item in archive.infolist() if not item.is_dir()])
         binaries = {name: archive.read(f"{root}/{name}") for name in executables}
         machines = {name: pe_machine(data) for name, data in binaries.items()}
         conpty_machines = {
@@ -398,6 +406,8 @@ def find_7zip() -> str:
 
 def verify_windows_installer_script(content: str, version: str) -> None:
     identity = package_native.release_identity(version)
+    document_id = ("NyaTerm.SpiceConnection" if identity == package_native.STABLE_IDENTITY
+                   else "NyaTerm.Preview.SpiceConnection")
     required = [
         f'Name "{identity.display_name}"',
         rf'InstallDir "$LOCALAPPDATA\Programs\{identity.display_name}"',
@@ -421,6 +431,11 @@ def verify_windows_installer_script(content: str, version: str) -> None:
         rf'DeleteRegKey HKCU "Software\Classes\{identity.desktop_id}"',
         rf'Delete "$DESKTOP\{identity.display_name}.lnk"',
         rf'RMDir "$SMPROGRAMS\{identity.display_name}"',
+        rf'WriteRegStr HKCU "Software\Classes\.vv\OpenWithProgids" "{document_id}" ""',
+        rf'ReadRegStr $0 HKCU "Software\Classes\{document_id}\shell\open\command" ""',
+        r'StrCmp $0 "$\"$INSTDIR\NyaTerm.exe$\" $\"%1$\"" 0 document_skip',
+        rf'DeleteRegValue HKCU "Software\Classes\.vv\OpenWithProgids" "{document_id}"',
+        rf'DeleteRegKey HKCU "Software\Classes\{document_id}"',
     ]
     for scheme in identity.url_schemes:
         required.extend([
@@ -495,7 +510,7 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
         applications = [candidate for candidate in files.values() if candidate.name == "NyaTerm.exe"]
         if len(applications) != 1:
             raise RuntimeError(f"{path.name} must contain exactly one NyaTerm.exe")
-        verify_android_resources(lambda name: files[name].read_bytes(), target)
+        verify_native_resources(lambda name: files[name].read_bytes(), target, names=spice_file_names(output))
         verify_windows_application_binary(applications[0].read_bytes(), path.name)
         verify_windows_application_version(applications[0], version)
         conpty_required = [
@@ -581,6 +596,7 @@ def verify_windows_msi_database(metadata: dict, target: str, version: str) -> di
         files[relative] = row["File"]
     required = {"NyaTerm.exe", "LICENSE", "VERSION", "icon.ico", *helper_filenames(target),
                 *(name for name in windows_portable.LAYOUT["support_files"] if not name.startswith("conpty/")),
+                *windows_portable.LAYOUT["spice_files"][target],
                 "conpty/LICENSE.txt", *(f"conpty/{p.as_posix()}" for p in package_native.conpty_files(target))}
     if set(files) != required or len(components) != len(files):
         raise RuntimeError(f"MSI installed file set mismatch: missing {sorted(required - files.keys())}, "
@@ -648,7 +664,7 @@ def verify_windows_msi(path: Path, target: str, version: str) -> None:
         for name in ("NyaTerm.exe", *helper_filenames(target)):
             if pe_machine(payload[name].read_bytes()) != machine:
                 raise RuntimeError(f"MSI contains the wrong PE machine for {name}")
-        verify_android_resources(lambda name: payload[name].read_bytes(), target)
+        verify_native_resources(lambda name: payload[name].read_bytes(), target, names=payload.keys())
         verify_windows_application_binary(payload["NyaTerm.exe"].read_bytes(), path.name)
         verify_windows_application_version(payload["NyaTerm.exe"], version)
         verify_conpty_machines(
@@ -677,7 +693,8 @@ def verify_macos_archive(path: Path, target: str, version: str) -> None:
         missing = required - names
         if missing:
             raise RuntimeError(f"{path.name} is missing: {', '.join(sorted(missing))}")
-        verify_android_resources(lambda name: archive.extractfile(f"{bundle}/Contents/MacOS/{name}").read(), target)
+        verify_native_resources(lambda name: archive.extractfile(f"{bundle}/Contents/MacOS/{name}").read(), target,
+                                names=[item.name.removeprefix(f"{bundle}/Contents/MacOS/") for item in archive.getmembers() if item.isfile()])
         packaged_version = archive.extractfile(version_file).read().decode().strip()  # type: ignore[union-attr]
         plist = plistlib.loads(archive.extractfile(info_plist).read())  # type: ignore[union-attr]
         binary = archive.extractfile(executable).read()  # type: ignore[union-attr]
@@ -770,7 +787,7 @@ def verify_appimage(path: Path, target: str, version: str) -> None:
             env={**os.environ, "APPIMAGE_EXTRACT_AND_RUN": "1"},
         )
         root = Path(directory) / "squashfs-root"
-        verify_android_resources(lambda name: (root / "usr/bin" / name).read_bytes(), target)
+        verify_native_resources(lambda name: (root / "usr/bin" / name).read_bytes(), target, names=spice_file_names(root / "usr/bin"))
         executables = [
             root / "usr" / "bin" / name
             for name in ("nyaterm", *helper_filenames(target))
@@ -791,6 +808,8 @@ def verify_appimage(path: Path, target: str, version: str) -> None:
             raise RuntimeError(f"{path.name} is missing AppImage entries: {missing}")
         packaged_version = version_file.read_text(encoding="utf-8").strip()
         desktop_content = desktop_file.read_text(encoding="utf-8")
+        package_native.spice_associations.verify_linux_mime(
+            (root / "usr/share/mime/packages" / f"{identity.desktop_id}-spice.xml").read_bytes())
         verify_linux_desktop((root / identity.linux_desktop_file).read_text(encoding="utf-8"), package_native.APP_BIN, path.name, identity)
         for size in package_native.linux_icons.ICON_SIZES:
             icon = root / "usr" / "share" / "icons" / "hicolor" / size / "apps" / f"{identity.desktop_id}.png"
@@ -845,7 +864,10 @@ def verify_deb(path: Path, target: str, version: str) -> None:
             stdout=subprocess.DEVNULL,
         )
         root = Path(directory)
-        verify_android_resources(lambda name: (root / "opt" / identity.desktop_id / name).read_bytes(), target)
+        verify_native_resources(lambda name: (root / "opt" / identity.desktop_id / name).read_bytes(), target,
+                                names=spice_file_names(root / "opt" / identity.desktop_id))
+        package_native.spice_associations.verify_linux_mime(
+            (root / "usr/share/mime/packages" / f"{identity.desktop_id}-spice.xml").read_bytes())
         desktop_content = (
             root / "usr" / "share" / "applications" / identity.linux_desktop_file
         ).read_text(encoding="utf-8")
@@ -884,12 +906,15 @@ def verify_rpm(path: Path, target: str, version: str) -> None:
     ):
         if required not in contents.splitlines():
             raise RuntimeError(f"{path.name} is missing {required}")
-    if read_rpm_member(path, f"/opt/{identity.desktop_id}/VERSION").decode("utf-8").strip() != version:
+    payload = read_rpm_payload(path)
+    package_native.spice_associations.verify_linux_mime(
+        payload[f"usr/share/mime/packages/{identity.desktop_id}-spice.xml"])
+    application_root = f"opt/{identity.desktop_id}/"
+    if payload[application_root + "VERSION"].decode("utf-8").strip() != version:
         raise RuntimeError(f"{path.name} contains the wrong installed version")
-    verify_android_resources(lambda name: read_rpm_member(path, f"/opt/{identity.desktop_id}/{name}"), target)
-    desktop_content = read_rpm_member(
-        path, f"/usr/share/applications/{identity.linux_desktop_file}"
-    ).decode("utf-8")
+    verify_native_resources(lambda name: payload[application_root + name], target,
+                            names=[name.removeprefix(application_root) for name in payload])
+    desktop_content = payload[f"usr/share/applications/{identity.linux_desktop_file}"].decode("utf-8")
     verify_linux_desktop(desktop_content, f"/opt/{identity.desktop_id}/nyaterm", path.name, identity)
 
 

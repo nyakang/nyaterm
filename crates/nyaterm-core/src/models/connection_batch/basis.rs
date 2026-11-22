@@ -52,6 +52,7 @@ pub fn connection_kind_counts(
         ConnectionBatchKind::Serial,
         ConnectionBatchKind::Rdp,
         ConnectionBatchKind::Vnc,
+        ConnectionBatchKind::Spice,
         ConnectionBatchKind::Adb,
         ConnectionBatchKind::Ftp,
     ]

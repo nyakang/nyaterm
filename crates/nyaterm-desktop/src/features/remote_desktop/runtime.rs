@@ -9,6 +9,7 @@ mod helper_start;
 mod input;
 mod lifecycle;
 mod resize;
+mod spice;
 mod start;
 #[cfg(test)]
 mod tests;

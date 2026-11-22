@@ -25,6 +25,7 @@ pub(in crate::features) mod options;
 mod rdp;
 mod recording;
 mod serial;
+mod spice;
 mod ssh;
 mod tags;
 mod telnet;
@@ -1132,6 +1133,9 @@ impl NyaTermApp {
             })
             .when(editor.kind == ConnectionKindTab::Rdp, |this| {
                 this.child(connection_editor_rdp_section(section_context, cx))
+            })
+            .when(editor.kind == ConnectionKindTab::Spice, |this| {
+                this.child(spice::section(section_context, cx))
             })
             .when(editor.kind == ConnectionKindTab::Vnc, |this| {
                 this.child(connection_editor_vnc_section(section_context, cx))

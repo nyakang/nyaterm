@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/release"))
 import prepare_android
 import verify_native_package
-from scripts.tests.test_verify_native_package import stage_android_fixture
+from scripts.tests.test_verify_native_package import stage_android_fixture, stage_spice_fixture
 from scripts.tests.test_package_native import staged_package
 import package_native
 
@@ -109,6 +109,8 @@ class AndroidReleaseTests(unittest.TestCase):
             with mock.patch.object(package_native, "WORK_DIR", root / "work"), \
                     mock.patch.object(package_native, "DIST_DIR", dist), \
                     mock.patch.object(package_native, "helper_binary_paths", return_value=helpers), \
+                    mock.patch.object(package_native, "copy_spice_resources", side_effect=stage_spice_fixture), \
+                    mock.patch.object(package_native, "spice_glibc_requirement", return_value="2.35"), \
                     mock.patch.object(package_native, "copy_android_resources", side_effect=resources):
                 package_native.create_linux_rpm(binary, package_native.target_info(target), "2.0.0", "2.0.0")
             artifact = next(dist.glob("*.rpm"))

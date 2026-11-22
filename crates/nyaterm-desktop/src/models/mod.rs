@@ -2,7 +2,7 @@
 //! Domain models live in `nyaterm-core`.
 
 mod chrome;
-mod connections;
+pub(crate) mod connections;
 pub(crate) mod event_wake;
 mod layout_state;
 mod navigation;

@@ -49,6 +49,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+same-file.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true, features = ["rt"] }

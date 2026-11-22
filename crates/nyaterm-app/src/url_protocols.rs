@@ -4,8 +4,8 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, KEY_WRITE, REG_OPTION_NON_VOLATILE,
-    REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW,
-    RegSetValueExW,
+    REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyValueW, RegDeleteTreeW,
+    RegGetValueW, RegSetValueExW,
 };
 
 fn wide(value: &str) -> Vec<u16> {
@@ -58,12 +58,15 @@ fn set(root: HKEY, path: &str, name: &str, value: &str) -> std::io::Result<()> {
     Ok(())
 }
 fn get(root: HKEY, path: &str) -> std::io::Result<Option<String>> {
+    get_named(root, path, "")
+}
+fn get_named(root: HKEY, path: &str, name: &str) -> std::io::Result<Option<String>> {
     let mut bytes = 0;
     let status = unsafe {
         RegGetValueW(
             root,
             wide(path).as_ptr(),
-            std::ptr::null(),
+            wide(name).as_ptr(),
             RRF_RT_REG_SZ,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -81,7 +84,7 @@ fn get(root: HKEY, path: &str) -> std::io::Result<Option<String>> {
         RegGetValueW(
             root,
             wide(path).as_ptr(),
-            std::ptr::null(),
+            wide(name).as_ptr(),
             RRF_RT_REG_SZ,
             std::ptr::null_mut(),
             value.as_mut_ptr().cast(),
@@ -157,13 +160,71 @@ pub(crate) fn run_if_requested() -> Option<anyhow::Result<()>> {
                 unregister(root.0, scheme, &executable)?;
             }
         }
+        let document = if schemes[0] == "nyaterm" {
+            "NyaTerm.SpiceConnection"
+        } else {
+            "NyaTerm.Preview.SpiceConnection"
+        };
+        if install {
+            register_document(root.0, document, &executable)?;
+        } else {
+            unregister_document(root.0, document, &executable)?;
+        }
+        unsafe {
+            windows_sys::Win32::UI::Shell::SHChangeNotify(
+                windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+                windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
         Ok(())
     })())
 }
 
+fn register_document(root: HKEY, document: &str, executable: &Path) -> std::io::Result<()> {
+    set(root, document, "", "SPICE connection")?;
+    set(
+        root,
+        &format!("{document}\\DefaultIcon"),
+        "",
+        &format!("{},0", executable.display()),
+    )?;
+    set(
+        root,
+        &format!("{document}\\shell\\open\\command"),
+        "",
+        &command(executable),
+    )?;
+    // Advertise an alternative without changing .vv's default or UserChoice.
+    set(root, r".vv\OpenWithProgids", document, "")
+}
+
+fn unregister_document(root: HKEY, document: &str, executable: &Path) -> std::io::Result<()> {
+    if get(root, &format!("{document}\\shell\\open\\command"))?.as_deref()
+        != Some(command(executable).as_str())
+    {
+        return Ok(());
+    }
+    let status = unsafe {
+        RegDeleteKeyValueW(
+            root,
+            wide(r".vv\OpenWithProgids").as_ptr(),
+            wide(document).as_ptr(),
+        )
+    };
+    if status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND {
+        return Err(std::io::Error::from_raw_os_error(status as i32));
+    }
+    unregister(root, document, executable)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{command, create, get, register, set, unregister};
+    use super::{
+        command, create, get, get_named, register, register_document, set, unregister,
+        unregister_document,
+    };
     use std::path::Path;
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
     #[test]
@@ -186,6 +247,69 @@ mod tests {
             register(root.0, "telnet", executable).unwrap();
             unregister(root.0, "telnet", executable).unwrap();
             assert!(get(root.0, r"telnet\shell\open\command").unwrap().is_none());
+        }
+        unsafe {
+            RegDeleteTreeW(HKEY_CURRENT_USER, super::wide(&path).as_ptr());
+        }
+    }
+
+    #[test]
+    fn document_registration_preserves_default_and_other_installations() {
+        let path = format!("Software\\NyaTermDocumentTests\\{}", uuid::Uuid::new_v4());
+        {
+            let root = create(HKEY_CURRENT_USER, &path).unwrap();
+            let executable = Path::new(r"C:\Program Files\NyaTerm\NyaTerm.exe");
+            let stable = "NyaTerm.SpiceConnection";
+            let preview = "NyaTerm.Preview.SpiceConnection";
+            set(root.0, ".vv", "", "existing-viewer").unwrap();
+            set(root.0, r".vv\OpenWithProgids", "existing-viewer", "").unwrap();
+            register_document(root.0, stable, executable).unwrap();
+            register_document(root.0, preview, executable).unwrap();
+            assert_eq!(
+                get(root.0, ".vv").unwrap().as_deref(),
+                Some("existing-viewer")
+            );
+            assert_eq!(
+                get_named(root.0, r".vv\OpenWithProgids", stable)
+                    .unwrap()
+                    .as_deref(),
+                Some("")
+            );
+            set(
+                root.0,
+                &format!("{preview}\\shell\\open\\command"),
+                "",
+                "newer-installation",
+            )
+            .unwrap();
+            unregister_document(root.0, preview, executable).unwrap();
+            assert_eq!(
+                get_named(root.0, r".vv\OpenWithProgids", preview)
+                    .unwrap()
+                    .as_deref(),
+                Some("")
+            );
+            unregister_document(root.0, stable, executable).unwrap();
+            assert!(
+                get_named(root.0, r".vv\OpenWithProgids", stable)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                get(root.0, &format!("{stable}\\shell\\open\\command"))
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                get_named(root.0, r".vv\OpenWithProgids", "existing-viewer")
+                    .unwrap()
+                    .as_deref(),
+                Some("")
+            );
+            assert_eq!(
+                get(root.0, ".vv").unwrap().as_deref(),
+                Some("existing-viewer")
+            );
         }
         unsafe {
             RegDeleteTreeW(HKEY_CURRENT_USER, super::wide(&path).as_ptr());
