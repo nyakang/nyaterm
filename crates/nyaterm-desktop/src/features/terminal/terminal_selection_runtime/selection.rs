@@ -188,7 +188,7 @@ impl NyaTermApp {
         terminal_selected_text_from_screen(*selection, &self.terminal.view.screen)
     }
 
-    fn terminal_selection_endpoint_in_current_history(
+    pub(in crate::features) fn terminal_selection_endpoint_in_current_history(
         &self,
         position: gpui::Point<gpui::Pixels>,
         geometry: &TerminalHitTestGeometry,
@@ -1120,7 +1120,10 @@ impl NyaTermApp {
         }
     }
 
-    fn queue_terminal_selection_drag_visual_notify(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn queue_terminal_selection_drag_visual_notify(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session_id) = self
             .terminal
             .selection

@@ -27,7 +27,7 @@ mod batch_edit;
 #[cfg(test)]
 pub(in crate::features) use batch_edit::AssetBatchSaveSummary;
 pub(in crate::features) use batch_edit::{
-    AssetBatchEditDraft, BatchEditMode, BatchFieldId, FieldBasis,
+    AssetBatchEditDraft, BatchEditMode, BatchFieldKey, FieldBasis,
 };
 
 pub(in crate::features) const ASSET_TABLE_ROW_HEIGHT: f32 = 56.;
@@ -401,11 +401,13 @@ impl StartWorkspaceFeatureState {
     pub fn start_asset_batch_edit(
         &mut self,
         ids: Vec<String>,
-        basis: HashMap<BatchFieldId, FieldBasis>,
-        values: HashMap<BatchFieldId, String>,
-        bool_values: HashMap<BatchFieldId, bool>,
+        basis: HashMap<BatchFieldKey, FieldBasis>,
+        values: HashMap<BatchFieldKey, String>,
+        bool_values: HashMap<BatchFieldKey, bool>,
+        navigation_focus: Option<gpui::FocusHandle>,
     ) {
-        self.asset_batch.start(ids, basis, values, bool_values);
+        self.asset_batch
+            .start(ids, basis, values, bool_values, navigation_focus);
     }
 
     pub fn clear_asset_batch_edit(&mut self) {
@@ -428,11 +430,11 @@ impl StartWorkspaceFeatureState {
         self.asset_batch.set_error(error);
     }
 
-    pub fn set_asset_batch_value(&mut self, field: BatchFieldId, value: &str) {
+    pub fn set_asset_batch_value(&mut self, field: BatchFieldKey, value: &str) {
         self.asset_batch.set_value(field, value.to_string());
     }
 
-    pub fn set_asset_batch_bool(&mut self, field: BatchFieldId, value: bool) {
+    pub fn set_asset_batch_bool(&mut self, field: BatchFieldKey, value: bool) {
         self.asset_batch.set_bool_value(field, value);
     }
 

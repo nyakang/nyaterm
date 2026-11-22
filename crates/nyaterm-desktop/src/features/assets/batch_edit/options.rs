@@ -58,6 +58,53 @@ pub(super) fn backspace_select_options() -> Vec<NyaSelectOption> {
     choice_options(options::backspace_choices(""))
 }
 
+pub(super) fn android_quality_select_options() -> Vec<NyaSelectOption> {
+    nyaterm_core::models::android::ScreenQualityPreset::ALL
+        .into_iter()
+        .map(|preset| {
+            let value = match preset {
+                nyaterm_core::models::android::ScreenQualityPreset::Smooth => "smooth",
+                nyaterm_core::models::android::ScreenQualityPreset::Balanced => "balanced",
+                nyaterm_core::models::android::ScreenQualityPreset::Sharp => "sharp",
+            };
+            NyaSelectOption::new(value, t!(preset.label_key()))
+        })
+        .collect()
+}
+
+pub(super) fn android_orientation_select_options() -> Vec<NyaSelectOption> {
+    nyaterm_core::models::android::CaptureOrientation::ALL
+        .into_iter()
+        .map(|orientation| {
+            NyaSelectOption::new(orientation.server_value(), t!(orientation.label_key()))
+        })
+        .collect()
+}
+
+pub(super) fn ftp_passive_select_options(selected: &str) -> Vec<NyaSelectOption> {
+    choice_options(options::ftp_passive_mode_choices(selected))
+}
+
+pub(super) fn ftp_security_select_options(selected: &str) -> Vec<NyaSelectOption> {
+    choice_options(options::ftp_security_mode_choices(selected))
+}
+
+pub(super) fn ftp_tls_select_options(selected: &str) -> Vec<NyaSelectOption> {
+    choice_options(options::ftp_tls_version_choices(selected))
+}
+
+pub(super) fn ftp_filename_encoding_select_options(selected: &str) -> Vec<NyaSelectOption> {
+    choice_options(options::ftp_filename_encoding_choices(selected))
+}
+
+pub(super) fn ftp_filename_encoding_mode_select_options() -> Vec<NyaSelectOption> {
+    vec![
+        NyaSelectOption::new("auto", t!("dialog.filenameEncodingAuto")),
+        NyaSelectOption::new("utf8", t!("dialog.filenameEncodingForceUtf8")),
+        NyaSelectOption::new("custom", t!("dialog.filenameEncodingCustom")),
+    ]
+}
+
 pub(super) fn ssh_profile_select_options() -> Vec<NyaSelectOption> {
     choice_options(options::ssh_profile_choices(
         nyaterm_core::SshProfile::Standard,
@@ -237,17 +284,28 @@ pub(super) fn batch_kind_label(kind: ConnectionBatchKind) -> SharedString {
     }
 }
 pub(super) fn scope_select_options(draft: &AssetBatchEditDraft) -> Vec<NyaSelectOption> {
-    let mut options = vec![NyaSelectOption::new(
+    std::iter::once(NyaSelectOption::new(
         "common",
-        t!("assets.batch.commonScope", count = draft.ids().len()),
-    )];
-    options.extend(draft.counts().iter().map(|(kind, count)| {
-        NyaSelectOption::new(
-            batch_kind_value(*kind),
-            format!("{} ({count})", batch_kind_label(*kind)),
-        )
-    }));
-    options
+        t!("assets.batch.scopeCommon"),
+    ))
+    .chain(
+        crate::models::ConnectionKindTab::ALL
+            .into_iter()
+            .map(|tab| {
+                let count = draft
+                    .counts()
+                    .iter()
+                    .find(|(kind, _)| *kind == tab.batch_kind())
+                    .map(|(_, count)| *count)
+                    .unwrap_or(0);
+                NyaSelectOption::new(
+                    batch_kind_value(tab.batch_kind()),
+                    format!("{} ({count})", tab.label()),
+                )
+                .disabled(count == 0)
+            }),
+    )
+    .collect()
 }
 
 pub(super) fn default_icon_value() -> Option<String> {

@@ -2749,3 +2749,43 @@ fn open_popup_tracks_new_folded_frames_without_replacing_suggestions() {
         });
     }
 }
+
+#[test]
+fn regression_reading_mode_writes_no_user_bytes_but_keeps_protocol_responses() {
+    let mut f = Fixture::new();
+    f.update(|app, cx, id| {
+        app.toggle_terminal_local_mode(cx);
+        assert_eq!(app.terminal_local_mode_session(), Some(id));
+        let mut control = key("d");
+        control.keystroke.modifiers.control = true;
+        assert!(!app.send_terminal_key_event(&control, true, cx));
+        assert!(!app.send_terminal_input(b"text".to_vec(), cx));
+        app.commit_terminal_text("中文", cx);
+        assert!(app.write_session_input_recorded(id, b"text").is_err());
+        assert!(app.write_session_raw_input_recorded(id, b"\x04").is_err());
+        assert!(
+            app.write_session_sensitive_input(id, b"secret-fixture")
+                .is_err()
+        );
+        assert!(
+            app.write_session_wire_input_recorded_as(id, b"paste", b"paste")
+                .is_err()
+        );
+        assert!(
+            app.write_automated_terminal_input(id, b"command", None)
+                .is_err()
+        );
+    });
+    f.assert_quiet();
+    f.update(|app, _, id| {
+        app.write_session_protocol_response(id, b"protocol-fixture")
+            .unwrap()
+    });
+    f.receive(b"protocol-fixture");
+    f.assert_quiet();
+    f.update(|app, cx, id| {
+        app.exit_terminal_local_mode(cx);
+        app.write_session_input_recorded(id, b"normal").unwrap();
+    });
+    f.receive(b"normal");
+}

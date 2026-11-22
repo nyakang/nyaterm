@@ -244,6 +244,53 @@ pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
     out
 }
 
+/// Resolve a set of session-scoped user rules to paint rules using the active
+/// theme, then overlay them on top of the resolved global rules by id.
+///
+/// A session rule with an id equal to a global rule replaces that rule in
+/// place (so per-session tweaks win without affecting other sessions). New
+/// session-only ids are appended. The input order of `global` and `session`
+/// is otherwise preserved.
+pub fn overlay_resolved_keyword_highlight_rules(
+    global: &[ResolvedKeywordHighlightRule],
+    session_rules: &[KeywordHighlightRule],
+    is_dark: bool,
+) -> Vec<ResolvedKeywordHighlightRule> {
+    if session_rules.is_empty() {
+        return global.to_vec();
+    }
+    let resolved_session: Vec<ResolvedKeywordHighlightRule> = session_rules
+        .iter()
+        .map(|rule| ResolvedKeywordHighlightRule {
+            id: rule.id.clone(),
+            name: rule.name.clone(),
+            patterns: rule.patterns.clone(),
+            color: if is_dark {
+                rule.color_dark.clone()
+            } else {
+                rule.color_light.clone()
+            },
+            enabled: rule.enabled,
+        })
+        .collect();
+
+    let mut out = global.to_vec();
+    let mut positions: std::collections::HashMap<String, usize> = out
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| (rule.id.clone(), index))
+        .collect();
+    for session_rule in resolved_session {
+        if let Some(&index) = positions.get(&session_rule.id) {
+            out[index] = session_rule;
+        } else {
+            positions.insert(session_rule.id.clone(), out.len());
+            out.push(session_rule);
+        }
+    }
+    out
+}
+
 pub fn builtin_keyword_rule_label(id: &str) -> &'static str {
     match id {
         "builtin-command" => "Command",
@@ -767,10 +814,72 @@ pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str]
 #[cfg(test)]
 mod tests {
     use super::{
-        KeywordHighlightRule, builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized,
-        get_builtin_keyword_rules, merge_keyword_highlight_rules_for_paint,
+        KeywordHighlightRule, ResolvedKeywordHighlightRule, builtin_keyword_rule_ids,
+        builtin_keyword_rule_is_specialized, get_builtin_keyword_rules,
+        merge_keyword_highlight_rules_for_paint, overlay_resolved_keyword_highlight_rules,
     };
     use std::collections::{HashMap, HashSet};
+
+    fn rule(id: &str, dark: &str, light: &str) -> KeywordHighlightRule {
+        KeywordHighlightRule {
+            id: id.into(),
+            name: id.into(),
+            patterns: vec![id.into()],
+            color_dark: dark.into(),
+            color_light: light.into(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn session_overlay_replaces_same_id_and_appends_new() {
+        let global = vec![
+            ResolvedKeywordHighlightRule {
+                id: "g1".into(),
+                name: "G1".into(),
+                patterns: vec!["g1".into()],
+                color: "#111111".into(),
+                enabled: true,
+            },
+            ResolvedKeywordHighlightRule {
+                id: "g2".into(),
+                name: "G2".into(),
+                patterns: vec!["g2".into()],
+                color: "#222222".into(),
+                enabled: true,
+            },
+        ];
+        let session = vec![
+            rule("g1", "#ff0000", "#aa0000"),
+            rule("s1", "#00ff00", "#00aa00"),
+        ];
+
+        let dark = overlay_resolved_keyword_highlight_rules(&global, &session, true);
+        assert_eq!(dark.len(), 3);
+        assert_eq!(dark[0].id, "g1");
+        assert_eq!(dark[0].color, "#ff0000", "session rule wins on same id");
+        assert_eq!(dark[1].id, "g2");
+        assert_eq!(dark[1].color, "#222222");
+        assert_eq!(dark[2].id, "s1");
+        assert_eq!(dark[2].color, "#00ff00");
+
+        let light = overlay_resolved_keyword_highlight_rules(&global, &session, false);
+        assert_eq!(light[0].color, "#aa0000", "light theme uses light colour");
+        assert_eq!(light[2].color, "#00aa00");
+    }
+
+    #[test]
+    fn session_overlay_empty_is_a_cheap_copy() {
+        let global = vec![ResolvedKeywordHighlightRule {
+            id: "g1".into(),
+            name: "G1".into(),
+            patterns: vec!["g1".into()],
+            color: "#111111".into(),
+            enabled: true,
+        }];
+        let out = overlay_resolved_keyword_highlight_rules(&global, &[], true);
+        assert_eq!(out, global);
+    }
 
     #[test]
     fn builtin_catalog_is_stable() {

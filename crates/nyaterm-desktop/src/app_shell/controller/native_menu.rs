@@ -110,6 +110,8 @@ impl NativeMenuProjection {
                         .command(TitleMenuCommand::TerminalFind),
                     TitleMenuDefinition::action(t!("menu.selectAll"))
                         .command(TitleMenuCommand::TerminalSelectAll),
+                    TitleMenuDefinition::action(t!("settings.shortcutLabels.localMode"))
+                        .command(TitleMenuCommand::TerminalLocalMode),
                 ]);
             }
             (t!(menu.i18n_key()).to_string(), items)

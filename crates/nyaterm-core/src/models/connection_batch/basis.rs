@@ -52,6 +52,8 @@ pub fn connection_kind_counts(
         ConnectionBatchKind::Serial,
         ConnectionBatchKind::Rdp,
         ConnectionBatchKind::Vnc,
+        ConnectionBatchKind::Adb,
+        ConnectionBatchKind::Ftp,
     ]
     .into_iter()
     .filter_map(|kind| counts.get(&kind).map(|count| (kind, *count)))
@@ -70,12 +72,23 @@ pub fn rdp_field_basis<T: PartialEq>(
     targets: &[(String, ConnectionBatchKind)],
     group: RdpBatchFieldGroup,
     edit: &ConnectionBatchEdit,
-    mut project: impl FnMut(&SavedConnection) -> T,
+    project: impl FnMut(&SavedConnection) -> T,
 ) -> (BatchValueBasis<T>, BatchFieldApplicability) {
     let by_id: HashMap<_, _> = connections
         .iter()
         .map(|connection| (connection.id.as_str(), connection))
         .collect();
+    rdp_field_basis_indexed(&by_id, targets, group, edit, project)
+}
+
+/// Reuse a selection index while projecting multiple RDP fields.
+pub fn rdp_field_basis_indexed<T: PartialEq>(
+    by_id: &HashMap<&str, &SavedConnection>,
+    targets: &[(String, ConnectionBatchKind)],
+    group: RdpBatchFieldGroup,
+    edit: &ConnectionBatchEdit,
+    mut project: impl FnMut(&SavedConnection) -> T,
+) -> (BatchValueBasis<T>, BatchFieldApplicability) {
     let mut applicability = BatchFieldApplicability::default();
     let mut first = None;
     let mut mixed = false;

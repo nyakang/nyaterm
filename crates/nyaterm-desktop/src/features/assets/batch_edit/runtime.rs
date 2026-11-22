@@ -2,11 +2,10 @@ use super::basis::{
     batch_kind_value, batch_skip_reasons_label, compute_batch_basis, parse_batch_kind,
     select_initial_value,
 };
-use super::fields::{BatchFieldId, EDITABLE_FIELDS, FieldBasis};
+use super::fields::{BatchFieldKey, FieldBasis};
 use super::options;
 use super::{ASSET_BATCH_SELECT_PREFIX, ASSET_BATCH_TEXT_PREFIX};
 use crate::features::NyaTermApp;
-use crate::features::assets::BatchEditMode;
 use crate::features::text_inputs::TextInputSetup;
 use gpui::{Context, Window};
 use nyaterm_core::models::SshProfile;
@@ -53,7 +52,7 @@ impl NyaTermApp {
     /// Open the editor for the current asset selection. Creating the widget
     /// entities here, in an event handler, keeps the render path read-only.
     ///
-    /// Mixed selections start in the common scope; protocol tabs keep their original targets.
+    /// Protocol and common scopes retain their original targets.
     pub(in crate::features) fn open_asset_batch_edit(
         &mut self,
         _window: &mut Window,
@@ -78,8 +77,13 @@ impl NyaTermApp {
             compute_batch_basis(self.connection_state.connections(), &ids, None);
         let groups = self.connection_state.groups().to_vec();
         self.forget_text_inputs(ASSET_BATCH_TEXT_PREFIX);
-        self.start_workspace
-            .start_asset_batch_edit(ids, basis, values, bool_values);
+        self.start_workspace.start_asset_batch_edit(
+            ids,
+            basis,
+            values,
+            bool_values,
+            Some(cx.focus_handle()),
+        );
         self.start_workspace
             .asset_batch_mut()
             .initialize_scopes(self.connection_state.connections());
@@ -93,30 +97,149 @@ impl NyaTermApp {
         kind: Option<ConnectionBatchKind>,
         cx: &mut Context<Self>,
     ) {
+        self.start_workspace
+            .asset_batch_mut()
+            .prepare_scope(kind, self.connection_state.connections());
         if self.start_workspace.asset_batch_mut().set_scope(kind) {
             self.reseed_asset_batch_inputs(cx);
         }
     }
-    fn reseed_asset_batch_inputs(&mut self, cx: &mut Context<Self>) {
-        self.start_workspace
-            .asset_batch_mut()
-            .refresh_rdp_basis(self.connection_state.connections());
-        if let Some(input) = self.existing_text_input(BatchFieldId::Password.text_input_id()) {
-            input.update(cx, |state, cx| state.discard_content(cx));
+    pub(in crate::features) fn select_asset_batch_section(
+        &mut self,
+        section: crate::models::ConnectionEditorSection,
+        cx: &mut Context<Self>,
+    ) {
+        if self.start_workspace.asset_batch_mut().set_section(section) {
+            cx.notify();
         }
-        self.forget_text_inputs(ASSET_BATCH_TEXT_PREFIX);
+    }
+
+    /// Move the section rail like the connection editor: up/down plus home/end.
+    pub(in crate::features) fn asset_batch_navigation_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let (kind_tab, current) = {
+            let draft = self.start_workspace.asset_batch();
+            let kind_tab = draft
+                .display_kind()
+                .map(crate::models::ConnectionKindTab::from_batch_kind)
+                .unwrap_or(crate::models::ConnectionKindTab::Ssh);
+            let sections = crate::models::ConnectionEditorSection::for_kind(kind_tab, false);
+            let current = draft
+                .section()
+                .filter(|section| sections.contains(section))
+                .unwrap_or(sections[0]);
+            (kind_tab, current)
+        };
+        let sections = if self.start_workspace.asset_batch().display_kind().is_none() {
+            &[crate::models::ConnectionEditorSection::Basic][..]
+        } else {
+            crate::models::ConnectionEditorSection::for_kind(kind_tab, false)
+        };
+        let index = sections
+            .iter()
+            .position(|section| *section == current)
+            .unwrap_or(0);
+        let next = match event.keystroke.key.as_str() {
+            "up" => Some(index.saturating_sub(1)),
+            "down" => Some((index + 1).min(sections.len() - 1)),
+            "home" => Some(0),
+            "end" => Some(sections.len() - 1),
+            _ => None,
+        };
+        let Some(next) = next else {
+            return false;
+        };
+        self.select_asset_batch_section(sections[next], cx);
+        true
+    }
+
+    /// Clicking the rail keeps keyboard navigation alive, as in the editor.
+    pub(in crate::features) fn focus_asset_batch_navigation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(focus) = self
+            .start_workspace
+            .asset_batch()
+            .navigation_focus()
+            .cloned()
+        {
+            window.focus(&focus, cx);
+        }
+    }
+    fn refresh_asset_batch_field_input(&mut self, field: BatchFieldKey, cx: &mut Context<Self>) {
+        let draft = self.start_workspace.asset_batch();
+        let value = if field == BatchFieldKey::Password {
+            draft.replacement_password()
+        } else {
+            draft.value(field)
+        }
+        .to_string();
+        let selected = select_initial_value(draft, field);
+        if let Some(input) = self.existing_text_input(field.text_input_id()) {
+            input.update(cx, |state, cx| {
+                if state.value(cx) != value {
+                    state.set_content_silent(&value, cx);
+                }
+            });
+        }
+        if let Some(select) = self.selects.field(&field.select_id()) {
+            select.update(cx, |state, cx| state.set_selected_value(selected, cx));
+        }
+    }
+
+    fn reseed_asset_batch_inputs(&mut self, cx: &mut Context<Self>) {
+        for field in super::fields::EDITABLE_FIELDS {
+            self.refresh_asset_batch_field_input(field, cx);
+        }
         let groups = self.connection_state.groups().to_vec();
         self.seed_asset_batch_inputs(&groups, cx);
         cx.notify();
     }
-    pub(in crate::features) fn set_asset_batch_mode(
+    /// Undo: restore the row's original value without producing a patch.
+    pub(in crate::features) fn undo_asset_batch_field(
         &mut self,
-        field: BatchFieldId,
-        mode: BatchEditMode,
+        field: BatchFieldKey,
         cx: &mut Context<Self>,
     ) {
-        self.start_workspace.asset_batch_mut().set_mode(field, mode);
-        self.reseed_asset_batch_inputs(cx);
+        self.start_workspace.asset_batch_mut().undo_field(field);
+        self.refresh_asset_batch_field_input(field, cx);
+        if matches!(
+            field,
+            BatchFieldKey::RdpBackend | BatchFieldKey::RdpDisplayMode
+        ) {
+            self.start_workspace
+                .asset_batch_mut()
+                .refresh_rdp_basis(self.connection_state.connections());
+            self.reseed_asset_batch_inputs(cx);
+        }
+        cx.notify();
+    }
+    /// Restore default: write the row's documented default as `Clear`.
+    pub(in crate::features) fn reset_asset_batch_field(
+        &mut self,
+        field: BatchFieldKey,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_workspace.asset_batch_mut().reset_field(field);
+        self.refresh_asset_batch_field_input(field, cx);
+        if matches!(
+            field,
+            BatchFieldKey::RdpBackend | BatchFieldKey::RdpDisplayMode
+        ) {
+            self.start_workspace
+                .asset_batch_mut()
+                .refresh_rdp_basis(self.connection_state.connections());
+            self.reseed_asset_batch_inputs(cx);
+        }
+        cx.notify();
+    }
+    pub(in crate::features) fn clear_asset_batch_password(&mut self, cx: &mut Context<Self>) {
+        self.reset_asset_batch_field(BatchFieldKey::Password, cx);
     }
     pub(in crate::features) fn close_asset_batch_edit(&mut self, cx: &mut Context<Self>) {
         let handle = self.start_workspace.asset_batch_window_handle();
@@ -130,7 +253,7 @@ impl NyaTermApp {
     /// Close without touching the native window; used by the window's own
     /// close handler, which removes the window itself.
     pub(in crate::features) fn dismiss_asset_batch_edit(&mut self, cx: &mut Context<Self>) {
-        if let Some(input) = self.existing_text_input(BatchFieldId::Password.text_input_id()) {
+        if let Some(input) = self.existing_text_input(BatchFieldKey::Password.text_input_id()) {
             input.update(cx, |state, cx| state.discard_content(cx));
         }
         self.start_workspace.clear_asset_batch_edit();
@@ -141,88 +264,131 @@ impl NyaTermApp {
     fn seed_asset_batch_inputs(&mut self, groups: &[nyaterm_core::Group], cx: &mut Context<Self>) {
         for (field, hint) in [
             (
-                BatchFieldId::Description,
+                BatchFieldKey::Description,
                 t!("assets.batch.placeholderDescription"),
             ),
-            (BatchFieldId::Port, t!("assets.batch.placeholderPort")),
+            (BatchFieldKey::Port, t!("assets.batch.placeholderPort")),
             (
-                BatchFieldId::Username,
+                BatchFieldKey::Username,
                 t!("assets.batch.placeholderUsername"),
             ),
             (
-                BatchFieldId::SftpShellTimeout,
+                BatchFieldKey::SftpShellTimeout,
                 t!("assets.batch.placeholderShellTimeout"),
             ),
             (
-                BatchFieldId::PostLoginCommand,
+                BatchFieldKey::PostLoginCommand,
                 t!("assets.batch.placeholderPostLoginCommand"),
             ),
             (
-                BatchFieldId::PostLoginDelay,
+                BatchFieldKey::PostLoginDelay,
                 t!("assets.batch.placeholderPostLoginDelay"),
             ),
-            (BatchFieldId::SshKex, t!("assets.batch.placeholderSshKex")),
+            (BatchFieldKey::SshKex, t!("assets.batch.placeholderSshKex")),
             (
-                BatchFieldId::SshCiphers,
+                BatchFieldKey::SshCiphers,
                 t!("assets.batch.placeholderSshCiphers"),
             ),
-            (BatchFieldId::SshMacs, t!("assets.batch.placeholderSshMacs")),
             (
-                BatchFieldId::SshHostKeys,
+                BatchFieldKey::SshMacs,
+                t!("assets.batch.placeholderSshMacs"),
+            ),
+            (
+                BatchFieldKey::SshHostKeys,
                 t!("assets.batch.placeholderSshHostKeys"),
             ),
-            (BatchFieldId::Tags, t!("assets.batch.placeholderValue")),
+            (BatchFieldKey::Tags, t!("assets.batch.placeholderValue")),
             (
-                BatchFieldId::SshAuthAgentEnvironment,
+                BatchFieldKey::SshAuthAgentEnvironment,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::SshAuthAgentSocket,
-                t!("assets.batch.placeholderValue"),
-            ),
-            (BatchFieldId::ShellPath, t!("assets.batch.placeholderValue")),
-            (BatchFieldId::ShellArgs, t!("assets.batch.placeholderValue")),
-            (
-                BatchFieldId::WorkingDir,
+                BatchFieldKey::SshAuthAgentSocket,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetKeepAlive,
+                BatchFieldKey::ShellPath,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetAutoLoginTimeout,
+                BatchFieldKey::ShellArgs,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetAutoLoginRetries,
+                BatchFieldKey::WorkingDir,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetAutoLoginUserPrompt,
+                BatchFieldKey::TelnetKeepAlive,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetAutoLoginPasswordPrompt,
+                BatchFieldKey::TelnetAutoLoginTimeout,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetAutoLoginSuccessPrompt,
+                BatchFieldKey::TelnetAutoLoginRetries,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::TelnetAutoLoginFailurePrompt,
-                t!("assets.batch.placeholderValue"),
-            ),
-            (BatchFieldId::RdpDomain, t!("assets.batch.placeholderValue")),
-            (BatchFieldId::RdpWidth, t!("assets.batch.placeholderValue")),
-            (BatchFieldId::RdpHeight, t!("assets.batch.placeholderValue")),
-            (
-                BatchFieldId::RdpReconnectAttempts,
+                BatchFieldKey::TelnetAutoLoginUserPrompt,
                 t!("assets.batch.placeholderValue"),
             ),
             (
-                BatchFieldId::VncReconnectAttempts,
+                BatchFieldKey::TelnetAutoLoginPasswordPrompt,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::TelnetAutoLoginSuccessPrompt,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::TelnetAutoLoginFailurePrompt,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::RdpDomain,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (BatchFieldKey::RdpWidth, t!("assets.batch.placeholderValue")),
+            (
+                BatchFieldKey::RdpHeight,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::RdpReconnectAttempts,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::VncReconnectAttempts,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::AdbDirectory,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::AdbScreenMaxSize,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::AdbScreenFps,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::AdbScreenBitRate,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::FtpInitialDirectory,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::FtpLocalInitialDirectory,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::FtpConnectTimeout,
                 t!("assets.batch.placeholderValue"),
             ),
         ] {
@@ -236,7 +402,7 @@ impl NyaTermApp {
                     ),
                     FieldBasis::Mixed => (
                         draft.value(field).to_string(),
-                        t!("assets.batch.mixed").to_string(),
+                        t!("assets.batch.keepPlaceholder").to_string(),
                         false,
                     ),
                     FieldBasis::Uniform => {
@@ -259,7 +425,6 @@ impl NyaTermApp {
 
             let disabled = disabled
                 || !self.start_workspace.asset_batch().field_available(field)
-                || self.start_workspace.asset_batch().mode(field) != BatchEditMode::Set
                 || self.start_workspace.asset_batch_saving();
             input.update(cx, |state, cx| state.set_disabled(disabled, cx));
         }
@@ -267,10 +432,12 @@ impl NyaTermApp {
         {
             let (placeholder, disabled) = {
                 let draft = self.start_workspace.asset_batch();
-                match draft.basis(BatchFieldId::Password) {
+                match draft.basis(BatchFieldKey::Password) {
                     FieldBasis::Inapplicable => (t!("assets.batch.inapplicable").to_string(), true),
                     FieldBasis::Mixed => (t!("assets.batch.mixed").to_string(), false),
-                    FieldBasis::Uniform => (draft.value(BatchFieldId::Password).to_string(), false),
+                    FieldBasis::Uniform => {
+                        (draft.value(BatchFieldKey::Password).to_string(), false)
+                    }
                 }
             };
             // The seed is always empty: the existing credential is never read
@@ -282,14 +449,8 @@ impl NyaTermApp {
                 .asset_batch()
                 .replacement_password()
                 .to_string();
-            let input = self.text_input(BatchFieldId::Password.text_input_id(), &seed, setup, cx);
-            let disabled = disabled
-                || self
-                    .start_workspace
-                    .asset_batch()
-                    .mode(BatchFieldId::Password)
-                    != BatchEditMode::Set
-                || self.start_workspace.asset_batch_saving();
+            let input = self.text_input(BatchFieldKey::Password.text_input_id(), &seed, setup, cx);
+            let disabled = disabled || self.start_workspace.asset_batch_saving();
             input.update(cx, |state, cx| state.set_disabled(disabled, cx));
         }
 
@@ -313,53 +474,39 @@ impl NyaTermApp {
             });
         }
 
-        for field in EDITABLE_FIELDS.into_iter().filter(|field| field.is_bool()) {
-            let draft = self.start_workspace.asset_batch();
-            let selected = (draft.basis(field) == FieldBasis::Uniform || draft.is_edited(field))
-                .then(|| draft.bool_value(field).to_string());
-            let selected =
-                if draft.basis(field) == FieldBasis::Mixed && !draft.current_bool_is_set(field) {
-                    None
-                } else {
-                    selected
-                };
-            let disabled = draft.mode(field) != BatchEditMode::Set
-                || draft.saving()
-                || !draft.field_available(field);
-            self.select_entity(
-                field.select_id(),
-                vec![
-                    nyaterm_ui::NyaSelectOption::new("true", t!("assets.batch.enabled")),
-                    nyaterm_ui::NyaSelectOption::new("false", t!("assets.batch.disabled")),
-                ],
-                selected,
-                disabled,
-                cx,
-            );
-        }
-        let selected_value = |field: BatchFieldId| {
+        let selected_value = |field: BatchFieldKey| {
             let draft = self.start_workspace.asset_batch();
             select_initial_value(draft, field).unwrap_or_default()
         };
         let selected_ids = self.start_workspace.asset_batch_ids().to_vec();
         let account_kind = self.start_workspace.asset_batch().display_kind();
-        let terminal_profile = if selected_value(BatchFieldId::SshProfile) == "network_device" {
+        let terminal_profile = if selected_value(BatchFieldKey::SshProfile) == "network_device" {
             SshProfile::NetworkDevice
         } else {
             SshProfile::Standard
         };
+        // Each protocol offers exactly the modes its editor offers; broad
+        // options would let the batch write a mode the connection cannot use.
+        let auth_options = match account_kind {
+            Some(ConnectionBatchKind::Ssh) => vec![
+                nyaterm_ui::NyaSelectOption::new("password", t!("dialog.password")),
+                nyaterm_ui::NyaSelectOption::new("key", t!("dialog.privateKey")),
+                nyaterm_ui::NyaSelectOption::new("agent", t!("dialog.sshAgent")),
+                nyaterm_ui::NyaSelectOption::new("none", t!("dialog.noAuthentication")),
+            ],
+            Some(ConnectionBatchKind::Ftp) => vec![
+                nyaterm_ui::NyaSelectOption::new("password", t!("dialog.password")),
+                nyaterm_ui::NyaSelectOption::new("none", t!("dialog.ftpAnonymousLogin")),
+            ],
+            _ => vec![
+                nyaterm_ui::NyaSelectOption::new("password", t!("dialog.password")),
+                nyaterm_ui::NyaSelectOption::new("none", t!("dialog.noAuthentication")),
+            ],
+        };
         for (field, options) in [
-            (
-                BatchFieldId::AuthMode,
-                vec![
-                    nyaterm_ui::NyaSelectOption::new("password", t!("dialog.password")),
-                    nyaterm_ui::NyaSelectOption::new("key", t!("dialog.privateKey")),
-                    nyaterm_ui::NyaSelectOption::new("agent", t!("dialog.sshAgent")),
-                    nyaterm_ui::NyaSelectOption::new("none", t!("dialog.noAuthentication")),
-                ],
-            ),
-            (BatchFieldId::Group, options::group_select_options(groups)),
-            (BatchFieldId::Icon, {
+            (BatchFieldKey::AuthMode, auth_options),
+            (BatchFieldKey::Group, options::group_select_options(groups)),
+            (BatchFieldKey::Icon, {
                 let mut icons = options::icon_select_options();
                 icons.extend(
                     self.connection_state
@@ -372,145 +519,180 @@ impl NyaTermApp {
                 );
                 icons
             }),
-            (BatchFieldId::Encoding, options::encoding_select_options()),
-            (BatchFieldId::Backspace, options::backspace_select_options()),
+            (BatchFieldKey::Encoding, options::encoding_select_options()),
             (
-                BatchFieldId::SshProfile,
+                BatchFieldKey::Backspace,
+                options::backspace_select_options(),
+            ),
+            (
+                BatchFieldKey::SshProfile,
                 options::ssh_profile_select_options(),
             ),
             (
-                BatchFieldId::TerminalType,
+                BatchFieldKey::TerminalType,
                 options::terminal_type_select_options(terminal_profile),
             ),
             (
-                BatchFieldId::SftpCwdFollow,
+                BatchFieldKey::SftpCwdFollow,
                 options::sftp_cwd_follow_select_options(),
             ),
             (
-                BatchFieldId::SftpFilenameEncoding,
+                BatchFieldKey::SftpFilenameEncoding,
                 options::sftp_filename_encoding_select_options(),
             ),
             (
-                BatchFieldId::SftpPipelineDepth,
+                BatchFieldKey::SftpPipelineDepth,
                 options::sftp_pipeline_depth_select_options(&selected_value(
-                    BatchFieldId::SftpPipelineDepth,
+                    BatchFieldKey::SftpPipelineDepth,
                 )),
             ),
             (
-                BatchFieldId::SshAlgorithmMode,
+                BatchFieldKey::SshAlgorithmMode,
                 options::ssh_algorithm_mode_select_options(),
             ),
             (
-                BatchFieldId::RdpCertificatePolicy,
+                BatchFieldKey::RdpCertificatePolicy,
                 options::rdp_certificate_policy_select_options(),
             ),
             (
-                BatchFieldId::VncSecurityMode,
+                BatchFieldKey::VncSecurityMode,
                 options::vnc_security_select_options(),
             ),
             (
-                BatchFieldId::Account,
+                BatchFieldKey::Account,
                 options::account_select_options(
                     self.security.passwords(),
                     account_kind,
-                    &selected_value(BatchFieldId::Account),
+                    &selected_value(BatchFieldKey::Account),
                 ),
             ),
             (
-                BatchFieldId::Key,
+                BatchFieldKey::Key,
                 options::key_select_options(
                     self.security.ssh_keys(),
-                    &selected_value(BatchFieldId::Key),
+                    &selected_value(BatchFieldKey::Key),
                 ),
             ),
             (
-                BatchFieldId::Otp,
+                BatchFieldKey::Otp,
                 options::otp_select_options(
                     self.security.otp_entries(),
-                    &selected_value(BatchFieldId::Otp),
+                    &selected_value(BatchFieldKey::Otp),
                 ),
             ),
             (
-                BatchFieldId::Proxy,
+                BatchFieldKey::Proxy,
                 options::proxy_select_options(
                     self.tunnel_state.proxies(),
-                    &selected_value(BatchFieldId::Proxy),
+                    &selected_value(BatchFieldKey::Proxy),
                 ),
             ),
             (
-                BatchFieldId::ProxyJump,
+                BatchFieldKey::ProxyJump,
                 options::proxy_jump_select_options(
                     self.connection_state.connections(),
                     groups,
-                    &selected_value(BatchFieldId::ProxyJump),
+                    &selected_value(BatchFieldKey::ProxyJump),
                     &selected_ids,
                 ),
             ),
             (
-                BatchFieldId::SshAuthAgentEndpoint,
+                BatchFieldKey::SshAuthAgentEndpoint,
                 options::ssh_agent_endpoint_select_options(&selected_value(
-                    BatchFieldId::SshAuthAgentEndpoint,
+                    BatchFieldKey::SshAuthAgentEndpoint,
                 )),
             ),
             (
-                BatchFieldId::AgentPolicy,
+                BatchFieldKey::AgentPolicy,
                 options::ssh_agent_policy_select_options(&selected_value(
-                    BatchFieldId::AgentPolicy,
+                    BatchFieldKey::AgentPolicy,
                 )),
             ),
             (
-                BatchFieldId::RdpBackend,
-                options::rdp_backend_select_options(&selected_value(BatchFieldId::RdpBackend)),
+                BatchFieldKey::RdpBackend,
+                options::rdp_backend_select_options(&selected_value(BatchFieldKey::RdpBackend)),
             ),
             (
-                BatchFieldId::RdpDisplayMode,
+                BatchFieldKey::RdpDisplayMode,
                 options::rdp_display_mode_select_options(&selected_value(
-                    BatchFieldId::RdpDisplayMode,
+                    BatchFieldKey::RdpDisplayMode,
                 )),
             ),
             (
-                BatchFieldId::VncScaleMode,
-                options::vnc_scale_select_options(&selected_value(BatchFieldId::VncScaleMode)),
+                BatchFieldKey::VncScaleMode,
+                options::vnc_scale_select_options(&selected_value(BatchFieldKey::VncScaleMode)),
             ),
             (
-                BatchFieldId::RecordingMode,
+                BatchFieldKey::RecordingMode,
                 options::recording_mode_select_options(&selected_value(
-                    BatchFieldId::RecordingMode,
+                    BatchFieldKey::RecordingMode,
                 )),
             ),
             (
-                BatchFieldId::SerialPort,
+                BatchFieldKey::SerialPort,
                 options::serial_port_select_options(
                     self.connection_state.serial_ports(),
                     &self.serial_ports_in_use(),
-                    &selected_value(BatchFieldId::SerialPort),
+                    &selected_value(BatchFieldKey::SerialPort),
                 ),
             ),
             (
-                BatchFieldId::BaudRate,
-                options::baud_rate_select_options(&selected_value(BatchFieldId::BaudRate)),
+                BatchFieldKey::BaudRate,
+                options::baud_rate_select_options(&selected_value(BatchFieldKey::BaudRate)),
             ),
             (
-                BatchFieldId::DataBits,
-                options::data_bits_select_options(&selected_value(BatchFieldId::DataBits)),
+                BatchFieldKey::DataBits,
+                options::data_bits_select_options(&selected_value(BatchFieldKey::DataBits)),
             ),
             (
-                BatchFieldId::Parity,
-                options::parity_select_options(&selected_value(BatchFieldId::Parity)),
+                BatchFieldKey::Parity,
+                options::parity_select_options(&selected_value(BatchFieldKey::Parity)),
             ),
             (
-                BatchFieldId::StopBits,
-                options::stop_bits_select_options(&selected_value(BatchFieldId::StopBits)),
+                BatchFieldKey::StopBits,
+                options::stop_bits_select_options(&selected_value(BatchFieldKey::StopBits)),
             ),
             (
-                BatchFieldId::FlowControl,
-                options::flow_control_select_options(&selected_value(BatchFieldId::FlowControl)),
+                BatchFieldKey::FlowControl,
+                options::flow_control_select_options(&selected_value(BatchFieldKey::FlowControl)),
             ),
             (
-                BatchFieldId::TelnetEnterMode,
+                BatchFieldKey::TelnetEnterMode,
                 options::telnet_enter_select_options(&selected_value(
-                    BatchFieldId::TelnetEnterMode,
+                    BatchFieldKey::TelnetEnterMode,
                 )),
+            ),
+            (
+                BatchFieldKey::AdbScreenQuality,
+                options::android_quality_select_options(),
+            ),
+            (
+                BatchFieldKey::AdbScreenOrientation,
+                options::android_orientation_select_options(),
+            ),
+            (
+                BatchFieldKey::FtpPassiveMode,
+                options::ftp_passive_select_options(&selected_value(BatchFieldKey::FtpPassiveMode)),
+            ),
+            (
+                BatchFieldKey::FtpFilenameEncodingMode,
+                options::ftp_filename_encoding_mode_select_options(),
+            ),
+            (
+                BatchFieldKey::FtpFilenameEncoding,
+                options::ftp_filename_encoding_select_options(&selected_value(
+                    BatchFieldKey::FtpFilenameEncoding,
+                )),
+            ),
+            (
+                BatchFieldKey::FtpSecurityMode,
+                options::ftp_security_select_options(&selected_value(
+                    BatchFieldKey::FtpSecurityMode,
+                )),
+            ),
+            (
+                BatchFieldKey::FtpTlsVersion,
+                options::ftp_tls_select_options(&selected_value(BatchFieldKey::FtpTlsVersion)),
             ),
         ] {
             self.seed_asset_batch_select(field, options, cx);
@@ -519,7 +701,7 @@ impl NyaTermApp {
 
     fn seed_asset_batch_select(
         &mut self,
-        field: BatchFieldId,
+        field: BatchFieldKey,
         options: Vec<nyaterm_ui::NyaSelectOption>,
         cx: &mut Context<Self>,
     ) {
@@ -533,7 +715,7 @@ impl NyaTermApp {
                 ),
                 FieldBasis::Mixed => (
                     select_initial_value(draft, field),
-                    t!("assets.batch.mixed").to_string(),
+                    t!("assets.batch.keepPlaceholder").to_string(),
                     false,
                 ),
                 FieldBasis::Uniform => (select_initial_value(draft, field), String::new(), false),
@@ -543,14 +725,13 @@ impl NyaTermApp {
             .into_iter()
             .filter(|option| {
                 !option.value().is_empty()
-                    && !(field == BatchFieldId::Encoding && option.value() == "global")
-                    && !(field == BatchFieldId::SftpFilenameEncoding
+                    && !(field == BatchFieldKey::Encoding && option.value() == "global")
+                    && !(field == BatchFieldKey::SftpFilenameEncoding
                         && option.value() == "terminal")
             })
             .collect();
         let disabled = disabled
             || !self.start_workspace.asset_batch().field_available(field)
-            || self.start_workspace.asset_batch().mode(field) != BatchEditMode::Set
             || self.start_workspace.asset_batch_saving();
         let select = self.select_entity(field.select_id(), options, selected, disabled, cx);
         select.update(cx, |state, cx| {
@@ -571,10 +752,22 @@ impl NyaTermApp {
         if key.starts_with("select.") || key.starts_with("bool.") {
             return;
         }
-        if let Some(field) = BatchFieldId::from_key(key) {
+        if let Some(field) = BatchFieldKey::from_key(key) {
             self.start_workspace.set_asset_batch_value(field, text);
             cx.notify();
         }
+    }
+
+    /// A switch is the editor's control for booleans; toggling it is the edit,
+    /// so the draft holds a concrete value from that point on.
+    pub(in crate::features) fn set_asset_batch_bool_value(
+        &mut self,
+        field: BatchFieldKey,
+        value: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_workspace.set_asset_batch_bool(field, value);
+        cx.notify();
     }
 
     pub(in crate::features) fn apply_asset_batch_select(
@@ -590,7 +783,7 @@ impl NyaTermApp {
             self.set_asset_batch_scope(parse_batch_kind(value), cx);
             return;
         }
-        if let Some(field) = BatchFieldId::from_key(key) {
+        if let Some(field) = BatchFieldKey::from_key(key) {
             if field.is_bool() {
                 self.start_workspace
                     .set_asset_batch_bool(field, value == "true");
@@ -599,8 +792,11 @@ impl NyaTermApp {
             }
             if matches!(
                 field,
-                BatchFieldId::RdpBackend | BatchFieldId::RdpDisplayMode
+                BatchFieldKey::RdpBackend | BatchFieldKey::RdpDisplayMode
             ) {
+                self.start_workspace
+                    .asset_batch_mut()
+                    .refresh_rdp_basis(self.connection_state.connections());
                 self.reseed_asset_batch_inputs(cx);
             } else {
                 cx.notify();

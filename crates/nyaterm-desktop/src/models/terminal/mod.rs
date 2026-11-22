@@ -157,6 +157,9 @@ pub(crate) struct TerminalViewState {
     pub(crate) has_unread: bool,
     /// Viewport offset from the live bottom (0 = follow output).
     pub(crate) scroll_offset: usize,
+    /// Local Mode freezes the current absolute view even when the user entered
+    /// while following output (scroll_offset == 0).
+    pub(crate) local_mode_scroll_locked: bool,
     /// True when output arrived while scrolled into history (FAB "New" affordance).
     pub(crate) has_new_while_scrolled: bool,
     pub(crate) performance_mode: TerminalPerformanceMode,
@@ -223,6 +226,7 @@ impl TerminalViewState {
             render_cache: TerminalRenderCache::default(),
             has_unread: false,
             scroll_offset: 0,
+            local_mode_scroll_locked: false,
             has_new_while_scrolled: false,
             performance_mode: TerminalPerformanceMode::Normal,
             performance_overlay: None,
@@ -278,6 +282,7 @@ impl TerminalViewState {
             render_cache: TerminalRenderCache::default(),
             has_unread: false,
             scroll_offset: 0,
+            local_mode_scroll_locked: false,
             has_new_while_scrolled: false,
             performance_mode: TerminalPerformanceMode::Normal,
             performance_overlay: None,
@@ -365,7 +370,13 @@ impl TerminalViewState {
                 self.clear_scrollback_query_caches();
             }
         }
-        self.scroll_offset = current.reanchor_offset(previous, self.scroll_offset);
+        self.scroll_offset = if self.local_mode_scroll_locked {
+            self.scroll_offset
+                .saturating_add(scrolled.unwrap_or(0))
+                .min(current.scrollback_len)
+        } else {
+            current.reanchor_offset(previous, self.scroll_offset)
+        };
         if self.scroll_offset > 0 && scrolled.is_some_and(|rows| rows > 0) {
             self.has_new_while_scrolled = true;
         }

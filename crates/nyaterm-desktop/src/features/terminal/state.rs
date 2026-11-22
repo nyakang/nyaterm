@@ -4,7 +4,7 @@
 //! selected, where the surface was painted. Parsing, snapshots and the wire
 //! protocol stay in `nyaterm-terminal` and `nyaterm-transport`.
 
-use nyaterm_terminal::selection::TerminalSelectionEndpoint;
+use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelectionEndpoint};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,6 +18,7 @@ use super::assist_state::TerminalAssistState;
 use super::command_suggestions::paste::SuggestionPasteContext;
 use super::editing_state::TerminalEditingState;
 use super::ime_state::TerminalImeState;
+use super::keyword_highlight_popup::KeywordHighlightPopupState;
 use super::terminal_surface::TerminalScrollbarDragState;
 use super::terminal_surface_entity::TerminalSurface;
 use crate::features::{FontResolutionStatus, terminal::ResolvedAppearanceFont};
@@ -38,6 +39,30 @@ pub(in crate::features) struct TerminalFeatureState {
     pub(super) layout: TerminalLayoutState,
     pub(super) menus: TerminalMenuState,
     pub(super) paint: TerminalPaintCacheState,
+    pub(super) keyword_popup: KeywordHighlightPopupState,
+    pub(super) local_mode: TerminalLocalModeState,
+}
+
+/// Keyboard-driven local selection mode.
+///
+/// Only one focused session can be in local mode at a time. The cursor is an
+/// absolute-buffer position; the mouse selection state remains the single
+/// source of truth for copied text and painted selection.
+pub(super) struct TerminalLocalModeState {
+    pub(super) session_id: Option<String>,
+    pub(super) cursor: TerminalBufferCellPos,
+    pub(super) anchor: Option<TerminalBufferCellPos>,
+    pub(super) history: nyaterm_terminal::TerminalHistoryState,
+    pub(super) preferred_col: usize,
+    pub(super) pending_end: bool,
+}
+
+impl TerminalLocalModeState {
+    pub(super) fn is_active_for(&self, session_id: Option<&str>) -> bool {
+        self.session_id
+            .as_deref()
+            .is_some_and(|active| Some(active) == session_id)
+    }
 }
 
 /// Focus handles the terminal feature needs at construction time.
@@ -517,6 +542,15 @@ impl TerminalFeatureState {
             paint: TerminalPaintCacheState {
                 cached_keyword_highlight_rules: None,
             },
+            keyword_popup: KeywordHighlightPopupState::default(),
+            local_mode: TerminalLocalModeState {
+                session_id: None,
+                cursor: TerminalBufferCellPos::new(0, 0),
+                anchor: None,
+                history: Default::default(),
+                preferred_col: 0,
+                pending_end: false,
+            },
         }
     }
 
@@ -782,6 +816,16 @@ mod tests {
                 },
             )
         })
+    }
+
+    #[test]
+    fn local_mode_state_tracks_the_active_session() {
+        let mut state = terminal_state();
+        assert!(!state.local_mode.is_active_for(Some("s1")));
+        state.local_mode.session_id = Some("s1".to_string());
+        assert!(state.local_mode.is_active_for(Some("s1")));
+        assert!(!state.local_mode.is_active_for(Some("s2")));
+        assert!(!state.local_mode.is_active_for(None));
     }
 
     #[test]

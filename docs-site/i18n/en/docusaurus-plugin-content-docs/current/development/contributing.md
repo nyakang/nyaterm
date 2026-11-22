@@ -20,6 +20,17 @@ Thank you for your interest in contributing to NyaTerm.
 
 Cross-crate changes keep adapters small and explicit, with one authoritative owner for each value.
 
+## Connection editor parity
+
+The connection editor and the asset batch editor must keep the same surface. When adding, removing, or renaming a connection setting:
+
+- add the field to the connection editor section that owns it;
+- give the batch editor a row with the same label, the same section, and the same default value used for a new connection;
+- keep `BATCH_FIELDS_BY_SECTION` exhaustive; a batch field that no protocol section renders is a parity bug;
+- run the `editor_surface_parity` tests in `nyaterm-desktop`, which check field coverage, section reachability, and that `Restore default` writes the value a new connection starts with.
+
+Protocol-specific editor sections compose the shared `editor_surface` primitives. Do not paint a private control shell or copy a control layout into a batch section.
+
 ## Contribution workflow
 
 1. Fork the repository and create a branch from `main`.

@@ -31,23 +31,28 @@ impl NyaTermApp {
         self.save_appearance_settings(cx);
     }
 
-    fn save_keyword_highlights(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::features) fn save_keyword_highlights(&mut self, cx: &mut Context<Self>) {
         self.invalidate_paint_theme_caches();
         self.settings.mark_keyword_persistence_dirty();
         if self.defer_settings_persistence(cx) {
             return;
         }
         let config = self.settings.keyword_config().clone();
+        let submitted = config.clone();
         self.submit_store_request(
             0,
             nyaterm_store::store_mutation(StoreDomain::Settings, move |store| {
                 store.save_keyword_highlights(&config)
             }),
-            |this, event, cx| {
+            move |this, event, cx| {
                 match event.outcome {
                     Ok(config) => {
+                        // A completion must not overwrite edits made after submission.
+                        if this.settings.keyword_config() != &submitted {
+                            return;
+                        }
+                        this.settings.replace_keyword_config(config.clone());
                         this.settings.finish_keyword_persistence(&config);
-                        this.settings.replace_keyword_config(config);
                         this.settings
                             .update_store_status("keyword highlight settings saved", true);
                     }

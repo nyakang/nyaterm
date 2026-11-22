@@ -15,6 +15,7 @@ actions!(
         TerminalCommandNext,
         TerminalCommandSelect,
         TerminalSelectAll,
+        TerminalLocalMode,
         ManageSyncGroups,
         ShowCommandSuggestions,
         ToggleRecording,

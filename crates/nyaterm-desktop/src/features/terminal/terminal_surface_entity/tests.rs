@@ -4904,3 +4904,205 @@ fn highlight_requests_distinguish_fold_gaps_with_the_same_outer_window() {
     }
     assert_ne!(keys[0], keys[1]);
 }
+
+#[test]
+fn session_keyword_rules_overlay_global_without_mutating_global() {
+    use super::terminal_keyword_rules_with_session;
+    use nyaterm_core::{KeywordHighlightRule, ResolvedKeywordHighlightRule};
+
+    let global = Arc::new(vec![ResolvedKeywordHighlightRule {
+        id: "kh-shared".into(),
+        name: "Shared".into(),
+        patterns: vec!["error".into()],
+        color: "#111111".into(),
+        enabled: true,
+    }]);
+    let session = vec![
+        KeywordHighlightRule {
+            id: "kh-shared".into(),
+            name: "Session override".into(),
+            patterns: vec!["error".into()],
+            color_dark: "#ff0000".into(),
+            color_light: "#aa0000".into(),
+            enabled: true,
+        },
+        KeywordHighlightRule {
+            id: "kh-session-only".into(),
+            name: "Session only".into(),
+            patterns: vec!["warn".into()],
+            color_dark: "#00ff00".into(),
+            color_light: "#00aa00".into(),
+            enabled: true,
+        },
+    ];
+
+    let merged = terminal_keyword_rules_with_session(&global, &session, true);
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0].color, "#ff0000", "session rule wins on same id");
+    assert_eq!(merged[1].color, "#00ff00", "session-only rule appended");
+    // Global rules must not be mutated by the overlay.
+    assert_eq!(global[0].color, "#111111");
+
+    let light = terminal_keyword_rules_with_session(&global, &session, false);
+    assert_eq!(light[0].color, "#aa0000");
+
+    let no_session = terminal_keyword_rules_with_session(&global, &[], true);
+    assert!(
+        Arc::ptr_eq(&no_session, &global),
+        "empty session reuses the Arc"
+    );
+}
+
+#[test]
+fn regression_deleting_session_rule_removes_effective_rule_immediately() {
+    let mut cx = TestAppContext::single();
+    let surface = cx.new(|_| TerminalSurface::new("review"));
+    surface.update(&mut cx, |surface, cx| {
+        let global = nyaterm_core::ResolvedKeywordHighlightRule {
+            id: "global".into(),
+            name: "global".into(),
+            patterns: vec!["global".into()],
+            color: "#111111".into(),
+            enabled: true,
+        };
+        surface.set_decorations_and_keywords(Vec::new(), Arc::new(vec![global]), false, "block");
+        surface.set_session_keyword_rules(
+            vec![nyaterm_core::KeywordHighlightRule {
+                id: "session".into(),
+                name: "session".into(),
+                patterns: vec!["session".into()],
+                color_dark: "#222222".into(),
+                color_light: "#333333".into(),
+                enabled: true,
+            }],
+            cx,
+        );
+        assert_eq!(surface.keyword_rules.len(), 2);
+        surface.set_session_keyword_rules(Vec::new(), cx);
+        assert_eq!(
+            surface.keyword_rules.len(),
+            1,
+            "deleted session rule must not remain cached"
+        );
+    });
+}
+
+#[test]
+fn regression_session_rules_reuse_effective_cache_and_restore_global_override() {
+    let mut cx = TestAppContext::single();
+    let surface = cx.new(|_| TerminalSurface::new("cache"));
+    surface.update(&mut cx, |surface, cx| {
+        let global = Arc::new(vec![nyaterm_core::ResolvedKeywordHighlightRule {
+            id: "same".into(),
+            name: "global".into(),
+            patterns: vec!["global".into()],
+            color: "#112233".into(),
+            enabled: true,
+        }]);
+        surface.set_decorations_and_keywords(Vec::new(), global.clone(), false, "block");
+        surface.set_session_keyword_rules(
+            vec![nyaterm_core::KeywordHighlightRule {
+                id: "same".into(),
+                name: "override".into(),
+                patterns: vec!["session".into()],
+                color_dark: "#334455".into(),
+                color_light: "#556677".into(),
+                enabled: false,
+            }],
+            cx,
+        );
+        let cached = surface.keyword_rules.clone();
+        for _ in 0..100 {
+            surface.set_decorations_and_keywords(Vec::new(), global.clone(), false, "block");
+            assert!(Arc::ptr_eq(&cached, &surface.keyword_rules));
+        }
+        assert!(!surface.keyword_rules[0].enabled);
+        surface.set_session_keyword_rules(Vec::new(), cx);
+        assert!(Arc::ptr_eq(&global, &surface.keyword_rules));
+        assert_eq!(surface.keyword_rules[0].name, "global");
+    });
+}
+
+#[test]
+#[ignore = "manual performance probe; records synthetic merge and cached synchronization timings"]
+fn keyword_rule_cache_cost_probe() {
+    let mut cx = TestAppContext::single();
+    for count in [0, 20, 200, 1000] {
+        let global = Arc::new(
+            (0..count)
+                .map(|index| nyaterm_core::ResolvedKeywordHighlightRule {
+                    id: format!("g{index}"),
+                    name: format!("rule {index}"),
+                    patterns: vec![format!("PATTERN_{index}")],
+                    color: "#123456".into(),
+                    enabled: true,
+                })
+                .collect::<Vec<_>>(),
+        );
+        let session = (0..count)
+            .map(|index| nyaterm_core::KeywordHighlightRule {
+                id: format!("s{index}"),
+                name: format!("rule {index}"),
+                patterns: vec![format!("SESSION_{index}")],
+                color_dark: "#234567".into(),
+                color_light: "#345678".into(),
+                enabled: true,
+            })
+            .collect::<Vec<_>>();
+        for panes in [1, 4, 8] {
+            let surfaces = (0..panes)
+                .map(|_| cx.new(|_| TerminalSurface::new("cost-probe")))
+                .collect::<Vec<_>>();
+            for surface in &surfaces {
+                surface.update(&mut cx, |surface, cx| {
+                    surface.set_decorations_and_keywords(
+                        Vec::new(),
+                        global.clone(),
+                        false,
+                        "block",
+                    );
+                    surface.set_session_keyword_rules(session.clone(), cx);
+                });
+            }
+            let start = Instant::now();
+            for _ in 0..100 {
+                for _ in 0..panes {
+                    let mut old = global.as_ref().clone();
+                    for rule in &session {
+                        let resolved = nyaterm_core::ResolvedKeywordHighlightRule {
+                            id: rule.id.clone(),
+                            name: rule.name.clone(),
+                            patterns: rule.patterns.clone(),
+                            color: rule.color_dark.clone(),
+                            enabled: rule.enabled,
+                        };
+                        if let Some(existing) = old.iter_mut().find(|r| r.id == rule.id) {
+                            *existing = resolved;
+                        } else {
+                            old.push(resolved);
+                        }
+                    }
+                    std::hint::black_box(old);
+                }
+            }
+            let old_us = start.elapsed().as_micros();
+            let start = Instant::now();
+            for _ in 0..100 {
+                for surface in &surfaces {
+                    surface.update(&mut cx, |surface, _| {
+                        std::hint::black_box(surface.set_decorations_and_keywords(
+                            Vec::new(),
+                            global.clone(),
+                            false,
+                            "block",
+                        ));
+                    });
+                }
+            }
+            println!(
+                "rule_cache count={count} panes={panes} iterations=100 old_merge_us={old_us} cached_sync_us={}",
+                start.elapsed().as_micros()
+            );
+        }
+    }
+}

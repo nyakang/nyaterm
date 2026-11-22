@@ -434,6 +434,9 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.terminal_local_mode_session() == Some(session_id.as_str()) {
+            self.exit_terminal_local_mode(cx);
+        }
         self.terminal.cancel_serial_reconnect_enter(&session_id);
         if self.session.session_is_busy(&session_id) {
             self.shell

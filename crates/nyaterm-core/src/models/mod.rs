@@ -128,11 +128,11 @@ fn default_backspace_mode_telnet() -> String {
     "del".to_string()
 }
 
-fn default_telnet_enter_mode() -> String {
+pub fn default_telnet_enter_mode() -> String {
     "cr".to_string()
 }
 
-fn default_telnet_auto_login_timeout_ms() -> u64 {
+pub fn default_telnet_auto_login_timeout_ms() -> u64 {
     60_000
 }
 
@@ -167,7 +167,7 @@ where
     })
 }
 
-fn default_rdp_certificate_policy() -> String {
+pub fn default_rdp_certificate_policy() -> String {
     "prompt".to_string()
 }
 
@@ -175,11 +175,11 @@ fn default_rdp_display_mode() -> String {
     "fit-window".to_string()
 }
 
-fn default_rdp_width() -> u32 {
+pub fn default_rdp_width() -> u32 {
     1920
 }
 
-fn default_rdp_height() -> u32 {
+pub fn default_rdp_height() -> u32 {
     1080
 }
 
@@ -191,15 +191,15 @@ fn default_rdp_clipboard_mode() -> String {
     "text-and-files".to_string()
 }
 
-fn default_rdp_reconnect_attempts() -> u32 {
+pub fn default_rdp_reconnect_attempts() -> u32 {
     5
 }
 
-fn default_vnc_security_mode() -> String {
+pub fn default_vnc_security_mode() -> String {
     "auto".to_string()
 }
 
-fn default_vnc_scale_mode() -> String {
+pub fn default_vnc_scale_mode() -> String {
     "fit".to_string()
 }
 
