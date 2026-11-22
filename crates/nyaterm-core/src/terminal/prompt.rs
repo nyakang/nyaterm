@@ -9,6 +9,8 @@ pub enum PromptFamily {
     PowerShell,
     Cmd,
     HostPath,
+    HostDirUser,
+    ShellVersion,
     Path,
     LeadingArrow,
     Arrow,
@@ -45,6 +47,8 @@ pub fn match_prompt(text: &str) -> Option<PromptMatch<'_>> {
         PromptFamily::PowerShell,
         PromptFamily::Cmd,
         PromptFamily::HostPath,
+        PromptFamily::HostDirUser,
+        PromptFamily::ShellVersion,
         PromptFamily::Path,
         PromptFamily::LeadingArrow,
         PromptFamily::Arrow,
@@ -52,6 +56,8 @@ pub fn match_prompt(text: &str) -> Option<PromptMatch<'_>> {
     ][index];
     let identity = match family {
         PromptFamily::UserHost | PromptFamily::HostPath => trimmed.split(':').next()?,
+        // The user (with its terminator) is what a `su`/`sudo -i` changes.
+        PromptFamily::HostDirUser => trimmed.rsplit(' ').next()?,
         PromptFamily::Bracketed => trimmed
             .strip_prefix('[')?
             .split(']')
@@ -182,6 +188,8 @@ mod tests {
             "PS C:\\src>dir",
             "C:\\src>dir",
             "device:/sdcard # ls",
+            "Jakubs-MacBook-Pro:~ root# ls",
+            "bash-3.2$ ls",
             "~/src ❯ ls",
             "➜ ~/src ls",
             "❯ ls",
@@ -206,6 +214,8 @@ mod tests {
             ("PS C:\\src> ", "PS D:\\tmp> "),
             ("C:\\src>", "D:\\tmp>"),
             ("device:/sdcard # ", "device:/data # "),
+            ("host:~ jakub$ ", "host:/tmp jakub$ "),
+            ("bash-3.2$ ", "bash-3.2$ "),
             ("~/src ❯ ", "/tmp ❯ "),
             ("➜ ~/src ", "➜ /tmp "),
             ("$ ", "$"),
@@ -217,6 +227,8 @@ mod tests {
             ("user@host:~$ ", "user@other:~$ "),
             ("[user@host src]$ ", "[root@host src]$ "),
             ("$ ", "# "),
+            ("host:~ jakub$ ", "host:~ root# "),
+            ("bash-3.2$ ", "bash-3.2# "),
             ("❯ ", "➜ "),
             ("PS C:\\src> ", "C:\\src>"),
         ] {

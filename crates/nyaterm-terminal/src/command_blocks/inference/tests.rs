@@ -464,3 +464,50 @@ fn wrap_only_changes_on_the_preceding_row_revoke_a_cached_return_prompt() {
     assert_eq!(before.row(2).unwrap().text, after.row(2).unwrap().text);
     assert!(!after.command_blocks[0].complete);
 }
+
+fn note_submission(screen: &mut TerminalScreen) -> bool {
+    let evidence =
+        command_submission_evidence(&screen.snapshot(), &TerminalInputState::new(), b"\r")
+            .expect("prompt must be recognised");
+    screen.note_command_submission(evidence)
+}
+
+#[test]
+fn commands_in_a_su_root_shell_without_integration_stay_foldable_for_unix_prompt_styles() {
+    for (user_prompt, root_prompt) in [
+        ("user@host:~$ ", "root@host:~# "),
+        (
+            "Jakubs-MacBook-Pro:~ jakub$ ",
+            "Jakubs-MacBook-Pro:~ root# ",
+        ),
+        ("bash-3.2$ ", "bash-3.2# "),
+    ] {
+        let mut screen = TerminalScreen::new(100, 40);
+        // The original shell has integration; `sudo su -` starts a root shell without it.
+        screen.advance(
+            format!(
+                "\x1b]133;A\x07{user_prompt}\x1b]133;B\x07ls\r\n\x1b]133;C\x07a\r\nb\r\nc\r\n\x1b]133;D;0\x07\x1b]133;A\x07{user_prompt}\x1b]133;B\x07sudo su -\r\n\x1b]133;C\x07Password:\r\n{root_prompt}ls"
+            )
+            .as_bytes(),
+        );
+        assert!(note_submission(&mut screen), "{root_prompt}");
+        screen.advance(format!("\r\nx\r\ny\r\nz\r\n{root_prompt}ls -la").as_bytes());
+        assert!(note_submission(&mut screen), "{root_prompt}");
+        screen.advance(format!("\r\nq\r\nr\r\ns\r\n{root_prompt}").as_bytes());
+        let snapshot = screen.snapshot();
+        let inferred: Vec<_> = snapshot
+            .command_blocks
+            .iter()
+            .filter(|block| {
+                block.source == CommandBoundarySource::ConfirmedPrompt && block.output_lines > 0
+            })
+            .collect();
+        assert_eq!(inferred.len(), 2, "{root_prompt}");
+        assert!(
+            inferred
+                .iter()
+                .all(|block| block.complete && block.output_lines == 3 && block.can_collapse(3)),
+            "{root_prompt}"
+        );
+    }
+}

@@ -48,8 +48,8 @@ fn leading_env_prefix() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\(([^()\r\n]+)\)\s*").expect("env prefix"))
 }
 
-pub(super) fn prompt_matchers() -> &'static [Regex; 9] {
-    static MATCHERS: OnceLock<[Regex; 9]> = OnceLock::new();
+pub(super) fn prompt_matchers() -> &'static [Regex; 11] {
+    static MATCHERS: OnceLock<[Regex; 11]> = OnceLock::new();
     MATCHERS.get_or_init(|| {
         // Consume one separator after the terminator, preserving command spacing.
         // Specific structures precede bare theme arrows (e.g. `➜ ~/src cmd`).
@@ -60,6 +60,10 @@ pub(super) fn prompt_matchers() -> &'static [Regex; 9] {
             r"^PS +[^>\r\n]+> ?",
             r"^[A-Za-z]:(?:[\\/][^>\r\n]*)?> ?",
             r"^[A-Za-z0-9_.-]+:(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*) *[#$%](?: |$)",
+            // BSD/macOS default `host:dir user$` (and `user#` as root).
+            r"^[A-Za-z0-9_.-]+:[^\s#$%❯➜→›]+ +[A-Za-z0-9_.-]+[#$%](?: |$)",
+            // Bare shells print `bash-3.2$` / `sh-5.1#` when no PS1 is configured.
+            r"^(?:ba|z|da|k|c|tc|a)?sh-[0-9][0-9.]*[#$%](?: |$)",
             r"^(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*) +[#$%❯➜→›](?: |$)",
             r"^[❯➜→›] +(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*)(?: |$)",
             r"^[❯➜→›](?: |$)",
@@ -663,6 +667,11 @@ mod tests {
             "# ",
             "$ ",
             "PS C:\\Users> ",
+            "Jakubs-MacBook-Pro:~ jakub$ ",
+            "Jakubs-MacBook-Pro:~ root# ",
+            "host:Documents user$ ",
+            "bash-3.2$ ",
+            "sh-5.1# ",
         ] {
             let line = format!("{prompt} echo  hi ");
             assert_eq!(
