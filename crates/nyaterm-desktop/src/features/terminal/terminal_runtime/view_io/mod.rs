@@ -734,8 +734,9 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) -> Entity<TerminalSurface> {
-        if let Some(surface) = self.terminal.view.surfaces.get(session_id) {
-            return surface.clone();
+        if let Some(surface) = self.terminal.view.surfaces.get(session_id).cloned() {
+            self.sync_terminal_keyword_source(session_id, &surface, cx);
+            return surface;
         }
         let layout_cache = self
             .terminal
@@ -788,7 +789,54 @@ impl NyaTermApp {
             .view
             .surfaces
             .insert(session_id.to_string(), surface.clone());
+        self.sync_terminal_keyword_source(session_id, &surface, cx);
         surface
+    }
+
+    pub(in crate::features) fn sync_terminal_keyword_source(
+        &self,
+        session_id: &str,
+        surface: &Entity<TerminalSurface>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.terminal.view.views.get(session_id) else {
+            return;
+        };
+        let rules = view.keyword_highlights.snapshot();
+        let enabled = self.settings.keyword_config().enabled;
+        surface.update(cx, |surface, cx| {
+            surface.set_keyword_highlight_source(enabled, rules, cx);
+        });
+    }
+
+    pub(in crate::features) fn set_session_keyword_rules(
+        &mut self,
+        session_id: &str,
+        rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.terminal.view.views.get_mut(session_id)
+            && view.keyword_highlights.replace(rules)
+        {
+            self.sync_terminal_surface_paint(session_id, cx);
+        }
+    }
+
+    pub(in crate::features) fn session_keyword_rules(
+        &self,
+        session_id: &str,
+    ) -> Option<&[nyaterm_core::models::KeywordHighlightRule]> {
+        self.terminal
+            .view
+            .views
+            .get(session_id)
+            .map(|view| view.keyword_highlights.rules())
+    }
+
+    pub(in crate::features) fn refresh_terminal_keyword_sources(&self, cx: &mut Context<Self>) {
+        for (id, surface) in &self.terminal.view.surfaces {
+            self.sync_terminal_keyword_source(id, surface, cx);
+        }
     }
 
     pub(in crate::features) fn remove_terminal_surface(&mut self, session_id: &str) {

@@ -4389,6 +4389,7 @@
     "ruleBack": "返回規則清單",
     "readHistoryChanged": "歷史內容已變更，閱讀位置已調整；輸入仍暫停。",
     "ruleConflict": "規則已被其他視窗修改。請重新載入後再編輯。",
+    "invalidRulePattern": "規則「%{name}」的第 %{line} 行模式無效：%{error}",
     "invalidRuleColor": "色彩必須為 6 位十六進位值。",
     "ruleSessionClosed": "目標工作階段已關閉，無法儲存工作階段規則。",
     "ruleInherited": "繼承自全域",

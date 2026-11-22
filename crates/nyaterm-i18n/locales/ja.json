@@ -4389,6 +4389,7 @@
     "ruleBack": "ルール一覧に戻る",
     "readHistoryChanged": "履歴が変更されたため、閲覧位置を調整しました。入力は引き続き停止中です。",
     "ruleConflict": "別の画面でルールが変更されました。再読み込みしてから編集してください。",
+    "invalidRulePattern": "ルール「%{name}」のパターン %{line} 行目：%{error}",
     "invalidRuleColor": "色は 6 桁の 16 進数で指定してください。",
     "ruleSessionClosed": "対象のセッションは終了しました。セッションルールを保存できません。",
     "ruleInherited": "グローバルから継承",

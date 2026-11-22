@@ -6,6 +6,17 @@
 
 use crate::selection::TerminalBufferCellPos;
 
+/// Reader carets are insertion boundaries, unlike inclusive terminal cell ranges.
+pub fn local_mode_selection(
+    anchor: TerminalBufferCellPos,
+    head: TerminalBufferCellPos,
+) -> crate::selection::TerminalSelection {
+    crate::selection::TerminalSelection {
+        head: head.into(),
+        ..crate::selection::TerminalSelection::with_anchor(anchor)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalModeMotion {
     Left,
@@ -317,5 +328,28 @@ mod cell_boundary_tests {
         assert_eq!(local_mode_cell_boundary(&row.cells, 1, true), 2);
         assert_eq!(local_mode_cell_boundary(&row.cells, 1, false), 0);
         assert_eq!(local_mode_cell_boundary(&row.cells, 2, true), 2);
+    }
+}
+
+#[cfg(test)]
+mod insertion_selection_tests {
+    use super::local_mode_selection;
+    use crate::selection::TerminalBufferCellPos;
+
+    #[test]
+    fn insertion_boundaries_select_exactly_the_cells_between_carets() {
+        let at = |col| TerminalBufferCellPos::new(0, col);
+        assert!(local_mode_selection(at(1), at(1)).is_empty());
+        for (a, b) in [(1, 2), (2, 1)] {
+            assert_eq!(
+                local_mode_selection(at(a), at(b)).cols_for_absolute_line(0),
+                Some((1, 2))
+            );
+        }
+        // Two terminal cells for a wide glyph, with no following character.
+        assert_eq!(
+            local_mode_selection(at(1), at(3)).cols_for_absolute_line(0),
+            Some((1, 3))
+        );
     }
 }

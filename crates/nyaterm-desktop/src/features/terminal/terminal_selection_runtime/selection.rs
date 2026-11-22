@@ -632,14 +632,7 @@ impl NyaTermApp {
                 .as_ref()
                 .is_some_and(|selection| !selection.is_empty())
             {
-                self.ensure_terminal_selection_text(cx);
-                if self.settings.summary().interaction_copy_on_select {
-                    let _ = self.copy_terminal_selection(cx);
-                }
-                // Double/triple-click selections are committed on MouseDown,
-                // but occurrence search remains a MouseUp-only operation.
-                self.schedule_terminal_selected_occurrence_search(cx);
-                self.notify_terminal_selection_owner_surface(cx);
+                self.complete_terminal_selection_reading(cx);
             }
             // Stationary click without an active drag can still reposition the
             // tracked input cursor (Tauri handleTerminalMouseUp smart cursor).
@@ -710,16 +703,13 @@ impl NyaTermApp {
             // an empty selection to editing, context-menu or copy operations.
             self.terminal.selection.click_anchor = click_anchor;
             self.terminal.selection.session_id = session_id;
-        } else if self.settings.summary().interaction_copy_on_select {
-            let _ = self.copy_terminal_selection(cx);
-        } else if self.terminal.selection.selection.is_some() {
-            // One shell notify for status after drag ends (not per mouse move).
+        } else if !self.settings.summary().interaction_copy_on_select
+            && self.terminal.selection.selection.is_some()
+        {
             self.shell.set_status("selection ready".to_string());
             cx.notify();
         }
-        self.ensure_terminal_selection_text(cx);
-        self.schedule_terminal_selected_occurrence_search(cx);
-        self.notify_terminal_selection_owner_surface(cx);
+        self.complete_terminal_selection_reading(cx);
     }
 
     pub(in crate::features) fn recover_terminal_selection_after_lost_mouse_up(
@@ -897,7 +887,7 @@ impl NyaTermApp {
         }
     }
 
-    fn update_terminal_selection_autoscroll(
+    pub(in crate::features) fn update_terminal_selection_autoscroll(
         &mut self,
         session_id: String,
         position: gpui::Point<gpui::Pixels>,
@@ -997,6 +987,15 @@ impl NyaTermApp {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.terminal.local_mode.is_active_for(Some(session_id))
+            && !self
+                .terminal
+                .selection
+                .selection
+                .is_some_and(|s| s.mode == TerminalSelectionMode::Block)
+        {
+            return self.refresh_local_mode_selection_head(session_id, position, cx);
+        }
         self.reanchor_terminal_selection_for_session(session_id, cx);
         let Some(geometry) = self.terminal_hit_test_geometry_for_session(Some(session_id), cx)
         else {
@@ -1026,6 +1025,7 @@ impl NyaTermApp {
             self.terminal.selection.text.invalidate_preserving_copy();
             self.queue_terminal_selection_drag_visual_notify(cx);
         }
+        self.sync_local_mode_caret_from_selection(session_id, cx);
         true
     }
 
@@ -1118,6 +1118,27 @@ impl NyaTermApp {
             self.terminal.selection.text.invalidate_preserving_copy();
             self.queue_terminal_selection_drag_visual_notify(cx);
         }
+        self.sync_local_mode_caret_from_selection(session_id, cx);
+    }
+
+    /// Shared read-only completion, including the user's mouse-copy preference.
+    pub(in crate::features) fn complete_terminal_selection_reading(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .terminal
+            .selection
+            .selection
+            .is_some_and(|selection| !selection.is_empty())
+        {
+            self.ensure_terminal_selection_text(cx);
+            if self.settings.summary().interaction_copy_on_select {
+                let _ = self.copy_terminal_selection(cx);
+            }
+            self.schedule_terminal_selected_occurrence_search(cx);
+        }
+        self.notify_terminal_selection_owner_surface(cx);
     }
 
     pub(in crate::features) fn queue_terminal_selection_drag_visual_notify(

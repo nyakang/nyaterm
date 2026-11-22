@@ -395,10 +395,12 @@ pub(in crate::features) struct TerminalSurface {
     global_keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
     resolved_keyword_theme: Option<bool>,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
-    /// Session-scoped highlight rules are stored as raw rules (both theme
-    /// colours) and overlaid onto `keyword_rules` for this surface only.
-    /// Borrowed by the popup editor; dropped with the surface on session close.
-    session_keyword_rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
+    /// Immutable projection of the rules owned by the session view.
+    session_keyword_rules: Arc<Vec<nyaterm_core::models::KeywordHighlightRule>>,
+    keyword_highlights_enabled: bool,
+    keyword_config_key: Option<u64>,
+    #[cfg(test)]
+    keyword_config_key_computations: usize,
     /// Cached `ui_highlight_line_roles`; the highlight path runs inside
     /// `app.update`, where reading the app entity would borrow it twice.
     line_roles: bool,
@@ -495,7 +497,11 @@ impl TerminalSurface {
             global_keyword_rules: empty_terminal_keyword_rules(),
             resolved_keyword_theme: None,
             keyword_rules: empty_terminal_keyword_rules(),
-            session_keyword_rules: Vec::new(),
+            session_keyword_rules: Arc::new(Vec::new()),
+            keyword_highlights_enabled: true,
+            keyword_config_key: None,
+            #[cfg(test)]
+            keyword_config_key_computations: 0,
             line_roles: true,
             keyword_highlights: None,
             keyword_highlight_generation: 0,
@@ -2063,7 +2069,7 @@ impl TerminalSurface {
 
         let rules = self.keyword_rules.clone();
         let config = self.keyword_highlight_config();
-        let rules_key = terminal_keyword_highlight_config_key(rules.as_slice(), config);
+        let rules_key = self.cached_keyword_config_key();
         let visible_ready = self.keyword_highlights.as_ref().is_some_and(|highlights| {
             highlights.rules_key() == rules_key
                 && highlights.matches_snapshot_ranges(
@@ -2301,6 +2307,10 @@ impl TerminalSurface {
         &mut self,
         global: &Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
     ) -> Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
+        if !self.keyword_highlights_enabled {
+            self.global_keyword_rules = Arc::clone(global);
+            return empty_terminal_keyword_rules();
+        }
         let is_dark = self.keyword_highlight_theme_is_dark();
         if self.resolved_keyword_theme == Some(is_dark)
             && terminal_keyword_rule_sets_equal(&self.global_keyword_rules, global)
@@ -2313,32 +2323,58 @@ impl TerminalSurface {
         terminal_keyword_rules_with_session(global, &self.session_keyword_rules, is_dark)
     }
 
-    /// Replace the session-scoped highlight rules for this surface and
-    /// invalidate/refresh highlighting so the change becomes visible at once.
-    pub(in crate::features) fn set_session_keyword_rules(
+    /// Receive an immutable session projection; the view remains its only owner.
+    pub(in crate::features) fn set_keyword_highlight_source(
         &mut self,
-        rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
+        enabled: bool,
+        rules: Arc<Vec<nyaterm_core::models::KeywordHighlightRule>>,
         cx: &mut Context<Self>,
-    ) {
-        if self.session_keyword_rules == rules {
-            return;
+    ) -> bool {
+        if self.keyword_highlights_enabled == enabled
+            && Arc::ptr_eq(&self.session_keyword_rules, &rules)
+        {
+            return false;
         }
         self.session_keyword_rules = rules;
+        self.keyword_highlights_enabled = enabled;
         self.resolved_keyword_theme = None;
         let global = Arc::clone(&self.global_keyword_rules);
         let merged = self.keyword_rules_with_session(&global);
         self.keyword_rules = merged;
         self.invalidate_keyword_highlight_config();
-        self.schedule_keyword_highlights(false, self.keyword_highlight_output_pressure, cx);
+        self.schedule_keyword_highlights(true, self.keyword_highlight_output_pressure, cx);
+        cx.notify();
+        true
     }
 
-    pub(in crate::features) fn session_keyword_rules(
-        &self,
-    ) -> &[nyaterm_core::models::KeywordHighlightRule] {
-        &self.session_keyword_rules
+    fn cached_keyword_config_key(&mut self) -> u64 {
+        if let Some(key) = self.keyword_config_key {
+            return key;
+        }
+        #[cfg(test)]
+        {
+            self.keyword_config_key_computations += 1;
+        }
+        let key = terminal_keyword_highlight_config_key(
+            &self.keyword_rules,
+            self.keyword_highlight_config(),
+        );
+        self.keyword_config_key = Some(key);
+        key
+    }
+
+    #[cfg(test)]
+    fn set_session_keyword_rules(
+        &mut self,
+        rules: Vec<nyaterm_core::models::KeywordHighlightRule>,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_keyword_highlight_source(true, Arc::new(rules), cx);
+        self.schedule_keyword_highlights(true, self.keyword_highlight_output_pressure, cx);
     }
 
     fn invalidate_keyword_highlight_config(&mut self) {
+        self.keyword_config_key = None;
         self.keyword_highlight_generation = self.keyword_highlight_generation.saturating_add(1);
         self.keyword_highlight_cancel_epoch
             .fetch_add(1, Ordering::AcqRel);
@@ -2716,8 +2752,9 @@ impl TerminalSurface {
     }
 
     fn can_handle_scroll_wheel_locally(&self) -> bool {
-        !self.protocol_state.mouse_reporting
-            && self.protocol_state.alternate_scroll_payload(1).is_none()
+        self.local_mode_cursor.is_some()
+            || (!self.protocol_state.mouse_reporting
+                && self.protocol_state.alternate_scroll_payload(1).is_none())
     }
 
     fn apply_local_scroll_wheel_visual_state(
@@ -3637,9 +3674,10 @@ impl Render for TerminalSurface {
             .text_color(rgb(palette.terminal_fg))
             .font(surface_font)
             .text_size(px(self.font_size))
-            .when(!self.protocol_state.mouse_reporting, |this| {
-                this.cursor_text()
-            })
+            .when(
+                self.local_mode_cursor.is_some() || !self.protocol_state.mouse_reporting,
+                |this| this.cursor_text(),
+            )
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                 this.handle_scroll_wheel(event, cx);
             }))

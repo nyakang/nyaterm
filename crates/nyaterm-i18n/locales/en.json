@@ -4389,6 +4389,7 @@
     "ruleBack": "Back to rules",
     "readHistoryChanged": "History changed. Reading position adjusted; input remains paused.",
     "ruleConflict": "Rules changed in another editor. Reload before editing again.",
+    "invalidRulePattern": "Rule “%{name}”, pattern line %{line}: %{error}",
     "invalidRuleColor": "Colors must contain six hexadecimal digits.",
     "ruleSessionClosed": "The target session has closed. Session rules cannot be saved.",
     "ruleInherited": "Inherited",

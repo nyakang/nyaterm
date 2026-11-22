@@ -445,6 +445,7 @@ impl NyaTermApp {
     ) {
         // Background sessions must answer with the new theme even when no pane is visible.
         self.sync_terminal_color_palette();
+        self.refresh_terminal_keyword_sources(cx);
         let ids = self
             .visible_terminal_session_ids()
             .into_iter()

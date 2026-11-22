@@ -596,7 +596,10 @@ impl NyaTermApp {
         delta_lines: i32,
         cx: &mut Context<Self>,
     ) -> bool {
-        if delta_lines == 0 || session_id.is_empty() {
+        if delta_lines == 0
+            || session_id.is_empty()
+            || self.terminal.local_mode.is_active_for(Some(session_id))
+        {
             return false;
         }
         if self.session.is_disconnected(session_id) {
@@ -826,7 +829,8 @@ impl NyaTermApp {
             motion,
             modifiers,
         } = report;
-        if session_id.is_empty()
+        if self.terminal.local_mode.is_active_for(Some(session_id))
+            || session_id.is_empty()
             || !mouse_report_allowed_by_alt(
                 self.settings.summary().interaction_mouse_events_require_alt,
                 modifiers.alt,

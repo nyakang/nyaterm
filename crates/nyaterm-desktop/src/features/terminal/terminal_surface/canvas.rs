@@ -726,7 +726,8 @@ impl NyaTermApp {
                 .summary()
                 .interaction_terminal_right_click_action
                 == nyaterm_core::TerminalRightClickAction::Menu
-            && (!terminal_mouse_reporting
+            && (local_mode_active
+                || !terminal_mouse_reporting
                 || self.settings.summary().interaction_mouse_events_require_alt);
         let context_menu_app = cx.entity().downgrade();
         let context_menu_session_id = session_id.clone();

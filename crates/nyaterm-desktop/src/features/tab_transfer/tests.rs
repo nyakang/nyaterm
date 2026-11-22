@@ -22,7 +22,7 @@ fn tab_transfer_preserves_split_tree_terminal_contents_and_active_session() {
         first: Box::new(WorkspacePaneNode::leaf("tab")),
         second: Box::new(WorkspacePaneNode::leaf("secondary")),
     };
-    source.update(&mut cx, |app, _| {
+    source.update(&mut cx, |app, cx| {
         app.session.register_session_metadata(
             "secondary",
             SessionRuntimeMetadata {
@@ -40,6 +40,15 @@ fn tab_transfer_preserves_split_tree_terminal_contents_and_active_session() {
             .seed_session_view("tab".into(), "primary contents".into(), "UTF-8");
         app.terminal
             .seed_session_view("secondary".into(), "secondary contents".into(), "UTF-8");
+        app.set_session_keyword_rules(
+            "tab",
+            vec![nyaterm_core::KeywordHighlightRule {
+                id: "session-rule".into(),
+                patterns: vec!["primary".into()],
+                ..Default::default()
+            }],
+            cx,
+        );
         app.shell
             .insert_workspace_pane_root("tab".into(), tree.clone());
         app.rebuild_session_tab_owners();
@@ -57,6 +66,11 @@ fn tab_transfer_preserves_split_tree_terminal_contents_and_active_session() {
         assert_eq!(app.session.active_id(), Some("tab"));
         assert_eq!(app.shell.workspace_pane_root("tab"), Some(&tree));
         assert_eq!(app.terminal.session_output("tab"), Some("primary contents"));
+        assert_eq!(
+            app.session_keyword_rules("tab").unwrap()[0].id,
+            "session-rule"
+        );
+        assert!(app.session_keyword_rules("secondary").unwrap().is_empty());
         assert_eq!(
             app.terminal.session_output("secondary"),
             Some("secondary contents")
@@ -77,9 +91,17 @@ fn rejected_transfer_rolls_back_contents_order_and_active_tab() {
     let target_root = TestTempDir::new("nyaterm-tab-transfer-rollback-target");
     let source = app_with_visible_local_session(&mut cx, root.path(), "tab");
     let target = app_with_visible_local_session(&mut cx, target_root.path(), "tab");
-    source.update(&mut cx, |app, _| {
+    source.update(&mut cx, |app, cx| {
         app.terminal
             .seed_session_view("tab".into(), "retained contents".into(), "UTF-8");
+        app.set_session_keyword_rules(
+            "tab",
+            vec![nyaterm_core::KeywordHighlightRule {
+                id: "rollback-rule".into(),
+                ..Default::default()
+            }],
+            cx,
+        );
     });
     let bundle = source.update(&mut cx, |app, cx| {
         app.detach_tab_tree_for_transfer("tab", app.workspace_revision(), cx)
@@ -96,6 +118,10 @@ fn rejected_transfer_rolls_back_contents_order_and_active_tab() {
             .unwrap();
         assert_eq!(app.session.active_id(), Some("tab"));
         assert_eq!(app.session.session_order(), &["tab"]);
+        assert_eq!(
+            app.session_keyword_rules("tab").unwrap()[0].id,
+            "rollback-rule"
+        );
         assert_eq!(
             app.terminal.session_output("tab"),
             Some("retained contents")

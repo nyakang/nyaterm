@@ -462,6 +462,148 @@ fn block_scroll_rehit_preserves_anchor_columns_and_mode() {
 }
 
 #[test]
+fn reading_autoscroll_advances_history_preserves_anchor_and_stops_on_cancel() {
+    let dir = TestConfigDir::new("nyaterm-reading-history-drag");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+    app.update(&mut cx, |app, cx| {
+        seed_click_selection_fixture(app);
+        let output = (0..200)
+            .map(|i| format!("line {i}\r\n"))
+            .collect::<String>();
+        app.terminal.seed_session_view("s1".into(), output, "UTF-8");
+        app.toggle_terminal_local_mode(cx);
+        let origin = block_pointer(app, 2.5, 1.25, cx);
+        assert!(app.handle_terminal_local_mode_mouse_down(
+            Some("s1"),
+            &MouseDownEvent {
+                position: origin,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            },
+            cx
+        ));
+        let outside = Point {
+            y: px(-30.),
+            ..origin
+        };
+        app.update_terminal_local_mode_selection_drag(
+            &MouseMoveEvent {
+                position: outside,
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            },
+            cx,
+        );
+        let anchor = app.terminal.selection.selection.unwrap().anchor;
+        let previous_offset = app.terminal_display_offset_for_session(Some("s1"));
+        let generation = app.terminal.selection.autoscroll_generation;
+        app.advance_terminal_selection_autoscroll(generation, cx);
+        assert!(app.terminal_display_offset_for_session(Some("s1")) > previous_offset);
+        let selection = app.terminal.selection.selection.unwrap();
+        assert_eq!(selection.anchor, anchor);
+        assert_eq!(selection.head.position, app.terminal.local_mode.cursor);
+        assert_eq!(
+            selection.head.side,
+            nyaterm_terminal::selection::TerminalCellSide::Left
+        );
+        app.cancel_terminal_selection_drag(cx);
+        let stopped_offset = app.terminal_display_offset_for_session(Some("s1"));
+        app.advance_terminal_selection_autoscroll(generation, cx);
+        assert_eq!(
+            app.terminal_display_offset_for_session(Some("s1")),
+            stopped_offset
+        );
+        assert!(app.terminal.selection.autoscroll.is_none());
+    });
+}
+
+#[gpui::test]
+fn reading_drag_rejects_old_painted_geometry_until_scrolled_frame_arrives(cx: &mut TestAppContext) {
+    let dir = TestConfigDir::new("nyaterm-reading-painted-history");
+    let _cleanup = TestAppCleanup::new(cx);
+    cx.update(nyaterm_ui::init_components);
+    let app = app_with_visible_local_session(cx, dir.path(), "s1");
+    app.update(cx, |app, cx| {
+        seed_click_selection_fixture(app);
+        let output = (0..200)
+            .map(|i| format!("line {i}\r\n"))
+            .collect::<String>();
+        app.terminal
+            .seed_session_view("s1".into(), output.clone(), "UTF-8");
+        // A mounted canvas consumes the frame worker, unlike the state-only
+        // fixture. Seed both before painting so the initial viewport agrees.
+        let pipeline = &app.terminal.view.frame_pipeline;
+        pipeline.seed_session("s1", &output, "UTF-8", 1000);
+        pipeline.request_snapshot("s1", 0, false, Default::default());
+        pipeline.flush_for_test();
+        let mut events = std::collections::VecDeque::new();
+        pipeline.drain_events_into(&mut events, usize::MAX);
+        let snapshot = events
+            .into_iter()
+            .find_map(|event| match event {
+                crate::models::TerminalFrameEvent::Snapshot(frame) => Some(frame.snapshot),
+                _ => None,
+            })
+            .unwrap();
+        let view = app.terminal.view.views.get_mut("s1").unwrap();
+        view.frame_snapshot = Some(snapshot);
+        view.render_degraded = false;
+        view.output_burst_bytes = 0;
+        app.toggle_terminal_local_mode(cx);
+    });
+    let (_, vcx) = cx.add_window_view({
+        let app = app.clone();
+        move |window, cx| {
+            let host = cx.new(|_| BlockCanvasHost { app });
+            nyaterm_ui::nya_root(host, window, cx)
+        }
+    });
+    vcx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let origin = block_pointer(app, 2.5, 1.25, cx);
+            assert!(app.handle_terminal_local_mode_mouse_down(
+                Some("s1"),
+                &MouseDownEvent {
+                    position: origin,
+                    button: MouseButton::Left,
+                    click_count: 1,
+                    ..Default::default()
+                },
+                cx,
+            ));
+            let head = block_pointer(app, 1.5, 4.25, cx);
+            app.update_terminal_local_mode_selection_drag(
+                &MouseMoveEvent {
+                    position: head,
+                    pressed_button: Some(MouseButton::Left),
+                    ..Default::default()
+                },
+                cx,
+            );
+            let selection = app.terminal.selection.selection.unwrap();
+            let previous = app.terminal_display_offset_for_session(Some("s1"));
+            let next = app
+                .scroll_terminal_by_for_session_state_only(Some("s1"), 3)
+                .unwrap();
+            assert!(next.display_offset > previous);
+            let painted = app
+                .terminal_hit_test_geometry_for_session(Some("s1"), cx)
+                .unwrap();
+            assert_eq!(painted.display_offset, previous);
+            assert!(!app.refresh_local_mode_selection_head("s1", head, cx));
+            assert_eq!(app.terminal.selection.selection, Some(selection));
+            app.cancel_terminal_selection_drag(cx);
+        })
+    });
+}
+
+#[test]
 fn block_gesture_defers_to_remote_alt_mouse_reports_until_release() {
     let dir = TestConfigDir::new("nyaterm-block-mouse-report");
     let mut cx = TestAppContext::single();

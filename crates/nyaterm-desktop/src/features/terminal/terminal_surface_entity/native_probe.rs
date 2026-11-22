@@ -50,12 +50,34 @@ fn distribution(mut values: Vec<u64>) -> serde_json::Value {
     serde_json::json!({"count": values.len(), "p50_us": percentile(50), "p95_us": percentile(95), "p99_us": percentile(99), "max_us": values[values.len()-1]})
 }
 
+struct HighlightPanesProbe {
+    surfaces: Vec<Entity<TerminalSurface>>,
+}
+impl Render for HighlightPanesProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().flex().children(
+            self.surfaces
+                .iter()
+                .map(|surface| div().flex_1().min_w_0().h_full().child(surface.clone())),
+        )
+    }
+}
+
 #[test]
 #[ignore = "manual native GPU benchmark; run one test per process with --nocapture"]
 fn keyword_highlight_native_probe() {
     crate::preload_i18n().expect("preload fixture UI");
     let case = std::env::var("NYATERM_HIGHLIGHT_PROBE_CASE").unwrap_or_else(|_| "typing".into());
     assert!(matches!(case.as_str(), "typing" | "output" | "scroll"));
+    let rule_count = std::env::var("NYATERM_HIGHLIGHT_PROBE_RULES")
+        .ok()
+        .map(|v| v.parse::<usize>().expect("rule count"))
+        .unwrap_or(0);
+    let panes = std::env::var("NYATERM_HIGHLIGHT_PROBE_PANES")
+        .ok()
+        .map(|v| v.parse::<usize>().expect("pane count"))
+        .unwrap_or(1);
+    assert!(matches!(panes, 1 | 4));
     let roles = std::env::var("NYATERM_HIGHLIGHT_PROBE_ROLES").is_ok_and(|value| value == "1");
     let theme =
         std::env::var("NYATERM_HIGHLIGHT_PROBE_THEME").unwrap_or_else(|_| "github-dark".into());
@@ -64,7 +86,7 @@ fn keyword_highlight_native_probe() {
     set_trace_enabled(true);
     gpui_platform::application().run(move |cx: &mut App| {
         nyaterm_ui::apply_component_theme(palette, font("Consolas"), px(12.), cx);
-        let surface = cx.new(|_| {
+        let surfaces: Vec<_> = (0..panes).map(|_| cx.new(|_| {
             let mut surface = TerminalSurface::new("synthetic-highlight-probe");
             surface.line_roles = roles; // HISTORICAL ROLE ADAPTER
             surface.palette = palette;
@@ -73,15 +95,19 @@ fn keyword_highlight_native_probe() {
             surface.font_family = "Consolas".into();
             surface.font_size = 12.;
             surface.keyword_rules = Arc::new(nyaterm_core::keyword_highlight_presets::merge_keyword_highlight_rules_for_paint_with_ansi(&[], &std::collections::HashMap::new(), theme != "github-light", palette.terminal_ansi));
+            Arc::make_mut(&mut surface.keyword_rules).extend((0..rule_count).map(|i| nyaterm_core::ResolvedKeywordHighlightRule {
+                id: format!("probe-{i}"), name: format!("Probe {i}"),
+                patterns: vec![format!(r"\bprobe_{i}_[0-9]+\b")], color: "#ff0000".into(), enabled: true,
+            }));
             surface
-        });
-        let host_surface = surface.clone();
+        })).collect();
+        let host_surfaces = surfaces.clone();
         let window = cx.open_window(WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(960.), px(640.)), cx))),
             show: true, focus: false, inactive_frame_interval: None, ..Default::default()
-        }, move |_, cx| cx.new(|_| Probe { surface: host_surface })).expect("native GPU window");
+        }, move |_, cx| cx.new(|_| HighlightPanesProbe { surfaces: host_surfaces })).expect("native GPU window");
         cx.spawn(async move |cx| {
-            let mut screen = TerminalScreen::new(COLS, ROWS);
+            let mut screen = TerminalScreen::new(COLS / panes as u16, ROWS);
             for index in 0..2200 {
                 screen.advance(format!("2026-11-06 10:00:00 INFO worker={index} ERROR 2001:db8::1 128MiB\r\n").as_bytes());
             }
@@ -113,15 +139,14 @@ fn keyword_highlight_native_probe() {
                         }
                     }
                 }
-                surface.read_with(cx, |surface, _| {
-                    if let Some(at) = highlight_pending {
-                        let ready = surface.keyword_highlights.as_ref().zip(surface.snapshot.as_ref()).is_some_and(|(highlights, snapshot)| highlights.matches_snapshot_rows(snapshot, surface.palette, 0..snapshot.row_count()));
-                        if ready {
-                            if step >= WARMUP { highlight_ready_us.push(Instant::now().duration_since(at).as_micros() as u64); }
-                            highlight_pending = None;
-                        }
+                if let Some(at) = highlight_pending {
+                    let ready = surfaces.iter().all(|surface| surface.read_with(cx, |surface, _| {
+                        surface.keyword_highlights.as_ref().zip(surface.snapshot.as_ref()).is_some_and(|(highlights, snapshot)| highlights.matches_snapshot_rows(snapshot, surface.palette, 0..snapshot.row_count()))
+                    }));
+                    if ready && step >= WARMUP {
+                        highlight_ready_us.push(Instant::now().duration_since(at).as_micros() as u64);
                     }
-                });
+                }
                 if case != "scroll" {
                     screen.advance(b"\x1b]133;C\x07\r\n");
                     for line in 0..16 {
@@ -134,11 +159,11 @@ fn keyword_highlight_native_probe() {
                 let snapshot = Arc::new(screen.viewport_snapshot(if case == "scroll" { step % 1000 } else { 0 }));
                 let at = Instant::now();
                 window.update(cx, |_, _, cx| {
-                    surface.update(cx, |surface, cx| {
-                        install(surface, snapshot);
+                    for surface in &surfaces { surface.update(cx, |surface, cx| {
+                        install(surface, snapshot.clone());
                         surface.schedule_keyword_highlights(true, case != "scroll", cx);
                         cx.notify();
-                    });
+                    }); }
                 }).unwrap();
                 if step >= WARMUP { handler_us.push(at.elapsed().as_micros() as u64); }
                 pending.push_back((at, step >= WARMUP));
@@ -148,19 +173,19 @@ fn keyword_highlight_native_probe() {
             let settle_started = Instant::now();
             loop {
                 cx.background_executor().timer(Duration::from_millis(2)).await;
-                let ready = surface.read_with(cx, |surface, _| surface.keyword_highlight_task.is_none() && surface.keyword_highlight_deferred_task.is_none());
+                let ready = surfaces.iter().all(|surface| surface.read_with(cx, |surface, _| surface.keyword_highlight_task.is_none() && surface.keyword_highlight_deferred_task.is_none()));
                 if ready { break; }
                 assert!(settle_started.elapsed() < Duration::from_secs(5), "highlight worker did not settle");
             }
             let settle_us = settle_started.elapsed().as_micros() as u64;
-            assert!(surface.read_with(cx, |surface, _| surface.keyword_highlights.as_ref().zip(surface.snapshot.as_ref()).is_some_and(|(highlights, snapshot)| highlights.matches_snapshot_rows(snapshot, surface.palette, 0..snapshot.row_count()))), "final snapshot did not converge");
+            assert!(surfaces.iter().all(|surface| surface.read_with(cx, |surface, _| surface.keyword_highlights.as_ref().zip(surface.snapshot.as_ref()).is_some_and(|(highlights, snapshot)| highlights.matches_snapshot_rows(snapshot, surface.palette, 0..snapshot.row_count())))), "final snapshot did not converge");
             let image = window.update(cx, |_, window, _| screenshot.as_ref().map(|_| window.render_to_image().expect("native screenshot"))).unwrap();
             if let Some(image) = image {
                 let path = screenshot.unwrap();
                 cx.background_executor().spawn(async move { image.save(path).expect("save native fixture"); }).await;
             }
             println!("{}", serde_json::json!({
-                "case": case, "roles": roles, "theme": theme, "samples": SAMPLES,
+                "case": case, "custom_rules": rule_count, "panes": panes, "roles": roles, "theme": theme, "samples": SAMPLES,
                 "handler": distribution(handler_us), "draw": distribution(draw_us),
                 "platform_submit_cpu": distribution(submit_us),
                 "synthetic_frame_to_present": distribution(frame_to_present),

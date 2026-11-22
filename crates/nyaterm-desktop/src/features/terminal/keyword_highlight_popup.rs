@@ -1,5 +1,8 @@
 //! Session-scoped editor. Drafts and input widgets belong to the child entity;
 //! the application only owns its lifetime and applies validated changes.
+mod draft;
+
+use self::draft::{RuleDraftIndex, RuleSummary};
 use crate::features::NyaTermApp;
 use crate::features::view_widgets::{
     ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, child_window_header,
@@ -8,7 +11,8 @@ use crate::features::view_widgets::{
 use crate::theme::ThemePalette;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, IntoElement, Render,
-    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, rgb, uniform_list,
+    ScrollHandle, Subscription, UniformListScrollHandle, Window, div, prelude::*, px, rgb,
+    uniform_list,
 };
 use nyaterm_core::KeywordHighlightRule;
 use nyaterm_ui::{
@@ -138,11 +142,15 @@ struct KeywordHighlightWindow {
     session: Vec<KeywordHighlightRule>,
     scope: RuleScope,
     selected: [Option<String>; 2],
-    visible: Vec<(String, String, bool)>,
+    indexes: [RuleDraftIndex; 2],
+    summaries: Vec<RuleSummary>,
+    summary_positions: HashMap<String, usize>,
+    visible: Vec<usize>,
     search_text: String,
     search: Entity<NyaInputState>,
     inputs: Vec<Entity<NyaInputState>>,
     scroll: [UniformListScrollHandle; 2],
+    detail_scroll: ScrollHandle,
     focus: FocusHandle,
     list_focus: FocusHandle,
     chrome: ChildWindowChrome,
@@ -154,6 +162,8 @@ struct KeywordHighlightWindow {
     error: Option<String>,
     confirm_close: bool,
     saving: bool,
+    validation_generation: u64,
+    focus_pattern: bool,
     closed: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -169,14 +179,11 @@ impl KeywordHighlightWindow {
         let root = app.read(cx);
         let global = root.settings.keyword_config().rules.clone();
         let session = root
-            .terminal
-            .view
-            .surfaces
-            .get(&session_id)
-            .map(|s| s.read(cx).session_keyword_rules().to_vec())
-            .unwrap_or_default();
+            .session_keyword_rules(&session_id)
+            .unwrap_or_default()
+            .to_vec();
         let palette = root.theme_palette();
-        let session_alive = root.terminal.view.surfaces.contains_key(&session_id);
+        let session_alive = root.terminal.view.views.contains_key(&session_id);
         let appearance = (
             root.settings.summary().ui_font_family.clone(),
             root.settings.summary().ui_font_size,
@@ -203,7 +210,7 @@ impl KeywordHighlightWindow {
         let mut subscriptions = vec![cx.subscribe(&search, |this, _, event, cx| {
             if let NyaInputEvent::Changed(text) = event {
                 this.search_text = text.to_lowercase();
-                this.refresh_list();
+                this.filter_list();
                 cx.notify();
             }
         })];
@@ -219,7 +226,7 @@ impl KeywordHighlightWindow {
         subscriptions.push(cx.observe(&app, |this, app, cx| {
             let root = app.read(cx);
             let palette = root.theme_palette();
-            let alive = root.terminal.view.surfaces.contains_key(&this.session_id);
+            let alive = root.terminal.view.views.contains_key(&this.session_id);
             let appearance = (
                 root.settings.summary().ui_font_family.clone(),
                 root.settings.summary().ui_font_size,
@@ -249,6 +256,9 @@ impl KeywordHighlightWindow {
             session,
             scope: RuleScope::Session,
             selected: [None, None],
+            indexes: Default::default(),
+            summaries: Vec::new(),
+            summary_positions: HashMap::new(),
             visible: Vec::new(),
             search_text: String::new(),
             search,
@@ -257,6 +267,7 @@ impl KeywordHighlightWindow {
                 UniformListScrollHandle::new(),
                 UniformListScrollHandle::new(),
             ],
+            detail_scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             list_focus: cx.focus_handle(),
             chrome,
@@ -268,6 +279,8 @@ impl KeywordHighlightWindow {
             error: None,
             confirm_close: false,
             saving: false,
+            validation_generation: 0,
+            focus_pattern: false,
             closed: false,
             _subscriptions: subscriptions,
         };
@@ -288,51 +301,75 @@ impl KeywordHighlightWindow {
         }
     }
     fn dirty(&self) -> bool {
-        self.global != self.base_global || self.session != self.base_session
+        self.indexes.iter().any(RuleDraftIndex::dirty)
+    }
+    fn filter_list(&mut self) {
+        self.visible = self
+            .summaries
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| rule.search.contains(&self.search_text))
+            .map(|(index, _)| index)
+            .collect();
     }
     fn refresh_list(&mut self) {
-        self.visible = self
-            .global
-            .iter()
-            .map(|r| (r.id.clone(), r.name.clone(), r.enabled))
-            .collect();
+        self.indexes[0].rebuild(&self.base_session, &self.session);
+        self.indexes[1].rebuild(&self.base_global, &self.global);
+        self.summaries.clear();
+        for global in &self.global {
+            let (rule, source) = if self.scope == RuleScope::Global {
+                (global, "terminalCtx.globalRules")
+            } else if let Some(rule) = self.indexes[0].get(&self.session, &global.id) {
+                (rule, "terminalCtx.ruleOverride")
+            } else {
+                (global, "terminalCtx.ruleInherited")
+            };
+            self.summaries.push(RuleSummary::new(rule, source));
+        }
         if self.scope == RuleScope::Session {
-            let mut positions: HashMap<String, usize> = self
-                .visible
-                .iter()
-                .enumerate()
-                .map(|(index, r)| (r.0.clone(), index))
-                .collect();
             for rule in &self.session {
-                let summary = (rule.id.clone(), rule.name.clone(), rule.enabled);
-                if let Some(&index) = positions.get(&rule.id) {
-                    self.visible[index] = summary;
-                } else {
-                    positions.insert(rule.id.clone(), self.visible.len());
-                    self.visible.push(summary);
+                if !self.indexes[1].contains(&rule.id) {
+                    self.summaries
+                        .push(RuleSummary::new(rule, "terminalCtx.sessionRules"));
                 }
             }
         }
-        if !self.search_text.is_empty() {
-            self.visible
-                .retain(|r| r.1.to_lowercase().contains(&self.search_text));
+        self.summary_positions = self
+            .summaries
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.id.clone(), i))
+            .collect();
+        self.filter_list();
+    }
+    fn refresh_rule(&mut self, id: &str, summary_changed: bool) {
+        if self.scope == RuleScope::Session {
+            self.indexes[0].update(&self.base_session, &self.session, id);
+        } else {
+            self.indexes[1].update(&self.base_global, &self.global, id);
+        }
+        if summary_changed && let Some(&index) = self.summary_positions.get(id) {
+            let source = self.summaries[index].source;
+            if let Some(rule) = self.selected_rule() {
+                self.summaries[index] = RuleSummary::new(rule, source);
+            }
+            self.filter_list();
         }
     }
-
     fn selected_rule(&self) -> Option<&KeywordHighlightRule> {
         let id = self.selected[self.index()].as_ref()?;
         if self.scope == RuleScope::Session
-            && let Some(rule) = self.session.iter().find(|r| &r.id == id)
+            && let Some(rule) = self.indexes[0].get(&self.session, id)
         {
             return Some(rule);
         }
-        self.global.iter().find(|r| &r.id == id)
+        self.indexes[1].get(&self.global, id)
     }
     fn inherited(&self) -> bool {
         self.scope == RuleScope::Session
             && self
                 .selected_rule()
-                .is_some_and(|r| !self.session.iter().any(|s| s.id == r.id))
+                .is_some_and(|r| !self.indexes[0].contains(&r.id))
     }
     fn seed_inputs(&mut self, cx: &mut Context<Self>) {
         let rule = self
@@ -360,14 +397,15 @@ impl KeywordHighlightWindow {
         let Some(id) = self.selected[self.index()].clone() else {
             return;
         };
+        let Some(position) = self.indexes[self.index()].position(&id) else {
+            return;
+        };
         let rules = if self.scope == RuleScope::Session {
             &mut self.session
         } else {
             &mut self.global
         };
-        let Some(rule) = rules.iter_mut().find(|r| r.id == id) else {
-            return;
-        };
+        let rule = &mut rules[position];
         match field {
             0 => rule.name = text,
             1 => rule.patterns = text.lines().map(str::to_string).collect(),
@@ -375,9 +413,7 @@ impl KeywordHighlightWindow {
             _ => rule.color_light = text,
         }
         self.error = None;
-        if field == 0 {
-            self.refresh_list();
-        }
+        self.refresh_rule(&id, field == 0);
         cx.notify();
     }
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
@@ -423,9 +459,9 @@ impl KeywordHighlightWindow {
         self.session = app
             .terminal
             .view
-            .surfaces
+            .views
             .get(&self.session_id)
-            .map(|surface| surface.read(cx).session_keyword_rules().to_vec())
+            .map(|view| view.keyword_highlights.rules().to_vec())
             .unwrap_or_default();
         self.base_global = self.global.clone();
         self.base_session = self.session.clone();
@@ -455,6 +491,64 @@ impl KeywordHighlightWindow {
         cx.notify();
     }
     fn save(&mut self, cx: &mut Context<Self>) {
+        if self.saving || self.closed {
+            return;
+        }
+        let mut pending = Vec::new();
+        for (scope, base, rules) in [
+            (RuleScope::Session, &self.base_session, &self.session),
+            (RuleScope::Global, &self.base_global, &self.global),
+        ] {
+            let before: HashMap<_, _> = base.iter().map(|rule| (rule.id.as_str(), rule)).collect();
+            for rule in rules {
+                if before
+                    .get(rule.id.as_str())
+                    .is_none_or(|old| old.patterns != rule.patterns)
+                {
+                    pending.push((
+                        scope,
+                        rule.id.clone(),
+                        rule.name.clone(),
+                        rule.patterns.clone(),
+                    ));
+                }
+            }
+        }
+        self.saving = true;
+        self.validation_generation = self.validation_generation.wrapping_add(1);
+        let generation = self.validation_generation;
+        self.seed_inputs(cx);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let error = cx.background_spawn(async move {
+                pending.into_iter().find_map(|(scope, id, name, patterns)| {
+                    nyaterm_terminal_gpui::keywords::validation::validate_keyword_highlight_patterns(&patterns)
+                        .into_iter().next().map(|error| (scope, id, name, error))
+                })
+            }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.closed || this.validation_generation != generation { return; }
+                this.saving = false;
+                if let Some((scope, id, name, error)) = error {
+                    this.scope = scope;
+                    this.selected[this.index()] = Some(id);
+                    this.detail = true;
+                    this.focus_pattern = true;
+                    this.search_text.clear();
+                    this.search.update(cx, |input, cx| input.set_content_silent("", cx));
+                    this.refresh_list();
+                    this.error = Some(t!("terminalCtx.invalidRulePattern", name = name, line = error.line, error = error.message).to_string());
+                    this.seed_inputs(cx);
+                    cx.notify();
+                } else {
+                    this.apply_validated_save(cx);
+                    if !this.saving { this.seed_inputs(cx); }
+                }
+            });
+        }).detach();
+    }
+
+    fn apply_validated_save(&mut self, cx: &mut Context<Self>) {
         if self.saving {
             return;
         }
@@ -468,8 +562,9 @@ impl KeywordHighlightWindow {
                 *color = normalize_popup_color(color);
             }
         }
+        self.refresh_list();
         let root = self.app.read(cx);
-        let Some(surface) = root.terminal.view.surfaces.get(&self.session_id) else {
+        let Some(view) = root.terminal.view.views.get(&self.session_id) else {
             self.error = Some(t!("terminalCtx.ruleSessionClosed").to_string());
             cx.notify();
             return;
@@ -483,7 +578,7 @@ impl KeywordHighlightWindow {
             merge_rules(
                 &self.base_session,
                 &self.session,
-                surface.read(cx).session_keyword_rules(),
+                view.keyword_highlights.rules(),
             )
             .map(|session| (global, session))
         });
@@ -497,7 +592,7 @@ impl KeywordHighlightWindow {
         };
         let mut config = root.settings.keyword_config().clone();
         let submission_base = config.clone();
-        let session_base = surface.read(cx).session_keyword_rules().to_vec();
+        let session_base = view.keyword_highlights.rules().to_vec();
         let changed = config.rules != global;
         config.rules = global;
         let owner = self.session_id.clone();
@@ -507,9 +602,7 @@ impl KeywordHighlightWindow {
         cx.notify();
         if !changed {
             self.app.update(cx, |app, cx| {
-                if let Some(surface) = app.terminal.view.surfaces.get(&owner).cloned() {
-                    surface.update(cx, |s, cx| s.set_session_keyword_rules(session, cx));
-                }
+                app.set_session_keyword_rules(&owner, session, cx);
             });
             self.close(cx);
             return;
@@ -529,6 +622,7 @@ impl KeywordHighlightWindow {
                                 app.save_keyword_highlights(cx);
                                 let _ = weak.update(cx, |editor, cx| {
                                     editor.saving = false;
+                                    editor.refresh_list();
                                     editor.error = Some(t!("terminalCtx.ruleConflict").to_string());
                                     editor.seed_inputs(cx);
                                     cx.notify();
@@ -538,19 +632,16 @@ impl KeywordHighlightWindow {
                             app.settings
                                 .replace_keyword_highlight_rules(config.rules.clone());
                             app.settings.finish_keyword_persistence(&config);
-                            let session_unchanged = app
-                                .terminal
-                                .view
-                                .surfaces
-                                .get(&owner)
-                                .is_some_and(|surface| {
-                                    surface.read(cx).session_keyword_rules() == session_base
+                            let session_unchanged =
+                                app.terminal.view.views.get(&owner).is_some_and(|view| {
+                                    view.keyword_highlights.rules() == session_base
                                 });
                             if !session_unchanged {
                                 let _ = weak.update(cx, |editor, cx| {
                                     editor.base_global = config.rules.clone();
                                     editor.global = config.rules;
                                     editor.saving = false;
+                                    editor.refresh_list();
                                     editor.error = Some(t!("terminalCtx.ruleConflict").to_string());
                                     editor.seed_inputs(cx);
                                     cx.notify();
@@ -562,10 +653,7 @@ impl KeywordHighlightWindow {
                             }
                             app.invalidate_paint_theme_caches();
                             app.refresh_visible_terminal_surfaces(cx);
-                            if let Some(surface) = app.terminal.view.surfaces.get(&owner).cloned() {
-                                surface
-                                    .update(cx, |s, cx| s.set_session_keyword_rules(session, cx));
-                            }
+                            app.set_session_keyword_rules(&owner, session, cx);
                             app.terminal.keyword_popup = KeywordHighlightPopupState::default();
                             let _ = weak.update(cx, |editor, cx| {
                                 editor.closed = true;
@@ -588,26 +676,23 @@ impl KeywordHighlightWindow {
         });
     }
     fn row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let rule = &self.visible[index];
-        let id = rule.0.clone();
-        let source = if self.scope == RuleScope::Global {
-            t!("terminalCtx.globalRules")
-        } else if !self.session.iter().any(|s| s.id == id) {
-            t!("terminalCtx.ruleInherited")
-        } else if self.global.iter().any(|s| s.id == id) {
-            t!("terminalCtx.ruleOverride")
-        } else {
-            t!("terminalCtx.sessionRules")
-        };
+        let rule = &self.summaries[self.visible[index]];
+        let id = rule.id.clone();
+        let source = t!(rule.source);
         NyaButton::new(
             format!("keyword-row-{id}"),
-            format!("{} {} · {}", if rule.2 { "●" } else { "○" }, rule.1, source),
+            format!(
+                "{} {} · {}",
+                if rule.enabled { "●" } else { "○" },
+                rule.name,
+                source
+            ),
         )
         .variant(NyaButtonVariant::Ghost)
         .full_width()
         .height(px(40.))
         .label_left()
-        .tooltip(rule.1.clone())
+        .tooltip(rule.name.clone())
         .selected(self.selected[self.index()].as_deref() == Some(id.as_str()))
         .disabled(self.saving)
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -645,7 +730,7 @@ impl KeywordHighlightWindow {
                 let current = this
                     .visible
                     .iter()
-                    .position(|rule| Some(&rule.0) == selected)
+                    .position(|&index| Some(&this.summaries[index].id) == selected)
                     .unwrap_or(0);
                 let next = match event.keystroke.key.as_str() {
                     "up" => current.saturating_sub(1),
@@ -660,7 +745,7 @@ impl KeywordHighlightWindow {
                     }
                     _ => return,
                 };
-                let id = this.visible[next].0.clone();
+                let id = this.summaries[this.visible[next]].id.clone();
                 this.select(id, cx);
                 if f32::from(window.viewport_size().width) < 760. {
                     this.detail = false;
@@ -781,7 +866,7 @@ impl KeywordHighlightWindow {
                             if let Some(rule) = rules.iter_mut().find(|r| r.id == id) {
                                 rule.enabled = *checked;
                             }
-                            this.refresh_list();
+                            this.refresh_rule(&id, true);
                             cx.notify();
                         })),
                 ),
@@ -793,8 +878,7 @@ impl KeywordHighlightWindow {
                     .on_click(cx.listener(|this, _, _, cx| this.override_rule(cx))),
             );
         } else {
-            let restore =
-                self.scope == RuleScope::Session && self.global.iter().any(|r| r.id == rule.id);
+            let restore = self.scope == RuleScope::Session && self.indexes[1].contains(&rule.id);
             form = form.child(
                 NyaButton::new(
                     "keyword-delete",
@@ -808,7 +892,17 @@ impl KeywordHighlightWindow {
                 .on_click(cx.listener(|this, _, _, cx| this.remove_rule(cx))),
             );
         }
-        form.h_full().overflow_y_scrollbar().into_any_element()
+        div()
+            .relative()
+            .h_full()
+            .min_h_0()
+            .child(
+                form.h_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.detail_scroll),
+            )
+            .vertical_scrollbar(&self.detail_scroll)
+            .into_any_element()
     }
 }
 
@@ -830,6 +924,18 @@ impl Render for KeywordHighlightWindow {
         let header_close = on_close.clone();
         let palette = self.palette;
         focus_child_window_shell_if_idle(&self.focus, window, cx);
+        if std::mem::take(&mut self.focus_pattern) {
+            let focus = self.inputs[1].read(cx).focus_handle();
+            let scroll = self.detail_scroll.clone();
+            let editor = cx.entity().downgrade();
+            // The diagnostic changes the form's viewport. Wait for its new
+            // bounds before revealing the pattern field, then repaint.
+            window.on_next_frame(move |window, cx| {
+                scroll.scroll_to_top_of_item(1);
+                window.focus(&focus, cx);
+                let _ = editor.update(cx, |_, cx| cx.notify());
+            });
+        }
         let root = self.app.read(cx);
         let font = root.gpui_ui_font().font();
         let font_size = root.settings.summary().ui_font_size.clamp(12, 24) as f32;
@@ -957,7 +1063,16 @@ impl Render for KeywordHighlightWindow {
                         d.child(t!("terminalCtx.ruleSessionClosed"))
                     })
                     .when_some(self.error.clone(), |d, error| {
-                        d.child(div().text_color(rgb(palette.danger)).child(error))
+                        d.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .max_h(px(96.))
+                                .flex_shrink_0()
+                                .overflow_y_scrollbar()
+                                .text_color(rgb(palette.danger))
+                                .child(error),
+                        )
                     })
                     .child(body)
                     .child(footer),
@@ -1007,7 +1122,7 @@ fn prefill_rule_from_text(selection: String) -> Option<KeywordHighlightRule> {
         } else {
             name
         },
-        patterns: lines,
+        patterns: lines.iter().map(|line| regex::escape(line)).collect(),
         color_dark: "#79c0ff".into(),
         color_light: "#0969da".into(),
         enabled: true,
@@ -1045,6 +1160,93 @@ mod tests {
     use crate::features::view_widgets::ChildWindowSpec;
     use crate::test_support::{TestAppCleanup, TestConfigDir};
     use gpui::{AppContext as _, TestAppContext};
+
+    #[test]
+    fn reading_prefill_escapes_selected_text_as_literal_patterns() {
+        for text in ["192.168.1.1", "[ERROR]", "[", r"C:\work\file", "中文(a+b)"] {
+            let rule = prefill_rule_from_text(text.into()).unwrap();
+            assert_eq!(rule.patterns, vec![regex::escape(text)]);
+            let matcher = regex::Regex::new(&format!("^(?:{})$", rule.patterns[0])).unwrap();
+            assert!(matcher.is_match(text));
+        }
+        let rule = prefill_rule_from_text("192.168.1.1".into()).unwrap();
+        assert!(
+            !regex::Regex::new(&rule.patterns[0])
+                .unwrap()
+                .is_match("192x168x1x1")
+        );
+    }
+
+    #[test]
+    fn reading_invalid_pattern_keeps_draft_and_identifies_rule_without_applying_it() {
+        let dir = TestConfigDir::new("nyaterm-highlight-validation");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+        let editor = cx.new(|cx| {
+            KeywordHighlightWindow::new(
+                app.clone(),
+                "local".into(),
+                "valid".into(),
+                ChildWindowSpec::modal_editor("test".into(), 880., 600.).chrome(),
+                cx,
+            )
+        });
+        editor.update(&mut cx, |editor, cx| {
+            editor.edit_field(1, "valid\n[".into(), cx);
+            editor.save(cx);
+            assert!(editor.saving);
+        });
+        cx.run_until_parked();
+        editor.read_with(&cx, |editor, _| {
+            assert!(!editor.saving);
+            assert!(!editor.closed);
+            assert!(editor.error.is_some());
+            assert!(editor.dirty());
+            assert_eq!(editor.selected_rule().unwrap().patterns, vec!["valid", "["]);
+        });
+        app.read_with(&cx, |app, _| {
+            assert!(app.session_keyword_rules("local").unwrap().is_empty())
+        });
+    }
+
+    #[test]
+    fn reading_validation_preserves_concurrent_additions_and_unchanged_legacy_patterns() {
+        let dir = TestConfigDir::new("nyaterm-highlight-validation-merge");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+        let mut legacy = new_popup_rule();
+        legacy.patterns = vec!["[".into()];
+        app.update(&mut cx, |app, _| {
+            app.settings
+                .replace_keyword_highlight_rules(vec![legacy.clone()])
+        });
+        let editor = cx.new(|cx| {
+            KeywordHighlightWindow::new(
+                app.clone(),
+                "local".into(),
+                "selected".into(),
+                ChildWindowSpec::modal_editor("test".into(), 880., 600.).chrome(),
+                cx,
+            )
+        });
+        editor.update(&mut cx, |editor, cx| editor.save(cx));
+        let mut concurrent = new_popup_rule();
+        concurrent.patterns = vec!["concurrent".into()];
+        app.update(&mut cx, |app, cx| {
+            app.set_session_keyword_rules("local", vec![concurrent.clone()], cx)
+        });
+        cx.run_until_parked();
+        editor.read_with(&cx, |editor, _| assert!(editor.closed));
+        app.read_with(&cx, |app, _| {
+            assert_eq!(app.settings.keyword_config().rules, vec![legacy]);
+            let rules = app.session_keyword_rules("local").unwrap();
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0], concurrent);
+            assert_eq!(rules[1].patterns, vec!["selected"]);
+        });
+    }
 
     #[test]
     fn regression_rule_merge_preserves_concurrent_additions_and_rejects_conflicting_edits() {
@@ -1129,6 +1331,11 @@ mod native_probe {
         crate::preload_i18n().unwrap();
         let output =
             std::env::var("NYATERM_EDITOR_PROBE_OUTPUT").expect("fixture output directory");
+        let rule_count = std::env::var("NYATERM_EDITOR_PROBE_RULES")
+            .ok()
+            .map(|v| v.parse::<usize>().expect("rule count"))
+            .unwrap_or(200);
+        let invalid = std::env::var("NYATERM_EDITOR_PROBE_INVALID").is_ok();
         let root = TestConfigDir::new("nyaterm-keyword-ui-probe");
         let path = root.path().to_path_buf();
         gpui_platform::application().run(move |cx: &mut App| {
@@ -1149,7 +1356,7 @@ mod native_probe {
                 app.terminal
                     .seed_session_view("synthetic".into(), String::new(), "UTF-8");
                 app.ensure_terminal_surface("synthetic", cx);
-                let rules = (0..200)
+                let rules = (0..rule_count)
                     .map(|index| {
                         let mut rule = new_popup_rule();
                         rule.name = format!("Synthetic rule {index:03}");
@@ -1186,6 +1393,12 @@ mod native_probe {
                                 )
                             });
                             let view = editor.clone();
+                            if invalid {
+                                editor.update(cx, |editor, cx| {
+                                    editor.edit_field(1, "[".into(), cx);
+                                    editor.save(cx);
+                                });
+                            }
                             let window = cx
                                 .open_window(
                                     WindowOptions {
@@ -1268,7 +1481,10 @@ mod native_probe {
                         editor.read_with(cx, |editor, _| {
                             assert_eq!(
                                 editor.selected[editor.index()].as_deref(),
-                                editor.visible.last().map(|r| r.0.as_str())
+                                editor
+                                    .visible
+                                    .last()
+                                    .map(|&index| editor.summaries[index].id.as_str())
                             )
                         });
                     })

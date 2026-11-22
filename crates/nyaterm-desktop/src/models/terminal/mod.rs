@@ -1,5 +1,6 @@
 //! Application terminal state and frame-worker facade.
 pub(crate) mod command_blocks;
+pub(crate) mod keyword_highlights;
 
 use crate::terminal::terminal_screen_from_output;
 use nyaterm_core::{TerminalBackendResize, terminal_backend_resize_changed};
@@ -112,6 +113,7 @@ pub(crate) fn append_terminal_ui_output_tail(output: &mut String, text: &str) {
 }
 
 pub(crate) struct TerminalViewState {
+    pub(crate) keyword_highlights: keyword_highlights::TerminalSessionHighlightState,
     pub(crate) command_blocks: command_blocks::TerminalCommandBlockState,
     /// Bounded tail of decoded session output, control sequences included.
     /// Kept current for every session whatever its visibility or render mode:
@@ -193,6 +195,7 @@ pub(crate) struct TerminalFrameParts<'a> {
 impl TerminalViewState {
     pub(crate) fn new() -> Self {
         Self {
+            keyword_highlights: Default::default(),
             command_blocks: Default::default(),
             output: String::new(),
             screen: TerminalScreen::default(),
@@ -249,6 +252,7 @@ impl TerminalViewState {
         let screen = terminal_screen_from_output(&output);
         let protocol_state = TerminalProtocolState::from_screen(&screen);
         Self {
+            keyword_highlights: Default::default(),
             command_blocks: Default::default(),
             output,
             screen,

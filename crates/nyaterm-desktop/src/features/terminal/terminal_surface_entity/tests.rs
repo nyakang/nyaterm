@@ -5106,3 +5106,160 @@ fn keyword_rule_cache_cost_probe() {
         }
     }
 }
+
+#[test]
+fn reading_highlight_master_switch_cancels_session_rules_and_restores_them() {
+    let mut cx = TestAppContext::single();
+    let surface = cx.new(|_| TerminalSurface::new("master"));
+    surface.update(&mut cx, |surface, cx| {
+        let rules = Arc::new(vec![nyaterm_core::KeywordHighlightRule {
+            id: "temporary".into(),
+            patterns: vec!["ERROR".into()],
+            enabled: true,
+            color_dark: "#ff0000".into(),
+            color_light: "#0000ff".into(),
+            ..Default::default()
+        }]);
+        surface.set_keyword_highlight_source(true, rules.clone(), cx);
+        assert_eq!(surface.keyword_rules.len(), 1);
+        let enabled_epoch = surface
+            .keyword_highlight_cancel_epoch
+            .load(std::sync::atomic::Ordering::Acquire);
+        surface.set_keyword_highlight_source(false, rules.clone(), cx);
+        assert!(surface.keyword_rules.is_empty());
+        assert!(surface.keyword_highlights.is_none());
+        assert!(surface.keyword_highlight_deferred_task.is_none());
+        assert!(
+            surface
+                .keyword_highlight_cancel_epoch
+                .load(std::sync::atomic::Ordering::Acquire)
+                > enabled_epoch
+        );
+        surface.schedule_keyword_highlights(true, true, cx);
+        assert!(surface.keyword_highlight_task.is_none());
+        surface.set_keyword_highlight_source(true, rules, cx);
+        assert_eq!(surface.keyword_rules[0].id, "temporary");
+        surface.set_keyword_highlight_source(true, Arc::new(Vec::new()), cx);
+        assert!(surface.keyword_rules.is_empty());
+    });
+}
+
+#[test]
+fn reading_master_switch_rejects_in_flight_results_and_can_restart() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let surface = cx.new(|_| TerminalSurface::new("master-worker"));
+    let rules = Arc::new(vec![nyaterm_core::KeywordHighlightRule {
+        id: "temporary".into(),
+        patterns: vec!["ERROR".into()],
+        enabled: true,
+        color_dark: "#ff0000".into(),
+        color_light: "#0000ff".into(),
+        ..Default::default()
+    }]);
+    surface.update(&mut cx, |surface, cx| {
+        let mut screen = TerminalScreen::new(80, 4);
+        screen.advance(b"ERROR pending");
+        install_keyword_test_frame(surface, Arc::new(screen.snapshot()));
+        surface.set_keyword_highlight_source(true, rules.clone(), cx);
+        assert!(surface.keyword_highlight_task.is_some());
+        surface.set_keyword_highlight_source(false, rules.clone(), cx);
+    });
+    cx.run_until_parked();
+    surface.update(&mut cx, |surface, cx| {
+        assert!(surface.keyword_highlights.is_none());
+        assert!(surface.keyword_highlight_task.is_none());
+        surface.set_keyword_highlight_source(true, rules, cx);
+    });
+    cx.run_until_parked();
+    surface.read_with(&cx, |surface, _| {
+        assert!(surface.keyword_highlight_task.is_none());
+        let snapshot = surface.snapshot.as_ref().unwrap();
+        assert!(
+            surface
+                .keyword_highlights
+                .as_ref()
+                .unwrap()
+                .matches_snapshot_rows(snapshot, surface.palette, 0..snapshot.row_count())
+        );
+    });
+}
+
+#[test]
+fn reading_highlight_fingerprint_is_reused_until_rules_or_match_config_change() {
+    let mut cx = TestAppContext::single();
+    let surface = cx.new(|_| TerminalSurface::new("fingerprint"));
+    surface.update(&mut cx, |surface, cx| {
+        let rules = Arc::new(vec![nyaterm_core::KeywordHighlightRule {
+            id: "temporary".into(),
+            patterns: vec!["ERROR".into()],
+            enabled: true,
+            ..Default::default()
+        }]);
+        surface.set_keyword_highlight_source(true, rules.clone(), cx);
+        let original = surface.cached_keyword_config_key();
+        for _ in 0..100 {
+            assert!(!surface.set_keyword_highlight_source(true, rules.clone(), cx));
+            assert_eq!(surface.cached_keyword_config_key(), original);
+        }
+        assert_eq!(surface.keyword_config_key_computations, 1);
+        surface.set_line_roles(!surface.line_roles, cx);
+        assert_ne!(surface.cached_keyword_config_key(), original);
+        assert_eq!(surface.keyword_config_key_computations, 2);
+        surface.set_keyword_highlight_source(false, rules, cx);
+        assert_ne!(surface.cached_keyword_config_key(), original);
+        assert_eq!(surface.keyword_config_key_computations, 3);
+    });
+}
+
+#[test]
+#[ignore = "manual rule fingerprint cost probe"]
+fn reading_highlight_fingerprint_cost_probe() {
+    let mut cx = TestAppContext::single();
+    for count in [20, 200, 1000, 10000] {
+        let surface = cx.new(|_| TerminalSurface::new("fingerprint-cost"));
+        surface.update(&mut cx, |surface, cx| {
+            let rules = (0..count)
+                .map(|index| nyaterm_core::KeywordHighlightRule {
+                    id: format!("s{index}"),
+                    name: format!("Rule {index}"),
+                    patterns: vec![
+                        format!("prefix_{index}_{}", "x".repeat(64)),
+                        format!("another_{index}"),
+                    ],
+                    color_dark: "#123456".into(),
+                    color_light: "#654321".into(),
+                    enabled: true,
+                })
+                .collect();
+            surface.set_session_keyword_rules(rules, cx);
+            let config = surface.keyword_highlight_config();
+            let expected = nyaterm_terminal_gpui::keywords::terminal_keyword_highlight_config_key(
+                &surface.keyword_rules,
+                config,
+            );
+            assert_eq!(surface.cached_keyword_config_key(), expected);
+            let start = Instant::now();
+            for _ in 0..1000 {
+                std::hint::black_box(
+                    nyaterm_terminal_gpui::keywords::terminal_keyword_highlight_config_key(
+                        std::hint::black_box(&surface.keyword_rules),
+                        config,
+                    ),
+                );
+            }
+            let uncached_ns = start.elapsed().as_nanos() / 1000;
+            let start = Instant::now();
+            for _ in 0..100000 {
+                std::hint::black_box(
+                    std::hint::black_box(&mut *surface).cached_keyword_config_key(),
+                );
+            }
+            let cached_ns = start.elapsed().as_nanos() / 100000;
+            println!(
+                "fingerprint_cost rules={count} uncached_ns={uncached_ns} cached_ns={cached_ns}"
+            );
+            assert_eq!(surface.keyword_config_key_computations, 1);
+        });
+    }
+}

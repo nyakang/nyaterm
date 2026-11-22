@@ -4389,6 +4389,7 @@
     "ruleBack": "返回规则列表",
     "readHistoryChanged": "历史内容已变化，阅读位置已调整；输入仍暂停。",
     "ruleConflict": "规则已被其他窗口修改。请重新加载后再编辑。",
+    "invalidRulePattern": "规则“%{name}”的第 %{line} 行模式无效：%{error}",
     "invalidRuleColor": "颜色必须为 6 位十六进制值。",
     "ruleSessionClosed": "目标会话已关闭，无法保存会话规则。",
     "ruleInherited": "继承自全局",

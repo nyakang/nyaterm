@@ -76,8 +76,9 @@ def cpu_time(process) -> float | None:
     return sum((value.dwHighDateTime << 32) | value.dwLowDateTime for value in values[2:]) / 10_000_000
 
 
-def probe(binary, case, roles, theme, screenshot=None):
+def probe(binary, case, roles, theme, screenshot=None, *, rules=0, panes=1):
     env = dict(os.environ, NYATERM_HIGHLIGHT_PROBE_CASE=case, NYATERM_HIGHLIGHT_PROBE_ROLES=str(int(roles)), NYATERM_HIGHLIGHT_PROBE_THEME=theme)
+    env.update(NYATERM_HIGHLIGHT_PROBE_RULES=str(rules), NYATERM_HIGHLIGHT_PROBE_PANES=str(panes))
     if screenshot:
         env["NYATERM_HIGHLIGHT_PROBE_SCREENSHOT"] = str(screenshot)
     started = time.monotonic()

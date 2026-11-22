@@ -4389,6 +4389,7 @@
     "ruleBack": "규칙 목록으로",
     "readHistoryChanged": "기록이 변경되어 읽기 위치를 조정했습니다. 입력은 계속 일시 중지됩니다.",
     "ruleConflict": "다른 창에서 규칙이 변경되었습니다. 다시 불러온 후 편집하세요.",
+    "invalidRulePattern": "규칙 “%{name}”의 패턴 %{line}행: %{error}",
     "invalidRuleColor": "색상은 6자리 16진수여야 합니다.",
     "ruleSessionClosed": "대상 세션이 종료되어 세션 규칙을 저장할 수 없습니다.",
     "ruleInherited": "전역에서 상속",

@@ -4389,6 +4389,7 @@
     "ruleBack": "Retour aux règles",
     "readHistoryChanged": "Historique modifié. Position de lecture ajustée ; saisie toujours suspendue.",
     "ruleConflict": "Les règles ont été modifiées ailleurs. Rechargez-les avant de continuer.",
+    "invalidRulePattern": "Règle « %{name} », ligne de motif %{line} : %{error}",
     "invalidRuleColor": "Les couleurs doivent contenir six chiffres hexadécimaux.",
     "ruleSessionClosed": "La session cible est fermée. Impossible d’enregistrer ses règles.",
     "ruleInherited": "Héritée",

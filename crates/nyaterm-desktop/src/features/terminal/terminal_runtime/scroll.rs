@@ -930,7 +930,7 @@ impl NyaTermApp {
         &self,
         session_id: &str,
     ) -> bool {
-        if session_id.is_empty() {
+        if session_id.is_empty() || self.terminal.local_mode.is_active_for(Some(session_id)) {
             return true;
         }
         let protocol = self.terminal_protocol_state_for_session(session_id);

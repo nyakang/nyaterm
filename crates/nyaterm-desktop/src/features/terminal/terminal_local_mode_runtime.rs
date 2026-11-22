@@ -9,9 +9,9 @@ use crate::features::terminal::terminal_surface::terminal_snapshot_absolute_rang
 use gpui::{Context, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
 use nyaterm_terminal::local_mode::{
     LocalModeMotion, LocalModeViewport, local_mode_cell_boundary, local_mode_insertion_col,
-    local_mode_scroll_delta, move_local_mode_cursor,
+    local_mode_scroll_delta, local_mode_selection, move_local_mode_cursor,
 };
-use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelection};
+use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelectionMode};
 use rust_i18n::t;
 
 /// Insertion-point column just after the last non-empty cell of a snapshot
@@ -23,6 +23,17 @@ fn row_content_end(row: &nyaterm_terminal::TerminalSnapshotRow) -> usize {
         .rposition(|cell| !cell.text().is_empty())
         .map(|index| index + row.cells[index].width.max(1) as usize)
         .unwrap_or(0)
+}
+
+fn local_mode_endpoint_boundary(
+    endpoint: nyaterm_terminal::selection::TerminalSelectionEndpoint,
+) -> TerminalBufferCellPos {
+    TerminalBufferCellPos::new(
+        endpoint.position.line,
+        endpoint.position.col.saturating_add(usize::from(
+            endpoint.side == nyaterm_terminal::selection::TerminalCellSide::Right,
+        )),
+    )
 }
 
 impl NyaTermApp {
@@ -65,7 +76,7 @@ impl NyaTermApp {
             .selection
             .selection
             .filter(|_| self.terminal.selection.session_id.as_deref() == Some(session_id.as_str()))
-            .map(|selection| selection.head.position)
+            .map(|selection| local_mode_endpoint_boundary(selection.head))
             .filter(|position| position.line >= absolute_start && position.line <= last_line)
             .unwrap_or_else(|| {
                 let row = last_line.saturating_sub(absolute_start);
@@ -93,7 +104,7 @@ impl NyaTermApp {
             .selection
             .selection
             .filter(|_| self.terminal.selection.session_id.as_deref() == Some(session_id.as_str()))
-            .map(|selection| selection.anchor.position);
+            .map(|selection| local_mode_endpoint_boundary(selection.anchor));
         self.stop_terminal_selection_autoscroll();
         if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
             view.local_mode_scroll_locked = true;
@@ -276,7 +287,7 @@ impl NyaTermApp {
         if shift {
             let anchor = self.terminal.local_mode.anchor.unwrap_or(current);
             self.terminal.local_mode.anchor = Some(anchor);
-            let selection = TerminalSelection::from_range(anchor, next);
+            let selection = local_mode_selection(anchor, next);
             self.terminal.selection.selection = Some(selection);
             self.terminal.selection.click_anchor = None;
             self.terminal.selection.session_id = Some(session_id.clone());
@@ -399,9 +410,11 @@ impl NyaTermApp {
             self.terminal.local_mode.pending_end = false;
             self.terminal.local_mode.cursor.col = local_mode_cell_boundary(&row.cells, col, false);
             if let Some(anchor) = self.terminal.local_mode.anchor
-                && self.terminal.selection.selection.is_some()
+                && self.terminal.selection.selection.is_some_and(|selection| {
+                    selection.mode == TerminalSelectionMode::Linear && !selection.all_buffer
+                })
             {
-                let next = TerminalSelection::from_range(anchor, self.terminal.local_mode.cursor);
+                let next = local_mode_selection(anchor, self.terminal.local_mode.cursor);
                 if self.terminal.selection.selection != Some(next) {
                     self.terminal.selection.selection = Some(next);
                     self.terminal.selection.text.invalidate_preserving_copy();
@@ -472,7 +485,7 @@ impl NyaTermApp {
         head: TerminalBufferCellPos,
         cx: &mut Context<Self>,
     ) {
-        self.terminal.selection.selection = Some(TerminalSelection::from_range(anchor, head));
+        self.terminal.selection.selection = Some(local_mode_selection(anchor, head));
         self.terminal.selection.click_anchor = None;
         self.terminal.selection.session_id = Some(session_id.to_string());
         self.terminal.selection.dragging = true;
@@ -511,6 +524,17 @@ impl NyaTermApp {
             self.exit_terminal_local_mode(cx);
             return false;
         }
+        if event.click_count >= 2 {
+            self.start_terminal_selection_for_session(Some(&active_session), event, cx);
+            self.sync_local_mode_caret_from_selection(&active_session, cx);
+            return true;
+        }
+        if let Some(surface) = self.terminal.view.surfaces.get(&active_session).cloned()
+            && let Some(state) =
+                surface.update(cx, |surface, _| surface.take_scroll_state_for_selection())
+        {
+            let _ = self.sync_terminal_local_scroll_visual_state_from_surface(state, cx);
+        }
         let Some(head) = self.local_mode_insertion_point_at(&active_session, event.position, cx)
         else {
             return false;
@@ -519,7 +543,12 @@ impl NyaTermApp {
             self.terminal
                 .local_mode
                 .anchor
-                .or_else(|| self.terminal.selection.selection.map(|s| s.anchor.position))
+                .or_else(|| {
+                    self.terminal
+                        .selection
+                        .selection
+                        .map(|selection| local_mode_endpoint_boundary(selection.anchor))
+                })
                 .unwrap_or(self.terminal.local_mode.cursor)
         } else {
             head
@@ -553,23 +582,79 @@ impl NyaTermApp {
         {
             return false;
         }
-        let Some(anchor) = self.terminal.local_mode.anchor else {
+        if self
+            .terminal
+            .selection
+            .selection
+            .is_some_and(|s| s.mode == TerminalSelectionMode::Block)
+        {
             return false;
-        };
-        let Some(head) = self.local_mode_insertion_point_at(&active_session, event.position, cx)
+        }
+        if let Some(geometry) =
+            self.terminal_hit_test_geometry_for_session(Some(&active_session), cx)
+        {
+            self.update_terminal_selection_autoscroll(
+                active_session.clone(),
+                event.position,
+                &geometry,
+                cx,
+            );
+        }
+        self.terminal.selection.drag_pointer_position = Some(event.position);
+        self.refresh_local_mode_selection_head(&active_session, event.position, cx);
+        true
+    }
+
+    pub(in crate::features) fn refresh_local_mode_selection_head(
+        &mut self,
+        session_id: &str,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(geometry) = self.terminal_hit_test_geometry_for_session(Some(session_id), cx)
         else {
             return false;
         };
-        self.terminal.selection.drag_pointer_position = Some(event.position);
-        if self.terminal.selection.selection.map(|s| s.head.position) == Some(head) {
-            return true;
+        let Some(view) = self.terminal.view.views.get(session_id) else {
+            return false;
+        };
+        if view.history_state() != geometry.snapshot.history
+            || self.terminal_display_offset_for_session(Some(session_id)) != geometry.display_offset
+        {
+            return false;
         }
-        self.terminal.local_mode.cursor = head;
-        self.terminal.local_mode.preferred_col = head.col;
-        self.terminal.local_mode.pending_end = false;
-        self.apply_local_mode_selection(&active_session, anchor, head, cx);
-        self.sync_terminal_local_mode_cursor(&active_session, cx);
+        let Some(anchor) = self.terminal.local_mode.anchor else {
+            return false;
+        };
+        let Some(head) = self.local_mode_insertion_point_at(session_id, position, cx) else {
+            return false;
+        };
+        let selection = local_mode_selection(anchor, head);
+        if self.terminal.selection.selection != Some(selection) {
+            self.terminal.local_mode.cursor = head;
+            self.terminal.local_mode.preferred_col = head.col;
+            self.terminal.local_mode.pending_end = false;
+            self.apply_local_mode_selection(session_id, anchor, head, cx);
+            self.sync_terminal_local_mode_cursor(session_id, cx);
+        }
         true
+    }
+
+    pub(in crate::features) fn sync_local_mode_caret_from_selection(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.terminal.local_mode.is_active_for(Some(session_id)) {
+            return;
+        }
+        if let Some(selection) = self.terminal.selection.selection {
+            self.terminal.local_mode.cursor = local_mode_endpoint_boundary(selection.head);
+            self.terminal.local_mode.anchor = Some(local_mode_endpoint_boundary(selection.anchor));
+            self.terminal.local_mode.preferred_col = self.terminal.local_mode.cursor.col;
+            self.terminal.local_mode.pending_end = false;
+            self.sync_terminal_local_mode_cursor(session_id, cx);
+        }
     }
 
     pub(in crate::features) fn finish_terminal_local_mode_selection(
@@ -583,13 +668,35 @@ impl NyaTermApp {
         let Some(active_session) = self.terminal.local_mode.session_id.clone() else {
             return false;
         };
+        if self.terminal.selection.session_id.as_deref() != Some(active_session.as_str()) {
+            return false;
+        }
+        if self
+            .terminal
+            .selection
+            .selection
+            .is_some_and(|s| s.mode == TerminalSelectionMode::Block)
+        {
+            self.finish_terminal_selection(event, cx);
+            self.sync_local_mode_caret_from_selection(&active_session, cx);
+            return true;
+        }
+        if self.terminal.selection.dragging {
+            self.refresh_local_mode_selection_head(&active_session, event.position, cx);
+        }
         self.terminal.selection.dragging = false;
         self.terminal.selection.drag_pointer_position = None;
+        self.terminal.selection.scroll_rehit_armed = false;
         self.stop_terminal_selection_autoscroll();
-        if self.terminal.selection.selection.is_some() {
-            self.ensure_terminal_selection_text(cx);
-            self.notify_terminal_selection_visual_only(&active_session, cx);
+        if self
+            .terminal
+            .selection
+            .selection
+            .is_some_and(|s| s.is_empty())
+        {
+            self.clear_terminal_selection(cx);
         }
+        self.complete_terminal_selection_reading(cx);
         cx.notify();
         true
     }
@@ -600,6 +707,302 @@ mod regression_tests {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::test_support::{TestAppCleanup, TestConfigDir};
     use gpui::{AppContext as _, KeyDownEvent, Keystroke, Modifiers, TestAppContext};
+
+    fn pointer(
+        app: &crate::features::NyaTermApp,
+        col: f32,
+        row: f32,
+        cx: &mut gpui::Context<crate::features::NyaTermApp>,
+    ) -> gpui::Point<gpui::Pixels> {
+        let geometry = app
+            .terminal_hit_test_geometry_for_session(Some("a"), cx)
+            .unwrap();
+        gpui::point(
+            geometry.bounds.origin.x
+                + gpui::px(geometry.padding_left + geometry.gutter + col * geometry.cell_w),
+            geometry.bounds.origin.y
+                + gpui::px(geometry.padding_top + geometry.visual_y_offset + row * geometry.cell_h),
+        )
+    }
+    fn seed_reader(
+        app: &mut crate::features::NyaTermApp,
+        cx: &mut gpui::Context<crate::features::NyaTermApp>,
+    ) {
+        app.terminal.layout.surface_bounds = Some(gpui::Bounds {
+            origin: gpui::Point::default(),
+            size: gpui::size(gpui::px(800.), gpui::px(600.)),
+        });
+        app.terminal.seed_session_view(
+            "a".into(),
+            "first word\r\nsecond word\r\nthird".into(),
+            "UTF-8",
+        );
+        app.enter_terminal_local_mode("a".into(), cx);
+    }
+
+    #[test]
+    fn reading_mouse_selects_exact_boundaries_and_arms_then_stops_edge_scroll() {
+        let dir = TestConfigDir::new("nyaterm-reading-drag");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            let origin = pointer(app, 0.25, 0.5, cx);
+            assert!(app.handle_terminal_local_mode_mouse_down(
+                Some("a"),
+                &gpui::MouseDownEvent {
+                    position: origin,
+                    button: gpui::MouseButton::Left,
+                    click_count: 1,
+                    ..Default::default()
+                },
+                cx
+            ));
+            let head = pointer(app, 1.25, 0.5, cx);
+            assert!(app.update_terminal_local_mode_selection_drag(
+                &gpui::MouseMoveEvent {
+                    position: head,
+                    ..Default::default()
+                },
+                cx
+            ));
+            assert_eq!(app.selected_terminal_text().as_deref(), Some("f"));
+            let outside = gpui::point(head.x, gpui::px(-20.));
+            app.update_terminal_local_mode_selection_drag(
+                &gpui::MouseMoveEvent {
+                    position: outside,
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert!(app.terminal.selection.autoscroll.is_some());
+            let release = pointer(app, 2.25, 0.5, cx);
+            app.finish_terminal_local_mode_selection(
+                &gpui::MouseUpEvent {
+                    position: release,
+                    button: gpui::MouseButton::Left,
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert!(app.terminal.selection.autoscroll.is_none());
+            assert!(!app.terminal.selection.dragging);
+            assert_eq!(app.selected_terminal_text().as_deref(), Some("fi"));
+        });
+    }
+
+    #[test]
+    fn reading_wide_characters_and_cancelled_or_lost_release_preserve_copy_policy() {
+        let dir = TestConfigDir::new("nyaterm-reading-wide-cancel");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            app.terminal
+                .seed_session_view("a".into(), "中😀文abc".into(), "UTF-8");
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_copy_on_select = true;
+            app.settings.replace_summary(settings);
+            for cancel in [true, false] {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string("unchanged".into()));
+                let origin = pointer(app, 0.25, 0.5, cx);
+                app.handle_terminal_local_mode_mouse_down(
+                    Some("a"),
+                    &gpui::MouseDownEvent {
+                        position: origin,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                let head = pointer(app, 4.25, 0.5, cx);
+                app.update_terminal_local_mode_selection_drag(
+                    &gpui::MouseMoveEvent {
+                        position: head,
+                        pressed_button: Some(gpui::MouseButton::Left),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                assert_eq!(app.selected_terminal_text().as_deref(), Some("中😀"));
+                if cancel {
+                    app.cancel_terminal_selection_drag(cx);
+                } else {
+                    app.recover_terminal_selection_after_lost_mouse_up(cx);
+                }
+                assert!(!app.terminal.selection.dragging);
+                assert!(app.terminal.selection.autoscroll.is_none());
+                assert_eq!(
+                    cx.read_from_clipboard()
+                        .and_then(|item| item.text())
+                        .as_deref(),
+                    Some(if cancel { "unchanged" } else { "中😀" })
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn reading_block_selection_keeps_rectangular_range_through_cursor_refresh() {
+        let dir = TestConfigDir::new("nyaterm-reading-block");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            let origin = pointer(app, 1.25, 0.5, cx);
+            let down = gpui::MouseDownEvent {
+                position: origin,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                modifiers: Modifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(!app.handle_terminal_local_mode_mouse_down(Some("a"), &down, cx));
+            app.start_terminal_selection_for_session(Some("a"), &down, cx);
+            let head = pointer(app, 4.25, 1.5, cx);
+            let drag = gpui::MouseMoveEvent {
+                position: head,
+                pressed_button: Some(gpui::MouseButton::Left),
+                modifiers: down.modifiers,
+            };
+            assert!(!app.update_terminal_local_mode_selection_drag(&drag, cx));
+            app.update_terminal_selection_drag(&drag, cx);
+            app.sync_local_mode_caret_from_selection("a", cx);
+            app.refresh_terminal_local_mode("a", cx);
+            assert_eq!(
+                app.terminal.selection.selection.unwrap().mode,
+                nyaterm_terminal::selection::TerminalSelectionMode::Block
+            );
+            app.finish_terminal_local_mode_selection(
+                &gpui::MouseUpEvent {
+                    position: head,
+                    button: gpui::MouseButton::Left,
+                    modifiers: down.modifiers,
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(app.selected_terminal_text().as_deref(), Some("irs\neco"));
+        });
+    }
+
+    #[test]
+    fn reading_double_click_uses_copy_preference_and_triple_click_selects_line() {
+        let dir = TestConfigDir::new("nyaterm-reading-clicks");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_copy_on_select = true;
+            app.settings.replace_summary(settings);
+            let position = pointer(app, 1.25, 0.5, cx);
+            for count in [2, 3] {
+                assert!(app.handle_terminal_local_mode_mouse_down(
+                    Some("a"),
+                    &gpui::MouseDownEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: count,
+                        ..Default::default()
+                    },
+                    cx
+                ));
+                app.finish_terminal_local_mode_selection(
+                    &gpui::MouseUpEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                let text = app.selected_terminal_text().unwrap();
+                if count == 2 {
+                    assert_eq!(text, "first");
+                } else {
+                    assert!(text.starts_with("first word"));
+                }
+                assert_eq!(
+                    cx.read_from_clipboard().and_then(|item| item.text()),
+                    Some(text)
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn reading_tui_mouse_is_local_without_error_status_and_releases_protocol_on_exit() {
+        use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
+        let dir = TestConfigDir::new("nyaterm-reading-tui");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            let protocol = &mut app.terminal.view.views.get_mut("a").unwrap().protocol_state;
+            protocol.mouse_reporting = true;
+            protocol.mouse_motion_reporting = true;
+            protocol.alternate_screen = true;
+            protocol.alternate_scroll = true;
+            let status = app.shell.status().to_string();
+            assert!(app.terminal_local_scroll_enabled_for_session("a"));
+            assert!(!app.maybe_send_mouse_report_for_session(
+                TerminalMouseReportRequest {
+                    session_id: "a",
+                    button: 2,
+                    col: 0,
+                    row: 0,
+                    press: true,
+                    motion: false,
+                    modifiers: Modifiers::default(),
+                },
+                cx
+            ));
+            assert!(!app.maybe_send_alternate_scroll_for_session("a", 1, cx));
+            assert_eq!(app.shell.status(), status);
+            app.exit_terminal_local_mode(cx);
+            assert!(!app.terminal_local_scroll_enabled_for_session("a"));
+        });
+    }
+
+    #[test]
+    fn reading_session_rules_survive_surface_replacement_and_reconnect_but_not_close() {
+        let dir = TestConfigDir::new("nyaterm-session-rule-lifetime");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            app.set_session_keyword_rules(
+                "a",
+                vec![nyaterm_core::KeywordHighlightRule {
+                    id: "retained".into(),
+                    ..Default::default()
+                }],
+                cx,
+            );
+            app.remove_terminal_surface("a");
+            app.ensure_terminal_surface("a", cx);
+            assert_eq!(app.session_keyword_rules("a").unwrap()[0].id, "retained");
+            app.terminal.rekey_session_view("a", "reconnected", "UTF-8");
+            assert_eq!(
+                app.session_keyword_rules("reconnected").unwrap()[0].id,
+                "retained"
+            );
+            assert!(app.session_keyword_rules("a").is_none());
+            app.terminal.remove_frame_session("reconnected");
+            app.terminal
+                .seed_session_view("reconnected".into(), String::new(), "UTF-8");
+            assert!(app.session_keyword_rules("reconnected").unwrap().is_empty());
+        });
+    }
 
     #[test]
     fn regression_reading_mode_blocks_composition_and_preserves_protection_on_history_reset() {
