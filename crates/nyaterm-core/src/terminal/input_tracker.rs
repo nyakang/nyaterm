@@ -48,8 +48,12 @@ fn leading_env_prefix() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^\(([^()\r\n]+)\)\s*").expect("env prefix"))
 }
 
-pub(super) fn prompt_matchers() -> &'static [Regex; 11] {
-    static MATCHERS: OnceLock<[Regex; 11]> = OnceLock::new();
+/// Shared with `prompt::match_prompt`, which keeps one `PromptFamily` per matcher; the
+/// shared length makes a one-sided edit a compile error instead of a runtime mislabel.
+pub(super) const PROMPT_MATCHER_COUNT: usize = 11;
+
+pub(super) fn prompt_matchers() -> &'static [Regex; PROMPT_MATCHER_COUNT] {
+    static MATCHERS: OnceLock<[Regex; PROMPT_MATCHER_COUNT]> = OnceLock::new();
     MATCHERS.get_or_init(|| {
         // Consume one separator after the terminator, preserving command spacing.
         // Specific structures precede bare theme arrows (e.g. `➜ ~/src cmd`).
@@ -63,7 +67,7 @@ pub(super) fn prompt_matchers() -> &'static [Regex; 11] {
             // BSD/macOS default `host:dir user$` (and `user#` as root).
             r"^[A-Za-z0-9_.-]+:[^\s#$%❯➜→›]+ +[A-Za-z0-9_.-]+[#$%](?: |$)",
             // Bare shells print `bash-3.2$` / `sh-5.1#` when no PS1 is configured.
-            r"^(?:ba|z|da|k|c|tc|a)?sh-[0-9][0-9.]*[#$%](?: |$)",
+            r"^-?(?:ba|z|da|k|c|tc|a)?sh-[0-9][0-9.]*[#$%](?: |$)",
             r"^(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*) +[#$%❯➜→›](?: |$)",
             r"^[❯➜→›] +(?:~(?:/[^\s#$%❯➜→›]*)?|/[^\s#$%❯➜→›]*)(?: |$)",
             r"^[❯➜→›](?: |$)",
@@ -672,6 +676,7 @@ mod tests {
             "host:Documents user$ ",
             "bash-3.2$ ",
             "sh-5.1# ",
+            "-bash-4.2# ",
         ] {
             let line = format!("{prompt} echo  hi ");
             assert_eq!(

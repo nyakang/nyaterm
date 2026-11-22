@@ -1,6 +1,8 @@
 //! Presentation-only prompt matching. These matches grant no editing capability.
 
-use crate::terminal::input_tracker::prompt_matchers;
+use std::borrow::Cow;
+
+use crate::terminal::input_tracker::{PROMPT_MATCHER_COUNT, prompt_matchers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptFamily {
@@ -20,7 +22,7 @@ pub enum PromptFamily {
 pub struct PromptMatch<'a> {
     pub prefix: &'a str,
     pub family: PromptFamily,
-    identity: &'a str,
+    identity: Cow<'a, str>,
     terminator: char,
 }
 
@@ -33,7 +35,7 @@ impl PromptMatch<'_> {
     }
 }
 
-/// Shares the input tracker's existing syntax without broadening its accepted prompts.
+/// Shares the input tracker's prompt syntax; each family is tied to its matcher by index.
 pub fn match_prompt(text: &str) -> Option<PromptMatch<'_>> {
     let (index, found) = prompt_matchers()
         .iter()
@@ -41,7 +43,7 @@ pub fn match_prompt(text: &str) -> Option<PromptMatch<'_>> {
         .find_map(|(index, matcher)| matcher.find(text).map(|found| (index, found)))?;
     let prefix = &text[..found.end()];
     let trimmed = prefix.trim_end();
-    let family = [
+    const FAMILIES: [PromptFamily; PROMPT_MATCHER_COUNT] = [
         PromptFamily::Bracketed,
         PromptFamily::UserHost,
         PromptFamily::PowerShell,
@@ -53,20 +55,31 @@ pub fn match_prompt(text: &str) -> Option<PromptMatch<'_>> {
         PromptFamily::LeadingArrow,
         PromptFamily::Arrow,
         PromptFamily::Bare,
-    ][index];
-    let identity = match family {
-        PromptFamily::UserHost | PromptFamily::HostPath => trimmed.split(':').next()?,
-        // The user (with its terminator) is what a `su`/`sudo -i` changes.
-        PromptFamily::HostDirUser => trimmed.rsplit(' ').next()?,
-        PromptFamily::Bracketed => trimmed
-            .strip_prefix('[')?
-            .split(']')
-            .next()?
-            .split_whitespace()
-            .next()?
-            .split(':')
-            .next()?,
-        _ => "",
+    ];
+    let family = FAMILIES[index];
+    let identity: Cow<'_, str> = match family {
+        PromptFamily::UserHost | PromptFamily::HostPath => {
+            Cow::Borrowed(trimmed.split(':').next()?)
+        }
+        // Host and user are not contiguous in the prompt; both change under ssh or su.
+        PromptFamily::HostDirUser => {
+            let host = trimmed.split(':').next()?;
+            let user = trimmed.rsplit(' ').next()?;
+            Cow::Owned(format!("{host}\u{1f}{user}"))
+        }
+        // `bash-3.2` and `bash-5.1` are different shells, e.g. after ssh.
+        PromptFamily::ShellVersion => Cow::Borrowed(trimmed.trim_end_matches(['#', '$', '%'])),
+        PromptFamily::Bracketed => Cow::Borrowed(
+            trimmed
+                .strip_prefix('[')?
+                .split(']')
+                .next()?
+                .split_whitespace()
+                .next()?
+                .split(':')
+                .next()?,
+        ),
+        _ => Cow::Borrowed(""),
     };
     let terminator = if family == PromptFamily::LeadingArrow {
         trimmed.chars().next()?
@@ -190,6 +203,7 @@ mod tests {
             "device:/sdcard # ls",
             "Jakubs-MacBook-Pro:~ root# ls",
             "bash-3.2$ ls",
+            "-bash-4.2# ls",
             "~/src ❯ ls",
             "➜ ~/src ls",
             "❯ ls",
@@ -228,7 +242,9 @@ mod tests {
             ("[user@host src]$ ", "[root@host src]$ "),
             ("$ ", "# "),
             ("host:~ jakub$ ", "host:~ root# "),
+            ("mac1:~ jakub$ ", "mac2:~ jakub$ "),
             ("bash-3.2$ ", "bash-3.2# "),
+            ("bash-3.2$ ", "bash-5.1$ "),
             ("❯ ", "➜ "),
             ("PS C:\\src> ", "C:\\src>"),
         ] {
