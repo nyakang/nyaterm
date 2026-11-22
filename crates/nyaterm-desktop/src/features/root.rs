@@ -65,7 +65,6 @@ pub(in crate::features) struct OverlayFlags {
 }
 
 impl OverlayFlags {
-    #[cfg(any(windows, test))]
     pub(in crate::features) fn obscures_native_surface(self) -> bool {
         self.blocks_workspace_focus()
     }
