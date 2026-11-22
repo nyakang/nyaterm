@@ -143,6 +143,47 @@ fn draw_editor(app: &Entity<NyaTermApp>, vcx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
+fn connection_type_layout_clicks_reordered_tabs_and_keeps_narrow_selection(
+    cx: &mut TestAppContext,
+) {
+    let test_dir = TestConfigDir::new("nyaterm-connection-type-layout-view");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 680., 12.);
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            for kind in ConnectionKindTab::ALL {
+                if !matches!(kind, ConnectionKindTab::Ftp | ConnectionKindTab::Local) {
+                    app.settings.set_connection_type_visible(kind, false);
+                }
+            }
+            while app
+                .settings
+                .move_connection_type(ConnectionKindTab::Ftp, false)
+            {}
+            app.set_connection_editor_kind(ConnectionKindTab::Local, cx);
+        });
+    });
+    draw_editor(&app, vcx);
+    let tabs = vcx.debug_bounds("connection-editor-protocols").unwrap();
+    vcx.simulate_click(
+        point(tabs.left() + tabs.size.width / 4., tabs.top() + px(16.)),
+        Modifiers::default(),
+    );
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.connection_state.active_editor_draft().unwrap().kind,
+                ConnectionKindTab::Ftp
+            );
+            // Render the same draft through the narrow path and observe the shared selection.
+            let draft = app.connection_state.active_editor_draft().unwrap();
+            let _ = app.connection_editor_panel(draft, (640., 680.), cx);
+            let select = app.selects.field(&"connection-editor-kind".into()).unwrap();
+            assert_eq!(select.read(cx).selected_value(), Some("ftp"));
+        });
+    });
+}
+
+#[gpui::test]
 fn telnet_network_page_and_select_focus_work_in_raw_tcp_mode(cx: &mut TestAppContext) {
     use crate::models::ConnectionEditorSection;
     let test_dir = TestConfigDir::new("nyaterm-telnet-network-editor");

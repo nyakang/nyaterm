@@ -404,6 +404,29 @@ impl NyaTermApp {
             || (connection_id.is_none() && self.settings.summary().open_new_connection_after_save)
     }
 
+    fn new_preferred_connection_editor_state(
+        &mut self,
+        parent_group_id: Option<String>,
+        connect_after_save: bool,
+        cx: &gpui::App,
+    ) -> ConnectionEditorState {
+        let kind = ConnectionKindTab::editor_types(
+            &self.settings.summary().connection_type_layout,
+            false,
+            &[],
+        )
+        .first()
+        .copied()
+        .unwrap_or(ConnectionKindTab::Ssh);
+        let base = self.new_connection_editor_state(parent_group_id, connect_after_save);
+        let mut editor =
+            crate::features::connections::state::ConnectionFeatureState::prepare_editor_kind(
+                base, kind,
+            );
+        self.apply_default_session_settings(&mut editor, cx);
+        editor
+    }
+
     pub(in crate::features) fn open_connection_editor(
         &mut self,
         connection_id: Option<String>,
@@ -430,9 +453,7 @@ impl NyaTermApp {
             };
             connection_editor_from_saved(connection, connect_after_save)
         } else {
-            let mut editor = self.new_connection_editor_state(parent_group_id, connect_after_save);
-            self.apply_default_session_settings(&mut editor, cx);
-            editor
+            self.new_preferred_connection_editor_state(parent_group_id, connect_after_save, cx)
         };
 
         if editor.kind == ConnectionKindTab::Adb {

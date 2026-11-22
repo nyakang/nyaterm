@@ -1242,16 +1242,7 @@ pub(super) fn build_saved_connection_from_editor(
 
 /// Stable storage key for a connection kind's default session settings.
 pub(super) fn default_session_settings_kind_id(kind: ConnectionKindTab) -> &'static str {
-    match kind {
-        ConnectionKindTab::Ssh => "ssh",
-        ConnectionKindTab::Local => "local",
-        ConnectionKindTab::Telnet => "telnet",
-        ConnectionKindTab::Serial => "serial",
-        ConnectionKindTab::Rdp => "rdp",
-        ConnectionKindTab::Vnc => "vnc",
-        ConnectionKindTab::Adb => "adb",
-        ConnectionKindTab::Ftp => "ftp",
-    }
+    kind.persistence_id()
 }
 
 /// Build the persisted payload of a "default session settings" draft.

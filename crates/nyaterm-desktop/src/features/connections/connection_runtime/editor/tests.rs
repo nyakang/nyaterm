@@ -8,6 +8,51 @@ use crate::features::connections::connection_runtime::helpers::{
 };
 use crate::models::{ConnectionEditorPasswordSource, ConnectionPasswordEdit};
 
+#[test]
+fn connection_type_preferences_initialize_protocol_defaults_and_route_narrow_selections() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::ConnectionKindTab;
+    use crate::test_support::TestAppCleanup;
+    use gpui::TestAppContext;
+
+    let root = TestTempDir::new("nyaterm-preferred-connection-type");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        for (kind, port) in [
+            (ConnectionKindTab::Ssh, "22"),
+            (ConnectionKindTab::Telnet, "23"),
+            (ConnectionKindTab::Rdp, "3389"),
+            (ConnectionKindTab::Vnc, "5900"),
+            (ConnectionKindTab::Adb, "5555"),
+            (ConnectionKindTab::Ftp, "21"),
+        ] {
+            app.settings.reset_connection_type_layout();
+            while app.settings.move_connection_type(kind, false) {}
+            let draft = app.new_preferred_connection_editor_state(None, false, cx);
+            assert_eq!(draft.kind, kind);
+            assert_eq!(draft.port, port);
+        }
+        let draft = app.new_preferred_connection_editor_state(None, false, cx);
+        app.connection_state.begin_editor(draft);
+        // These two protocols previously had no narrow-selector event routing.
+        for kind in [ConnectionKindTab::Adb, ConnectionKindTab::Ftp] {
+            app.on_select_changed("connection-editor-kind", Some(kind.persistence_id()), cx);
+            assert_eq!(
+                app.connection_state.active_editor_draft().unwrap().kind,
+                kind
+            );
+        }
+        app.settings
+            .set_connection_type_visible(ConnectionKindTab::Ftp, false);
+        assert_eq!(
+            app.connection_state.active_editor_draft().unwrap().kind,
+            ConnectionKindTab::Ftp
+        );
+    });
+}
+
 fn connection(id: &str, group_id: Option<&str>, sort_order: i32) -> SavedConnection {
     // The older saved format omits timestamps and optional editor metadata.
     serde_json::from_value(json!({

@@ -1,3 +1,4 @@
+pub mod connection_type_layout;
 pub mod panel_visibility;
 
 /// Display policy only; applications retain control of the terminal's VT modes.
@@ -709,6 +710,8 @@ pub struct AppSettingsSummary {
     /// data keeps saving without opening.
     #[serde(default)]
     pub open_new_connection_after_save: bool,
+    #[serde(default)]
+    pub connection_type_layout: connection_type_layout::ConnectionTypeLayout,
     pub enable_screen_lock: bool,
     #[serde(default)]
     pub enable_startup_lock: bool,
@@ -921,6 +924,7 @@ impl Default for AppSettingsSummary {
             minimize_to_tray: false,
             confirm_on_close: true,
             open_new_connection_after_save: false,
+            connection_type_layout: Default::default(),
             enable_screen_lock: false,
             enable_startup_lock: false,
             enable_idle_lock: false,
@@ -1314,6 +1318,24 @@ mod tests {
             summary.diagnostics_log_shard_bytes,
             crate::diagnostics::DEFAULT_LOG_SHARD_BYTES,
             "legacy documents without a shard size must log into 10 MiB files"
+        );
+    }
+
+    #[test]
+    fn connection_type_layout_defaults_for_legacy_summaries() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("connection_type_layout");
+        let legacy: AppSettingsSummary = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(legacy.connection_type_layout, Default::default());
+        value["connection_type_layout"] =
+            serde_json::json!({"order": ["ftp", "ssh"], "hidden": ["telnet"], "future": 42});
+        let settings: AppSettingsSummary = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(settings).unwrap()["connection_type_layout"],
+            value["connection_type_layout"]
         );
     }
 

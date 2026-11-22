@@ -3484,6 +3484,63 @@ fn save_empty_search_engine_list_roundtrip() {
 }
 
 #[test]
+fn connection_type_layout_roundtrip_preserves_future_preferences_and_old_defaults() {
+    let dir = unique_temp_dir("settings-connection-types");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let baseline = store.load_app_settings_summary().unwrap();
+    assert_eq!(baseline.connection_type_layout, Default::default());
+    let mut raw = store.load_settings_value().unwrap();
+    let layout = serde_json::json!({
+        "order": ["vnc", "spice", "ssh", "vnc"],
+        "hidden": ["telnet", "spice"], "future": {"mode": 3}
+    });
+    set_nested_json_value(
+        &mut raw,
+        &["general", "connection_type_layout"],
+        layout.clone(),
+    );
+    store.save_settings_value(&raw).unwrap();
+    let mut summary = store.load_app_settings_summary().unwrap();
+    summary.confirm_on_close = !summary.confirm_on_close;
+    let saved = store.save_general_settings(&summary).unwrap();
+    assert_eq!(saved.connection_type_layout, summary.connection_type_layout);
+    assert_eq!(
+        store.load_settings_value().unwrap()["general"]["connection_type_layout"],
+        layout
+    );
+    summary
+        .connection_type_layout
+        .move_relative(&["ssh", "telnet", "vnc", "ftp"], "ftp", false);
+    summary
+        .connection_type_layout
+        .set_visible(&["ssh", "telnet", "vnc", "ftp"], "ssh", false);
+    let saved = store.save_general_settings(&summary).unwrap();
+    assert_eq!(
+        saved
+            .connection_type_layout
+            .visible(&["ssh", "telnet", "vnc", "ftp"]),
+        ["vnc", "ftp"]
+    );
+    assert_eq!(
+        saved.connection_type_layout.extensions["future"],
+        serde_json::json!({"mode": 3})
+    );
+
+    // A malformed known field must not be silently replaced by an unrelated save.
+    set_nested_json_value(
+        &mut raw,
+        &["general", "connection_type_layout"],
+        serde_json::json!({"order": 42}),
+    );
+    store.save_settings_value(&raw).unwrap();
+    assert!(store.load_app_settings_summary().is_err());
+    assert!(store.save_general_settings(&summary).is_err());
+    assert_eq!(store.load_settings_value().unwrap(), raw);
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn save_general_and_diagnostics_settings_roundtrip() {
     let dir = unique_temp_dir("settings-general-diag");
     let store = ConnectionStore::open(&dir).expect("store");

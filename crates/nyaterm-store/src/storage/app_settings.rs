@@ -708,6 +708,11 @@ impl ConnectionStore {
             ),
             minimize_to_tray: json_bool(&value, &["general", "minimize_to_tray"], false),
             confirm_on_close: json_bool(&value, &["general", "confirm_on_close"], true),
+            connection_type_layout: json_path(&value, &["general", "connection_type_layout"])
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?
+                .unwrap_or_default(),
             open_new_connection_after_save: json_bool(
                 &value,
                 &["general", "open_new_connection_after_save"],
@@ -1778,6 +1783,17 @@ impl ConnectionStore {
             &mut value,
             &["general", "open_new_connection_after_save"],
             serde_json::Value::Bool(settings.open_new_connection_after_save),
+        );
+        // Validate the existing layout before replacing any user preferences.
+        if let Some(layout) = json_path(&value, &["general", "connection_type_layout"]) {
+            serde_json::from_value::<
+                nyaterm_core::models::settings::connection_type_layout::ConnectionTypeLayout,
+            >(layout.clone())?;
+        }
+        set_nested_json_value(
+            &mut value,
+            &["general", "connection_type_layout"],
+            serde_json::to_value(&settings.connection_type_layout)?,
         );
         // UI language lives under ui.language (Tauri UiConfig.language).
         let language = match settings.language.as_str() {

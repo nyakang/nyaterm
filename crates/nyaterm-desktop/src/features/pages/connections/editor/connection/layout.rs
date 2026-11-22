@@ -77,33 +77,8 @@ pub(in crate::features) struct ConnectionEditorFrame {
     pub wide: bool,
     pub navigation_width: f32,
     pub protocol_select: Entity<NyaSelectState>,
+    pub protocol_kinds: Vec<ConnectionKindTab>,
     pub validation_error: Option<String>,
-}
-
-fn connection_kind_index(kind: ConnectionKindTab) -> usize {
-    match kind {
-        ConnectionKindTab::Ssh => 0,
-        ConnectionKindTab::Local => 1,
-        ConnectionKindTab::Telnet => 2,
-        ConnectionKindTab::Serial => 3,
-        ConnectionKindTab::Rdp => 4,
-        ConnectionKindTab::Vnc => 5,
-        ConnectionKindTab::Adb => 6,
-        ConnectionKindTab::Ftp => 7,
-    }
-}
-
-fn connection_kind_at(index: usize) -> ConnectionKindTab {
-    match index {
-        0 => ConnectionKindTab::Ssh,
-        1 => ConnectionKindTab::Local,
-        2 => ConnectionKindTab::Telnet,
-        3 => ConnectionKindTab::Serial,
-        4 => ConnectionKindTab::Rdp,
-        5 => ConnectionKindTab::Vnc,
-        6 => ConnectionKindTab::Adb,
-        _ => ConnectionKindTab::Ftp,
-    }
 }
 
 pub(in crate::features) fn connection_editor_frame<H: EditorFrameHost>(
@@ -123,11 +98,10 @@ pub(in crate::features) fn connection_editor_frame<H: EditorFrameHost>(
         wide,
         navigation_width,
         protocol_select,
+        protocol_kinds,
         validation_error,
     } = frame;
     let sections = ConnectionEditorSection::for_kind(chrome.kind, chrome.defaults_mode);
-    let local_label = t!("dialog.localTerminal");
-    let serial_label = t!("dialog.serial");
     let cancel_label = t!("common.cancel");
     let save_label = t!("common.save");
     let navigation = div()
@@ -204,6 +178,7 @@ pub(in crate::features) fn connection_editor_frame<H: EditorFrameHost>(
                 .when(!native_window, |this| this.pt_3())
                 .child(
                     div()
+                        .debug_selector(|| "connection-editor-protocols".to_string())
                         .flex()
                         .flex_col()
                         .gap_2()
@@ -211,23 +186,21 @@ pub(in crate::features) fn connection_editor_frame<H: EditorFrameHost>(
                         .when(wide, |this| {
                             this.child(
                                 NyaTabs::new("connection-kind-tabs")
-                                    .items([
-                                        NyaTabItem::new("SSH"),
-                                        NyaTabItem::new(local_label),
-                                        NyaTabItem::new("Telnet"),
-                                        NyaTabItem::new(serial_label),
-                                        NyaTabItem::new("RDP"),
-                                        NyaTabItem::new("VNC"),
-                                        NyaTabItem::new("ADB"),
-                                        NyaTabItem::new("FTP"),
-                                    ])
-                                    .selected_index(connection_kind_index(chrome.kind))
-                                    .on_select(cx.listener(|this, index, window, cx| {
-                                        this.editor_frame_select_kind(
-                                            connection_kind_at(*index),
-                                            window,
-                                            cx,
-                                        );
+                                    .items(
+                                        protocol_kinds
+                                            .iter()
+                                            .map(|kind| NyaTabItem::new(kind.display_label())),
+                                    )
+                                    .selected_index(
+                                        protocol_kinds
+                                            .iter()
+                                            .position(|kind| *kind == chrome.kind)
+                                            .unwrap_or(0),
+                                    )
+                                    .on_select(cx.listener(move |this, index, window, cx| {
+                                        if let Some(kind) = protocol_kinds.get(*index) {
+                                            this.editor_frame_select_kind(*kind, window, cx);
+                                        }
                                     })),
                             )
                         })

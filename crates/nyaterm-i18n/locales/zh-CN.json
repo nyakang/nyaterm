@@ -2979,6 +2979,9 @@
     "unread": "未读"
   },
   "settings": {
+    "connectionTypes": "连接类型显示与排序",
+    "connectionTypesDescription": "选择新建和编辑连接时显示的类型。首个可见类型作为新建连接的默认类型，至少保留一项。隐藏不影响已有连接的使用。",
+    "connectionTypesReset": "恢复默认",
     "themeMode": "主题模式",
     "themeModeManual": "手动选择",
     "themeModeSystem": "跟随系统",

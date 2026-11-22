@@ -32,7 +32,6 @@ mod vnc;
 
 use rust_i18n::t;
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
@@ -740,30 +739,27 @@ impl NyaTermApp {
         let wide = width >= 760.;
         let navigation_width = if wide { 180. } else { 128. };
         let narrow = width - navigation_width < 500.;
+        let mut retained = vec![editor.kind];
+        if let Some(original) = editor.id.as_ref().and_then(|id| {
+            self.connection_state
+                .connections()
+                .iter()
+                .find(|connection| &connection.id == id)
+        }) {
+            retained.push(ConnectionKindTab::from_connection_type(&original.config));
+        }
+        let protocol_kinds = ConnectionKindTab::editor_types(
+            &self.settings.summary().connection_type_layout,
+            editor.defaults_mode,
+            &retained,
+        );
         let protocol_select = self.select_entity(
             "connection-editor-kind",
-            [
-                ConnectionKindTab::Ssh,
-                ConnectionKindTab::Local,
-                ConnectionKindTab::Telnet,
-                ConnectionKindTab::Serial,
-                ConnectionKindTab::Rdp,
-                ConnectionKindTab::Vnc,
-                ConnectionKindTab::Adb,
-            ]
-            .into_iter()
-            .map(|kind| {
-                NyaSelectOption::new(
-                    kind.label(),
-                    match kind {
-                        ConnectionKindTab::Local => t!("dialog.localTerminal"),
-                        ConnectionKindTab::Serial => t!("dialog.serial"),
-                        _ => Cow::Borrowed(kind.label()),
-                    },
-                )
-            })
-            .collect(),
-            Some(editor.kind.label().to_string()),
+            protocol_kinds
+                .iter()
+                .map(|kind| NyaSelectOption::new(kind.persistence_id(), kind.display_label()))
+                .collect(),
+            Some(editor.kind.persistence_id().to_string()),
             false,
             cx,
         );
@@ -1173,6 +1169,7 @@ impl NyaTermApp {
                 wide,
                 navigation_width,
                 protocol_select,
+                protocol_kinds,
                 validation_error: editor
                     .error
                     .as_ref()

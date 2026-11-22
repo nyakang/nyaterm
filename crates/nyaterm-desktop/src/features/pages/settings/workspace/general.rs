@@ -149,6 +149,7 @@ impl SettingsPanel {
                         ),
                     )),
             ))
+            .child(self.connection_types_settings_section(cx))
             .child(self.startup_settings_section(cx))
             .child(self.data_directory_section(cx))
             .child(settings_form_section(

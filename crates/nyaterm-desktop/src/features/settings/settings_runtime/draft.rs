@@ -1533,6 +1533,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn connection_type_layout_draft_cancel_apply_and_reset_preserve_committed_preferences() {
+        use crate::models::ConnectionKindTab;
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let stored = |cx: &mut TestAppContext| {
+            app.update(cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+                    .connection_type_layout
+            })
+        };
+        let baseline = stored(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.set_connection_type_visible(ConnectionKindTab::Ssh, false, cx);
+            app.move_connection_type(ConnectionKindTab::Ftp, false, cx);
+            assert!(app.settings_draft_dirty());
+        });
+        assert_eq!(stored(&mut cx), baseline);
+        app.update(&mut cx, |app, cx| {
+            app.cancel_settings(cx);
+            assert_eq!(app.settings.summary().connection_type_layout, baseline);
+            app.begin_settings_draft(cx);
+            app.set_connection_type_visible(ConnectionKindTab::Ssh, false, cx);
+            app.move_connection_type(ConnectionKindTab::Ftp, false, cx);
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+        let saved = stored(&mut cx);
+        assert!(saved.hidden.iter().any(|id| id == "ssh"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            cx.run_until_parked();
+            if app.update(&mut cx, |app, _| !app.settings_draft_dirty()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "settings apply completion"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let catalog = ConnectionKindTab::catalog_ids();
+        let ordered = saved.ordered(&catalog);
+        assert!(
+            ordered.iter().position(|id| *id == "ftp") < ordered.iter().position(|id| *id == "adb")
+        );
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.reset_connection_type_layout(cx);
+            app.cancel_settings(cx);
+            assert_eq!(app.settings.summary().connection_type_layout, saved);
+        });
+        assert_eq!(stored(&mut cx), saved);
+    }
+
     /// Editing only the word separators must still be written when the draft is applied.
     ///
     /// The box used to update memory and nothing else, so no persistence domain was

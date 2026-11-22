@@ -414,6 +414,7 @@
       "interaction_default_encoding": "local",
       "host_key_policy": "local",
       "open_new_connection_after_save": "local",
+      "connection_type_layout": "local",
       "transfer_download_path": "local",
       "transfer_ask_save_location": "local",
       "transfer_duplicate_strategy": "local",

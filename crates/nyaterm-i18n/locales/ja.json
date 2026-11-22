@@ -2979,6 +2979,9 @@
     "unread": "未読"
   },
   "settings": {
+    "connectionTypes": "接続タイプの表示と順序",
+    "connectionTypesDescription": "接続の作成・編集時に表示するタイプを選択します。最初の表示タイプが新規接続の既定になります。少なくとも1つを表示してください。既存の接続は引き続き使用できます。",
+    "connectionTypesReset": "既定に戻す",
     "themeMode": "テーマモード",
     "themeModeManual": "手動で選択",
     "themeModeSystem": "システムに従う",

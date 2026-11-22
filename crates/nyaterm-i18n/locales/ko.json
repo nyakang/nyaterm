@@ -2979,6 +2979,9 @@
     "unread": "읽지 않음"
   },
   "settings": {
+    "connectionTypes": "연결 유형 표시 및 순서",
+    "connectionTypesDescription": "연결 생성 및 편집 시 표시할 유형을 선택합니다. 첫 번째 표시 유형이 새 연결의 기본값이 됩니다. 하나 이상 표시해야 합니다. 기존 연결은 계속 사용할 수 있습니다.",
+    "connectionTypesReset": "기본값 복원",
     "themeMode": "테마 모드",
     "themeModeManual": "수동 선택",
     "themeModeSystem": "시스템 설정 따르기",

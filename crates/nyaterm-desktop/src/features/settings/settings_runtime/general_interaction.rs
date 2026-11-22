@@ -76,6 +76,33 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn set_connection_type_visible(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        visible: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.set_connection_type_visible(kind, visible) {
+            self.save_general_settings(cx);
+        }
+    }
+
+    pub(in crate::features) fn move_connection_type(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        down: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.move_connection_type(kind, down) {
+            self.save_general_settings(cx);
+        }
+    }
+
+    pub(in crate::features) fn reset_connection_type_layout(&mut self, cx: &mut Context<Self>) {
+        self.settings.reset_connection_type_layout();
+        self.save_general_settings(cx);
+    }
+
     pub(in crate::features) fn update_ui_language(
         &mut self,
         language: &str,

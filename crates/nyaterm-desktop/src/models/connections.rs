@@ -35,6 +35,53 @@ impl ConnectionKindTab {
         Self::Ftp,
     ];
 
+    pub(crate) const fn persistence_id(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+            Self::Local => "local",
+            Self::Telnet => "telnet",
+            Self::Serial => "serial",
+            Self::Rdp => "rdp",
+            Self::Vnc => "vnc",
+            Self::Adb => "adb",
+            Self::Ftp => "ftp",
+        }
+    }
+
+    pub(crate) fn display_label(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Local => t!("dialog.localTerminal"),
+            Self::Serial => t!("dialog.serial"),
+            _ => std::borrow::Cow::Borrowed(self.label()),
+        }
+    }
+
+    pub(crate) fn catalog_ids() -> Vec<&'static str> {
+        Self::ALL.into_iter().map(Self::persistence_id).collect()
+    }
+
+    /// Retain the saved connection's type and the active draft even when hidden.
+    pub(crate) fn editor_types(
+        layout: &nyaterm_core::models::settings::connection_type_layout::ConnectionTypeLayout,
+        defaults_mode: bool,
+        retained: &[Self],
+    ) -> Vec<Self> {
+        let catalog = Self::catalog_ids();
+        let visible = layout.visible(&catalog);
+        layout
+            .ordered(&catalog)
+            .into_iter()
+            .filter_map(|id| {
+                Self::ALL
+                    .into_iter()
+                    .find(|kind| kind.persistence_id() == id)
+            })
+            .filter(|kind| {
+                defaults_mode || visible.contains(&kind.persistence_id()) || retained.contains(kind)
+            })
+            .collect()
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Ssh => "SSH",
@@ -93,6 +140,47 @@ impl ConnectionKindTab {
             ConnectionBatchKind::Adb => Self::Adb,
             ConnectionBatchKind::Ftp => Self::Ftp,
         }
+    }
+}
+
+#[cfg(test)]
+mod connection_type_layout_tests {
+    use super::ConnectionKindTab;
+    use nyaterm_core::models::settings::connection_type_layout::ConnectionTypeLayout;
+
+    #[test]
+    fn connection_type_layout_retains_original_and_active_types_without_exposing_other_hidden_types()
+     {
+        let layout: ConnectionTypeLayout = serde_json::from_value(serde_json::json!({
+            "order": ["ftp", "vnc", "ssh", "local"],
+            "hidden": ["ssh", "telnet", "vnc", "adb", "serial"]
+        }))
+        .unwrap();
+        assert_eq!(
+            ConnectionKindTab::editor_types(&layout, false, &[]),
+            [
+                ConnectionKindTab::Ftp,
+                ConnectionKindTab::Local,
+                ConnectionKindTab::Rdp
+            ]
+        );
+        assert_eq!(
+            ConnectionKindTab::editor_types(
+                &layout,
+                false,
+                &[ConnectionKindTab::Vnc, ConnectionKindTab::Ssh]
+            ),
+            [
+                ConnectionKindTab::Ftp,
+                ConnectionKindTab::Vnc,
+                ConnectionKindTab::Ssh,
+                ConnectionKindTab::Local,
+                ConnectionKindTab::Rdp
+            ]
+        );
+        let defaults = ConnectionKindTab::editor_types(&layout, true, &[]);
+        assert_eq!(defaults.len(), ConnectionKindTab::ALL.len());
+        assert_eq!(defaults[0], ConnectionKindTab::Ftp);
     }
 }
 
