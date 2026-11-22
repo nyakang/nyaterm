@@ -353,6 +353,9 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if self.terminal_local_mode_session() == Some(session_id) {
+            self.exit_terminal_local_mode(cx);
+        }
         self.terminal.cancel_serial_reconnect_enter(session_id);
         // A tmux host closing takes its virtual pane sessions with it —
         self.android.close_view(session_id);

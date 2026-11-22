@@ -261,6 +261,12 @@ impl NyaTermApp {
                 return Err(error.to_string());
             }
         };
+        if self
+            .terminal_local_mode_session()
+            .is_some_and(|owner| session_ids.iter().any(|id| id == owner))
+        {
+            self.exit_terminal_local_mode(cx);
+        }
         let terminal = self.terminal.detach_sessions_for_transfer(frames);
         let transfer = self.transfer.detach_sessions_for_transfer(&session_ids);
         let android = self

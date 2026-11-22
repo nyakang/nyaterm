@@ -19,7 +19,24 @@ pub(in crate::features) enum StagedCommandInput {
 
 pub(in crate::features) enum StagedQuickCommandWriteError {
     Backpressure,
+    ReadingMode,
     Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::features) enum TerminalInputBlockReason {
+    ReadingMode,
+}
+
+impl From<TerminalInputBlockReason> for String {
+    fn from(_: TerminalInputBlockReason) -> Self {
+        rust_i18n::t!("terminalCtx.localModeStatus").to_string()
+    }
+}
+impl From<TerminalInputBlockReason> for StagedQuickCommandWriteError {
+    fn from(_: TerminalInputBlockReason) -> Self {
+        Self::ReadingMode
+    }
 }
 
 impl From<String> for StagedQuickCommandWriteError {
@@ -38,6 +55,7 @@ impl StagedQuickCommandWriteError {
     fn message(self) -> String {
         match self {
             Self::Backpressure => "transport input queue is full".into(),
+            Self::ReadingMode => rust_i18n::t!("terminalCtx.localModeStatus").to_string(),
             Self::Failed(message) => message,
         }
     }
@@ -118,11 +136,27 @@ pub(super) fn terminal_should_track_command_suggestion_input(
 }
 
 impl NyaTermApp {
+    /// Authorize application input before changing editing/recording state.
+    /// Protocol responses use their separate transport path and remain enabled.
+    pub(in crate::features) fn ensure_terminal_input_allowed(
+        &self,
+        session_id: &str,
+    ) -> Result<(), TerminalInputBlockReason> {
+        if self.terminal.local_mode.is_active_for(Some(session_id)) {
+            return Err(TerminalInputBlockReason::ReadingMode);
+        }
+        Ok(())
+    }
+
     pub(in crate::features) fn active_terminal_input_blocked(&self) -> bool {
         self.active_workspace_tab()
             .is_some_and(|key| !crate::models::WorkspaceTabId::from_layout_key(&key).is_session())
             || self.session.start_has_active_pending()
             || self.session.start_has_active_failed()
+            || self
+                .terminal
+                .local_mode
+                .is_active_for(self.session.active_id())
     }
 
     pub(in crate::features) fn send_terminal_input(
@@ -301,6 +335,9 @@ impl NyaTermApp {
         track_suggestions: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.active_terminal_input_blocked() {
+            return false;
+        }
         let input_started_at = Instant::now();
         // Key protocol modes are session-local (application cursor/keypad,
         // Kitty keyboard). Re-encode for each sync peer instead of broadcasting
@@ -966,6 +1003,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
             state.suggestion_fill = None;
         }
@@ -980,6 +1018,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
             state.suggestion_fill = None;
         }
@@ -995,6 +1034,7 @@ impl NyaTermApp {
         run_id: u64,
         input: StagedCommandInput,
     ) -> Result<(), StagedQuickCommandWriteError> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if !self.commands.owns_staged_quick_command(session_id, run_id) {
             return Err("quick command cancelled by newer input".into());
         }
@@ -1033,6 +1073,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if self
             .mcp
             .capabilities
@@ -1057,6 +1098,7 @@ impl NyaTermApp {
         bytes: &[u8],
         command: Option<&str>,
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         self.commands.cancel_staged_quick_command(session_id);
         self.write_terminal_input_recorded_impl(session_id, bytes, command)
     }
@@ -1096,6 +1138,7 @@ impl NyaTermApp {
         bytes: &[u8],
         command: Option<&str>,
     ) -> Result<(), StagedQuickCommandWriteError> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if self.security.screen_locked() {
             return Err("screen locked".to_string().into());
         }
@@ -1195,6 +1238,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         self.commands.cancel_staged_quick_command(session_id);
         self.write_session_raw_input_recorded_guarded(session_id, bytes)
     }
@@ -1214,6 +1258,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), StagedQuickCommandWriteError> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if self
             .mcp
             .capabilities
@@ -1266,6 +1311,7 @@ impl NyaTermApp {
         session_id: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         self.commands.cancel_staged_quick_command(session_id);
         if self
             .mcp
@@ -1375,6 +1421,7 @@ impl NyaTermApp {
         recording_bytes: &[u8],
         literal: bool,
     ) -> Result<(), String> {
+        self.ensure_terminal_input_allowed(session_id)?;
         if let Some(state) = self.terminal.editing.sessions.get_mut(session_id) {
             state.suggestion_fill = None;
         }

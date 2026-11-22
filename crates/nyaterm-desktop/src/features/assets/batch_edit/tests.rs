@@ -14,6 +14,13 @@ fn connection(id: &str, kind: &str) -> SavedConnection {
     .unwrap()
 }
 fn started(connections: &[SavedConnection]) -> AssetBatchEditDraft {
+    let mut draft = started_lazy(connections);
+    for (kind, _) in draft.counts().to_vec() {
+        draft.prepare_scope(Some(kind), connections);
+    }
+    draft
+}
+fn started_lazy(connections: &[SavedConnection]) -> AssetBatchEditDraft {
     let ids = connections.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
     let (basis, values, bools) = compute_batch_basis(connections, &ids, None);
     let mut draft = AssetBatchEditDraft::default();
@@ -542,4 +549,176 @@ fn mstsc_only_fields_start_disabled_and_recover_after_backend_change() {
     assert!(draft.bool_value(BatchFieldKey::RdpUseNla));
     draft.set_mode(BatchFieldKey::RdpUseNla, BatchEditMode::Set);
     assert!(draft.build_edits().is_ok());
+}
+
+// Regressions for session isolation and batch patch semantics.
+#[test]
+fn regression_common_scope_keeps_common_fields_editable() {
+    let mut draft = started(&[connection("review", "ssh")]);
+    assert!(draft.set_scope(None));
+    assert_ne!(
+        draft.basis(BatchFieldKey::Description),
+        FieldBasis::Inapplicable
+    );
+    assert_ne!(draft.basis(BatchFieldKey::Group), FieldBasis::Inapplicable);
+}
+
+#[test]
+fn regression_ftp_endpoint_fields_are_available() {
+    let draft = started(&[connection("review", "ftp")]);
+    assert_ne!(draft.basis(BatchFieldKey::Port), FieldBasis::Inapplicable);
+    assert_ne!(
+        draft.basis(BatchFieldKey::Username),
+        FieldBasis::Inapplicable
+    );
+}
+
+#[test]
+fn regression_ftp_account_selection_is_applied() {
+    let mut connection = connection("review", "ftp");
+    let mut draft = started(std::slice::from_ref(&connection));
+    draft.set_value(BatchFieldKey::Account, "review-account".into());
+    let edits = draft.build_edits().unwrap();
+    let report =
+        apply_connection_batch_edit(&mut connection, &edits[&Some(ConnectionBatchKind::Ftp)]);
+    assert_eq!(report.skipped_fields, 0);
+    assert_eq!(
+        connection
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.saved_account_id()),
+        Some("review-account")
+    );
+}
+
+#[test]
+fn regression_reset_port_updates_visible_value() {
+    let mut connection = connection("review", "ssh");
+    if let ConnectionType::Ssh { port, .. } = &mut connection.config {
+        *port = 2222;
+    }
+    let mut draft = started(&[connection]);
+    draft.reset_field(BatchFieldKey::Port);
+    assert_eq!(draft.value(BatchFieldKey::Port), "22");
+}
+
+#[test]
+fn regression_batch_validation_and_summary_invalidate_after_edit_and_undo() {
+    let mut draft = started(&[connection("a", "ssh"), connection("b", "ftp")]);
+    assert!(!draft.valid_for_save());
+    assert_eq!(draft.summary(), (0, 0));
+    draft.set_value(BatchFieldKey::Port, "2222".into());
+    assert!(draft.valid_for_save());
+    assert_eq!(draft.summary(), (1, 1));
+    draft.undo_field(BatchFieldKey::Port);
+    assert!(!draft.valid_for_save());
+    assert_eq!(draft.summary(), (0, 0));
+    assert!(draft.set_scope(None));
+    draft.set_value(BatchFieldKey::Description, "common".into());
+    assert!(draft.valid_for_save());
+    assert_eq!(draft.summary(), (2, 1));
+    assert_eq!(draft.scope_summaries(), vec![(None, 2, 1)]);
+}
+
+#[test]
+fn regression_reset_preserves_unrelated_input_entity_and_uncommitted_text() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::features::text_inputs::TextInputSetup;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::TestAppContext;
+    let dir = TestConfigDir::new("nyaterm-batch-stable-input");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let connections = [connection("a", "ssh")];
+        let ids = vec!["a".to_string()];
+        let (basis, values, bools) = compute_batch_basis(&connections, &ids, None);
+        app.start_workspace
+            .start_asset_batch_edit(ids, basis, values, bools, None);
+        app.start_workspace
+            .asset_batch_mut()
+            .initialize_scopes(&connections);
+        let port = app.text_input(
+            BatchFieldKey::Port.text_input_id(),
+            "2222",
+            TextInputSetup::default(),
+            cx,
+        );
+        let other = app.text_input(
+            BatchFieldKey::Username.text_input_id(),
+            "uncommitted",
+            TextInputSetup::default(),
+            cx,
+        );
+        app.reset_asset_batch_field(BatchFieldKey::Port, cx);
+        assert_eq!(port.read(cx).value(cx), "22");
+        assert_eq!(
+            app.existing_text_input(BatchFieldKey::Username.text_input_id())
+                .unwrap()
+                .entity_id(),
+            other.entity_id()
+        );
+        assert_eq!(other.read(cx).value(cx), "uncommitted");
+        app.undo_asset_batch_field(BatchFieldKey::Port, cx);
+        assert_eq!(other.read(cx).value(cx), "uncommitted");
+    });
+}
+
+#[test]
+#[ignore = "synthetic batch preparation and cached render-state cost probe"]
+fn batch_preparation_cost_probe() {
+    use std::time::Instant;
+    for count in [10, 1000, 10000] {
+        let connections = (0..count)
+            .map(|index| {
+                connection(
+                    &format!("synthetic-{index}"),
+                    ["ssh", "rdp", "ftp"][index % 3],
+                )
+            })
+            .collect::<Vec<_>>();
+        let start = Instant::now();
+        let mut draft = started_lazy(&connections);
+        let prepare_us = start.elapsed().as_micros();
+        draft.set_value(BatchFieldKey::Port, "2222".into());
+        std::hint::black_box(draft.summary());
+        std::hint::black_box(draft.valid_for_save());
+        let start = Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(draft.summary());
+            std::hint::black_box(draft.valid_for_save());
+        }
+        let cached_us = start.elapsed().as_micros();
+        let start = Instant::now();
+        draft.prepare_scope(Some(ConnectionBatchKind::Ftp), &connections);
+        let first_scope_us = start.elapsed().as_micros();
+        let start = Instant::now();
+        for _ in 0..100 {
+            draft.set_scope(Some(ConnectionBatchKind::Ftp));
+            draft.set_scope(Some(ConnectionBatchKind::Ssh));
+        }
+        println!(
+            "batch count={count} prepare_us={prepare_us} cached_state_1000_us={cached_us} first_ftp_scope_us={first_scope_us} switch_scope_200_us={}",
+            start.elapsed().as_micros()
+        );
+    }
+}
+
+#[test]
+fn regression_inactive_batch_scopes_prepare_once_without_losing_common_edits() {
+    let connections = [connection("a", "ssh"), connection("b", "rdp")];
+    let mut draft = started_lazy(&connections);
+    assert!(!draft.set_scope(Some(ConnectionBatchKind::Rdp)));
+    assert!(draft.set_scope(None));
+    draft.set_value(BatchFieldKey::Description, "common edit".into());
+    draft.prepare_scope(Some(ConnectionBatchKind::Rdp), &connections);
+    assert!(draft.set_scope(Some(ConnectionBatchKind::Rdp)));
+    draft.set_value(BatchFieldKey::Port, "3390".into());
+    assert!(draft.set_scope(None));
+    assert_eq!(draft.value(BatchFieldKey::Description), "common edit");
+    draft.prepare_scope(Some(ConnectionBatchKind::Rdp), &connections);
+    assert!(draft.set_scope(Some(ConnectionBatchKind::Rdp)));
+    assert_eq!(draft.value(BatchFieldKey::Port), "3390");
+    assert_eq!(draft.summary(), (2, 2));
 }

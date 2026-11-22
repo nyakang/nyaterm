@@ -7,7 +7,7 @@ use crate::features::NyaTermApp;
 use crate::features::assets::BatchEditMode;
 use gpui::{AnyElement, Context, IntoElement, SharedString, div, prelude::*, px, rgb};
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaInputShell, NyaScrollable, NyaSelect, NyaSwitch, NyaTabItem,
+    NyaButton, NyaButtonVariant, NyaCheckbox, NyaInputShell, NyaScrollable, NyaSelect, NyaTabItem,
     NyaTabs,
 };
 use rust_i18n::t;
@@ -68,8 +68,9 @@ impl NyaTermApp {
             .and_then(|kind| {
                 crate::models::ConnectionKindTab::from_batch_kind(kind).position_in_all()
             })
+            .map(|index| index + 1)
             .unwrap_or(0);
-        let tabs = crate::models::ConnectionKindTab::ALL
+        let mut tabs = crate::models::ConnectionKindTab::ALL
             .into_iter()
             .map(|tab| {
                 let count = draft
@@ -81,14 +82,19 @@ impl NyaTermApp {
                 NyaTabItem::new(format!("{} ({count})", tab.label())).disabled(count == 0)
             })
             .collect::<Vec<_>>();
+        tabs.insert(
+            0,
+            NyaTabItem::new(t!("assets.batch.scopeCommon").to_string()),
+        );
         let kind_control = if viewport.0 >= 760. {
             NyaTabs::new("asset-batch-scopes")
                 .items(tabs)
                 .selected_index(selected)
                 .full_width(true)
                 .on_select(cx.listener(move |this, index: &usize, _, cx| {
-                    let kind = crate::models::ConnectionKindTab::ALL
-                        .get(*index)
+                    let kind = index
+                        .checked_sub(1)
+                        .and_then(|index| crate::models::ConnectionKindTab::ALL.get(index))
                         .map(|tab| tab.batch_kind());
                     this.set_asset_batch_scope(kind, cx);
                 }))
@@ -106,8 +112,19 @@ impl NyaTermApp {
                 )
                 .into_any_element()
         };
-        let (_, changed_fields) = draft.summary();
-        let summary = t!("assets.batch.changeSummary", count = changed_fields).to_string();
+        let (changed_connections, changed_fields) = draft.summary();
+        let summary = t!(
+            "assets.batch.impactSummary",
+            connections = changed_connections,
+            fields = changed_fields
+        )
+        .to_string();
+        let expanded = draft.summary_expanded();
+        let scope_summaries = if expanded {
+            draft.scope_summaries()
+        } else {
+            Vec::new()
+        };
         let counts = asset_batch_kind_counts_label(draft.counts());
         let total = draft.ids().len();
         let error = draft.error().cloned();
@@ -115,13 +132,18 @@ impl NyaTermApp {
         let has_connections =
             !draft.ids().is_empty() && draft.counts().iter().any(|(_, count)| *count > 0);
         let apply_disabled =
-            saving || !has_connections || !draft.has_edits() || draft.build_edits().is_err();
+            saving || !has_connections || !draft.has_edits() || !draft.valid_for_save();
         let scroll_handle = draft.scroll().clone();
         let kind_tab = draft
             .display_kind()
             .map(crate::models::ConnectionKindTab::from_batch_kind)
             .unwrap_or(crate::models::ConnectionKindTab::Ssh);
-        let sections = crate::models::ConnectionEditorSection::for_kind(kind_tab, false);
+        let sections = if draft.display_kind().is_none() {
+            &[crate::models::ConnectionEditorSection::Basic][..]
+        } else {
+            crate::models::ConnectionEditorSection::for_kind(kind_tab, false)
+        };
+        let show_section_nav = sections.len() > 1;
         let active_section = draft
             .section()
             .filter(|section| sections.contains(section))
@@ -190,7 +212,12 @@ impl NyaTermApp {
                         .all(|spec| spec.key.section() == active_section),
                     "batch row table must agree with BatchFieldKey::section"
                 );
-                Some(self.asset_batch_row(row.layout, &visible, cx))
+                let layout = if viewport.0 < 640. {
+                    BatchRowLayout::Stack
+                } else {
+                    row.layout
+                };
+                Some(self.asset_batch_row(layout, &visible, cx))
             })
             .collect::<Vec<_>>();
         let rows = if has_connections {
@@ -243,7 +270,7 @@ impl NyaTermApp {
                     .min_h_0()
                     .min_w_0()
                     .flex()
-                    .child(section_nav)
+                    .when(show_section_nav, |this| this.child(section_nav))
                     .child(
                         div()
                             .relative()
@@ -267,6 +294,31 @@ impl NyaTermApp {
                             ),
                     ),
             )
+            .when(expanded, |this| {
+                this.child(
+                    div()
+                        .id("asset-batch-impact-details")
+                        .h(px((scope_summaries.len() as f32 * 20.).min(96.)))
+                        .flex_none()
+                        .px_3()
+                        .overflow_y_scrollbar()
+                        .children(scope_summaries.into_iter().map(
+                            |(kind, connections, fields)| {
+                                let label = kind
+                                    .map(super::options::batch_kind_label)
+                                    .unwrap_or_else(|| t!("assets.batch.scopeCommon").into());
+                                div().text_xs().child(format!(
+                                    "{label}: {}",
+                                    t!(
+                                        "assets.batch.impactSummary",
+                                        connections = connections,
+                                        fields = fields
+                                    )
+                                ))
+                            },
+                        )),
+                )
+            })
             .when_some(error, |this, error| {
                 this.child(
                     div()
@@ -286,7 +338,20 @@ impl NyaTermApp {
                     .flex_wrap()
                     .items_center()
                     .gap_2()
-                    .child(div().flex_1().min_w(px(160.)).text_xs().child(summary))
+                    .child(
+                        div().flex_1().min_w(px(160.)).child(
+                            NyaButton::new(
+                                "asset-batch-impact",
+                                format!("{} {summary}", if expanded { "▾" } else { "▸" }),
+                            )
+                            .tooltip(summary)
+                            .variant(NyaButtonVariant::Ghost)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.start_workspace.asset_batch_mut().toggle_summary();
+                                cx.notify();
+                            })),
+                        ),
+                    )
                     .child(
                         NyaButton::new("asset-batch-cancel", t!("common.cancel"))
                             .variant(NyaButtonVariant::Secondary)
@@ -367,8 +432,7 @@ impl NyaTermApp {
         debug_assert_eq!(action, field.action(), "batch table action drift");
         let control = if editable {
             if field.is_bool() {
-                // The connection editor uses a switch for every boolean, so the
-                // batch row does too; the first toggle is the edit.
+                // Indeterminate preserves mixed values until the user makes a choice.
                 div()
                     .w_full()
                     .h(px(32.))
@@ -376,11 +440,14 @@ impl NyaTermApp {
                     .items_center()
                     .gap_2()
                     .child(
-                        NyaSwitch::new(SharedString::from(format!(
+                        NyaCheckbox::new(SharedString::from(format!(
                             "asset-batch-bool-{}",
                             field.key()
                         )))
                         .checked(draft.bool_value(field))
+                        .indeterminate(
+                            basis == FieldBasis::Mixed && !draft.current_bool_is_set(field),
+                        )
                         .disabled(draft.saving() || !draft.field_available(field))
                         .on_click(cx.listener(
                             move |this, value: &bool, _, cx| {
@@ -507,7 +574,17 @@ impl NyaTermApp {
                         .into_any_element(),
                     );
                 }
-                BatchFieldAction::None if basis == FieldBasis::Mixed && !dirty => {
+                BatchFieldAction::None
+                    if (basis == FieldBasis::Mixed && !dirty)
+                        || matches!(
+                            field,
+                            BatchFieldKey::Account
+                                | BatchFieldKey::Key
+                                | BatchFieldKey::Otp
+                                | BatchFieldKey::Proxy
+                                | BatchFieldKey::ProxyJump
+                        ) =>
+                {
                     actions.push(
                         action_button(
                             format!("asset-batch-clear-{}", field.key()),

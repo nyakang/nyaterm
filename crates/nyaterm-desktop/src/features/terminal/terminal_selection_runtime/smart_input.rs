@@ -368,6 +368,13 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn commit_terminal_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self
+            .terminal
+            .local_mode
+            .is_active_for(self.session.active_id())
+        {
+            return;
+        }
         if text.is_empty() {
             return;
         }

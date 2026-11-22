@@ -131,6 +131,14 @@ impl NyaTermApp {
             cx.stop_propagation();
             return;
         }
+        if self
+            .terminal
+            .local_mode
+            .is_active_for(self.session.active_id())
+        {
+            cx.stop_propagation();
+            return;
+        }
         if self.handle_credential_suggestion_key(event, cx) {
             cx.stop_propagation();
             return;
@@ -1142,6 +1150,9 @@ impl NyaTermApp {
                                             .absolute()
                                             .right(px(8.))
                                             .top(px(4.))
+                                            .cursor_pointer()
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                            .on_click(cx.listener(|this, _, _, cx| this.exit_terminal_local_mode(cx)))
                                             .rounded_md()
                                             .bg(rgba((palette.link << 8) | 0xd9))
                                             .px_2()

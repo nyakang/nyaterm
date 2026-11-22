@@ -8,8 +8,8 @@ use crate::features::NyaTermApp;
 use crate::features::terminal::terminal_surface::terminal_snapshot_absolute_range;
 use gpui::{Context, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
 use nyaterm_terminal::local_mode::{
-    LocalModeMotion, LocalModeViewport, local_mode_insertion_col, local_mode_scroll_delta,
-    move_local_mode_cursor,
+    LocalModeMotion, LocalModeViewport, local_mode_cell_boundary, local_mode_insertion_col,
+    local_mode_scroll_delta, move_local_mode_cursor,
 };
 use nyaterm_terminal::selection::{TerminalBufferCellPos, TerminalSelection};
 use rust_i18n::t;
@@ -26,6 +26,10 @@ fn row_content_end(row: &nyaterm_terminal::TerminalSnapshotRow) -> usize {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn terminal_local_mode_session(&self) -> Option<&str> {
+        self.terminal.local_mode.session_id.as_deref()
+    }
+
     pub(in crate::features) fn toggle_terminal_local_mode(&mut self, cx: &mut Context<Self>) {
         let session_id = self.session.active_id_owned();
         if self
@@ -43,6 +47,8 @@ impl NyaTermApp {
     }
 
     fn enter_terminal_local_mode(&mut self, session_id: String, cx: &mut Context<Self>) {
+        self.exit_terminal_local_mode(cx);
+        self.clear_terminal_composition(cx);
         let offset = self
             .terminal
             .view
@@ -74,19 +80,21 @@ impl NyaTermApp {
                 TerminalBufferCellPos::new(last_line, col)
             });
 
-        // Mouse selection head seeds the cursor, but Local Mode starts with a
-        // clean selection so the first Shift+motion defines a fresh anchor.
-        self.terminal.selection.selection = None;
-        self.terminal.selection.click_anchor = None;
-        self.terminal.selection.session_id = None;
-        self.terminal.selection.text.invalidate();
-        self.terminal.selection.source_history = None;
         self.terminal.selection.dragging = false;
         self.notify_terminal_selection_visual_only(&session_id, cx);
 
         self.terminal.local_mode.session_id = Some(session_id.clone());
         self.terminal.local_mode.cursor = cursor;
-        self.terminal.local_mode.anchor = None;
+        self.terminal.local_mode.history = snapshot.history;
+        self.terminal.local_mode.preferred_col = cursor.col;
+        self.terminal.local_mode.pending_end = false;
+        self.terminal.local_mode.anchor = self
+            .terminal
+            .selection
+            .selection
+            .filter(|_| self.terminal.selection.session_id.as_deref() == Some(session_id.as_str()))
+            .map(|selection| selection.anchor.position);
+        self.stop_terminal_selection_autoscroll();
         if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
             view.local_mode_scroll_locked = true;
         }
@@ -100,6 +108,8 @@ impl NyaTermApp {
             return;
         };
         self.terminal.local_mode.anchor = None;
+        self.terminal.local_mode.pending_end = false;
+        self.stop_terminal_selection_autoscroll();
         self.terminal.selection.dragging = false;
         self.terminal.selection.drag_pointer_position = None;
         if let Some(view) = self.terminal.view.views.get_mut(&session_id) {
@@ -118,6 +128,10 @@ impl NyaTermApp {
         let Some(session_id) = self.terminal.local_mode.session_id.clone() else {
             return false;
         };
+        if self.session.active_id() != Some(session_id.as_str()) {
+            self.exit_terminal_local_mode(cx);
+            return false;
+        }
         let keystroke = &event.keystroke;
         let key = keystroke.key.as_str();
         let shift = keystroke.modifiers.shift;
@@ -127,7 +141,7 @@ impl NyaTermApp {
         let function = keystroke.modifiers.function;
 
         if !control && !alt && !platform && !function {
-            if key == "escape" || key == "i" {
+            if key == "escape" {
                 self.exit_terminal_local_mode(cx);
                 return true;
             }
@@ -188,16 +202,29 @@ impl NyaTermApp {
             cols: snapshot.cols,
         };
         let content_end = |line: usize| {
-            let row = line.saturating_sub(absolute_start);
+            let row = line.checked_sub(absolute_start);
             // Lines outside the current snapshot (e.g. a whole page away) have
             // no measurable content end yet. Return the full width so the
             // motion keeps the caret's column; it is clamped against the real
             // content end once `reveal` has scrolled the target line on screen.
-            snapshot.row(row).map_or(snapshot.cols, row_content_end)
+            row.and_then(|row| snapshot.row(row))
+                .map_or(snapshot.cols, row_content_end)
         };
 
         let current = self.terminal.local_mode.cursor;
-        let moved = move_local_mode_cursor(current, motion, viewport, content_end);
+        let vertical = matches!(
+            motion,
+            LocalModeMotion::Up
+                | LocalModeMotion::Down
+                | LocalModeMotion::PageUp(_)
+                | LocalModeMotion::PageDown(_)
+        );
+        let mut moved = move_local_mode_cursor(current, motion, viewport, content_end);
+        if vertical {
+            moved.col = self.terminal.local_mode.preferred_col.min(snapshot.cols);
+        }
+        self.terminal.local_mode.pending_end =
+            matches!(motion, LocalModeMotion::End | LocalModeMotion::BufferEnd);
 
         // Page motions are full-screen navigations: scroll the viewport by the
         // exact number of lines the caret moved so the display follows the page
@@ -222,7 +249,13 @@ impl NyaTermApp {
         let next_snapshot = self.terminal_snapshot_for_session(Some(&session_id), next_offset);
         let (next_start, _) = terminal_snapshot_absolute_range(&next_snapshot);
         let next_row = moved.line.saturating_sub(next_start);
-        let next_content_end = next_snapshot.row(next_row).map_or(1, row_content_end);
+        let target_row = (moved.line >= next_start)
+            .then(|| next_snapshot.row(next_row))
+            .flatten();
+        let next_content_end = target_row.map_or(moved.col, row_content_end);
+        if target_row.is_some() {
+            self.terminal.local_mode.pending_end = false;
+        }
         // End/BufferEnd may target a line outside the pre-scroll snapshot, so
         // their column was clamped against a placeholder. Recompute it against
         // the snapshot that now contains the target line.
@@ -231,6 +264,13 @@ impl NyaTermApp {
             _ => moved.col.min(next_content_end),
         }
         .min(next_snapshot.cols);
+        let next_col = target_row.map_or(next_col, |row| {
+            local_mode_cell_boundary(
+                &row.cells,
+                next_col,
+                matches!(motion, LocalModeMotion::Right),
+            )
+        });
         let next = TerminalBufferCellPos::new(moved.line, next_col);
 
         if shift {
@@ -256,6 +296,9 @@ impl NyaTermApp {
             self.clear_terminal_selection(cx);
         }
 
+        if !vertical {
+            self.terminal.local_mode.preferred_col = next.col;
+        }
         self.terminal.local_mode.cursor = next;
         self.sync_terminal_local_mode_cursor(&session_id, cx);
         true
@@ -279,6 +322,94 @@ impl NyaTermApp {
         if scroll_delta != 0 {
             self.scroll_terminal_by_for_session(Some(session_id), scroll_delta, cx);
         }
+    }
+
+    pub(in crate::features) fn refresh_terminal_local_mode(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.terminal.local_mode.is_active_for(Some(session_id)) {
+            return;
+        }
+        let Some(view) = self.terminal.view.views.get(session_id) else {
+            return;
+        };
+        let history = view.history_state();
+        let offset = view.scroll_offset;
+        let Some(change) = history.changes_since(self.terminal.local_mode.history) else {
+            let snapshot = self.terminal_snapshot_for_session(Some(session_id), offset);
+            let (start, end) = terminal_snapshot_absolute_range(&snapshot);
+            self.terminal.local_mode.history = history;
+            self.terminal.local_mode.cursor.line = self
+                .terminal
+                .local_mode
+                .cursor
+                .line
+                .clamp(start, end.saturating_sub(1).max(start));
+            self.terminal.local_mode.cursor.col =
+                self.terminal.local_mode.cursor.col.min(snapshot.cols);
+            self.terminal.local_mode.anchor = None;
+            self.terminal.local_mode.pending_end = false;
+            self.terminal.selection.selection = None;
+            self.terminal.selection.text.invalidate();
+            self.set_terminal_status_if_changed(t!("terminalCtx.readHistoryChanged").to_string());
+            cx.notify();
+            self.sync_terminal_local_mode_cursor(session_id, cx);
+            return;
+        };
+        let position_evicted = change.evicted > self.terminal.local_mode.cursor.line
+            || self
+                .terminal
+                .local_mode
+                .anchor
+                .is_some_and(|anchor| change.evicted > anchor.line);
+        if position_evicted {
+            self.set_terminal_status_if_changed(t!("terminalCtx.readHistoryChanged").to_string());
+            cx.notify();
+        }
+        self.terminal.local_mode.history = history;
+        self.terminal.local_mode.cursor.line = self
+            .terminal
+            .local_mode
+            .cursor
+            .line
+            .saturating_sub(change.evicted);
+        if let Some(anchor) = self.terminal.local_mode.anchor.as_mut() {
+            anchor.line = anchor.line.saturating_sub(change.evicted);
+        }
+        let snapshot = self.terminal_snapshot_for_session(Some(session_id), offset);
+        if snapshot.history != history {
+            // A cached frame may still use coordinates from before eviction or reflow.
+            // Keep the navigation intent until a frame from the current history arrives.
+            self.sync_terminal_local_mode_cursor(session_id, cx);
+            return;
+        }
+        let (start, _) = terminal_snapshot_absolute_range(&snapshot);
+        let cursor = self.terminal.local_mode.cursor;
+        if cursor.line >= start
+            && let Some(row) = snapshot.row(cursor.line - start)
+        {
+            let end = row_content_end(row);
+            let col = if self.terminal.local_mode.pending_end {
+                end
+            } else {
+                cursor.col.min(end)
+            };
+            self.terminal.local_mode.pending_end = false;
+            self.terminal.local_mode.cursor.col = local_mode_cell_boundary(&row.cells, col, false);
+            if let Some(anchor) = self.terminal.local_mode.anchor
+                && self.terminal.selection.selection.is_some()
+            {
+                let next = TerminalSelection::from_range(anchor, self.terminal.local_mode.cursor);
+                if self.terminal.selection.selection != Some(next) {
+                    self.terminal.selection.selection = Some(next);
+                    self.terminal.selection.text.invalidate_preserving_copy();
+                }
+                self.terminal.selection.source_history = Some(history);
+            }
+        }
+        self.sync_terminal_local_mode_cursor(session_id, cx);
     }
 
     fn sync_terminal_local_mode_cursor(&mut self, session_id: &str, cx: &mut Context<Self>) {
@@ -323,10 +454,15 @@ impl NyaTermApp {
                     .map(|index| index + (line.cells[index].width.max(1) as usize))
             })
             .unwrap_or(0);
-        Some(TerminalBufferCellPos::new(
-            endpoint.position.line,
-            local_mode_insertion_col(endpoint.position.col, endpoint.side, content_end),
-        ))
+        let col = local_mode_insertion_col(endpoint.position.col, endpoint.side, content_end);
+        let col = geometry.snapshot.row(row).map_or(col, |line| {
+            local_mode_cell_boundary(
+                &line.cells,
+                col,
+                endpoint.side == nyaterm_terminal::selection::TerminalCellSide::Right,
+            )
+        });
+        Some(TerminalBufferCellPos::new(endpoint.position.line, col))
     }
 
     fn apply_local_mode_selection(
@@ -389,6 +525,8 @@ impl NyaTermApp {
             head
         };
         self.terminal.local_mode.cursor = head;
+        self.terminal.local_mode.preferred_col = head.col;
+        self.terminal.local_mode.pending_end = false;
         self.terminal.local_mode.anchor = Some(anchor);
         self.clear_terminal_selection(cx);
         self.terminal.selection.session_id = Some(active_session.clone());
@@ -427,6 +565,8 @@ impl NyaTermApp {
             return true;
         }
         self.terminal.local_mode.cursor = head;
+        self.terminal.local_mode.preferred_col = head.col;
+        self.terminal.local_mode.pending_end = false;
         self.apply_local_mode_selection(&active_session, anchor, head, cx);
         self.sync_terminal_local_mode_cursor(&active_session, cx);
         true
@@ -452,5 +592,110 @@ impl NyaTermApp {
         }
         cx.notify();
         true
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+    use gpui::{AppContext as _, KeyDownEvent, Keystroke, Modifiers, TestAppContext};
+
+    #[test]
+    fn regression_reading_mode_blocks_composition_and_preserves_protection_on_history_reset() {
+        use crate::features::test_support::session_focus_test_window;
+        use gpui::EntityInputHandler as _;
+        let dir = TestConfigDir::new("nyaterm-local-mode-ime");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            app.enter_terminal_local_mode("a".into(), cx)
+        });
+        let vcx = session_focus_test_window(&mut cx, &app);
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.replace_and_mark_text_in_range(None, "中文", None, window, cx);
+                assert!(!app.terminal.input.ime.is_active_for(Some("a")));
+                app.replace_text_in_range(None, "中文", window, cx);
+                assert!(app.selected_text_range(false, window, cx).is_none());
+                assert!(
+                    app.write_session_wire_input_recorded_as("a", b"paste", b"paste")
+                        .is_err()
+                );
+                assert!(
+                    app.write_automated_terminal_input("a", b"command", None)
+                        .is_err()
+                );
+                app.terminal.local_mode.history.epoch =
+                    app.terminal.local_mode.history.epoch.wrapping_add(1);
+                app.refresh_terminal_local_mode("a", cx);
+                assert_eq!(app.terminal_local_mode_session(), Some("a"));
+                assert!(app.ensure_terminal_input_allowed("a").is_err());
+                app.exit_terminal_local_mode(cx);
+                assert!(app.ensure_terminal_input_allowed("a").is_ok());
+            })
+        });
+    }
+
+    #[test]
+    fn regression_session_activation_exits_previous_local_mode() {
+        let dir = TestConfigDir::new("nyaterm-review-1342-switch");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        cx.update_entity(&app, |app, cx| {
+            app.terminal
+                .seed_session_view("b".into(), String::new(), "UTF-8");
+            app.enter_terminal_local_mode("a".into(), cx);
+            app.activate_session_id("b", cx);
+            assert!(app.terminal.local_mode.session_id.is_none());
+            assert!(!app.terminal.view.views["a"].local_mode_scroll_locked);
+        });
+    }
+
+    #[test]
+    fn regression_unbound_control_key_cannot_reach_input_boundary() {
+        let dir = TestConfigDir::new("nyaterm-review-1342-control");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        cx.update_entity(&app, |app, cx| {
+            app.enter_terminal_local_mode("a".into(), cx);
+            let event = KeyDownEvent {
+                keystroke: Keystroke {
+                    modifiers: Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                    key: "d".into(),
+                    key_char: Some("d".into()),
+                },
+                is_held: false,
+                prefer_character_input: false,
+            };
+            assert!(!app.handle_terminal_local_mode_key(&event, cx));
+            assert!(app.ensure_terminal_input_allowed("a").is_err());
+            assert!(app.write_session_input_recorded("a", b"test").is_err());
+            assert!(app.write_session_raw_input_recorded("a", b"\x04").is_err());
+            assert!(app.write_session_sensitive_input("a", b"test").is_err());
+        });
+    }
+
+    #[test]
+    fn regression_reentering_on_another_session_releases_previous_scroll_lock() {
+        let dir = TestConfigDir::new("nyaterm-review-1342-lock");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        cx.update_entity(&app, |app, cx| {
+            app.terminal
+                .seed_session_view("b".into(), String::new(), "UTF-8");
+            app.enter_terminal_local_mode("a".into(), cx);
+            app.activate_session_id("b", cx);
+            app.toggle_terminal_local_mode(cx);
+            app.exit_terminal_local_mode(cx);
+            assert!(!app.terminal.view.views["a"].local_mode_scroll_locked);
+        });
     }
 }

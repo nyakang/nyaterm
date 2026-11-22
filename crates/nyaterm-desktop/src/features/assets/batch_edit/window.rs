@@ -209,3 +209,79 @@ fn open_asset_batch_edit_window_now_from_app(app: Entity<NyaTermApp>, cx: &mut A
         }
     });
 }
+
+#[cfg(test)]
+mod native_probe {
+    use super::AssetBatchEditWindow;
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::features::assets::batch_edit::basis::compute_batch_basis;
+    use crate::features::assets::batch_edit::fields::BatchFieldKey;
+    use crate::features::view_widgets::ChildWindowSpec;
+    use crate::test_support::TestConfigDir;
+    use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
+    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "native batch editor visual fixture; run alone with NYATERM_EDITOR_PROBE_OUTPUT"]
+    fn batch_editor_native_probe() {
+        crate::preload_i18n().unwrap();
+        let output = std::env::var("NYATERM_EDITOR_PROBE_OUTPUT").unwrap();
+        let root = TestConfigDir::new("nyaterm-batch-ui-probe");
+        let path = root.path().to_path_buf();
+        gpui_platform::application().run(move |cx: &mut App| {
+            let runtime = AppRuntime::from_parts_for_test(RuntimeMode::Portable, path.clone(), path.join("config"), path.join("logs"), path.join("cache"), None);
+            let stores = UiStoreHandles { startup_restore: cx.new(|_| StartupRestoreStore::default()), overlays: cx.new(|_| OverlayStore::default()) };
+            let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+            app.update(cx, |app, cx| {
+                let connections = (0..10).map(|index| serde_json::from_value(serde_json::json!({"id": format!("synthetic-{index}"), "name": format!("Synthetic {index}"), "type": if index % 2 == 0 { "ssh" } else { "ftp" }, "host": "example.invalid", "username": "fixture"})).unwrap()).collect::<Vec<nyaterm_core::SavedConnection>>();
+                let ids = connections.iter().map(|connection| connection.id.clone()).collect::<Vec<_>>();
+                let (basis, values, bools) = compute_batch_basis(&connections, &ids, None);
+                app.start_workspace.start_asset_batch_edit(ids, basis, values, bools, Some(cx.focus_handle()));
+                app.start_workspace.asset_batch_mut().initialize_scopes(&connections);
+                app.connection_state.replace_loaded(connections, Vec::new());
+                app.set_asset_batch_scope(None, cx);
+                app.start_workspace.asset_batch_mut().set_value(BatchFieldKey::Description, "Synthetic description".into());
+                if let Some(input) = app.existing_text_input(BatchFieldKey::Description.text_input_id()) {
+                    input.update(cx, |input, cx| input.set_content_silent("Synthetic description", cx));
+                }
+                app.start_workspace.asset_batch_mut().toggle_summary();
+                app.sync_component_theme(cx);
+            });
+            cx.spawn(async move |cx| {
+                for (width, height, font_size) in [(420., 480., 12), (420., 480., 24), (900., 680., 24)] {
+                    let window = cx.update(|cx| {
+                        app.update(cx, |app, _| {
+                            let mut summary = app.settings.summary().clone();
+                            summary.ui_font_size = font_size;
+                            app.settings.replace_summary(summary);
+                        });
+                        let app = app.clone();
+                        cx.open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(width), px(height)), cx))), show: true, focus: false, ..Default::default() }, move |window, cx| {
+                            let editor = cx.new(|cx| AssetBatchEditWindow::new(app, ChildWindowSpec::modal_editor("Fixture".into(), width, height).chrome(), cx));
+                            cx.new(|cx| nyaterm_ui::nya_root(editor, window, cx))
+                        }).unwrap()
+                    });
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                    let image = cx.update_window(window.into(), |_, window, _| window.render_to_image().unwrap()).unwrap();
+                    let file = std::path::Path::new(&output).join(format!("batch-{width}x{height}-font{font_size}.png"));
+                    cx.background_executor().spawn(async move { image.save(file).unwrap(); }).await;
+                    cx.update_window(window.into(), |_, window, cx| {
+                        window.dispatch_event(gpui::PlatformInput::Scroll(gpui::ScrollEvent {
+                            position: gpui::point(px(width - 40.), px(240.)),
+                            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1400.))),
+                            ..Default::default()
+                        }), cx);
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(150)).await;
+                    let image = cx.update_window(window.into(), |_, window, _| window.render_to_image().unwrap()).unwrap();
+                    let file = std::path::Path::new(&output).join(format!("batch-{width}x{height}-font{font_size}-scrolled.png"));
+                    cx.background_executor().spawn(async move { image.save(file).unwrap(); }).await;
+                }
+                cx.update(|cx| cx.quit());
+            }).detach();
+        });
+        drop(root);
+    }
+}

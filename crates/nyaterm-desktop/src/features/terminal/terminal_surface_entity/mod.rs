@@ -392,6 +392,8 @@ pub(in crate::features) struct TerminalSurface {
     retained_row_origin: usize,
     retained_rows: BTreeMap<usize, TerminalRetainedRow>,
     retained_row_estimated_bytes: usize,
+    global_keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
+    resolved_keyword_theme: Option<bool>,
     keyword_rules: Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
     /// Session-scoped highlight rules are stored as raw rules (both theme
     /// colours) and overlaid onto `keyword_rules` for this surface only.
@@ -490,7 +492,9 @@ impl TerminalSurface {
             retained_row_origin: 0,
             retained_rows: BTreeMap::new(),
             retained_row_estimated_bytes: 0,
-            keyword_rules: Arc::new(Vec::new()),
+            global_keyword_rules: empty_terminal_keyword_rules(),
+            resolved_keyword_theme: None,
+            keyword_rules: empty_terminal_keyword_rules(),
             session_keyword_rules: Vec::new(),
             line_roles: true,
             keyword_highlights: None,
@@ -2294,14 +2298,19 @@ impl TerminalSurface {
 
     /// Overlay this surface's session rules on the globally resolved rules.
     fn keyword_rules_with_session(
-        &self,
+        &mut self,
         global: &Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>>,
     ) -> Arc<Vec<nyaterm_core::ResolvedKeywordHighlightRule>> {
-        terminal_keyword_rules_with_session(
-            global,
-            &self.session_keyword_rules,
-            self.keyword_highlight_theme_is_dark(),
-        )
+        let is_dark = self.keyword_highlight_theme_is_dark();
+        if self.resolved_keyword_theme == Some(is_dark)
+            && terminal_keyword_rule_sets_equal(&self.global_keyword_rules, global)
+        {
+            self.global_keyword_rules = Arc::clone(global);
+            return Arc::clone(&self.keyword_rules);
+        }
+        self.global_keyword_rules = Arc::clone(global);
+        self.resolved_keyword_theme = Some(is_dark);
+        terminal_keyword_rules_with_session(global, &self.session_keyword_rules, is_dark)
     }
 
     /// Replace the session-scoped highlight rules for this surface and
@@ -2315,7 +2324,9 @@ impl TerminalSurface {
             return;
         }
         self.session_keyword_rules = rules;
-        let merged = self.keyword_rules_with_session(&self.keyword_rules);
+        self.resolved_keyword_theme = None;
+        let global = Arc::clone(&self.global_keyword_rules);
+        let merged = self.keyword_rules_with_session(&global);
         self.keyword_rules = merged;
         self.invalidate_keyword_highlight_config();
         self.schedule_keyword_highlights(false, self.keyword_highlight_output_pressure, cx);

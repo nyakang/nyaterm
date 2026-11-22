@@ -120,6 +120,12 @@ fn endpoint_values(config: &ConnectionType) -> Option<(&str, u16, &str)> {
             username,
             ..
         }
+        | ConnectionType::Ftp {
+            host,
+            port,
+            username,
+            ..
+        }
         | ConnectionType::Vnc {
             host,
             port,
@@ -978,13 +984,13 @@ type BatchBasis = (
 );
 
 pub(super) fn compute_rdp_field_basis(
-    connections: &[SavedConnection],
+    by_id: &HashMap<&str, &SavedConnection>,
     targets: &[(String, ConnectionBatchKind)],
     field: BatchFieldKey,
     edit: &ConnectionBatchEdit,
 ) -> (FieldBasis, Option<String>, BatchFieldApplicability) {
-    let (basis, applicability) = domain_basis::rdp_field_basis(
-        connections,
+    let (basis, applicability) = domain_basis::rdp_field_basis_indexed(
+        by_id,
         targets,
         field.rdp_group().expect("RDP field"),
         edit,
@@ -1031,6 +1037,14 @@ pub(super) fn compute_batch_basis(
         .map(|connection| (connection.id.as_str(), connection))
         .collect();
 
+    compute_batch_basis_indexed(&by_id, ids, target)
+}
+
+pub(super) fn compute_batch_basis_indexed(
+    by_id: &HashMap<&str, &SavedConnection>,
+    ids: &[String],
+    target: Option<ConnectionBatchKind>,
+) -> BatchBasis {
     let mut basis = HashMap::new();
     let mut values = HashMap::new();
     let mut bool_values = HashMap::new();

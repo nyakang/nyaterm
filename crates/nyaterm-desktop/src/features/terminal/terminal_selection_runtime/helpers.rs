@@ -130,6 +130,13 @@ impl EntityInputHandler for NyaTermApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self
+            .terminal
+            .local_mode
+            .is_active_for(self.session.active_id())
+        {
+            return None;
+        }
         // GPUI's IME contract needs a valid insertion range even when there is
         // no marked text. This is also what lets CJK candidate windows anchor to
         // the terminal cursor instead of treating the surface as non-editable.
@@ -190,6 +197,11 @@ impl EntityInputHandler for NyaTermApp {
         let Some(session_id) = self.session.active_id_owned() else {
             return;
         };
+        if self.terminal.local_mode.is_active_for(Some(&session_id)) {
+            self.clear_terminal_composition(cx);
+            window.notify_text_input_changed(&self.terminal.input.focus);
+            return;
+        }
         self.terminal
             .input
             .ime

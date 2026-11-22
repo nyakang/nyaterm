@@ -322,6 +322,12 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self
+            .terminal_local_mode_session()
+            .is_some_and(|owner| owner != session_id)
+        {
+            self.exit_terminal_local_mode(cx);
+        }
         self.ensure_sftp_session_view(session_id, cx);
         if let Some(view) = self.file_manager.workspace(&format!("sftp-{session_id}")) {
             view.update(cx, |view, cx| view.request_focus(cx));

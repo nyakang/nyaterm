@@ -108,6 +108,20 @@ pub fn move_local_mode_cursor(
     cursor
 }
 
+/// Snap insertion points away from the continuation cell of a wide glyph.
+pub fn local_mode_cell_boundary(cells: &[crate::RenderCell], col: usize, forward: bool) -> usize {
+    let col = col.min(cells.len());
+    if col > 0 && cells.get(col).is_some_and(|cell| cell.width == 0) && cells[col - 1].width == 2 {
+        if forward {
+            (col + 1).min(cells.len())
+        } else {
+            col - 1
+        }
+    } else {
+        col
+    }
+}
+
 /// Mouse hit to text-editor style caret column. `content_end` is the column
 /// just after the last non-empty cell, so clicking the blank area to the right
 /// of a line always snaps back to the line's real end.
@@ -156,7 +170,11 @@ pub fn local_mode_scroll_delta(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        LocalModeMotion, LocalModeViewport, local_mode_insertion_col, local_mode_scroll_delta,
+        move_local_mode_cursor,
+    };
+    use crate::selection::TerminalBufferCellPos;
 
     const VIEWPORT: LocalModeViewport = LocalModeViewport {
         first_line: 10,
@@ -283,5 +301,21 @@ mod tests {
         // Caret inside the window: no scroll.
         assert_eq!(local_mode_scroll_delta(None, 115, 100, 130), 0);
         assert_eq!(local_mode_scroll_delta(None, 100, 100, 130), 0);
+    }
+}
+
+#[cfg(test)]
+mod cell_boundary_tests {
+    use super::local_mode_cell_boundary;
+    use crate::TerminalScreen;
+    #[test]
+    fn local_reader_skips_wide_character_continuation_cells() {
+        let mut screen = TerminalScreen::new(10, 2);
+        screen.advance("中a".as_bytes());
+        let snapshot = screen.viewport_snapshot(0);
+        let row = snapshot.row(0).unwrap();
+        assert_eq!(local_mode_cell_boundary(&row.cells, 1, true), 2);
+        assert_eq!(local_mode_cell_boundary(&row.cells, 1, false), 0);
+        assert_eq!(local_mode_cell_boundary(&row.cells, 2, true), 2);
     }
 }

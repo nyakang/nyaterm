@@ -1173,7 +1173,11 @@ impl NyaTermApp {
                 wide,
                 navigation_width,
                 protocol_select,
-                validation_error,
+                validation_error: editor
+                    .error
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .or(validation_error),
             },
             cx,
         );

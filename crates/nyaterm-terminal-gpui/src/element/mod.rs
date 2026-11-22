@@ -2439,7 +2439,7 @@ impl Element for NyaTerminalElement {
                 {
                     (position.line - absolute_start, position.col)
                 } else {
-                    (self.snapshot.cursor.row, self.snapshot.cursor.col)
+                    (usize::MAX, 0)
                 }
             },
         );
@@ -2470,7 +2470,8 @@ impl Element for NyaTerminalElement {
         };
         if (self.show_cursor || self.local_mode_cursor.is_some())
             && cursor_row < self.snapshot.row_count()
-            && cursor_col < self.snapshot.cols.max(1)
+            && (cursor_col < self.snapshot.cols.max(1)
+                || (self.local_mode_cursor.is_some() && cursor_col == self.snapshot.cols))
             && cursor_in_view
         {
             let left = (f32::from(cursor_paint_geometry.bounds.left())
@@ -2487,11 +2488,22 @@ impl Element for NyaTerminalElement {
                 + cursor_paint_geometry.visual_y_offset
                 + (cursor_row + 1) as f32 * cell_h)
                 .ceil();
-            let x = px(left);
+            let x = px(
+                if self.local_mode_cursor.is_some() && cursor_col == self.snapshot.cols {
+                    left - 2.
+                } else {
+                    left
+                },
+            );
             let y = px(top);
             let width = (right - left).max(1.);
             let height = (bottom - top).max(1.);
-            let cursor_bounds = match self.cursor_style.as_str() {
+            let style = if self.local_mode_cursor.is_some() {
+                "bar"
+            } else {
+                self.cursor_style.as_str()
+            };
+            let cursor_bounds = match style {
                 "bar" => Bounds::new(point(x, y), size(px(2.), px(height))),
                 "underline" => {
                     Bounds::new(point(x, px((bottom - 2.).floor())), size(px(width), px(2.)))
@@ -2499,8 +2511,8 @@ impl Element for NyaTerminalElement {
                 _ => Bounds::new(point(x, y), size(px(width), px(height))),
             };
             plan.cursor_background = Some(fill(cursor_bounds, rgb(self.palette.terminal_cursor)));
-            if self.cursor_style.as_str() != "bar"
-                && self.cursor_style.as_str() != "underline"
+            if style != "bar"
+                && style != "underline"
                 && !terminal_cursor_cell_hidden(&self.snapshot)
             {
                 let cursor_line = self.snapshot.line(cursor_row).unwrap_or("");

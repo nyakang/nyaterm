@@ -52,6 +52,9 @@ pub(super) struct TerminalLocalModeState {
     pub(super) session_id: Option<String>,
     pub(super) cursor: TerminalBufferCellPos,
     pub(super) anchor: Option<TerminalBufferCellPos>,
+    pub(super) history: nyaterm_terminal::TerminalHistoryState,
+    pub(super) preferred_col: usize,
+    pub(super) pending_end: bool,
 }
 
 impl TerminalLocalModeState {
@@ -544,6 +547,9 @@ impl TerminalFeatureState {
                 session_id: None,
                 cursor: TerminalBufferCellPos::new(0, 0),
                 anchor: None,
+                history: Default::default(),
+                preferred_col: 0,
+                pending_end: false,
             },
         }
     }

@@ -52,7 +52,7 @@ impl NyaTermApp {
     /// Open the editor for the current asset selection. Creating the widget
     /// entities here, in an event handler, keeps the render path read-only.
     ///
-    /// Mixed selections start in the common scope; protocol tabs keep their original targets.
+    /// Protocol and common scopes retain their original targets.
     pub(in crate::features) fn open_asset_batch_edit(
         &mut self,
         _window: &mut Window,
@@ -97,6 +97,9 @@ impl NyaTermApp {
         kind: Option<ConnectionBatchKind>,
         cx: &mut Context<Self>,
     ) {
+        self.start_workspace
+            .asset_batch_mut()
+            .prepare_scope(kind, self.connection_state.connections());
         if self.start_workspace.asset_batch_mut().set_scope(kind) {
             self.reseed_asset_batch_inputs(cx);
         }
@@ -130,7 +133,11 @@ impl NyaTermApp {
                 .unwrap_or(sections[0]);
             (kind_tab, current)
         };
-        let sections = crate::models::ConnectionEditorSection::for_kind(kind_tab, false);
+        let sections = if self.start_workspace.asset_batch().display_kind().is_none() {
+            &[crate::models::ConnectionEditorSection::Basic][..]
+        } else {
+            crate::models::ConnectionEditorSection::for_kind(kind_tab, false)
+        };
         let index = sections
             .iter()
             .position(|section| *section == current)
@@ -164,14 +171,31 @@ impl NyaTermApp {
             window.focus(&focus, cx);
         }
     }
-    fn reseed_asset_batch_inputs(&mut self, cx: &mut Context<Self>) {
-        self.start_workspace
-            .asset_batch_mut()
-            .refresh_rdp_basis(self.connection_state.connections());
-        if let Some(input) = self.existing_text_input(BatchFieldKey::Password.text_input_id()) {
-            input.update(cx, |state, cx| state.discard_content(cx));
+    fn refresh_asset_batch_field_input(&mut self, field: BatchFieldKey, cx: &mut Context<Self>) {
+        let draft = self.start_workspace.asset_batch();
+        let value = if field == BatchFieldKey::Password {
+            draft.replacement_password()
+        } else {
+            draft.value(field)
         }
-        self.forget_text_inputs(ASSET_BATCH_TEXT_PREFIX);
+        .to_string();
+        let selected = select_initial_value(draft, field);
+        if let Some(input) = self.existing_text_input(field.text_input_id()) {
+            input.update(cx, |state, cx| {
+                if state.value(cx) != value {
+                    state.set_content_silent(&value, cx);
+                }
+            });
+        }
+        if let Some(select) = self.selects.field(&field.select_id()) {
+            select.update(cx, |state, cx| state.set_selected_value(selected, cx));
+        }
+    }
+
+    fn reseed_asset_batch_inputs(&mut self, cx: &mut Context<Self>) {
+        for field in super::fields::EDITABLE_FIELDS {
+            self.refresh_asset_batch_field_input(field, cx);
+        }
         let groups = self.connection_state.groups().to_vec();
         self.seed_asset_batch_inputs(&groups, cx);
         cx.notify();
@@ -183,7 +207,17 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.start_workspace.asset_batch_mut().undo_field(field);
-        self.reseed_asset_batch_inputs(cx);
+        self.refresh_asset_batch_field_input(field, cx);
+        if matches!(
+            field,
+            BatchFieldKey::RdpBackend | BatchFieldKey::RdpDisplayMode
+        ) {
+            self.start_workspace
+                .asset_batch_mut()
+                .refresh_rdp_basis(self.connection_state.connections());
+            self.reseed_asset_batch_inputs(cx);
+        }
+        cx.notify();
     }
     /// Restore default: write the row's documented default as `Clear`.
     pub(in crate::features) fn reset_asset_batch_field(
@@ -192,13 +226,20 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.start_workspace.asset_batch_mut().reset_field(field);
-        self.reseed_asset_batch_inputs(cx);
+        self.refresh_asset_batch_field_input(field, cx);
+        if matches!(
+            field,
+            BatchFieldKey::RdpBackend | BatchFieldKey::RdpDisplayMode
+        ) {
+            self.start_workspace
+                .asset_batch_mut()
+                .refresh_rdp_basis(self.connection_state.connections());
+            self.reseed_asset_batch_inputs(cx);
+        }
+        cx.notify();
     }
     pub(in crate::features) fn clear_asset_batch_password(&mut self, cx: &mut Context<Self>) {
-        self.start_workspace
-            .asset_batch_mut()
-            .reset_field(BatchFieldKey::Password);
-        self.reseed_asset_batch_inputs(cx);
+        self.reset_asset_batch_field(BatchFieldKey::Password, cx);
     }
     pub(in crate::features) fn close_asset_batch_edit(&mut self, cx: &mut Context<Self>) {
         let handle = self.start_workspace.asset_batch_window_handle();
@@ -753,6 +794,9 @@ impl NyaTermApp {
                 field,
                 BatchFieldKey::RdpBackend | BatchFieldKey::RdpDisplayMode
             ) {
+                self.start_workspace
+                    .asset_batch_mut()
+                    .refresh_rdp_basis(self.connection_state.connections());
                 self.reseed_asset_batch_inputs(cx);
             } else {
                 cx.notify();

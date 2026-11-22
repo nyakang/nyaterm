@@ -275,10 +275,16 @@ pub fn overlay_resolved_keyword_highlight_rules(
         .collect();
 
     let mut out = global.to_vec();
+    let mut positions: std::collections::HashMap<String, usize> = out
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| (rule.id.clone(), index))
+        .collect();
     for session_rule in resolved_session {
-        if let Some(existing) = out.iter_mut().find(|rule| rule.id == session_rule.id) {
-            *existing = session_rule;
+        if let Some(&index) = positions.get(&session_rule.id) {
+            out[index] = session_rule;
         } else {
+            positions.insert(session_rule.id.clone(), out.len());
             out.push(session_rule);
         }
     }

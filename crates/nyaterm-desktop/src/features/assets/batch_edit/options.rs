@@ -284,22 +284,28 @@ pub(super) fn batch_kind_label(kind: ConnectionBatchKind) -> SharedString {
     }
 }
 pub(super) fn scope_select_options(draft: &AssetBatchEditDraft) -> Vec<NyaSelectOption> {
-    crate::models::ConnectionKindTab::ALL
-        .into_iter()
-        .map(|tab| {
-            let count = draft
-                .counts()
-                .iter()
-                .find(|(kind, _)| *kind == tab.batch_kind())
-                .map(|(_, count)| *count)
-                .unwrap_or(0);
-            NyaSelectOption::new(
-                batch_kind_value(tab.batch_kind()),
-                format!("{} ({count})", tab.label()),
-            )
-            .disabled(count == 0)
-        })
-        .collect()
+    std::iter::once(NyaSelectOption::new(
+        "common",
+        t!("assets.batch.scopeCommon"),
+    ))
+    .chain(
+        crate::models::ConnectionKindTab::ALL
+            .into_iter()
+            .map(|tab| {
+                let count = draft
+                    .counts()
+                    .iter()
+                    .find(|(kind, _)| *kind == tab.batch_kind())
+                    .map(|(_, count)| *count)
+                    .unwrap_or(0);
+                NyaSelectOption::new(
+                    batch_kind_value(tab.batch_kind()),
+                    format!("{} ({count})", tab.label()),
+                )
+                .disabled(count == 0)
+            }),
+    )
+    .collect()
 }
 
 pub(super) fn default_icon_value() -> Option<String> {

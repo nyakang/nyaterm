@@ -1,5 +1,6 @@
 use super::basis::{
-    BatchFieldApplicability, asset_batch_kind_counts, compute_batch_basis, compute_rdp_field_basis,
+    BatchFieldApplicability, asset_batch_kind_counts, compute_batch_basis_indexed,
+    compute_rdp_field_basis,
 };
 use super::fields::{BatchFieldKey, EDITABLE_FIELDS, FieldBasis};
 use crate::models::ConnectionEditorSection;
@@ -75,12 +76,16 @@ impl BatchScopeDraft {
         targets: &[(String, ConnectionBatchKind)],
     ) {
         let edit = self.rdp_dependency_edit();
+        let by_id = connections
+            .iter()
+            .map(|connection| (connection.id.as_str(), connection))
+            .collect();
         for field in EDITABLE_FIELDS
             .into_iter()
             .filter(|field| field.rdp_group().is_some())
         {
             let (basis, value, applicability) =
-                compute_rdp_field_basis(connections, targets, field, &edit);
+                compute_rdp_field_basis(&by_id, targets, field, &edit);
             self.basis.insert(field, basis);
             self.rdp_applicability.insert(field, applicability);
             self.original_values.remove(&field);
@@ -1059,6 +1064,9 @@ pub(in crate::features) struct AssetBatchEditDraft {
     scroll: ScrollHandle,
     section: Option<ConnectionEditorSection>,
     navigation_focus: Option<FocusHandle>,
+    validation_cache: std::cell::Cell<Option<bool>>,
+    summary_cache: std::cell::Cell<Option<(usize, usize)>>,
+    summary_expanded: bool,
 }
 impl std::ops::Deref for AssetBatchEditDraft {
     type Target = BatchScopeDraft;
@@ -1130,6 +1138,8 @@ impl AssetBatchEditDraft {
             .any(|mode| *mode != BatchEditMode::Keep)
     }
     pub(in crate::features) fn set_mode(&mut self, field: BatchFieldKey, mode: BatchEditMode) {
+        self.validation_cache.set(None);
+        self.summary_cache.set(None);
         if self.saving
             || (mode != BatchEditMode::Keep
                 && self
@@ -1152,6 +1162,19 @@ impl AssetBatchEditDraft {
                 self.current.bool_values.remove(&field);
             }
         }
+        if mode == BatchEditMode::Clear {
+            let kind = self
+                .current
+                .kind
+                .map(crate::models::ConnectionKindTab::from_batch_kind)
+                .unwrap_or(crate::models::ConnectionKindTab::Ssh);
+            let value = field.default_value(kind).unwrap_or_default();
+            if field.is_bool() {
+                self.current.bool_values.insert(field, value == "true");
+            } else {
+                self.current.values.insert(field, value);
+            }
+        }
         if field == BatchFieldKey::Password && mode != BatchEditMode::Set {
             self.current.password = None;
         }
@@ -1164,6 +1187,8 @@ impl AssetBatchEditDraft {
             .unwrap_or("")
     }
     pub(in crate::features) fn set_value(&mut self, field: BatchFieldKey, value: String) {
+        self.validation_cache.set(None);
+        self.summary_cache.set(None);
         if self.saving
             || self
                 .current
@@ -1188,6 +1213,8 @@ impl AssetBatchEditDraft {
         self.current.values.insert(field, value);
     }
     pub(in crate::features) fn set_bool_value(&mut self, field: BatchFieldKey, value: bool) {
+        self.validation_cache.set(None);
+        self.summary_cache.set(None);
         if self.saving
             || self
                 .current
@@ -1240,9 +1267,11 @@ impl AssetBatchEditDraft {
         };
     }
     pub(in crate::features) fn initialize_scopes(&mut self, connections: &[SavedConnection]) {
+        let selected: std::collections::HashSet<&str> =
+            self.ids.iter().map(String::as_str).collect();
         self.targets = connections
             .iter()
-            .filter(|connection| self.ids.contains(&connection.id))
+            .filter(|connection| selected.contains(connection.id.as_str()))
             .map(|connection| {
                 (
                     connection.id.clone(),
@@ -1251,32 +1280,52 @@ impl AssetBatchEditDraft {
             })
             .collect();
         self.counts = asset_batch_kind_counts(connections, &self.ids);
-        for &(kind, _) in &self.counts {
-            let (basis, values, bool_values) =
-                compute_batch_basis(connections, &self.ids, Some(kind));
-            self.scopes.insert(
-                Some(kind),
-                BatchScopeDraft {
-                    kind: Some(kind),
-                    original_values: values.clone(),
-                    original_bools: bool_values.clone(),
-                    basis,
-                    values,
-                    bool_values,
-                    ..Default::default()
-                },
-            );
+        // Only prepare the initially visible scope. Inactive protocols are
+        // projected on first activation; subsequent visits reuse their drafts.
+        if let Some(&(kind, _)) = self.counts.iter().find(|(_, count)| *count > 0) {
+            self.prepare_scope(Some(kind), connections);
+            self.set_scope(Some(kind));
         }
-        // The tab strip never offers the protocol-independent scope, so open on
-        // the first protocol that actually has selected connections.
-        if let Some(&(kind, _)) = self.counts.iter().find(|(_, count)| *count > 0)
-            && let Some(scope) = self.scopes.remove(&Some(kind))
-        {
-            self.current = scope;
+    }
+    pub(in crate::features) fn prepare_scope(
+        &mut self,
+        kind: Option<ConnectionBatchKind>,
+        connections: &[SavedConnection],
+    ) {
+        if self.saving || self.current.kind == kind || self.scopes.contains_key(&kind) {
+            return;
         }
-        self.refresh_rdp_basis(connections);
+        let Some(kind) = kind.filter(|kind| self.counts.iter().any(|(k, _)| k == kind)) else {
+            return;
+        };
+        let by_id = connections
+            .iter()
+            .map(|connection| (connection.id.as_str(), connection))
+            .collect();
+        let ids = self
+            .targets
+            .iter()
+            .filter(|(_, k)| *k == kind)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let (basis, values, bool_values) = compute_batch_basis_indexed(&by_id, &ids, Some(kind));
+        let mut scope = BatchScopeDraft {
+            kind: Some(kind),
+            original_values: values.clone(),
+            original_bools: bool_values.clone(),
+            basis,
+            values,
+            bool_values,
+            ..Default::default()
+        };
+        if kind == ConnectionBatchKind::Rdp {
+            scope.refresh_rdp_basis(connections, &self.targets);
+        }
+        self.scopes.insert(Some(kind), scope);
     }
     pub(in crate::features) fn refresh_rdp_basis(&mut self, connections: &[SavedConnection]) {
+        self.validation_cache.set(None);
+        self.summary_cache.set(None);
         if self.current.kind == Some(ConnectionBatchKind::Rdp) {
             self.current.refresh_rdp_basis(connections, &self.targets);
         } else if let Some(scope) = self.scopes.get_mut(&Some(ConnectionBatchKind::Rdp)) {
@@ -1298,7 +1347,19 @@ impl AssetBatchEditDraft {
         }
         Ok(edits)
     }
+    pub(in crate::features) fn valid_for_save(&self) -> bool {
+        if let Some(valid) = self.validation_cache.get() {
+            return valid;
+        }
+        let valid = self.build_edits().is_ok();
+        self.validation_cache.set(Some(valid));
+        valid
+    }
+
     pub(in crate::features) fn summary(&self) -> (usize, usize) {
+        if let Some(summary) = self.summary_cache.get() {
+            return summary;
+        }
         let mut connections = 0;
         let mut fields = 0;
         for scope in std::iter::once(&self.current).chain(self.scopes.values()) {
@@ -1323,7 +1384,42 @@ impl AssetBatchEditDraft {
                 connections += 1;
             }
         }
+        self.summary_cache.set(Some((connections, fields)));
         (connections, fields)
+    }
+    pub(in crate::features) fn summary_expanded(&self) -> bool {
+        self.summary_expanded
+    }
+    pub(in crate::features) fn toggle_summary(&mut self) {
+        self.summary_expanded = !self.summary_expanded;
+    }
+    pub(in crate::features) fn scope_summaries(
+        &self,
+    ) -> Vec<(Option<ConnectionBatchKind>, usize, usize)> {
+        std::iter::once(None)
+            .chain(self.counts.iter().map(|(kind, _)| Some(*kind)))
+            .filter_map(|kind| {
+                let scope = if self.current.kind == kind {
+                    Some(&self.current)
+                } else {
+                    self.scopes.get(&kind)
+                }?;
+                let fields = scope
+                    .modes
+                    .values()
+                    .filter(|mode| **mode != BatchEditMode::Keep)
+                    .count();
+                let connections = if let Some(kind) = kind {
+                    self.counts
+                        .iter()
+                        .find(|(k, _)| *k == kind)
+                        .map_or(0, |(_, n)| *n)
+                } else {
+                    self.targets.len()
+                };
+                (fields > 0).then_some((kind, connections, fields))
+            })
+            .collect()
     }
     pub(in crate::features) fn window(&self) -> &ChildWindowSlot {
         &self.window

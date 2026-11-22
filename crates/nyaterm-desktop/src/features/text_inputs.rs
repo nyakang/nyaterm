@@ -613,14 +613,6 @@ impl NyaTermApp {
             self.apply_snapshot_password_input(text, cx);
         } else if id.as_ref() == "terminal.search.query" {
             self.apply_terminal_search_query(text, cx);
-        } else if let Some(field_key) =
-            id.strip_prefix(crate::features::terminal::keyword_highlight_popup::POPUP_INPUT_PREFIX)
-        {
-            if let Some(field) =
-                crate::models::KeywordHighlightEditorField::from_input_key(field_key)
-            {
-                self.apply_keyword_highlight_popup_input(field, text, cx);
-            }
         } else if let Some(field_id) = id.strip_prefix("keyword.highlight.") {
             self.apply_keyword_highlight_input(field_id, text, cx);
         } else if let Some(field_id) = id.strip_prefix("ai.settings.action.") {

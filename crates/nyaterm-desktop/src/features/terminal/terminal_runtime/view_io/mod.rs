@@ -814,6 +814,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.refresh_terminal_local_mode(session_id, cx);
         if session_id.is_empty() {
             return false;
         }
@@ -1110,6 +1111,7 @@ impl NyaTermApp {
         session_id: &str,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_terminal_local_mode(session_id, cx);
         if session_id.is_empty() {
             return;
         }

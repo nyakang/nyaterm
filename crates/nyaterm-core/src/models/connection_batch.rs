@@ -937,7 +937,7 @@ pub fn apply_connection_batch_edit(
         }
     }
 
-    let account_ok = is_ssh || is_telnet;
+    let account_ok = is_ssh || is_telnet || is_ftp;
     let password_reference_ok = is_rdp || is_vnc;
 
     if !edit.auth_mode.is_unchanged() {
