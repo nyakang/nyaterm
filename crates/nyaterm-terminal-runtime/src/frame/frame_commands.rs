@@ -29,6 +29,9 @@ pub(super) enum TerminalFrameCommand {
     SetLogicalLineSnapshots {
         enabled: bool,
     },
+    SetIgnoreAlternateScreen {
+        enabled: bool,
+    },
     ExecutionRecording {
         session_id: String,
         event: ExecutionRecordingEvent,

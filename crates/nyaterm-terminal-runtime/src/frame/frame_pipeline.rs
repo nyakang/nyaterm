@@ -28,6 +28,7 @@ use std::time::Duration;
 pub struct TerminalFramePipeline {
     pub(super) keyword_rules: Arc<Mutex<Arc<Vec<ResolvedKeywordHighlightRule>>>>,
     pub(super) logical_line_snapshots: Arc<AtomicBool>,
+    pub(super) ignore_alternate_screen: Arc<AtomicBool>,
     pub(super) recording_writer: RecordingWriteHandle,
     pub(super) command_tx: TerminalFrameCommandSender,
     pub(super) event_queue: TerminalFrameEventQueue,
@@ -118,6 +119,7 @@ impl TerminalFramePipeline {
         Self {
             keyword_rules: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             logical_line_snapshots: Arc::new(AtomicBool::new(false)),
+            ignore_alternate_screen: Arc::new(AtomicBool::new(false)),
             recording_writer,
             command_tx,
             event_queue,
@@ -133,6 +135,20 @@ impl TerminalFramePipeline {
             let _ = self
                 .command_tx
                 .send(TerminalFrameCommand::SetLogicalLineSnapshots { enabled });
+        }
+    }
+
+    /// Draw full-screen programs on the primary screen so their output reaches
+    /// scrollback. Idempotent; callers may invoke it on every render.
+    pub fn set_ignore_alternate_screen(&self, enabled: bool) {
+        if self
+            .ignore_alternate_screen
+            .swap(enabled, Ordering::Relaxed)
+            != enabled
+        {
+            let _ = self
+                .command_tx
+                .send(TerminalFrameCommand::SetIgnoreAlternateScreen { enabled });
         }
     }
 
@@ -645,6 +661,7 @@ impl Clone for TerminalFramePipeline {
         Self {
             keyword_rules: self.keyword_rules.clone(),
             logical_line_snapshots: self.logical_line_snapshots.clone(),
+            ignore_alternate_screen: self.ignore_alternate_screen.clone(),
             recording_writer: self.recording_writer.clone(),
             command_tx: self.command_tx.clone(),
             event_queue: self.event_queue.clone(),

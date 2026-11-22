@@ -475,6 +475,7 @@ pub(super) fn run_terminal_frame_processor(
     let mut sessions: HashMap<String, TerminalFrameSession> = HashMap::new();
     let mut color_palette = TerminalColorPalette::default();
     let mut logical_line_snapshots = false;
+    let mut ignore_alternate_screen = false;
     let mut rekeyed_old_ids: HashSet<String> = HashSet::new();
     let mut rekeyed_old_order = VecDeque::new();
     // Sessions that should include full live viewport snapshots on every output.
@@ -549,6 +550,13 @@ pub(super) fn run_terminal_frame_processor(
                 }
             }
 
+            TerminalFrameCommand::SetIgnoreAlternateScreen { enabled } => {
+                ignore_alternate_screen = enabled;
+                for session in sessions.values_mut() {
+                    session.screen.set_ignore_alternate_screen(enabled);
+                }
+            }
+
             TerminalFrameCommand::SetLogicalLineSnapshots { enabled } => {
                 logical_line_snapshots = enabled;
                 for (session_id, session) in &mut sessions {
@@ -586,6 +594,9 @@ pub(super) fn run_terminal_frame_processor(
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
+                session
+                    .screen
+                    .set_ignore_alternate_screen(ignore_alternate_screen);
                 session.include_live_snapshot = include;
             }
             TerminalFrameCommand::SeedSession {
@@ -612,6 +623,9 @@ pub(super) fn run_terminal_frame_processor(
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
+                session
+                    .screen
+                    .set_ignore_alternate_screen(ignore_alternate_screen);
                 session.include_live_snapshot = include;
             }
             TerminalFrameCommand::RemoveSession { session_id } => {
@@ -821,6 +835,9 @@ pub(super) fn run_terminal_frame_processor(
                     session
                         .screen
                         .set_logical_line_snapshots(logical_line_snapshots);
+                    session
+                        .screen
+                        .set_ignore_alternate_screen(ignore_alternate_screen);
                     session.include_live_snapshot = terminal_frame_live_snapshot_enabled(
                         !priority_initialized || snapshot_priority.contains(&session_id),
                     );
@@ -872,6 +889,9 @@ pub(super) fn run_terminal_frame_processor(
                 session
                     .screen
                     .set_logical_line_snapshots(logical_line_snapshots);
+                session
+                    .screen
+                    .set_ignore_alternate_screen(ignore_alternate_screen);
                 session.include_live_snapshot = include_live_snapshot;
                 process_terminal_frame_output_burst(
                     &command_rx,

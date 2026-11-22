@@ -3656,7 +3656,7 @@
     "mouseEventsRequireAlt": "마우스 보고에 Alt 필요",
     "mouseEventsRequireAltDesc": "Alt를 누르고 있을 때만 터미널 앱에 마우스 이벤트를 보냅니다.",
     "alternateScroll": "전체 화면 앱에서 휠이 방향키 전송",
-    "alternateScrollDesc": "마우스 보고가 없는 대체 화면(tmux, screen, less, vim)에서 마우스 휠을 위/아래 키로 전송합니다. 끄면 휠로 셸 기록이 넘어가지 않습니다. 기존 동작과의 호환성을 위해 기본적으로 켜져 있습니다. 꺼도 tmux 기록 스크롤이 활성화되지는 않습니다.",
+    "alternateScrollDesc": "켜짐: 표준 xterm 동작으로, 대체 화면(tmux, screen, less, vim)에서 휠이 위/아래 키를 전송합니다. 꺼짐: 방향키를 보내지 않고 전체 화면 프로그램이 기본 화면에 남아 휠로 터미널 기록을 스크롤합니다(PuTTY의 '대체 화면 비활성화'와 유사). 새 출력부터 적용되며 vim/less는 종료 후 화면이 남을 수 있습니다.",
     "enableStartupLock": "시작 시 잠금",
     "enableStartupLockDesc": "앱이 시작될 때 잠급니다.",
     "enableIdleLock": "유휴 시 잠금",

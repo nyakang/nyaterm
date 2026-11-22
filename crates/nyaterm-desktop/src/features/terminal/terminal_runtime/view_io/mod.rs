@@ -873,6 +873,10 @@ impl NyaTermApp {
                 self.settings.summary().terminal_wrap_mode
                     == nyaterm_core::models::settings::TerminalWrapMode::None,
             );
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_ignore_alternate_screen(!self.settings.summary().interaction_alternate_scroll);
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return false;
@@ -1173,6 +1177,10 @@ impl NyaTermApp {
                 self.settings.summary().terminal_wrap_mode
                     == nyaterm_core::models::settings::TerminalWrapMode::None,
             );
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_ignore_alternate_screen(!self.settings.summary().interaction_alternate_scroll);
         let surface = self.ensure_terminal_surface(session_id, cx);
         // Read only the lightweight row/column pair for the active surface; no
         // snapshot is cloned, and inactive surfaces do not need this check.
@@ -1808,6 +1816,10 @@ impl NyaTermApp {
                 self.settings.summary().terminal_wrap_mode
                     == nyaterm_core::models::settings::TerminalWrapMode::None,
             );
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_ignore_alternate_screen(!self.settings.summary().interaction_alternate_scroll);
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return;
@@ -1957,6 +1969,10 @@ impl NyaTermApp {
                 self.settings.summary().terminal_wrap_mode
                     == nyaterm_core::models::settings::TerminalWrapMode::None,
             );
+        self.terminal
+            .view
+            .frame_pipeline
+            .set_ignore_alternate_screen(!self.settings.summary().interaction_alternate_scroll);
         let surface = self.ensure_terminal_surface(session_id, cx);
         let Some(view) = self.terminal.view.views.get(session_id) else {
             return;

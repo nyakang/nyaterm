@@ -15,6 +15,7 @@ use alacritty_terminal::vte::ansi::{Color, Handler as _, NamedColor, NamedPrivat
 
 pub mod action_links;
 pub mod agent_capture;
+mod alt_screen_filter;
 mod cell_string;
 mod cells;
 pub mod colors;
@@ -852,6 +853,7 @@ pub struct TerminalCore {
     color_palette: TerminalColorPalette,
     proxy: NyaTermEventProxy,
     sidecar: NyaTermSidecar,
+    alt_screen_filter: alt_screen_filter::AltScreenFilter,
     pending_effects: TerminalEffects,
     primary_lines: ScreenLineState,
     alternate_lines: ScreenLineState,
@@ -1046,6 +1048,7 @@ impl TerminalCore {
             color_palette: TerminalColorPalette::default(),
             proxy,
             sidecar: NyaTermSidecar::default(),
+            alt_screen_filter: alt_screen_filter::AltScreenFilter::default(),
             pending_effects: TerminalEffects::default(),
             primary_lines,
             alternate_lines,
@@ -1085,6 +1088,17 @@ impl TerminalCore {
 
     pub fn color_palette(&self) -> TerminalColorPalette {
         self.color_palette
+    }
+
+    /// Ignore `CSI ? 47/1047/1049 h` so full-screen programs draw on the primary
+    /// screen and keep scrollback. A reset is still honoured while the emulator
+    /// is already on the alternate screen, so toggling mid-session is safe.
+    pub fn set_ignore_alternate_screen(&mut self, enabled: bool) {
+        self.alt_screen_filter.set_enabled(enabled);
+    }
+
+    pub fn ignores_alternate_screen(&self) -> bool {
+        self.alt_screen_filter.enabled()
     }
 
     /// Enable richer frames without changing the protocol grid or VT modes.
@@ -1596,6 +1610,7 @@ impl TerminalCore {
         self.graphics_ingress = GraphicsIngress::new();
         self.session_encoding.reset_decoder();
         self.sidecar.osc = None;
+        self.alt_screen_filter.reset_stream();
     }
 
     /// Reset connection-local input protocols without clearing either screen or history.
@@ -1792,6 +1807,11 @@ impl TerminalCore {
                     // Borrows straight through for valid UTF-8, which is the
                     // default charset and so the overwhelming majority.
                     let data = self.session_encoding.decode_output_bytes(data);
+                    if data.is_empty() {
+                        return;
+                    }
+                    let in_alternate_screen = self.alternate_screen();
+                    let data = self.alt_screen_filter.filter(&data, in_alternate_screen);
                     if data.is_empty() {
                         return;
                     }

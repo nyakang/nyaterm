@@ -4273,3 +4273,43 @@ fn multiple_resets_and_alternate_entries_have_slice_independent_identities() {
         assert_same_retained_rows(&whole, &sliced);
     }
 }
+
+#[test]
+fn ignoring_alternate_screen_keeps_full_screen_output_on_primary_scrollback() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?1049h");
+    assert!(!screen.alternate_screen());
+    for line in 1..=12 {
+        screen.advance(format!("line{line}\r\n").as_bytes());
+    }
+    screen.advance(b"\x1b[?1049l");
+    assert!(!screen.alternate_screen());
+    assert!(
+        screen.viewport_snapshot(0).scrollback_len > 0,
+        "full-screen output must reach scrollback"
+    );
+
+    let mut standard = TerminalScreen::new(20, 4);
+    standard.advance(b"\x1b[?1049h");
+    assert!(standard.alternate_screen());
+}
+
+#[test]
+fn enabling_alternate_screen_filter_mid_session_does_not_strand_the_user() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.advance(b"\x1b[?1049h");
+    assert!(screen.alternate_screen());
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?1049l");
+    assert!(!screen.alternate_screen());
+}
+
+#[test]
+fn alternate_screen_switch_split_across_chunks_is_still_ignored() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?10");
+    screen.advance(b"49hhello");
+    assert!(!screen.alternate_screen());
+}
