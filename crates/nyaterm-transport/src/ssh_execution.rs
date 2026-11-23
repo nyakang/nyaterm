@@ -111,7 +111,9 @@ where
     T: Send + 'static,
     F: Future<Output = anyhow::Result<T>> + Send + 'static,
 {
+    // This runtime is created per operation, so its I/O pool must not scale with CPUs.
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .thread_name("nyaterm-ssh-exec")
         .build()

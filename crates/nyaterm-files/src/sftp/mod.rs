@@ -251,7 +251,9 @@ where
     T: Send + 'static,
     F: Future<Output = anyhow::Result<T>> + Send + 'static,
 {
+    // Match the compatibility runtime's I/O pool instead of scaling per operation.
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .thread_name("nyaterm-sftp")
         .build()

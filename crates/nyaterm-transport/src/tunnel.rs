@@ -237,7 +237,9 @@ fn run_tunnel_worker(
     ready_tx: mpsc::Sender<Result<SshTunnelInfo, String>>,
     multiplex: Option<SshMultiplexHandle>,
 ) {
+    // Each tunnel owns a runtime; bound I/O workers without changing its lifetime.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .thread_name("nyaterm-ssh-tunnel")
         .build()
