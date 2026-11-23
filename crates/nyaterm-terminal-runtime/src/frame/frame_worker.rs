@@ -109,8 +109,11 @@ impl TerminalFrameSession {
 
     pub(super) fn seed(&mut self, output: String, encoding: &str, scrollback_limit: usize) {
         let palette = self.screen.color_palette();
+        let ignore_alternate_screen = self.screen.ignores_alternate_screen();
         self.screen = TerminalScreen::default();
         self.screen.set_color_palette(palette);
+        self.screen
+            .set_ignore_alternate_screen(ignore_alternate_screen);
         self.screen.advance(output.as_bytes());
         if let Err(error) = self.screen.set_encoding(encoding) {
             tracing::warn!(%error, "terminal encoding configuration rejected");
@@ -619,6 +622,9 @@ pub(super) fn run_terminal_frame_processor(
                     .entry(session_id.clone())
                     .or_insert_with(|| TerminalFrameSession::new(&encoding, scrollback_limit));
                 session.screen.set_color_palette(color_palette);
+                session
+                    .screen
+                    .set_ignore_alternate_screen(ignore_alternate_screen);
                 session.seed(output, &encoding, scrollback_limit);
                 session
                     .screen

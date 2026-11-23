@@ -4296,7 +4296,7 @@ fn ignoring_alternate_screen_keeps_full_screen_output_on_primary_scrollback() {
 }
 
 #[test]
-fn enabling_alternate_screen_filter_mid_session_does_not_strand_the_user() {
+fn enabling_alternate_screen_policy_mid_session_preserves_normal_exit() {
     let mut screen = TerminalScreen::new(20, 4);
     screen.advance(b"\x1b[?1049h");
     assert!(screen.alternate_screen());
@@ -4311,5 +4311,115 @@ fn alternate_screen_switch_split_across_chunks_is_still_ignored() {
     screen.set_ignore_alternate_screen(true);
     screen.advance(b"\x1b[?10");
     screen.advance(b"49hhello");
+    assert!(!screen.alternate_screen());
+}
+
+#[test]
+fn c0_inside_decset_must_not_bypass_filter() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?1049\x07h");
+    assert!(
+        !screen.alternate_screen(),
+        "BEL is executable inside CSI, but the alternate switch must still be ignored"
+    );
+}
+
+#[test]
+fn valid_csi_must_not_leave_screen_dependent_on_chunking() {
+    let enter = b"\x1b[?1049\x07hhello";
+    let exit = b"\x1b[?1049l";
+    let mut whole = TerminalScreen::new(20, 4);
+    whole.set_ignore_alternate_screen(true);
+    whole.advance(&[enter.as_slice(), exit.as_slice()].concat());
+    let mut split = TerminalScreen::new(20, 4);
+    split.set_ignore_alternate_screen(true);
+    split.advance(enter);
+    split.advance(exit);
+    assert_eq!(
+        whole.alternate_screen(),
+        split.alternate_screen(),
+        "same output must end on the same screen regardless of read boundaries"
+    );
+}
+
+#[test]
+fn cancelled_csi_must_not_join_across_removed_sequence() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?25\x1b[?1049hl");
+    assert_eq!(screen.snapshot().row(0).unwrap().text.as_str(), "l");
+}
+
+#[test]
+fn alternate_screen_policy_preserves_controls_and_survives_reset_and_reconfiguration() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?1049\x07;2004;1h");
+    assert!(screen.take_visual_bell());
+    assert!(screen.bracketed_paste());
+    assert!(screen.application_cursor_keys());
+    assert!(!screen.alternate_screen());
+    screen.set_scrollback_limit(120);
+    screen.reset_stream_state();
+    screen.advance(b"\x1bc\x1b[?1049h");
+    assert!(screen.ignores_alternate_screen());
+    assert!(!screen.alternate_screen());
+    screen.set_ignore_alternate_screen(false);
+    screen.advance(b"\x1b[?1049h");
+    assert!(screen.alternate_screen());
+}
+
+#[test]
+fn alternate_screen_policy_preserves_unrelated_sequences_at_every_chunk_boundary() {
+    let cases: &[&[u8]] = &[
+        b"\x1b[?1049\x07hhello\x1b[?1049l",
+        b"\x1b[?25\x1b[?1049hl",
+        b"\x1b[?1049\x18h\x1b[?1049\x1ah",
+        b"\x1b]0;title\x07\x1bP+qignored\x1b\\\x1b[?1049htext",
+        b"\x1b[?00000000000000000000000000000000000000000000000000000000000000001049htext",
+    ];
+    for input in cases {
+        let mut whole = TerminalScreen::new(20, 4);
+        whole.set_ignore_alternate_screen(true);
+        whole.advance(input);
+        for split in 0..=input.len() {
+            let mut sliced = TerminalScreen::new(20, 4);
+            sliced.set_ignore_alternate_screen(true);
+            sliced.advance(&input[..split]);
+            sliced.advance(&input[split..]);
+            assert!(!sliced.alternate_screen());
+            assert_eq!(
+                snapshot_text(&whole.snapshot()),
+                snapshot_text(&sliced.snapshot()),
+                "split {split}"
+            );
+        }
+        let mut bytewise = TerminalScreen::new(20, 4);
+        bytewise.set_ignore_alternate_screen(true);
+        for byte in input.chunks(1) {
+            bytewise.advance(byte);
+        }
+        assert!(!bytewise.alternate_screen());
+        assert_eq!(
+            snapshot_text(&whole.snapshot()),
+            snapshot_text(&bytewise.snapshot())
+        );
+    }
+}
+
+#[test]
+fn alternate_screen_policy_changes_during_partial_csi_apply_at_dispatch() {
+    let mut screen = TerminalScreen::new(20, 4);
+    screen.advance(b"\x1b[?10");
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"49hhello");
+    assert!(!screen.alternate_screen());
+    screen.advance(b"\x1b[?10");
+    screen.set_ignore_alternate_screen(false);
+    screen.advance(b"49h");
+    assert!(screen.alternate_screen());
+    screen.set_ignore_alternate_screen(true);
+    screen.advance(b"\x1b[?1049l");
     assert!(!screen.alternate_screen());
 }

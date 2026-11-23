@@ -139,7 +139,7 @@ impl TerminalFramePipeline {
     }
 
     /// Draw full-screen programs on the primary screen so their output reaches
-    /// scrollback. Idempotent; callers may invoke it on every render.
+    /// scrollback. Idempotent; enqueue before starting ingress and when the host setting changes.
     pub fn set_ignore_alternate_screen(&self, enabled: bool) {
         if self
             .ignore_alternate_screen
