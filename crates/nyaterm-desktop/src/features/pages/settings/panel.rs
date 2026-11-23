@@ -1690,14 +1690,6 @@ impl SettingsPanel {
         self.with_app(cx, |app, cx| app.toggle_ai_model_enabled(model_id, cx));
     }
 
-    pub(in crate::features) fn start_codex_login(
-        &mut self,
-        device_code: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_app(cx, |app, cx| app.start_codex_login(device_code, cx));
-    }
-
     pub(in crate::features) fn copy_external_mcp_config(
         &mut self,
         client: &'static str,
@@ -1958,11 +1950,6 @@ forward_app_action!(
     confirm_keybinding_recording,
     copy_github_gist_user_code,
     refresh_ai_agents,
-    refresh_codex_account,
-    refresh_claude_account,
-    cancel_codex_login,
-    logout_codex,
-    copy_codex_device_code,
     open_github_gist_verification_url,
     prompt_background_image,
     prompt_diagnostics_export,
@@ -1973,10 +1960,6 @@ forward_app_action!(
     run_provider_cloud_sync_test,
     start_github_gist_auth,
     toggle_ai_allow_save_command,
-    toggle_ai_claude_enabled,
-    toggle_ai_claude_mcp_integration,
-    toggle_ai_codex_enabled,
-    toggle_ai_codex_mcp_integration,
     toggle_ai_enabled,
     toggle_ai_mcp_enabled,
     toggle_ai_record_history,
@@ -2186,8 +2169,8 @@ mod tests {
             ),
             (
                 SettingsTab::AiAgents,
-                "ai-agent-thread-field",
-                "ai-agent-model-field",
+                "acp-profile-field-builtin-codex-name",
+                "acp-profile-field-builtin-codex-strategy",
             ),
         ] {
             vcx.update(|_, cx| {

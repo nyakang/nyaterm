@@ -180,11 +180,10 @@ pub fn step_heading(step: &AiAgentStepView) -> String {
 
 pub fn agent_turn_header(
     palette: ThemePalette,
-    agent_kind: &nyaterm_core::AiAgentKind,
+    name: &str,
     agent_mode: bool,
     live: bool,
 ) -> AnyElement {
-    let name = crate::components::agent_kind_display_name(agent_kind);
     let title = if agent_mode {
         format!("{name} {}", t!("ai.modeAgent"))
     } else {

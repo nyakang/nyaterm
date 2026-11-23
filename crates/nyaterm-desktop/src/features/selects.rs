@@ -534,7 +534,8 @@ impl NyaTermApp {
                 let kind = match value {
                     "codex" => AiAgentKind::Codex,
                     "claude_code" => AiAgentKind::ClaudeCode,
-                    _ => AiAgentKind::Nyaterm,
+                    "nyaterm" => AiAgentKind::Nyaterm,
+                    id => AiAgentKind::Acp(id.to_owned()),
                 };
                 self.set_ai_default_agent(kind, cx);
             }

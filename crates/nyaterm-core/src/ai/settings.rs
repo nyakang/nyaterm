@@ -21,6 +21,13 @@ const OLLAMA_DEFAULT_BASE_URL: &str = "http://localhost:11434/";
 const OLLAMA_LEGACY_DEFAULT_BASE_URL: &str = "http://localhost:11434/v1/";
 
 pub fn mask_ai_settings(mut settings: AiSettings) -> AiSettings {
+    for profile in settings.external_agents.iter_mut().flatten() {
+        for variable in &mut profile.environment {
+            if !variable.value.is_empty() {
+                variable.value = MASKED_SECRET_VALUE.into();
+            }
+        }
+    }
     settings.proxy.password = mask_secret(settings.proxy.password.take());
     for profile in &mut settings.provider_profiles {
         profile.api_key = mask_secret(profile.api_key.take());
@@ -42,6 +49,14 @@ fn mask_custom_header_values(headers: &mut [AiHttpHeader]) {
 }
 
 pub fn merge_masked_ai_settings(current: &AiSettings, mut next: AiSettings) -> AiSettings {
+    for profile in next.external_agents.iter_mut().flatten() {
+        let previous = current
+            .external_agents
+            .iter()
+            .flatten()
+            .find(|item| item.id == profile.id);
+        profile.merge_masked_environment(previous);
+    }
     next.proxy.password = merge_secret(
         current.proxy.password.as_ref(),
         next.proxy.password.as_ref(),
@@ -114,7 +129,8 @@ fn merge_custom_header_values(
 pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
     let original = serde_json::to_string(settings).unwrap_or_default();
 
-    settings.schema_version = default_schema_version();
+    super::external_agents::migrate_profiles(settings);
+    settings.schema_version = settings.schema_version.max(default_schema_version());
     if settings.request_user_agent.trim().is_empty() {
         settings.request_user_agent = default_request_user_agent();
     }
@@ -233,7 +249,12 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
 }
 
 pub fn ai_settings_has_secret(settings: &AiSettings) -> bool {
-    optional_secret_present(&settings.proxy.password)
+    settings.external_agents.iter().flatten().any(|profile| {
+        profile
+            .environment
+            .iter()
+            .any(|variable| !variable.value.is_empty())
+    }) || optional_secret_present(&settings.proxy.password)
         || settings
             .provider_profiles
             .iter()
@@ -256,6 +277,7 @@ impl Default for AiSettings {
             .map(|item| item.id.clone());
 
         Self {
+            external_agents: None,
             proxy: Default::default(),
             schema_version: default_schema_version(),
             enabled: true,
@@ -291,7 +313,7 @@ impl Default for AiSettings {
 }
 
 pub(super) fn default_schema_version() -> u32 {
-    7
+    8
 }
 
 pub(super) fn default_codex_runtime() -> Option<String> {
@@ -790,7 +812,7 @@ mod tests {
         settings.provider_profiles[3].enabled = true;
 
         assert!(normalize_ai_settings(&mut settings));
-        assert_eq!(settings.schema_version, 7);
+        assert_eq!(settings.schema_version, 8);
         assert!(!settings.provider_credentials.is_empty());
         assert!(
             settings

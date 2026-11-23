@@ -153,6 +153,18 @@ pub(in crate::features) struct TextInputRegistry {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn retain_acp_inputs(
+        &mut self,
+        valid: &std::collections::HashSet<String>,
+    ) {
+        self.text_inputs
+            .fields
+            .retain(|id, _| !id.starts_with("ai.agent.") || valid.contains(id.as_ref()));
+        self.text_inputs
+            .subscriptions
+            .retain(|id, _| !id.starts_with("ai.agent.") || valid.contains(id.as_ref()));
+    }
+
     /// Navigation and locking hide values without discarding unsaved drafts.
     pub(in crate::features) fn hide_secret_inputs(&mut self, cx: &mut Context<Self>) {
         self.hide_ai_provider_secret(cx);
@@ -619,6 +631,8 @@ impl NyaTermApp {
             self.apply_ai_action_input(field_id, text, cx);
         } else if let Some(group_key) = id.strip_prefix("ai.settings.manual-model.") {
             self.apply_ai_manual_model_input(group_key, text, cx);
+        } else if let Some(rest) = id.strip_prefix("ai.agent.") {
+            self.apply_acp_profile_input(rest, text, cx);
         } else if let Some(rest) = id.strip_prefix("ai.credential.") {
             self.apply_ai_credential_input(rest, text, cx);
         } else if let Some(field) = id

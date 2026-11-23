@@ -115,6 +115,119 @@ impl AiFeatureState {
         }
     }
 
+    pub(in crate::features) fn edit_external_profile(
+        &mut self,
+        id: &str,
+        action: &str,
+        value: String,
+    ) -> Result<bool, &'static str> {
+        use nyaterm_core::ai::external_agents::{
+            AgentEnvironmentVariable, ExternalAgentProfile, migrate_profiles,
+        };
+        migrate_profiles(&mut self.settings.config);
+        let profiles = self
+            .settings
+            .config
+            .external_agents
+            .as_mut()
+            .expect("normalized profiles");
+        if action == "add" {
+            profiles.push(ExternalAgentProfile::new(nyaterm_core::uuid(), &value));
+        } else {
+            let Some(index) = profiles.iter().position(|p| p.id == id) else {
+                return Ok(false);
+            };
+            if action == "delete" {
+                profiles.remove(index);
+            } else if action == "copy" {
+                let mut profile = profiles[index].clone();
+                profile.id = nyaterm_core::uuid();
+                profile.name.push_str(" (copy)");
+                profile.enabled = false;
+                // A duplicate has a new identity and must not carry saved secret masks.
+                for variable in &mut profile.environment {
+                    variable.value = Default::default();
+                }
+                profiles.push(profile);
+            } else {
+                let mut profile = profiles[index].clone();
+                let optional = || (!value.trim().is_empty()).then(|| value.clone());
+                match action {
+                    "name" => profile.name = value,
+                    "executable" => profile.executable = value,
+                    "strategy" => {
+                        profile.strategy.0 = value;
+                        profile.enabled = false;
+                    }
+                    "args" => {
+                        profile.args = serde_json::from_str(&value)
+                            .map_err(|_| "Arguments must be a JSON array of strings")?
+                    }
+                    "cwd" => profile.working_directory = optional(),
+                    "config" => profile.config_directory = optional(),
+                    "model" => profile.default_model = optional(),
+                    "enabled" => profile.enabled = !profile.enabled && profile.strategy.supported(),
+                    "persistent" => profile.persistent = !profile.persistent,
+                    "add-env" => {
+                        let name = (1..)
+                            .map(|i| format!("VARIABLE_{i}"))
+                            .find(|name| {
+                                !profile
+                                    .environment
+                                    .iter()
+                                    .any(|e| e.name.eq_ignore_ascii_case(name))
+                            })
+                            .unwrap();
+                        profile.environment.push(AgentEnvironmentVariable {
+                            id: nyaterm_core::uuid(),
+                            name,
+                            value: Default::default(),
+                        });
+                    }
+                    field => {
+                        let Some((row, field)) =
+                            field.strip_prefix("env.").and_then(|s| s.rsplit_once('.'))
+                        else {
+                            return Ok(false);
+                        };
+                        if field == "delete" {
+                            profile.environment.retain(|e| e.id != row);
+                        } else if let Some(env) =
+                            profile.environment.iter_mut().find(|e| e.id == row)
+                        {
+                            match field {
+                                "name" => env.name = value,
+                                "value" => env.value = value.into(),
+                                _ => return Ok(false),
+                            }
+                        }
+                    }
+                }
+                profile.validate()?;
+                if !matches!(action, "name" | "enabled" | "model") && profile != profiles[index] {
+                    profile.revision = profile
+                        .revision
+                        .checked_add(1)
+                        .ok_or("Agent revision exhausted")?;
+                }
+                profiles[index] = profile;
+            }
+        }
+        if action == "delete"
+            && nyaterm_core::ai::external_agents::profile_id(
+                &self.settings.config.default_agent_kind,
+            ) == Some(id)
+        {
+            self.settings.config.default_agent_kind = AiAgentKind::Nyaterm;
+        }
+        self.agent_management.invalidate();
+        Ok(true)
+    }
+
+    pub(in crate::features) fn cancel_agent_management(&mut self) {
+        self.agent_management.invalidate();
+    }
+
     pub(in crate::features) fn settings_config(&self) -> &AiSettings {
         &self.settings.config
     }
@@ -174,22 +287,6 @@ impl AiFeatureState {
                 self.settings.config.external_mcp.permission_mode = mode
             }
         }
-    }
-
-    pub(in crate::features) fn toggle_settings_codex_enabled(&mut self) {
-        self.settings.config.codex.enabled = !self.settings.config.codex.enabled;
-    }
-
-    pub(in crate::features) fn toggle_settings_codex_mcp_integration(&mut self) {
-        toggle_mcp_integration(&mut self.settings.config.codex.tool_integration_mode);
-    }
-
-    pub(in crate::features) fn toggle_settings_claude_enabled(&mut self) {
-        self.settings.config.claude_code.enabled = !self.settings.config.claude_code.enabled;
-    }
-
-    pub(in crate::features) fn toggle_settings_claude_mcp_integration(&mut self) {
-        toggle_mcp_integration(&mut self.settings.config.claude_code.tool_integration_mode);
     }
 
     pub(in crate::features) fn toggle_settings_mcp_enabled(&mut self) {
@@ -1298,14 +1395,6 @@ impl AiFeatureState {
             }
         }
         discoveries.len()
-    }
-}
-
-fn toggle_mcp_integration(mode: &mut Option<String>) {
-    if mode.as_deref() == Some("nyaterm_mcp") {
-        *mode = None;
-    } else {
-        *mode = Some("nyaterm_mcp".to_string());
     }
 }
 

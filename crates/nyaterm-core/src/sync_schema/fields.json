@@ -499,6 +499,7 @@
   "AiSettings": {
     "source": "ai/mod.rs",
     "fields": {
+      "external_agents": "local",
       "proxy": "local",
       "schema_version": "local",
       "enabled": "local",

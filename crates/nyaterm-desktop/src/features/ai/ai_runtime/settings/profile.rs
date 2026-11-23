@@ -162,26 +162,6 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    pub(in crate::features) fn toggle_ai_codex_enabled(&mut self, cx: &mut Context<Self>) {
-        self.ai.toggle_settings_codex_enabled();
-        self.persist_ai_settings_now(cx);
-    }
-
-    pub(in crate::features) fn toggle_ai_codex_mcp_integration(&mut self, cx: &mut Context<Self>) {
-        self.ai.toggle_settings_codex_mcp_integration();
-        self.persist_ai_settings_now(cx);
-    }
-
-    pub(in crate::features) fn toggle_ai_claude_enabled(&mut self, cx: &mut Context<Self>) {
-        self.ai.toggle_settings_claude_enabled();
-        self.persist_ai_settings_now(cx);
-    }
-
-    pub(in crate::features) fn toggle_ai_claude_mcp_integration(&mut self, cx: &mut Context<Self>) {
-        self.ai.toggle_settings_claude_mcp_integration();
-        self.persist_ai_settings_now(cx);
-    }
-
     pub(in crate::features) fn toggle_ai_mcp_enabled(&mut self, cx: &mut Context<Self>) {
         self.ai.toggle_settings_mcp_enabled();
         self.persist_ai_settings_now(cx);

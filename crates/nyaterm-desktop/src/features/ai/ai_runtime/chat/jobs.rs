@@ -152,22 +152,12 @@ impl NyaTermApp {
                 ..Default::default()
             },
         };
-        let external_agent = matches!(
-            request.agent_kind,
-            AiAgentKind::Codex | AiAgentKind::ClaudeCode
-        );
-        let tool_integration_enabled = match request.agent_kind {
-            AiAgentKind::Codex => {
-                settings.codex.tool_integration_mode.as_deref() == Some("nyaterm_mcp")
-            }
-            AiAgentKind::ClaudeCode => {
-                settings.claude_code.tool_integration_mode.as_deref() == Some("nyaterm_mcp")
-            }
-            AiAgentKind::Nyaterm => true,
-        };
-        if external_agent && !tool_integration_enabled {
+        let external_agent = request.agent_kind != AiAgentKind::Nyaterm;
+        if external_agent
+            && !nyaterm_core::ai::external_agents::is_enabled(&settings, &request.agent_kind)
+        {
             self.ai.reject_chat_start(
-                "External agents require strict NyaTerm MCP tool integration",
+                "External Agent is disabled or its strategy is unsupported",
                 true,
             );
             self.defer_ai_panel_snapshot_flush(cx);

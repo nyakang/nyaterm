@@ -748,7 +748,9 @@ fn ask_then_agent_restores_the_previous_agent_runtime() {
     let (app, vcx) = compact_host(&mut cx, root.path());
     vcx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.ai.toggle_settings_codex_enabled();
+            app.ai
+                .edit_external_profile("builtin-codex", "enabled", String::new())
+                .unwrap();
             app.set_ai_run_mode(AiMode::Agent, AiAgentKind::Codex, cx);
         });
     });

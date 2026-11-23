@@ -69,6 +69,8 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+agent-client-protocol = { version = "=5.5.1", features = ["unstable_auth_status"] }
+blocking = "1"
 nyaterm-remote-monitor-gpui = { path = "crates/nyaterm-remote-monitor-gpui" }
 nyaterm-connections-gpui = { path = "crates/nyaterm-connections-gpui" }
 nyaterm-file-browser-gpui = { path = "crates/nyaterm-file-browser-gpui" }

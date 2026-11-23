@@ -6527,7 +6527,7 @@ fn ai_settings_loads_and_normalizes_legacy_embedded_settings() {
     store.save_settings_value(&raw).expect("save raw settings");
 
     let loaded = store.load_ai_settings().expect("load ai");
-    assert_eq!(loaded.schema_version, 7);
+    assert_eq!(loaded.schema_version, 8);
     assert_eq!(loaded.active_profile_id, "ollama");
     assert_eq!(loaded.default_model_id.as_deref(), Some("ollama:llama3"));
     assert!(!loaded.provider_credentials.is_empty());
@@ -6587,7 +6587,7 @@ fn ai_settings_v6_preserves_unknown_fields_and_drops_explicitly_deprecated_field
     store.save_settings_value(&raw).expect("seed settings");
 
     let mut loaded = store.load_ai_settings().expect("load settings");
-    assert_eq!(loaded.schema_version, 7);
+    assert_eq!(loaded.schema_version, 8);
     assert_eq!(
         loaded.external_mcp.terminal_display_mode,
         nyaterm_core::McpTerminalDisplayMode::Inline
@@ -9973,4 +9973,84 @@ fn unsupported_networktools_documents_are_not_replaced_when_saving_defaults() {
         );
         assert_eq!(store.load_settings_value().unwrap(), raw);
     }
+}
+
+#[test]
+fn acp_profiles_encrypt_environment_and_preserve_backup_sync_and_future_fields() {
+    use nyaterm_core::ai::external_agents::{AgentEnvironmentVariable, ExternalAgentProfile};
+    let dir = unique_temp_dir("acp-profile-secrets");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut profile = ExternalAgentProfile::new("fixture-agent".into(), "future-strategy");
+    profile
+        .extra
+        .insert("future_option".into(), serde_json::json!({"version":9}));
+    profile.environment.push(AgentEnvironmentVariable {
+        id: "token-row".into(),
+        name: "AUTH_TOKEN".into(),
+        value: "acp-secret-fixture".into(),
+    });
+    let settings = AiSettings {
+        external_agents: Some(vec![profile]),
+        ..Default::default()
+    };
+    let saved = store.save_ai_settings(settings).unwrap();
+    assert!(
+        !store
+            .load_settings_value()
+            .unwrap()
+            .to_string()
+            .contains("acp-secret-fixture")
+    );
+    assert_eq!(store.load_ai_settings().unwrap(), saved);
+    assert_eq!(
+        store
+            .save_ai_settings(nyaterm_core::mask_ai_settings(saved.clone()))
+            .unwrap(),
+        saved
+    );
+    let restored_dir = unique_temp_dir("acp-profile-restore");
+    let restored = ConnectionStore::open(&restored_dir).unwrap();
+    for kind in [PortableSnapshotKind::Backup, PortableSnapshotKind::Sync] {
+        let mut snapshot = store
+            .build_raw_portable_snapshot(kind, "fixture", "2.0.0")
+            .unwrap();
+        snapshot.recalculate_hash().unwrap();
+        assert!(!snapshot.entities["settings"].contains("acp-secret-fixture"));
+        restored.apply_raw_portable_snapshot(&snapshot).unwrap();
+        assert_eq!(restored.load_ai_settings().unwrap(), saved);
+    }
+    let mut invalid = saved.clone();
+    invalid.external_agents.as_mut().unwrap()[0].environment[0].name = "INVALID=NAME".into();
+    assert!(store.save_ai_settings(invalid).is_err());
+    assert_eq!(store.load_ai_settings().unwrap(), saved);
+    let mut masked = nyaterm_core::mask_ai_settings(saved.clone());
+    masked.external_agents.as_mut().unwrap()[0].environment[0].id = "replacement".into();
+    let cleared = store.save_ai_settings(masked).unwrap();
+    assert!(
+        cleared.external_agents.unwrap()[0].environment[0]
+            .value
+            .is_empty()
+    );
+    store.save_ai_settings(saved.clone()).unwrap();
+    let mut corrupted = store.load_settings_value().unwrap();
+    corrupted["ai"]["external_agents"][0]["environment"][0]["value"] =
+        serde_json::json!("enc:v1:corrupt-fixture");
+    store.save_settings_value(&corrupted).unwrap();
+    assert!(store.load_ai_settings().is_err());
+    assert!(store.save_ai_settings(saved).is_err());
+    assert_eq!(store.load_settings_value().unwrap(), corrupted);
+}
+
+#[test]
+fn removed_acp_profiles_are_not_resurrected_by_legacy_enabled_flags() {
+    let dir = unique_temp_dir("acp-profile-removal");
+    let store = ConnectionStore::open(&dir).unwrap();
+    let mut settings = AiSettings::default();
+    settings.codex.enabled = true;
+    settings.external_agents = Some(vec![]);
+    store.save_ai_settings(settings).unwrap();
+    assert_eq!(
+        store.load_ai_settings().unwrap().external_agents,
+        Some(vec![])
+    );
 }

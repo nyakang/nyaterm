@@ -1,5 +1,6 @@
 //! AI chat, agent loop, background jobs and AI settings runtime.
 
+mod acp_runtime;
 pub(in crate::features) mod agent_management;
 mod ai_agent_runtime;
 mod ai_jobs;

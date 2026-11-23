@@ -14,6 +14,7 @@ use nyaterm_ui::presentation::compact_id;
 pub fn agent_kind_display_name(kind: &AiAgentKind) -> &'static str {
     match kind {
         AiAgentKind::Nyaterm => "NyaTerm",
+        AiAgentKind::Acp(_) => "ACP Agent",
         AiAgentKind::Codex => "Codex",
         AiAgentKind::ClaudeCode => "Claude Code",
     }
