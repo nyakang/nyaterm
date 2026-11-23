@@ -617,7 +617,7 @@ fn terminal_view_output_discontinuity_resets_all_stream_decoders() {
 fn terminal_view_output_skips_graphics_payload() {
     let mut view = TerminalViewState::new();
 
-    view.append_bytes_unprotected(b"pre\x1b_Ga=T,i=1,c=1,r=1;QUI=\x1b\\post");
+    view.append_bytes_unprotected(b"pre\x1b_Ga=T,i=1,c=1,r=1,C=1;QUI=\x1b\\post");
 
     assert_eq!(view.output, "prepost");
     assert!(view.screen.lines().join("").contains("prepost"));

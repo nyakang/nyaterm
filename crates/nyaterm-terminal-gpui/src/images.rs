@@ -512,6 +512,7 @@ fn cached_render_image_poll(placement_id: u64, content_id: u64) -> CachedRenderI
 #[cfg(test)]
 mod tests {
     use gpui::RenderImage;
+    use nyaterm_terminal::TerminalScreen;
 
     use super::{
         CachedRenderImage, DecodeCache, MAX_DECODE_CACHE_ENTRIES, MAX_DECODED_IMAGE_BYTES,
@@ -666,6 +667,27 @@ mod tests {
         let size = image.size(0);
         assert_eq!(u32::from(size.width), 1);
         assert_eq!(u32::from(size.height), 1);
+    }
+
+    #[test]
+    fn decodes_chunked_kitty_png_from_terminal_snapshot() {
+        let mut terminal = TerminalScreen::new(20, 8);
+        // A 1x1 PNG with a half-transparent red pixel.
+        terminal.advance(
+            b"\x1b_Ga=T,t=d,f=100,i=42,c=2,r=1,C=1,q=2,m=1;iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB\x1b\\",
+        );
+        assert!(terminal.snapshot().images.is_empty());
+        terminal.advance(b"\x1b_Gm=1;CAYAAAAfFcSJAAAADUlEQVR4nGP4z8DQ\x1b\\");
+        terminal.advance(b"\x1b_Gm=0;AAAEgQGALFXOsAAAAABJRU5ErkJggg==\x1b\\");
+
+        let snapshot = terminal.snapshot();
+        let [placement] = snapshot.images.as_slice() else {
+            panic!("expected one Kitty placement");
+        };
+        let image = decode_render_image(&placement.data).expect("decode Kitty PNG for GPUI");
+        assert_eq!(image.frame_count(), 1);
+        let size = image.size(0);
+        assert_eq!((u32::from(size.width), u32::from(size.height)), (1, 1));
     }
 
     #[test]

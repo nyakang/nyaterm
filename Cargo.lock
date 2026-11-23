@@ -7710,6 +7710,7 @@ name = "nyaterm-terminal"
 version = "2.0.8"
 dependencies = [
  "alacritty_terminal",
+ "base64 0.22.1",
  "encoding_rs",
  "flate2",
  "memchr",
