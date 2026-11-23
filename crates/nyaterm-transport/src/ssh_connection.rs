@@ -361,8 +361,11 @@ pub fn open_ssh_multiplex_handle(
     config.apply_runtime_policy().map_err(anyhow::Error::msg)?;
     let agent_forwarding_config = effective_agent_forwarding_config(&config);
     let agent_stored_key_revision = current_agent_stored_key_revision(&config);
+    // Each connection owns a runtime, including connections shared by several tabs.
+    // A CPU-sized pool per connection multiplies idle threads on larger machines.
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .thread_name("nyaterm-ssh-multiplex")
             .build()
