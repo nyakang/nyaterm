@@ -10,7 +10,6 @@
 
 mod common;
 mod panel;
-mod runtime;
 mod state;
 mod tftp;
 mod window;
@@ -24,9 +23,9 @@ use nyaterm_transport::networktools::{
 use nyaterm_ui::notification::NyaNotificationKind;
 use rust_i18n::t;
 
-use self::runtime::RuntimeCommand;
 use crate::features::NyaTermApp;
 use crate::features::networktools::common::ids;
+use nyaterm_transport::networktools::runtime::RuntimeCommand;
 
 pub(in crate::features) use state::NetworkToolsFeatureState;
 

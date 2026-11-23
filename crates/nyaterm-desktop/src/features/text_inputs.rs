@@ -11,6 +11,7 @@
 //! A panel needs no state of its own beyond the value it already keeps, and
 //! edits arrive as one event with the id attached.
 
+pub(in crate::features) use nyaterm_ui::presentation::number_input_box_from_state;
 use std::collections::HashMap;
 
 use gpui::{
@@ -20,8 +21,7 @@ use gpui::{
 };
 use nyaterm_ui::{
     NYA_FORM_CONTROL_HEIGHT_PX, NyaInput, NyaInputEvent, NyaInputKind, NyaInputShell,
-    NyaInputState, NyaNumberInput, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState,
-    NyaSearchInput,
+    NyaInputState, NyaNumberInputEvent, NyaNumberInputOptions, NyaNumberInputState, NyaSearchInput,
 };
 
 use super::NyaTermApp;
@@ -828,34 +828,6 @@ fn parse_u32_input(text: &str) -> Option<u32> {
 
 fn parse_u64_input(text: &str) -> Option<u64> {
     text.trim().parse::<u64>().ok()
-}
-
-/// The number-input box, built from a state entity the caller already holds.
-///
-/// Split out of `number_input_box` so a panel rendering from a snapshot can build the box
-/// without reaching for the app -- the app creates the entity at flush time and hands the
-/// handle over.
-pub(in crate::features) fn number_input_box_from_state(
-    id: SharedString,
-    palette: crate::theme::ThemePalette,
-    field: Entity<NyaNumberInputState>,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        // The form or toolbar owns the width, just as for text inputs and selects.
-        .w_full()
-        .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
-        .min_w_0()
-        .flex()
-        .items_center()
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .text_xs()
-                .text_color(rgb(palette.text))
-                .child(NyaNumberInput::new(&field)),
-        )
 }
 
 #[cfg(test)]

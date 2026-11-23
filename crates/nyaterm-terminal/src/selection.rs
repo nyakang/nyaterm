@@ -3,6 +3,7 @@
 use crate::{RenderCell, TerminalHistoryState, TerminalSnapshot};
 
 mod text;
+pub mod words;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionTextError {

@@ -8,7 +8,9 @@ pub mod command_blocks;
 pub mod decorations;
 pub mod ime;
 pub mod scrollbar;
+pub mod selection;
 mod types;
+pub mod wheel_zoom;
 
 mod ansi;
 mod contrast;

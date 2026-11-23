@@ -1,0 +1,545 @@
+use super::super::panels::RemoteMonitorPanel;
+use super::{DockerRenderContext, docker_menu_layer};
+use crate::actions::RemoteMonitorAction;
+use crate::formatting::{docker_state_color, docker_state_rank};
+use crate::models::{DockerConfirmAction, DockerConfirmState};
+use gpui::{
+    Context, FontWeight, IntoElement, MouseButton, SharedString, UniformListScrollHandle, div,
+    prelude::*, px, rgb, rgba, uniform_list,
+};
+use nyaterm_remote_ops::docker::DockerContainer;
+use nyaterm_ui::ThemePalette;
+use nyaterm_ui::presentation::{compact_id, gpui_code_font_family};
+use nyaterm_ui::{NyaScrollable, NyaTooltip};
+use nyaterm_ui::{empty_panel, status_pill, svg_icon_button};
+use rust_i18n::t;
+use std::sync::Arc;
+
+pub(crate) struct DockerContainersPanelState {
+    pub has_snapshot: bool,
+    pub has_session: bool,
+    pub docker_available: bool,
+    pub filtered_containers: Arc<[DockerContainer]>,
+    pub query_empty: bool,
+    pub open_menu_id: Option<String>,
+}
+
+pub(crate) fn docker_containers_panel(
+    context: DockerRenderContext,
+    state: DockerContainersPanelState,
+    scroll: UniformListScrollHandle,
+    cx: &mut Context<RemoteMonitorPanel>,
+) -> impl IntoElement {
+    let DockerRenderContext {
+        palette,
+        ref labels,
+        ..
+    } = context;
+    let DockerContainersPanelState {
+        has_snapshot,
+        has_session,
+        docker_available,
+        filtered_containers,
+        query_empty,
+        open_menu_id,
+    } = state;
+    // Tauri Docker containers tab: dense ~66px rows, left accent, ⋮ action menu.
+    if !has_snapshot {
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(empty_panel(
+                if has_session {
+                    labels.error.clone()
+                } else {
+                    labels.no_session.clone()
+                },
+                palette,
+            ))
+            .into_any_element();
+    }
+    if !docker_available {
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(empty_panel(labels.unavailable.clone(), palette))
+            .into_any_element();
+    }
+    if filtered_containers.is_empty() {
+        return div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(empty_panel(
+                if query_empty {
+                    labels.no_containers.clone()
+                } else {
+                    labels.no_matches.clone()
+                },
+                palette,
+            ))
+            .into_any_element();
+    }
+
+    let mut containers = filtered_containers.to_vec();
+    containers.sort_by(|left, right| {
+        docker_state_rank(&left.state)
+            .cmp(&docker_state_rank(&right.state))
+            .then(left.name.cmp(&right.name))
+    });
+
+    let containers: Arc<[DockerContainer]> = containers.into();
+    let total = containers.len();
+    let rows_context = context.clone();
+    let rows = uniform_list(
+        "docker-container-rows",
+        total,
+        cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
+            range
+                .filter_map(|index| containers.get(index).cloned())
+                .map(|container| {
+                    let menu_open = open_menu_id.as_deref() == Some(container.id.as_str());
+                    div()
+                        .h(px(66.))
+                        .pb(px(6.))
+                        .flex_none()
+                        .child(docker_container_row(
+                            rows_context.clone(),
+                            container,
+                            menu_open,
+                            cx,
+                        ))
+                        .into_any_element()
+                })
+                .collect()
+        }),
+    )
+    .size_full()
+    .track_scroll(&scroll);
+
+    div()
+        .id(SharedString::from("docker-containers-scroll"))
+        .relative()
+        .size_full()
+        .overflow_hidden()
+        .child(rows)
+        .vertical_scrollbar(&scroll)
+        .into_any_element()
+}
+
+fn docker_container_row(
+    context: DockerRenderContext,
+    container: DockerContainer,
+    menu_open: bool,
+    cx: &mut Context<RemoteMonitorPanel>,
+) -> impl IntoElement {
+    let DockerRenderContext {
+        palette,
+        ref labels,
+        ..
+    } = context;
+    let container_id = container.id.clone();
+    let details_id = container.id.clone();
+    let menu_id = container.id.clone();
+    let state = container.state.clone();
+    let running = state.trim().eq_ignore_ascii_case("running");
+    let can_start = can_start_docker_container(&state);
+    let can_stop = can_stop_docker_container(&state);
+    let accent = docker_state_border_color(palette, &state);
+    let short = compact_id(&container.id);
+    let name_tooltip = container.name.clone();
+    let image_tooltip = container.image.clone();
+
+    div()
+        .id(SharedString::from(format!("docker-container-{short}")))
+        .relative()
+        .h(px(60.))
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(palette.border))
+        // Left accent bar painted as absolute child.
+        .bg(rgba((palette.surface_elevated << 8) | 0x08))
+        .hover(move |this| this.bg(rgba((palette.link << 8) | 0x0f)))
+        .cursor_pointer()
+        .overflow_hidden()
+        .child(
+            // Left state accent
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(3.))
+                .bg(accent),
+        )
+        .child(
+            div()
+                .size_full()
+                .px_3()
+                .py(px(6.))
+                .pl(px(12.))
+                .pr(px(36.))
+                .flex()
+                .flex_col()
+                .justify_center()
+                // Keep both single-line rows inside the fixed virtual-list item height.
+                .line_height(px(16.))
+                .gap(px(4.))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("container-name")
+                                .min_w_0()
+                                .flex_1()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight(600.))
+                                .text_color(rgb(palette.text))
+                                .truncate()
+                                .tooltip(move |window, cx| {
+                                    NyaTooltip::new(name_tooltip.clone()).build(window, cx)
+                                })
+                                .child(container.name.clone()),
+                        )
+                        .child(div().flex_none().whitespace_nowrap().child(status_pill(
+                            labels.state_label(&container.state),
+                            docker_state_color(palette, &container.state),
+                            rgb(0x17233a),
+                        ))),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .font_family(gpui_code_font_family())
+                        .text_size(px(10.))
+                        .line_height(px(14.))
+                        .text_color(rgb(palette.text_dimmed))
+                        .child(
+                            div()
+                                .id("container-image")
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .tooltip(move |window, cx| {
+                                    NyaTooltip::new(image_tooltip.clone()).build(window, cx)
+                                })
+                                .child(container.image.clone()),
+                        )
+                        .child(div().flex_none().child(short.clone())),
+                ),
+        )
+        .on_click(cx.listener(move |panel, _, window, cx| {
+            {
+                panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                panel.dispatch_in(
+                    RemoteMonitorAction::ContainerDetails(details_id.clone()),
+                    window,
+                    cx,
+                );
+            };
+        }))
+        .child(
+            div().absolute().top(px(8.)).right(px(6.)).child(
+                div()
+                    .relative()
+                    .child(svg_icon_button(
+                        format!("docker-menu-toggle-{short}"),
+                        "icons/session/more.svg",
+                        14.,
+                        t!("dockerManager.moreActions").to_string(),
+                        palette,
+                        cx.listener(move |panel, _, _, cx| {
+                            {
+                                cx.stop_propagation();
+                                panel.dispatch(
+                                    RemoteMonitorAction::ToggleContainerMenu(menu_id.clone()),
+                                    cx,
+                                );
+                            };
+                        }),
+                    ))
+                    .when(menu_open, |this| {
+                        this.child(docker_menu_layer(docker_container_action_menu(
+                            context,
+                            container_id.clone(),
+                            container.name.clone(),
+                            running,
+                            can_start,
+                            can_stop,
+                            cx,
+                        )))
+                    }),
+            ),
+        )
+}
+
+fn docker_container_action_menu(
+    context: DockerRenderContext,
+    container_id: String,
+    container_name: String,
+    running: bool,
+    can_start: bool,
+    can_stop: bool,
+    cx: &mut Context<RemoteMonitorPanel>,
+) -> impl IntoElement {
+    let DockerRenderContext {
+        palette,
+        menu_bg,
+        labels,
+    } = context;
+    let short = compact_id(&container_id);
+    let logs_id = container_id.clone();
+    let enter_id = container_id.clone();
+    let start_id = container_id.clone();
+    let stop_id = container_id.clone();
+    let restart_id = container_id.clone();
+    let kill_id = container_id.clone();
+    let remove_id = container_id.clone();
+    let kill_name = container_name.clone();
+    let remove_name = container_name;
+
+    div()
+        .id(SharedString::from(format!("docker-menu-{short}")))
+        .w(px(148.))
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(menu_bg)
+        .shadow_lg()
+        .py_1()
+        .flex()
+        .flex_col()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-logs-{short}"),
+            labels.logs.clone(),
+            false,
+            cx.listener(move |panel, _, _, cx| {
+                {
+                    panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                    panel.dispatch(RemoteMonitorAction::ContainerLogs(logs_id.clone()), cx);
+                };
+            }),
+        ))
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-enter-{short}"),
+            labels.enter.clone(),
+            !running,
+            cx.listener(move |panel, _, _, cx| {
+                {
+                    panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                    panel.dispatch(RemoteMonitorAction::ContainerTerminal(enter_id.clone()), cx);
+                };
+            }),
+        ))
+        .child(docker_menu_separator(palette))
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-start-{short}"),
+            labels.start.clone(),
+            !can_start,
+            cx.listener(move |panel, _, window, cx| {
+                {
+                    panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                    panel.dispatch_in(
+                        RemoteMonitorAction::ContainerAction(start_id.clone(), "start"),
+                        window,
+                        cx,
+                    );
+                };
+            }),
+        ))
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-stop-{short}"),
+            labels.stop.clone(),
+            !can_stop,
+            cx.listener(move |panel, _, window, cx| {
+                {
+                    panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                    panel.dispatch_in(
+                        RemoteMonitorAction::ContainerAction(stop_id.clone(), "stop"),
+                        window,
+                        cx,
+                    );
+                };
+            }),
+        ))
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-restart-{short}"),
+            labels.restart.clone(),
+            false,
+            cx.listener(move |panel, _, window, cx| {
+                {
+                    panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                    panel.dispatch_in(
+                        RemoteMonitorAction::ContainerAction(restart_id.clone(), "restart"),
+                        window,
+                        cx,
+                    );
+                };
+            }),
+        ))
+        .child(docker_menu_separator(palette))
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-kill-{short}"),
+            labels.kill.clone(),
+            !running,
+            cx.listener({
+                let kill_labels = labels.clone();
+                move |panel, _, window, cx| {
+                    {
+                        panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                        let target = if kill_name.trim().is_empty() {
+                            compact_id(&kill_id)
+                        } else {
+                            kill_name.clone()
+                        };
+                        panel.dispatch_in(
+                            RemoteMonitorAction::ConfirmDocker(DockerConfirmState {
+                                title: kill_labels.confirm_action_title.to_string(),
+                                detail: kill_labels.confirm_description(&kill_labels.kill, &target),
+                                action: DockerConfirmAction::ContainerAction {
+                                    container_id: kill_id.clone(),
+                                    action: "kill",
+                                },
+                            }),
+                            window,
+                            cx,
+                        );
+                    };
+                }
+            }),
+        ))
+        .child(docker_menu_item(
+            palette,
+            format!("docker-menu-remove-{short}"),
+            labels.delete.clone(),
+            false,
+            cx.listener({
+                let remove_labels = labels.clone();
+                move |panel, _, window, cx| {
+                    {
+                        panel.dispatch(RemoteMonitorAction::CloseContainerMenu, cx);
+                        let target = if remove_name.trim().is_empty() {
+                            compact_id(&remove_id)
+                        } else {
+                            remove_name.clone()
+                        };
+                        panel.dispatch_in(
+                            RemoteMonitorAction::ConfirmDocker(DockerConfirmState {
+                                title: remove_labels.confirm_action_title.to_string(),
+                                detail: remove_labels
+                                    .confirm_description(&remove_labels.delete, &target),
+                                action: DockerConfirmAction::ContainerAction {
+                                    container_id: remove_id.clone(),
+                                    action: "remove",
+                                },
+                            }),
+                            window,
+                            cx,
+                        );
+                    };
+                }
+            }),
+        ))
+}
+
+fn can_start_docker_container(state: &str) -> bool {
+    matches!(
+        state.trim().to_ascii_lowercase().as_str(),
+        "created" | "exited"
+    )
+}
+
+fn can_stop_docker_container(state: &str) -> bool {
+    matches!(
+        state.trim().to_ascii_lowercase().as_str(),
+        "running" | "restarting"
+    )
+}
+
+fn docker_menu_item(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<SharedString>,
+    disabled: bool,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl IntoElement {
+    let label: SharedString = label.into();
+    div()
+        .id(SharedString::from(id.into()))
+        .h(px(28.))
+        .px_3()
+        .flex()
+        .items_center()
+        .text_size(px(12.))
+        .text_color(if disabled {
+            rgb(palette.border)
+        } else {
+            rgb(palette.text)
+        })
+        .when(!disabled, |this| {
+            this.cursor_pointer()
+                .hover(|s| s.bg(rgb(palette.surface_elevated)))
+                .on_click(on_click)
+        })
+        .when(disabled, |this| this.opacity(0.5))
+        .child(label)
+}
+
+fn docker_menu_separator(palette: ThemePalette) -> impl IntoElement {
+    div().h(px(1.)).mx_2().my_1().bg(rgb(palette.border))
+}
+
+fn docker_state_border_color(palette: ThemePalette, state: &str) -> gpui::Hsla {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "running" => rgb(0x22c55e).into(),
+        "restarting" | "paused" => rgb(0xf59e0b).into(),
+        "exited" | "dead" => rgb(0xef4444).into(),
+        "created" => rgb(0x3b82f6).into(),
+        _ => rgb(palette.text_dimmed).into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_start_docker_container, can_stop_docker_container};
+
+    #[test]
+    fn docker_container_actions_follow_runtime_state() {
+        for state in ["created", " exited ", "CREATED"] {
+            assert!(can_start_docker_container(state));
+            assert!(!can_stop_docker_container(state));
+        }
+        for state in ["running", " Restarting ", "RUNNING"] {
+            assert!(!can_start_docker_container(state));
+            assert!(can_stop_docker_container(state));
+        }
+        for state in ["paused", "dead", "unknown"] {
+            assert!(!can_start_docker_container(state));
+            assert!(!can_stop_docker_container(state));
+        }
+    }
+}

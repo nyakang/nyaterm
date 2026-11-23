@@ -1262,30 +1262,6 @@ fn connection_description_field(
         )
 }
 
-fn connection_editor_footer_button(
-    _palette: crate::theme::ThemePalette,
-    id: &'static str,
-    label: impl Into<SharedString>,
-    primary: bool,
-    enabled: bool,
-    disabled_tooltip: Option<String>,
-    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> impl IntoElement {
-    let mut button = nyaterm_ui::NyaButton::new(id, label)
-        .height(px(36.))
-        .variant(if primary {
-            nyaterm_ui::NyaButtonVariant::Primary
-        } else {
-            nyaterm_ui::NyaButtonVariant::Secondary
-        })
-        .disabled(!enabled)
-        .on_click(on_click);
-    if !enabled && let Some(tooltip) = disabled_tooltip {
-        button = button.tooltip(tooltip);
-    }
-    div().debug_selector(move || id.to_string()).child(button)
-}
-
 fn connection_proxy_jump_would_cycle(
     connections: &[SavedConnection],
     current_id: Option<&str>,

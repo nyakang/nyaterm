@@ -64,10 +64,9 @@ fn terminal_surface_text_first_repaint_ready(
 }
 
 mod command_blocks;
-mod wheel_zoom;
 mod wrapping;
 
-use self::wheel_zoom::TerminalWheelZoom;
+use nyaterm_terminal_gpui::wheel_zoom::TerminalWheelZoom;
 
 /// Process-wide surface paint counter (Phase 0 isolation diagnostics).
 pub(in crate::features) static TERMINAL_SURFACE_PAINT_COUNT: AtomicU64 = AtomicU64::new(0);

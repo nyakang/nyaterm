@@ -320,24 +320,7 @@ pub(in crate::features) struct AiAgentLoopState {
     pub(in crate::features) max_steps: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::features) struct AiAgentStepView {
-    pub(in crate::features) kind: crate::features::ai::presentation::AiAgentStepKind,
-    pub(in crate::features) source_message_id: Option<String>,
-    pub(in crate::features) command_card_id: Option<String>,
-    pub(in crate::features) exit_code: Option<i32>,
-    pub(in crate::features) step_index: u16,
-    pub(in crate::features) status: AiAgentStepStatus,
-    pub(in crate::features) title: String,
-    /// Short summary line (Tauri duration / status meta).
-    pub(in crate::features) detail: String,
-    /// Collapsible thought text (Tauri AgentStepView.thought).
-    pub(in crate::features) thought: Option<String>,
-    /// Shell command body when the step is execute_command-like.
-    pub(in crate::features) command: Option<String>,
-    /// Observation / terminal output snippet.
-    pub(in crate::features) observation: Option<String>,
-}
+pub(in crate::features) use nyaterm_ai_gpui::presentation::AiAgentStepView;
 
 pub(in crate::features) use nyaterm_core::ai::AiAgentStepStatus;
 

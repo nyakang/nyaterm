@@ -297,6 +297,71 @@ fn panel_header_shell(
         })
 }
 
+pub fn number_input_box_from_state(
+    id: SharedString,
+    palette: crate::ThemePalette,
+    field: Entity<NyaNumberInputState>,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        // The form or toolbar owns the width, just as for text inputs and selects.
+        .w_full()
+        .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+        .min_w_0()
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .text_xs()
+                .text_color(rgb(palette.text))
+                .child(NyaNumberInput::new(&field)),
+        )
+}
+
+pub fn format_file_size(size: Option<u64>) -> String {
+    let Some(size) = size else {
+        return String::new();
+    };
+    if size >= 1024 * 1024 {
+        format!("{:.1} MiB", size as f64 / 1024. / 1024.)
+    } else if size >= 1024 {
+        format!("{:.1} KiB", size as f64 / 1024.)
+    } else {
+        format!("{size} B")
+    }
+}
+
+pub fn gpui_code_font_family() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Consolas"
+    } else {
+        "JetBrains Mono"
+    }
+}
+
+pub fn compact_id(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= 12 {
+        trimmed.to_string()
+    } else {
+        let prefix: String = trimmed.chars().take(8).collect();
+        let suffix: String = trimmed
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        format!("{prefix}..{suffix}")
+    }
+}
+
+use crate::{NYA_FORM_CONTROL_HEIGHT_PX, NyaNumberInput, NyaNumberInputState};
+use gpui::Entity;
+
 #[cfg(test)]
 mod tests {
     use super::{menu_item, menu_separator};

@@ -1,18 +1,16 @@
 use nyaterm_ui::icons::{resolve_connection_icon, saved_connection_icon};
-use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use gpui::{
-    AnyElement, AppContext as _, ClipboardItem, Context, FontWeight, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, RenderOnce, SharedString, Window, div,
+    AnyElement, AppContext as _, Context, FontWeight, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, SharedString, div,
     prelude::{
         FluentBuilder, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
     },
     px, relative, rgb, rgba, svg,
 };
 use nyaterm_core::SavedConnection;
-use nyaterm_ui::{NyaHoverCard, NyaIconButton, NyaInput, NyaPopoverAlign, NyaPopoverPlacement};
-use rust_i18n::t;
+use nyaterm_ui::NyaInput;
 
 use crate::features::{
     connections::ConnectionDragKind, connections::ConnectionDragPayload,
@@ -26,7 +24,6 @@ use super::super::list::{
     connection_tree_indent_px,
 };
 use super::super::panel::{ConnectionListSnapshot, ConnectionPanel};
-use super::CONNECTION_ACTION_CLEARANCE_PX;
 
 fn connection_group_icon(expanded: bool) -> gpui::Svg {
     // Tauri GroupNodeItem uses Tailwind 4's text-amber-500/70.
@@ -36,166 +33,6 @@ fn connection_group_icon(expanded: bool) -> gpui::Svg {
         "icons/conn/folder.svg"
     };
     mono_icon(path, rgb(0xfe9a00).into(), 16.).opacity(0.7)
-}
-
-/// Interactive label/value card shown after hovering a saved connection.
-///
-/// `NyaHoverCard` keeps this content open while the pointer crosses from the
-/// connection name, so copy buttons remain reachable just like Tauri's
-/// hoverable TooltipContent.
-#[derive(IntoElement)]
-pub(in crate::features) struct ConnectionDetailsHoverCard {
-    connection_id: String,
-    rows: Arc<[ConnectionDetailRow]>,
-    share_text: String,
-    palette: crate::theme::ThemePalette,
-}
-
-impl ConnectionDetailsHoverCard {
-    pub(in crate::features) fn new(
-        connection_id: String,
-        rows: Arc<[ConnectionDetailRow]>,
-        share_text: String,
-        palette: crate::theme::ThemePalette,
-    ) -> Self {
-        Self {
-            connection_id,
-            rows,
-            share_text,
-            palette,
-        }
-    }
-}
-
-impl RenderOnce for ConnectionDetailsHoverCard {
-    fn render(self, _: &mut Window, _: &mut gpui::App) -> impl IntoElement {
-        let mut grid = div().flex().flex_col().gap(px(6.));
-        for (index, row) in self.rows.iter().enumerate() {
-            // connection_detail_rows always places the description last.
-            let is_description = index + 1 == self.rows.len();
-            let value = div()
-                .min_w_0()
-                .flex_1()
-                .when(is_description, |this| {
-                    let selector = format!("connection-detail-description-{}", self.connection_id);
-                    this.debug_selector(move || selector.clone())
-                        .whitespace_normal()
-                        .line_height(px(16.))
-                        .line_clamp(3)
-                        .text_ellipsis()
-                })
-                .text_size(px(11.))
-                .text_color(rgb(self.palette.text))
-                .when(!is_description && row.multiline, |this| {
-                    this.whitespace_normal()
-                })
-                .when(!is_description && !row.multiline, |this| {
-                    this.whitespace_nowrap().line_clamp(1).text_ellipsis()
-                })
-                .child(row.value.clone());
-            let copy = row.copy_value.clone().map(|copy_value| {
-                let copy_id = format!("connection-detail-copy-{}-{index}", self.connection_id);
-                let copy_selector = copy_id.clone();
-                div()
-                    .id(SharedString::from(copy_id.clone()))
-                    .debug_selector(move || copy_selector.clone())
-                    .size(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        NyaIconButton::new(format!("{copy_id}-button"), "icons/copy.svg")
-                            .icon_size(px(12.))
-                            .tooltip(t!("savedConnections.copy").to_string())
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    copy_value.clone(),
-                                ));
-                                window.notify_operation(
-                                    "copy-connection-detail",
-                                    NyaNotificationKind::Success,
-                                    t!("common.copied").to_string(),
-                                    cx,
-                                );
-                            }),
-                    )
-            });
-            let action = if is_description {
-                let share_id = format!("connection-detail-share-{}", self.connection_id);
-                let share_selector = share_id.clone();
-                let share_text = self.share_text.clone();
-                div()
-                    .id(SharedString::from(share_id.clone()))
-                    .debug_selector(move || share_selector.clone())
-                    .self_center()
-                    .size(px(20.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        NyaIconButton::new(format!("{share_id}-button"), "icons/share.svg")
-                            .icon_size(px(12.))
-                            .size(px(20.))
-                            .tooltip(t!("savedConnections.share").to_string())
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    share_text.clone(),
-                                ));
-                                window.notify_operation(
-                                    "share-connection-detail",
-                                    NyaNotificationKind::Success,
-                                    t!("common.copied").to_string(),
-                                    cx,
-                                );
-                            }),
-                    )
-                    .into_any_element()
-            } else {
-                div()
-                    .size(px(20.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .children(copy)
-                    .into_any_element()
-            };
-            let label = div()
-                .text_size(px(11.))
-                .text_color(rgb(self.palette.text_dimmed))
-                .child(row.label.clone());
-            grid = grid.child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .child(label.w(px(64.)).flex_none())
-                    .child(value)
-                    .child(action),
-            );
-        }
-
-        let content_selector = format!(
-            "connection-details-hover-card-content-{}",
-            self.connection_id
-        );
-        div()
-            .id(SharedString::from(content_selector.clone()))
-            .debug_selector(move || content_selector.clone())
-            .w(px(220.))
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(self.palette.border))
-            .bg(rgb(self.palette.surface_elevated))
-            .shadow_lg()
-            .px_2()
-            .py(px(6.))
-            .child(grid)
-    }
 }
 
 pub(in crate::features::pages::connections) fn connection_section(
@@ -523,411 +360,83 @@ pub(in crate::features::pages::connections) fn saved_connection_row(
     let show_before = drop_position == Some(ConnectionDropPosition::Before);
     let show_after = drop_position == Some(ConnectionDropPosition::After);
     let show_inside = drop_position == Some(ConnectionDropPosition::Inside);
-    // Tauri ConnectionItem: py-1.5 single-line row (~34px) with hover actions.
     let palette = snapshot.chrome.palette;
-    let row_selector = format!("connection-row-{}", connection.id);
-    let name_selector = format!("connection-row-name-{}", connection.id);
-    div()
-        .id(SharedString::from(row_selector.clone()))
-        .debug_selector(move || row_selector.clone())
-        .relative()
-        .h(px(34.))
-        // The list scrolls sideways, so a row is at least the panel width and
-        // grows past it when the name is long.
-        .min_w(relative(1.))
-        .flex()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .pl(px(connection_tree_indent_px(depth)))
-        .bg(if selected {
-            rgba((palette.primary << 8) | 0x1a)
-        } else if keyboard_active {
-            rgba((palette.primary << 8) | 0x12)
-        } else if show_inside {
-            rgb(palette.hover)
-        } else {
-            rgba(0x00000000)
-        })
-        .when(keyboard_active && !selected, |this| {
-            this.border_1().border_color(rgb(palette.primary))
-        })
-        .hover(move |this| this.bg(rgb(palette.hover)))
-        .when(show_inside, |this| {
-            this.border_1().border_color(rgb(palette.link))
-        })
-        .cursor_default()
-        .on_drag(
-            ConnectionDragPayload {
-                icon: Some(icon_def),
-                custom_icon: custom_icon.clone(),
-                palette,
-                panel: cx.weak_entity(),
-                kind: ConnectionDragKind::Connection,
-                id: connection.id.clone(),
-                label: connection.name.clone(),
-            },
-            move |payload, position, window, cx| {
-                // GPUI installs the active drag after this constructor returns.
-                window.defer(cx, |window, cx| {
-                    cx.set_active_drag_cursor_style(gpui::CursorStyle::ClosedHand, window);
-                });
-                let _ = payload.panel.update(cx, |panel, cx| {
-                    panel.arm_tree_drag(
-                        payload,
-                        window.mouse_position(),
-                        drag_scroll.bounds(),
-                        drag_scroll.clone(),
-                        cx,
-                    )
-                });
-                cx.new(|_| ConnectionDragPreview::new(payload.clone(), position))
-            },
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _, _, cx| {
-                cx.stop_propagation();
-            }),
-        )
-        // Aims the list's one context menu at this row. Capture, so it runs
-        // before the menu is built and regardless of who stops the bubble.
-        .capture_any_mouse_down(
-            cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
-                window.focus(panel.focus_handle(), cx);
-                panel.with_app(cx, |this, cx| {
-                    if event.button == MouseButton::Right {
-                        this.prepare_connection_context_menu(menu_id.clone(), cx);
-                    }
-                })
-            }),
-        )
-        .on_click(
-            cx.listener(move |panel, event: &gpui::ClickEvent, window, cx| {
-                panel.with_app(cx, |this, cx| {
-                    cx.stop_propagation();
-                    if event.click_count() >= 2 {
-                        this.start_saved_connection(connect_connection_dbl.clone(), window, cx);
-                        return;
-                    }
-                    let modifiers = event.modifiers();
-                    let additive = modifiers.control || modifiers.platform;
-                    let range = modifiers.shift;
-                    this.select_connection(select_id.clone(), additive, range, cx);
-                })
-            }),
-        )
-        // Match Tauri's hoverable TooltipContent with a real HoverCard: the
-        // pointer can cross into the card and click host/port/user copy buttons.
-        .child(
-            NyaHoverCard::new(
-                format!("connection-details-hover-card-{}", connection.id),
-                div()
-                    .id(SharedString::from(name_selector.clone()))
-                    .debug_selector(move || name_selector.clone())
-                    .h_full()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    // Match Tauri's `pr-14`: at maximum horizontal scroll the
-                    // final glyph can move clear of the viewport-fixed actions.
-                    .pr(px(CONNECTION_ACTION_CLEARANCE_PX))
-                    .child(saved_connection_icon(
-                        palette,
-                        icon_def,
-                        custom_icon,
-                        selected,
-                        16.,
-                    ))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight(500.))
-                            .text_color(if selected {
-                                rgb(palette.link)
-                            } else {
-                                rgb(palette.text)
-                            })
-                            // Full name, never clipped — the list scrolls to reach it.
-                            .whitespace_nowrap()
-                            .child(connection.name.clone()),
-                    ),
-                ConnectionDetailsHoverCard::new(
-                    connection.id.clone(),
-                    details_rows,
-                    share_text,
-                    palette,
-                ),
-            )
-            // Use the visible list edges, independent of name width, nesting
-            // and horizontal scrolling. Side placement flips at window edges.
-            .horizontal_viewport(hover_viewport)
-            .placement(NyaPopoverPlacement::Right)
-            .align(NyaPopoverAlign::Center)
-            // The scroll viewport excludes the list shell padding.
-            .offset(px(super::CONNECTION_LIST_PADDING_PX + 6.))
-            .open_delay(Duration::from_millis(350))
-            .close_delay(Duration::from_millis(120))
-            .appearance(false),
-        )
-        .child(div().flex_1().min_w_0())
-        .when(show_before, |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .left(px(8.))
-                    .right(px(8.))
-                    .top_0()
-                    .h(px(2.))
-                    .rounded_full()
-                    .bg(rgb(palette.link)),
-            )
-        })
-        .when(show_after, |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .left(px(8.))
-                    .right(px(8.))
-                    .bottom_0()
-                    .h(px(2.))
-                    .rounded_full()
-                    .bg(rgb(palette.link)),
-            )
-        })
-}
-
-#[cfg(test)]
-mod hover_card_tests {
-    use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
-
-    use gpui::{
-        AppContext as _, ClipboardItem, Context, InteractiveElement as _, KeyDownEvent, KeyUpEvent,
-        Keystroke, Modifiers, ParentElement as _, Render, StatefulInteractiveElement as _,
-        Styled as _, TestAppContext, Window, div, prelude::FluentBuilder as _, px,
-    };
-    use nyaterm_ui::{NyaHoverCard, NyaPopoverAlign, NyaPopoverPlacement};
-
-    use crate::theme::{apply_component_theme, theme_palette};
-
-    use super::{ConnectionDetailRow, ConnectionDetailsHoverCard};
-
-    const SHARE_TEXT: &str = "Name: Production\nType: SSH\nHost: example.com\nDescription: Production server with a long description that wraps onto several lines\nSecond line\nThird line\nFourth line\nFifth line";
-
-    struct HoverCardHarness {
-        parent_clicks: Rc<Cell<usize>>,
-        at_right_edge: bool,
-    }
-
-    impl Render for HoverCardHarness {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
-            let rows: Arc<[ConnectionDetailRow]> = [
-                ConnectionDetailRow {
-                    label: "Host".to_string(),
-                    value: "example.com".to_string(),
-                    copy_value: Some("example.com".to_string()),
-                    multiline: false,
-                },
-                ConnectionDetailRow {
-                    label: "Description".to_string(),
-                    value:
-                        "Production server with a long description that wraps onto several lines\nSecond line\nThird line\nFourth line\nFifth line"
-                            .to_string(),
-                    copy_value: None,
-                    multiline: false,
-                },
-            ]
-            .into();
-            let parent_clicks = self.parent_clicks.clone();
-            // Exercise both preferred placement and flipping at the right edge.
-            div()
-                .id("connection-share-parent")
-                .tab_group()
-                .size_full()
-                .flex()
-                .items_center()
-                .when(!self.at_right_edge, |this| this.justify_start())
-                .when(self.at_right_edge, |this| this.justify_end())
-                .on_click(move |_, _, _| parent_clicks.set(parent_clicks.get() + 1))
-                .child(
-                    NyaHoverCard::new(
-                        "connection-details-hover-card-test",
-                        div()
-                            .debug_selector(|| "connection-details-hover-card-trigger-test".into())
-                            .size(px(40.)),
-                        ConnectionDetailsHoverCard::new(
-                            "test".to_string(),
-                            rows,
-                            SHARE_TEXT.to_string(),
-                            theme_palette("github-dark"),
-                        ),
-                    )
-                    .placement(NyaPopoverPlacement::Right)
-                    .align(NyaPopoverAlign::Center)
-                    .offset(px(6.))
-                    .appearance(false)
-                    .open_delay(Duration::from_millis(10))
-                    .close_delay(Duration::from_millis(120)),
+    nyaterm_connections_gpui::rows::saved_connection_row(
+        nyaterm_connections_gpui::rows::ConnectionRow {
+            id: connection.id.clone(),
+            name: connection.name.clone(),
+            depth,
+            palette,
+            selected,
+            keyboard_active,
+            drop_before: show_before,
+            drop_after: show_after,
+            drop_inside: show_inside,
+            icon: saved_connection_icon(palette, icon_def, custom_icon.clone(), selected, 16.)
+                .into_any_element(),
+            details: details_rows,
+            share_text,
+        },
+        hover_viewport,
+    )
+    .on_drag(
+        ConnectionDragPayload {
+            icon: Some(icon_def),
+            custom_icon: custom_icon.clone(),
+            palette,
+            panel: cx.weak_entity(),
+            kind: ConnectionDragKind::Connection,
+            id: connection.id.clone(),
+            label: connection.name.clone(),
+        },
+        move |payload, position, window, cx| {
+            // GPUI installs the active drag after this constructor returns.
+            window.defer(cx, |window, cx| {
+                cx.set_active_drag_cursor_style(gpui::CursorStyle::ClosedHand, window);
+            });
+            let _ = payload.panel.update(cx, |panel, cx| {
+                panel.arm_tree_drag(
+                    payload,
+                    window.mouse_position(),
+                    drag_scroll.bounds(),
+                    drag_scroll.clone(),
+                    cx,
                 )
-        }
-    }
-
-    #[gpui::test]
-    fn connection_hover_card_stays_open_and_copy_and_share_buttons_work(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            apply_component_theme(
-                theme_palette("github-dark"),
-                gpui::font("Inter"),
-                gpui::px(16.),
-                cx,
-            )
-        });
-        let parent_clicks = Rc::new(Cell::new(0));
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            window.activate_window();
-            let view = cx.new(|_| HoverCardHarness {
-                parent_clicks: parent_clicks.clone(),
-                at_right_edge: false,
             });
-            nyaterm_ui::nya_root(view, window, cx)
-        });
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-
-        let trigger = cx
-            .debug_bounds("connection-details-hover-card-trigger-test")
-            .expect("hover-card trigger");
-        cx.simulate_mouse_move(trigger.center(), None, Modifiers::default());
-        cx.executor().advance_clock(Duration::from_millis(10));
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            window.draw(cx).clear(cx);
-            window.draw(cx).clear(cx);
-        });
-
-        let content_selector = "connection-details-hover-card-content-test";
-        let content = cx
-            .debug_bounds(content_selector)
-            .expect("opened hover-card content");
-        assert_eq!(content.size.width, px(220.));
-        let description = cx
-            .debug_bounds("connection-detail-description-test")
-            .expect("description body");
-        assert!(description.size.height > px(22.), "description must wrap");
-        assert!(
-            description.size.height <= px(48.),
-            "description is capped at three lines: {:?}",
-            description.size.height
-        );
-        let share = cx
-            .debug_bounds("connection-detail-share-test")
-            .expect("share button beside description");
-        assert_eq!(description.left(), content.left() + px(9. + 64. + 8.));
-        assert_eq!(description.right() + px(8.), share.left());
-        assert_eq!(share.right(), content.right() - px(9.));
-        assert_eq!(share.center().y, description.center().y);
-        // Beside the row, not under it: a card below would cover the
-        // neighbouring connections in the list.
-        assert_eq!(content.left(), trigger.right() + px(6.));
-        assert_eq!(content.center().y, trigger.center().y);
-
-        cx.simulate_mouse_move(content.center(), None, Modifiers::default());
-        cx.executor().advance_clock(Duration::from_millis(120));
-        cx.run_until_parked();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        assert!(
-            cx.debug_bounds(content_selector).is_some(),
-            "moving from the trigger into content must cancel delayed close"
-        );
-
-        cx.update(|window, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
-            window.blur(cx);
-            window.focus_next(cx);
-            window.focus_next(cx);
-            assert!(window.focused(cx).is_some());
-            window.draw(cx).clear(cx);
-        });
-        let keystroke = Keystroke::parse("enter").expect("Enter keystroke");
-        cx.simulate_event(KeyDownEvent {
-            keystroke: keystroke.clone(),
-            is_held: false,
-            prefer_character_input: false,
-        });
-        cx.simulate_event(KeyUpEvent { keystroke });
-        let keyboard_clipboard = cx.update(|_, cx| {
-            cx.read_from_clipboard()
-                .and_then(|item| item.text())
-                .unwrap_or_default()
-        });
-        assert_eq!(keyboard_clipboard, SHARE_TEXT, "Enter must activate share");
-        assert_eq!(parent_clicks.get(), 0);
-
-        let copy = cx
-            .debug_bounds("connection-detail-copy-test-0")
-            .expect("copy button target");
-        cx.simulate_click(copy.center(), Modifiers::default());
-        let clipboard = cx.update(|_, cx| {
-            cx.read_from_clipboard()
-                .and_then(|item| item.text())
-                .unwrap_or_default()
-        });
-        assert_eq!(clipboard, "example.com");
-
-        let share = cx
-            .debug_bounds("connection-detail-share-test")
-            .expect("share button target");
-        assert!(share.left() >= content.left() && share.right() <= content.right());
-        assert!(share.top() >= content.top() && share.bottom() <= content.bottom());
-        cx.simulate_click(share.center(), Modifiers::default());
-        let clipboard = cx.update(|_, cx| {
-            cx.read_from_clipboard()
-                .and_then(|item| item.text())
-                .unwrap_or_default()
-        });
-        assert_eq!(clipboard, SHARE_TEXT);
-        assert_eq!(
-            parent_clicks.get(),
-            0,
-            "copy actions must not activate the row"
-        );
-    }
-
-    #[gpui::test]
-    fn connection_hover_card_flips_at_right_window_edge(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            apply_component_theme(
-                theme_palette("github-dark"),
-                gpui::font("Inter"),
-                px(16.),
-                cx,
-            )
-        });
-        let (_, cx) = cx.add_window_view(|window, cx| {
-            window.activate_window();
-            let view = cx.new(|_| HoverCardHarness {
-                parent_clicks: Rc::new(Cell::new(0)),
-                at_right_edge: true,
-            });
-            nyaterm_ui::nya_root(view, window, cx)
-        });
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        let trigger = cx
-            .debug_bounds("connection-details-hover-card-trigger-test")
-            .expect("trigger");
-        cx.simulate_mouse_move(trigger.center(), None, Modifiers::default());
-        cx.executor().advance_clock(Duration::from_millis(10));
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            window.draw(cx).clear(cx);
-            window.draw(cx).clear(cx);
-        });
-        let content = cx
-            .debug_bounds("connection-details-hover-card-content-test")
-            .expect("content");
-        assert_eq!(content.size.width, px(220.));
-        assert_eq!(content.right(), trigger.left() - px(6.));
-        assert!(content.left() >= px(0.));
-        assert_eq!(content.center().y, trigger.center().y);
-    }
+            cx.new(|_| ConnectionDragPreview::new(payload.clone(), position))
+        },
+    )
+    .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|_, _, _, cx| {
+            cx.stop_propagation();
+        }),
+    )
+    // Aims the list's one context menu at this row. Capture, so it runs
+    // before the menu is built and regardless of who stops the bubble.
+    .capture_any_mouse_down(
+        cx.listener(move |panel, event: &MouseDownEvent, window, cx| {
+            window.focus(panel.focus_handle(), cx);
+            panel.with_app(cx, |this, cx| {
+                if event.button == MouseButton::Right {
+                    this.prepare_connection_context_menu(menu_id.clone(), cx);
+                }
+            })
+        }),
+    )
+    .on_click(
+        cx.listener(move |panel, event: &gpui::ClickEvent, window, cx| {
+            panel.with_app(cx, |this, cx| {
+                cx.stop_propagation();
+                if event.click_count() >= 2 {
+                    this.start_saved_connection(connect_connection_dbl.clone(), window, cx);
+                    return;
+                }
+                let modifiers = event.modifiers();
+                let additive = modifiers.control || modifiers.platform;
+                let range = modifiers.shift;
+                this.select_connection(select_id.clone(), additive, range, cx);
+            })
+        }),
+    )
 }

@@ -22,6 +22,11 @@ members = [
     "crates/nyaterm-executor",
     "crates/nyaterm-files",
     "crates/nyaterm-host-tools-gpui",
+    "crates/nyaterm-remote-monitor-gpui",
+    "crates/nyaterm-connections-gpui",
+    "crates/nyaterm-file-browser-gpui",
+    "crates/nyaterm-ai-gpui",
+    "crates/nyaterm-notes-gpui",
     "crates/nyaterm-i18n",
     "crates/nyaterm-mcp",
     "crates/nyaterm-mcp-host",
@@ -64,6 +69,11 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+nyaterm-remote-monitor-gpui = { path = "crates/nyaterm-remote-monitor-gpui" }
+nyaterm-connections-gpui = { path = "crates/nyaterm-connections-gpui" }
+nyaterm-file-browser-gpui = { path = "crates/nyaterm-file-browser-gpui" }
+nyaterm-ai-gpui = { path = "crates/nyaterm-ai-gpui" }
+nyaterm-notes-gpui = { path = "crates/nyaterm-notes-gpui" }
 nyaterm-host-tools-gpui = { path = "crates/nyaterm-host-tools-gpui" }
 nyaterm-executor = { path = "crates/nyaterm-executor" }
 nyaterm-completion-runtime = { path = "crates/nyaterm-completion-runtime" }

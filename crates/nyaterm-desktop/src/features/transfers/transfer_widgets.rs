@@ -2,6 +2,7 @@ use crate::models::TransferJobKind;
 use nyaterm_files::sftp_transfer_types::{
     SftpDuplicateDecision, SftpDuplicatePolicy, SftpTransferProgress,
 };
+pub(in crate::features) use nyaterm_ui::presentation::format_file_size;
 use rust_i18n::t;
 
 pub(in crate::features) fn duplicate_policy_label(policy: SftpDuplicatePolicy) -> &'static str {
@@ -136,19 +137,6 @@ pub(in crate::features) fn format_transfer_progress(progress: &SftpTransferProgr
             )
         }
         None => format!("{transferred} transferred"),
-    }
-}
-
-pub(in crate::features) fn format_file_size(size: Option<u64>) -> String {
-    let Some(size) = size else {
-        return String::new();
-    };
-    if size >= 1024 * 1024 {
-        format!("{:.1} MiB", size as f64 / 1024. / 1024.)
-    } else if size >= 1024 {
-        format!("{:.1} KiB", size as f64 / 1024.)
-    } else {
-        format!("{size} B")
     }
 }
 

@@ -7143,6 +7143,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-ai-gpui"
+version = "2.0.8"
+dependencies = [
+ "gpui",
+ "nyaterm-core",
+ "nyaterm-i18n",
+ "nyaterm-mcp-protocol",
+ "nyaterm-ui",
+ "rust-i18n",
+ "serde_json",
+]
+
+[[package]]
 name = "nyaterm-android"
 version = "2.0.8"
 dependencies = [
@@ -7232,6 +7245,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-connections-gpui"
+version = "2.0.8"
+dependencies = [
+ "gpui",
+ "nyaterm-core",
+ "nyaterm-i18n",
+ "nyaterm-ui",
+ "rust-i18n",
+ "serde_json",
+]
+
+[[package]]
 name = "nyaterm-core"
 version = "2.0.8"
 dependencies = [
@@ -7296,21 +7321,26 @@ dependencies = [
  "libc",
  "nyaterm-agent-client",
  "nyaterm-ai-client",
+ "nyaterm-ai-gpui",
  "nyaterm-android",
  "nyaterm-cloud-storage",
  "nyaterm-completion-runtime",
+ "nyaterm-connections-gpui",
  "nyaterm-core",
  "nyaterm-executor",
+ "nyaterm-file-browser-gpui",
  "nyaterm-files",
  "nyaterm-host-tools-gpui",
  "nyaterm-i18n",
  "nyaterm-mcp-host",
  "nyaterm-mcp-protocol",
+ "nyaterm-notes-gpui",
  "nyaterm-otp",
  "nyaterm-plugin-host",
  "nyaterm-preview",
  "nyaterm-recording",
  "nyaterm-remote-desktop",
+ "nyaterm-remote-monitor-gpui",
  "nyaterm-remote-ops",
  "nyaterm-store",
  "nyaterm-sync",
@@ -7352,6 +7382,20 @@ name = "nyaterm-executor"
 version = "2.0.8"
 dependencies = [
  "futures",
+]
+
+[[package]]
+name = "nyaterm-file-browser-gpui"
+version = "2.0.8"
+dependencies = [
+ "gpui",
+ "nyaterm-core",
+ "nyaterm-files",
+ "nyaterm-i18n",
+ "nyaterm-preview",
+ "nyaterm-ui",
+ "rust-i18n",
+ "time",
 ]
 
 [[package]]
@@ -7461,6 +7505,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyaterm-notes-gpui"
+version = "2.0.8"
+dependencies = [
+ "gpui",
+ "nyaterm-core",
+ "nyaterm-i18n",
+ "nyaterm-ui",
+ "rust-i18n",
+]
+
+[[package]]
 name = "nyaterm-otp"
 version = "0.1.0"
 
@@ -7550,6 +7605,19 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "nyaterm-remote-monitor-gpui"
+version = "2.0.8"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+ "nyaterm-core",
+ "nyaterm-i18n",
+ "nyaterm-remote-ops",
+ "nyaterm-ui",
+ "rust-i18n",
 ]
 
 [[package]]

@@ -540,7 +540,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
             StatsApplyOutcome::Applied { .. }
         ));
     }
-    let history = state.stats_presentation().network_history;
+    let history = state.stats.active_network_history();
     assert_eq!(history.len(), 256);
     assert_eq!(history[0].rx_bytes_per_sec, 1.0);
     assert_eq!(history[255].interfaces["eth0"], (256.0, 512.0));
@@ -570,7 +570,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
         100.0
     );
     assert_eq!(
-        state.stats_presentation().network_history[0].rx_bytes_per_sec,
+        state.stats.active_network_history()[0].rx_bytes_per_sec,
         100.0
     );
     state.reset_for_session_switch();
@@ -584,7 +584,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
             .rx_bytes_per_sec,
         256.0
     );
-    assert_eq!(state.stats_presentation().network_history.len(), 256);
+    assert_eq!(state.stats.active_network_history().len(), 256);
 
     let stale = state.begin_stats_job("session-a".to_string(), false);
     state.clear_stats_sample("session-a");
@@ -603,7 +603,7 @@ fn stats_network_history_is_bounded_isolated_and_cleaned_up() {
     ));
     state.activate_stats_session("session-a");
     assert!(state.stats_presentation().data.is_none());
-    assert!(state.stats_presentation().network_history.is_empty());
+    assert!(state.stats.active_network_history().is_empty());
 }
 
 #[test]

@@ -1,20 +1,16 @@
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton,
     MouseDownEvent, ParentElement as _, Render, ScrollStrategy, SharedString, Styled as _,
-    Subscription, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px, rgb, rgba,
+    Subscription, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px, rgb,
     uniform_list,
 };
 
-use nyaterm_core::{NoteFolder, NoteNodeKind};
+use nyaterm_core::NoteNodeKind;
 use nyaterm_ui::{
-    NyaButton, NyaButtonVariant, NyaContextMenu, NyaDropdownMenu, NyaInputEvent, NyaInputShell,
-    NyaInputState, NyaMenuItem, NyaScrollable as _, NyaSearchInput,
+    NyaButton, NyaButtonVariant, NyaContextMenu, NyaDropdownMenu, NyaInputEvent, NyaInputState,
+    NyaMenuItem, NyaScrollable as _, NyaSearchInput,
 };
 use rust_i18n::t;
 
@@ -22,40 +18,7 @@ use crate::features::{NyaTermApp, view_widgets::mono_icon};
 
 use super::NoteTreeRow;
 
-#[derive(Clone)]
-struct NotesDragPayload {
-    id: String,
-    label: String,
-}
-
-struct NotesDragPreview {
-    payload: NotesDragPayload,
-    position: gpui::Point<gpui::Pixels>,
-    palette: crate::theme::ThemePalette,
-}
-
-impl Render for NotesDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .pl(self.position.x - px(70.))
-            .pt(self.position.y - px(16.))
-            .child(
-                div()
-                    .w(px(140.))
-                    .h(px(32.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(rgb(self.palette.border))
-                    .bg(rgb(self.palette.surface_elevated))
-                    .text_color(rgb(self.palette.text))
-                    .child(self.payload.label.clone()),
-            )
-    }
-}
-
+use nyaterm_notes_gpui::tree::NotesDragPayload;
 pub(in crate::features) struct NotesPanel {
     app: WeakEntity<NyaTermApp>,
     search: Entity<NyaInputState>,
@@ -437,39 +400,9 @@ impl Render for NotesPanel {
 }
 
 fn notes_more_menu(app: WeakEntity<NyaTermApp>) -> NyaDropdownMenu {
-    let expand_app = app.clone();
-    let collapse_app = app.clone();
-    let export_app = app.clone();
-    NyaDropdownMenu::new("notes-more")
-        .icon("icons/session/more.svg")
-        .icon_size(px(16.))
-        .tooltip(t!("common.more"))
-        .items([
-            NyaMenuItem::action(t!("notes.exportMarkdown").to_string())
-                .icon("icons/fe/download.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = export_app.upgrade() {
-                        app.update(cx, |app, cx| app.prompt_export_notes(cx));
-                    }
-                }),
-            NyaMenuItem::action(t!("notes.expandAll").to_string()).on_click(move |_, _, cx| {
-                if let Some(app) = expand_app.upgrade() {
-                    app.update(cx, |app, cx| app.set_all_notes_expanded(true, cx));
-                }
-            }),
-            NyaMenuItem::action(t!("notes.collapseAll").to_string()).on_click(move |_, _, cx| {
-                if let Some(app) = collapse_app.upgrade() {
-                    app.update(cx, |app, cx| app.set_all_notes_expanded(false, cx));
-                }
-            }),
-            NyaMenuItem::action(t!("common.refresh").to_string())
-                .icon("icons/fe/refresh.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = app.upgrade() {
-                        app.update(cx, |app, cx| app.refresh_notes(cx));
-                    }
-                }),
-        ])
+    nyaterm_notes_gpui::menus::more_menu(Rc::new(move |action, window, cx| {
+        dispatch_menu_action(&app, action, window, cx);
+    }))
 }
 
 fn toolbar_button(
@@ -500,16 +433,6 @@ fn toolbar_button(
         .into_any_element()
 }
 
-fn note_row_drop_parent(row: &NoteTreeRow, source_id: &str) -> Option<Option<String>> {
-    if source_id == row.id {
-        return None;
-    }
-    Some(match row.kind {
-        NoteNodeKind::Folder => Some(row.id.clone()),
-        NoteNodeKind::Note => row.parent_id.clone(),
-    })
-}
-
 fn note_row(
     panel: &mut NotesPanel,
     row: NoteTreeRow,
@@ -517,239 +440,36 @@ fn note_row(
     palette: crate::theme::ThemePalette,
     app: WeakEntity<NyaTermApp>,
     context_target: Rc<RefCell<Option<String>>>,
-    cx: &mut Context<NotesPanel>,
+    _cx: &mut Context<NotesPanel>,
 ) -> gpui::AnyElement {
-    let selected = selected_id == Some(row.id.as_str());
-    let click_id = row.id.clone();
-    let kind = row.kind;
-    let app_for_click = app.clone();
-    let drag_payload = NotesDragPayload {
-        id: row.id.clone(),
-        label: row.name.clone(),
-    };
-    if panel.renaming_id.as_deref() == Some(row.id.as_str()) {
-        return div()
-            .h(px(28.))
-            .w_full()
-            .flex_none()
-            .pl(px(48. + row.depth as f32 * 14.))
-            .pr_1()
-            .flex()
-            .items_center()
-            .child(
-                div()
-                    .w_full()
-                    .h(px(24.))
-                    .child(NyaInputShell::new("notes-inline-rename", &panel.rename)),
-            )
-            .into_any_element();
-    }
-    let expander = if row.kind == NoteNodeKind::Folder {
-        let toggle_app = app.clone();
-        let toggle_id = row.id.clone();
-        let mut chevron = mono_icon(
-            "icons/menu/chevron-right.svg",
-            rgb(palette.text_dimmed).into(),
-            16.,
-        );
-        if row.expanded {
-            chevron =
-                chevron.with_transformation(gpui::Transformation::rotate(gpui::percentage(0.25)));
-        }
-        div()
-            .id(SharedString::from(format!("notes-toggle-{}", row.id)))
-            .size(px(20.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_sm()
-            .hover(move |this| this.bg(rgb(palette.hover)))
-            .on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                if let Some(app) = toggle_app.upgrade() {
-                    app.update(cx, |app, cx| app.toggle_note_folder(&toggle_id, cx));
-                }
-            })
-            .child(chevron)
-            .into_any_element()
-    } else {
-        div().size(px(20.)).flex_none().into_any_element()
-    };
-    let icon_path = match (row.kind, row.expanded) {
-        (NoteNodeKind::Folder, true) => "icons/session/folder-open.svg",
-        (NoteNodeKind::Folder, false) => "icons/conn/folder.svg",
-        (NoteNodeKind::Note, _) => "icons/notes.svg",
-    };
-    let icon_color = if row.kind == NoteNodeKind::Folder && row.expanded {
-        palette.primary
-    } else {
-        palette.text_muted
-    };
-    let context_id = row.id.clone();
-    let row_selector = format!("notes-row-{}", row.id);
-    let drop_row_for_style = row.clone();
-    let drop_row = row.clone();
-    let drop_app = app.clone();
-    let base = div()
-        .id(SharedString::from(format!("notes-row-{}", row.id)))
-        .debug_selector(move || row_selector.clone())
-        .h(px(28.))
-        .w_full()
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap_1()
-        .pr_1()
-        .pl(px(4. + row.depth as f32 * 14.))
-        .rounded_sm()
-        .bg(if selected {
-            rgba((palette.primary << 8) | 0x2e)
-        } else {
-            rgba(0x00000000)
-        })
-        .text_color(rgb(if selected {
-            palette.text
-        } else {
-            palette.text_muted
-        }))
-        .hover(move |this| this.bg(rgb(palette.hover)).text_color(rgb(palette.text)))
-        .cursor_pointer()
-        .cursor_move()
-        .capture_any_mouse_down(move |event: &MouseDownEvent, _, _| {
-            if event.button == MouseButton::Right {
-                *context_target.borrow_mut() = Some(context_id.clone());
-            }
-        })
-        .on_drag(drag_payload, move |payload, position, _, cx| {
-            cx.new(|_| NotesDragPreview {
-                payload: payload.clone(),
-                position,
-                palette,
-            })
-        })
-        .drag_over::<NotesDragPayload>(move |this, payload, _, cx| {
-            let valid =
-                note_row_drop_parent(&drop_row_for_style, &payload.id).is_some_and(|parent_id| {
-                    drop_app.upgrade().is_some_and(|app| {
-                        app.read(cx)
-                            .notes
-                            .can_move_to(&payload.id, parent_id.as_deref())
-                    })
-                });
-            if valid {
-                this.border_1().border_color(rgb(palette.primary))
-            } else {
-                this
-            }
-        })
-        .on_drop(
-            cx.listener(move |panel, payload: &NotesDragPayload, _, cx| {
-                cx.stop_propagation();
-                let id = payload.id.clone();
-                let Some(parent_id) = note_row_drop_parent(&drop_row, &id) else {
-                    return;
-                };
-                panel.with_app(cx, |app, cx| app.move_note_node_to(id, parent_id, cx));
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|panel, _, window, cx| {
-                cx.stop_propagation();
-                window.focus(&panel.focus, cx);
-            }),
-        )
-        .on_click(move |event, _, cx| {
-            if let Some(app) = app_for_click.upgrade() {
-                app.update(cx, |app, cx| {
-                    app.select_note_node(Some(click_id.clone()), cx);
-                    if event.click_count() >= 2 {
-                        match kind {
-                            NoteNodeKind::Folder => app.toggle_note_folder(&click_id, cx),
-                            NoteNodeKind::Note => app.open_note_editor(click_id.clone(), cx),
-                        }
-                    }
-                });
-            }
-        })
-        .child(expander)
-        .child(
-            div()
-                .size(px(20.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(mono_icon(icon_path, rgb(icon_color).into(), 14.)),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .truncate()
-                .text_size(px(12.))
-                .child(row.name),
-        );
-    base.into_any_element()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct NoteFolderTarget {
-    id: String,
-    name: String,
-    depth: usize,
-}
-
-fn note_folder_targets(folders: &[NoteFolder]) -> Vec<NoteFolderTarget> {
-    let mut children = HashMap::<Option<&str>, Vec<&NoteFolder>>::new();
-    for folder in folders {
-        children
-            .entry(folder.parent_id.as_deref())
-            .or_default()
-            .push(folder);
-    }
-    for siblings in children.values_mut() {
-        siblings.sort_by(|left, right| {
-            left.sort_order
-                .cmp(&right.sort_order)
-                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-                .then_with(|| left.id.cmp(&right.id))
+    use nyaterm_notes_gpui::tree::{CanMoveHandler, TreeAction, TreeActionHandler, TreeHandlers};
+    let move_app = app.clone();
+    let can_move: CanMoveHandler = Rc::new(move |id, parent, cx| {
+        move_app
+            .upgrade()
+            .is_some_and(|app| app.read(cx).notes.can_move_to(id, parent))
+    });
+    let handler: TreeActionHandler = Rc::new(move |action, cx| {
+        let _ = app.update(cx, |app, cx| match action {
+            TreeAction::Select(id) => app.select_note_node(Some(id), cx),
+            TreeAction::Toggle(id) => app.toggle_note_folder(&id, cx),
+            TreeAction::Open(id) => app.open_note_editor(id, cx),
+            TreeAction::Move(id, parent) => app.move_note_node_to(id, parent, cx),
         });
-    }
-
-    fn append(
-        parent_id: Option<&str>,
-        depth: usize,
-        children: &HashMap<Option<&str>, Vec<&NoteFolder>>,
-        visited: &mut HashSet<String>,
-        targets: &mut Vec<NoteFolderTarget>,
-    ) {
-        let Some(folders) = children.get(&parent_id) else {
-            return;
-        };
-        for folder in folders {
-            if !visited.insert(folder.id.clone()) {
-                continue;
-            }
-            targets.push(NoteFolderTarget {
-                id: folder.id.clone(),
-                name: folder.name.clone(),
-                depth,
-            });
-            append(
-                Some(folder.id.as_str()),
-                depth + 1,
-                children,
-                visited,
-                targets,
-            );
-        }
-    }
-
-    let mut targets = Vec::with_capacity(folders.len());
-    append(None, 0, &children, &mut HashSet::new(), &mut targets);
-    targets
+    });
+    let rename = (panel.renaming_id.as_deref() == Some(row.id.as_str())).then_some(&panel.rename);
+    nyaterm_notes_gpui::tree::note_row(
+        row,
+        selected_id,
+        palette,
+        rename,
+        panel.focus.clone(),
+        context_target,
+        TreeHandlers {
+            action: handler,
+            can_move,
+        },
+    )
 }
 
 fn note_context_menu_items(
@@ -758,151 +478,59 @@ fn note_context_menu_items(
     panel: WeakEntity<NotesPanel>,
     cx: &mut gpui::App,
 ) -> Vec<NyaMenuItem> {
+    use nyaterm_notes_gpui::menus::{NoteMenuTarget, note_folder_targets};
     let Some(app_entity) = app.upgrade() else {
         return Vec::new();
     };
-    let Some(target_id) = target_id else {
-        let note_app = app.clone();
-        let folder_app = app.clone();
-        return vec![
-            NyaMenuItem::action(t!("notes.newNote").to_string())
-                .icon("icons/conn/add.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = note_app.upgrade() {
-                        app.update(cx, |app, cx| app.create_root_note(cx));
-                    }
-                }),
-            NyaMenuItem::action(t!("notes.newFolder").to_string())
-                .icon("icons/fe/new-folder.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = folder_app.upgrade() {
-                        app.update(cx, |app, cx| app.create_root_note_folder(cx));
-                    }
-                }),
-            NyaMenuItem::separator(),
-            NyaMenuItem::action(t!("common.refresh").to_string())
-                .icon("icons/fe/refresh.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = app.upgrade() {
-                        app.update(cx, |app, cx| app.refresh_notes(cx));
-                    }
-                }),
-        ];
-    };
-    let Some((kind, _, name)) = app_entity.read(cx).notes.node(&target_id) else {
-        return Vec::new();
-    };
-    let folder_targets = {
-        let app = app_entity.read(cx);
-        note_folder_targets(app.notes.folders())
+    let target = if let Some(id) = target_id {
+        let state = &app_entity.read(cx).notes;
+        let Some((kind, _, name)) = state.node(&id) else {
+            return Vec::new();
+        };
+        let folders = note_folder_targets(state.folders())
             .into_iter()
-            .filter(|folder| app.notes.can_move_to(&target_id, Some(&folder.id)))
-            .collect::<Vec<_>>()
-    };
-
-    let mut items = Vec::new();
-    if kind == NoteNodeKind::Note {
-        let open_app = app.clone();
-        let open_id = target_id.clone();
-        items.push(
-            NyaMenuItem::action(t!("notes.open").to_string())
-                .icon("icons/menu/external.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = open_app.upgrade() {
-                        let id = open_id.clone();
-                        app.update(cx, |app, cx| app.open_note_editor(id, cx));
-                    }
-                }),
-        );
+            .filter(|folder| state.can_move_to(&id, Some(&folder.id)))
+            .collect();
+        Some(NoteMenuTarget {
+            id,
+            kind,
+            name,
+            folders,
+        })
     } else {
-        let note_app = app.clone();
-        let note_parent_id = target_id.clone();
-        items.push(
-            NyaMenuItem::action(t!("notes.newNote").to_string())
-                .icon("icons/conn/add.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = note_app.upgrade() {
-                        let parent_id = note_parent_id.clone();
-                        app.update(cx, |app, cx| app.create_note_in_folder(Some(parent_id), cx));
-                    }
-                }),
-        );
-        let folder_app = app.clone();
-        let folder_parent_id = target_id.clone();
-        items.push(
-            NyaMenuItem::action(t!("notes.newFolder").to_string())
-                .icon("icons/fe/new-folder.svg")
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = folder_app.upgrade() {
-                        let parent_id = folder_parent_id.clone();
-                        app.update(cx, |app, cx| {
-                            app.create_note_folder_in_folder(Some(parent_id), cx)
-                        });
-                    }
-                }),
-        );
+        None
+    };
+    let handler = Rc::new(move |action, window: &mut Window, cx: &mut gpui::App| {
+        use nyaterm_notes_gpui::menus::MenuAction;
+        if let MenuAction::Rename { id, name } = action {
+            let _ = panel.update(cx, |panel, cx| panel.begin_rename(id, name, window, cx));
+            return;
+        }
+        dispatch_menu_action(&app, action, window, cx);
+    });
+    nyaterm_notes_gpui::menus::context_menu_items(target, handler)
+}
+
+fn dispatch_menu_action(
+    app: &WeakEntity<NyaTermApp>,
+    action: nyaterm_notes_gpui::menus::MenuAction,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    use nyaterm_notes_gpui::menus::MenuAction;
+    if let Some(app) = app.upgrade() {
+        app.update(cx, |app, cx| match action {
+            MenuAction::CreateNote(parent) => app.create_note_in_folder(parent, cx),
+            MenuAction::CreateFolder(parent) => app.create_note_folder_in_folder(parent, cx),
+            MenuAction::Export => app.prompt_export_notes(cx),
+            MenuAction::Expand(expanded) => app.set_all_notes_expanded(expanded, cx),
+            MenuAction::Refresh => app.refresh_notes(cx),
+            MenuAction::Open(id) => app.open_note_editor(id, cx),
+            MenuAction::Move { id, parent } => app.move_note_node_to(id, parent, cx),
+            MenuAction::Delete(id) => app.request_delete_note_node(id, window, cx),
+            MenuAction::Rename { .. } => {}
+        });
     }
-
-    let rename_id = target_id.clone();
-    items.push(
-        NyaMenuItem::action(t!("notes.rename").to_string())
-            .icon("icons/net/edit.svg")
-            .on_click(move |_, window, cx| {
-                let id = rename_id.clone();
-                let name = name.clone();
-                let _ = panel.update(cx, |panel, cx| panel.begin_rename(id, name, window, cx));
-            }),
-    );
-
-    let mut move_items = Vec::with_capacity(folder_targets.len() + 1);
-    let root_app = app.clone();
-    let root_id = target_id.clone();
-    move_items.push(
-        NyaMenuItem::action(t!("notes.root").to_string()).on_click(move |_, _, cx| {
-            if let Some(app) = root_app.upgrade() {
-                let id = root_id.clone();
-                app.update(cx, |app, cx| app.move_note_node_to(id, None, cx));
-            }
-        }),
-    );
-    for folder in folder_targets {
-        let move_app = app.clone();
-        let id = target_id.clone();
-        let parent_id = folder.id;
-        move_items.push(
-            NyaMenuItem::action(folder.name)
-                .label_indent(px(folder.depth as f32 * 10.))
-                .on_click(move |_, _, cx| {
-                    if let Some(app) = move_app.upgrade() {
-                        let id = id.clone();
-                        let parent_id = parent_id.clone();
-                        app.update(cx, |app, cx| app.move_note_node_to(id, Some(parent_id), cx));
-                    }
-                }),
-        );
-    }
-    items.push(
-        NyaMenuItem::submenu(t!("notes.moveTo").to_string(), move_items)
-            .icon("icons/net/move.svg")
-            .submenu_min_width(px(176.))
-            .submenu_max_height(px(288.))
-            .submenu_scrollable(true),
-    );
-
-    let delete_app = app;
-    let delete_id = target_id;
-    items.push(
-        NyaMenuItem::action(t!("common.delete").to_string())
-            .icon("icons/net/delete.svg")
-            .danger()
-            .on_click(move |_, window, cx| {
-                if let Some(app) = delete_app.upgrade() {
-                    let id = delete_id.clone();
-                    app.update(cx, |app, cx| app.request_delete_note_node(id, window, cx));
-                }
-            }),
-    );
-    items
 }
 
 #[cfg(test)]
@@ -922,10 +550,7 @@ mod tests {
     use crate::test_support::TestConfigDir;
     use nyaterm_ui::NyaDialogWindowExt as _;
 
-    use super::{
-        NoteFolderTarget, NoteTreeRow, note_context_menu_items, note_folder_targets,
-        note_row_drop_parent,
-    };
+    use super::note_context_menu_items;
 
     struct NotesHost {
         app: Entity<NyaTermApp>,
@@ -1012,93 +637,6 @@ mod tests {
             _ = window.draw(cx);
             assert!(window.has_active_nya_dialog(cx));
         });
-    }
-
-    #[test]
-    fn folder_targets_keep_tree_order_and_depth() {
-        let folders = vec![
-            NoteFolder {
-                id: "root".into(),
-                parent_id: None,
-                name: "Root".into(),
-                sort_order: 0,
-                created_at_ms: 1,
-                updated_at_ms: 1,
-                extra: BTreeMap::new(),
-            },
-            NoteFolder {
-                id: "child".into(),
-                parent_id: Some("root".into()),
-                name: "Child".into(),
-                sort_order: 0,
-                created_at_ms: 1,
-                updated_at_ms: 1,
-                extra: BTreeMap::new(),
-            },
-            NoteFolder {
-                id: "sibling".into(),
-                parent_id: None,
-                name: "Sibling".into(),
-                sort_order: 1,
-                created_at_ms: 1,
-                updated_at_ms: 1,
-                extra: BTreeMap::new(),
-            },
-        ];
-
-        assert_eq!(
-            note_folder_targets(&folders),
-            vec![
-                NoteFolderTarget {
-                    id: "root".into(),
-                    name: "Root".into(),
-                    depth: 0,
-                },
-                NoteFolderTarget {
-                    id: "child".into(),
-                    name: "Child".into(),
-                    depth: 1,
-                },
-                NoteFolderTarget {
-                    id: "sibling".into(),
-                    name: "Sibling".into(),
-                    depth: 0,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn row_drop_targets_match_tauri_parent_rules() {
-        let folder = NoteTreeRow {
-            id: "folder".into(),
-            kind: nyaterm_core::NoteNodeKind::Folder,
-            parent_id: None,
-            name: "Folder".into(),
-            depth: 0,
-            expanded: false,
-            has_children: false,
-        };
-        let note = NoteTreeRow {
-            id: "note".into(),
-            kind: nyaterm_core::NoteNodeKind::Note,
-            parent_id: Some("folder".into()),
-            name: "Note".into(),
-            depth: 1,
-            expanded: false,
-            has_children: false,
-        };
-
-        assert_eq!(
-            note_row_drop_parent(&folder, "source"),
-            Some(Some("folder".into()))
-        );
-        assert_eq!(
-            note_row_drop_parent(&note, "source"),
-            Some(Some("folder".into()))
-        );
-        assert_eq!(note_row_drop_parent(&folder, "folder"), None);
-        assert_eq!(note_row_drop_parent(&note, "note"), None);
     }
 
     #[test]

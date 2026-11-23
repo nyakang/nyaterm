@@ -22,6 +22,24 @@ must include explicit conversion logic and tests.
 * `crates/nyaterm-desktop`: GPUI application composition, `AppShell`,
   `NyaTermApp`, feature state, views, platform adapters, background-job
   coordination, service adapters, and GPUI Entity stores.
+* Presentation crates depend on core, ui and i18n, never desktop, store,
+  transport, gpui-kit or another presentation crate, including tests:
+  * `nyaterm-remote-monitor-gpui`: Stats/GPU/NPU/Processes/Docker panel entities,
+    immutable projections, chart geometry and polling clocks. May also depend
+    on remote-ops. Desktop owns refresh jobs, caches, host-token validation
+    against the current session and SSH lease, and deferred snapshot delivery.
+  * `nyaterm-file-browser-gpui`: file cells, path projections, transfer queue
+    presentation and preview components. May also depend on files and preview.
+    Desktop owns panes, navigation, frozen operation targets and transfer jobs.
+  * `nyaterm-ai-gpui`: AI presentation contracts, layout, message/tool components
+    and approval cards. May also depend on mcp-protocol for tool names. Desktop
+    owns execution, approval validation, transcript scheduling and input entities.
+  * `nyaterm-notes-gpui`: note tree rows and editor presentation/formatting.
+    Desktop owns document/input entities, 800ms autosave, conflicts and closing.
+  * `nyaterm-connections-gpui`: connection details and shared connection/batch
+    editor presentation. Desktop owns drafts, credentials, discovery and saving.
+  The default-off remote-monitor `test-support` feature exposes only fixtures
+  and observations needed by desktop integration tests.
 * `crates/nyaterm-executor`: UI-independent bounded blocking executor, cancellation,
   task results, metrics and worker shutdown. No workspace or GPUI dependencies,
   including tests. Desktop owns executor instances, scheduling and shutdown coordination.

@@ -8,16 +8,7 @@ use nyaterm_core::{
 };
 use nyaterm_ui::NyaWindowHandle;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::features) struct NoteTreeRow {
-    pub id: String,
-    pub kind: NoteNodeKind,
-    pub parent_id: Option<String>,
-    pub name: String,
-    pub depth: usize,
-    pub expanded: bool,
-    pub has_children: bool,
-}
+pub(in crate::features) use nyaterm_notes_gpui::tree::NoteTreeRow;
 
 pub(in crate::features) struct NotesFeatureState {
     folders: Vec<NoteFolder>,

@@ -83,38 +83,12 @@ impl AiPanel {
                 row.child(self.ai_execution_mode_chip(snapshot, cx))
             })
             .child(ai_send_button(palette, snapshot.running, send_disabled, cx));
-        let footer = if compact {
-            div()
-                .debug_selector(|| "ai-composer-controls".to_string())
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(mode_controls)
-                .child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(model_control)
-                        .child(trailing),
-                )
-        } else {
-            div()
-                .debug_selector(|| "ai-composer-controls".to_string())
-                .w_full()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(mode_controls)
-                .child(model_control)
-                .child(trailing)
-        }
-        .flex_none();
+        let footer = nyaterm_ai_gpui::composer::controls(
+            compact,
+            mode_controls.into_any_element(),
+            model_control,
+            trailing.into_any_element(),
+        );
 
         let prompt_index = usize::from(snapshot.quoted_text.is_some())
             + usize::from(!snapshot.target_sessions.is_empty());

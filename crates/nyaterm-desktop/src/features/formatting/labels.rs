@@ -1,6 +1,10 @@
 use gpui::rgb;
 use nyaterm_core::{CloudSyncError, CloudSyncSettings, TunnelConfig};
+pub(in crate::features) use nyaterm_remote_monitor_gpui::formatting::docker_compose_project_key;
+pub(in crate::features) use nyaterm_remote_monitor_gpui::formatting::docker_state_color;
+pub(in crate::features) use nyaterm_remote_monitor_gpui::formatting::format_uptime;
 use nyaterm_transport::{SessionKind, SshTunnelMode, TelnetEnterMode};
+pub(in crate::features) use nyaterm_ui::presentation::compact_id;
 
 use crate::theme::ThemePalette;
 
@@ -12,62 +16,6 @@ pub(in crate::features) fn format_rate(bytes_per_sec: f64) -> String {
     } else {
         format!("{bytes_per_sec:.0} B/s")
     }
-}
-
-pub(in crate::features) fn format_uptime(seconds: u64) -> String {
-    let days = seconds / 86_400;
-    let hours = (seconds % 86_400) / 3_600;
-    let minutes = (seconds % 3_600) / 60;
-    if days > 0 {
-        format!("{days}d {hours}h")
-    } else if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else {
-        format!("{minutes}m")
-    }
-}
-
-pub(in crate::features) fn docker_state_rank(state: &str) -> u8 {
-    match state.trim().to_ascii_lowercase().as_str() {
-        "running" => 0,
-        "restarting" | "paused" => 1,
-        "created" => 2,
-        "exited" | "dead" => 3,
-        _ => 4,
-    }
-}
-
-pub(in crate::features) fn docker_state_label(state: &str) -> &'static str {
-    match state.trim().to_ascii_lowercase().as_str() {
-        "running" => "running",
-        "restarting" => "restart",
-        "paused" => "paused",
-        "created" => "created",
-        "exited" => "exited",
-        "dead" => "dead",
-        _ => "unknown",
-    }
-}
-
-pub(in crate::features) fn docker_state_color(palette: ThemePalette, state: &str) -> gpui::Hsla {
-    match state.trim().to_ascii_lowercase().as_str() {
-        "running" => rgb(palette.success).into(),
-        "restarting" | "paused" => rgb(palette.warning).into(),
-        "created" => rgb(palette.link).into(),
-        "exited" | "dead" => rgb(palette.danger).into(),
-        _ => rgb(palette.text_muted).into(),
-    }
-}
-
-pub(in crate::features) fn docker_compose_project_key(
-    project_name: &str,
-    config_files: Option<&str>,
-) -> String {
-    format!(
-        "{}\n{}",
-        project_name.trim(),
-        config_files.unwrap_or_default().trim()
-    )
 }
 
 pub(in crate::features) fn session_kind_label(kind: SessionKind) -> std::borrow::Cow<'static, str> {
@@ -131,24 +79,6 @@ pub(in crate::features) fn recent_terminal_output(output: &str, max_lines: usize
         .collect::<Vec<_>>();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
-}
-
-pub(in crate::features) fn compact_id(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= 12 {
-        trimmed.to_string()
-    } else {
-        let prefix: String = trimmed.chars().take(8).collect();
-        let suffix: String = trimmed
-            .chars()
-            .rev()
-            .take(4)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        format!("{prefix}..{suffix}")
-    }
 }
 
 pub(in crate::features) fn format_cloud_provider(provider: &str) -> String {
@@ -314,9 +244,7 @@ pub(in crate::features) fn tunnel_endpoint(tunnel: &TunnelConfig, listen: &str) 
     }
 }
 
-pub(in crate::features) fn format_permissions_octal(mode: u32) -> String {
-    format!("{:04o}", mode & 0o7777)
-}
+pub(in crate::features) use nyaterm_file_browser_gpui::formatting::format_permissions_octal;
 
 pub(in crate::features) fn trim_terminal_output_to(output: &mut String, max_bytes: usize) {
     if max_bytes == 0 || output.len() <= max_bytes {

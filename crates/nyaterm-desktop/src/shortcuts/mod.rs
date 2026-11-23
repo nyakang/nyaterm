@@ -12,7 +12,7 @@ pub(crate) use actions::*;
 pub(crate) const WORKSPACE_KEY_CONTEXT: &str = "NyaWorkspace";
 pub(crate) const FILE_EXPLORER_KEY_CONTEXT: &str = "FileExplorer";
 pub(crate) const SAVED_CONNECTIONS_KEY_CONTEXT: &str = "SavedConnections";
-pub(crate) const MODAL_KEY_CONTEXT: &str = "NyaModal";
+pub(crate) use nyaterm_ui::overlay::MODAL_KEY_CONTEXT;
 pub(crate) const SCREEN_LOCKED_KEY_CONTEXT: &str = "ScreenLocked";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

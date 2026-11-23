@@ -25,6 +25,7 @@ class PluginDependencyTests(unittest.TestCase):
                 "nyaterm-mcp-host", "nyaterm-agent-client",
                 "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
             )
+            crates = (*crates, *check_architecture.PRESENTATION_DEPENDENCIES)
             for crate in crates:
                 directory = root / "crates" / crate
                 directory.mkdir(parents=True)
@@ -33,6 +34,19 @@ class PluginDependencyTests(unittest.TestCase):
                 (directory / "Cargo.toml").write_text(document, encoding="utf-8")
             with patch.object(check_architecture, "ROOT", root):
                 return check_architecture.dependency_errors()
+
+    def test_feature_presentations_reject_runtime_and_cross_feature_dependencies(self):
+        forbidden = {"nyaterm-desktop", "nyaterm-store", "nyaterm-transport", "gpui-kit", "gpui-base"}
+        for source, extra in check_architecture.PRESENTATION_DEPENDENCIES.items():
+            allowed = check_architecture.PRESENTATION_BASE | extra | {"gpui", "gpui-platform"}
+            targets = allowed | forbidden | set(check_architecture.PRESENTATION_DEPENDENCIES)
+            for target in sorted(targets):
+                for section in ["dependencies", "dev-dependencies", "build-dependencies", "target.'cfg(windows)'.dev-dependencies"]:
+                    with self.subTest(source=source, target=target, section=section):
+                        errors = self.check_dependencies("", "", {source:
+                            f'[{section}]\nhidden = {{ package = "{target}", version = "1" }}\n'})
+                        self.assertEqual(errors, [] if target in allowed else [
+                            f"crate_boundary: {source} must not depend on {target}"])
 
     def test_executor_and_host_tools_boundaries_include_aliases_and_test_dependencies(self):
         allowed_host_tools = {"nyaterm-core", "nyaterm-executor", "nyaterm-i18n", "nyaterm-remote-ops", "nyaterm-ui", "gpui", "gpui-platform"}
