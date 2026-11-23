@@ -519,6 +519,11 @@ impl ConnectionStore {
                 &["interaction", "alternate_scroll"],
                 true,
             ),
+            interaction_disable_alternate_screen: json_bool(
+                &value,
+                &["interaction", "disable_alternate_screen"],
+                false,
+            ),
             interaction_terminal_zoom_enabled: json_bool(
                 &value,
                 &["interaction", "terminal_zoom_enabled"],
@@ -1665,6 +1670,11 @@ impl ConnectionStore {
             &mut value,
             &["interaction", "alternate_scroll"],
             serde_json::Value::Bool(settings.interaction_alternate_scroll),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["interaction", "disable_alternate_screen"],
+            serde_json::Value::Bool(settings.interaction_disable_alternate_screen),
         );
         set_nested_json_value(
             &mut value,

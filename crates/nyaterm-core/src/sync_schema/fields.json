@@ -437,6 +437,7 @@
       "interaction_terminal_right_click_action": "local",
       "interaction_mouse_events_require_alt": "local",
       "interaction_alternate_scroll": "local",
+      "interaction_disable_alternate_screen": "local",
       "interaction_terminal_zoom_enabled": "local",
       "interaction_command_suggestions_enabled": "local",
       "interaction_credential_autofill_enabled": "local",

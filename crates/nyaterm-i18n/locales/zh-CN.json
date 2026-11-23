@@ -3660,6 +3660,8 @@
     "mouseEventsRequireAltDesc": "仅在按住 Alt 时向终端程序发送鼠标事件。",
     "alternateScroll": "全屏程序中滚轮发送方向键",
     "alternateScrollDesc": "在备用屏幕（tmux、screen、less、vim）且未启用鼠标报告时，将鼠标滚轮作为上/下方向键发送。关闭后滚轮不会翻动 shell 历史。为兼容原有行为，默认开启。关闭此选项不会启用 tmux 历史滚动。",
+    "disableAlternateScreen": "禁用备用屏幕",
+    "disableAlternateScreenDesc": "让新启动的全屏程序留在主屏幕，使输出可进入本地滚屏历史。这不是 tmux 自身的历史；窗格重绘可能混杂，vim/less 退出后可能残留画面。已处于备用屏幕的程序需退出重进。默认关闭。",
     "enableStartupLock": "启动时锁定",
     "enableStartupLockDesc": "应用启动时锁定。",
     "enableIdleLock": "空闲时锁定",
