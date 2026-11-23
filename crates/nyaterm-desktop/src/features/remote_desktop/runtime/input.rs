@@ -55,7 +55,7 @@ impl NyaTermApp {
             return;
         }
         let focus_in = cx.on_focus_in(&self.remote_desktop.focus, window, |this, window, _cx| {
-            if let Some(session_id) = this.session.active_id_owned()
+            if let Some(session_id) = this.remote_desktop_input_session(window).map(str::to_owned)
                 && this.remote_desktop.is_session(&session_id)
             {
                 #[cfg(windows)]
@@ -87,7 +87,9 @@ impl NyaTermApp {
                     this.remote_desktop.spice_manager.clone(),
                     None,
                 );
-                if let Some(session_id) = this.session.active_id_owned() {
+                if let Some(session_id) =
+                    this.remote_desktop_input_session(window).map(str::to_owned)
+                {
                     this.release_remote_keys(&session_id);
                 }
             },
@@ -152,54 +154,56 @@ impl NyaTermApp {
     }
 
     pub(super) fn sync_rdp_keyboard_capture(&self, window: &Window) {
-        let target = self.session.active_id().and_then(|session_id| {
-            use crate::features::remote_desktop::keyboard_capture::CaptureProtocol;
-            let is_spice = self.is_spice_session(session_id);
-            if is_spice && !self.spice_input_enabled(session_id) {
-                return None;
-            }
-            if self.spice_relative_input(session_id) && !self.spice_pointer_owned(session_id) {
-                return None;
-            }
-            let is_vnc = self.session.metadata(session_id).is_some_and(|metadata| {
-                matches!(
-                    metadata.launch_config,
-                    crate::models::SessionLaunchConfig::Vnc(_)
-                )
+        let target = self
+            .remote_desktop_input_session(window)
+            .and_then(|session_id| {
+                use crate::features::remote_desktop::keyboard_capture::CaptureProtocol;
+                let is_spice = self.is_spice_session(session_id);
+                if is_spice && !self.spice_input_enabled(session_id) {
+                    return None;
+                }
+                if self.spice_relative_input(session_id) && !self.spice_pointer_owned(session_id) {
+                    return None;
+                }
+                let is_vnc = self.session.metadata(session_id).is_some_and(|metadata| {
+                    matches!(
+                        metadata.launch_config,
+                        crate::models::SessionLaunchConfig::Vnc(_)
+                    )
+                });
+                (window.is_window_active()
+                    && self.remote_desktop.focus.is_focused(window)
+                    && self
+                        .remote_desktop
+                        .sessions
+                        .get(session_id)
+                        .is_some_and(|session| {
+                            // The Microsoft control owns keyboard input; the global
+                            // capture hook would swallow those keys and send them to a
+                            // helper session that does not exist.
+                            #[cfg(windows)]
+                            if session.native_rdp.is_some() || session.native_rdp_config.is_some() {
+                                return false;
+                            }
+                            matches!(session.state, RemoteDesktopViewState::Connected)
+                                && (is_vnc
+                                    || session.viewport.is_some_and(|bounds| {
+                                        bounds.contains(&window.mouse_position())
+                                    }))
+                        }))
+                .then(|| {
+                    (
+                        session_id.to_string(),
+                        if is_spice {
+                            CaptureProtocol::Spice
+                        } else if is_vnc {
+                            CaptureProtocol::Vnc
+                        } else {
+                            CaptureProtocol::Rdp
+                        },
+                    )
+                })
             });
-            (window.is_window_active()
-                && self.remote_desktop.focus.is_focused(window)
-                && self
-                    .remote_desktop
-                    .sessions
-                    .get(session_id)
-                    .is_some_and(|session| {
-                        // The Microsoft control owns keyboard input; the global
-                        // capture hook would swallow those keys and send them to a
-                        // helper session that does not exist.
-                        #[cfg(windows)]
-                        if session.native_rdp.is_some() || session.native_rdp_config.is_some() {
-                            return false;
-                        }
-                        matches!(session.state, RemoteDesktopViewState::Connected)
-                            && (is_vnc
-                                || session.viewport.is_some_and(|bounds| {
-                                    bounds.contains(&window.mouse_position())
-                                }))
-                    }))
-            .then(|| {
-                (
-                    session_id.to_string(),
-                    if is_spice {
-                        CaptureProtocol::Spice
-                    } else if is_vnc {
-                        CaptureProtocol::Vnc
-                    } else {
-                        CaptureProtocol::Rdp
-                    },
-                )
-            })
-        });
         crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
             self.remote_desktop.manager.clone(),
             self.remote_desktop.vnc_manager.clone(),
@@ -766,23 +770,21 @@ impl NyaTermApp {
     }
 
     pub(super) fn flush_pending_remote_cursor_repaint(&mut self, cx: &mut Context<Self>) {
-        let Some(session_id) = self.session.active_id_owned() else {
-            return;
-        };
-        let pending = self
+        let sessions = self
             .remote_desktop
             .sessions
-            .get(&session_id)
-            .is_some_and(|session| session.cursor_repaint_pending);
-        if !pending {
-            return;
-        }
+            .iter()
+            .filter(|(_, session)| session.cursor_repaint_pending)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
         let software_renderer = crate::platform::is_software_renderer(self.shell.renderer());
-        self.repaint_remote_cursor(
-            &session_id,
-            remote_cursor_repaint_interval(software_renderer),
-            cx,
-        );
+        for session_id in sessions {
+            self.repaint_remote_cursor(
+                &session_id,
+                remote_cursor_repaint_interval(software_renderer),
+                cx,
+            );
+        }
     }
 
     fn repaint_remote_cursor(
@@ -791,7 +793,9 @@ impl NyaTermApp {
         interval: Duration,
         cx: &mut Context<Self>,
     ) {
-        if self.session.active_id() != Some(session_id) {
+        if self.session.active_id() != Some(session_id)
+            && !self.is_remote_desktop_detached_fullscreen(session_id)
+        {
             if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
                 session.cursor_repaint_pending = false;
             }

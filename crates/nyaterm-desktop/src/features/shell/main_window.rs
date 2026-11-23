@@ -26,23 +26,25 @@ impl NyaTermApp {
         })
     }
 
-    /// Same as `update_in_main_window`, but pinned to the current RDP host
-    /// window: the detached fullscreen window while one is open, otherwise the
-    /// main window. RDP dynamic textures live in the rendering window's sprite
-    /// atlas, so frame upload, native child hosting and keyboard capture must
-    /// all follow the window that actually renders the surface.
-    pub(in crate::features) fn update_in_rdp_host_window<C: AppContext, R>(
+    /// Visit both rendering windows without borrowing either across the other
+    /// update. Each callback processes only sessions owned by that window.
+    pub(in crate::features) fn update_in_remote_desktop_windows<C: AppContext, R>(
         this: &WeakEntity<Self>,
         cx: &mut C,
-        update: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) -> R,
-    ) -> anyhow::Result<R> {
-        let Some(host) = this.read_with(cx, |this, _| this.rdp_host_window())? else {
-            return this.update_in(cx, update);
-        };
-        let entity = this.upgrade().context("entity released")?;
-        cx.update_window(host.into(), |_, window, cx| {
-            entity.update(cx, |this, cx| update(this, window, cx))
-        })
+        mut update: impl FnMut(&mut Self, &mut Window, &mut Context<Self>) -> R,
+    ) -> anyhow::Result<Vec<R>> {
+        let main = Self::update_in_main_window(this, cx, &mut update)?;
+        let mut results = vec![main];
+        let fullscreen = this.read_with(cx, |this, _| this.remote_desktop_fullscreen_window())?;
+        if let Some(fullscreen) = fullscreen {
+            let entity = this.upgrade().context("entity released")?;
+            if let Ok(result) = cx.update_window(fullscreen.into(), |_, window, cx| {
+                entity.update(cx, |this, cx| update(this, window, cx))
+            }) {
+                results.push(result);
+            }
+        }
+        Ok(results)
     }
 }
 

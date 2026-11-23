@@ -9,7 +9,7 @@
 //! Builtin/IronRDP sessions open a **separate native window** that hosts the
 //! remote surface. The main window keeps running, but while a session is
 //! fullscreen it renders a placeholder instead of the surface, so the surface
-//! has exactly one owner. All window-coupled RDP work follows `rdp_host_window()`.
+//! has exactly one owner. Window-coupled work is routed by session to its owning window.
 //!
 //! `fullscreen_session` + `fullscreen_window` are the single source of truth.
 //! `fullscreen_window` is `None` for ActiveX window-level fullscreen. The session
@@ -41,9 +41,7 @@ fn is_native_rdp_session(app: &NyaTermApp, session_id: &str) -> bool {
     app.remote_desktop
         .sessions
         .get(session_id)
-        .is_some_and(|session| {
-            session.native_rdp.is_some() || session.native_rdp_config.is_some()
-        })
+        .is_some_and(|session| session.native_rdp.is_some() || session.native_rdp_config.is_some())
 }
 
 /// Root view of the IronRDP detached fullscreen window. Renders the normal
@@ -61,11 +59,17 @@ struct RemoteDesktopFullscreenWindow {
     /// renders the same content but a different root, so it must observe the
     /// surface as well to repaint the software cursor on pointer moves.
     _surface_observation: Option<Subscription>,
+    _activation_observation: Subscription,
     focused_once: bool,
 }
 
 impl RemoteDesktopFullscreenWindow {
-    fn new(app: WeakEntity<NyaTermApp>, session_id: String, cx: &mut Context<Self>) -> Self {
+    fn new(
+        app: WeakEntity<NyaTermApp>,
+        session_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let observation = app
             .upgrade()
             .map(|app| cx.observe(&app, |_, _, cx| cx.notify()));
@@ -78,12 +82,28 @@ impl RemoteDesktopFullscreenWindow {
                 .cloned()?;
             Some(cx.observe(&surface, |_, _, cx| cx.notify()))
         });
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active()
+                && let Some(app) = this.app.upgrade()
+            {
+                app.update(cx, |app, _| {
+                    app.release_remote_keys(&this.session_id);
+                    super::keyboard_capture::set_keyboard_capture(
+                        app.remote_desktop.manager.clone(),
+                        app.remote_desktop.vnc_manager.clone(),
+                        app.remote_desktop.spice_manager.clone(),
+                        None,
+                    );
+                });
+            }
+        });
         Self {
             app,
             session_id,
             shell_focus: cx.focus_handle(),
             _app_observation: observation,
             _surface_observation: surface_observation,
+            _activation_observation: activation,
             focused_once: false,
         }
     }
@@ -196,37 +216,55 @@ impl NyaTermApp {
             })
     }
 
-    /// Drop window-bound textures for a session before its rendering window
-    /// changes. Dynamic textures live in the rendering window's sprite atlas,
-    /// so a texture uploaded in the main window cannot be painted by the
-    /// detached window (and vice versa). Clearing them forces a fresh upload in
-    /// the new host on its next frame.
-    fn invalidate_host_textures(&mut self, session_id: &str) {
-        if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
-            if let Some(texture) = session.texture.take() {
-                self.remote_desktop.pending_texture_removals.push(texture);
-            }
-            if let Some(texture) = session.cursor_texture.take() {
-                self.remote_desktop.pending_texture_removals.push(texture);
-            }
-            session.texture_dirty = session.framebuffer.is_some();
-        }
+    pub(in crate::features) fn remote_desktop_fullscreen_window(&self) -> Option<NyaWindowHandle> {
+        self.remote_desktop.fullscreen_window
     }
 
-    /// The window that currently hosts RDP rendering: the detached fullscreen
-    /// window while one is open, otherwise the main window. Frame upload,
-    /// native child hosting and keyboard capture all route through this.
-    pub(in crate::features) fn rdp_host_window(&self) -> Option<NyaWindowHandle> {
-        self.remote_desktop
+    pub(in crate::features) fn remote_desktop_session_in_window(
+        &self,
+        session_id: &str,
+        window: &Window,
+    ) -> bool {
+        let current = window.window_handle();
+        if let Some(fullscreen) = self.remote_desktop.fullscreen_window {
+            if self.is_remote_desktop_fullscreen(session_id) {
+                return current == fullscreen.into();
+            }
+            if current == fullscreen.into() {
+                return false;
+            }
+        }
+        self.shell
+            .main_window()
+            .is_none_or(|main| current == main.into())
+    }
+
+    /// Main-window selection and detached-window selection are independent.
+    pub(in crate::features) fn remote_desktop_input_session(
+        &self,
+        window: &Window,
+    ) -> Option<&str> {
+        if self
+            .remote_desktop
             .fullscreen_window
-            .or_else(|| self.shell.main_window())
+            .is_some_and(|host| host.window_id() == window.window_handle().window_id())
+        {
+            return self.remote_desktop_fullscreen_session();
+        }
+        self.session
+            .active_id()
+            .filter(|id| self.remote_desktop_session_in_window(id, window))
+    }
+
+    pub(super) fn remote_desktop_session_visible(&self, session_id: &str, window: &Window) -> bool {
+        window.is_visible() && self.remote_desktop_input_session(window) == Some(session_id)
     }
 
     /// Open (or close) RDP fullscreen for a session.
     pub(in crate::features) fn toggle_remote_desktop_fullscreen(
         &mut self,
         session_id: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.is_remote_desktop_fullscreen(session_id) {
@@ -248,7 +286,7 @@ impl NyaTermApp {
         if is_native_rdp_session(self, session_id) {
             self.remote_desktop.fullscreen_session = Some(session_id.to_string());
             self.remote_desktop.fullscreen_window = None;
-            window.toggle_fullscreen();
+            _window.toggle_fullscreen();
             cx.notify();
             return;
         }
@@ -265,7 +303,7 @@ impl NyaTermApp {
             .or_insert_with(|| cx.new(|cx| super::surface::RemoteDesktopSurface::new(app, id, cx)));
         self.remote_desktop.fullscreen_session = Some(session_id.to_string());
         // The surface is about to move to a different window atlas.
-        self.invalidate_host_textures(session_id);
+        self.remote_desktop.invalidate_session_textures(session_id);
         self.open_fullscreen_window(session_id.to_string(), cx);
         cx.notify();
     }
@@ -308,8 +346,9 @@ impl NyaTermApp {
         let main_window = self.shell.main_window();
 
         if let Some(session_id) = session_id.as_deref() {
+            self.release_remote_keys(session_id);
             // Surface returns to the main window atlas; force a fresh upload.
-            self.invalidate_host_textures(session_id);
+            self.remote_desktop.invalidate_session_textures(session_id);
         }
 
         if let Some(handle) = fullscreen_window {
@@ -374,7 +413,8 @@ fn open_fullscreen_window_now(app: Entity<NyaTermApp>, session_id: String, cx: &
             // Let the window close; state is already cleared.
             true
         });
-        let view = cx.new(|cx| RemoteDesktopFullscreenWindow::new(view_app, view_session, cx));
+        let view =
+            cx.new(|cx| RemoteDesktopFullscreenWindow::new(view_app, view_session, window, cx));
         cx.new(|cx| nya_root(view, window, cx))
     });
 

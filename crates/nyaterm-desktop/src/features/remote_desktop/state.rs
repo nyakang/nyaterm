@@ -10,7 +10,10 @@ use std::time::Instant;
 
 use crate::models::event_wake::{ANY_INTEREST, EventWake};
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui::{Bounds, DynamicTexture, FocusHandle, Pixels, Subscription};
+use gpui::{
+    AnyWindowHandle, App, AppContext as _, Bounds, DynamicTexture, FocusHandle, Pixels,
+    Subscription, Window,
+};
 use nyaterm_remote_desktop::{
     CertificatePromptReason, ClipboardTracker, CursorPosition, CursorShape, KeyMapper,
     RdpCapability, RdpCertificateRequest, RdpDisplayMetrics, RdpError, RdpErrorKind,
@@ -45,7 +48,7 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     pub(super) metrics_last_report: Instant,
     pub(super) metrics_control_events: usize,
     pub(super) metrics_frame_updates: usize,
-    pub(super) pending_texture_removals: Vec<DynamicTexture>,
+    pub(super) pending_texture_removals: Vec<PendingTextureRemoval>,
     pub(super) focus_subscriptions: Vec<Subscription>,
     pub(super) spice_pointer_capture: Option<spice::SpicePointerCapture>,
     /// Signalled by both session managers after they enqueue. Taken once by
@@ -60,6 +63,28 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     pub(super) pointer_flush_scheduled: bool,
     #[cfg(windows)]
     pub(super) native_shutting_down: bool,
+}
+
+/// A texture must be released from the atlas that allocated it, even after
+/// its session moves to another window or is removed.
+pub(super) struct PendingTextureRemoval {
+    pub(super) owner: Option<AnyWindowHandle>,
+    pub(super) texture: DynamicTexture,
+}
+
+impl PendingTextureRemoval {
+    pub(super) fn remove(self, window: &mut Window, cx: &mut App) {
+        if let Some(owner) = self.owner.filter(|owner| *owner != window.window_handle()) {
+            cx.defer(move |cx| {
+                // Closing a window already drops its atlas.
+                let _ = cx.update_window(owner, |_, window, _| {
+                    window.remove_dynamic_texture(self.texture);
+                });
+            });
+        } else {
+            window.remove_dynamic_texture(self.texture);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -81,6 +106,7 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) state: RemoteDesktopViewState,
     pub(super) framebuffer: Option<RemoteDesktopFrameSource>,
     pub(super) texture: Option<DynamicTexture>,
+    pub(super) texture_window: Option<AnyWindowHandle>,
     pub(super) texture_dirty: bool,
     /// Scratch buffer for packing dirty rectangles before texture uploads.
     ///
@@ -142,6 +168,7 @@ impl Default for RemoteDesktopSessionState {
             state: RemoteDesktopViewState::Connecting,
             framebuffer: None,
             texture: None,
+            texture_window: None,
             texture_dirty: false,
             upload_staging: Vec::new(),
             uploads_stopped: false,
@@ -218,16 +245,42 @@ impl RemoteDesktopFeatureState {
             .collect()
     }
 
+    pub(super) fn invalidate_session_textures(&mut self, session_id: &str) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            for texture in [session.texture.take(), session.cursor_texture.take()]
+                .into_iter()
+                .flatten()
+            {
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
+            }
+            session.texture_window = None;
+            session.texture_dirty = session.framebuffer.is_some();
+        }
+        self.wake.signal(ANY_INTEREST);
+    }
+
     pub(in crate::features) fn release_inactive_textures(&mut self, active: &str) {
         for (id, session) in &mut self.sessions {
-            if id == active {
+            if id == active
+                || (self.fullscreen_window.is_some()
+                    && self.fullscreen_session.as_deref() == Some(id.as_str()))
+            {
                 continue;
             }
             if let Some(texture) = session.texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
             if let Some(texture) = session.cursor_texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
             session.cursor_repaint_pending = false;
             #[cfg(windows)]
@@ -481,10 +534,16 @@ impl RemoteDesktopFeatureState {
         if let Some(mut session) = self.sessions.remove(session_id) {
             session.start_attempt.cancel();
             if let Some(texture) = session.texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
             if let Some(texture) = session.cursor_texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
         }
         // Resource disposal must run even when the last helper is already gone.

@@ -1315,7 +1315,7 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
     }
     let (_, cx) = cx.add_window_view(|_, _| EmptyView);
     cx.update(|window, cx| {
-        app.update(cx, |app, _| {
+        app.update(cx, |app, cx| {
             app.remote_desktop.insert_connecting("healthy".into());
             app.remote_desktop.insert_connecting("broken".into());
             app.reset_rdp_framebuffer("healthy", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
@@ -1343,7 +1343,7 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
                 pixels
             );
             for old in app.remote_desktop.pending_texture_removals.drain(..) {
-                window.remove_dynamic_texture(old);
+                old.remove(window, cx);
             }
             app.prepare_remote_desktop_textures("healthy", window);
             assert_ne!(
