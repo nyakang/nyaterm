@@ -11,8 +11,8 @@ use crate::shortcuts::{
     SwitchToTab, TemporarySshLink, TerminalClear, TerminalClearAll, TerminalCommandNext,
     TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalFind, TerminalLocalMode,
     TerminalPaste, TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar,
-    ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording, ToggleRightSidebar,
-    ToggleRdpFullscreen, UploadFile, ZoomIn, ZoomOut,
+    ToggleNativeFullscreen, TogglePaneFocus, ToggleRdpFullscreen, ToggleRecording,
+    ToggleRightSidebar, UploadFile, ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {

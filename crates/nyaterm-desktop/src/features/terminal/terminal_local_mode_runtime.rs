@@ -47,11 +47,7 @@ fn snapshot_last_content_line(snapshot: &nyaterm_terminal::TerminalSnapshot) -> 
         .rows()
         .iter()
         .rposition(|row| {
-            !row.cleared
-                && row
-                    .cells
-                    .iter()
-                    .any(|cell| !cell.text().trim().is_empty())
+            !row.cleared && row.cells.iter().any(|cell| !cell.text().trim().is_empty())
         })
         .unwrap_or(0);
     start.saturating_add(last_row).min(screen_end)
@@ -1160,34 +1156,40 @@ mod regression_tests {
 
             // BufferEnd / Down / PageDown must all stop at the last content row.
             app.handle_terminal_local_mode_key(
-                &key_event("end", Modifiers {
-                    control: true,
-                    ..Default::default()
-                }),
+                &key_event(
+                    "end",
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                ),
                 cx,
             );
             assert_eq!(app.terminal.local_mode.cursor.line, 2);
             app.handle_terminal_local_mode_key(&key_event("down", Modifiers::default()), cx);
             assert_eq!(app.terminal.local_mode.cursor.line, 2);
-            app.handle_terminal_local_mode_key(
-                &key_event("pagedown", Modifiers::default()),
-                cx,
-            );
+            app.handle_terminal_local_mode_key(&key_event("pagedown", Modifiers::default()), cx);
             assert_eq!(app.terminal.local_mode.cursor.line, 2);
 
             // Shift+PageDown cannot extend the selection into blank rows.
             app.handle_terminal_local_mode_key(
-                &key_event("home", Modifiers {
-                    control: true,
-                    ..Default::default()
-                }),
+                &key_event(
+                    "home",
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                ),
                 cx,
             );
             app.handle_terminal_local_mode_key(
-                &key_event("pagedown", Modifiers {
-                    shift: true,
-                    ..Default::default()
-                }),
+                &key_event(
+                    "pagedown",
+                    Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                ),
                 cx,
             );
             assert!(app.terminal.local_mode.cursor.line <= 2);
@@ -1195,10 +1197,13 @@ mod regression_tests {
             // Select from the top through the end of the last content row; the
             // copied text must stop at "third" with no trailing empty lines.
             app.handle_terminal_local_mode_key(
-                &key_event("home", Modifiers {
-                    control: true,
-                    ..Default::default()
-                }),
+                &key_event(
+                    "home",
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                ),
                 cx,
             );
             let shift = Modifiers {
@@ -1211,8 +1216,14 @@ mod regression_tests {
             let text = app.selected_terminal_text().unwrap();
             assert!(text.contains("first word"));
             assert!(text.contains("third"));
-            assert!(!text.ends_with('\n'), "selection reached blank rows: {text:?}");
-            assert!(text.lines().all(|line| !line.trim().is_empty()), "blank row copied: {text:?}");
+            assert!(
+                !text.ends_with('\n'),
+                "selection reached blank rows: {text:?}"
+            );
+            assert!(
+                text.lines().all(|line| !line.trim().is_empty()),
+                "blank row copied: {text:?}"
+            );
         });
     }
 

@@ -1552,7 +1552,10 @@ mod tests {
         assert_eq!(parse_rdp_drive_letters("*").len(), 26);
         assert_eq!(parse_rdp_drive_letters("dcD,"), vec!['C', 'D']);
         assert!(parse_rdp_drive_letters("").is_empty());
-        assert_eq!(toggle_rdp_drive_letter("*", 'b'), "ACDEFGHIJKLMNOPQRSTUVWXYZ");
+        assert_eq!(
+            toggle_rdp_drive_letter("*", 'b'),
+            "ACDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
         assert_eq!(toggle_rdp_drive_letter("C", 'd'), "CD");
         assert_eq!(toggle_rdp_drive_letter("CD", 'c'), "D");
         assert_eq!(toggle_rdp_drive_letter("D", '1'), "D");

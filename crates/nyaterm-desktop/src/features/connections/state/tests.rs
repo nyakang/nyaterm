@@ -2824,7 +2824,11 @@ fn rdp_local_resource_switches_update_draft_and_clipboard_mode() {
     assert_eq!(editor.rdp_clipboard.mode, "text-and-files");
 
     // The custom-directory checkbox clears a configured path on toggle-off.
-    draft.as_mut().expect("draft remains open").rdp_redirection.custom_drive_path = "a custom directory".into();
+    draft
+        .as_mut()
+        .expect("draft remains open")
+        .rdp_redirection
+        .custom_drive_path = "a custom directory".into();
     assert!(toggle_connection_editor_flag(
         &mut draft,
         ConnectionEditorToggle::RdpCustomDriveToggled

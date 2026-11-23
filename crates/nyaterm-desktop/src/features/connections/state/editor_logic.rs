@@ -856,18 +856,14 @@ pub(super) fn toggle_connection_editor_flag(
             // Checking the box seeds a usable default path; unchecking clears
             // it so the share is not announced. An empty string is the single
             // source of truth for "custom directory disabled".
-            editor.rdp_redirection.custom_drive_path = if editor
-                .rdp_redirection
-                .custom_drive_path
-                .trim()
-                .is_empty()
-            {
-                dirs::home_dir()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
+            editor.rdp_redirection.custom_drive_path =
+                if editor.rdp_redirection.custom_drive_path.trim().is_empty() {
+                    dirs::home_dir()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
         }
         ConnectionEditorToggle::RdpRedirectDriveLetter(letter) => {
             // Toggle within the drives the editor actually shows. Expanding a
@@ -889,12 +885,12 @@ pub(super) fn toggle_connection_editor_flag(
                 selected.push(letter);
                 selected.sort_unstable();
             }
-            editor.rdp_redirection.drive_letters =
-                if !selected.is_empty() && selected == available {
-                    RDP_ALL_DRIVES.to_string()
-                } else {
-                    selected.into_iter().collect()
-                };
+            editor.rdp_redirection.drive_letters = if !selected.is_empty() && selected == available
+            {
+                RDP_ALL_DRIVES.to_string()
+            } else {
+                selected.into_iter().collect()
+            };
         }
         ConnectionEditorToggle::RdpRedirectPrinters => {
             editor.rdp_redirection.printers = !editor.rdp_redirection.printers;

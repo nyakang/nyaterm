@@ -490,10 +490,7 @@ impl NyaTermApp {
                     .h(px(32.))
                     .child(
                         NyaButton::new(
-                            SharedString::from(format!(
-                                "asset-batch-picker-{}",
-                                field.key()
-                            )),
+                            SharedString::from(format!("asset-batch-picker-{}", field.key())),
                             display,
                         )
                         .form_control()

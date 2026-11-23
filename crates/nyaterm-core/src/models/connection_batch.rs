@@ -1659,7 +1659,9 @@ pub fn apply_connection_batch_edit(
     if rdp_display_ok
         && rdp_redirection_fields.iter().any(|touched| *touched)
         && let ConnectionType::Rdp {
-            redirection, clipboard, ..
+            redirection,
+            clipboard,
+            ..
         } = &mut connection.config
     {
         if !edit.rdp_redirect_clipboard.is_unchanged() {

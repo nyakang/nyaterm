@@ -162,20 +162,18 @@ fn rdp_drive_picker(
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(
-                                    NyaCheckbox::new(id)
-                                        .checked(checked)
-                                        .on_click(move |_, _, cx| {
-                                            let _ = app.update(cx, |app, cx| {
-                                                app.toggle_connection_editor_flag(
-                                                    ConnectionEditorToggle::RdpRedirectDriveLetter(
-                                                        letter,
-                                                    ),
-                                                    cx,
-                                                );
-                                            });
-                                        }),
-                                )
+                                .child(NyaCheckbox::new(id).checked(checked).on_click(
+                                    move |_, _, cx| {
+                                        let _ = app.update(cx, |app, cx| {
+                                            app.toggle_connection_editor_flag(
+                                                ConnectionEditorToggle::RdpRedirectDriveLetter(
+                                                    letter,
+                                                ),
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ))
                                 .child(
                                     div()
                                         .text_xs()
@@ -702,9 +700,10 @@ fn rdp_session(
                         )
                     }),
                 ))
-                .when_some(rdp_drive_picker(palette, editor, fields, cx), |this, picker| {
-                    this.child(picker)
-                })
+                .when_some(
+                    rdp_drive_picker(palette, editor, fields, cx),
+                    |this, picker| this.child(picker),
+                )
                 .child(rdp_switch_row(
                     palette,
                     "connection-rdp-redirect-printers",
