@@ -11,7 +11,7 @@ if [[ "$(uname -m)" != x86_64 ]]; then
 fi
 echo '== Executables and system libraries (default GPU path) =='
 private_libs="$PWD/opengl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-for binary in nyaterm nyaterm-mcp nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-android-helper adb/adb; do
+for binary in nyaterm nyaterm-mcp nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-android-helper nyaterm-spice-helper adb/adb; do
   if [[ ! -x "$binary" ]]; then echo "ERROR: missing executable: $binary"; failed=1; continue; fi
   output="$(LC_ALL=C ldd -r "./$binary" 2>&1)"
   status=$?
@@ -20,6 +20,19 @@ for binary in nyaterm nyaterm-mcp nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-
     failed=1
   fi
 done
+echo '== Bundled SPICE runtime =='
+if [[ ! -f spice/SOURCE.json || ! -f spice/libspice-client-glib-2.0.so.8 ]]; then
+  echo 'ERROR: incomplete private SPICE runtime.'; failed=1
+else
+  for library in spice/*.so.* spice/gstreamer-1.0/*.so spice/sasl2/*.so*; do
+    [[ -f "$library" ]] || continue
+    output="$(LD_LIBRARY_PATH= LC_ALL=C ldd -r "./$library" 2>&1)"
+    status=$?
+    if [[ $status != 0 ]] || [[ "$output" == *'not found'* || "$output" == *'undefined symbol'* ]]; then
+      printf 'ERROR: %s\n%s\n' "$library" "$output"; failed=1
+    fi
+  done
+fi
 echo '== Bundled OpenGL (explicit CPU fallback) =='
 if [[ ! -f opengl/lib/libEGL.so.1 || ! -f opengl/lib/libEGL_nyaterm.so.1 ]]; then
   echo 'ERROR: incomplete private OpenGL runtime.'; failed=1

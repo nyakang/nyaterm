@@ -69,6 +69,7 @@ fn new_session_connection_protocol(connection: &SavedConnection) -> &'static str
         ConnectionType::Rdp { .. } => "rdp",
         ConnectionType::Ssh { .. } => "ssh",
         ConnectionType::Vnc { .. } => "vnc",
+        ConnectionType::Spice { .. } => "spice",
         ConnectionType::Adb { .. } => "adb",
         ConnectionType::Ftp { .. } => "ftp",
     }
@@ -348,6 +349,7 @@ impl NyaTermApp {
                         nyaterm_transport::SessionKind::RawTcp => "SSH",
                         nyaterm_transport::SessionKind::Rdp => "RDP",
                         nyaterm_transport::SessionKind::Vnc => "VNC",
+                        nyaterm_transport::SessionKind::Spice => "SPICE",
                         nyaterm_transport::SessionKind::AdbShell
                         | nyaterm_transport::SessionKind::AdbFiles
                         | nyaterm_transport::SessionKind::AdbScreen => "Android",
@@ -613,6 +615,16 @@ impl NyaTermApp {
                             .text_color(rgb(palette.text))
                             .child(new_session_label),
                     ),
+            )
+            .child(
+                nyaterm_ui::NyaButton::new(
+                    format!("spice-open-file-{menu_id_suffix}"),
+                    t!("spice.openFile"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_new_session_menu(cx);
+                    this.prompt_spice_connection_file(cx);
+                })),
             )
             .child(all_sessions_popover);
 

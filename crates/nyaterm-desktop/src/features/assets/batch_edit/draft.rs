@@ -205,6 +205,34 @@ impl BatchScopeDraft {
             }
             if self.mode(field) == BatchEditMode::Clear {
                 match field {
+                    BatchFieldKey::SpiceTcpPort => edit.spice.tcp_port = BatchField::Clear,
+                    BatchFieldKey::SpiceTlsPort => edit.spice.tls_port = BatchField::Clear,
+                    BatchFieldKey::SpiceHttpProxy => edit.spice.proxy = BatchField::Clear,
+                    BatchFieldKey::SpiceCaPem => edit.spice.ca_pem = BatchField::Clear,
+                    BatchFieldKey::SpiceCertificateSubject => {
+                        edit.spice.certificate_subject = BatchField::Clear
+                    }
+                    BatchFieldKey::SpiceRequireTls => edit.spice.require_tls = BatchField::Clear,
+                    BatchFieldKey::SpiceDynamicResolution => {
+                        edit.spice.dynamic_resolution = BatchField::Clear
+                    }
+                    BatchFieldKey::SpiceFitWindow => edit.spice.fit_window = BatchField::Clear,
+                    BatchFieldKey::SpiceViewOnly => edit.spice.view_only = BatchField::Clear,
+                    BatchFieldKey::SpiceClipboardToGuest => {
+                        edit.spice.clipboard_to_guest = BatchField::Clear
+                    }
+                    BatchFieldKey::SpiceClipboardFromGuest => {
+                        edit.spice.clipboard_from_guest = BatchField::Clear
+                    }
+                    BatchFieldKey::SpiceAudioPlayback => {
+                        edit.spice.audio_playback = BatchField::Clear
+                    }
+                    BatchFieldKey::SpiceFileTransfer => {
+                        edit.spice.file_transfer = BatchField::Clear
+                    }
+                    BatchFieldKey::SpiceReconnectAttempts => {
+                        edit.spice.reconnect_attempts = BatchField::Clear
+                    }
                     BatchFieldKey::Group => edit.group_id = BatchField::Clear,
                     BatchFieldKey::Description => edit.description = BatchField::Clear,
                     BatchFieldKey::Icon => edit.icon = BatchField::Clear,
@@ -260,7 +288,11 @@ impl BatchScopeDraft {
                     BatchFieldKey::Account => {
                         if matches!(
                             self.kind,
-                            Some(ConnectionBatchKind::Rdp | ConnectionBatchKind::Vnc)
+                            Some(
+                                ConnectionBatchKind::Rdp
+                                    | ConnectionBatchKind::Vnc
+                                    | ConnectionBatchKind::Spice
+                            )
                         ) {
                             edit.password_id = BatchField::Clear;
                         } else {
@@ -449,6 +481,53 @@ impl BatchScopeDraft {
                 self.require_text(field)?;
             }
             match field {
+                BatchFieldKey::SpiceTcpPort => {
+                    edit.spice.tcp_port = BatchField::Set(
+                        self.value(field)
+                            .trim()
+                            .parse::<u16>()
+                            .map_err(|_| t!("spice.validation.ports").to_string())?,
+                    )
+                }
+                BatchFieldKey::SpiceTlsPort => {
+                    edit.spice.tls_port = BatchField::Set(
+                        self.value(field)
+                            .trim()
+                            .parse::<u16>()
+                            .map_err(|_| t!("spice.validation.ports").to_string())?,
+                    )
+                }
+                BatchFieldKey::SpiceHttpProxy => edit.spice.proxy = self.text_field(field, true),
+                BatchFieldKey::SpiceCaPem => edit.spice.ca_pem = self.text_field(field, true),
+                BatchFieldKey::SpiceCertificateSubject => {
+                    edit.spice.certificate_subject = self.text_field(field, true)
+                }
+                BatchFieldKey::SpiceRequireTls => edit.spice.require_tls = self.bool_field(field),
+                BatchFieldKey::SpiceDynamicResolution => {
+                    edit.spice.dynamic_resolution = self.bool_field(field)
+                }
+                BatchFieldKey::SpiceFitWindow => edit.spice.fit_window = self.bool_field(field),
+                BatchFieldKey::SpiceViewOnly => edit.spice.view_only = self.bool_field(field),
+                BatchFieldKey::SpiceClipboardToGuest => {
+                    edit.spice.clipboard_to_guest = self.bool_field(field)
+                }
+                BatchFieldKey::SpiceClipboardFromGuest => {
+                    edit.spice.clipboard_from_guest = self.bool_field(field)
+                }
+                BatchFieldKey::SpiceAudioPlayback => {
+                    edit.spice.audio_playback = self.bool_field(field)
+                }
+                BatchFieldKey::SpiceFileTransfer => {
+                    edit.spice.file_transfer = self.bool_field(field)
+                }
+                BatchFieldKey::SpiceReconnectAttempts => {
+                    edit.spice.reconnect_attempts = BatchField::Set(
+                        self.value(field)
+                            .trim()
+                            .parse::<u32>()
+                            .map_err(|_| t!("spice.validation.reconnect").to_string())?,
+                    )
+                }
                 BatchFieldKey::Group => {
                     let value = self.value(field).trim();
                     edit.group_id = if value.is_empty() {
@@ -655,7 +734,11 @@ impl BatchScopeDraft {
                     let value = self.value(field).trim();
                     let uses_password_catalog = matches!(
                         self.display_kind(),
-                        Some(ConnectionBatchKind::Rdp | ConnectionBatchKind::Vnc)
+                        Some(
+                            ConnectionBatchKind::Rdp
+                                | ConnectionBatchKind::Vnc
+                                | ConnectionBatchKind::Spice
+                        )
                     );
                     let patch = if value.is_empty() {
                         BatchField::Clear

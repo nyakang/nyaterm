@@ -28,6 +28,7 @@ impl NyaTermApp {
                 ConnectionType::Serial { .. } => "Serial",
                 ConnectionType::Rdp { .. } => "RDP",
                 ConnectionType::Vnc { .. } => "VNC",
+                ConnectionType::Spice { .. } => "SPICE",
                 ConnectionType::Adb { .. } => "adb_shell",
                 ConnectionType::Ftp { .. } => "ftp",
             };

@@ -65,7 +65,6 @@ pub(in crate::features) struct OverlayFlags {
 }
 
 impl OverlayFlags {
-    #[cfg(any(windows, test))]
     pub(in crate::features) fn obscures_native_surface(self) -> bool {
         self.blocks_workspace_focus()
     }
@@ -479,6 +478,7 @@ impl NyaTermApp {
             .font(self.gpui_ui_font().font())
             .text_size(px(self.settings.summary().ui_font_size.clamp(12, 24) as f32))
             .child(self.session_tab_drag_listener_layer(cx))
+            .child(self.spice_pointer_listener_layer(cx))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.cancel_internal_drag_on_escape(event, window, cx);
             }))
@@ -1379,6 +1379,7 @@ fn fit_wallpaper_tile_size(viewport: (f32, f32), intrinsic: (f32, f32)) -> (f32,
 
 impl Render for NyaTermApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.reconcile_spice_pointer(window, cx);
         self.sync_android_visibility(cx);
         for texture in self.android.retired_textures.drain(..) {
             texture.remove(window);

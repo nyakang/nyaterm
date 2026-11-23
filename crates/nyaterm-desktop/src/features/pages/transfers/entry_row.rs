@@ -12,22 +12,7 @@ use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 use nyaterm_ui::NyaHoverCard;
 use std::collections::HashSet;
 
-pub(in crate::features) fn format_browser_file_size(size: Option<u64>) -> String {
-    match size {
-        None | Some(0) => "-".to_string(),
-        Some(size) if size < 1024 => format!("{size} B"),
-        Some(size) => {
-            const UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
-            let mut unit_index = 0;
-            let mut divisor = 1024_u64;
-            while size / divisor >= 1024 && unit_index < UNITS.len() - 1 {
-                divisor *= 1024;
-                unit_index += 1;
-            }
-            format!("{:.1} {}", size as f64 / divisor as f64, UNITS[unit_index])
-        }
-    }
-}
+pub(in crate::features) use nyaterm_file_browser_gpui::formatting::format_browser_file_size;
 
 pub(super) fn transfer_browser_parent_entry_row(
     palette: ThemePalette,

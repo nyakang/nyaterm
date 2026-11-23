@@ -25,6 +25,7 @@ pub(in crate::features) mod options;
 mod rdp;
 mod recording;
 mod serial;
+mod spice;
 mod ssh;
 mod tags;
 mod telnet;
@@ -32,7 +33,6 @@ mod vnc;
 
 use rust_i18n::t;
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
@@ -746,30 +746,27 @@ impl NyaTermApp {
         let wide = width >= 760.;
         let navigation_width = if wide { 180. } else { 128. };
         let narrow = width - navigation_width < 500.;
+        let mut retained = vec![editor.kind];
+        if let Some(original) = editor.id.as_ref().and_then(|id| {
+            self.connection_state
+                .connections()
+                .iter()
+                .find(|connection| &connection.id == id)
+        }) {
+            retained.push(ConnectionKindTab::from_connection_type(&original.config));
+        }
+        let protocol_kinds = ConnectionKindTab::editor_types(
+            &self.settings.summary().connection_type_layout,
+            editor.defaults_mode,
+            &retained,
+        );
         let protocol_select = self.select_entity(
             "connection-editor-kind",
-            [
-                ConnectionKindTab::Ssh,
-                ConnectionKindTab::Local,
-                ConnectionKindTab::Telnet,
-                ConnectionKindTab::Serial,
-                ConnectionKindTab::Rdp,
-                ConnectionKindTab::Vnc,
-                ConnectionKindTab::Adb,
-            ]
-            .into_iter()
-            .map(|kind| {
-                NyaSelectOption::new(
-                    kind.label(),
-                    match kind {
-                        ConnectionKindTab::Local => t!("dialog.localTerminal"),
-                        ConnectionKindTab::Serial => t!("dialog.serial"),
-                        _ => Cow::Borrowed(kind.label()),
-                    },
-                )
-            })
-            .collect(),
-            Some(editor.kind.label().to_string()),
+            protocol_kinds
+                .iter()
+                .map(|kind| NyaSelectOption::new(kind.persistence_id(), kind.display_label()))
+                .collect(),
+            Some(editor.kind.persistence_id().to_string()),
             false,
             cx,
         );
@@ -1143,6 +1140,9 @@ impl NyaTermApp {
             .when(editor.kind == ConnectionKindTab::Rdp, |this| {
                 this.child(connection_editor_rdp_section(section_context, cx))
             })
+            .when(editor.kind == ConnectionKindTab::Spice, |this| {
+                this.child(spice::section(section_context, cx))
+            })
             .when(editor.kind == ConnectionKindTab::Vnc, |this| {
                 this.child(connection_editor_vnc_section(section_context, cx))
             })
@@ -1179,6 +1179,7 @@ impl NyaTermApp {
                 wide,
                 navigation_width,
                 protocol_select,
+                protocol_kinds,
                 validation_error: editor
                     .error
                     .as_ref()
@@ -1265,30 +1266,6 @@ fn connection_description_field(
                 })
                 .children(entity.map(NyaInput::new)),
         )
-}
-
-fn connection_editor_footer_button(
-    _palette: crate::theme::ThemePalette,
-    id: &'static str,
-    label: impl Into<SharedString>,
-    primary: bool,
-    enabled: bool,
-    disabled_tooltip: Option<String>,
-    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> impl IntoElement {
-    let mut button = nyaterm_ui::NyaButton::new(id, label)
-        .height(px(36.))
-        .variant(if primary {
-            nyaterm_ui::NyaButtonVariant::Primary
-        } else {
-            nyaterm_ui::NyaButtonVariant::Secondary
-        })
-        .disabled(!enabled)
-        .on_click(on_click);
-    if !enabled && let Some(tooltip) = disabled_tooltip {
-        button = button.tooltip(tooltip);
-    }
-    div().debug_selector(move || id.to_string()).child(button)
 }
 
 fn connection_proxy_jump_would_cycle(

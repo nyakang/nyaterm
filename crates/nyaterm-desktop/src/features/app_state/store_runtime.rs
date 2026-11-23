@@ -162,6 +162,7 @@ impl NyaTermApp {
         let ssh_connections = self.session.ssh_connection_pool();
         self.remote_desktop.routes.clear();
         self.shutdown_remote_desktop_workers();
+        let spice_shutdown = self.remote_desktop.take_spice_shutdown();
         self.android.shutdown();
         #[cfg(windows)]
         let native_hosts = self.remote_desktop.take_native_hosts_for_shutdown();
@@ -217,6 +218,7 @@ impl NyaTermApp {
                 }
                 mcp_shutdown();
                 stop_jobs();
+                spice_shutdown();
                 stop_transfers();
                 ssh_connections.finish_disconnects();
             })

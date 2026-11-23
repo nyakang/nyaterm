@@ -21,6 +21,7 @@ mod menu;
 mod native_overlay;
 pub mod notification;
 mod number_input;
+pub mod overlay;
 pub mod plot;
 mod popover;
 pub mod presentation;

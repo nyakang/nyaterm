@@ -806,6 +806,7 @@ impl ConnectionFeatureState {
                     .placeholder(placeholder);
                 match field {
                     ConnectionEditorField::Description => input.multi_line(Some(2)),
+                    ConnectionEditorField::SpiceCaPem => input.multi_line(Some(6)),
                     ConnectionEditorField::PostLoginCommand => input.code(Some(4)).language("bash"),
                     _ => input,
                 }

@@ -40,6 +40,11 @@ impl NyaTermApp {
         };
         session.viewport = Some(bounds);
         session.viewport_scale_factor = scale_factor;
+        if session.spice.is_some() {
+            let metrics = fit_window_display_metrics(bounds, scale_factor).clamped();
+            self.queue_spice_resize(session_id, metrics.width, metrics.height);
+            return;
+        }
         if let Some((config, _)) = session.deferred_start.take() {
             // The panel is known now, so the connect itself asks for this size.
             self.begin_rdp_runtime(session_id, config, cx);

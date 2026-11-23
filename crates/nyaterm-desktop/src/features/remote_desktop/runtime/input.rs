@@ -79,10 +79,12 @@ impl NyaTermApp {
         let focus_out = cx.on_focus_out(
             &self.remote_desktop.focus,
             window,
-            |this, _event, _window, _cx| {
+            |this, _event, window, _cx| {
+                this.release_spice_pointer(window);
                 crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
                     this.remote_desktop.manager.clone(),
                     this.remote_desktop.vnc_manager.clone(),
+                    this.remote_desktop.spice_manager.clone(),
                     None,
                 );
                 if let Some(session_id) = this.session.active_id_owned() {
@@ -94,6 +96,27 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn release_remote_keys(&mut self, session_id: &str) {
+        if self.is_spice_session(session_id) {
+            if let Some(capture) = self.remote_desktop.spice_pointer_capture.as_mut()
+                && capture.session_id == session_id
+            {
+                capture.release_requested = true;
+            }
+            let _ = self.remote_desktop.spice_manager.send(
+                session_id,
+                nyaterm_remote_desktop::spice::protocol::SpiceControl::Input {
+                    events: vec![nyaterm_remote_desktop::spice::protocol::SpiceInput::ReleaseAll],
+                },
+            );
+            if let Some(session) = self.remote_desktop.sessions.get_mut(session_id) {
+                session.keys = Default::default();
+                session.modifiers = Default::default();
+                session.last_pointer = None;
+                session.wheel_remainder_x = 0.0;
+                session.wheel_remainder_y = 0.0;
+            }
+            return;
+        }
         if self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
@@ -130,6 +153,14 @@ impl NyaTermApp {
 
     pub(super) fn sync_rdp_keyboard_capture(&self, window: &Window) {
         let target = self.session.active_id().and_then(|session_id| {
+            use crate::features::remote_desktop::keyboard_capture::CaptureProtocol;
+            let is_spice = self.is_spice_session(session_id);
+            if is_spice && !self.spice_input_enabled(session_id) {
+                return None;
+            }
+            if self.spice_relative_input(session_id) && !self.spice_pointer_owned(session_id) {
+                return None;
+            }
             let is_vnc = self.session.metadata(session_id).is_some_and(|metadata| {
                 matches!(
                     metadata.launch_config,
@@ -156,11 +187,23 @@ impl NyaTermApp {
                                     bounds.contains(&window.mouse_position())
                                 }))
                     }))
-            .then(|| (session_id.to_string(), is_vnc))
+            .then(|| {
+                (
+                    session_id.to_string(),
+                    if is_spice {
+                        CaptureProtocol::Spice
+                    } else if is_vnc {
+                        CaptureProtocol::Vnc
+                    } else {
+                        CaptureProtocol::Rdp
+                    },
+                )
+            })
         });
         crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
             self.remote_desktop.manager.clone(),
             self.remote_desktop.vnc_manager.clone(),
+            self.remote_desktop.spice_manager.clone(),
             target,
         );
     }
@@ -172,6 +215,11 @@ impl NyaTermApp {
     ) -> bool {
         if text.is_empty() {
             return true;
+        }
+        if self.is_spice_session(session_id) {
+            self.shell
+                .set_status(rust_i18n::t!("spice.guestImeNotice").to_string());
+            return false;
         }
         if !self
             .remote_desktop
@@ -287,10 +335,7 @@ impl NyaTermApp {
         else {
             return false;
         };
-        self.remote_desktop
-            .manager
-            .send_input(session_id, vec![event])
-            .is_ok()
+        self.send_remote_scancodes(session_id, vec![event])
     }
 
     pub(in crate::features) fn send_rdp_key_up(&mut self, session_id: &str, key: &str) -> bool {
@@ -310,10 +355,7 @@ impl NyaTermApp {
         else {
             return false;
         };
-        self.remote_desktop
-            .manager
-            .send_input(session_id, vec![event])
-            .is_ok()
+        self.send_remote_scancodes(session_id, vec![event])
     }
 
     pub(in crate::features) fn send_remote_modifier_state(
@@ -337,6 +379,9 @@ impl NyaTermApp {
                 crate::models::SessionLaunchConfig::Vnc(_)
             )
         });
+        if self.is_spice_session(session_id) && !self.spice_input_enabled(session_id) {
+            return false;
+        }
         if is_vnc && !self.vnc_input_enabled(session_id) {
             return false;
         }
@@ -383,12 +428,7 @@ impl NyaTermApp {
                 }
             })
             .collect::<Vec<_>>();
-        !events.is_empty()
-            && self
-                .remote_desktop
-                .manager
-                .send_input(session_id, events)
-                .is_ok()
+        !events.is_empty() && self.send_remote_scancodes(session_id, events)
     }
 
     pub(in crate::features) fn rdp_secure_attention_available(&self, session_id: &str) -> bool {
@@ -435,6 +475,9 @@ impl NyaTermApp {
         pressed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.is_spice_session(session_id) {
+            return self.send_spice_pointer(session_id, position, button, pressed);
+        }
         if self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
@@ -605,12 +648,18 @@ impl NyaTermApp {
         delta_lines_x: f32,
         delta_lines_y: f32,
     ) -> bool {
+        if self.is_spice_session(session_id) {
+            return self.send_spice_wheel(session_id, delta_lines_x, delta_lines_y);
+        }
         let is_vnc = self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
                 metadata.launch_config,
                 crate::models::SessionLaunchConfig::Vnc(_)
             )
         });
+        if self.is_spice_session(session_id) && !self.spice_input_enabled(session_id) {
+            return false;
+        }
         if is_vnc && !self.vnc_input_enabled(session_id) {
             return false;
         }

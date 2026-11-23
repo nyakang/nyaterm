@@ -35,7 +35,7 @@ use crate::models::{FtpSessionConfig, SessionLaunchConfig};
 
 fn session_start_focus_target(config: &ConnectionType) -> SessionStartFocusTarget {
     match config {
-        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {
+        ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } | ConnectionType::Spice { .. } => {
             SessionStartFocusTarget::RemoteDesktop
         }
         ConnectionType::Adb { .. }
@@ -65,6 +65,80 @@ pub(in crate::features) struct SshSessionConfigBuildContext {
 }
 
 impl SshSessionConfigBuildContext {
+    pub(in crate::features) fn prepare_spice_routes(
+        &self,
+        connection: &SavedConnection,
+        config: &mut nyaterm_remote_desktop::spice::protocol::SpiceSessionConfig,
+    ) -> Result<Vec<Arc<nyaterm_transport::network_route::NetworkRoute>>, String> {
+        use nyaterm_transport::network_route::{NetworkRoute, NetworkRouteConfig};
+        self.attempt.check()?;
+        if !connection
+            .network
+            .as_ref()
+            .is_some_and(|n| n.proxy_id.is_some() || n.proxy_jump_id.is_some())
+        {
+            return Ok(Vec::new());
+        }
+        let jump = load_proxy_jump_config_with_context(self, connection, &mut Vec::new())?
+            .map(|jump| *jump);
+        let proxy = if jump.is_none() {
+            load_proxy_config_with_context(self, connection)?
+        } else {
+            None
+        };
+        let endpoint = &config.endpoint;
+        let proxy_target = endpoint
+            .proxy
+            .as_ref()
+            .map(|value| {
+                let url =
+                    url::Url::parse(value.expose_secret()).map_err(|_| "invalid SPICE proxy")?;
+                Ok::<_, &str>((
+                    url.host_str().ok_or("missing SPICE proxy host")?.to_owned(),
+                    url.port_or_known_default()
+                        .ok_or("missing SPICE proxy port")?,
+                ))
+            })
+            .transpose()?;
+        let mut routes: Vec<Arc<NetworkRoute>> = Vec::new();
+        let mut destinations = Vec::new();
+        for (enabled_port, relay) in [
+            (
+                endpoint
+                    .port
+                    .filter(|_| !config.settings.security.require_tls),
+                &mut config.tcp_relay,
+            ),
+            (endpoint.tls_port, &mut config.tls_relay),
+        ] {
+            let Some(port) = enabled_port else {
+                continue;
+            };
+            let destination = proxy_target
+                .clone()
+                .unwrap_or_else(|| (endpoint.host.expose_secret().to_owned(), port));
+            self.attempt.check()?;
+            let index = if let Some(index) = destinations.iter().position(|d| d == &destination) {
+                index
+            } else {
+                routes.push(
+                    NetworkRoute::start(NetworkRouteConfig {
+                        host: destination.0.clone(),
+                        port: destination.1,
+                        jump: jump.clone(),
+                        proxy: proxy.clone(),
+                    })
+                    .map_err(|_| "could not prepare SPICE route")?,
+                );
+                destinations.push(destination);
+                routes.len() - 1
+            };
+            *relay = Some(routes[index].endpoint.clone());
+        }
+        self.attempt.check()?;
+        Ok(routes)
+    }
+
     pub(in crate::features) fn build_config(
         &self,
         connection: &SavedConnection,
@@ -828,7 +902,9 @@ impl NyaTermApp {
                     cx,
                 );
             }
-            ConnectionType::Rdp { .. } | ConnectionType::Vnc { .. } => {
+            ConnectionType::Rdp { .. }
+            | ConnectionType::Vnc { .. }
+            | ConnectionType::Spice { .. } => {
                 let relay = route.as_ref().map(|route| route.endpoint.clone());
                 let config = match self.saved_remote_desktop_launch_config(&connection, relay) {
                     Ok(config) => config,
@@ -850,6 +926,13 @@ impl NyaTermApp {
                 let session_id = match &config {
                     SessionLaunchConfig::Rdp(config) => self.schedule_rdp_runtime(
                         config.clone(),
+                        request_id.to_string(),
+                        pending.attempt.clone(),
+                        cx,
+                    ),
+                    SessionLaunchConfig::Spice(config) => self.schedule_spice_runtime(
+                        config.clone(),
+                        connection.clone(),
                         request_id.to_string(),
                         pending.attempt.clone(),
                         cx,
@@ -904,6 +987,34 @@ impl NyaTermApp {
         relay: Option<nyaterm_core::connection_route::RelayEndpoint>,
     ) -> Result<SessionLaunchConfig, String> {
         match connection.config.clone() {
+            ConnectionType::Spice {
+                endpoint,
+                username,
+                settings,
+            } => {
+                if relay.is_some() {
+                    return Err("SPICE requires separate routes for TCP and TLS".into());
+                }
+                let session = nyaterm_remote_desktop::spice::protocol::SpiceSessionConfig {
+                    session_id: nyaterm_core::uuid(),
+                    endpoint,
+                    username: username.into(),
+                    password: inline_connection_password(connection.auth.as_ref())
+                        .unwrap_or_default(),
+                    settings,
+                    credential_lifetime:
+                        nyaterm_remote_desktop::spice::protocol::SpiceCredentialLifetime::Saved,
+                    tcp_relay: None,
+                    tls_relay: None,
+                };
+                session.validate().map_err(str::to_owned)?;
+                Ok(SessionLaunchConfig::Spice(
+                    crate::models::session::SpiceLaunchConfig {
+                        name: connection.name.clone(),
+                        session,
+                    },
+                ))
+            }
             ConnectionType::Rdp {
                 host,
                 port,
@@ -1540,6 +1651,7 @@ fn saved_connection_password_id(connection: &SavedConnection) -> Option<String> 
         ConnectionType::Telnet { .. }
             | ConnectionType::Rdp { .. }
             | ConnectionType::Vnc { .. }
+            | ConnectionType::Spice { .. }
             | ConnectionType::Ftp { .. }
     ) {
         return None;

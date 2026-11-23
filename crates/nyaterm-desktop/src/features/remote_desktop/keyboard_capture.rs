@@ -1,9 +1,20 @@
 use std::sync::Arc;
 
+use nyaterm_remote_desktop::spice::session::SpiceSessionManager;
 use nyaterm_remote_desktop::{RdpSessionManager, VncSessionManager};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CaptureProtocol {
+    Rdp,
+    Vnc,
+    Spice,
+}
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use super::CaptureProtocol;
+    use nyaterm_remote_desktop::spice::protocol::{SpiceControl, SpiceInput};
+    use nyaterm_remote_desktop::spice::session::SpiceSessionManager;
     use std::collections::HashSet;
     use std::ptr::null_mut;
     use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
@@ -36,6 +47,7 @@ mod platform {
     struct CaptureState {
         rdp_manager: Mutex<Weak<RdpSessionManager>>,
         vnc_manager: Mutex<Weak<VncSessionManager>>,
+        spice_manager: Mutex<Weak<SpiceSessionManager>>,
         target: Mutex<Option<CaptureTarget>>,
         win_key_down: Mutex<bool>,
         captured_keys: Mutex<HashSet<(u16, bool)>>,
@@ -44,7 +56,7 @@ mod platform {
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct CaptureTarget {
         session_id: String,
-        is_vnc: bool,
+        protocol: CaptureProtocol,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,13 +70,18 @@ mod platform {
     pub(super) fn set_keyboard_capture(
         rdp_manager: Arc<RdpSessionManager>,
         vnc_manager: Arc<VncSessionManager>,
-        target: Option<(String, bool)>,
+        spice_manager: Arc<SpiceSessionManager>,
+        target: Option<(String, CaptureProtocol)>,
     ) {
-        let target = target.map(|(session_id, is_vnc)| CaptureTarget { session_id, is_vnc });
+        let target = target.map(|(session_id, protocol)| CaptureTarget {
+            session_id,
+            protocol,
+        });
         let state = CAPTURE.get_or_init(|| {
             Arc::new(CaptureState {
                 rdp_manager: Mutex::new(Weak::new()),
                 vnc_manager: Mutex::new(Weak::new()),
+                spice_manager: Mutex::new(Weak::new()),
                 target: Mutex::new(None),
                 win_key_down: Mutex::new(false),
                 captured_keys: Mutex::new(HashSet::new()),
@@ -76,6 +93,9 @@ mod platform {
         if let Ok(mut current_manager) = state.vnc_manager.lock() {
             *current_manager = Arc::downgrade(&vnc_manager);
         }
+        if let Ok(mut current_manager) = state.spice_manager.lock() {
+            *current_manager = Arc::downgrade(&spice_manager);
+        }
         let previous = state.target.lock().ok().and_then(|mut current| {
             let previous = current.clone();
             *current = target.clone();
@@ -84,7 +104,14 @@ mod platform {
         if previous != target {
             let had_pressed_keys = reset_pressed_state(state);
             if had_pressed_keys && let Some(previous) = previous {
-                if previous.is_vnc {
+                if previous.protocol == CaptureProtocol::Spice {
+                    let _ = spice_manager.send(
+                        &previous.session_id,
+                        SpiceControl::Input {
+                            events: vec![SpiceInput::ReleaseAll],
+                        },
+                    );
+                } else if previous.protocol == CaptureProtocol::Vnc {
                     let _ = vnc_manager
                         .send_input(&previous.session_id, vec![VncInputEvent::ReleaseAllInputs]);
                 } else {
@@ -213,7 +240,19 @@ mod platform {
             && update_capture_state(state, &event)
             && let Some(destination) = capture_target(state)
         {
-            if destination.target.is_vnc {
+            if destination.target.protocol == CaptureProtocol::Spice {
+                if let Some(manager) = destination.spice_manager {
+                    let _ = manager.send(
+                        &destination.target.session_id,
+                        SpiceControl::Input {
+                            events: vec![SpiceInput::Key {
+                                scan_code: event.scan_code | if event.extended { 0x100 } else { 0 },
+                                pressed: event.pressed,
+                            }],
+                        },
+                    );
+                }
+            } else if destination.target.protocol == CaptureProtocol::Vnc {
                 if let (Some(manager), Some(keysym)) = (destination.vnc_manager, event.vnc_keysym) {
                     let _ = manager.send_input(
                         &destination.target.session_id,
@@ -341,6 +380,7 @@ mod platform {
         target: CaptureTarget,
         rdp_manager: Option<Arc<RdpSessionManager>>,
         vnc_manager: Option<Arc<VncSessionManager>>,
+        spice_manager: Option<Arc<SpiceSessionManager>>,
     }
 
     fn capture_target(state: &CaptureState) -> Option<CaptureDestination> {
@@ -348,6 +388,7 @@ mod platform {
             target: state.target.lock().ok()?.clone()?,
             rdp_manager: state.rdp_manager.lock().ok()?.upgrade(),
             vnc_manager: state.vnc_manager.lock().ok()?.upgrade(),
+            spice_manager: state.spice_manager.lock().ok()?.upgrade(),
         })
     }
 
@@ -387,12 +428,13 @@ mod platform {
 pub(super) fn set_keyboard_capture(
     rdp_manager: Arc<RdpSessionManager>,
     vnc_manager: Arc<VncSessionManager>,
-    target: Option<(String, bool)>,
+    spice_manager: Arc<SpiceSessionManager>,
+    target: Option<(String, CaptureProtocol)>,
 ) {
     #[cfg(target_os = "windows")]
-    platform::set_keyboard_capture(rdp_manager, vnc_manager, target);
+    platform::set_keyboard_capture(rdp_manager, vnc_manager, spice_manager, target);
     #[cfg(not(target_os = "windows"))]
-    let _ = (rdp_manager, vnc_manager, target);
+    let _ = (rdp_manager, vnc_manager, spice_manager, target);
 }
 
 pub(super) fn shutdown_keyboard_capture() {

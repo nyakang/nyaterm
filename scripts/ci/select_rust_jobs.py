@@ -16,6 +16,11 @@ OUTPUTS = ("run_rust", "run_tmux", "run_plugin_sdk", "run_python", "run_workflow
 
 # Explicit registration makes a new crate fail closed until its CI impact is reviewed.
 KNOWN_CRATES = frozenset({
+    "nyaterm-remote-monitor-gpui",
+    "nyaterm-connections-gpui",
+    "nyaterm-file-browser-gpui",
+    "nyaterm-ai-gpui",
+    "nyaterm-notes-gpui",
     "nyaterm-executor", "nyaterm-host-tools-gpui",
     "nyaterm-i18n", "nyaterm-completion-runtime",
     "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client",
@@ -23,7 +28,7 @@ KNOWN_CRATES = frozenset({
     "nyaterm-android", "nyaterm-desktop", "nyaterm-mcp",
     "nyaterm-files", "nyaterm-recording", "nyaterm-remote-ops",
     "nyaterm-mcp-host", "nyaterm-mcp-protocol", "nyaterm-otp", "nyaterm-plugin-api",
-    "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-windows-rdp",
+    "nyaterm-plugin-host", "nyaterm-rdp-helper", "nyaterm-spice-helper", "nyaterm-windows-rdp",
     "nyaterm-remote-desktop", "nyaterm-store", "nyaterm-sync", "nyaterm-terminal",
     "nyaterm-terminal-gpui", "nyaterm-terminal-runtime", "nyaterm-transport", "nyaterm-ui", "nyaterm-vnc-helper",
     "nyaterm-android-helper",

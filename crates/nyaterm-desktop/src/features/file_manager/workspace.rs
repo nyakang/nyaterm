@@ -41,13 +41,7 @@ pub(in crate::features) struct FileManagerWorkspace {
     pub(super) queue_resize: Option<(f32, f32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::features) enum FileManagerQueueFilter {
-    All,
-    Active,
-    Completed,
-    Failed,
-}
+pub(in crate::features) use nyaterm_file_browser_gpui::queue::FileManagerQueueFilter;
 
 pub(in crate::features) struct FileManagerListResult {
     pub pane: PaneId,

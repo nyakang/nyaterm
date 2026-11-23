@@ -167,6 +167,7 @@ const PROTOCOL_ICONS: &[(&str, IconDef)] = &[
     ("serial", IconDef::mono("icons/conn/serial.svg", 0xbc8cff)),
     ("rdp", IconDef::mono("icons/conn/rdp.svg", 0x22d3ee)),
     ("vnc", IconDef::mono("icons/conn/vnc.svg", 0xfb7185)),
+    ("spice", IconDef::mono("icons/conn/spice.svg", 0xf59e0b)),
     ("ftp", IconDef::mono("icons/conn/ftp.svg", 0xfeb50a)),
 ];
 
@@ -247,6 +248,7 @@ pub fn default_connection_icon_for_kind(kind: &str) -> IconDef {
         "Serial" => "serial",
         "RDP" => "rdp",
         "VNC" => "vnc",
+        "SPICE" => "spice",
         "FTP" => "ftp",
         "ADB" | "Android" | "Android (ADB)" => "android",
         _ => DEFAULT_CONNECTION_ICON,

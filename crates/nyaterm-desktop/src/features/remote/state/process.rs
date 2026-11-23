@@ -2,6 +2,7 @@ use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::{ProcessJobOutput, ProcessJobResult};
 use crate::models::{RemoteProcessSortDirection, RemoteProcessSortKey};
 use futures::channel::mpsc::UnboundedReceiver;
+pub(in crate::features) use nyaterm_remote_monitor_gpui::presentation::ProcessPresentationState;
 use nyaterm_remote_ops::query::process::process_search_key;
 use nyaterm_remote_ops::remote_process::RemoteProcess;
 use std::sync::Arc;
@@ -45,20 +46,6 @@ struct ProcessDerivedKey {
 struct ProcessDerivedCache {
     key: ProcessDerivedKey,
     items: Arc<[RemoteProcess]>,
-}
-
-#[derive(Clone)]
-pub(in crate::features) struct ProcessPresentationState {
-    pub items: Arc<[RemoteProcess]>,
-    pub snapshot_loaded: bool,
-    pub status: String,
-    pub search_draft: String,
-    pub sort_key: RemoteProcessSortKey,
-    pub sort_direction: RemoteProcessSortDirection,
-    pub selected_pid: Option<u32>,
-    pub menu_pid: Option<u32>,
-    pub nice_draft: String,
-    pub pending: bool,
 }
 
 impl ProcessPaneState {

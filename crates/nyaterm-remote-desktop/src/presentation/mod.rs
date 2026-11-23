@@ -1,5 +1,5 @@
 //! Background-owned VNC composition and immutable, cumulative GPU uploads.
-mod compositor;
+pub(crate) mod compositor;
 mod worker;
 
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ impl Default for VncPresentationConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VncPresentationId {
+pub struct RemotePresentationId {
     pub epoch: u64,
     pub generation: u64,
     /// Pixel revision at the last accepted update boundary, scoped to the epoch.
@@ -31,7 +31,7 @@ pub struct VncPresentationId {
 }
 
 #[derive(Clone, Debug)]
-pub struct VncUploadRegion {
+pub struct RemoteUploadRegion {
     pub rect: DirtyRect,
     pub pixels: PixelBuffer,
 }
@@ -39,7 +39,7 @@ pub struct VncUploadRegion {
 /// Every region changed since the last successful acknowledgment is included.
 /// Replacing an unconsumed presentation therefore never drops a pixel delta.
 #[derive(Clone, Debug)]
-pub struct VncPresentation {
+pub struct RemotePresentation {
     pub id: VncPresentationId,
     pub width: u32,
     pub height: u32,
@@ -58,3 +58,8 @@ pub struct VncPresentationMetrics {
     pub packed_bytes: u64,
     pub compose_nanoseconds: u64,
 }
+
+// Preserve the existing VNC API while sharing immutable upload contracts.
+pub type VncPresentationId = RemotePresentationId;
+pub type VncUploadRegion = RemoteUploadRegion;
+pub type VncPresentation = RemotePresentation;

@@ -1,3 +1,4 @@
+pub(in crate::features) use nyaterm_ui::presentation::gpui_code_font_family;
 use rust_i18n::t;
 
 use std::sync::Arc;
@@ -1022,14 +1023,6 @@ pub(in crate::features) fn gpui_terminal_font_fallback() -> &'static str {
         "Consolas"
     } else {
         "monospace"
-    }
-}
-
-pub(in crate::features) fn gpui_code_font_family() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "Consolas"
-    } else {
-        "JetBrains Mono"
     }
 }
 

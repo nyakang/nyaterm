@@ -16,7 +16,7 @@ use rust_i18n::t;
 
 use crate::features::NyaTermApp;
 use crate::features::networktools::common::ids;
-use crate::features::networktools::runtime::RuntimeCommand;
+use nyaterm_transport::networktools::runtime::RuntimeCommand;
 
 const KIND: NetworkToolKind = NetworkToolKind::Tftp;
 

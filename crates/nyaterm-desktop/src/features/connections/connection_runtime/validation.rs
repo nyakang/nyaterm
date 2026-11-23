@@ -158,6 +158,12 @@ impl ConnectionEditorValidationError {
             | ConnectionEditorValidationError::AndroidHostInvalid
             | ConnectionEditorValidationError::HostRequired
             | ConnectionEditorValidationError::RdpMstscHostInvalid => ConnectionEditorField::Host,
+            ConnectionEditorValidationError::SpiceInvalid(reason) => match *reason {
+                "ports" => ConnectionEditorField::SpiceTcpPort,
+                "reconnect" => ConnectionEditorField::SpiceReconnectAttempts,
+                "identity" => ConnectionEditorField::Host,
+                _ => ConnectionEditorField::SpiceCaPem,
+            },
             ConnectionEditorValidationError::PortInvalid => ConnectionEditorField::Port,
             ConnectionEditorValidationError::UsernameRequired
             | ConnectionEditorValidationError::MissingAccount => ConnectionEditorField::Username,

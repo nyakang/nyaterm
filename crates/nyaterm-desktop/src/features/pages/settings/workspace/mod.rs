@@ -1,4 +1,5 @@
 mod appearance;
+mod connection_types;
 mod data_directory;
 mod general;
 mod interaction;

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import plistlib
+import hashlib
+import json
 import os
 import io
 import shutil
@@ -25,6 +27,8 @@ import verify_native_package  # noqa: E402
 
 @contextmanager
 def staged_package(target: str):
+    import spice_release
+    from scripts.tests.test_verify_native_package import stage_spice_fixture, fixture_spice_locked_files
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         binary = root / "build" / "nyaterm"
@@ -56,6 +60,9 @@ def staged_package(target: str):
             mock.patch.object(package_native.windows_msi, "find_wix", return_value="wix"),
             mock.patch.object(package_native, "run", side_effect=run),
             mock.patch.object(package_native, "linux_deb_dependencies", return_value="libc6"),
+            mock.patch.object(package_native, "spice_glibc_requirement", return_value="2.35"),
+            mock.patch.object(package_native, "copy_spice_resources", side_effect=stage_spice_fixture),
+            mock.patch.object(spice_release, "locked_files", side_effect=fixture_spice_locked_files),
         ):
             package_native.WORK_DIR.mkdir()
             package_native.DIST_DIR.mkdir()
@@ -64,9 +71,11 @@ def staged_package(target: str):
 
 class PackageNativeTests(unittest.TestCase):
     def setUp(self):
-        from scripts.tests.test_verify_native_package import stage_android_fixture
+        from scripts.tests.test_verify_native_package import stage_android_fixture, stage_spice_fixture
         patcher = mock.patch.object(package_native, "copy_android_resources", side_effect=stage_android_fixture)
         patcher.start(); self.addCleanup(patcher.stop)
+        spice_patcher = mock.patch.object(package_native, "copy_spice_resources", side_effect=stage_spice_fixture)
+        spice_patcher.start(); self.addCleanup(spice_patcher.stop)
 
     @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
     def test_real_deb_icons_are_readable_root_owned_and_repaired_on_configure(self) -> None:
@@ -207,11 +216,67 @@ class PackageNativeTests(unittest.TestCase):
                 self.assertEqual(plist["CFBundleName"], identity.display_name)
                 self.assertEqual(plist["CFBundleIdentifier"], identity.macos_identifier)
                 self.assertEqual(plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"], list(identity.url_schemes))
+                document = plist["CFBundleDocumentTypes"][0]
+                self.assertEqual(document["LSHandlerRank"], "Alternate")
+                self.assertEqual(document["CFBundleTypeRole"], "Viewer")
+                declaration = plist["UTImportedTypeDeclarations"][0]
+                self.assertEqual(document["LSItemContentTypes"], [declaration["UTTypeIdentifier"]])
+                self.assertEqual(declaration["UTTypeTagSpecification"]["public.filename-extension"], ["vv"])
+                self.assertEqual(declaration["UTTypeTagSpecification"]["public.mime-type"], "application/x-virt-viewer")
                 self.assertTrue((root / "work" / "dmg" / identity.macos_bundle_name).is_dir())
                 self.assertEqual((root / "work" / "dmg" / "Applications").readlink().as_posix(), "/Applications")
                 archive = next((root / "dist").glob("*.tar.gz"))
                 with tarfile.open(archive) as handle:
                     self.assertIn(f"{identity.macos_bundle_name}/Contents/MacOS/NyaTerm", handle.getnames())
+
+    def test_spice_signatures_are_reflected_in_manifest_before_bundle_signing(self) -> None:
+        with staged_package("aarch64-apple-darwin") as (root, binary, info):
+            signed = set()
+
+            def sign(command, **kwargs):
+                if command[0] != "codesign":
+                    return
+                if "--verify" in command:
+                    self.assertIn("--deep", command)
+                    return
+                self.assertNotIn("--deep", command)
+                path = Path(command[-1])
+                if path.is_file():
+                    path.write_bytes(path.read_bytes() + b"signature")
+                    signed.add(path)
+                else:
+                    runtime = path / "Contents/MacOS/spice"
+                    manifest = json.loads((runtime / "SOURCE.json").read_bytes())
+                    native = [runtime / name for name in manifest["files"] if name.endswith((".dylib", ".so"))]
+                    self.assertTrue(native)
+                    self.assertTrue(set(native) <= signed)
+                    for name, digest in manifest["files"].items():
+                        self.assertEqual(hashlib.sha256((runtime / name).read_bytes()).hexdigest(), digest)
+
+            with mock.patch.object(package_native, "run", side_effect=sign):
+                package_native.create_macos_packages(binary, info, "2.0.0", "2.0.0")
+            archive = next((root / "dist").glob("*.tar.gz"))
+            import spice_release
+            with tarfile.open(archive) as handle:
+                prefix = "NyaTerm.app/Contents/MacOS/"
+                spice_release.verify_resources(
+                    lambda name: handle.extractfile(prefix + name).read(), info.target,
+                    names=[name.removeprefix(prefix) for name in handle.getnames() if handle.getmember(name).isfile()],
+                )
+
+    def test_nsis_removes_owned_spice_directories_from_leaves_to_root(self) -> None:
+        with staged_package("x86_64-pc-windows-msvc") as (root, binary, info):
+            package_native.create_windows_packages(binary, info, "2.0.0", "2.0.0")
+            script = (root / "work/nyaterm-installer.nsi").read_text()
+            paths = package_native.windows_portable.LAYOUT["spice_files"][info.target]
+            parents = {parent for name in paths for parent in Path(name).parents if parent != Path(".")}
+            for parent in parents:
+                command = f'RMDir "$INSTDIR\\{package_native.nsis_relative_path(parent)}"'
+                self.assertIn(command, script)
+                if parent.parent != Path("."):
+                    outer = f'RMDir "$INSTDIR\\{package_native.nsis_relative_path(parent.parent)}"'
+                    self.assertLess(script.index(command), script.index(outer))
+            self.assertNotIn('RMDir /r "$INSTDIR', script)
 
     def test_run_with_retry_retries_transient_command_failures(self) -> None:
         failure = subprocess.CalledProcessError(1, ["hdiutil", "create"])
@@ -239,6 +304,8 @@ class PackageNativeTests(unittest.TestCase):
                     desktop = payload / "usr" / "share" / "applications" / identity.linux_desktop_file
                     executable = "nyaterm" if payload.name == "NyaTerm.AppDir" else f"/opt/{identity.desktop_id}/nyaterm"
                     verify_native_package.verify_linux_desktop(desktop.read_text(), executable, str(desktop), identity)
+                    package_native.spice_associations.verify_linux_mime(
+                        (payload / "usr/share/mime/packages" / f"{identity.desktop_id}-spice.xml").read_bytes())
                     for size in package_native.linux_icons.ICON_SIZES:
                         icon = payload / "usr/share/icons/hicolor" / size / "apps" / f"{identity.desktop_id}.png"
                         self.assertTrue(icon.is_file())
@@ -449,7 +516,7 @@ class PackageNativeTests(unittest.TestCase):
             package_native.write_desktop_file(path, "/opt/nyaterm/nyaterm")
             desktop = path.read_text(encoding="utf-8")
         self.assertIn("Exec=/opt/nyaterm/nyaterm %U\n", desktop)
-        self.assertIn("MimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;\n", desktop)
+        self.assertIn("MimeType=x-scheme-handler/nyaterm;x-scheme-handler/ssh;x-scheme-handler/telnet;application/x-virt-viewer;\n", desktop)
 
     def test_deb_dependencies_cover_helper_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -693,6 +693,7 @@ pub(super) fn set_connection_editor_kind(
             }
         }
         ConnectionKindTab::Adb => "5555".to_string(),
+        ConnectionKindTab::Spice => "5901".to_string(),
         ConnectionKindTab::Vnc => {
             if editor.port.trim().is_empty()
                 || editor.port == "22"
@@ -948,6 +949,39 @@ pub(super) fn toggle_connection_editor_flag(
         ConnectionEditorToggle::RdpCursorBlinking => {
             editor.rdp_display.disable_cursor_blinking =
                 !editor.rdp_display.disable_cursor_blinking;
+        }
+        ConnectionEditorToggle::SpiceRequireTls => {
+            editor.spice.settings.security.require_tls = !editor.spice.settings.security.require_tls
+        }
+        ConnectionEditorToggle::SpiceDynamicResolution => {
+            editor.spice.settings.dynamic_resolution = !editor.spice.settings.dynamic_resolution
+        }
+        ConnectionEditorToggle::SpiceFitWindow => {
+            editor.spice.settings.fit_window = !editor.spice.settings.fit_window
+        }
+        ConnectionEditorToggle::SpiceViewOnly => {
+            editor.spice.settings.view_only = !editor.spice.settings.view_only
+        }
+        ConnectionEditorToggle::SpiceAudio => {
+            editor.spice.settings.audio_playback = !editor.spice.settings.audio_playback
+        }
+        ConnectionEditorToggle::SpiceFileTransfer => {
+            editor.spice.settings.file_transfer = !editor.spice.settings.file_transfer
+        }
+        ConnectionEditorToggle::SpiceClipboardToGuest
+        | ConnectionEditorToggle::SpiceClipboardFromGuest => {
+            use nyaterm_core::spice::settings::SpiceClipboardMode;
+            let current = editor.spice.settings.clipboard;
+            let send =
+                current.can_send() ^ matches!(flag, ConnectionEditorToggle::SpiceClipboardToGuest);
+            let receive = current.can_receive()
+                ^ matches!(flag, ConnectionEditorToggle::SpiceClipboardFromGuest);
+            editor.spice.settings.clipboard = match (send, receive) {
+                (true, true) => SpiceClipboardMode::Bidirectional,
+                (true, false) => SpiceClipboardMode::ToGuest,
+                (false, true) => SpiceClipboardMode::FromGuest,
+                (false, false) => SpiceClipboardMode::Disabled,
+            };
         }
         ConnectionEditorToggle::VncClipboard => {
             editor.vnc_clipboard.enabled = !editor.vnc_clipboard.enabled;
@@ -1343,6 +1377,42 @@ pub(super) fn editor_field_seeds(
             Empty,
         ),
         (
+            ConnectionEditorField::SpiceTcpPort,
+            draft.spice.tcp_port.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::SpiceTlsPort,
+            draft.spice.tls_port.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::SpiceProxy,
+            draft.spice.proxy.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::SpiceCaPem,
+            draft.spice.ca_pem.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::SpiceCertificateSubject,
+            draft.spice.certificate_subject.clone(),
+            false,
+            Empty,
+        ),
+        (
+            ConnectionEditorField::SpiceReconnectAttempts,
+            draft.spice.reconnect_attempts.clone(),
+            false,
+            Empty,
+        ),
+        (
             ConnectionEditorField::VncReconnectAttempts,
             draft.vnc_reconnect.max_attempts.to_string(),
             false,
@@ -1571,6 +1641,12 @@ pub(super) fn set_connection_editor_field_text(
                 draft.rdp_reconnect.max_attempts = value;
             }
         }
+        ConnectionEditorField::SpiceTcpPort => draft.spice.tcp_port = text,
+        ConnectionEditorField::SpiceTlsPort => draft.spice.tls_port = text,
+        ConnectionEditorField::SpiceProxy => draft.spice.proxy = text,
+        ConnectionEditorField::SpiceCaPem => draft.spice.ca_pem = text,
+        ConnectionEditorField::SpiceCertificateSubject => draft.spice.certificate_subject = text,
+        ConnectionEditorField::SpiceReconnectAttempts => draft.spice.reconnect_attempts = text,
         ConnectionEditorField::VncReconnectAttempts => {
             if let Ok(value) = text.parse() {
                 draft.vnc_reconnect.max_attempts = value;

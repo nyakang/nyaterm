@@ -1384,6 +1384,7 @@ fn session_kind_for_launch_config(config: &SessionLaunchConfig) -> SessionKind {
         SessionLaunchConfig::Serial(_) => SessionKind::Serial,
         SessionLaunchConfig::Rdp(_) => SessionKind::Rdp,
         SessionLaunchConfig::Vnc(_) => SessionKind::Vnc,
+        SessionLaunchConfig::Spice(_) => SessionKind::Spice,
         SessionLaunchConfig::Ftp(_) => SessionKind::Ftp,
     }
 }
@@ -1457,7 +1458,9 @@ fn create_session_from_launch_config(
                 ftp_service: None,
             })
             .map_err(|error| error.to_string()),
-        SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_) => {
+        SessionLaunchConfig::Rdp(_)
+        | SessionLaunchConfig::Vnc(_)
+        | SessionLaunchConfig::Spice(_) => {
             unreachable!("remote desktop sessions are created by RemoteDesktopFeatureState")
         }
         SessionLaunchConfig::Ftp(_) => {
@@ -1519,7 +1522,7 @@ fn launch_config_for_session_info(info: &SessionInfo) -> SessionLaunchConfig {
             backspace_mode: "delete".to_string(),
             encoding: "UTF-8".to_string(),
         }),
-        SessionKind::Rdp | SessionKind::Vnc => {
+        SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice => {
             unreachable!("remote desktop session metadata does not originate from SessionManager")
         }
         SessionKind::Ftp => {

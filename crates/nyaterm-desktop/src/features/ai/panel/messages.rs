@@ -1,17 +1,14 @@
 use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
 use std::collections::HashSet;
 
-use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, FontWeight, IntoElement, SharedString,
-    Window, div, prelude::*, px, relative, rgb,
-};
+use gpui::{AnyElement, ClipboardItem, Context, FontWeight, IntoElement, div, prelude::*, px, rgb};
 use nyaterm_core::ai::{AiAgentStepStatus, AiCommandCard, AiMessage, AiMessageRole, RiskLevel};
-use nyaterm_ui::chat::{NyaDisclosure, NyaShimmerText, running_indicator};
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaIconButton};
+use nyaterm_ui::chat::{NyaShimmerText, running_indicator};
+use nyaterm_ui::{NyaButton, NyaButtonVariant};
 use rust_i18n::t;
 
 use crate::features::ai::is_agent_command_card;
-use crate::features::ai::panel::components::{agent_kind_display_name, ai_command_target_label};
+use crate::features::ai::panel::components::ai_command_target_label;
 use crate::features::ai::panel::texts::TextOwner;
 use crate::features::ai::panel::tool_call::{AiToolCallView, tool_call_title};
 use crate::features::ai::panel::transcript::AiTranscriptRow;
@@ -20,7 +17,6 @@ use crate::features::ai::presentation::{AiAgentStepKind, AiCommandPhase, AiRespo
 use crate::features::formatting::format_ai_message_time;
 use crate::features::runtime_jobs::AiAgentStepView;
 use crate::features::shell::gpui_code_font_family;
-use crate::theme::ThemePalette;
 
 pub(super) fn localized_risk(risk: Option<&RiskLevel>) -> String {
     t!(match risk {
@@ -186,175 +182,8 @@ impl AiPanelSnapshot {
     }
 }
 
-pub(super) fn disclosure(
-    id: String,
-    label: impl Into<SharedString>,
-    open: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let selector = id.clone();
-    let content_selector = format!("{id}-content");
-    div()
-        .debug_selector(move || selector.clone())
-        .flex()
-        .justify_start()
-        .items_center()
-        .child(
-            div()
-                .flex_none()
-                .debug_selector(move || content_selector.clone())
-                .child(NyaDisclosure::new(id, label, open).on_click(on_click)),
-        )
-        .into_any_element()
-}
-
-fn secondary(
-    id: String,
-    label: impl Into<SharedString>,
-    variant: NyaButtonVariant,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let selector = id.clone();
-    div()
-        .debug_selector(move || selector.clone())
-        .child(
-            NyaButton::new(id, label)
-                .small()
-                .compact()
-                .height(px(24.))
-                .variant(variant)
-                .on_click(on_click),
-        )
-        .into_any_element()
-}
-
-fn message_footer(
-    id: &str,
-    text: &str,
-    timestamp: Option<String>,
-    palette: ThemePalette,
-) -> AnyElement {
-    div()
-        .flex()
-        .items_center()
-        .justify_end()
-        .gap_2()
-        .when_some(timestamp, |row, timestamp| {
-            row.child(
-                div()
-                    .relative()
-                    // A glyph's optical center sits above its line-box center,
-                    // so nudge it down to meet the icon's middle.
-                    .top(px(2.))
-                    .text_size(px(10.))
-                    // Match the 20px copy button height so the glyphs share
-                    // its vertical center instead of hanging near the top.
-                    .line_height(px(20.))
-                    // Main text at reduced alpha: a middle step between the
-                    // theme's muted and dimmed tiers that follows the theme.
-                    .text_color(rgb(palette.text).opacity(0.8))
-                    .child(timestamp),
-            )
-        })
-        .child(copy_message_button(id, text, palette))
-        .into_any_element()
-}
-
-fn copy_message_button(id: &str, text: &str, palette: ThemePalette) -> AnyElement {
-    let content = text.to_string();
-    let selector = format!("ai-copy-{id}");
-    div()
-        .debug_selector(move || selector.clone())
-        .child(
-            NyaIconButton::new(format!("ai-copy-{id}"), "icons/copy.svg")
-                .icon_size(px(12.))
-                .size(px(20.))
-                .color(rgb(palette.text).opacity(0.8))
-                .tooltip(t!("ai.copy"))
-                .on_click(move |_, window, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
-                    window.notify_operation(
-                        "copy-ai-message",
-                        NyaNotificationKind::Success,
-                        t!("common.copied").to_string(),
-                        cx,
-                    );
-                }),
-        )
-        .into_any_element()
-}
-
-fn thinking_indicator(id: &str, label: impl Into<SharedString>) -> AnyElement {
-    let selector = format!("ai-thinking-{id}");
-    div()
-        .debug_selector({
-            let selector = selector.clone();
-            move || selector.clone()
-        })
-        .child(
-            NyaShimmerText::new(label)
-                .text_size(px(11.))
-                .line_height(px(16.))
-                .id(selector)
-                .duration(std::time::Duration::from_secs(2)),
-        )
-        .into_any_element()
-}
-
-/// Bounded, Unicode-safe text for previews; the original payload remains expandable.
-pub(super) fn text_preview(text: &str, lines: usize, characters: usize) -> String {
-    let joined = text.lines().take(lines).collect::<Vec<_>>().join("\n");
-    let preview: String = joined.chars().take(characters).collect();
-    if preview.len() < text.trim_end().len() {
-        format!("{preview}…")
-    } else {
-        preview
-    }
-}
-
-pub(super) fn command_heading(card: &AiCommandCard) -> String {
-    if !matches!(card.title.trim(), "" | "Agent Command") {
-        return card.title.clone();
-    }
-    let explanation = card.explanation.trim();
-    if explanation.is_empty() {
-        return t!("ai.terminalCommand").to_string();
-    }
-    let clause = explanation
-        .split(['\n', '，', '。', ',', ';', '；'])
-        .next()
-        .unwrap_or(explanation);
-    text_preview(clause, 1, 80)
-}
-
-fn step_heading(step: &AiAgentStepView) -> String {
-    match step.kind {
-        AiAgentStepKind::Planning => t!("ai.thinking").to_string(),
-        AiAgentStepKind::ToolProgress => {
-            let name = step
-                .title
-                .trim()
-                .strip_prefix("Tool ")
-                .unwrap_or(step.title.trim());
-            let key = match name {
-                "get_environment" => "ai.activityEnvironment",
-                "session_get" => "ai.activitySession",
-                "terminal_execute" | "execute_command" => "ai.terminalCommand",
-                "terminal_recent_output" => "ai.activityTerminalOutput",
-                "sftp_list" => "ai.activityListFiles",
-                "sftp_stat" => "ai.activityFileInfo",
-                "sftp_read_text" => "ai.activityReadFile",
-                "tool_output_read" => "ai.activityToolOutput",
-                "request_user_input" => "ai.harness.waitingForUser",
-                "update_plan" => "ai.harness.plan",
-                _ if step.status == AiAgentStepStatus::Tool => "ai.preparingNextCommand",
-                _ => "ai.workingOnStep",
-            };
-            t!(key).to_string()
-        }
-        _ => step.title.clone(),
-    }
-}
+pub(super) use nyaterm_ai_gpui::messages::{command_heading, disclosure, text_preview};
+use nyaterm_ai_gpui::messages::{secondary, step_heading};
 
 impl AiPanel {
     pub(super) fn ai_message_bubble(
@@ -385,41 +214,12 @@ impl AiPanel {
         snapshot: &AiPanelSnapshot,
         live: bool,
     ) -> AnyElement {
-        let palette = snapshot.chrome.palette;
-        let name = agent_kind_display_name(&snapshot.agent_kind);
-        let title = if snapshot.agent_mode {
-            format!("{name} {}", t!("ai.modeAgent"))
-        } else {
-            name.to_string()
-        };
-        let status = if live {
-            t!("ai.activity.running")
-        } else {
-            t!("ai.activity.completed")
-        };
-        div()
-            .debug_selector(|| "ai-agent-turn".to_string())
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight(600.))
-                    .text_color(rgb(palette.text))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(if live {
-                        palette.link
-                    } else {
-                        palette.text_muted
-                    }))
-                    .child(status),
-            )
-            .into_any_element()
+        nyaterm_ai_gpui::messages::agent_turn_header(
+            snapshot.chrome.palette,
+            &snapshot.agent_kind,
+            snapshot.agent_mode,
+            live,
+        )
     }
 
     pub(super) fn ai_final_message(
@@ -457,164 +257,44 @@ impl AiPanel {
             .map(|content| content.display.as_str())
             .unwrap_or_default();
         let reasoning = prepared.and_then(|content| content.reasoning.as_deref());
-        let mut body = div()
-            .id(SharedString::from(format!("ai-msg-{}", message.id)))
-            .debug_selector({
-                let id = message.id.clone();
-                move || format!("ai-message-{id}")
-            })
-            .min_w_0()
-            .when(!is_user, |body| body.w_full())
-            .flex()
-            .flex_col()
-            .gap_2()
-            .text_size(px(12.))
-            .line_height(px(18.))
-            .text_color(rgb(palette.text))
-            .when(is_user, |body| {
-                body.max_w(relative(0.85))
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .bg(rgb(palette.hover))
-                    .p_2()
-            });
-        if !is_user && !activity && !final_answer {
-            body = body.child(self.ai_agent_turn_header(snapshot, streaming && snapshot.running));
-        }
-        if activity {
-            if let Some(_reasoning) = reasoning.filter(|text| {
+        let show_thought = if activity {
+            reasoning.is_some_and(|text| {
                 text.trim() != display.trim()
                     && !message
                         .command_cards
                         .iter()
                         .any(|card| card.explanation.trim() == text.trim())
-            }) {
-                let open = snapshot.activity_thought_open(&message.id);
-                let id = message.id.clone();
-                body = body.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .text_color(rgb(palette.text_muted))
-                        .child(disclosure(
-                            format!("ai-thought-toggle-{id}"),
-                            t!("ai.thoughtProcess"),
-                            open,
-                            cx.listener(move |panel, _, _, cx| {
-                                let id = id.clone();
-                                panel.with_app(cx, move |app, cx| {
-                                    app.ai.toggle_message_thought(id);
-                                    app.defer_ai_panel_snapshot_flush(cx);
-                                });
-                            }),
-                        ))
-                        .when(thinking, |header| {
-                            header.child(thinking_indicator(&message.id, activity_label.clone()))
-                        }),
-                );
-                if open {
-                    body = body.child(
-                        div()
-                            .min_w_0()
-                            .w_full()
-                            .text_color(rgb(palette.text_muted))
-                            .child(self.selectable_text(
-                                TextOwner::Message(message.id.clone()),
-                                "thought",
-                                false,
-                                cx,
-                            )),
-                    );
-                }
-            }
-        } else if let Some(_reasoning) = reasoning.filter(|_| !final_answer) {
-            let open = snapshot.expanded_message_thoughts.contains(&message.id);
-            let id = message.id.clone();
-            let header = disclosure(
-                format!("ai-thought-toggle-{id}"),
-                t!("ai.thoughtProcess"),
-                open,
-                cx.listener(move |panel, _, _, cx| {
-                    let id = id.clone();
-                    panel.with_app(cx, move |app, cx| {
-                        app.ai.toggle_message_thought(id);
-                        app.defer_ai_panel_snapshot_flush(cx);
-                    });
-                }),
-            );
-            body = body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_color(rgb(palette.text_muted))
-                    .child(header)
-                    .when(thinking, |header| {
-                        header.child(thinking_indicator(&message.id, activity_label.clone()))
-                    }),
-            );
-            if open {
-                body = body.child(
-                    div()
-                        .min_w_0()
-                        .w_full()
-                        .text_color(rgb(palette.text_muted))
-                        .child(self.selectable_text(
-                            TextOwner::Message(message.id.clone()),
-                            "thought",
-                            false,
-                            cx,
-                        )),
-                );
-            }
-        } else if thinking {
-            body = body.child(
-                div()
-                    .text_color(rgb(palette.text_muted))
-                    .child(thinking_indicator(&message.id, activity_label.clone())),
-            );
-        }
-        // Native calls project the same explanation into both payloads. Suppress only
-        // an exact duplicate in presentation, retaining saved text and legacy notes.
-        let duplicate_explanation = !is_user
-            && !message.command_cards.is_empty()
-            && message.command_cards.iter().all(|card| {
-                !card.explanation.trim().is_empty() && card.explanation.trim() == display.trim()
-            });
-        let show_answer = !reasoning_only && !display.is_empty() && !duplicate_explanation;
-        // Copy the displayed answer's Markdown, excluding hidden reasoning.
-        let timestamp = format_ai_message_time(&message.created_at);
-        if show_answer {
-            body = body.child(if is_user {
-                self.selectable_text(TextOwner::Message(message.id.clone()), "answer", false, cx)
-            } else {
-                div()
-                    .debug_selector({
-                        let id = message.id.clone();
-                        move || format!("ai-answer-{id}")
-                    })
-                    .min_w_0()
-                    .w_full()
-                    .child(self.selectable_text(
-                        TextOwner::Message(message.id.clone()),
-                        "answer",
-                        true,
-                        cx,
-                    ))
-                    .into_any_element()
-            });
-        }
+            })
+        } else {
+            reasoning.is_some() && !final_answer
+        };
+        let thought_open = if activity {
+            snapshot.activity_thought_open(&message.id)
+        } else {
+            snapshot.expanded_message_thoughts.contains(&message.id)
+        };
+        let show_answer =
+            nyaterm_ai_gpui::messages::show_message_answer(message, display, reasoning_only);
+        let thought = (show_thought && thought_open).then(|| {
+            self.selectable_text(TextOwner::Message(message.id.clone()), "thought", false, cx)
+        });
+        let answer = show_answer.then(|| {
+            self.selectable_text(
+                TextOwner::Message(message.id.clone()),
+                "answer",
+                !is_user,
+                cx,
+            )
+        });
+        let mut details = Vec::new();
         if !reasoning_only {
-            // A reasoning-only row exists beside the full FinalMessage for the
-            // same message; cards and steps render once, on the final row.
+            // The final row owns cards and steps; the adjacent reasoning row must not repeat them.
             let mut shown = HashSet::new();
             for card in &message.command_cards {
                 if shown.insert(&card.id)
                     && snapshot.card_owner(&card.id) == Some(message.id.as_str())
                 {
-                    body = body.child(if activity {
+                    details.push(if activity {
                         self.ai_execution_command_view(snapshot, card.clone(), cx)
                     } else {
                         self.ai_command_card_view(snapshot, card.clone(), cx)
@@ -622,32 +302,35 @@ impl AiPanel {
                 }
             }
             for step in snapshot.message_steps(&message.id) {
-                body =
-                    body.child(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
+                details.push(self.ai_agent_step_card_inner(snapshot, step.clone(), activity, cx));
             }
         }
-        if is_user {
-            // The transcript already leaves 8px under every row. A user bubble
-            // needs a little more air so it separates from the turns around it.
-            let mut row = div()
-                .w_full()
-                .min_w_0()
-                .pt(px(6.))
-                .pb(px(6.))
-                .flex()
-                .flex_col()
-                .items_end()
-                .gap_1()
-                .child(body);
-            if show_answer {
-                row = row.child(message_footer(&message.id, display, timestamp, palette));
-            }
-            return row.into_any_element();
-        }
-        if show_answer {
-            body = body.child(message_footer(&message.id, display, timestamp, palette));
-        }
-        body.into_any_element()
+        let id = message.id.clone();
+        nyaterm_ai_gpui::messages::message_bubble(
+            nyaterm_ai_gpui::messages::MessageBubble {
+                id: message.id.clone(),
+                palette,
+                is_user,
+                activity,
+                show_thought,
+                thought_open,
+                thinking: thinking.then(|| activity_label.into()),
+                header: (!is_user && !activity && !final_answer)
+                    .then(|| self.ai_agent_turn_header(snapshot, streaming && snapshot.running)),
+                thought,
+                answer,
+                details,
+                copy_text: show_answer.then(|| display.to_string()),
+                timestamp: format_ai_message_time(&message.created_at),
+            },
+            cx.listener(move |panel, _, _, cx| {
+                let id = id.clone();
+                panel.with_app(cx, move |app, cx| {
+                    app.ai.toggle_message_thought(id);
+                    app.defer_ai_panel_snapshot_flush(cx);
+                });
+            }),
+        )
     }
 
     pub(super) fn ai_agent_step_card(

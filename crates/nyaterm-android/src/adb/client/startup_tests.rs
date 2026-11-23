@@ -94,13 +94,16 @@ fn tcp_connect_failures_start_the_configured_adb_and_verify_its_server() {
 fn refused_server_uses_custom_adb_and_verifies_that_startup_really_succeeded() {
     let root = tempfile::tempdir().unwrap();
     let executable = custom_adb(root.path());
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    // Reserve the port without listening. Dropping a listener here lets another
+    // parallel fixture claim the address before the post-startup probe.
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let mut client = AdbClient::local(Some(&executable)).unwrap();
-    client.server = listener.local_addr().unwrap();
-    drop(listener);
+    client.server = reserved.local_addr().unwrap();
     // The fixture exits successfully without starting a server. Do not report
     // success until a subsequent host:version probe has actually succeeded.
-    assert!(matches!(client.ensure_server(), Err(AdbError::Io(_))));
+    let result = client.ensure_server();
+    assert!(matches!(result, Err(AdbError::Io(_))), "{result:?}");
     assert!(root.path().join("started").is_file());
 }
 

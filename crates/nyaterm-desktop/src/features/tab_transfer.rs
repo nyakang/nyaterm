@@ -209,9 +209,14 @@ impl NyaTermApp {
         if session_ids.iter().any(|session_id| {
             self.session
                 .session_info(session_id)
-                .is_some_and(|session| matches!(session.kind, SessionKind::Rdp | SessionKind::Vnc))
+                .is_some_and(|session| {
+                    matches!(
+                        session.kind,
+                        SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice
+                    )
+                })
         }) {
-            return Err("RDP and VNC tabs cannot be moved while connected yet".to_string());
+            return Err("Remote desktop tabs cannot be moved between windows yet".to_string());
         }
         if session_ids.iter().any(|session_id| {
             self.session

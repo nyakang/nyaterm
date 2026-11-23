@@ -662,6 +662,13 @@ pub enum ConnectionType {
         #[serde(default)]
         reconnect: RdpReconnectSettings,
     },
+    Spice {
+        endpoint: crate::spice::settings::SpiceEndpoint,
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        settings: crate::spice::settings::SpiceSettings,
+    },
     Vnc {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         username: String,

@@ -13,6 +13,36 @@ impl SettingsFeatureState {
     ) {
         self.draft_dirty_domains.insert(domain);
     }
+    pub(in crate::features) fn set_connection_type_visible(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        visible: bool,
+    ) -> bool {
+        self.summary.connection_type_layout.set_visible(
+            &crate::models::ConnectionKindTab::catalog_ids(),
+            kind.persistence_id(),
+            visible,
+        )
+    }
+
+    pub(in crate::features) fn move_connection_type(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        down: bool,
+    ) -> bool {
+        self.summary.connection_type_layout.move_relative(
+            &crate::models::ConnectionKindTab::catalog_ids(),
+            kind.persistence_id(),
+            down,
+        )
+    }
+
+    pub(in crate::features) fn reset_connection_type_layout(&mut self) {
+        self.summary
+            .connection_type_layout
+            .reset_known(&crate::models::ConnectionKindTab::catalog_ids());
+    }
+
     pub(in crate::features) fn set_language(&mut self, language: &str) {
         self.summary.language = language.to_string();
         crate::i18n::apply_locale(&self.summary.language);

@@ -149,7 +149,7 @@ pub(super) fn account_select_options(
 ) -> Vec<NyaSelectOption> {
     let selected = (!selected.trim().is_empty()).then_some(selected);
     let choices = match kind {
-        Some(ConnectionBatchKind::Rdp | ConnectionBatchKind::Vnc) => {
+        Some(ConnectionBatchKind::Rdp | ConnectionBatchKind::Vnc | ConnectionBatchKind::Spice) => {
             options::password_choices(passwords, selected, selected.is_none(), selected)
         }
         _ => options::account_choices(passwords, selected, selected.is_none(), selected),
@@ -281,6 +281,7 @@ pub(super) fn batch_kind_label(kind: ConnectionBatchKind) -> SharedString {
         ConnectionBatchKind::Telnet => "Telnet".into(),
         ConnectionBatchKind::Rdp => "RDP".into(),
         ConnectionBatchKind::Vnc => "VNC".into(),
+        ConnectionBatchKind::Spice => "SPICE".into(),
         ConnectionBatchKind::Adb => "Android".into(),
         ConnectionBatchKind::LocalTerminal => t!("dialog.localTerminal").into(),
         ConnectionBatchKind::Serial => t!("dialog.serial").into(),

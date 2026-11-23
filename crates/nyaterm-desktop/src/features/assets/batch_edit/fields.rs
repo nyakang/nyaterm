@@ -22,6 +22,20 @@ pub(in crate::features) enum FieldBasis {
 /// a widget id that could be focused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::features) enum BatchFieldKey {
+    SpiceTcpPort,
+    SpiceTlsPort,
+    SpiceHttpProxy,
+    SpiceCaPem,
+    SpiceCertificateSubject,
+    SpiceRequireTls,
+    SpiceDynamicResolution,
+    SpiceFitWindow,
+    SpiceViewOnly,
+    SpiceClipboardToGuest,
+    SpiceClipboardFromGuest,
+    SpiceAudioPlayback,
+    SpiceFileTransfer,
+    SpiceReconnectAttempts,
     Group,
     Description,
     Icon,
@@ -188,6 +202,20 @@ impl BatchFieldKey {
 
     pub(in crate::features) fn key(self) -> &'static str {
         match self {
+            Self::SpiceTcpPort => "spice-tcp-port",
+            Self::SpiceTlsPort => "spice-tls-port",
+            Self::SpiceHttpProxy => "spice-proxy",
+            Self::SpiceCaPem => "spice-ca-pem",
+            Self::SpiceCertificateSubject => "spice-certificate-subject",
+            Self::SpiceRequireTls => "spice-require-tls",
+            Self::SpiceDynamicResolution => "spice-dynamic-resolution",
+            Self::SpiceFitWindow => "spice-fit-window",
+            Self::SpiceViewOnly => "spice-view-only",
+            Self::SpiceClipboardToGuest => "spice-clipboard-to-guest",
+            Self::SpiceClipboardFromGuest => "spice-clipboard-from-guest",
+            Self::SpiceAudioPlayback => "spice-audio-playback",
+            Self::SpiceFileTransfer => "spice-file-transfer",
+            Self::SpiceReconnectAttempts => "spice-reconnect-attempts",
             Self::Group => "group",
             Self::Description => "description",
             Self::Icon => "icon",
@@ -334,6 +362,20 @@ impl BatchFieldKey {
 
     pub(in crate::features) fn label_key(self) -> &'static str {
         match self {
+            Self::SpiceTcpPort => "spice.tcpPort",
+            Self::SpiceTlsPort => "spice.tlsPort",
+            Self::SpiceHttpProxy => "spice.httpProxy",
+            Self::SpiceCaPem => "spice.caPem",
+            Self::SpiceCertificateSubject => "spice.certificateSubject",
+            Self::SpiceRequireTls => "spice.requireTls",
+            Self::SpiceDynamicResolution => "spice.dynamicResolution",
+            Self::SpiceFitWindow => "spice.fitWindow",
+            Self::SpiceViewOnly => "spice.viewOnly",
+            Self::SpiceClipboardToGuest => "spice.clipboardToGuest",
+            Self::SpiceClipboardFromGuest => "spice.clipboardFromGuest",
+            Self::SpiceAudioPlayback => "spice.audioPlayback",
+            Self::SpiceFileTransfer => "spice.fileTransfer",
+            Self::SpiceReconnectAttempts => "spice.reconnectAttempts",
             Self::Group => "dialog.group",
             Self::Description => "dialog.description",
             Self::Icon => "dialog.icon",
@@ -467,7 +509,15 @@ impl BatchFieldKey {
     pub(in crate::features) fn is_bool(self) -> bool {
         matches!(
             self,
-            Self::IconAutoDetect
+            Self::SpiceRequireTls
+                | Self::SpiceDynamicResolution
+                | Self::SpiceFitWindow
+                | Self::SpiceViewOnly
+                | Self::SpiceClipboardToGuest
+                | Self::SpiceClipboardFromGuest
+                | Self::SpiceAudioPlayback
+                | Self::SpiceFileTransfer
+                | Self::IconAutoDetect
                 | Self::DynamicTabTitle
                 | Self::SshCompatibility
                 | Self::AllowShortRsaHostKeys
@@ -527,7 +577,21 @@ impl BatchFieldKey {
 
 /// Fields the batch editor writes. Each one keeps its connection-editor
 /// position; the connection editor labels stay in place for the rest.
-pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 123] = [
+pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 137] = [
+    BatchFieldKey::SpiceTcpPort,
+    BatchFieldKey::SpiceTlsPort,
+    BatchFieldKey::SpiceHttpProxy,
+    BatchFieldKey::SpiceCaPem,
+    BatchFieldKey::SpiceCertificateSubject,
+    BatchFieldKey::SpiceRequireTls,
+    BatchFieldKey::SpiceDynamicResolution,
+    BatchFieldKey::SpiceFitWindow,
+    BatchFieldKey::SpiceViewOnly,
+    BatchFieldKey::SpiceClipboardToGuest,
+    BatchFieldKey::SpiceClipboardFromGuest,
+    BatchFieldKey::SpiceAudioPlayback,
+    BatchFieldKey::SpiceFileTransfer,
+    BatchFieldKey::SpiceReconnectAttempts,
     BatchFieldKey::Group,
     BatchFieldKey::Description,
     BatchFieldKey::Icon,
@@ -679,6 +743,20 @@ impl BatchFieldKey {
     /// adding a batch field must place it in a section.
     pub(in crate::features) fn section(self) -> ConnectionEditorSection {
         match self {
+            Self::SpiceTcpPort => ConnectionEditorSection::Basic,
+            Self::SpiceTlsPort => ConnectionEditorSection::Basic,
+            Self::SpiceHttpProxy => ConnectionEditorSection::Network,
+            Self::SpiceCaPem => ConnectionEditorSection::Security,
+            Self::SpiceCertificateSubject => ConnectionEditorSection::Security,
+            Self::SpiceRequireTls => ConnectionEditorSection::Security,
+            Self::SpiceDynamicResolution => ConnectionEditorSection::Display,
+            Self::SpiceFitWindow => ConnectionEditorSection::Display,
+            Self::SpiceViewOnly => ConnectionEditorSection::Session,
+            Self::SpiceClipboardToGuest => ConnectionEditorSection::Session,
+            Self::SpiceClipboardFromGuest => ConnectionEditorSection::Session,
+            Self::SpiceAudioPlayback => ConnectionEditorSection::Session,
+            Self::SpiceFileTransfer => ConnectionEditorSection::Session,
+            Self::SpiceReconnectAttempts => ConnectionEditorSection::Session,
             Self::Group
             | Self::Description
             | Self::Icon
@@ -811,6 +889,11 @@ impl BatchFieldKey {
 
     pub(in crate::features) const fn action(self) -> BatchFieldAction {
         match self {
+            Self::SpiceTcpPort => BatchFieldAction::None,
+            Self::SpiceTlsPort => BatchFieldAction::None,
+            Self::SpiceHttpProxy => BatchFieldAction::None,
+            Self::SpiceCaPem => BatchFieldAction::None,
+            Self::SpiceCertificateSubject => BatchFieldAction::None,
             Self::Password => BatchFieldAction::ClearPassword,
             Self::Group
             | Self::Description
@@ -855,6 +938,20 @@ impl BatchFieldKey {
     /// stores it. `None` means the field has no single scalar default.
     pub(in crate::features) fn default_value(self, kind: ConnectionKindTab) -> Option<String> {
         let value = match self {
+            Self::SpiceTcpPort => return None,
+            Self::SpiceTlsPort => return None,
+            Self::SpiceHttpProxy => return None,
+            Self::SpiceCaPem => return None,
+            Self::SpiceCertificateSubject => return None,
+            Self::SpiceRequireTls => "true".to_string(),
+            Self::SpiceDynamicResolution => "true".to_string(),
+            Self::SpiceFitWindow => "true".to_string(),
+            Self::SpiceViewOnly => "false".to_string(),
+            Self::SpiceClipboardToGuest => "true".to_string(),
+            Self::SpiceClipboardFromGuest => "true".to_string(),
+            Self::SpiceAudioPlayback => "true".to_string(),
+            Self::SpiceFileTransfer => "true".to_string(),
+            Self::SpiceReconnectAttempts => "5".to_string(),
             Self::Port => kind.batch_kind().default_port().to_string(),
             Self::Username => {
                 if matches!(kind, ConnectionKindTab::Ssh) {
@@ -1409,6 +1506,76 @@ const RDP_SESSION: &[BatchRowSpec] = &[
     row(BatchRowLayout::Stack, &[spec(BatchFieldKey::RdpAudio)]),
 ];
 
+const SPICE_BASIC: &[BatchRowSpec] = &[
+    BASIC_HEADER,
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Host)]),
+    row(
+        BatchRowLayout::Columns,
+        &[
+            spec(BatchFieldKey::SpiceTcpPort),
+            spec(BatchFieldKey::SpiceTlsPort),
+        ],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::AuthMode)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Account)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Password)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Username)]),
+    BASIC_TAGS,
+    BASIC_DESCRIPTION,
+];
+const SPICE_NETWORK: &[BatchRowSpec] = &[
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceHttpProxy)],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::Proxy)]),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::ProxyJump)]),
+];
+const SPICE_SECURITY: &[BatchRowSpec] = &[
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::SpiceCaPem)]),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceCertificateSubject)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceRequireTls)],
+    ),
+];
+const SPICE_DISPLAY: &[BatchRowSpec] = &[
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceDynamicResolution)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceFitWindow)],
+    ),
+];
+const SPICE_SESSION: &[BatchRowSpec] = &[
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::SpiceViewOnly)]),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceClipboardToGuest)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceClipboardFromGuest)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceAudioPlayback)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceFileTransfer)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::SpiceReconnectAttempts)],
+    ),
+];
+
 const VNC_BASIC: &[BatchRowSpec] = &[
     BASIC_HEADER,
     row(
@@ -1579,6 +1746,11 @@ pub(in crate::features) fn batch_rows(
         (ConnectionKindTab::Rdp, ConnectionEditorSection::Display) => RDP_DISPLAY,
         (ConnectionKindTab::Rdp, ConnectionEditorSection::Session) => RDP_SESSION,
         (ConnectionKindTab::Vnc, ConnectionEditorSection::Basic) => VNC_BASIC,
+        (ConnectionKindTab::Spice, ConnectionEditorSection::Basic) => SPICE_BASIC,
+        (ConnectionKindTab::Spice, ConnectionEditorSection::Network) => SPICE_NETWORK,
+        (ConnectionKindTab::Spice, ConnectionEditorSection::Security) => SPICE_SECURITY,
+        (ConnectionKindTab::Spice, ConnectionEditorSection::Display) => SPICE_DISPLAY,
+        (ConnectionKindTab::Spice, ConnectionEditorSection::Session) => SPICE_SESSION,
         (ConnectionKindTab::Vnc, ConnectionEditorSection::Network) => VNC_NETWORK,
         (ConnectionKindTab::Vnc, ConnectionEditorSection::Security) => VNC_SECURITY,
         (ConnectionKindTab::Vnc, ConnectionEditorSection::Display) => VNC_DISPLAY,

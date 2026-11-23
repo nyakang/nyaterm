@@ -20,8 +20,12 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts/release"))
 import linux_icons
 import prepare_android
+import prepare_spice
+import spice_associations
+import spice_release
+import spice_unix
 
-BINARIES = ("nyaterm", "nyaterm-mcp", "nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-android-helper")
+BINARIES = ("nyaterm", "nyaterm-mcp", "nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-android-helper", "nyaterm-spice-helper")
 ANDROID_LIBRARIES = {"libavcodec.so.62", "libavformat.so.62", "libavutil.so.60", "libswscale.so.9"}
 LIMITS = {"GLIBC": (2, 31), "GLIBCXX": (3, 4, 28), "CXXABI": (1, 3, 12)}
 # These SONAMEs are supplied by the documented focal desktop. No newer SSL/FFI,
@@ -32,7 +36,7 @@ SYSTEM_LIBRARIES = {
     "ld-linux-x86-64.so.2", "libdbus-1.so.3", "libgtk-3.so.0", "libgdk-3.so.0",
     "libgdk_pixbuf-2.0.so.0", "libgio-2.0.so.0", "libgobject-2.0.so.0",
     "libglib-2.0.so.0", "libxcb.so.1", "libxkbcommon.so.0", "libxkbcommon-x11.so.0",
-    "libudev.so.1", "libssl.so.1.1", "libcrypto.so.1.1", "libz.so.1",
+    "libudev.so.1", "libssl.so.1.1", "libcrypto.so.1.1", "libz.so.1", "libasound.so.2",
 }
 
 
@@ -151,6 +155,45 @@ def audit_opengl(runtime):
     return reports
 
 
+def stage_spice(binary_dir, stage):
+    """Audit the private decoder closure without widening application ABI rules."""
+    target = "x86_64-unknown-linux-gnu"
+    source = binary_dir / "spice"
+    manifest = prepare_spice.verify_runtime(source, target)
+    runtime = stage / "spice"
+    shutil.copytree(source, runtime)
+    names = {"spice/" + name for name in [*manifest["files"], "SOURCE.json"]}
+    spice_release.verify_resources(lambda name: (stage / name).read_bytes(), target, names=names)
+    libraries = {name for name in manifest["files"]
+                 if not name.startswith("licenses/") and (name.endswith(".so") or ".so." in name)}
+    root_libraries = {name for name in libraries if "/" not in name}
+    if root_libraries & spice_unix.SYSTEM_ELF:
+        raise ValueError("SPICE must not bundle system libc/loader")
+    reports = []
+    for name in sorted(libraries):
+        library = runtime / name
+        spice_unix.check_architecture(library, target)
+        version_info = command("readelf", "--version-info", "--wide", str(library))
+        needs = version_info.partition("Version needs section")[2]
+        # Some leaf modules have no versioned symbols; their dependency closure
+        # is still checked. Exported GLIBCXX versions are not requirements.
+        versions = check_versions(needs) if re.search(r"Name: (?:GLIBC|GLIBCXX|CXXABI)_", needs) else []
+        dynamic = command("readelf", "--dynamic", "--wide", str(library))
+        paths = re.findall(r"\((?:RUNPATH|RPATH)\).*\[([^]]*)\]", dynamic)
+        expected = "$ORIGIN/.." if "/" in name else "$ORIGIN"
+        if paths != [expected]:
+            raise ValueError("non-relocatable SPICE library: " + name)
+        needed = re.findall(r"\(NEEDED\).*Shared library: \[([^]]+)\]", dynamic)
+        if set(needed) - root_libraries - spice_unix.SYSTEM_ELF:
+            raise ValueError("incomplete SPICE dependency closure: " + name)
+        linkage = command("ldd", "-r", str(library.resolve()), extra_env={"LD_LIBRARY_PATH": ""})
+        if "not found" in linkage or "undefined symbol" in linkage:
+            raise ValueError("unresolved SPICE dependency: " + name)
+        reports.append({"name": name, "versions": versions, "needed": needed,
+                        "sha256": sha256(library)})
+    return reports
+
+
 def create_deb(stage, output, version):
     """Package the audited runtime without touching an installed/released copy."""
     desktop_id = "nyaterm-compat"
@@ -179,6 +222,7 @@ def create_deb(stage, output, version):
             Terminal=false
             Categories=Development;TerminalEmulator;Network;
             StartupNotify=true
+            MimeType=application/x-virt-viewer;
 
             Actions=SoftwareRendering;
 
@@ -189,9 +233,11 @@ def create_deb(stage, output, version):
             """).format(wm_class), encoding="utf-8")
         desktop.chmod(0o644)
         linux_icons.copy_icons(root, ROOT / "crates/nyaterm-app/resources/icons", desktop_id)
+        spice_associations.write_linux_mime(root, desktop_id)
         control = root / "DEBIAN"
         control.mkdir()
-        linux_icons.write_postinst(control / "postinst", desktop_id)
+        linux_icons.write_postinst(control / "postinst", desktop_id, spice_associations.linux_cache_commands())
+        spice_associations.write_linux_postrm(control / "postrm")
         dependencies = deb_dependencies([app_root / name for name in BINARIES])
         (control / "control").write_text(textwrap.dedent("""\
             Package: nyaterm-compat
@@ -203,7 +249,7 @@ def create_deb(stage, output, version):
             Depends: bash, {}
             Recommends: libvulkan1 | mesa-vulkan-drivers
             Description: NyaTerm Ubuntu 20.04 compatibility build with GPU rendering and a CPU fallback
-             Includes MCP/RDP/VNC/Android helpers, ADB, FFmpeg and a checksum-pinned Mesa runtime.
+             Includes MCP/RDP/VNC/Android/SPICE helpers, ADB, FFmpeg and private SPICE/Mesa runtimes.
              Requires X11. Does not replace libc or system graphics drivers.
             """).format(version.replace("-", "~"), dependencies), encoding="utf-8")
         linux_icons.normalize_permissions(root)
@@ -267,6 +313,7 @@ def create_package(binary_dir, output, version, opengl, deb=False):
             shutil.copy2(binary_dir / name, stage / name)
             (stage / name).chmod(0o755)
         android_reports = stage_android(binary_dir, stage)
+        spice_reports = stage_spice(binary_dir, stage)
         reports = [audit(stage / name, android=name == "nyaterm-android-helper") for name in BINARIES]
         # Portable mode keeps all data beside the application, without touching
         # installed NyaTerm data or depending on a fixed installation prefix.
@@ -287,7 +334,7 @@ def create_package(binary_dir, output, version, opengl, deb=False):
         (stage / "abi-report.json").write_text(json.dumps(
             {"baseline": "Ubuntu 20.04 x86_64 / glibc 2.31", "version": version,
              "binaries": reports, "opengl_libraries": graphics,
-             "android_runtime": android_reports}, indent=2) + "\n", encoding="utf-8")
+             "android_runtime": android_reports, "spice_runtime": spice_reports}, indent=2) + "\n", encoding="utf-8")
         linux_icons.normalize_permissions(stage)
         if deb:
             create_deb(stage, output, version)

@@ -247,6 +247,16 @@ fn item_endpoint(item: &QuickSwitchItem) -> Option<(&str, u16)> {
                 device: nyaterm_core::models::android::AdbDeviceSelector::Tcp { host, port },
                 ..
             } => Some((host, *port)),
+            ConnectionType::Spice {
+                endpoint, settings, ..
+            } => {
+                let port = if settings.security.require_tls {
+                    endpoint.tls_port
+                } else {
+                    endpoint.port.or(endpoint.tls_port)
+                };
+                port.map(|port| (endpoint.host.expose_secret(), port))
+            }
             ConnectionType::Adb { .. }
             | ConnectionType::LocalTerminal { .. }
             | ConnectionType::Serial { .. } => None,

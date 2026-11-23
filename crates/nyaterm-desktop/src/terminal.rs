@@ -1,7 +1,6 @@
-pub(crate) use nyaterm_terminal::{
-    TerminalTextCell, terminal_byte_index_for_cell_col, terminal_is_zero_width_mark,
-    terminal_text_cells,
-};
+pub(crate) use nyaterm_terminal::terminal_byte_index_for_cell_col;
+#[cfg(test)]
+pub(crate) use nyaterm_terminal::{TerminalTextCell, terminal_text_cells};
 pub(crate) use nyaterm_terminal_gpui::{
     NyaTerminalElement, NyaTerminalLayoutCache, TerminalBufferMatch, TerminalGridSelection,
     TerminalKeyMode, TerminalKeywordHighlightConfig, TerminalKeywordHighlightSnapshot,

@@ -39,6 +39,7 @@ pub mod runtime;
 pub mod secret;
 pub mod send_command;
 pub mod session_import;
+pub mod spice;
 pub mod ssh_keys;
 pub mod sync_schema;
 pub mod temporary_connection;

@@ -6,7 +6,9 @@ use std::path::Path;
 use nyaterm_core::packaging::portable::windows_portable_layout;
 use nyaterm_core::updater::UpdateArchitecture;
 
-const MAX_ENTRIES: usize = 128;
+// Includes private SPICE libraries and their source/license notices. Paths
+// remain an exact allowlist; this does not permit arbitrary archive contents.
+const MAX_ENTRIES: usize = 1024;
 const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 const BACKUP_DIRECTORY: &str = "portable-backup";
 
@@ -298,6 +300,18 @@ fn validate_payload_path(root: &Path, name: &str, required: bool) -> Result<(), 
     }
 }
 
+fn commit_names(architecture: UpdateArchitecture) -> Vec<&'static str> {
+    // Replace the private runtime as one unit. Otherwise an obsolete plugin
+    // absent from the new inventory could survive and still be discovered by
+    // the native loader. User data never lives under this program directory.
+    windows_portable_layout()
+        .files(architecture)
+        .into_iter()
+        .filter(|name| !name.starts_with("spice/"))
+        .chain(std::iter::once("spice"))
+        .collect()
+}
+
 pub(super) fn commit_portable_files_with(
     staged: &Path,
     target: &Path,
@@ -315,13 +329,14 @@ pub(super) fn commit_portable_files_with(
     for name in removed {
         validate_payload_path(target, name, false)?;
     }
+    let commits = commit_names(architecture);
     let backup = work.join(BACKUP_DIRECTORY);
     std::fs::create_dir(&backup)
         .map_err(|error| format!("failed to create portable backup: {error}"))?;
     let mut backed_up = Vec::new();
     let mut installed = Vec::new();
     let result = (|| {
-        for name in files.iter().copied().chain(removed).collect::<Vec<_>>() {
+        for name in commits.iter().copied().chain(removed).collect::<Vec<_>>() {
             let current = target.join(name);
             if current.exists() {
                 let previous = backup.join(name);
@@ -332,7 +347,7 @@ pub(super) fn commit_portable_files_with(
                 backed_up.push(name);
             }
         }
-        for name in &files {
+        for name in &commits {
             let output = target.join(name);
             std::fs::create_dir_all(output.parent().ok_or("missing install parent")?)
                 .map_err(|error| format!("failed to prepare installation for {name}: {error}"))?;
@@ -345,7 +360,12 @@ pub(super) fn commit_portable_files_with(
     if let Err(error) = result {
         let mut rollback_errors = Vec::new();
         for name in installed.into_iter().rev() {
-            if let Err(error) = std::fs::remove_file(target.join(name)) {
+            let removed = if name == "spice" {
+                std::fs::remove_dir_all(target.join(name))
+            } else {
+                std::fs::remove_file(target.join(name))
+            };
+            if let Err(error) = removed {
                 rollback_errors.push(format!("failed to remove new {name}: {error}"));
             }
         }
@@ -385,7 +405,8 @@ mod tests {
     use nyaterm_core::updater::{UpdateArchitecture, UpdateTarget};
 
     use super::{
-        commit_portable_files_with, extract_windows_portable, extract_with_limits, recovery_pending,
+        commit_names, commit_portable_files_with, extract_windows_portable, extract_with_limits,
+        recovery_pending,
     };
     use crate::install::cleanup_update_work_dir;
 
@@ -589,7 +610,7 @@ mod tests {
                 &archive,
                 &root.join("staged"),
                 UpdateArchitecture::X86_64,
-                128,
+                entries.len(),
                 1
             )
             .unwrap_err()
@@ -668,13 +689,27 @@ mod tests {
     fn portable_commit_rolls_back_every_move_and_removes_new_components() {
         for architecture in ARCHITECTURES {
             let files = windows_portable_layout().files(architecture);
+            let commits = commit_names(architecture);
             for old_complete in [true, false] {
                 let old_files = files
                     .iter()
-                    .filter(|name| old_complete || !name.starts_with("conpty/"))
+                    .filter(|name| {
+                        old_complete
+                            || (!name.starts_with("conpty/")
+                                && !name.starts_with("spice/")
+                                && **name != "nyaterm-spice-helper.exe")
+                    })
                     .copied()
                     .collect::<Vec<_>>();
-                for fail_at in 0..old_files.len() + files.len() {
+                let old_moves = commits
+                    .iter()
+                    .filter(|name| {
+                        old_files
+                            .iter()
+                            .any(|file| file == *name || file.starts_with(&format!("{name}/")))
+                    })
+                    .count();
+                for fail_at in 0..old_moves + commits.len() {
                     let root = TestTempDir::new("nyaterm-portable-rollback");
                     let (staged, target, work) =
                         (root.join("staged"), root.join("target"), root.join("work"));
@@ -682,6 +717,9 @@ mod tests {
                     write_files(&target, architecture, b"old");
                     for name in files.iter().filter(|name| !old_files.contains(name)) {
                         std::fs::remove_file(target.join(name)).unwrap();
+                    }
+                    if !old_complete {
+                        std::fs::remove_dir_all(target.join("spice")).unwrap();
                     }
                     std::fs::create_dir_all(target.join("data")).unwrap();
                     std::fs::write(target.join("data/user.db"), b"user-data").unwrap();
@@ -723,6 +761,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn portable_spice_runtime_replacement_removes_old_plugins_and_rollback_restores_them() {
+        let architecture = UpdateArchitecture::X86_64;
+        let root = TestTempDir::new("nyaterm-portable-spice-replace");
+        let (staged, target, work) = (root.join("staged"), root.join("target"), root.join("work"));
+        write_files(&staged, architecture, b"new");
+        write_files(&target, architecture, b"old");
+        std::fs::create_dir(&work).unwrap();
+        let obsolete = target.join("spice/gstreamer-1.0/obsolete-plugin.dll");
+        std::fs::write(&obsolete, b"old-plugin").unwrap();
+        let failed =
+            commit_portable_files_with(&staged, &target, &work, architecture, |from, to| {
+                if from == staged.join("spice") {
+                    Err("injected runtime replacement failure".into())
+                } else {
+                    rename(from, to)
+                }
+            })
+            .unwrap_err();
+        assert!(!failed.recovery_required);
+        assert_eq!(std::fs::read(&obsolete).unwrap(), b"old-plugin");
+        assert_eq!(
+            std::fs::read(target.join("spice/SOURCE.json")).unwrap(),
+            b"old"
+        );
+        // Earlier new files were removed by rollback; reconstruct a new staged
+        // package just as a retry does after validating its signed archive.
+        write_files(&staged, architecture, b"new");
+        commit_portable_files_with(&staged, &target, &work, architecture, rename).unwrap();
+        assert!(!obsolete.exists());
+        assert_eq!(
+            std::fs::read(target.join("spice/SOURCE.json")).unwrap(),
+            b"new"
+        );
     }
 
     #[test]

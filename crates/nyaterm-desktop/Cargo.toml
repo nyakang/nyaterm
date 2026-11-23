@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+nyaterm-remote-monitor-gpui.workspace = true
+nyaterm-connections-gpui.workspace = true
+nyaterm-file-browser-gpui.workspace = true
+nyaterm-ai-gpui.workspace = true
+nyaterm-notes-gpui.workspace = true
 nyaterm-host-tools-gpui.workspace = true
 nyaterm-executor.workspace = true
 nyaterm-completion-runtime.workspace = true
@@ -49,6 +54,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+same-file.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true, features = ["rt"] }
@@ -61,6 +67,7 @@ zip.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+nyaterm-remote-monitor-gpui = { workspace = true, features = ["test-support"] }
 nyaterm-host-tools-gpui = { workspace = true, features = ["test-support"] }
 nyaterm-terminal-runtime = { workspace = true, features = ["test-support"] }
 russh.workspace = true

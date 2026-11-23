@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
 import package_native
 import verify_native_package
 import windows_msi
-from scripts.tests.test_verify_native_package import fake_pe, stage_android_fixture
+from scripts.tests.test_verify_native_package import fake_pe, stage_android_fixture, stage_spice_fixture, patch_spice_lock
 
 
 def stage_payload(root: Path, target: str) -> None:
@@ -34,6 +34,7 @@ def stage_payload(root: Path, target: str) -> None:
         path.write_bytes(fake_pe(0xAA64 if "arm64" in relative.parts else 0x8664))
     (root / "conpty/LICENSE.txt").write_text("ConPTY test license", encoding="utf-8")
     stage_android_fixture(root, target)
+    stage_spice_fixture(root, target)
 
 
 class WindowsMsiTests(unittest.TestCase):
@@ -148,6 +149,9 @@ class WindowsMsiCleanupTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "win32" and shutil.which("wix"), "requires Windows and WiX 6.0.2")
 class CompiledWindowsMsiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        patch_spice_lock(self)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.temporary = tempfile.TemporaryDirectory(prefix="nyaterm-msi-test-")
@@ -189,10 +193,11 @@ class CompiledWindowsMsiTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "architecture"):
                 verify_native_package.verify_windows_msi_database(changed, target, "2.0.0")
 
-    def test_compiled_database_requires_all_helpers_and_conpty_files(self) -> None:
+    def test_compiled_database_requires_all_helpers_conpty_and_spice_files(self) -> None:
         for target, (_, baseline, _) in self.packages.items():
             files = verify_native_package.verify_windows_msi_database(baseline, target, "2.0.0")
             for name in (*verify_native_package.helper_filenames(target),
+                         *verify_native_package.windows_portable.LAYOUT["spice_files"][target],
                          *(f"conpty/{p.as_posix()}" for p in package_native.conpty_files(target))):
                 changed = copy.deepcopy(baseline)
                 changed["tables"]["File"] = [row for row in changed["tables"]["File"] if row["File"] != files[name]]

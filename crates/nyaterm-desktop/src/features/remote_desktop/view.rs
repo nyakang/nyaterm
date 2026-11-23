@@ -48,11 +48,15 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let palette = self.theme_palette();
+        let temporary_spice = self.session.metadata(&session_id).is_some_and(|metadata| matches!(
+            &metadata.launch_config, crate::models::SessionLaunchConfig::Spice(config)
+                if config.session.credential_lifetime == nyaterm_remote_desktop::spice::protocol::SpiceCredentialLifetime::Temporary
+        ));
         let Some(session) = self.remote_desktop.sessions.get(&session_id) else {
             return self
                 .rdp_status_view(
                     "Remote Desktop",
-                    "The RDP runtime is no longer available for this tab.",
+                    "The remote desktop runtime is no longer available for this tab.",
                 )
                 .into_any_element();
         };
@@ -176,9 +180,17 @@ impl NyaTermApp {
                         .child(small_button(
                             palette,
                             format!("rdp-retry-{session_id}"),
-                            t!("remoteDesktop.retry"),
+                            if temporary_spice {
+                                t!("spice.openFile")
+                            } else {
+                                t!("remoteDesktop.retry")
+                            },
                             cx.listener(move |this, _, _, cx| {
-                                this.retry_rdp_runtime(&retry_id, cx);
+                                if temporary_spice {
+                                    this.prompt_spice_connection_file(cx);
+                                } else {
+                                    this.retry_rdp_runtime(&retry_id, cx);
+                                }
                                 cx.notify();
                             }),
                         ))
@@ -240,9 +252,17 @@ impl NyaTermApp {
                         .child(small_button(
                             palette,
                             format!("rdp-disconnected-retry-{session_id}"),
-                            t!("remoteDesktop.retry"),
+                            if temporary_spice {
+                                t!("spice.openFile")
+                            } else {
+                                t!("remoteDesktop.retry")
+                            },
                             cx.listener(move |this, _, _, cx| {
-                                this.retry_rdp_runtime(&retry_id, cx);
+                                if temporary_spice {
+                                    this.prompt_spice_connection_file(cx);
+                                } else {
+                                    this.retry_rdp_runtime(&retry_id, cx);
+                                }
                                 cx.notify();
                             }),
                         ))
@@ -288,6 +308,13 @@ impl NyaTermApp {
             .session
             .metadata(&session_id)
             .and_then(|metadata| match &metadata.launch_config {
+                crate::models::SessionLaunchConfig::Spice(config) => {
+                    Some(if config.session.settings.fit_window {
+                        VncScaleMode::Fit
+                    } else {
+                        VncScaleMode::Actual
+                    })
+                }
                 crate::models::SessionLaunchConfig::Vnc(config) => Some(config.display.scale_mode),
                 _ => None,
             })
@@ -321,7 +348,18 @@ impl NyaTermApp {
         });
         let input_up = input.clone();
 
-        let hide_native_cursor = remote_cursor_hides_native(cursor_visible, cursor_shape.as_ref());
+        let relative_mouse_released = self
+            .remote_desktop
+            .sessions
+            .get(&session_id)
+            .and_then(|session| session.spice.as_ref())
+            .is_some_and(|spice| {
+                spice.capabilities.mouse_mode
+                    == nyaterm_remote_desktop::spice::protocol::SpiceMouseMode::Relative
+            })
+            && !self.spice_pointer_owned(&session_id);
+        let hide_native_cursor = !relative_mouse_released
+            && remote_cursor_hides_native(cursor_visible, cursor_shape.as_ref());
         let remote_cursor_texture_visible = cursor_visible
             && cursor_texture.is_some()
             && cursor_shape.as_ref().is_some_and(|shape| {
@@ -396,9 +434,11 @@ impl NyaTermApp {
             matches!(
                 metadata.launch_config,
                 crate::models::SessionLaunchConfig::Rdp(_)
+                    | crate::models::SessionLaunchConfig::Spice(_)
             )
         });
-        div()
+        let spice_toolbar = self.spice_toolbar(&session_id, cx);
+        let surface = div()
             .id(format!("rdp-surface-{session_id}"))
             .size_full()
             .relative()
@@ -423,11 +463,13 @@ impl NyaTermApp {
             .on_hover(cx.listener(move |this, hovered: &bool, window, _cx| {
                 if release_keyboard_on_exit
                     && !hovered
+                    && !this.spice_pointer_owned(&hover_id)
                     && this.remote_desktop.focus.is_focused(window)
                 {
                     super::keyboard_capture::set_keyboard_capture(
                         this.remote_desktop.manager.clone(),
                         this.remote_desktop.vnc_manager.clone(),
+                        this.remote_desktop.spice_manager.clone(),
                         None,
                     );
                     this.release_remote_keys(&hover_id);
@@ -436,7 +478,10 @@ impl NyaTermApp {
                     // ordinary keyboard focus. The hook may release all inputs.
                 }
             }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if this.release_spice_pointer_shortcut(&event.keystroke, window, cx) {
+                    return;
+                }
                 this.handle_remote_desktop_key_down(&key_down_id, event, cx);
             }))
             .on_modifiers_changed(
@@ -477,6 +522,7 @@ impl NyaTermApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(this.remote_desktop.focus(), cx);
                     this.activate_workspace_pane(left_down_id.clone(), cx);
+                    this.capture_spice_pointer(&left_down_id, window, cx);
                     if this.send_rdp_pointer(
                         &left_down_id,
                         event.position,
@@ -494,6 +540,7 @@ impl NyaTermApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(this.remote_desktop.focus(), cx);
                     this.activate_workspace_pane(right_down_id.clone(), cx);
+                    this.capture_spice_pointer(&right_down_id, window, cx);
                     if this.send_rdp_pointer(
                         &right_down_id,
                         event.position,
@@ -511,6 +558,7 @@ impl NyaTermApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(this.remote_desktop.focus(), cx);
                     this.activate_workspace_pane(middle_down_id.clone(), cx);
+                    this.capture_spice_pointer(&middle_down_id, window, cx);
                     if this.send_rdp_pointer(
                         &middle_down_id,
                         event.position,
@@ -687,8 +735,18 @@ impl NyaTermApp {
                 }
             }))
             .child(canvas)
-            .when_some(input, |this, input| this.child(input))
-            .into_any_element()
+            .when_some(input, |this, input| this.child(input));
+        if let Some(toolbar) = spice_toolbar {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(toolbar)
+                .child(div().flex_1().min_h_0().relative().child(surface))
+                .into_any_element()
+        } else {
+            surface.into_any_element()
+        }
     }
 
     fn rdp_certificate_view(

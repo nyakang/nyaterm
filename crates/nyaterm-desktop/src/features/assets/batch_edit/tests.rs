@@ -28,6 +28,29 @@ fn started_lazy(connections: &[SavedConnection]) -> AssetBatchEditDraft {
     draft.initialize_scopes(connections);
     draft
 }
+
+#[test]
+fn spice_batch_draft_separates_ports_and_clipboard_directions() {
+    let connections: [SavedConnection; 1] = [serde_json::from_value(serde_json::json!({
+        "id":"s", "name":"SPICE", "type":"spice",
+        "endpoint":{"host":"guest", "port":5900,"tls_port":5901},
+        "settings":{"clipboard":"bidirectional"}
+    }))
+    .unwrap()];
+    let mut draft = started(&connections);
+    assert_eq!(draft.display_kind(), Some(ConnectionBatchKind::Spice));
+    draft.set_mode(BatchFieldKey::SpiceTcpPort, BatchEditMode::Clear);
+    draft.set_bool_value(BatchFieldKey::SpiceClipboardToGuest, false);
+    draft.set_mode(BatchFieldKey::SpiceReconnectAttempts, BatchEditMode::Set);
+    draft.set_value(BatchFieldKey::SpiceReconnectAttempts, "8".into());
+    let edits = draft.build_edits().unwrap();
+    let edit = &edits[&Some(ConnectionBatchKind::Spice)];
+    assert_eq!(edit.spice.tcp_port, BatchField::Clear);
+    assert_eq!(edit.spice.tls_port, BatchField::Unchanged);
+    assert_eq!(edit.spice.clipboard_to_guest, BatchField::Set(false));
+    assert_eq!(edit.spice.clipboard_from_guest, BatchField::Unchanged);
+    assert_eq!(edit.spice.reconnect_attempts, BatchField::Set(8));
+}
 #[test]
 fn scopes_preserve_drafts_and_only_apply_to_original_protocols() {
     let connections = [
@@ -90,6 +113,18 @@ fn three_states_require_explicit_clear_and_keep_removes_patch() {
 }
 #[test]
 fn mixed_booleans_require_choice_and_secret_drafts_are_discarded() {
+    // The patch builder is a large generated match. In debug builds its stack
+    // frame can exceed the default 2 MiB test-thread stack after the SPICE
+    // fields were added, so give this case enough headroom.
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(mixed_booleans_require_choice_and_secret_drafts_are_discarded_case)
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread should not panic");
+}
+
+fn mixed_booleans_require_choice_and_secret_drafts_are_discarded_case() {
     let mut draft = AssetBatchEditDraft::default();
     draft.start(
         vec!["a".into()],

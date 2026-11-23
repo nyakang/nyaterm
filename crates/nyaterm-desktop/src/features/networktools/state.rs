@@ -20,7 +20,7 @@ use nyaterm_transport::networktools::{
 use nyaterm_ui::{ChildWindowSlot, NyaWindowHandle};
 
 use super::common::form::BindOption;
-use super::runtime::{
+use nyaterm_transport::networktools::runtime::{
     NetworkToolsRuntime, RuntimeCommand, RuntimeResult, RuntimeSnapshot, ServiceSnapshot,
 };
 

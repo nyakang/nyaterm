@@ -2,6 +2,7 @@
 pub mod ai;
 pub mod encryption;
 pub mod secrets;
+mod spice;
 pub mod trust;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -145,6 +146,7 @@ pub fn valid_fixed_cloud_sync_value(field: &SyncFieldId, value: &Value) -> bool 
     if kind == "connection" && !connection_fields(name).is_empty() {
         return value.as_object().is_some_and(|fields| {
             fields.iter().all(|(key, value)| match key.as_str() {
+                "endpoint" => spice::project_endpoint(value).is_ok_and(|clean| clean == *value),
                 "device" => {
                     value.is_object()
                         && pick(value, &["kind", "serial", "host", "port"]) == *value
@@ -421,12 +423,17 @@ fn project_connection(source: &Value) -> Result<Value, String> {
         "telnet" => &["type", "host", "port", "username"],
         "rdp" => &["type", "host", "port", "username", "domain"],
         "vnc" => &["type", "host", "port", "username"],
+        "spice" => &["type", "endpoint", "username"],
         "ftp" => &["type", "host", "port", "username"],
         "adb" => &["type", "device"],
         "local" | "local_terminal" | "serial" => &["type"],
         _ => return Err("Unsupported connection protocol".into()),
     };
     result["endpoint"] = pick(source, endpoint_fields);
+    if kind == "spice" {
+        result["endpoint"]["endpoint"] =
+            spice::project_endpoint(source.get("endpoint").unwrap_or(&Value::Null))?;
+    }
     if kind == "ftp" {
         result["ftp"] = pick(source, connection_fields("ftp"));
     }
@@ -576,7 +583,11 @@ pub fn apply_record(kind: &str, original: &Value, projected: &Value) -> Result<V
             };
             for (key, value) in group {
                 if connection_fields(field).contains(&key.as_str()) {
+                    if key == "endpoint" {
+                        spice::project_endpoint(value)?;
+                    }
                     let nested_fields: &[&str] = match key.as_str() {
+                        "endpoint" => spice::ENDPOINT_FIELDS,
                         "device" => &["kind", "serial", "host", "port"],
                         "screen" => &["max_size", "max_fps", "bit_rate", "view_only"],
                         "connect_prompt" => SERIAL_CONNECT_PROMPT_FIELDS,
@@ -752,7 +763,9 @@ fn connection_fields(field: &str) -> &'static [&'static str] {
             "ftp_security_mode",
             "ftp_tls_version",
         ],
-        "endpoint" => &["type", "host", "port", "username", "domain", "device"],
+        "endpoint" => &[
+            "type", "host", "port", "username", "domain", "device", "endpoint",
+        ],
         "android" => &["directory", "screen"],
         "placement" => &["group_id", "sort_order", "tree_order"],
         "terminal" => &[
@@ -835,11 +848,16 @@ fn clear_connection_field(result: &mut Value, field: &str) {
             object.remove(field);
         } else {
             for key in connection_fields(field) {
-                if *key == "connect_prompt"
+                let nested_fields = match *key {
+                    "connect_prompt" => SERIAL_CONNECT_PROMPT_FIELDS,
+                    "endpoint" => spice::ENDPOINT_FIELDS,
+                    _ => &[],
+                };
+                if !nested_fields.is_empty()
                     && let Some(prompt) = object.get_mut(*key).and_then(Value::as_object_mut)
                 {
                     // Clearing the known flags must preserve local future options.
-                    for flag in SERIAL_CONNECT_PROMPT_FIELDS {
+                    for flag in nested_fields {
                         prompt.remove(*flag);
                     }
                     if !prompt.is_empty() {

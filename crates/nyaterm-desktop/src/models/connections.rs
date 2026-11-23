@@ -1,8 +1,9 @@
+pub(crate) mod spice;
+
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::Pixels;
 use nyaterm_core::CredentialPromptKind;
 use nyaterm_core::mac_address::MacAddressFormat;
-use rust_i18n::t;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -10,6 +11,7 @@ use std::thread;
 use crate::action_links::{ActionLinkAction, ActionLinkTarget};
 
 use super::event_wake::{ANY_INTEREST, EventWake};
+pub(crate) use nyaterm_connections_gpui::models::{ConnectionEditorSection, ConnectionKindTab};
 
 /// Logical drive letters currently present on this machine (Windows only).
 /// Shared by the drive picker and its toggle handler so an explicit selection
@@ -29,214 +31,6 @@ pub(crate) fn local_drive_letters() -> Vec<char> {
     #[cfg(not(windows))]
     {
         Vec::new()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ConnectionKindTab {
-    Ssh,
-    Local,
-    Telnet,
-    Serial,
-    Rdp,
-    Vnc,
-    Adb,
-    Ftp,
-}
-
-impl ConnectionKindTab {
-    pub(crate) const ALL: [Self; 8] = [
-        Self::Ssh,
-        Self::Local,
-        Self::Telnet,
-        Self::Serial,
-        Self::Rdp,
-        Self::Vnc,
-        Self::Adb,
-        Self::Ftp,
-    ];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Ssh => "SSH",
-            Self::Local => "Local",
-            Self::Telnet => "Telnet",
-            Self::Serial => "Serial",
-            Self::Rdp => "RDP",
-            Self::Vnc => "VNC",
-            Self::Adb => "Android (ADB)",
-            Self::Ftp => "FTP",
-        }
-    }
-
-    pub(crate) fn position_in_all(self) -> Option<usize> {
-        Self::ALL.iter().position(|tab| *tab == self)
-    }
-
-    pub(crate) fn from_connection_type(config: &nyaterm_core::ConnectionType) -> Self {
-        match config {
-            nyaterm_core::ConnectionType::Ssh { .. } => Self::Ssh,
-            nyaterm_core::ConnectionType::LocalTerminal { .. } => Self::Local,
-            nyaterm_core::ConnectionType::Telnet { .. } => Self::Telnet,
-            nyaterm_core::ConnectionType::Serial { .. } => Self::Serial,
-            nyaterm_core::ConnectionType::Rdp { .. } => Self::Rdp,
-            nyaterm_core::ConnectionType::Vnc { .. } => Self::Vnc,
-            nyaterm_core::ConnectionType::Adb { .. } => Self::Adb,
-            nyaterm_core::ConnectionType::Ftp { .. } => Self::Ftp,
-        }
-    }
-
-    pub(crate) fn batch_kind(self) -> nyaterm_core::models::connection_batch::ConnectionBatchKind {
-        use nyaterm_core::models::connection_batch::ConnectionBatchKind;
-        match self {
-            Self::Ssh => ConnectionBatchKind::Ssh,
-            Self::Local => ConnectionBatchKind::LocalTerminal,
-            Self::Telnet => ConnectionBatchKind::Telnet,
-            Self::Serial => ConnectionBatchKind::Serial,
-            Self::Rdp => ConnectionBatchKind::Rdp,
-            Self::Vnc => ConnectionBatchKind::Vnc,
-            Self::Adb => ConnectionBatchKind::Adb,
-            Self::Ftp => ConnectionBatchKind::Ftp,
-        }
-    }
-
-    pub(crate) fn from_batch_kind(
-        kind: nyaterm_core::models::connection_batch::ConnectionBatchKind,
-    ) -> Self {
-        use nyaterm_core::models::connection_batch::ConnectionBatchKind;
-        match kind {
-            ConnectionBatchKind::Ssh => Self::Ssh,
-            ConnectionBatchKind::LocalTerminal => Self::Local,
-            ConnectionBatchKind::Telnet => Self::Telnet,
-            ConnectionBatchKind::Serial => Self::Serial,
-            ConnectionBatchKind::Rdp => Self::Rdp,
-            ConnectionBatchKind::Vnc => Self::Vnc,
-            ConnectionBatchKind::Adb => Self::Adb,
-            ConnectionBatchKind::Ftp => Self::Ftp,
-        }
-    }
-}
-
-/// Navigation state belongs only to the editor draft, never to saved connections.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ConnectionEditorSection {
-    Basic,
-    AndroidScreen,
-    Network,
-    Terminal,
-    Sftp,
-    Forwarding,
-    PostLogin,
-    Algorithms,
-    AutoLogin,
-    Compatibility,
-    Security,
-    Display,
-    Session,
-    Serial,
-    Charset,
-    Advanced,
-}
-
-impl ConnectionEditorSection {
-    /// Sections offered by the editor. "Default session settings" reuses the
-    /// same surface without the basic-info tab, because identity fields never
-    /// carry over between connections.
-    pub(crate) fn for_kind(kind: ConnectionKindTab, defaults_mode: bool) -> &'static [Self] {
-        let sections = Self::for_kind_all_tabs(kind);
-        if defaults_mode {
-            match kind {
-                ConnectionKindTab::Serial => &[Self::Serial, Self::Terminal],
-                _ => &sections[1..],
-            }
-        } else {
-            sections
-        }
-    }
-
-    fn for_kind_all_tabs(kind: ConnectionKindTab) -> &'static [Self] {
-        match kind {
-            ConnectionKindTab::Adb => &[Self::Basic, Self::AndroidScreen],
-            ConnectionKindTab::Ssh => &[
-                Self::Basic,
-                Self::Network,
-                Self::Terminal,
-                Self::Sftp,
-                Self::Forwarding,
-                Self::PostLogin,
-                Self::Algorithms,
-            ],
-            ConnectionKindTab::Telnet => &[
-                Self::Basic,
-                Self::Network,
-                Self::AutoLogin,
-                Self::Terminal,
-                Self::Compatibility,
-            ],
-            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => &[
-                Self::Basic,
-                Self::Network,
-                Self::Security,
-                Self::Display,
-                Self::Session,
-            ],
-            ConnectionKindTab::Serial => &[Self::Basic, Self::Terminal],
-            ConnectionKindTab::Local => &[Self::Basic, Self::Terminal],
-            ConnectionKindTab::Ftp => &[Self::Basic, Self::Charset, Self::Advanced],
-        }
-    }
-
-    pub(crate) fn initial_for_kind(kind: ConnectionKindTab, defaults_mode: bool) -> Self {
-        if defaults_mode {
-            Self::for_kind(kind, true)
-                .first()
-                .copied()
-                .unwrap_or(Self::Basic)
-        } else {
-            Self::Basic
-        }
-    }
-
-    pub(crate) fn id(self) -> &'static str {
-        match self {
-            Self::Basic => "basic",
-            Self::AndroidScreen => "androidScreen",
-            Self::Network => "network",
-            Self::Terminal => "terminal",
-            Self::Sftp => "sftp",
-            Self::Forwarding => "forwarding",
-            Self::PostLogin => "postLogin",
-            Self::Algorithms => "algorithms",
-            Self::AutoLogin => "autoLogin",
-            Self::Compatibility => "compatibility",
-            Self::Security => "security",
-            Self::Display => "display",
-            Self::Session => "session",
-            Self::Serial => "serial",
-            Self::Charset => "charset",
-            Self::Advanced => "advanced",
-        }
-    }
-
-    pub(crate) fn label(self) -> std::borrow::Cow<'static, str> {
-        match self {
-            Self::Basic => t!("dialog.editorSections.basic"),
-            Self::AndroidScreen => t!("android.screenSettings"),
-            Self::Network => t!("dialog.editorSections.network"),
-            Self::Terminal => t!("dialog.editorSections.terminal"),
-            Self::Sftp => t!("dialog.editorSections.sftp"),
-            Self::Forwarding => t!("dialog.editorSections.forwarding"),
-            Self::PostLogin => t!("dialog.editorSections.postLogin"),
-            Self::Algorithms => t!("dialog.editorSections.algorithms"),
-            Self::AutoLogin => t!("dialog.editorSections.autoLogin"),
-            Self::Compatibility => t!("dialog.editorSections.compatibility"),
-            Self::Security => t!("dialog.editorSections.security"),
-            Self::Display => t!("dialog.editorSections.display"),
-            Self::Session => t!("dialog.editorSections.session"),
-            Self::Serial => t!("dialog.editorSections.serial"),
-            Self::Charset => t!("dialog.editorSections.charset"),
-            Self::Advanced => t!("dialog.editorSections.advanced"),
-        }
     }
 }
 
@@ -354,6 +148,12 @@ pub(crate) enum ConnectionEditorField {
     RdpCustomDrivePath,
     RdpReconnectAttempts,
     VncReconnectAttempts,
+    SpiceTcpPort,
+    SpiceTlsPort,
+    SpiceProxy,
+    SpiceCaPem,
+    SpiceCertificateSubject,
+    SpiceReconnectAttempts,
     FtpInitialDirectory,
     FtpLocalInitialDirectory,
     FtpConnectTimeout,
@@ -404,10 +204,14 @@ impl ConnectionEditorField {
             | Self::TelnetAutoLoginSuccessPrompt
             | Self::TelnetAutoLoginFailurePrompt
             | Self::TelnetAutoLoginMaxRetries => ConnectionEditorSection::AutoLogin,
+            Self::SpiceTcpPort | Self::SpiceTlsPort => ConnectionEditorSection::Basic,
+            Self::SpiceProxy => ConnectionEditorSection::Network,
+            Self::SpiceCaPem | Self::SpiceCertificateSubject => ConnectionEditorSection::Security,
+            Self::SpiceReconnectAttempts => ConnectionEditorSection::Session,
             Self::RdpDisplayWidth | Self::RdpDisplayHeight => ConnectionEditorSection::Display,
-            Self::RdpCustomDrivePath
-            | Self::RdpReconnectAttempts
-            | Self::VncReconnectAttempts => ConnectionEditorSection::Session,
+            Self::RdpCustomDrivePath | Self::RdpReconnectAttempts | Self::VncReconnectAttempts => {
+                ConnectionEditorSection::Session
+            }
             Self::FtpInitialDirectory
             | Self::FtpLocalInitialDirectory
             | Self::FtpConnectTimeout => ConnectionEditorSection::Advanced,
@@ -542,6 +346,7 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) rdp_redirection: nyaterm_core::RdpRedirectionSettings,
     pub(crate) rdp_reconnect: nyaterm_core::RdpReconnectSettings,
 
+    pub(crate) spice: spice::SpiceEditorDraft,
     pub(crate) vnc_security: nyaterm_core::VncSecuritySettings,
     pub(crate) vnc_display: nyaterm_core::VncDisplaySettings,
     pub(crate) vnc_clipboard: nyaterm_core::VncClipboardSettings,
@@ -676,6 +481,7 @@ impl ConnectionEditorState {
             ConnectionKindTab::Telnet => "23",
             ConnectionKindTab::Rdp => "3389",
             ConnectionKindTab::Vnc => "5900",
+            ConnectionKindTab::Spice => "5901",
             ConnectionKindTab::Adb => "5555",
             _ => "",
         };
@@ -757,7 +563,9 @@ impl ConnectionEditorState {
     pub(crate) fn password_account_id(&self) -> Option<&str> {
         match self.kind {
             ConnectionKindTab::Ssh | ConnectionKindTab::Telnet => self.account_id.as_deref(),
-            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc => self.password_id.as_deref(),
+            ConnectionKindTab::Rdp | ConnectionKindTab::Vnc | ConnectionKindTab::Spice => {
+                self.password_id.as_deref()
+            }
             _ => None,
         }
         .filter(|id| !id.is_empty())

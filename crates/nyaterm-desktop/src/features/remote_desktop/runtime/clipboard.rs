@@ -31,6 +31,9 @@ impl NyaTermApp {
     }
 
     pub(super) fn poll_active_rdp_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.security.screen_locked() {
+            return false;
+        }
         let Some(session_id) = self.session.active_id_owned() else {
             return false;
         };
@@ -57,6 +60,15 @@ impl NyaTermApp {
                     }
                     crate::models::SessionLaunchConfig::Vnc(config) if config.clipboard.enabled => {
                         Some(RemoteDesktopClipboardTarget::Vnc)
+                    }
+                    crate::models::SessionLaunchConfig::Spice(config)
+                        if config.session.settings.clipboard.can_send()
+                            && active_session
+                                .spice
+                                .as_ref()
+                                .is_some_and(|s| s.capabilities.clipboard) =>
+                    {
+                        Some(RemoteDesktopClipboardTarget::Spice)
                     }
                     _ => None,
                 });
@@ -94,6 +106,16 @@ impl NyaTermApp {
                     session.error = Some(error.into());
                 }
             }
+            RemoteDesktopClipboardTarget::Spice => {
+                if let Err(error) = self.remote_desktop.spice_manager.send(
+                    &session_id,
+                    nyaterm_remote_desktop::spice::protocol::SpiceControl::Clipboard {
+                        text: text.into(),
+                    },
+                ) {
+                    session.error = Some(super::spice::spice_error(error));
+                }
+            }
             RemoteDesktopClipboardTarget::Vnc => {
                 if let Err(error) = self
                     .remote_desktop
@@ -112,6 +134,7 @@ impl NyaTermApp {
 enum RemoteDesktopClipboardTarget {
     Rdp,
     Vnc,
+    Spice,
 }
 
 #[cfg(target_os = "windows")]

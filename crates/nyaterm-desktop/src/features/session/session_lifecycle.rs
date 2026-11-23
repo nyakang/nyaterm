@@ -174,7 +174,9 @@ impl NyaTermApp {
                     cx,
                 );
             }
-            SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_) => {
+            SessionLaunchConfig::Rdp(_)
+            | SessionLaunchConfig::Vnc(_)
+            | SessionLaunchConfig::Spice(_) => {
                 self.shell
                     .set_status("remote desktop duplication is not available".to_string());
                 self.shell.show_workspace();
@@ -496,7 +498,9 @@ impl NyaTermApp {
         };
         if matches!(
             metadata.launch_config,
-            SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_)
+            SessionLaunchConfig::Rdp(_)
+                | SessionLaunchConfig::Vnc(_)
+                | SessionLaunchConfig::Spice(_)
         ) {
             self.retry_rdp_runtime(&session_id, cx);
             return;
@@ -724,7 +728,9 @@ impl NyaTermApp {
                     cx,
                 );
             }
-            SessionLaunchConfig::Rdp(_) | SessionLaunchConfig::Vnc(_) => {
+            SessionLaunchConfig::Rdp(_)
+            | SessionLaunchConfig::Vnc(_)
+            | SessionLaunchConfig::Spice(_) => {
                 self.session.finish_busy_action(&old_id);
                 self.shell
                     .set_status("Use Retry in the remote desktop view to reconnect".to_string());

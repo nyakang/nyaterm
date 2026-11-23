@@ -279,16 +279,9 @@ impl NyaTermApp {
             return;
         }
         if id == "connection-editor-kind" {
-            if let Some(kind) = [
-                crate::models::ConnectionKindTab::Ssh,
-                crate::models::ConnectionKindTab::Local,
-                crate::models::ConnectionKindTab::Telnet,
-                crate::models::ConnectionKindTab::Serial,
-                crate::models::ConnectionKindTab::Rdp,
-                crate::models::ConnectionKindTab::Vnc,
-            ]
-            .into_iter()
-            .find(|kind| kind.label() == value)
+            if let Some(kind) = crate::models::ConnectionKindTab::ALL
+                .into_iter()
+                .find(|kind| kind.persistence_id() == value)
             {
                 self.set_connection_editor_kind(kind, cx);
             }

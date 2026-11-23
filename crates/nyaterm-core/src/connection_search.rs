@@ -110,6 +110,7 @@ impl ConnectionSearch {
             | ConnectionType::Telnet { host, .. }
             | ConnectionType::Rdp { host, .. }
             | ConnectionType::Vnc { host, .. } => host.as_str(),
+            ConnectionType::Spice { endpoint, .. } => endpoint.host.expose_secret(),
             ConnectionType::Adb {
                 device: crate::models::android::AdbDeviceSelector::Tcp { host, .. },
                 ..

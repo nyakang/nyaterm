@@ -2,6 +2,9 @@ use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::remote::list_window::{ACCELERATOR_PROCESS_VIEWPORT_ROWS, max_list_offset};
 use crate::features::runtime_jobs::{GpuJobResult, NpuJobResult};
 use futures::channel::mpsc::UnboundedReceiver;
+pub(in crate::features) use nyaterm_remote_monitor_gpui::presentation::{
+    GpuPresentationState, NpuPresentationState,
+};
 use nyaterm_remote_ops::ascend_npu::RemoteNpuOverview;
 use nyaterm_remote_ops::gpu::RemoteGpuOverview;
 pub(in crate::features) use nyaterm_remote_ops::query::accelerator::AcceleratorProcessList;
@@ -32,28 +35,6 @@ struct AcceleratorDerivedKey {
 struct AcceleratorDerivedCache<Process> {
     key: AcceleratorDerivedKey,
     items: Arc<[Process]>,
-}
-
-#[derive(Clone)]
-pub(in crate::features) struct GpuPresentationState {
-    pub data: Option<RemoteGpuOverview>,
-    pub status: String,
-    pub search_draft: String,
-    pub expanded_devices: HashSet<String>,
-    pub process_list_offset: usize,
-    pub pending: bool,
-    pub consecutive_refresh_failures: u8,
-}
-
-#[derive(Clone)]
-pub(in crate::features) struct NpuPresentationState {
-    pub data: Option<RemoteNpuOverview>,
-    pub status: String,
-    pub search_draft: String,
-    pub expanded_devices: HashSet<String>,
-    pub process_list_offset: usize,
-    pub pending: bool,
-    pub consecutive_refresh_failures: u8,
 }
 
 impl<Data: AcceleratorProcessList, Event> AcceleratorPaneState<Data, Event> {

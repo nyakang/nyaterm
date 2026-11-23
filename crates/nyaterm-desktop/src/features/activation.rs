@@ -1,3 +1,5 @@
+mod spice;
+mod spice_file;
 mod state;
 mod view;
 
@@ -95,12 +97,14 @@ impl NyaTermApp {
             || !self.shell.terminal_windows_restore_is_complete()
             || self.session.external_start_is_busy()
             || window.has_active_nya_dialog(cx)
+            || self.activation.spice_loading.is_some()
         {
             return true;
         }
         self.activation.waiting_for_start = false;
         if let Some(dialog) = self.activation.dialog.clone() {
             match dialog {
+                ExternalDialog::Spice { .. } => self.open_spice_import_dialog(window, cx),
                 ExternalDialog::Choose { .. } => self.open_external_match_dialog(window, cx),
                 ExternalDialog::Confirm { connection, mode } => {
                     self.open_confirm_dialog_with_cancel(
@@ -212,6 +216,10 @@ impl NyaTermApp {
     ) {
         self.activation.waiting_for_start = true;
         match request {
+            ExternalConnectionRequest::SpiceFile { path } => {
+                self.load_spice_file(path, cx);
+                return;
+            }
             ExternalConnectionRequest::Local { cwd } => {
                 let mut config = LocalSessionConfig {
                     working_dir: cwd.map(Into::into),

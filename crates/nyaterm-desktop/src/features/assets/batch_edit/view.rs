@@ -510,7 +510,9 @@ impl NyaTermApp {
             } else {
                 let multi_line = matches!(
                     field,
-                    BatchFieldKey::Description | BatchFieldKey::PostLoginCommand
+                    BatchFieldKey::Description
+                        | BatchFieldKey::PostLoginCommand
+                        | BatchFieldKey::SpiceCaPem
                 );
                 div()
                     .w_full()

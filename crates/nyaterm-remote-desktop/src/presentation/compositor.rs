@@ -9,8 +9,9 @@ use super::{VncPresentation, VncPresentationId, VncUploadRegion};
 const TILE_SIZE: u32 = 64;
 const MAX_UPLOAD_REGIONS: usize = 64;
 
-pub(super) struct Compositor {
+pub(crate) struct Compositor {
     framebuffer: Option<Framebuffer>,
+    limits: crate::FramebufferLimits,
     changed: Vec<u64>,
     columns: u32,
     revision: u64,
@@ -26,6 +27,7 @@ impl Default for Compositor {
     fn default() -> Self {
         Self {
             framebuffer: None,
+            limits: VNC_FRAMEBUFFER_LIMITS,
             changed: Vec::new(),
             columns: 0,
             revision: 0,
@@ -40,12 +42,27 @@ impl Default for Compositor {
 }
 
 impl Compositor {
-    pub(super) fn reset(&mut self, epoch: u64, width: u32, height: u32) -> Result<(), VncError> {
+    pub(crate) fn with_limits(limits: crate::FramebufferLimits) -> Self {
+        Self {
+            limits,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn bounds(&self) -> Option<DirtyRect> {
+        self.framebuffer.as_ref().map(|fb| DirtyRect {
+            x: 0,
+            y: 0,
+            width: fb.width(),
+            height: fb.height(),
+        })
+    }
+
+    pub(crate) fn reset(&mut self, epoch: u64, width: u32, height: u32) -> Result<(), VncError> {
         // Release the old allocation before reserving the replacement quota.
         self.framebuffer = None;
-        self.framebuffer = Some(
-            Framebuffer::new(epoch, width, height, VNC_FRAMEBUFFER_LIMITS).map_err(frame_error)?,
-        );
+        self.framebuffer =
+            Some(Framebuffer::new(epoch, width, height, self.limits).map_err(frame_error)?);
         self.columns = width.div_ceil(TILE_SIZE);
         self.changed = vec![0; (self.columns * height.div_ceil(TILE_SIZE)) as usize];
         self.revision = 0;
@@ -56,7 +73,7 @@ impl Compositor {
         Ok(())
     }
 
-    pub(super) fn apply(&mut self, frame: &RemoteFrameEvent) -> Result<(), VncError> {
+    pub(crate) fn apply(&mut self, frame: &RemoteFrameEvent) -> Result<(), VncError> {
         let Some(framebuffer) = self.framebuffer.as_mut() else {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
@@ -85,7 +102,7 @@ impl Compositor {
         Ok(())
     }
 
-    pub(super) fn complete(&mut self, epoch: u64, sequence: u64) -> Result<(), VncError> {
+    pub(crate) fn complete(&mut self, epoch: u64, sequence: u64) -> Result<(), VncError> {
         let Some(framebuffer) = self.framebuffer.as_ref() else {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
@@ -108,14 +125,14 @@ impl Compositor {
         Ok(())
     }
 
-    pub(super) fn set_generation(&mut self, generation: u64) {
+    pub(crate) fn set_generation(&mut self, generation: u64) {
         if self.generation != generation {
             self.generation = generation;
             self.full_required = true;
         }
     }
 
-    pub(super) fn acknowledge(&mut self, id: VncPresentationId) {
+    pub(crate) fn acknowledge(&mut self, id: VncPresentationId) {
         if self
             .framebuffer
             .as_ref()
@@ -133,11 +150,11 @@ impl Compositor {
         self.full_required = false;
     }
 
-    pub(super) fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.complete && (self.full_required || self.changed.iter().any(|value| *value != 0))
     }
 
-    pub(super) fn id(&self) -> Option<VncPresentationId> {
+    pub(crate) fn id(&self) -> Option<VncPresentationId> {
         self.framebuffer.as_ref().map(|fb| VncPresentationId {
             epoch: fb.epoch(),
             generation: self.generation,
@@ -145,35 +162,63 @@ impl Compositor {
         })
     }
 
-    pub(super) fn prepare(&self) -> Result<VncPresentation, VncError> {
+    pub(crate) fn prepare(&self) -> Result<VncPresentation, VncError> {
+        self.prepare_crop(self.bounds().expect("prepare requires a ready compositor"))
+    }
+
+    pub(crate) fn prepare_crop(&self, crop: DirtyRect) -> Result<VncPresentation, VncError> {
         let fb = self
             .framebuffer
             .as_ref()
             .expect("prepare requires a ready compositor");
-        let mut rects = tile_runs(&self.changed, self.columns, fb.width(), fb.height());
+        if crop.width == 0
+            || crop.height == 0
+            || u64::from(crop.x) + u64::from(crop.width) > u64::from(fb.width())
+            || u64::from(crop.y) + u64::from(crop.height) > u64::from(fb.height())
+        {
+            return Err(VncError::new(
+                VncErrorKind::Protocol,
+                "invalid presentation crop",
+            ));
+        }
+        let mut rects: Vec<_> = tile_runs(&self.changed, self.columns, fb.width(), fb.height())
+            .into_iter()
+            .filter_map(|rect| {
+                let x = rect.x.max(crop.x);
+                let y = rect.y.max(crop.y);
+                let right = (rect.x + rect.width).min(crop.x + crop.width);
+                let bottom = (rect.y + rect.height).min(crop.y + crop.height);
+                (right > x && bottom > y).then(|| DirtyRect {
+                    x,
+                    y,
+                    width: right - x,
+                    height: bottom - y,
+                })
+            })
+            .collect();
         let area: u64 = rects
             .iter()
             .map(|r| u64::from(r.width) * u64::from(r.height))
             .sum();
         let full = self.full_required
             || rects.len() > MAX_UPLOAD_REGIONS
-            || area * 100 >= u64::from(fb.width()) * u64::from(fb.height()) * 60;
+            || area * 100 >= u64::from(crop.width) * u64::from(crop.height) * 60;
         if full {
-            rects = vec![DirtyRect {
-                x: 0,
-                y: 0,
-                width: fb.width(),
-                height: fb.height(),
-            }];
+            rects = vec![crop];
         }
         let regions = rects
             .into_iter()
-            .map(|rect| pack(fb, rect))
+            .map(|rect| {
+                let mut region = pack(fb, rect)?;
+                region.rect.x -= crop.x;
+                region.rect.y -= crop.y;
+                Ok(region)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(VncPresentation {
             id: self.id().expect("framebuffer is present"),
-            width: fb.width(),
-            height: fb.height(),
+            width: crop.width,
+            height: crop.height,
             full,
             regions,
             completed_at: self.completed_at,

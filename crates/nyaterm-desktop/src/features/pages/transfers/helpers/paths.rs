@@ -105,20 +105,7 @@ pub(in crate::features::pages::transfers) fn transfer_path_part_value(
     }
 }
 
-pub(in crate::features) fn format_sftp_modified(value: Option<u32>) -> String {
-    let Some(seconds) = value.filter(|seconds| *seconds > 0) else {
-        return "-".to_string();
-    };
-    let Ok(timestamp) = time::OffsetDateTime::from_unix_timestamp(i64::from(seconds)) else {
-        return "-".to_string();
-    };
-    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-    let format = time::macros::format_description!("[year]/[month]/[day] [hour]:[minute]");
-    timestamp
-        .to_offset(offset)
-        .format(&format)
-        .unwrap_or_else(|_| "-".to_string())
-}
+pub(in crate::features) use nyaterm_file_browser_gpui::formatting::format_sftp_modified;
 
 #[cfg(test)]
 mod tests {

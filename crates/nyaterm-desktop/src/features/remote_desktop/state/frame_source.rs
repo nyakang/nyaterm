@@ -4,6 +4,11 @@ use nyaterm_remote_desktop::presentation::VncPresentationId;
 /// VNC pixels belong to its background compositor; desktop keeps only GPU metadata.
 pub(in crate::features::remote_desktop) enum RemoteDesktopFrameSource {
     Rdp(Framebuffer),
+    Spice {
+        width: u32,
+        height: u32,
+        id: nyaterm_remote_desktop::spice::presentation::SpicePresentationId,
+    },
     Vnc {
         width: u32,
         height: u32,
@@ -32,28 +37,28 @@ impl RemoteDesktopFrameSource {
     pub(in crate::features::remote_desktop) fn width(&self) -> u32 {
         match self {
             Self::Rdp(framebuffer) => framebuffer.width(),
-            Self::Vnc { width, .. } => *width,
+            Self::Vnc { width, .. } | Self::Spice { width, .. } => *width,
         }
     }
 
     pub(in crate::features::remote_desktop) fn height(&self) -> u32 {
         match self {
             Self::Rdp(framebuffer) => framebuffer.height(),
-            Self::Vnc { height, .. } => *height,
+            Self::Vnc { height, .. } | Self::Spice { height, .. } => *height,
         }
     }
 
     pub(in crate::features::remote_desktop) fn as_rdp(&self) -> Option<&Framebuffer> {
         match self {
             Self::Rdp(framebuffer) => Some(framebuffer),
-            Self::Vnc { .. } => None,
+            Self::Vnc { .. } | Self::Spice { .. } => None,
         }
     }
 
     pub(in crate::features::remote_desktop) fn as_rdp_mut(&mut self) -> Option<&mut Framebuffer> {
         match self {
             Self::Rdp(framebuffer) => Some(framebuffer),
-            Self::Vnc { .. } => None,
+            Self::Vnc { .. } | Self::Spice { .. } => None,
         }
     }
 }

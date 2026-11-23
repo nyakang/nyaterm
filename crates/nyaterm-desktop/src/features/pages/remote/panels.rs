@@ -1,615 +1,38 @@
-//! The five remote panels that poll a host, as GPUI entities.
-//!
-//! Stats, GPU, NPU, Processes and Docker each show data fetched from the active SSH
-//! session on an interval. Until Phase 4 they were built inline by `panel_body`, and
-//! the schedule that fetched their data lived in one shell-wide clock
-//! (`features/shell/remote_refresh.rs`).
-//!
-//! **What these entities own is the schedule, not the data.**
-//! `NyaTermApp.remote_ops` stays the single authoritative owner of every pane's data,
-//! in-flight job, failure streak and `last_refresh_at`, and the decision of whether a
-//! refresh is due stays with it -- a panel asks "refresh if due" and the app answers.
-//! The panel owns only the timer that does the asking, which is the thing that was in
-//! the wrong place.
-//!
-//! One type with a `kind` discriminant rather than five near-identical types: five
-//! instances are five entities with five entity ids, so they are as isolated as five
-//! types would be, and the two matches below are smaller than the duplication.
-//!
-//! These are held by `NyaTermApp` for its whole life, so a hidden panel is **not**
-//! dropped -- "not rendered" is not observable as a drop. That is deliberate rather
-//! than incidental: the header status bar can want stats, GPU or NPU while the
-//! matching panel is closed, so the entity has to outlive its own visibility to be
-//! able to own that demand.
-//!
-//! Nothing here observes the app. A view embedded with `into_any_element` takes
-//! GPUI's uncached path, whose `request_layout` calls `render` every frame, so a
-//! child view of the app is repainted by the app's own paint and a
-//! `cx.observe(&app, ..)` would buy nothing but coupling.
-
-use super::docker_view::docker_panel;
-use super::process::{process_display_mode, process_row_height_px};
-use super::process_view::processes_panel;
-use super::stats_view::{NetworkCardPresentation, gpu_panel, npu_panel, stats_panel};
 use crate::features::NyaTermApp;
-use crate::features::remote::{
-    DockerDerivedItems, DockerPresentationState, GpuPresentationState, NpuPresentationState,
-    ProcessPresentationState, StatsPresentationState,
-};
+use crate::features::remote::remote_runtime::host_tools::HostInteractionIdentity;
 use crate::features::text_inputs::TextInputSetup;
-use crate::models::{DockerTab, NavItem};
-use crate::theme::ThemePalette;
-use gpui::{
-    Context, Entity, IntoElement, ListAlignment, ListOffset, ListState, Render, Rgba, ScrollHandle,
-    ScrollStrategy, Task, UniformListScrollHandle, WeakEntity, Window, div, prelude::*, px,
+use crate::models::NavItem;
+use gpui::{AppContext as _, Context, Entity, WeakEntity, Window};
+use nyaterm_remote_monitor_gpui::actions::{
+    HostInteractionToken, RemoteMonitorAction, RemoteMonitorActionHandler,
 };
-use nyaterm_remote_ops::ascend_npu::RemoteNpuProcess;
-use nyaterm_remote_ops::gpu::RemoteGpuProcess;
-use nyaterm_remote_ops::process_control::ProcessControlCapabilities;
-use nyaterm_remote_ops::remote_process::RemoteProcess;
-use nyaterm_ui::{
-    NyaInputState, NyaNumberInputOptions, NyaNumberInputState, NyaSelectOption, NyaSelectState,
+pub(in crate::features) use nyaterm_remote_monitor_gpui::panels::RemoteMonitorKind;
+use nyaterm_remote_monitor_gpui::panels::{
+    DockerSnapshot, PanelChrome, RemoteMonitorData, RemoteMonitorKey, RemoteMonitorPanel,
+    RemoteMonitorSnapshot,
 };
+use nyaterm_ui::{NyaNumberInputOptions, NyaSelectOption};
 use rust_i18n::t;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-/// How often a polling panel asks whether its own interval has come due.
-///
-/// The per-panel intervals are user settings in whole seconds floored at one, so a
-/// one-second clock is exactly as fine as the finest thing it can service. This is
-/// the cadence the one shell-wide clock used, kept unchanged; what moved is who owns
-/// it. Sleeping straight to the next due moment instead would mean a settings change
-/// mid-sleep landing up to a whole interval late.
-const REMOTE_PANEL_POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Which of the five polling panels an entity is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::features) enum RemoteMonitorKind {
-    Stats,
-    Gpu,
-    Npu,
-    Processes,
-    Docker,
+use std::rc::Rc;
+use std::time::Instant;
+trait RemoteMonitorNavigation {
+    fn nav_item(self) -> NavItem;
 }
-
-impl RemoteMonitorKind {
-    pub(in crate::features) const ALL: [RemoteMonitorKind; 5] = [
-        RemoteMonitorKind::Stats,
-        RemoteMonitorKind::Gpu,
-        RemoteMonitorKind::Npu,
-        RemoteMonitorKind::Processes,
-        RemoteMonitorKind::Docker,
-    ];
-
-    /// The nav item whose panel shows this metric.
-    pub(in crate::features) fn nav_item(self) -> NavItem {
+impl RemoteMonitorNavigation for RemoteMonitorKind {
+    fn nav_item(self) -> NavItem {
         match self {
-            RemoteMonitorKind::Stats => NavItem::Stats,
-            RemoteMonitorKind::Gpu => NavItem::GpuMonitor,
-            RemoteMonitorKind::Npu => NavItem::AscendNpuMonitor,
-            RemoteMonitorKind::Processes => NavItem::Processes,
-            RemoteMonitorKind::Docker => NavItem::Docker,
+            Self::Stats => NavItem::Stats,
+            Self::Gpu => NavItem::GpuMonitor,
+            Self::Npu => NavItem::AscendNpuMonitor,
+            Self::Processes => NavItem::Processes,
+            Self::Docker => NavItem::Docker,
         }
     }
 }
-
-/// Colours a polling panel needs, already resolved.
-///
-/// The views used to call `theme_palette()` and `shell_transparent_color(..)` on the app
-/// while rendering. Resolving them into the snapshot is what lets a panel render without
-/// touching `NyaTermApp` at all -- and that matters beyond tidiness, because GPUI records
-/// every entity read during a view's render as a dependency of that view. One app read
-/// here would re-dirty the panel on every unrelated `app.notify()` and undo the whole
-/// point.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::features) struct PanelChrome {
-    pub palette: ThemePalette,
-    /// `shell_transparent_color(palette.surface)`.
-    pub transparent_surface: Rgba,
-    /// `shell_surface_color(palette.surface)`, which the process and Docker row menus
-    /// sit on.
-    pub surface: Rgba,
-    /// `shell_transparent_color(palette.section_header)`, the Docker section headers.
-    pub transparent_section_header: Rgba,
-}
-
-/// Everything a Stats/GPU/NPU panel renders from.
-///
-/// Carries the pane revision it was built at, so a flush can skip a panel that is already
-/// current and a boundary-time assertion can confirm none was left behind.
-pub(in crate::features) struct RemoteMonitorSnapshot {
-    key: RemoteMonitorKey,
-    data: RemoteMonitorData,
-}
-
-/// Everything outside the pane data that a snapshot depends on.
-///
-/// The pane revision alone is not enough: the theme, whether a session is active, and the
-/// right-panel width all change the rendered output without touching `remote_ops`, so a
-/// flush keyed on the revision alone would skip a panel that needs rebuilding.
-///
-/// **This is a safety net for a flush that runs, not a replacement for the boundaries.**
-/// A boundary that is never reached never compares anything, so a missed boundary is still
-/// a stale panel -- which is why the freshness tests drive each one rather than trusting
-/// the key. The explicit boundary list stays the discipline; the key only stops a flush
-/// from concluding "nothing changed" when something outside the pane did.
-#[derive(Clone, Debug, PartialEq)]
-struct RemoteMonitorKey {
-    revision: u64,
-    host_identity: crate::features::remote::remote_runtime::host_tools::HostInteractionIdentity,
-    process_control: ProcessControlCapabilities,
-    local_unsupported: bool,
-    chrome: PanelChrome,
-    has_session: bool,
-    ssh_compatibility_mode: bool,
-    /// Right-panel width, which decides the process table's columns and row heights.
-    /// Zero for the panes that do not depend on it.
-    panel_width: f32,
-    /// Whether the Stats pane lists logged-in users. Always false for the other panes.
-    show_users: bool,
-    stats_interval: u32,
-}
-
-pub(in crate::features) enum RemoteMonitorData {
-    Stats {
-        state: StatsPresentationState,
-        network_select: Entity<NyaSelectState>,
-    },
-    Gpu {
-        state: GpuPresentationState,
-        processes: Arc<[RemoteGpuProcess]>,
-        /// The search field's state entity, owned by the app's input registry and handed
-        /// over so the panel can build the element without asking for it. Reading this
-        /// entity during render is *wanted*: typing notifies it, which invalidates this
-        /// panel and nothing else.
-        search: Entity<NyaInputState>,
-    },
-    Npu {
-        state: NpuPresentationState,
-        processes: Arc<[RemoteNpuProcess]>,
-        search: Entity<NyaInputState>,
-    },
-    Processes {
-        state: ProcessPresentationState,
-        processes: Arc<[RemoteProcess]>,
-        search: Entity<NyaInputState>,
-        /// Only built while a process is selected, and keyed per pid.
-        nice: Option<Entity<NyaNumberInputState>>,
-        sort: Entity<NyaSelectState>,
-    },
-    /// Boxed because it is far the largest variant -- `DockerPresentationState` alone
-    /// carries fourteen fields including an inline `Option<DockerContainerDetails>` -- and
-    /// leaving it unboxed makes every variant pay for it. One allocation per Docker
-    /// snapshot build is the cheaper side of that trade.
-    Docker(Box<DockerSnapshot>),
-}
-
-pub(in crate::features) struct DockerSnapshot {
-    state: DockerPresentationState,
-    /// The filtered list for the effective tab; every variant is already `Arc`-backed.
-    derived: DockerDerivedItems,
-    effective_tab: DockerTab,
-    search: Entity<NyaInputState>,
-}
-
-/// One remote polling panel.
-pub(in crate::features) struct RemoteMonitorPanel {
-    kind: RemoteMonitorKind,
-    /// Weak on purpose. `NyaTermApp` owns this entity, so a strong handle back would
-    /// be a reference cycle that keeps both alive forever. The app always outlives
-    /// the panels it owns, so the upgrade below only fails during teardown.
-    app: WeakEntity<NyaTermApp>,
-    /// The refresh schedule, and the only record of whether this panel is wanted.
-    ///
-    /// A `Task` cancels when dropped, so `None` is not merely a flag saying the panel
-    /// should not poll -- it is the poll being gone. That makes "an inactive panel
-    /// does not poll" a property of the type rather than of a predicate somebody has
-    /// to remember to check, and it is why there is no separate `demand: bool`: the
-    /// task's existence *is* the demand, so the two cannot disagree.
-    clock: Option<Task<()>>,
-    /// The snapshot this panel renders from.
-    snapshot: Option<RemoteMonitorSnapshot>,
-    /// Display time advanced by the existing polling task, without rebuilding data.
-    network_clock: Instant,
-    network_scroll: ScrollHandle,
-    /// Variable-height process rows live here because expanding a process changes only
-    /// that row's measured height. The panel entity is the authoritative UI owner.
-    process_list: ListState,
-    /// Docker keeps separate positions for containers and the resource tabs, matching
-    /// the two independent offsets the old wheel-only implementation exposed.
-    docker_container_scroll: UniformListScrollHandle,
-    docker_resource_scroll: UniformListScrollHandle,
-    /// Paints of *this entity*, so a test can tell the entity route apart from the
-    /// inline views it replaced. Both register the same search-input ids, so no
-    /// externally visible side effect distinguishes them.
-    #[cfg(test)]
-    paint_count: usize,
-}
-
-impl RemoteMonitorPanel {
-    /// Every pane kind renders from a snapshot rather than reading app state in `render`.
-    pub(in crate::features::pages::remote) const SNAPSHOT_KINDS: [RemoteMonitorKind; 5] = [
-        RemoteMonitorKind::Stats,
-        RemoteMonitorKind::Gpu,
-        RemoteMonitorKind::Npu,
-        RemoteMonitorKind::Processes,
-        RemoteMonitorKind::Docker,
-    ];
-
-    /// Run `f` against the app and queue the snapshot flush after the panel lease ends.
-    ///
-    /// Every panel-initiated mutation goes through here, which makes the panel its own
-    /// flush boundary: no callback has to remember a separate step. Event handlers lease
-    /// this panel while they run, so the flush is deferred until that lease is released.
-    /// This method is called from event handlers, never from render.
-    pub(in crate::features::pages::remote) fn with_app<R: Default>(
-        &self,
-        cx: &mut Context<Self>,
-        f: impl FnOnce(&mut NyaTermApp, &mut Context<NyaTermApp>) -> R,
-    ) -> R {
-        let Some(app) = self.app.upgrade() else {
-            return R::default();
-        };
-        app.update(cx, |app, cx| {
-            let result = f(app, cx);
-            app.defer_remote_panel_snapshot_flush(cx);
-            result
-        })
-    }
-
-    /// The pane revision this panel last received, if any.
-    #[cfg(test)]
-    pub(in crate::features::pages::remote) fn snapshot_revision(&self) -> Option<u64> {
-        self.snapshot.as_ref().map(|snapshot| snapshot.key.revision)
-    }
-
-    fn snapshot_key(&self) -> Option<RemoteMonitorKey> {
-        self.snapshot.as_ref().map(|snapshot| snapshot.key.clone())
-    }
-
-    fn set_snapshot(&mut self, snapshot: RemoteMonitorSnapshot, cx: &mut Context<Self>) {
-        if self
-            .snapshot
-            .as_ref()
-            .is_some_and(|old| old.key.host_identity != snapshot.key.host_identity)
-        {
-            self.network_scroll = ScrollHandle::new();
-        }
-        self.network_clock = Instant::now();
-        self.reconcile_scroll_state(&snapshot);
-        self.snapshot = Some(snapshot);
-        // Notifies this panel only. The app is untouched, so nothing else repaints.
-        cx.notify();
-    }
-
-    fn new(kind: RemoteMonitorKind, app: WeakEntity<NyaTermApp>) -> Self {
-        Self {
-            kind,
-            app,
-            clock: None,
-            snapshot: None,
-            network_clock: Instant::now(),
-            network_scroll: ScrollHandle::new(),
-            process_list: ListState::new(0, ListAlignment::Top, px(256.)),
-            docker_container_scroll: UniformListScrollHandle::new(),
-            docker_resource_scroll: UniformListScrollHandle::new(),
-            #[cfg(test)]
-            paint_count: 0,
-        }
-    }
-
-    fn reconcile_scroll_state(&mut self, snapshot: &RemoteMonitorSnapshot) {
-        match &snapshot.data {
-            RemoteMonitorData::Processes {
-                state, processes, ..
-            } => {
-                let (reset_to_top, needs_reset) =
-                    self.snapshot.as_ref().map_or((true, true), |previous| {
-                        let RemoteMonitorData::Processes {
-                            state: previous_state,
-                            processes: previous_processes,
-                            ..
-                        } = &previous.data
-                        else {
-                            return (true, true);
-                        };
-                        let reset_to_top = previous.key.has_session != snapshot.key.has_session
-                            || previous_state.search_draft != state.search_draft
-                            || previous_state.sort_key != state.sort_key
-                            || previous_state.sort_direction != state.sort_direction;
-                        let previous_selected_index = previous_state.selected_pid.and_then(|pid| {
-                            previous_processes
-                                .iter()
-                                .position(|process| process.pid == pid)
-                        });
-                        let selected_index = state.selected_pid.and_then(|pid| {
-                            processes.iter().position(|process| process.pid == pid)
-                        });
-                        let previous_mode = process_display_mode(previous.key.panel_width);
-                        let mode = process_display_mode(snapshot.key.panel_width);
-                        (
-                            reset_to_top,
-                            reset_to_top
-                                || previous_processes.len() != processes.len()
-                                || previous_selected_index != selected_index
-                                || previous_mode != mode
-                                || previous.key.panel_width != snapshot.key.panel_width
-                                || (selected_index.is_some()
-                                    && previous.key.revision != snapshot.key.revision),
-                        )
-                    });
-                if needs_reset && !reset_to_top && self.process_list.item_count() == processes.len()
-                {
-                    // Width and expanded content can change heights without changing row identities.
-                    // Keep the position inside the current row instead of jumping to its top.
-                    self.process_list.remeasure();
-                } else if needs_reset {
-                    let previous_top = self.process_list.logical_scroll_top();
-                    let row_height =
-                        process_row_height_px(process_display_mode(snapshot.key.panel_width));
-                    self.process_list
-                        .reset_with_uniform_height(processes.len(), px(row_height));
-                    let restored_top = if reset_to_top {
-                        ListOffset::default()
-                    } else {
-                        ListOffset {
-                            item_ix: previous_top.item_ix.min(processes.len().saturating_sub(1)),
-                            offset_in_item: px(0.),
-                        }
-                    };
-                    self.process_list.scroll_to(restored_top);
-                }
-            }
-            RemoteMonitorData::Docker(docker) => {
-                let reset_to_top = self.snapshot.as_ref().is_none_or(|previous| {
-                    let RemoteMonitorData::Docker(previous_docker) = &previous.data else {
-                        return true;
-                    };
-                    previous.key.has_session != snapshot.key.has_session
-                        || previous_docker.effective_tab != docker.effective_tab
-                        || previous_docker.state.search_draft != docker.state.search_draft
-                });
-                if reset_to_top {
-                    self.docker_container_scroll
-                        .scroll_to_item_strict(0, ScrollStrategy::Top);
-                    self.docker_resource_scroll
-                        .scroll_to_item_strict(0, ScrollStrategy::Top);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Start or stop this panel's refresh schedule.
-    ///
-    /// Idempotent, and cheap in the steady state: one `Option::is_some` compare. The
-    /// caller reconciles every paint, so this is called far more often than it acts.
-    ///
-    /// No `cx.notify()` on either edge -- nothing this panel renders depends on
-    /// whether it is polling, and notifying from the app's own paint would ask for a
-    /// frame that has nothing new in it.
-    fn set_demand(&mut self, demand: bool, cx: &mut Context<Self>) {
-        if demand == self.clock.is_some() {
-            return;
-        }
-        if !demand {
-            // Dropping the task cancels it.
-            self.clock = None;
-            return;
-        }
-        let kind = self.kind;
-        let app = self.app.clone();
-        self.clock = Some(cx.spawn(async move |_panel, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(REMOTE_PANEL_POLL_INTERVAL)
-                    .await;
-                let Some(app) = app.upgrade() else {
-                    break;
-                };
-                // The app owns the decision: whether the interval is due, whether a
-                // job is already in flight, and whether the app is calm enough to
-                // submit one. This clock only decides *when to ask*.
-                //
-                // No error to handle: the strong handle from `upgrade` keeps the app
-                // alive for the call, and a released app ends the loop above.
-                app.update(cx, |app, cx| {
-                    app.refresh_remote_monitor_if_due(kind, cx);
-                    // Flush boundary: submitting a refresh changes the pane status.
-                    app.flush_remote_panel_snapshots(cx);
-                    if kind == RemoteMonitorKind::Stats && app.panel_is_rendered(kind.nav_item()) {
-                        let panel = app.remote_panels.entity(kind).clone();
-                        panel.update(cx, |panel, cx| {
-                            panel.advance_network_clock(Instant::now(), cx)
-                        });
-                    }
-                });
-            }
-        }));
-    }
-
-    fn advance_network_clock(&mut self, now: Instant, cx: &mut Context<Self>) {
-        let Some(RemoteMonitorSnapshot {
-            data: RemoteMonitorData::Stats { state, .. },
-            ..
-        }) = self.snapshot.as_ref()
-        else {
-            return;
-        };
-        let Some(last) = state.last_success_at else {
-            return;
-        };
-        if now.saturating_duration_since(last).as_secs()
-            != self.network_clock.saturating_duration_since(last).as_secs()
-        {
-            self.network_clock = now;
-            cx.notify();
-        }
-    }
-
-    /// Widened past this module so the session-activation boundary can assert that a
-    /// switch reconciles demand without a paint.
-    #[cfg(test)]
-    pub(in crate::features) fn is_polling(&self) -> bool {
-        self.clock.is_some()
-    }
-
-    #[cfg(test)]
-    fn paint_count(&self) -> usize {
-        self.paint_count
-    }
-}
-
-impl Render for RemoteMonitorPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(test)]
-        {
-            self.paint_count += 1;
-        }
-        // Snapshot kinds render with **zero** `NyaTermApp` access, diagnostics included:
-        // GPUI records every entity read during a view's render as a dependency of that
-        // view, so one app read here would re-dirty this panel on every unrelated
-        // `app.notify()`.
-        if Self::SNAPSHOT_KINDS.contains(&self.kind) {
-            let Some(snapshot) = self.snapshot.as_ref() else {
-                // Nothing pushed yet; the next boundary fills it in.
-                return div().into_any_element();
-            };
-            let chrome = snapshot.key.chrome;
-            if snapshot.key.local_unsupported {
-                return div()
-                    .size_full()
-                    .bg(chrome.transparent_surface)
-                    .child(nyaterm_ui::empty_panel(
-                        t!("hostTools.localWindowsUnsupported"),
-                        chrome.palette,
-                    ))
-                    .into_any_element();
-            }
-            if snapshot.key.ssh_compatibility_mode {
-                return div()
-                    .size_full()
-                    .bg(chrome.transparent_surface)
-                    .child(nyaterm_ui::empty_panel(
-                        t!("panel.sshCompatibilityModeUnavailable"),
-                        chrome.palette,
-                    ))
-                    .into_any_element();
-            }
-            let has_session = snapshot.key.has_session;
-            let panel_width = snapshot.key.panel_width;
-            return match &snapshot.data {
-                RemoteMonitorData::Stats {
-                    state,
-                    network_select,
-                } => stats_panel(
-                    chrome,
-                    has_session,
-                    snapshot.key.show_users,
-                    state.clone(),
-                    network_select.clone(),
-                    NetworkCardPresentation {
-                        now: self.network_clock,
-                        interval: Duration::from_secs(u64::from(snapshot.key.stats_interval)),
-                        scroll: self.network_scroll.clone(),
-                    },
-                    cx,
-                ),
-                RemoteMonitorData::Gpu {
-                    state,
-                    processes,
-                    search,
-                } => {
-                    let (state, processes, search) =
-                        (state.clone(), processes.clone(), search.clone());
-                    gpu_panel(
-                        chrome,
-                        has_session,
-                        state,
-                        processes,
-                        search,
-                        panel_width,
-                        cx,
-                    )
-                }
-                RemoteMonitorData::Npu {
-                    state,
-                    processes,
-                    search,
-                } => {
-                    let (state, processes, search) =
-                        (state.clone(), processes.clone(), search.clone());
-                    npu_panel(
-                        chrome,
-                        has_session,
-                        state,
-                        processes,
-                        search,
-                        panel_width,
-                        cx,
-                    )
-                }
-                RemoteMonitorData::Processes {
-                    state,
-                    processes,
-                    search,
-                    nice,
-                    sort,
-                } => {
-                    let sort = sort.clone();
-                    let (state, processes, search, nice) = (
-                        state.clone(),
-                        processes.clone(),
-                        search.clone(),
-                        nice.clone(),
-                    );
-                    processes_panel(
-                        chrome,
-                        snapshot.key.process_control,
-                        snapshot.key.host_identity.clone(),
-                        has_session,
-                        state,
-                        processes,
-                        panel_width,
-                        search,
-                        nice,
-                        sort,
-                        self.process_list.clone(),
-                        cx,
-                    )
-                }
-                RemoteMonitorData::Docker(docker) => {
-                    let (state, derived, effective_tab, search) = (
-                        docker.state.clone(),
-                        docker.derived.clone(),
-                        docker.effective_tab,
-                        docker.search.clone(),
-                    );
-                    docker_panel(
-                        chrome,
-                        has_session,
-                        state,
-                        derived,
-                        effective_tab,
-                        panel_width,
-                        search,
-                        self.docker_container_scroll.clone(),
-                        self.docker_resource_scroll.clone(),
-                        cx,
-                    )
-                }
-            };
-        }
-        // Every kind is a snapshot kind now, so this is unreachable in practice; it
-        // stays as the empty case rather than a panic because a panel with no snapshot
-        // yet is a legitimate transient state.
-        div().into_any_element()
-    }
-}
-
 /// The five panel entities, as one field on `NyaTermApp`.
 pub(in crate::features) struct RemotePanels {
+    host_identity: Option<HostInteractionIdentity>,
+    host_token: HostInteractionToken,
     stats: Entity<RemoteMonitorPanel>,
     gpu: Entity<RemoteMonitorPanel>,
     npu: Entity<RemoteMonitorPanel>,
@@ -624,9 +47,19 @@ impl RemotePanels {
     ) -> Self {
         let panel = |kind: RemoteMonitorKind, cx: &mut Context<NyaTermApp>| {
             let app = app.clone();
-            cx.new(|_| RemoteMonitorPanel::new(kind, app))
+            let handler: RemoteMonitorActionHandler = Rc::new(move |action, window, cx| {
+                let Some(app) = app.upgrade() else {
+                    return false;
+                };
+                app.update(cx, |app, cx| {
+                    app.handle_remote_monitor_action(action, window, cx)
+                })
+            });
+            cx.new(|_| RemoteMonitorPanel::new(kind, handler))
         };
         Self {
+            host_identity: None,
+            host_token: HostInteractionToken::default(),
             stats: panel(RemoteMonitorKind::Stats, cx),
             gpu: panel(RemoteMonitorKind::Gpu, cx),
             npu: panel(RemoteMonitorKind::Npu, cx),
@@ -650,6 +83,105 @@ impl RemotePanels {
 }
 
 impl NyaTermApp {
+    fn handle_remote_monitor_action(
+        &mut self,
+        action: RemoteMonitorAction,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use RemoteMonitorAction as A;
+        match action {
+            A::CheckHost(token) => {
+                return token == self.remote_panels.host_token
+                    && self.remote_panels.host_identity.as_ref()
+                        == Some(&self.host_interaction_identity(cx));
+            }
+            A::Tick(kind) => {
+                self.refresh_remote_monitor_if_due(kind, cx);
+                self.flush_remote_panel_snapshots(cx);
+                if kind == RemoteMonitorKind::Stats && self.panel_is_rendered(kind.nav_item()) {
+                    self.remote_panels
+                        .entity(kind)
+                        .clone()
+                        .update(cx, |panel, cx| {
+                            panel.advance_network_clock(Instant::now(), cx)
+                        });
+                }
+                return true;
+            }
+            A::CopyProcess(value, label) => self.copy_process_text(value, label, cx),
+            A::SelectProcess(pid) => self.toggle_process_selection(pid, cx),
+            A::CloseProcessMenu => self.remote_ops.close_process_menu(),
+            A::ToggleProcessMenu(pid) => self.remote_ops.toggle_process_menu(pid),
+            A::SortProcess(key) => self.toggle_process_sort(key, cx),
+            A::ToggleCurrentProcessSort => {
+                self.toggle_process_sort(self.remote_ops.process_presentation().sort_key, cx)
+            }
+            A::ToggleGpu(id) => self.toggle_gpu_device_expanded(id, cx),
+            A::ToggleNpu(id) => self.toggle_npu_device_expanded(id, cx),
+            A::ProcessOffset(kind, offset) => {
+                let moved = match kind {
+                    RemoteMonitorKind::Gpu => self.remote_ops.set_gpu_process_offset(offset),
+                    RemoteMonitorKind::Npu => self.remote_ops.set_npu_process_offset(offset),
+                    _ => false,
+                };
+                self.defer_remote_panel_snapshot_flush(cx);
+                if moved {
+                    cx.notify();
+                }
+                return moved;
+            }
+            A::ToggleCpu => self.toggle_stats_cpu_expanded(cx),
+            A::ToggleNetworkInterfaces => {
+                if let Some(id) = self.session.active_id().map(str::to_string) {
+                    self.remote_ops.toggle_stats_network_interfaces(&id);
+                }
+            }
+            A::CloseContainerMenu => self.remote_ops.close_docker_container_menu(),
+            A::ToggleContainerMenu(id) => self.remote_ops.toggle_docker_container_menu(id),
+            A::ContainerLogs(id) => self.send_docker_container_logs_to_terminal(id, cx),
+            A::ContainerTerminal(id) => self.enter_docker_container_terminal(id, cx),
+            A::SetDockerTab(tab) => self.set_docker_tab(tab, cx),
+            A::ToggleDockerTabMenu => self.toggle_docker_tab_menu(cx),
+            A::CloseComposeMenu => self.remote_ops.close_docker_compose_menu(),
+            A::ToggleComposeMenu(id) => self.remote_ops.toggle_docker_compose_menu(id),
+            A::ComposeServiceLogs(project, files, service) => {
+                self.send_docker_compose_service_logs_to_terminal(project, files, service, cx)
+            }
+            action => {
+                let Some(window) = window else {
+                    return false;
+                };
+                match action {
+                    A::SignalProcess(pid, signal) => {
+                        self.request_process_signal(pid, signal, window, cx)
+                    }
+                    A::ApplyProcessNice => self.apply_process_nice_draft(window, cx),
+                    A::ContainerDetails(id) => self.open_docker_details(id, window, cx),
+                    A::ContainerAction(id, action) => {
+                        self.docker_container_action(id, action, window, cx)
+                    }
+                    A::ConfirmDocker(confirm) => self.request_docker_confirm(confirm, window, cx),
+                    A::ComposeAction(project, files, action) => {
+                        self.docker_compose_action(project, files, action, window, cx)
+                    }
+                    A::ComposeServiceAction(project, files, service, action) => self
+                        .docker_compose_service_action(project, files, service, action, window, cx),
+                    A::ToggleComposeProject(project, files) => {
+                        self.toggle_docker_compose_project(project, files, window, cx)
+                    }
+                    A::LoadComposeServices(project, files) => {
+                        self.load_docker_compose_services(project, files, window, cx)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        self.defer_remote_panel_snapshot_flush(cx);
+        cx.notify();
+        true
+    }
+
     /// Queue a remote-panel snapshot rebuild after the current GPUI entity leases end.
     pub(in crate::features) fn defer_remote_panel_snapshot_flush(&self, cx: &mut Context<Self>) {
         self.defer_app_update(cx, |app, cx| {
@@ -661,13 +193,23 @@ impl NyaTermApp {
     ///
     /// **Never called from `render`.** The boundaries are the remote event drains, remote
     /// input subscriptions, a settings apply, `sync_remote_panels_after_activation` for
-    /// a session switch, the panel's own refresh clock, and `RemoteMonitorPanel::with_app`
+    /// a session switch, the panel's own refresh clock, and the injected action handler
     /// for anything the panel initiates. GPUI runs `flush_effects` when the outermost
     /// `update` finishes, so a mutation and the panel update it causes land in the same
     /// cycle, before any paint.
     ///
     /// Cheap when nothing changed: one `u64` compare per kind.
     pub(in crate::features) fn flush_remote_panel_snapshots(&mut self, cx: &mut Context<Self>) {
+        let identity = self.host_interaction_identity(cx);
+        if self.remote_panels.host_identity.as_ref() != Some(&identity) {
+            self.remote_panels.host_identity = Some(identity);
+            self.remote_panels.host_token.0 = self
+                .remote_panels
+                .host_token
+                .0
+                .checked_add(1)
+                .expect("host token exhausted");
+        }
         for kind in RemoteMonitorPanel::SNAPSHOT_KINDS {
             let key = self.remote_monitor_key(kind, cx);
             let panel = self.remote_panels.entity(kind).clone();
@@ -693,7 +235,7 @@ impl NyaTermApp {
         }
     }
 
-    fn remote_monitor_key(&self, kind: RemoteMonitorKind, cx: &gpui::App) -> RemoteMonitorKey {
+    fn remote_monitor_key(&self, kind: RemoteMonitorKind, _cx: &gpui::App) -> RemoteMonitorKey {
         let revision = match kind {
             RemoteMonitorKind::Stats => self.remote_ops.stats_revision(),
             RemoteMonitorKind::Gpu => self.remote_ops.gpu_revision(),
@@ -703,7 +245,7 @@ impl NyaTermApp {
         };
         RemoteMonitorKey {
             revision,
-            host_identity: self.host_interaction_identity(cx),
+            host_identity: self.remote_panels.host_token,
             process_control: self.process_control_capabilities(),
             local_unsupported: self.local_host_tools_unsupported()
                 && matches!(
@@ -968,7 +510,9 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{RemoteMonitorData, RemoteMonitorKind, RemoteMonitorPanel};
+    use super::{
+        RemoteMonitorData, RemoteMonitorKind, RemoteMonitorNavigation, RemoteMonitorPanel,
+    };
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
     use crate::features::NyaTermApp;
     use crate::test_support::TestConfigDir;
@@ -1023,6 +567,46 @@ mod tests {
                     .map(IntoElement::into_any_element),
             )
         }
+    }
+
+    #[test]
+    fn host_token_rejects_changed_identity_before_and_after_snapshot_flush() {
+        use nyaterm_remote_monitor_gpui::actions::RemoteMonitorAction;
+        let test_dir = TestConfigDir::new("nyaterm-monitor-host-token");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, test_dir.path());
+        let token = cx.update_entity(&app, |app, cx| {
+            app.flush_remote_panel_snapshots(cx);
+            let token = app.remote_panels.host_token;
+            assert!(app.handle_remote_monitor_action(
+                RemoteMonitorAction::CheckHost(token),
+                None,
+                cx
+            ));
+            token
+        });
+        activate_ssh_session(&app, &mut cx);
+        cx.update_entity(&app, |app, cx| {
+            assert!(!app.handle_remote_monitor_action(
+                RemoteMonitorAction::CheckHost(token),
+                None,
+                cx
+            ));
+            app.flush_remote_panel_snapshots(cx);
+            assert!(!app.handle_remote_monitor_action(
+                RemoteMonitorAction::CheckHost(token),
+                None,
+                cx
+            ));
+            let current = app.remote_panels.host_token;
+            assert_ne!(token, current);
+            assert!(app.handle_remote_monitor_action(
+                RemoteMonitorAction::CheckHost(current),
+                None,
+                cx
+            ));
+        });
     }
 
     /// Five instances means five entity ids, which is what makes them isolated views
@@ -1156,7 +740,7 @@ mod tests {
         cx.update(|window, cx| {
             _ = window.draw(cx);
             let panel = panel.read(cx);
-            let snapshot = panel.snapshot.as_ref().unwrap();
+            let snapshot = panel.test_snapshot().unwrap();
             let RemoteMonitorData::Stats {
                 state,
                 network_select,
@@ -1201,7 +785,7 @@ mod tests {
             let RemoteMonitorData::Stats {
                 state,
                 network_select,
-            } = &panel.snapshot.as_ref().unwrap().data
+            } = &panel.test_snapshot().unwrap().data
             else {
                 panic!("expected stats");
             };
@@ -1369,14 +953,14 @@ mod tests {
         );
         vcx.update(|_, cx| {
             panel.update(cx, |panel, cx| {
-                let RemoteMonitorData::Stats { state, .. } = &panel.snapshot.as_ref().unwrap().data
+                let RemoteMonitorData::Stats { state, .. } = &panel.test_snapshot().unwrap().data
                 else {
                     panic!("stats")
                 };
                 let chart = state.network_chart.clone();
                 let revision = panel.snapshot_revision();
                 panel.advance_network_clock(now + Duration::from_secs(12), cx);
-                let RemoteMonitorData::Stats { state, .. } = &panel.snapshot.as_ref().unwrap().data
+                let RemoteMonitorData::Stats { state, .. } = &panel.test_snapshot().unwrap().data
                 else {
                     panic!("stats")
                 };
@@ -1386,7 +970,7 @@ mod tests {
                     panel.snapshot_revision(),
                     "a clock tick must not rebuild the data snapshot"
                 );
-                assert!(state.stale(panel.network_clock, Duration::from_secs(3)));
+                assert!(state.stale(panel.test_network_clock(), Duration::from_secs(3)));
             });
         });
         toggle(vcx);
@@ -1583,8 +1167,7 @@ mod tests {
                 .remote_panels
                 .entity(RemoteMonitorKind::Docker)
                 .read(cx)
-                .snapshot
-                .as_ref()
+                .test_snapshot()
                 .unwrap();
             let RemoteMonitorData::Docker(docker) = &snapshot.data else {
                 panic!("Docker snapshot")
@@ -1616,7 +1199,7 @@ mod tests {
                 panel.snapshot_key(),
                 Some(app.remote_monitor_key(RemoteMonitorKind::Docker, cx))
             );
-            let RemoteMonitorData::Docker(docker) = &panel.snapshot.as_ref().unwrap().data else {
+            let RemoteMonitorData::Docker(docker) = &panel.test_snapshot().unwrap().data else {
                 panic!("Docker snapshot")
             };
             assert!(!docker.state.tab_menu_open);
@@ -1934,7 +1517,7 @@ mod tests {
                     app.sync_remote_panel_demand(cx);
                     app.flush_remote_panel_snapshots(cx);
                     assert!(!app.remote_panels.entity(kind).read(cx).is_polling());
-                    assert!(app.remote_panels.entity(kind).read(cx).snapshot.as_ref().unwrap().key.ssh_compatibility_mode);
+                    assert!(app.remote_panels.entity(kind).read(cx).test_snapshot().unwrap().key.ssh_compatibility_mode);
                     assert!(!app.refresh_remote_monitor_if_due(kind, cx));
                 }
             }
@@ -2168,10 +1751,10 @@ mod isolation_tests {
 
         vcx.update(|_, cx| {
             panel.update(cx, |panel, cx| {
-                panel.with_app(cx, |app, _| {
-                    app.remote_ops.apply_stats(RemoteStats::default());
-                    app.remote_ops.set_stats_status("loaded stats");
-                });
+                panel.test_dispatch(
+                    nyaterm_remote_monitor_gpui::actions::RemoteMonitorAction::ToggleCpu,
+                    cx,
+                );
                 assert_eq!(
                     panel.snapshot_revision(),
                     before,
@@ -2511,7 +2094,7 @@ mod isolation_tests {
                     app.remote_panels
                         .entity(RemoteMonitorKind::Processes)
                         .update(cx, |panel, cx| {
-                            panel.clock = None;
+                            panel.set_demand(false, cx);
                             panel.set_snapshot(snapshot, cx);
                         });
                 });
@@ -2669,7 +2252,7 @@ mod isolation_tests {
                 for kind in [RemoteMonitorKind::Gpu, RemoteMonitorKind::Npu] {
                     let panel = app.remote_panels.entity(kind).read(cx);
                     assert_eq!(
-                        panel.snapshot.as_ref().expect("snapshot").key.panel_width,
+                        panel.test_snapshot().expect("snapshot").key.panel_width,
                         width
                     );
                 }
@@ -2704,8 +2287,7 @@ mod isolation_tests {
                     .remote_panels
                     .entity(RemoteMonitorKind::Processes)
                     .read(cx)
-                    .process_list
-                    .bounds_for_item(0)
+                    .test_process_row_bounds(0)
                     .expect("expanded row")
                     .size
                     .height
@@ -2740,9 +2322,9 @@ mod isolation_tests {
                 .remote_panels
                 .entity(RemoteMonitorKind::Processes)
                 .read(cx);
-            assert_eq!(panel.process_list.item_count(), 100);
-            assert!(panel.process_list.max_offset_for_scrollbar().y > gpui::px(0.));
-            panel.process_list.scroll_to(gpui::ListOffset {
+            assert_eq!(panel.test_process_count(), 100);
+            assert!(panel.test_process_max_scroll() > gpui::px(0.));
+            panel.test_scroll_process_to(gpui::ListOffset {
                 item_ix: 60,
                 offset_in_item: gpui::px(0.),
             });
@@ -2763,12 +2345,9 @@ mod isolation_tests {
                 .remote_panels
                 .entity(RemoteMonitorKind::Processes)
                 .read(cx);
-            assert_eq!(panel.process_list.item_count(), 3);
-            assert!(panel.process_list.logical_scroll_top().item_ix < 3);
-            assert_eq!(
-                panel.process_list.max_offset_for_scrollbar().y,
-                gpui::px(0.)
-            );
+            assert_eq!(panel.test_process_count(), 3);
+            assert!(panel.test_process_top_index() < 3);
+            assert_eq!(panel.test_process_max_scroll(), gpui::px(0.));
         });
     }
 
@@ -3071,10 +2650,8 @@ mod isolation_tests {
                 .entity(RemoteMonitorKind::Docker)
                 .clone();
             panel.update(cx, |panel, cx| {
-                assert!(panel.docker_resource_scroll.is_scrollable());
-                panel
-                    .docker_resource_scroll
-                    .scroll_to_item_strict(60, gpui::ScrollStrategy::Top);
+                assert!(panel.test_docker_resources_scrollable());
+                panel.test_scroll_docker_resources_to(60);
                 cx.notify();
             });
         });
@@ -3088,16 +2665,7 @@ mod isolation_tests {
                 .remote_panels
                 .entity(RemoteMonitorKind::Docker)
                 .read(cx);
-            assert!(
-                panel
-                    .docker_resource_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .offset()
-                    .y
-                    < gpui::px(0.)
-            );
+            assert!(panel.test_docker_resource_offset() < gpui::px(0.));
         });
 
         vcx.update(|window, cx| {
@@ -3123,17 +2691,8 @@ mod isolation_tests {
                 .remote_panels
                 .entity(RemoteMonitorKind::Docker)
                 .read(cx);
-            assert!(!panel.docker_resource_scroll.is_scrollable());
-            assert_eq!(
-                panel
-                    .docker_resource_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .offset()
-                    .y,
-                gpui::px(0.)
-            );
+            assert!(!panel.test_docker_resources_scrollable());
+            assert_eq!(panel.test_docker_resource_offset(), gpui::px(0.));
         });
     }
 }

@@ -72,6 +72,16 @@ def check_budget(
     return errors
 
 
+PRESENTATION_DEPENDENCIES = {
+    "nyaterm-remote-monitor-gpui": {"nyaterm-remote-ops"},
+    "nyaterm-file-browser-gpui": {"nyaterm-files", "nyaterm-preview"},
+    "nyaterm-ai-gpui": {"nyaterm-mcp-protocol"},
+    "nyaterm-notes-gpui": set(),
+    "nyaterm-connections-gpui": set(),
+}
+PRESENTATION_BASE = {"nyaterm-core", "nyaterm-ui", "nyaterm-i18n"}
+
+
 def dependency_errors() -> list[str]:
     errors: list[str] = []
     dependency = re.compile(r"(?m)^\s*(gpui|gpui_platform|gpui-kit)\s*=")
@@ -182,6 +192,16 @@ def dependency_errors() -> list[str]:
             "nyaterm-core", "nyaterm-terminal", "nyaterm-ui"
         }:
             errors.append(f"crate_boundary: nyaterm-terminal-gpui must not depend on {package}")
+    for crate, extra in PRESENTATION_DEPENDENCIES.items():
+        manifest = ROOT / "crates" / crate / "Cargo.toml"
+        if not manifest.exists():
+            continue
+        document = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        for package in dependency_packages(document, workspace_dependencies):
+            if (package.startswith("nyaterm-") and package not in PRESENTATION_BASE | extra) or (
+                package.startswith("gpui-") and package != "gpui-platform"
+            ):
+                errors.append(f"crate_boundary: {crate} must not depend on {package}")
     for manifest in (ROOT / "crates").glob("*/Cargo.toml"):
         crate = manifest.parent.name
         if crate.endswith("-helper"):

@@ -1,9 +1,9 @@
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    Render, ScrollEvent, Subscription, Window, div, prelude::*, px,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
+    Subscription, Window, div,
 };
 use nyaterm_ui::document_snapshot::NyaDocumentSnapshot;
-use nyaterm_ui::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
+use nyaterm_ui::{NyaDocumentEditorEvent, NyaDocumentEditorState};
 
 use crate::features::NyaTermApp;
 use crate::models::{TransferEditorField, TransferEditorState};
@@ -142,16 +142,6 @@ impl RemoteTextEditor {
         self.document
             .update(cx, |document, cx| document.open_search(false, cx));
     }
-
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let modifiers = event.keystroke.modifiers;
-        if (modifiers.platform || modifiers.control) && event.keystroke.key == "s" {
-            let _ = self.app.update(cx, |app, cx| {
-                app.save_transfer_editor_tab(&self.tab_id, false, window, cx)
-            });
-            cx.stop_propagation();
-        }
-    }
 }
 
 impl Focusable for RemoteTextEditor {
@@ -179,24 +169,22 @@ impl Render for RemoteTextEditor {
             document.set_font_size(font_size, cx);
             document.set_font(font.clone(), cx);
         });
-        div()
-            .size_full()
-            .min_h_0()
-            .min_w_0()
-            .font(font)
-            .text_size(px(font_size))
-            .capture_key_down(cx.listener(|this, _, _, cx| {
-                let _ = this.app.update(cx, |app, _| app.mark_user_activity());
-            }))
-            .on_key_down(cx.listener(Self::on_key_down))
-            .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
-                let _ = this.app.update(cx, |app, _| app.mark_user_activity());
-            }))
-            .on_scroll(cx.listener(|this, _: &ScrollEvent, _, cx| {
-                let _ = this.app.update(cx, |app, _| app.mark_user_activity());
-            }))
-            .child(NyaDocumentEditor::new(&self.document))
-            .into_any_element()
+        let activity_app = self.app.clone();
+        let save_app = self.app.clone();
+        let tab_id = self.tab_id.clone();
+        nyaterm_file_browser_gpui::editor::editor_surface(
+            &self.document,
+            font,
+            font_size,
+            std::rc::Rc::new(move |cx| {
+                let _ = activity_app.update(cx, |app, _| app.mark_user_activity());
+            }),
+            move |window, cx| {
+                let _ = save_app.update(cx, |app, cx| {
+                    app.save_transfer_editor_tab(&tab_id, false, window, cx)
+                });
+            },
+        )
     }
 }
 

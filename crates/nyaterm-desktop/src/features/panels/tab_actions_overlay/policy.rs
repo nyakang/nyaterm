@@ -8,6 +8,7 @@ pub(in crate::features) enum TabSessionCapability {
     Serial,
     Rdp,
     Vnc,
+    Spice,
     AdbShell,
     AdbView,
 }
@@ -21,6 +22,7 @@ impl TabSessionCapability {
             SessionLaunchConfig::Serial(_) => Self::Serial,
             SessionLaunchConfig::Rdp(_) => Self::Rdp,
             SessionLaunchConfig::Vnc(_) => Self::Vnc,
+            SessionLaunchConfig::Spice(_) => Self::Spice,
             SessionLaunchConfig::AdbShell(_) => Self::AdbShell,
             SessionLaunchConfig::AdbFiles(_) | SessionLaunchConfig::AdbScreen(_) => Self::AdbView,
             SessionLaunchConfig::Ftp(_) => Self::AdbView,

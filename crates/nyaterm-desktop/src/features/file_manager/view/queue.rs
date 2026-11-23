@@ -1,11 +1,10 @@
-use gpui::{
-    AnyElement, Context, CursorStyle, IntoElement, MouseButton, MouseDownEvent, div, prelude::*,
-    px, rgb,
+use gpui::{AnyElement, Context};
+use nyaterm_file_browser_gpui::queue::{
+    QueueAction, QueueActionHandler, QueueRow, QueueSnapshot, QueueStatus,
 };
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaScrollable, NyaTooltip};
 use rust_i18n::t;
 
-use crate::features::file_manager::workspace::{FileManagerQueueFilter, FileManagerWorkspace};
+use crate::features::file_manager::workspace::FileManagerWorkspace;
 use crate::features::pages::transfers::format_browser_file_size;
 use crate::models::{TransferJobKind, TransferJobStatus};
 use crate::theme::ThemePalette;
@@ -23,135 +22,9 @@ impl FileManagerWorkspace {
                 })
                 .collect::<Vec<_>>()
         });
-        let active = jobs
-            .iter()
-            .filter(|(job, _)| {
-                matches!(
-                    job.status,
-                    TransferJobStatus::Queued
-                        | TransferJobStatus::Running
-                        | TransferJobStatus::Paused
-                        | TransferJobStatus::Cancelling
-                )
-            })
-            .count();
-        let failed = jobs
-            .iter()
-            .filter(|(job, _)| job.status == TransferJobStatus::Failed)
-            .count();
-        let mut header = div()
-            .h(px(30.))
-            .min_w_0()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .border_t_1()
-            .border_color(rgb(palette.border))
-            .child(
-                NyaButton::new(
-                    "fm-queue-toggle",
-                    format!(
-                        "{} · {active} {} · {failed} {}",
-                        t!("panel.fileTransfer"),
-                        t!("fileManager.filterActive"),
-                        t!("fileManager.filterFailed")
-                    ),
-                )
-                .small()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.queue_expanded = !this.queue_expanded;
-                    this.save_layout(window, cx);
-                    cx.notify();
-                })),
-            );
-        if self.queue_expanded {
-            for (filter, key) in [
-                (FileManagerQueueFilter::All, "fileManager.filterAll"),
-                (FileManagerQueueFilter::Active, "fileManager.filterActive"),
-                (
-                    FileManagerQueueFilter::Completed,
-                    "fileManager.filterCompleted",
-                ),
-                (FileManagerQueueFilter::Failed, "fileManager.filterFailed"),
-            ] {
-                header = header.child(
-                    NyaButton::new(format!("fm-filter-{filter:?}"), t!(key).to_string())
-                        .small()
-                        .variant(if self.queue_filter == filter {
-                            NyaButtonVariant::Primary
-                        } else {
-                            NyaButtonVariant::Ghost
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.queue_filter = filter;
-                            cx.notify();
-                        })),
-                );
-            }
-            header = header.child(
-                NyaButton::new("fm-all-jobs", t!("fileManager.allJobs").to_string())
-                    .small()
-                    .variant(if self.show_all_jobs {
-                        NyaButtonVariant::Primary
-                    } else {
-                        NyaButtonVariant::Ghost
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_all_jobs = !this.show_all_jobs;
-                        cx.notify();
-                    })),
-            );
-        }
-        let mut surface = div()
-            .flex_none()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .child(header.overflow_x_scrollbar());
-        if self.queue_expanded {
-            surface = surface.child(
-                div()
-                    .id("fm-queue-resize")
-                    .h(px(4.))
-                    .w_full()
-                    .cursor(CursorStyle::ResizeUpDown)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.queue_resize =
-                                Some((f32::from(event.position.y), this.queue_height));
-                            cx.stop_propagation();
-                        }),
-                    ),
-            );
-            let mut list = div()
-                .id("fm-queue-rows")
-                .h(px(self.queue_height))
-                .min_w_0()
-                .overflow_y_scrollbar()
-                .px_2()
-                .flex()
-                .flex_col()
-                .gap_1();
-            let mut count = 0;
-            for (job, context) in jobs.into_iter().filter(|(job, _)| match self.queue_filter {
-                FileManagerQueueFilter::All => true,
-                FileManagerQueueFilter::Active => matches!(
-                    job.status,
-                    TransferJobStatus::Queued
-                        | TransferJobStatus::Running
-                        | TransferJobStatus::Paused
-                        | TransferJobStatus::Cancelling
-                ),
-                FileManagerQueueFilter::Completed => job.status == TransferJobStatus::Completed,
-                FileManagerQueueFilter::Failed => matches!(
-                    job.status,
-                    TransferJobStatus::Failed | TransferJobStatus::Cancelled
-                ),
-            }) {
-                count += 1;
+        let rows = jobs
+            .into_iter()
+            .map(|(job, context)| {
                 let (source_path, target_path) = match &job.kind {
                     TransferJobKind::SendTo {
                         source_path,
@@ -214,142 +87,70 @@ impl FileManagerWorkspace {
                 } else {
                     job.display_name.clone()
                 };
-                let mut actions = div().flex().items_center().gap_1();
-                let can_pause = context.as_ref().is_none_or(|context| context.can_pause());
-                if can_pause
-                    && matches!(
-                        job.status,
-                        TransferJobStatus::Queued
-                            | TransferJobStatus::Running
-                            | TransferJobStatus::Paused
-                    )
-                {
-                    let id = job.id.clone();
-                    let paused = job.status == TransferJobStatus::Paused;
-                    actions = actions.child(
-                        NyaButton::new(
-                            format!("fm-pause-{id}"),
-                            t!(if paused {
-                                "fileTransfer.resume"
+                QueueRow {
+                    id: job.id,
+                    detail: job.detail,
+                    name,
+                    tooltip,
+                    labels,
+                    progress,
+                    speed,
+                    status: match job.status {
+                        TransferJobStatus::Queued => QueueStatus::Queued,
+                        TransferJobStatus::Running => QueueStatus::Running,
+                        TransferJobStatus::Paused => QueueStatus::Paused,
+                        TransferJobStatus::Cancelling => QueueStatus::Cancelling,
+                        TransferJobStatus::Completed => QueueStatus::Completed,
+                        TransferJobStatus::Failed => QueueStatus::Failed,
+                        TransferJobStatus::Cancelled => QueueStatus::Cancelled,
+                    },
+                    can_pause: context.as_ref().is_none_or(|context| context.can_pause()),
+                    can_retry: context.is_some(),
+                }
+            })
+            .collect();
+        let owner = cx.weak_entity();
+        let handler: QueueActionHandler = std::rc::Rc::new(move |action, window, cx| {
+            let _ = owner.update(cx, |this, cx| {
+                match action {
+                    QueueAction::Toggle => {
+                        this.queue_expanded = !this.queue_expanded;
+                        this.save_layout(window, cx);
+                    }
+                    QueueAction::Filter(filter) => this.queue_filter = filter,
+                    QueueAction::ToggleAll => this.show_all_jobs = !this.show_all_jobs,
+                    QueueAction::Resize(y) => this.queue_resize = Some((y, this.queue_height)),
+                    QueueAction::Pause(id, paused) => {
+                        this.dispatch_app(window, cx, move |app, _, cx| {
+                            if paused {
+                                app.resume_transfer_job(&id, cx);
                             } else {
-                                "fileTransfer.pause"
-                            })
-                            .to_string(),
-                        )
-                        .small()
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                let id = id.clone();
-                                this.dispatch_app(window, cx, move |app, _, cx| {
-                                    if paused {
-                                        app.resume_transfer_job(&id, cx);
-                                    } else {
-                                        app.pause_transfer_job(&id, cx);
-                                    }
-                                });
-                            },
-                        )),
-                    );
-                }
-                if matches!(
-                    job.status,
-                    TransferJobStatus::Queued
-                        | TransferJobStatus::Running
-                        | TransferJobStatus::Paused
-                ) {
-                    let id = job.id.clone();
-                    actions = actions.child(
-                        NyaButton::new(
-                            format!("fm-cancel-{id}"),
-                            t!("fileTransfer.cancel").to_string(),
-                        )
-                        .small()
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                let id = id.clone();
-                                this.dispatch_app(window, cx, move |app, _, cx| {
-                                    app.cancel_transfer_job(&id, cx)
-                                });
-                            },
-                        )),
-                    );
-                }
-                if matches!(
-                    job.status,
-                    TransferJobStatus::Failed | TransferJobStatus::Cancelled
-                ) && context.is_some()
-                {
-                    let id = job.id.clone();
-                    actions = actions.child(
-                        NyaButton::new(
-                            format!("fm-retry-{id}"),
-                            t!("fileTransfer.retry").to_string(),
-                        )
-                        .small()
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                let id = id.clone();
-                                this.dispatch_app(window, cx, move |app, window, cx| {
-                                    app.retry_transfer_job(id, window, cx)
-                                });
-                            },
-                        )),
-                    );
-                }
-                list = list.child(
-                    div()
-                        .id(gpui::SharedString::from(format!("fm-job-{}", job.id)))
-                        .h(px(54.))
-                        .flex_none()
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .border_b_1()
-                        .border_color(rgb(palette.border))
-                        .tooltip(move |window, cx| {
-                            NyaTooltip::new(tooltip.clone()).build(window, cx)
+                                app.pause_transfer_job(&id, cx);
+                            }
                         })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .text_xs()
-                                .child(div().truncate().child(name))
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_color(rgb(palette.text_muted))
-                                        .child(format!("{labels} · {progress} · {speed}")),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .max_w(px(240.))
-                                .truncate()
-                                .text_xs()
-                                .text_color(rgb(if job.status == TransferJobStatus::Failed {
-                                    palette.warning
-                                } else {
-                                    palette.text_muted
-                                }))
-                                .child(job.detail),
-                        )
-                        .child(actions),
-                );
-            }
-            if count == 0 {
-                list = list.child(
-                    div()
-                        .py_3()
-                        .text_xs()
-                        .child(t!("fileTransfer.noTransfers").to_string()),
-                );
-            }
-            surface = surface.child(list);
-        }
-        surface.into_any_element()
+                    }
+                    QueueAction::Cancel(id) => this.dispatch_app(window, cx, move |app, _, cx| {
+                        app.cancel_transfer_job(&id, cx)
+                    }),
+                    QueueAction::Retry(id) => {
+                        this.dispatch_app(window, cx, move |app, window, cx| {
+                            app.retry_transfer_job(id, window, cx)
+                        })
+                    }
+                }
+                cx.notify();
+            });
+        });
+        nyaterm_file_browser_gpui::queue::queue_view(
+            QueueSnapshot {
+                rows,
+                expanded: self.queue_expanded,
+                filter: self.queue_filter,
+                show_all: self.show_all_jobs,
+                height: self.queue_height,
+            },
+            palette,
+            handler,
+        )
     }
 }

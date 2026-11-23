@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 nyaterm-core = { path = "../nyaterm-core" }

@@ -1,17 +1,16 @@
 use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::StatsJobResult;
 use futures::channel::mpsc::UnboundedReceiver;
-use nyaterm_remote_ops::stats::{
-    CpuUsageSource, NetworkSummaryInfo, RemoteStats, RemoteStatsSampler,
-};
+pub(in crate::features) use nyaterm_remote_monitor_gpui::presentation::StatsPresentationState;
+use nyaterm_remote_ops::stats::{CpuUsageSource, RemoteStats, RemoteStatsSampler};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 mod network;
 #[cfg(test)]
 use network::NetworkHistorySample;
-use network::{NetworkChart, NetworkSessionState};
+use network::NetworkSessionState;
 
 pub(in crate::features) enum StatsApplyOutcome {
     Ignored,
@@ -55,43 +54,6 @@ struct IconProbe {
     pending_job: Option<u64>,
     retry_after: Option<Instant>,
     finished: bool,
-}
-
-#[derive(Clone)]
-pub(in crate::features) struct StatsPresentationState {
-    pub data: Option<Arc<RemoteStats>>,
-    pub network_chart: Arc<NetworkChart>,
-    pub network_interfaces_expanded: bool,
-    pub last_success_at: Option<Instant>,
-    #[cfg(test)]
-    pub network_history: Arc<[NetworkHistorySample]>,
-    pub selected_network_interface: Option<String>,
-    pub cpu_expanded: bool,
-    pub pending: bool,
-    pub error: bool,
-    pub consecutive_refresh_failures: u8,
-}
-
-impl StatsPresentationState {
-    pub(in crate::features) fn stale(&self, now: Instant, interval: Duration) -> bool {
-        self.error
-            || self.last_success_at.is_some_and(|at| {
-                now.saturating_duration_since(at)
-                    > nyaterm_remote_ops::stats::network_stale_after(interval)
-            })
-    }
-
-    pub(in crate::features) fn network_traffic(&self) -> Option<NetworkSummaryInfo> {
-        let stats = self.data.as_ref()?;
-        match self.selected_network_interface.as_deref() {
-            Some(nic) => stats
-                .networks
-                .iter()
-                .find(|network| network.nic == nic)
-                .and_then(|network| network.traffic()),
-            None => stats.network_traffic(),
-        }
-    }
 }
 
 impl StatsPaneState {
@@ -197,7 +159,7 @@ impl StatsPaneState {
     }
 
     #[cfg(test)]
-    fn active_network_history(&self) -> Arc<[NetworkHistorySample]> {
+    pub(super) fn active_network_history(&self) -> Arc<[NetworkHistorySample]> {
         self.active_session_id
             .as_deref()
             .and_then(|session_id| self.network_sessions.get(session_id))
@@ -409,8 +371,6 @@ impl StatsPaneState {
                 .as_deref()
                 .and_then(|id| self.snapshots.get(id))
                 .cloned(),
-            #[cfg(test)]
-            network_history: self.active_network_history(),
             selected_network_interface: self
                 .active_session_id
                 .as_ref()
@@ -768,15 +728,15 @@ mod tests {
                 tx_bytes_per_sec: 200.,
             }
         );
-        assert_eq!(presentation.network_history[0].traffic(interface), None);
+        assert_eq!(state.active_network_history()[0].traffic(interface), None);
         assert_eq!(
-            presentation.network_history[1].traffic(interface),
+            state.active_network_history()[1].traffic(interface),
             presentation.network_traffic()
         );
-        assert!(presentation.network_history[0].sampled_at >= started);
+        assert!(state.active_network_history()[0].sampled_at >= started);
         assert!(
-            presentation.network_history[1].sampled_at
-                >= presentation.network_history[0].sampled_at
+            state.active_network_history()[1].sampled_at
+                >= state.active_network_history()[0].sampled_at
         );
         let revision = state.revision();
         assert!(!state.select_network_interface("a", Some("eth1")));
@@ -831,7 +791,7 @@ mod tests {
         state.clear_stats_sample("a");
         let presentation = state.stats_presentation();
         assert!(presentation.selected_network_interface.is_none());
-        assert!(presentation.network_history.is_empty());
+        assert!(state.active_network_history().is_empty());
         state.apply_data("a", stats(&[("eth1", 50., 60.)]));
         assert!(
             state
@@ -862,7 +822,7 @@ mod tests {
             50.
         );
         assert!(
-            presentation.network_history[1]
+            state.active_network_history()[1]
                 .traffic(Some("eth1"))
                 .is_none()
         );

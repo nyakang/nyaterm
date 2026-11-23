@@ -24,8 +24,6 @@ pub(in crate::features) use inspector_widgets::{
     tab_menu_item_with_icon, tab_menu_item_with_shortcut, tab_menu_separator,
 };
 
-mod stats;
-pub(in crate::features) use stats::stats_progress_bar;
 mod rows;
 pub(in crate::features) use rows::cloud_sync_history_row;
 
@@ -33,8 +31,5 @@ pub(in crate::features) use nyaterm_ui::icons::{
     activity_icon, color_icon, connection_spinner, connection_type_icon, mono_icon,
     nyaterm_app_icon, nyaterm_logo_mark, themed_icon, transfer_entry_icon,
 };
-
-pub(in crate::features) mod markdown;
-pub(in crate::features) use markdown::markdown_content_view;
 
 pub(in crate::features) mod cloud_sync_conflict;

@@ -22,6 +22,9 @@ pub enum ActivationAction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExternalConnectionRequest {
+    SpiceFile {
+        path: RawActivationArg,
+    },
     Local {
         cwd: Option<String>,
     },
@@ -111,6 +114,21 @@ pub(super) fn parse_activation_with_behavior(
     let mut local_error = None;
     let mut args = request.args.iter().peekable();
     while let Some(arg) = args.next() {
+        if arg.encoded_len() > super::MAX_ACTIVATION_ARG_BYTES {
+            actions.push(Err(ActivationParseError::LinkTooLong));
+            continue;
+        }
+        if let Some(path) = arg.to_os_string().map(std::path::PathBuf::from)
+            && path.is_absolute()
+            && path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("vv"))
+        {
+            actions.push(Ok(ActivationAction::Connect(
+                ExternalConnectionRequest::SpiceFile { path: arg.clone() },
+            )));
+            continue;
+        }
         let text = match activation_text(arg) {
             Ok(text) => text,
             Err(error) => {
@@ -242,6 +260,30 @@ pub fn parse_deep_link(text: &str) -> Result<ActivationAction, ActivationParseEr
         return Err(ActivationParseError::UnsupportedScheme);
     }
     match url.scheme() {
+        "file" => {
+            if url.query().is_some()
+                || url.fragment().is_some()
+                || url
+                    .host_str()
+                    .is_some_and(|host| !host.is_empty() && host != "localhost")
+            {
+                return Err(ActivationParseError::UnsupportedComponent);
+            }
+            let path = url
+                .to_file_path()
+                .map_err(|_| ActivationParseError::InvalidUrl)?;
+            if !path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("vv"))
+            {
+                return Err(ActivationParseError::UnsupportedAction);
+            }
+            Ok(ActivationAction::Connect(
+                ExternalConnectionRequest::SpiceFile {
+                    path: RawActivationArg::from_os_string(path.into_os_string()),
+                },
+            ))
+        }
         "ssh" => parse_ssh_url(text, &url),
         "telnet" => parse_telnet_url(text, &url),
         "nyaterm" => parse_nyaterm_url(&url),
@@ -926,5 +968,28 @@ mod tests {
             parse_activation_request(&flooded),
             Err(ActivationParseError::TooManyActions)
         );
+    }
+}
+
+#[cfg(test)]
+mod spice_tests {
+    use crate::activation::{
+        ActivationAction, ActivationRequest, ExternalConnectionRequest, parse_deep_link,
+    };
+    #[test]
+    fn spice_activation_accepts_native_paths_and_local_file_urls_without_exposing_them() {
+        let path = std::env::temp_dir().join("private-ticket.vv");
+        let request = ActivationRequest::from_os_args([0; 16], [path.clone().into_os_string()]);
+        let action = request.parse().actions.remove(0).unwrap();
+        assert!(matches!(
+            action,
+            ActivationAction::Connect(ExternalConnectionRequest::SpiceFile { .. })
+        ));
+        assert!(!format!("{action:?}").contains("private-ticket"));
+        let url = url::Url::from_file_path(&path).unwrap();
+        assert_eq!(parse_deep_link(url.as_str()).unwrap(), action);
+        assert!(parse_deep_link("file://remote-host/private.vv").is_err());
+        assert!(parse_deep_link(&format!("{url}?password=hidden")).is_err());
+        assert!(parse_deep_link("file:///tmp/unsafe.exe").is_err());
     }
 }

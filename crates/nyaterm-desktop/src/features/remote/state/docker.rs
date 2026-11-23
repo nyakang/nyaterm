@@ -3,9 +3,11 @@ use crate::features::remote::job_state::{RemoteJobState, RemoteJobTicket};
 use crate::features::runtime_jobs::{DockerJobResult, DockerResource};
 use crate::models::DockerTab;
 use futures::channel::mpsc::UnboundedReceiver;
+pub(in crate::features) use nyaterm_remote_monitor_gpui::presentation::{
+    DockerDerivedItems, DockerPresentationState,
+};
 use nyaterm_remote_ops::docker::{
-    DockerComposeProject, DockerComposeService, DockerContainer, DockerContainerDetails,
-    DockerImage, DockerNetwork, DockerVolume, RemoteDockerOverview,
+    DockerComposeProject, DockerComposeService, DockerContainerDetails, RemoteDockerOverview,
 };
 use nyaterm_remote_ops::query::docker::{
     docker_compose_project_matches, docker_container_matches, docker_image_matches,
@@ -49,32 +51,6 @@ struct DockerDerivedKey {
 struct DockerDerivedCache {
     key: DockerDerivedKey,
     items: DockerDerivedItems,
-}
-
-#[derive(Clone)]
-pub(in crate::features) enum DockerDerivedItems {
-    Containers(Arc<[DockerContainer]>),
-    Images(Arc<[DockerImage]>),
-    Volumes(Arc<[DockerVolume]>),
-    Networks(Arc<[DockerNetwork]>),
-    Compose(Arc<[DockerComposeProject]>),
-}
-
-#[derive(Clone)]
-pub(in crate::features) struct DockerPresentationState {
-    pub overview: Option<Arc<RemoteDockerOverview>>,
-    pub loaded_resources: HashSet<DockerTab>,
-    pub status: String,
-    pub details: Option<DockerContainerDetails>,
-    pub details_container_id: Option<String>,
-    pub container_menu_id: Option<String>,
-    pub compose_menu_id: Option<String>,
-    pub tab_menu_open: bool,
-    pub search_draft: String,
-    pub compose_expanded: Arc<HashSet<String>>,
-    pub compose_services: Arc<HashMap<String, Vec<DockerComposeService>>>,
-    pub compose_service_errors: Arc<HashMap<String, String>>,
-    pub pending: bool,
 }
 
 impl DockerPaneState {

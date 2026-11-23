@@ -41,6 +41,27 @@ pub struct Packet {
 }
 
 impl Packet {
+    /// Total bytes on the pipe, for bounded outbound queues.
+    pub fn encoded_len(&self) -> io::Result<usize> {
+        self.payload_len()?
+            .checked_add(HEADER_LEN)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "packet length overflow"))
+    }
+
+    pub(crate) fn control(payload: Vec<u8>) -> io::Result<Self> {
+        if payload.len() > CONTROL_PAYLOAD_LIMIT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "control payload exceeds limit",
+            ));
+        }
+        Ok(Self {
+            packet_type: PacketType::Control,
+            payload: payload.into(),
+            body: Default::default(),
+        })
+    }
+
     fn payload_len(&self) -> io::Result<usize> {
         self.payload
             .len()

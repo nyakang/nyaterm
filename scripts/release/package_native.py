@@ -17,12 +17,15 @@ import time
 import tomllib
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import prepare_conpty
 import linux_icons
+import spice_associations
 import windows_msi
 import windows_portable
+from native_headers import MACOS_MINIMUM_VERSION
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -293,6 +296,7 @@ def build_application(target: str) -> Path:
     if prefix is None:
         raise RuntimeError("Android decoder dependencies were not prepared")
     os.environ["FFMPEG_DIR"] = str(prefix)
+    spice_runtime(target)
     binary = build_binary("nyaterm-app", APP_BIN, target)
     for name in helper_bins(target):
         build_binary(name, name, target)
@@ -313,7 +317,39 @@ def copy_helpers(destination: Path, target: str) -> list[Path]:
             make_executable(binary)
         copied.append(binary)
     copy_android_resources(destination, target)
+    copy_spice_resources(destination, target)
     return copied
+
+
+@lru_cache(maxsize=6)
+def spice_runtime(target: str) -> Path:
+    import prepare_spice
+    override = os.environ.get("NYATERM_SPICE_RUNTIME")
+    runtime = Path(override).resolve(strict=True) if override else prepare_spice.prepare(target)
+    prepare_spice.verify_runtime(runtime, target)
+    return runtime
+
+
+def copy_spice_resources(destination: Path, target: str) -> list[Path]:
+    import prepare_spice
+    runtime = spice_runtime(target)
+    output = destination / "spice"
+    shutil.copytree(runtime, output, dirs_exist_ok=True)
+    manifest = prepare_spice.verify_runtime(output, target)
+    names = sorted([*manifest["files"], "SOURCE.json"])
+    if "windows" in target and {"spice/" + name for name in names} != set(windows_portable.LAYOUT["spice_files"][target]):
+        raise RuntimeError("SPICE runtime differs from the shared portable contract; review and run prepare_spice.py --write-portable-contract")
+    return [output / name for name in names]
+
+
+def spice_resource_paths(destination: Path) -> list[Path]:
+    manifest = json.loads((destination / "spice/SOURCE.json").read_text(encoding="utf-8"))
+    return [destination / "spice" / name for name in sorted([*manifest["files"], "SOURCE.json"])]
+
+
+def spice_glibc_requirement(destination: Path) -> str:
+    import spice_release
+    return spice_release.linux_glibc_requirement(destination / "spice")
 
 
 def copy_android_resources(destination: Path, target: str) -> list[Path]:
@@ -414,7 +450,8 @@ def create_windows_packages(
     installer_root.mkdir()
     shutil.copy2(binary, installer_root / "NyaTerm.exe")
     installer_helpers = copy_helpers(installer_root, info.target)
-    installer_conpty = [*copy_conpty(installer_root, info.target), *copy_android_resources(installer_root, info.target)]
+    installer_conpty = [*copy_conpty(installer_root, info.target), *copy_android_resources(installer_root, info.target),
+                       *spice_resource_paths(installer_root)]
     copy_release_documents(installer_root, version)
     shutil.copy2(ICON_DIR / "icon.ico", installer_root / "icon.ico")
 
@@ -435,7 +472,8 @@ def create_windows_packages(
         for path in installer_conpty
     )
     conpty_dirs = sorted(
-        {path.parent.relative_to(installer_root) for path in installer_conpty},
+        {parent for path in installer_conpty
+         for parent in path.relative_to(installer_root).parents if parent != Path(".")},
         key=lambda path: len(path.parts),
         reverse=True,
     )
@@ -447,6 +485,23 @@ def create_windows_packages(
     output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}-setup.exe"
     script = WORK_DIR / "nyaterm-installer.nsi"
     protocol_command = r'$\"$INSTDIR\NyaTerm.exe$\" $\"%1$\"'
+    document_id = ("NyaTerm.SpiceConnection" if identity == STABLE_IDENTITY
+                   else "NyaTerm.Preview.SpiceConnection")
+    document_install = "\n".join(
+        f'WriteRegStr HKCU "Software\\Classes\\{key}" "{name}" "{value}"'
+        for key, name, value in (
+            (document_id, "", "SPICE connection"),
+            (document_id + r"\DefaultIcon", "", r"$INSTDIR\NyaTerm.exe,0"),
+            (document_id + r"\shell\open\command", "", protocol_command),
+            (r".vv\OpenWithProgids", document_id, ""),
+        )
+    )
+    document_uninstall = (
+        f'ReadRegStr $0 HKCU "Software\\Classes\\{document_id}\\shell\\open\\command" ""\n'
+        f'StrCmp $0 "{protocol_command}" 0 document_skip\n'
+        f'DeleteRegValue HKCU "Software\\Classes\\.vv\\OpenWithProgids" "{document_id}"\n'
+        f'DeleteRegKey HKCU "Software\\Classes\\{document_id}"\ndocument_skip:'
+    )
     protocol_install = "\n".join(
         f'WriteRegStr HKCU "Software\\Classes\\{scheme}{suffix}" "{name}" "{value}"'
         for scheme in identity.url_schemes
@@ -508,6 +563,8 @@ def create_windows_packages(
               WriteUninstaller "$INSTDIR\Uninstall.exe"
               WriteRegStr HKCU "{identity.windows_registry_key}" "InstallDir" "$INSTDIR"
               {protocol_install}
+              {document_install}
+              System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
               WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayName" "{identity.display_name}"
               WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayVersion" "{version}"
               WriteRegStr HKCU "{identity.windows_uninstall_key}" "DisplayIcon" "$INSTDIR\NyaTerm.exe"
@@ -531,6 +588,8 @@ def create_windows_packages(
               Delete "$INSTDIR\Uninstall.exe"
               RMDir "$INSTDIR"
               {protocol_uninstall}
+              {document_uninstall}
+              System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
               DeleteRegKey HKCU "{identity.windows_uninstall_key}"
               DeleteRegKey HKCU "{identity.windows_registry_key}"
             SectionEnd
@@ -589,9 +648,10 @@ def create_macos_packages(
             }
         ],
         "CFBundleVersion": version,
-        "LSMinimumSystemVersion": "12.0",
+        "LSMinimumSystemVersion": ".".join(map(str, MACOS_MINIMUM_VERSION[:2])),
         "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "Copyright Kang",
+        **spice_associations.macos_declarations(),
     }
     with (bundle / "Contents" / "Info.plist").open("wb") as handle:
         plistlib.dump(plist, handle, sort_keys=True)
@@ -601,13 +661,23 @@ def create_macos_packages(
     # Contents/MacOS as resources instead of signing them as code, which makes
     # the helper fail to launch under Gatekeeper.
     android_code = [*macos_dir.glob("android-libs/*.dylib"), macos_dir / "adb" / "adb"]
-    for helper in [*android_code, *helper_binaries]:
+    spice_manifest_path = macos_dir / "spice/SOURCE.json"
+    spice_manifest = json.loads(spice_manifest_path.read_text(encoding="utf-8"))
+    spice_code = [macos_dir / "spice" / name for name in spice_manifest["files"]
+                  if name.endswith((".dylib", ".so")) or ".so." in name]
+    for helper in [*android_code, *spice_code, *helper_binaries]:
         run([codesign, "--force", "--sign", "-", "--timestamp=none", str(helper)])
     manifest_path = macos_dir / "android-resources.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["files"] = {name: hashlib.sha256((macos_dir / name).read_bytes()).hexdigest() for name in manifest["files"]}
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    run([codesign, "--force", "--deep", "--sign", "-", "--timestamp=none", str(bundle)])
+    spice_manifest["files"] = {name: hashlib.sha256((macos_dir / "spice" / name).read_bytes()).hexdigest()
+                               for name in spice_manifest["files"]}
+    spice_manifest_path.write_text(json.dumps(spice_manifest, indent=2) + "\n", encoding="utf-8")
+    # Nested code is already signed and its final bytes are in the manifests.
+    # Recursive signing here could rewrite libraries after those hashes were set.
+    run([codesign, "--force", "--sign", "-", "--timestamp=none", str(bundle)])
+    run([codesign, "--verify", "--deep", "--strict", str(bundle)])
 
     tar_output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}.app.tar.gz"
     with tarfile.open(tar_output, "w:gz", compresslevel=9) as archive:
@@ -680,7 +750,7 @@ def write_desktop_file(
             StartupWMClass={identity.display_name}
             Terminal=false
             Categories=Development;TerminalEmulator;Network;
-            MimeType={"".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes)}
+            MimeType={"".join(f"x-scheme-handler/{scheme};" for scheme in identity.url_schemes)}{spice_associations.MIME_TYPE};
             StartupNotify=true
             """
         ).lstrip(),
@@ -737,6 +807,7 @@ def create_linux_appimage(
     shutil.copy2(ICON_DIR / "128x128.png", appdir / f"{identity.desktop_id}.png")
     (appdir / f"{identity.desktop_id}.png").chmod(0o644)
     copy_linux_icons(appdir, identity)
+    spice_associations.write_linux_mime(appdir, identity.desktop_id)
 
     apprun = appdir / "AppRun"
     apprun.write_text(
@@ -772,11 +843,17 @@ def create_linux_deb(
     applications.mkdir(parents=True)
     write_desktop_file(applications / identity.linux_desktop_file, f"/opt/{identity.desktop_id}/nyaterm", identity)
     copy_linux_icons(root, identity)
+    spice_associations.write_linux_mime(root, identity.desktop_id)
 
     control_dir = root / "DEBIAN"
     control_dir.mkdir()
-    linux_icons.write_postinst(control_dir / "postinst", identity.desktop_id)
+    linux_icons.write_postinst(control_dir / "postinst", identity.desktop_id,
+                              spice_associations.linux_cache_commands())
+    spice_associations.write_linux_postrm(control_dir / "postrm")
     dependencies = linux_deb_dependencies([app_binary, *helper_binaries])
+    # dlopen libraries are invisible to dpkg-shlibdeps on the helper executable.
+    # Retain the actual private runtime's glibc floor in the package metadata.
+    dependencies += f", libc6 (>= {spice_glibc_requirement(app_root)})"
     (control_dir / "control").write_text(
         textwrap.dedent(
             f"""
@@ -821,10 +898,12 @@ def create_linux_rpm(
     applications.mkdir(parents=True)
     write_desktop_file(applications / identity.linux_desktop_file, f"/opt/{identity.desktop_id}/nyaterm", identity)
     copy_linux_icons(payload, identity)
+    spice_associations.write_linux_mime(payload, identity.desktop_id)
     linux_icons.normalize_permissions(payload)
 
     rpm_version, rpm_release = linux_rpm_version(version)
     payload_path = str(payload.resolve()).replace("%", "%%")
+    spice_glibc = spice_glibc_requirement(app_root)
     spec = textwrap.dedent(
         f"""
         Name: {identity.desktop_id}
@@ -834,6 +913,12 @@ def create_linux_rpm(
         License: Apache-2.0
         URL: https://nyaterm.app
         BuildArch: {linux_rpm_arch(info.target)}
+        Requires: glibc >= {spice_glibc}
+
+        # Private dlopen libraries must never satisfy other packages' system
+        # dependencies. Their entire closure is bundled except glibc above.
+        %global __provides_exclude_from ^/opt/{identity.desktop_id}/spice/.*$
+        %global __requires_exclude_from ^/opt/{identity.desktop_id}/spice/.*$
 
         %description
         Native terminal workspace with SSH, SFTP and remote operations.
@@ -848,8 +933,12 @@ def create_linux_rpm(
         /usr/share/applications/{identity.linux_desktop_file}
         /usr/share/icons/hicolor/*/apps/{identity.desktop_id}.png
         /usr/share/doc/{identity.desktop_id}
+        /usr/share/mime/packages/{identity.desktop_id}-spice.xml
+
         """
     ).lstrip()
+    spec += "\n%post\n" + spice_associations.linux_cache_commands()
+    spec += "\n%postun\n" + spice_associations.linux_cache_commands()
     spec_path = top_dir / "SPECS" / "nyaterm.spec"
     spec_path.write_text(spec, encoding="utf-8")
     run(
