@@ -7713,7 +7713,6 @@ dependencies = [
  "smallvec",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
  "windows 0.62.2",
  "x509-cert 0.2.5",

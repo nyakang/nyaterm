@@ -138,14 +138,6 @@ fn validate_active_session_id(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
-    // RDPDR diagnostics are ON by default. A "drive shows but \\tsclient\X is
-    // inaccessible" failure is completely invisible otherwise: the desktop host
-    // trims helper stderr to bounded metadata, so the IRP-level NTSTATUS that
-    // explains the failure can only reach a file. Set NYATERM_RDP_TRACE=0 to
-    // opt out (for quiet production sessions).
-    if std::env::var("NYATERM_RDP_TRACE").as_deref() != Ok("0") {
-        init_diagnostics();
-    }
     let provider_error = install_crypto_provider()
         .err()
         .map(|error| error.to_string());
@@ -160,41 +152,6 @@ async fn main() {
         eprintln!("RDP helper stopped: {error}");
         std::process::exit(1);
     }
-}
-
-fn init_diagnostics() {
-    // Write to a well-known temp file so a user can attach it after reproducing
-    // a redirection failure. Stderr from the helper is intentionally reduced to
-    // bounded metadata by the desktop host, so it cannot carry these details.
-    let path = std::env::temp_dir().join("nyaterm-rdp-diagnostic.log");
-    let file = match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        Ok(file) => file,
-        Err(error) => {
-            eprintln!("RDP diagnostics: cannot open {}: {error}", path.display());
-            return;
-        }
-    };
-    eprintln!("RDP diagnostics: writing to {}", path.display());
-    // The default filter must name every crate that emits on the RDPDR path:
-    // `ironrdp` alone does NOT match `ironrdp_rdpdr_native` (EnvFilter matches
-    // crate/target prefixes separated by `::`, and the underscore crate names
-    // are distinct targets). Include the native filesystem backend at debug so
-    // create-IRP failures carry their NTSTATUS, plus the portable channel and
-    // client at info for symbol/name/announce context.
-    let default_filter = "ironrdp=debug,ironrdp_rdpdr=debug,ironrdp_rdpdr_native=debug,ironrdp_client=info,info";
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::sync::Mutex::new(file))
-        .with_ansi(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("NYATERM_RDP_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
-        )
-        .with_target(true)
-        .try_init();
 }
 
 fn install_crypto_provider() -> anyhow::Result<()> {
@@ -880,8 +837,9 @@ fn rdpdr_selection(redirection: &RdpRedirectionConfig) -> Option<RdpdrSelection>
     #[cfg(windows)]
     {
         use ironrdp_rdpdr_native::{
-            FIRST_NAMED_DRIVE_DEVICE_ID, LogicalDriveSelection, RedirectedDrive, WindowsPortRedirection,
-            WindowsPrinterRedirection, WindowsPrinterSelection, WindowsRdpdrBackendFactory,
+            FIRST_NAMED_DRIVE_DEVICE_ID, LogicalDriveSelection, RedirectedDrive,
+            WindowsPortRedirection, WindowsPrinterRedirection, WindowsPrinterSelection,
+            WindowsRdpdrBackendFactory,
         };
 
         if !device_redirection_requested(redirection) {
@@ -1832,12 +1790,12 @@ mod tests {
     use super::{
         CertificateGate, DesktopOutputState, DesktopPayload, Outbound, build_config,
         classify_error, classify_failure, convert_and_send_input, convert_input,
-        desktop_update_payload, device_redirection_requested, drive_name_for_path, drive_redirection, error_chain,
-        forward_full_frame_request, forward_output, graphics_pipeline_effective,
-        install_crypto_provider, is_transport_failure, output_channel, performance_flags_bits,
-        rdpdr_selection, report_ironrdp_panic, rgb_u32_to_bgra, secure_attention_input,
-        send_iron_input, send_reliable_iron_input, validate_active_session_id,
-        validate_input_events,
+        desktop_update_payload, device_redirection_requested, drive_name_for_path,
+        drive_redirection, error_chain, forward_full_frame_request, forward_output,
+        graphics_pipeline_effective, install_crypto_provider, is_transport_failure, output_channel,
+        performance_flags_bits, rdpdr_selection, report_ironrdp_panic, rgb_u32_to_bgra,
+        secure_attention_input, send_iron_input, send_reliable_iron_input,
+        validate_active_session_id, validate_input_events,
     };
     use crate::client_name::resolve_client_name;
     use ironrdp_cfg::PropertySetExt;
@@ -2006,6 +1964,7 @@ mod tests {
 
     #[test]
     fn custom_drive_name_uses_the_configured_directory() {
+        #[cfg(windows)]
         assert_eq!(
             drive_name_for_path(r"C:\Users\name\Documents", "Custom"),
             "Documents"
@@ -2023,9 +1982,15 @@ mod tests {
         redirection.drives = true;
         redirection.drive_letters = "C".into();
         redirection.custom_drive_path = r"C:\Users\name\Documents".into();
-        assert_eq!(drive_redirection(&redirection.drive_letters).to_string(), "C:\\");
+        assert_eq!(
+            drive_redirection(&redirection.drive_letters).to_string(),
+            "C:\\"
+        );
         redirection.custom_drive_path.clear();
-        assert_eq!(drive_redirection(&redirection.drive_letters).to_string(), "C:\\");
+        assert_eq!(
+            drive_redirection(&redirection.drive_letters).to_string(),
+            "C:\\"
+        );
     }
 
     #[test]
