@@ -91,7 +91,7 @@ pub enum ShellInputLineKind {
 
 pub use graphics::{
     GraphicsEvent, GraphicsImageSnapshot, GraphicsIngress, GraphicsPlacement, GraphicsProtocol,
-    GraphicsScreenKind, GraphicsSegment, GraphicsSegmentRef, KittyDeleteMode,
+    GraphicsScreenKind, GraphicsSegment, GraphicsSegmentRef, GraphicsSourceRect, KittyDeleteMode,
     TerminalGraphicsState,
 };
 

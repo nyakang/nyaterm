@@ -71,6 +71,8 @@ pub enum GraphicsEvent {
         pixel_height: Option<u32>,
         /// Kitty `q=` response mode: 0=all, 1=errors only, 2=none.
         quiet: Option<u8>,
+        /// Kitty `x,y,w,h` source region, in image pixels.
+        source_rect: Option<GraphicsSourceRect>,
     },
     /// Kitty `a=q` image/placement existence query.
     Query {
@@ -372,6 +374,7 @@ fn classify_dcs(buf: &[u8], start: usize) -> SequenceClass {
                     pixel_width: None,
                     pixel_height: None,
                     quiet: None,
+                    source_rect: None,
                 }),
             }
         }
@@ -572,6 +575,7 @@ fn parse_kitty_body(body: &[u8]) -> Option<GraphicsEvent> {
                 pixel_width,
                 pixel_height,
                 quiet,
+                source_rect: GraphicsSourceRect::from_params(&params),
             })
         }
         _ => None,
@@ -688,6 +692,7 @@ fn parse_iterm2_body(body: &[u8]) -> Option<GraphicsEvent> {
         pixel_width: None,
         pixel_height: None,
         quiet: None,
+        source_rect: None,
     })
 }
 
@@ -763,6 +768,54 @@ fn decode_base64_std(input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Kitty source rectangle in pixels. Placements carry a rectangle clipped to the raster.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GraphicsSourceRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl GraphicsSourceRect {
+    fn from_params(params: &HashMap<&str, &str>) -> Option<Self> {
+        let pixel = |key| {
+            params
+                .get(key)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0)
+        };
+        let rect = Self {
+            x: pixel("x"),
+            y: pixel("y"),
+            width: pixel("w"),
+            height: pixel("h"),
+        };
+        (rect != Self::default()).then_some(rect)
+    }
+
+    fn clipped(self, (width, height): (u32, u32)) -> Option<Self> {
+        let remaining_width = width.saturating_sub(self.x);
+        let remaining_height = height.saturating_sub(self.y);
+        if remaining_width == 0 || remaining_height == 0 {
+            return None;
+        }
+        Some(Self {
+            width: if self.width == 0 {
+                remaining_width
+            } else {
+                self.width.min(remaining_width)
+            },
+            height: if self.height == 0 {
+                remaining_height
+            } else {
+                self.height.min(remaining_height)
+            },
+            ..self
+        })
+    }
+}
+
 /// Stable image placement retained by the terminal model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsPlacement {
@@ -777,6 +830,7 @@ pub struct GraphicsPlacement {
     pub height_cells: usize,
     pub data: Arc<[u8]>,
     pub content_id: u64,
+    pub source_rect: Option<GraphicsSourceRect>,
     pub name: Option<String>,
     /// Kitty image number used for delete / place-only reuse.
     pub kitty_id: Option<u32>,
@@ -819,6 +873,7 @@ pub struct GraphicsImageSnapshot {
     pub source_col_cells: usize,
     pub data: Arc<[u8]>,
     pub content_id: u64,
+    pub source_rect: Option<GraphicsSourceRect>,
     pub name: Option<String>,
     pub above_text: bool,
 }
@@ -826,7 +881,7 @@ pub struct GraphicsImageSnapshot {
 /// Result of applying a graphics event to terminal state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GraphicsHandleResult {
-    /// Kitty `C=1`: move text cursor past the placed image.
+    /// Move the text cursor past a placement when requested.
     pub cursor_motion: Option<GraphicsCursorMotion>,
     /// Kitty graphics protocol replies (`ESC_G … ST`) for the PTY.
     pub pty_writes: Vec<Vec<u8>>,
@@ -877,11 +932,13 @@ struct PendingKittyTransfer {
     pixel_height: Option<u32>,
     quiet: u8,
     overflowed: bool,
+    source_rect: Option<GraphicsSourceRect>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct StoredKittyImage {
     data: Arc<[u8]>,
+    content_id: u64,
     width_cells: Option<u16>,
     height_cells: Option<u16>,
     name: Option<String>,
@@ -1020,6 +1077,7 @@ impl TerminalGraphicsState {
                 pixel_width,
                 pixel_height,
                 quiet,
+                source_rect,
             } => {
                 if protocol == GraphicsProtocol::Kitty {
                     let (motion, reply) = self.handle_kitty_image(
@@ -1039,6 +1097,7 @@ impl TerminalGraphicsState {
                         pixel_width,
                         pixel_height,
                         quiet,
+                        source_rect,
                         cursor_line,
                         cursor_col,
                         screen,
@@ -1065,7 +1124,9 @@ impl TerminalGraphicsState {
                         None,
                         width_cells,
                         height_cells,
-                        data,
+                        image_content_id(&data),
+                        clamp_image_data_arc(data),
+                        None,
                         name,
                         cursor_line,
                         cursor_col,
@@ -1076,9 +1137,7 @@ impl TerminalGraphicsState {
                         0,
                         above_text,
                     );
-                    if cursor_motion {
-                        result.cursor_motion = Some(motion);
-                    }
+                    result.cursor_motion = motion.filter(|_| cursor_motion);
                 }
             }
         }
@@ -1125,14 +1184,14 @@ impl TerminalGraphicsState {
                     return;
                 };
                 self.placements.retain(|p| {
-                    if p.screen == screen && p.kitty_id == Some(id) {
-                        freed_ids.push(id);
-                        false
-                    } else {
-                        true
-                    }
+                    !(p.screen == screen
+                        && p.kitty_id == Some(id)
+                        && placement_id.is_none_or(|pid| p.placement_id == Some(pid)))
                 });
-                if free_data {
+                if free_data
+                    && (placement_id.is_none()
+                        || !self.placements.iter().any(|p| p.kitty_id == Some(id)))
+                {
                     self.kitty_store.remove(&id);
                 }
                 return;
@@ -1258,6 +1317,7 @@ impl TerminalGraphicsState {
         pixel_width: Option<u32>,
         pixel_height: Option<u32>,
         quiet: Option<u8>,
+        source_rect: Option<GraphicsSourceRect>,
         cursor_line: i64,
         cursor_col: usize,
         screen: GraphicsScreenKind,
@@ -1286,7 +1346,9 @@ impl TerminalGraphicsState {
                 placement_id,
                 width_cells.or(stored.width_cells),
                 height_cells.or(stored.height_cells),
-                stored.data.to_vec(),
+                stored.content_id,
+                stored.data,
+                source_rect,
                 name.or(stored.name),
                 cursor_line,
                 cursor_col,
@@ -1298,8 +1360,8 @@ impl TerminalGraphicsState {
                 above_text,
             );
             return (
-                cursor_motion.then_some(motion),
-                kitty_reply_if_needed(quiet, id, placement_id, "OK"),
+                motion.filter(|_| cursor_motion),
+                kitty_reply_if_needed(quiet, id, placement_id, kitty_placement_status(motion)),
             );
         }
 
@@ -1317,6 +1379,7 @@ impl TerminalGraphicsState {
             compressed,
             pixel_width,
             pixel_height,
+            source_rect,
             ..PendingKittyTransfer::default()
         });
         transfer.quiet = quiet;
@@ -1346,6 +1409,7 @@ impl TerminalGraphicsState {
             pixel_height,
             overflowed,
             data,
+            source_rect,
             ..
         } = transfer;
         let data = (!overflowed)
@@ -1368,13 +1432,15 @@ impl TerminalGraphicsState {
             return (None, kitty_reply_if_needed(quiet, id, placement_id, status));
         };
 
+        let content_id = image_content_id(&data);
+        let data = clamp_image_data_arc(data);
         if let Some(kitty_id) = id {
-            let data = clamp_image_data_arc(data.clone());
             let last_used = self.next_store_generation();
             self.kitty_store.insert(
                 kitty_id,
                 StoredKittyImage {
-                    data,
+                    data: Arc::clone(&data),
+                    content_id,
                     width_cells,
                     height_cells,
                     name: name.clone(),
@@ -1390,7 +1456,9 @@ impl TerminalGraphicsState {
                 placement_id,
                 width_cells,
                 height_cells,
+                content_id,
                 data,
+                source_rect,
                 name,
                 cursor_line,
                 cursor_col,
@@ -1403,8 +1471,8 @@ impl TerminalGraphicsState {
             );
             self.prune_kitty_store();
             return (
-                cursor_motion.then_some(motion),
-                kitty_reply_if_needed(quiet, id, placement_id, "OK"),
+                motion.filter(|_| cursor_motion),
+                kitty_reply_if_needed(quiet, id, placement_id, kitty_placement_status(motion)),
             );
         }
         self.prune_kitty_store();
@@ -1494,7 +1562,9 @@ impl TerminalGraphicsState {
         placement_id: Option<u32>,
         width_cells: Option<u16>,
         height_cells: Option<u16>,
-        data: Vec<u8>,
+        content_id: u64,
+        data: Arc<[u8]>,
+        source_rect: Option<GraphicsSourceRect>,
         name: Option<String>,
         cursor_line: i64,
         cursor_col: usize,
@@ -1504,20 +1574,35 @@ impl TerminalGraphicsState {
         cell_height_px: u16,
         z_index: i32,
         above_text: bool,
-    ) -> GraphicsCursorMotion {
+    ) -> Option<GraphicsCursorMotion> {
+        let mut raster = peek_raster_size(&data);
+        let source_rect = match source_rect {
+            Some(source) => {
+                let clipped = source.clipped(raster?)?;
+                raster = Some((clipped.width, clipped.height));
+                Some(clipped)
+            }
+            None => None,
+        };
         let width = width_cells
             .map(|v| v as usize)
-            .unwrap_or_else(|| estimate_width_cells(&data, screen_cols, cell_width_px))
+            .unwrap_or_else(|| estimate_width_cells(raster, screen_cols, cell_width_px))
             .clamp(1, screen_cols.max(1));
         let height = height_cells
             .map(|v| v as usize)
-            .unwrap_or_else(|| estimate_height_cells(&data, width, cell_width_px, cell_height_px))
+            .unwrap_or_else(|| estimate_height_cells(raster, width, cell_width_px, cell_height_px))
             .clamp(1, 256);
         let internal = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        let content_id = image_content_id(&data);
-        let data = clamp_image_data_arc(data);
         let col = cursor_col.min(screen_cols.saturating_sub(1));
+        if let (Some(kitty_id), Some(placement_id)) = (kitty_id, placement_id) {
+            self.placements.retain(|placement| {
+                placement.screen != screen
+                    || placement.kitty_id != Some(kitty_id)
+                    || placement.placement_id != Some(placement_id)
+            });
+        }
+        self.prune_placement_payloads(&data);
         self.placements.push(GraphicsPlacement {
             id: internal,
             protocol,
@@ -1528,21 +1613,47 @@ impl TerminalGraphicsState {
             height_cells: height,
             data,
             content_id,
+            source_rect,
             name,
             kitty_id,
             placement_id,
             z_index,
             above_text,
         });
-        const MAX_PLACEMENTS: usize = 64;
+        const MAX_PLACEMENTS: usize = 8192;
         if self.placements.len() > MAX_PLACEMENTS {
             let drop_n = self.placements.len() - MAX_PLACEMENTS;
             let _ = self.placements.drain(..drop_n);
         }
-        GraphicsCursorMotion {
+        Some(GraphicsCursorMotion {
             start_col: col,
             width_cells: width,
             height_cells: height,
+        })
+    }
+
+    fn prune_placement_payloads(&mut self, incoming: &Arc<[u8]>) {
+        // Tiled previews can have thousands of placements backed by one raster.
+        // Keep the original bound on separately allocated payloads.
+        const MAX_PAYLOADS: usize = 64;
+        if self
+            .placements
+            .last()
+            .is_some_and(|p| Arc::ptr_eq(&p.data, incoming))
+        {
+            return;
+        }
+        let mut payloads = HashSet::from([incoming.as_ptr()]);
+        for placement in self.placements.iter().rev() {
+            let pointer = placement.data.as_ptr();
+            if payloads.len() == MAX_PAYLOADS && !payloads.contains(&pointer) {
+                break;
+            }
+            payloads.insert(pointer);
+        }
+        if payloads.len() == MAX_PAYLOADS {
+            self.placements
+                .retain(|p| payloads.contains(&p.data.as_ptr()));
         }
     }
 
@@ -1662,11 +1773,20 @@ impl TerminalGraphicsState {
                 source_col_cells: 0,
                 data: Arc::clone(&placement.data),
                 content_id: placement.content_id,
+                source_rect: placement.source_rect,
                 name: placement.name.clone(),
                 above_text: placement.above_text,
             });
         }
         images
+    }
+}
+
+fn kitty_placement_status(motion: Option<GraphicsCursorMotion>) -> &'static str {
+    if motion.is_some() {
+        "OK"
+    } else {
+        "EINVAL:Invalid source rectangle"
     }
 }
 
@@ -1727,8 +1847,12 @@ fn placement_intersects_line(p: &GraphicsPlacement, line: i64) -> bool {
     line >= p.line && line < p.line.saturating_add(p.height_cells as i64)
 }
 
-fn estimate_width_cells(data: &[u8], screen_cols: usize, cell_width_px: u16) -> usize {
-    if let Some((w, _)) = peek_raster_size(data) {
+fn estimate_width_cells(
+    raster: Option<(u32, u32)>,
+    screen_cols: usize,
+    cell_width_px: u16,
+) -> usize {
+    if let Some((w, _)) = raster {
         let cell_w = f32::from(cell_width_px.max(1));
         ((w as f32 / cell_w).ceil() as usize)
             .max(1)
@@ -1739,12 +1863,12 @@ fn estimate_width_cells(data: &[u8], screen_cols: usize, cell_width_px: u16) -> 
 }
 
 fn estimate_height_cells(
-    data: &[u8],
+    raster: Option<(u32, u32)>,
     width_cells: usize,
     cell_width_px: u16,
     cell_height_px: u16,
 ) -> usize {
-    if let Some((w, h)) = peek_raster_size(data) {
+    if let Some((w, h)) = raster {
         if w == 0 {
             return 1;
         }
