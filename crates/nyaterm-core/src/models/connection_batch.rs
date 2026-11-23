@@ -210,6 +210,16 @@ pub struct ConnectionBatchEdit {
     pub rdp_disable_cursor_blinking: BatchField<bool>,
     pub rdp_auto_reconnect: BatchField<bool>,
     pub rdp_reconnect_attempts: BatchField<u32>,
+    pub rdp_redirect_clipboard: BatchField<bool>,
+    pub rdp_redirect_drives: BatchField<bool>,
+    pub rdp_drive_letters: BatchField<String>,
+    pub rdp_custom_drive_path: BatchField<String>,
+    pub rdp_redirect_printers: BatchField<bool>,
+    pub rdp_redirect_ports: BatchField<bool>,
+    pub rdp_redirect_smartcards: BatchField<bool>,
+    pub rdp_redirect_microphone: BatchField<bool>,
+    pub rdp_redirect_webauthn: BatchField<bool>,
+    pub rdp_audio: BatchField<String>,
 
     pub vnc_scale_mode: BatchField<String>,
     pub vnc_clipboard: BatchField<bool>,
@@ -329,6 +339,16 @@ impl ConnectionBatchEdit {
             && self.rdp_disable_cursor_blinking.is_unchanged()
             && self.rdp_auto_reconnect.is_unchanged()
             && self.rdp_reconnect_attempts.is_unchanged()
+            && self.rdp_redirect_clipboard.is_unchanged()
+            && self.rdp_redirect_drives.is_unchanged()
+            && self.rdp_drive_letters.is_unchanged()
+            && self.rdp_custom_drive_path.is_unchanged()
+            && self.rdp_redirect_printers.is_unchanged()
+            && self.rdp_redirect_ports.is_unchanged()
+            && self.rdp_redirect_smartcards.is_unchanged()
+            && self.rdp_redirect_microphone.is_unchanged()
+            && self.rdp_redirect_webauthn.is_unchanged()
+            && self.rdp_audio.is_unchanged()
             && self.vnc_scale_mode.is_unchanged()
             && self.vnc_clipboard.is_unchanged()
             && self.vnc_shared.is_unchanged()
@@ -1591,6 +1611,81 @@ pub fn apply_connection_batch_edit(
             reconnect.max_attempts = match edit.rdp_reconnect_attempts {
                 BatchField::Set(value) => value,
                 BatchField::Clear => super::default_rdp_reconnect_attempts(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+    }
+
+    let rdp_redirection_fields = [
+        !edit.rdp_redirect_clipboard.is_unchanged(),
+        !edit.rdp_redirect_drives.is_unchanged(),
+        !edit.rdp_drive_letters.is_unchanged(),
+        !edit.rdp_custom_drive_path.is_unchanged(),
+        !edit.rdp_redirect_printers.is_unchanged(),
+        !edit.rdp_redirect_ports.is_unchanged(),
+        !edit.rdp_redirect_smartcards.is_unchanged(),
+        !edit.rdp_redirect_microphone.is_unchanged(),
+        !edit.rdp_redirect_webauthn.is_unchanged(),
+        !edit.rdp_audio.is_unchanged(),
+    ];
+    for touched in rdp_redirection_fields {
+        report.record(touched, rdp_reason);
+    }
+    if rdp_display_ok
+        && rdp_redirection_fields.iter().any(|touched| *touched)
+        && let ConnectionType::Rdp {
+            redirection, clipboard, ..
+        } = &mut connection.config
+    {
+        if !edit.rdp_redirect_clipboard.is_unchanged() {
+            let enabled = flag_value(&edit.rdp_redirect_clipboard, true);
+            redirection.clipboard = enabled;
+            clipboard.mode = if enabled {
+                "text-and-files".to_string()
+            } else {
+                "disabled".to_string()
+            };
+        }
+        if !edit.rdp_redirect_drives.is_unchanged() {
+            redirection.drives = flag_value(&edit.rdp_redirect_drives, false);
+        }
+        if !edit.rdp_drive_letters.is_unchanged() {
+            redirection.drive_letters = match &edit.rdp_drive_letters {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => super::default_rdp_drive_letters(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.rdp_custom_drive_path.is_unchanged() {
+            redirection.custom_drive_path = match &edit.rdp_custom_drive_path {
+                BatchField::Set(value) => value.clone(),
+                BatchField::Clear => String::new(),
+                BatchField::Unchanged => unreachable!(),
+            };
+        }
+        if !edit.rdp_redirect_printers.is_unchanged() {
+            redirection.printers = flag_value(&edit.rdp_redirect_printers, false);
+        }
+        if !edit.rdp_redirect_ports.is_unchanged() {
+            redirection.ports = flag_value(&edit.rdp_redirect_ports, false);
+        }
+        if !edit.rdp_redirect_smartcards.is_unchanged() {
+            redirection.smartcards = flag_value(&edit.rdp_redirect_smartcards, false);
+        }
+        if !edit.rdp_redirect_microphone.is_unchanged() {
+            redirection.microphone = flag_value(&edit.rdp_redirect_microphone, false);
+        }
+        if !edit.rdp_redirect_webauthn.is_unchanged() {
+            redirection.webauthn = flag_value(&edit.rdp_redirect_webauthn, false);
+        }
+        if !edit.rdp_audio.is_unchanged() {
+            redirection.audio = match &edit.rdp_audio {
+                BatchField::Set(value) => match value.as_str() {
+                    "play_on_local" | "redirect" => "local".to_string(),
+                    "play_on_remote" | "resource_only" => "remote".to_string(),
+                    _ => value.clone(),
+                },
+                BatchField::Clear => super::default_rdp_audio_mode(),
                 BatchField::Unchanged => unreachable!(),
             };
         }

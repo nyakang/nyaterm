@@ -6,14 +6,17 @@ use gpui::{
     prelude::{FluentBuilder, InteractiveElement, ParentElement, Styled},
     px, rgb,
 };
-use nyaterm_ui::NyaSwitch;
+use nyaterm_remote_desktop::parse_rdp_drive_letters;
+use nyaterm_ui::{NyaCheckbox, NyaSwitch};
 
 use crate::features::{NyaTermApp, connections::ConnectionEditorToggle};
-use crate::models::{ConnectionEditorField, ConnectionEditorSelect};
+use crate::models::{
+    ConnectionEditorField, ConnectionEditorSelect, ConnectionEditorState, local_drive_letters,
+};
 
 use super::super::super::list::{
-    ConnectionEditorRenderContext, connection_editor_select, editor_field, editor_stepper_field,
-    required,
+    ConnectionEditorFields, ConnectionEditorRenderContext, connection_editor_select, editor_field,
+    editor_stepper_field, required,
 };
 use super::ConnectionEditorSectionContext;
 
@@ -58,6 +61,196 @@ fn rdp_switch_row(
                     on_click(&gpui::ClickEvent::default(), window, cx);
                 }),
         )
+}
+
+/// A button that opens the native directory picker. The selected path is shown
+/// in place of a manually editable input, so the stored value is always a
+/// directory the user actually chose.
+fn rdp_drive_directory_picker(
+    palette: crate::theme::ThemePalette,
+    editor: &ConnectionEditorState,
+    fields: &ConnectionEditorFields,
+    id: &'static str,
+    label: impl Into<SharedString>,
+    cx: &mut Context<NyaTermApp>,
+) -> gpui::Div {
+    let label: SharedString = label.into();
+    let configured = editor.rdp_redirection.custom_drive_path.trim();
+    let display = if configured.is_empty() {
+        t!("dialog.rdpCustomDriveSelect").to_string()
+    } else {
+        configured.to_string()
+    };
+
+    div()
+        .min_w_0()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .when(!label.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(label),
+            )
+        })
+        .child(
+            nyaterm_ui::NyaButton::new(id, display)
+                .form_control()
+                .full_width()
+                .label_left()
+                .icon("icons/conn/folder.svg")
+                .tooltip(t!("dialog.rdpCustomDrivePickPrompt"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.prompt_connection_editor_custom_drive_path(cx);
+                })),
+        )
+        .when_some(
+            fields
+                .errors
+                .get(&ConnectionEditorField::RdpCustomDrivePath),
+            |this, error| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.danger))
+                        .child(error.clone()),
+                )
+            },
+        )
+}
+
+/// Shown only while the Drives switch is on and the built-in/IronRDP backend
+/// is selected. Windows offers per-letter picks plus one custom directory;
+/// Linux/macOS have no letters, so only the single directory is configured.
+fn rdp_drive_picker(
+    palette: crate::theme::ThemePalette,
+    editor: &ConnectionEditorState,
+    fields: &ConnectionEditorFields,
+    cx: &mut Context<NyaTermApp>,
+) -> Option<gpui::Div> {
+    if !editor.rdp_redirection.drives || editor.uses_mstsc_rdp() {
+        // mstscax only exposes an all-or-nothing RedirectDrives switch; no
+        // single-letter or single-directory property exists, so a picker here
+        // would be misleading.
+        return None;
+    }
+
+    let mut picker = div().mt_1().pl_1().flex().flex_col().gap_2();
+
+    if cfg!(windows) {
+        let available = local_drive_letters();
+        if !available.is_empty() {
+            let selected = parse_rdp_drive_letters(&editor.rdp_redirection.drive_letters);
+            picker = picker
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("dialog.rdpDrivePickerHint")),
+                )
+                .child({
+                    let mut letters = div().flex().flex_wrap().gap_2();
+                    for letter in available {
+                        let id = format!("connection-rdp-drive-{letter}");
+                        let checked = selected.contains(&letter);
+                        let app = cx.weak_entity();
+                        letters = letters.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    NyaCheckbox::new(id)
+                                        .checked(checked)
+                                        .on_click(move |_, _, cx| {
+                                            let _ = app.update(cx, |app, cx| {
+                                                app.toggle_connection_editor_flag(
+                                                    ConnectionEditorToggle::RdpRedirectDriveLetter(
+                                                        letter,
+                                                    ),
+                                                    cx,
+                                                );
+                                            });
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(palette.text))
+                                        .child(format!("{letter}:")),
+                                ),
+                        );
+                    }
+                    letters
+                });
+        }
+
+        let custom_checked = !editor.rdp_redirection.custom_drive_path.trim().is_empty();
+        let app = cx.weak_entity();
+        picker = picker.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            NyaCheckbox::new("connection-rdp-custom-drive")
+                                .checked(custom_checked)
+                                .on_click(move |_, _, cx| {
+                                    let _ = app.update(cx, |app, cx| {
+                                        if custom_checked {
+                                            app.toggle_connection_editor_flag(
+                                                ConnectionEditorToggle::RdpCustomDriveToggled,
+                                                cx,
+                                            );
+                                        } else {
+                                            app.prompt_connection_editor_custom_drive_path(cx);
+                                        }
+                                    });
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(palette.text))
+                                .child(t!("dialog.rdpCustomDrive")),
+                        ),
+                )
+                .child(rdp_drive_directory_picker(
+                    palette,
+                    editor,
+                    fields,
+                    "connection-editor-rdp-custom-drive-picker",
+                    "",
+                    cx,
+                )),
+        );
+    } else {
+        picker = picker
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("dialog.rdpCustomDriveHint")),
+            )
+            .child(rdp_drive_directory_picker(
+                palette,
+                editor,
+                fields,
+                "connection-editor-rdp-custom-drive-picker",
+                t!("dialog.rdpCustomDrive"),
+                cx,
+            ));
+    }
+
+    Some(picker)
 }
 
 pub(super) fn connection_editor_rdp_section(
@@ -465,4 +658,114 @@ fn rdp_session(
                 cx,
             ))
         })
+        .child(
+            div()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight(600.))
+                        .text_color(rgb(palette.text))
+                        .child(t!("dialog.rdpLocalResources")),
+                )
+                .child(rdp_switch_row(
+                    palette,
+                    "connection-rdp-redirect-clipboard",
+                    t!("dialog.rdpRedirectClipboard"),
+                    None,
+                    editor.rdp_redirection.clipboard,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::RdpRedirectClipboard,
+                            cx,
+                        )
+                    }),
+                ))
+                .child(rdp_switch_row(
+                    palette,
+                    "connection-rdp-redirect-drives",
+                    t!("dialog.rdpRedirectDrives"),
+                    editor
+                        .uses_mstsc_rdp()
+                        .then(|| t!("dialog.rdpDrivesAllActiveX").into()),
+                    editor.rdp_redirection.drives,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::RdpRedirectDrives,
+                            cx,
+                        )
+                    }),
+                ))
+                .when_some(rdp_drive_picker(palette, editor, fields, cx), |this, picker| {
+                    this.child(picker)
+                })
+                .child(rdp_switch_row(
+                    palette,
+                    "connection-rdp-redirect-printers",
+                    t!("dialog.rdpRedirectPrinters"),
+                    None,
+                    editor.rdp_redirection.printers,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::RdpRedirectPrinters,
+                            cx,
+                        )
+                    }),
+                ))
+                .child(rdp_switch_row(
+                    palette,
+                    "connection-rdp-redirect-ports",
+                    t!("dialog.rdpRedirectPorts"),
+                    None,
+                    editor.rdp_redirection.ports,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::RdpRedirectPorts,
+                            cx,
+                        )
+                    }),
+                ))
+                .child(rdp_switch_row(
+                    palette,
+                    "connection-rdp-redirect-smartcards",
+                    t!("dialog.rdpRedirectSmartcards"),
+                    None,
+                    editor.rdp_redirection.smartcards,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::RdpRedirectSmartcards,
+                            cx,
+                        )
+                    }),
+                ))
+                .child(rdp_switch_row(
+                    palette,
+                    "connection-rdp-redirect-microphone",
+                    t!("dialog.rdpRedirectMicrophone"),
+                    None,
+                    editor.rdp_redirection.microphone,
+                    cx.listener(|this, _, _, cx| {
+                        this.toggle_connection_editor_flag(
+                            ConnectionEditorToggle::RdpRedirectMicrophone,
+                            cx,
+                        )
+                    }),
+                ))
+                .child(connection_editor_select(
+                    ConnectionEditorRenderContext {
+                        palette,
+                        fields,
+                        cx,
+                    },
+                    "connection-editor-rdp-audio",
+                    t!("dialog.rdpAudio"),
+                    ConnectionEditorSelect::RdpAudio,
+                )),
+        )
 }

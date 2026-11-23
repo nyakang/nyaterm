@@ -251,6 +251,7 @@ fn fit_window_rdp_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig
         },
         clipboard: RdpClipboardConfig::default(),
         reconnect: RdpReconnectConfig::default(),
+        redirection: Default::default(),
     }
 }
 
@@ -1272,7 +1273,7 @@ fn closing_a_native_rdp_session_skips_the_helper_manager() {
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "local");
     cx.update(|cx| {
-        app.update(cx, |app, _| {
+        app.update(cx, |app, cx| {
             let session = RemoteDesktopSessionState {
                 native_rdp_config: Some(fit_window_rdp_config("native")),
                 ..Default::default()
@@ -1281,7 +1282,7 @@ fn closing_a_native_rdp_session_skips_the_helper_manager() {
                 .sessions
                 .insert("native-close".into(), session);
             assert!(
-                app.close_rdp_runtime("native-close").is_ok(),
+                app.close_rdp_runtime("native-close", cx).is_ok(),
                 "native sessions have no helper session to close"
             );
             assert!(!app.remote_desktop.sessions.contains_key("native-close"));

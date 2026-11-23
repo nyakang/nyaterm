@@ -97,6 +97,7 @@ fn rdp_connection() -> SavedConnection {
             display: Default::default(),
             clipboard: Default::default(),
             reconnect: Default::default(),
+            redirection: Default::default(),
         },
         ..ssh_connection()
     }
@@ -754,6 +755,81 @@ fn serial_and_vnc_fields_apply() {
             assert_eq!(reconnect.max_attempts, 5);
         }
         _ => panic!("expected vnc"),
+    }
+}
+
+#[test]
+fn rdp_redirection_fields_apply_and_clear_to_defaults() {
+    let mut connection = rdp_connection();
+    let edit = ConnectionBatchEdit {
+        rdp_redirect_clipboard: BatchField::Set(false),
+        rdp_redirect_drives: BatchField::Set(true),
+        rdp_drive_letters: BatchField::Set("CD".to_string()),
+        rdp_custom_drive_path: BatchField::Set("/shared/path".to_string()),
+        rdp_redirect_printers: BatchField::Set(true),
+        rdp_redirect_ports: BatchField::Set(true),
+        rdp_redirect_smartcards: BatchField::Set(true),
+        rdp_redirect_microphone: BatchField::Set(true),
+        rdp_redirect_webauthn: BatchField::Set(true),
+        rdp_audio: BatchField::Set("local".to_string()),
+        ..Default::default()
+    };
+    let report = apply_connection_batch_edit(&mut connection, &edit);
+    assert_eq!(report.applied_fields, 10);
+    match &connection.config {
+        ConnectionType::Rdp {
+            clipboard,
+            redirection,
+            ..
+        } => {
+            assert!(!redirection.clipboard);
+            assert_eq!(clipboard.mode, "disabled");
+            assert!(redirection.drives);
+            assert_eq!(redirection.drive_letters, "CD");
+            assert_eq!(redirection.custom_drive_path, "/shared/path");
+            assert!(redirection.printers);
+            assert!(redirection.ports);
+            assert!(redirection.smartcards);
+            assert!(redirection.microphone);
+            assert!(redirection.webauthn);
+            assert_eq!(redirection.audio, "local");
+        }
+        _ => panic!("expected rdp"),
+    }
+
+    let clear = ConnectionBatchEdit {
+        rdp_redirect_clipboard: BatchField::Clear,
+        rdp_redirect_drives: BatchField::Clear,
+        rdp_drive_letters: BatchField::Clear,
+        rdp_custom_drive_path: BatchField::Clear,
+        rdp_redirect_printers: BatchField::Clear,
+        rdp_redirect_ports: BatchField::Clear,
+        rdp_redirect_smartcards: BatchField::Clear,
+        rdp_redirect_microphone: BatchField::Clear,
+        rdp_redirect_webauthn: BatchField::Clear,
+        rdp_audio: BatchField::Clear,
+        ..Default::default()
+    };
+    apply_connection_batch_edit(&mut connection, &clear);
+    match &connection.config {
+        ConnectionType::Rdp {
+            clipboard,
+            redirection,
+            ..
+        } => {
+            assert!(redirection.clipboard);
+            assert_eq!(clipboard.mode, "text-and-files");
+            assert!(!redirection.drives);
+            assert_eq!(redirection.drive_letters, "*");
+            assert!(redirection.custom_drive_path.is_empty());
+            assert!(!redirection.printers);
+            assert!(!redirection.ports);
+            assert!(!redirection.smartcards);
+            assert!(!redirection.microphone);
+            assert!(!redirection.webauthn);
+            assert_eq!(redirection.audio, "no_audio");
+        }
+        _ => panic!("expected rdp"),
     }
 }
 

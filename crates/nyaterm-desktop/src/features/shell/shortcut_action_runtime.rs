@@ -11,8 +11,8 @@ use crate::shortcuts::{
     SwitchToTab, TemporarySshLink, TerminalClear, TerminalClearAll, TerminalCommandNext,
     TerminalCommandPrevious, TerminalCommandSelect, TerminalCopy, TerminalFind, TerminalLocalMode,
     TerminalPaste, TerminalPasteSelected, TerminalSelectAll, ToggleLeftSidebar,
-    ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording, ToggleRightSidebar, UploadFile,
-    ZoomIn, ZoomOut,
+    ToggleNativeFullscreen, TogglePaneFocus, ToggleRecording, ToggleRightSidebar,
+    ToggleRdpFullscreen, UploadFile, ZoomIn, ZoomOut,
 };
 
 fn shortcut_interceptor_dispatches(id: ShortcutId) -> bool {
@@ -238,8 +238,24 @@ impl NyaTermApp {
                 }
             }
             ShortcutId::ToggleNativeFullscreen => {
-                window.toggle_fullscreen();
-                cx.notify();
+                // RDP fullscreen is owned solely by Ctrl+Shift+Alt+F11. F11 keeps
+                // its ordinary native fullscreen behaviour for the workspace and
+                // never unwinding an RDP fullscreen session.
+                if !self.has_remote_desktop_fullscreen() {
+                    window.toggle_fullscreen();
+                    cx.notify();
+                }
+            }
+            ShortcutId::ToggleRdpFullscreen => {
+                // Exit takes precedence even if the active tab changed while
+                // the remote session owns fullscreen.
+                if self.has_remote_desktop_fullscreen() {
+                    self.exit_remote_desktop_fullscreen(cx);
+                } else if let Some(session_id) = self.session.active_id().map(str::to_string)
+                    && self.remote_desktop_fullscreen_supported(&session_id)
+                {
+                    self.toggle_remote_desktop_fullscreen(&session_id, window, cx);
+                }
             }
             ShortcutId::ZoomIn => {
                 self.execute_title_menu_command(&TitleMenuCommand::ZoomIn, window, cx)
@@ -366,6 +382,7 @@ impl NyaTermApp {
                 ToggleNativeFullscreen,
                 ToggleNativeFullscreen
             ))
+            .on_action(direct_handler!(ToggleRdpFullscreen, ToggleRdpFullscreen))
             .on_action(direct_handler!(ZoomIn, ZoomIn))
             .on_action(direct_handler!(ZoomOut, ZoomOut))
             .on_action(direct_handler!(ResetZoom, ResetZoom))

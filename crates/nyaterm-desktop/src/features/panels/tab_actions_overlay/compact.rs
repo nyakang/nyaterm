@@ -8,7 +8,8 @@ use super::{
 };
 use crate::features::NyaTermApp;
 use crate::features::view_widgets::{
-    tab_menu_item, tab_menu_item_enabled, tab_menu_item_with_icon, tab_menu_separator,
+    tab_menu_item, tab_menu_item_enabled, tab_menu_item_with_icon, tab_menu_item_with_shortcut,
+    tab_menu_separator,
 };
 use crate::models::{StartupCommandAction, TabActionsSubmenu, WorkspaceSplitDirection};
 use crate::theme::ThemePalette;
@@ -221,6 +222,15 @@ impl NyaTermApp {
         let explain_session_id = session_id.clone();
         let analyze_session_id = session_id.clone();
         let secure_attention_session_id = session_id.clone();
+        let fullscreen_session_id = session_id.clone();
+        let fullscreen_active = self.is_remote_desktop_fullscreen(&session_id);
+        let fullscreen_label = if fullscreen_active {
+            t!("remoteDesktop.exitFullscreen")
+        } else {
+            t!("remoteDesktop.fullscreen")
+        };
+        let fullscreen_shortcut =
+            self.display_shortcut_for("view.toggleRdpFullscreen", "Ctrl+Shift+Alt+F11");
         let submenu_panel = active_submenu
             .filter(|submenu| policy.supports_submenu(*submenu))
             .map(|submenu| {
@@ -750,6 +760,26 @@ impl NyaTermApp {
                                             this.mark_user_activity();
                                         }
                                         cx.notify();
+                                    }),
+                                ))
+                            })
+                            .when(support.rdp_fullscreen, |this| {
+                                this.child(tab_menu_item_with_shortcut(
+                                    palette,
+                                    if fullscreen_active {
+                                        "tab-ctx-rdp-exit-fullscreen"
+                                    } else {
+                                        "tab-ctx-rdp-fullscreen"
+                                    },
+                                    fullscreen_label,
+                                    fullscreen_shortcut,
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.close_tab_actions(cx);
+                                        this.toggle_remote_desktop_fullscreen(
+                                            &fullscreen_session_id,
+                                            window,
+                                            cx,
+                                        );
                                     }),
                                 ))
                             })

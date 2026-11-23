@@ -50,6 +50,7 @@ pub(crate) enum ShortcutId {
     ToggleRightSidebar,
     TogglePaneFocus,
     ToggleNativeFullscreen,
+    ToggleRdpFullscreen,
     ZoomIn,
     ZoomOut,
     ResetZoom,
@@ -99,6 +100,7 @@ impl ShortcutId {
             Self::ToggleRightSidebar => "view.toggleRightSidebar",
             Self::TogglePaneFocus => "view.togglePaneFocus",
             Self::ToggleNativeFullscreen => "view.toggleNativeFullscreen",
+            Self::ToggleRdpFullscreen => "view.toggleRdpFullscreen",
             Self::ZoomIn => "view.zoomIn",
             Self::ZoomOut => "view.zoomOut",
             Self::ResetZoom => "view.resetZoom",
@@ -385,7 +387,7 @@ macro_rules! shortcut {
     };
 }
 
-pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 44] = [
+pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 45] = [
     shortcut!(
         TerminalCopy,
         Terminal,
@@ -748,6 +750,17 @@ pub(crate) const SHORTCUT_REGISTRY: [ShortcutDefinition; 44] = [
         "ctrl+meta+f",
         Supported,
         "Toggles native fullscreen."
+    ),
+    shortcut!(
+        ToggleRdpFullscreen,
+        View,
+        "settings.shortcutLabels.toggleRdpFullscreen",
+        Workspace,
+        ShortcutKind::Direct,
+        "ctrl+shift+alt+f11",
+        "ctrl+shift+alt+f11",
+        Supported,
+        "Toggles RDP fullscreen."
     ),
     shortcut!(
         ZoomIn,
@@ -1209,6 +1222,7 @@ fn binding_for_action(
         ShortcutId::ToggleRightSidebar => binding!(ToggleRightSidebar),
         ShortcutId::TogglePaneFocus => binding!(TogglePaneFocus),
         ShortcutId::ToggleNativeFullscreen => binding!(ToggleNativeFullscreen),
+        ShortcutId::ToggleRdpFullscreen => binding!(ToggleRdpFullscreen),
         ShortcutId::ZoomIn => binding!(ZoomIn),
         ShortcutId::ZoomOut => binding!(ZoomOut),
         ShortcutId::ResetZoom => binding!(ResetZoom),
@@ -1491,7 +1505,7 @@ mod tests {
 
     #[test]
     fn registry_is_complete_unique_and_has_valid_platform_defaults() {
-        assert_eq!(SHORTCUT_REGISTRY.len(), 44);
+        assert_eq!(SHORTCUT_REGISTRY.len(), 45);
         let mut ids = HashSet::new();
         for definition in SHORTCUT_REGISTRY {
             assert!(ids.insert(definition.id));
@@ -1508,6 +1522,21 @@ mod tests {
                 Some(definition.id)
             );
         }
+    }
+
+    #[test]
+    fn rdp_fullscreen_shortcut_is_ctrl_shift_alt_f11() {
+        let definition = SHORTCUT_REGISTRY
+            .iter()
+            .find(|definition| definition.id == ShortcutId::ToggleRdpFullscreen)
+            .expect("RDP fullscreen shortcut is registered");
+        assert_eq!(definition.id.as_str(), "view.toggleRdpFullscreen");
+        let binding = definition.default_binding();
+        let keystroke = binding.chords()[0].keystroke();
+        assert_eq!(keystroke.key, "f11");
+        assert!(keystroke.modifiers.control);
+        assert!(keystroke.modifiers.shift);
+        assert!(keystroke.modifiers.alt);
     }
 
     #[gpui::test]
@@ -1619,11 +1648,13 @@ mod tests {
             }
             let mac = definition.default_binding_for(ShortcutPlatform::MacOs);
             assert!(
-                definition.id == ShortcutId::ToggleNativeFullscreen
-                    || mac
-                        .chords()
-                        .iter()
-                        .all(|chord| !chord.keystroke().modifiers.control),
+                matches!(
+                    definition.id,
+                    ShortcutId::ToggleNativeFullscreen | ShortcutId::ToggleRdpFullscreen
+                ) || mac
+                    .chords()
+                    .iter()
+                    .all(|chord| !chord.keystroke().modifiers.control),
                 "{}",
                 definition.id.as_str()
             );

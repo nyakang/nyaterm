@@ -510,6 +510,24 @@ pub(in crate::features) fn rdp_display_mode_choices(mode: &str) -> Vec<Connectio
     .collect()
 }
 
+pub(in crate::features) fn rdp_audio_choices(mode: &str) -> Vec<ConnectionEditorChoice> {
+    [
+        ("no_audio", t!("dialog.rdpAudioNoAudio")),
+        ("local", t!("dialog.rdpAudioLocal")),
+        ("remote", t!("dialog.rdpAudioRemote")),
+    ]
+    .into_iter()
+    .map(|(value, label)| {
+        let current = match mode {
+            "local" | "play_on_local" => "local",
+            "remote" | "play_on_remote" => "remote",
+            _ => "no_audio",
+        };
+        ConnectionEditorChoice::new(Some(value.to_string()), label, current == value)
+    })
+    .collect()
+}
+
 pub(in crate::features) fn vnc_security_choices(mode: &str) -> Vec<ConnectionEditorChoice> {
     [
         ("auto", t!("dialog.vncSecurityAuto")),

@@ -68,16 +68,17 @@ impl NyaTermApp {
                 let drain_started_at = Instant::now();
                 // Arm before draining, so a frame enqueued in between still
                 // signals rather than waiting for the next one.
-                let drained = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
-                    this.remote_desktop.arm_event_wake();
-                    // Any event means a session exists; the periodic clock is scoped
-                    // to that, and every reconnect is scheduled from an event handler.
-                    this.ensure_remote_desktop_periodic_clock(cx);
-                    let drained = this.drain_remote_desktop_queues(window, cx);
-                    let software_renderer =
-                        crate::platform::is_software_renderer(this.shell.renderer());
-                    (drained, software_renderer)
-                });
+                let drained =
+                    NyaTermApp::update_in_rdp_host_window(&this, cx, |this, window, cx| {
+                        this.remote_desktop.arm_event_wake();
+                        // Any event means a session exists; the periodic clock is scoped
+                        // to that, and every reconnect is scheduled from an event handler.
+                        this.ensure_remote_desktop_periodic_clock(cx);
+                        let drained = this.drain_remote_desktop_queues(window, cx);
+                        let software_renderer =
+                            crate::platform::is_software_renderer(this.shell.renderer());
+                        (drained, software_renderer)
+                    });
                 match drained {
                     Err(_) => break,
                     // A frame can arrive while the previous one is being applied.
@@ -243,17 +244,17 @@ impl NyaTermApp {
                         .active_id()
                         .and_then(|session_id| this.remote_desktop.sessions.get(session_id))
                         .is_some_and(|session| session.cursor_repaint_pending);
-                    remote_desktop_periodic_delay(
-                        this.remote_desktop.pointer_flush_is_pending(),
-                        cursor_repaint_pending,
-                    )
+                    // Pointer flushes now have their own one-shot short timer.
+                    // Keeping them off this clock stops a move burst from
+                    // running the whole maintenance pass at 125 Hz.
+                    remote_desktop_periodic_delay(false, cursor_repaint_pending)
                 }) else {
                     break;
                 };
                 cx.background_executor().timer(delay).await;
                 // `update_in`: keyboard-capture sync needs the window.
                 let Ok(keep_running) =
-                    NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                    NyaTermApp::update_in_rdp_host_window(&this, cx, |this, window, cx| {
                         if this.drive_remote_desktop_periodic(window, cx) {
                             cx.notify();
                         }

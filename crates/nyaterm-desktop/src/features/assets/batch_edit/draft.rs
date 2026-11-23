@@ -364,6 +364,30 @@ impl BatchScopeDraft {
                     BatchFieldKey::RdpReconnectAttempts => {
                         edit.rdp_reconnect_attempts = BatchField::Clear
                     }
+                    BatchFieldKey::RdpRedirectClipboard => {
+                        edit.rdp_redirect_clipboard = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpRedirectDrives => {
+                        edit.rdp_redirect_drives = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpDriveLetters => edit.rdp_drive_letters = BatchField::Clear,
+                    BatchFieldKey::RdpCustomDrivePath => {
+                        edit.rdp_custom_drive_path = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpRedirectPrinters => {
+                        edit.rdp_redirect_printers = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpRedirectPorts => edit.rdp_redirect_ports = BatchField::Clear,
+                    BatchFieldKey::RdpRedirectSmartcards => {
+                        edit.rdp_redirect_smartcards = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpRedirectMicrophone => {
+                        edit.rdp_redirect_microphone = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpRedirectWebauthn => {
+                        edit.rdp_redirect_webauthn = BatchField::Clear
+                    }
+                    BatchFieldKey::RdpAudio => edit.rdp_audio = BatchField::Clear,
                     BatchFieldKey::VncScaleMode => edit.vnc_scale_mode = BatchField::Clear,
                     BatchFieldKey::VncClipboard => edit.vnc_clipboard = BatchField::Clear,
                     BatchFieldKey::VncShared => edit.vnc_shared = BatchField::Clear,
@@ -880,6 +904,36 @@ impl BatchScopeDraft {
                     } else {
                         BatchField::Set(self.require_number::<u32>(field)?)
                     };
+                }
+                BatchFieldKey::RdpRedirectClipboard => {
+                    edit.rdp_redirect_clipboard = self.bool_field(field);
+                }
+                BatchFieldKey::RdpRedirectDrives => {
+                    edit.rdp_redirect_drives = self.bool_field(field);
+                }
+                BatchFieldKey::RdpDriveLetters => {
+                    edit.rdp_drive_letters = self.text_field(field, false);
+                }
+                BatchFieldKey::RdpCustomDrivePath => {
+                    edit.rdp_custom_drive_path = self.text_field(field, false);
+                }
+                BatchFieldKey::RdpRedirectPrinters => {
+                    edit.rdp_redirect_printers = self.bool_field(field);
+                }
+                BatchFieldKey::RdpRedirectPorts => {
+                    edit.rdp_redirect_ports = self.bool_field(field);
+                }
+                BatchFieldKey::RdpRedirectSmartcards => {
+                    edit.rdp_redirect_smartcards = self.bool_field(field);
+                }
+                BatchFieldKey::RdpRedirectMicrophone => {
+                    edit.rdp_redirect_microphone = self.bool_field(field);
+                }
+                BatchFieldKey::RdpRedirectWebauthn => {
+                    edit.rdp_redirect_webauthn = self.bool_field(field);
+                }
+                BatchFieldKey::RdpAudio => {
+                    edit.rdp_audio = self.text_field(field, true);
                 }
                 BatchFieldKey::VncScaleMode => {
                     edit.vnc_scale_mode = self.text_field(field, true);

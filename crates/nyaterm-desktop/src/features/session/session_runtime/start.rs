@@ -913,6 +913,7 @@ impl NyaTermApp {
                 security,
                 display,
                 clipboard,
+                redirection,
                 reconnect,
             } => {
                 let backend = parse_rdp_backend(&backend).map_err(|error| error.to_string())?;
@@ -937,6 +938,7 @@ impl NyaTermApp {
                         enabled: reconnect.enabled,
                         max_attempts: reconnect.max_attempts,
                     },
+                    redirection: (&redirection).into(),
                 };
                 config.normalize_backend_settings();
                 Ok(SessionLaunchConfig::Rdp(config))

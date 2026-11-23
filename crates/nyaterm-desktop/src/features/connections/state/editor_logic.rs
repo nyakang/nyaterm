@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use nyaterm_remote_desktop::{RDP_ALL_DRIVES, parse_rdp_drive_letters};
 use nyaterm_ui::ChildWindowSlot;
 
 use super::super::connection_runtime::ConnectionEditorToggle;
@@ -7,7 +8,7 @@ use super::password::STORED_PASSWORD_PLACEHOLDER;
 use crate::models::{
     ConnectionEditorField, ConnectionEditorPasswordSource, ConnectionEditorSelect,
     ConnectionEditorSshAlgorithmTab, ConnectionEditorState, ConnectionGroupEditorState,
-    ConnectionKindTab, ConnectionPasswordEdit,
+    ConnectionKindTab, ConnectionPasswordEdit, local_drive_letters,
 };
 
 pub(super) fn clear_connection_editor_runtime_state(
@@ -291,6 +292,9 @@ pub(super) fn set_connection_editor_select_value(
         }
         ConnectionEditorSelect::RdpDisplayMode => {
             editor.rdp_display.mode = value.unwrap_or_else(|| "fit-window".to_string());
+        }
+        ConnectionEditorSelect::RdpAudio => {
+            editor.rdp_redirection.audio = value.unwrap_or_else(|| "no_audio".to_string());
         }
         ConnectionEditorSelect::VncSecurityMode => {
             editor.vnc_security.mode = value.unwrap_or_else(|| "auto".to_string());
@@ -844,6 +848,74 @@ pub(super) fn toggle_connection_editor_flag(
             editor.rdp_security.administrative_session =
                 !editor.rdp_security.administrative_session;
         }
+        ConnectionEditorToggle::RdpRedirectDrives => {
+            editor.rdp_redirection.drives = !editor.rdp_redirection.drives;
+        }
+        ConnectionEditorToggle::RdpCustomDriveToggled => {
+            // Checking the box seeds a usable default path; unchecking clears
+            // it so the share is not announced. An empty string is the single
+            // source of truth for "custom directory disabled".
+            editor.rdp_redirection.custom_drive_path = if editor
+                .rdp_redirection
+                .custom_drive_path
+                .trim()
+                .is_empty()
+            {
+                dirs::home_dir()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+        }
+        ConnectionEditorToggle::RdpRedirectDriveLetter(letter) => {
+            // Toggle within the drives the editor actually shows. Expanding a
+            // wildcard to all 26 letters would advertise drives absent on this
+            // machine, which appear as inaccessible in the remote session.
+            let available = local_drive_letters();
+            let mut selected: Vec<char> =
+                if editor.rdp_redirection.drive_letters.trim() == RDP_ALL_DRIVES {
+                    available.clone()
+                } else {
+                    parse_rdp_drive_letters(&editor.rdp_redirection.drive_letters)
+                        .into_iter()
+                        .filter(|value| available.contains(value))
+                        .collect()
+                };
+            if let Some(index) = selected.iter().position(|value| *value == letter) {
+                selected.remove(index);
+            } else {
+                selected.push(letter);
+                selected.sort_unstable();
+            }
+            editor.rdp_redirection.drive_letters =
+                if !selected.is_empty() && selected == available {
+                    RDP_ALL_DRIVES.to_string()
+                } else {
+                    selected.into_iter().collect()
+                };
+        }
+        ConnectionEditorToggle::RdpRedirectPrinters => {
+            editor.rdp_redirection.printers = !editor.rdp_redirection.printers;
+        }
+        ConnectionEditorToggle::RdpRedirectPorts => {
+            editor.rdp_redirection.ports = !editor.rdp_redirection.ports;
+        }
+        ConnectionEditorToggle::RdpRedirectSmartcards => {
+            editor.rdp_redirection.smartcards = !editor.rdp_redirection.smartcards;
+        }
+        ConnectionEditorToggle::RdpRedirectMicrophone => {
+            editor.rdp_redirection.microphone = !editor.rdp_redirection.microphone;
+        }
+        ConnectionEditorToggle::RdpRedirectClipboard => {
+            editor.rdp_redirection.clipboard = !editor.rdp_redirection.clipboard;
+            // Keep the legacy mode field in sync so the built-in helper sees it.
+            editor.rdp_clipboard.mode = if editor.rdp_redirection.clipboard {
+                "text-and-files".to_string()
+            } else {
+                "disabled".to_string()
+            };
+        }
         ConnectionEditorToggle::RdpReconnect => {
             editor.rdp_reconnect.enabled = !editor.rdp_reconnect.enabled;
         }
@@ -966,6 +1038,19 @@ pub(super) fn apply_connection_editor_working_dir(
         return false;
     };
     editor.working_dir = working_dir;
+    editor.error = None;
+    editor.field_errors.clear();
+    true
+}
+
+pub(super) fn apply_connection_editor_custom_drive_path(
+    draft: &mut Option<ConnectionEditorState>,
+    path: String,
+) -> bool {
+    let Some(editor) = draft.as_mut() else {
+        return false;
+    };
+    editor.rdp_redirection.custom_drive_path = path;
     editor.error = None;
     editor.field_errors.clear();
     true
@@ -1238,6 +1323,20 @@ pub(super) fn editor_field_seeds(
             Empty,
         ),
         (
+            ConnectionEditorField::RdpCustomDrivePath,
+            // Linux/macOS have no letters: show the directory that will
+            // actually be mapped, defaulting to home for legacy sessions.
+            if draft.rdp_redirection.custom_drive_path.trim().is_empty() && !cfg!(windows) {
+                dirs::home_dir()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                draft.rdp_redirection.custom_drive_path.clone()
+            },
+            false,
+            I18n("dialog.rdpCustomDrivePlaceholder"),
+        ),
+        (
             ConnectionEditorField::RdpReconnectAttempts,
             draft.rdp_reconnect.max_attempts.to_string(),
             false,
@@ -1463,6 +1562,9 @@ pub(super) fn set_connection_editor_field_text(
             if let Ok(value) = text.parse() {
                 draft.rdp_display.height = value;
             }
+        }
+        ConnectionEditorField::RdpCustomDrivePath => {
+            draft.rdp_redirection.custom_drive_path = text;
         }
         ConnectionEditorField::RdpReconnectAttempts => {
             if let Ok(value) = text.parse() {

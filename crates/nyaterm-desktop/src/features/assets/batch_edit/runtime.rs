@@ -7,7 +7,7 @@ use super::options;
 use super::{ASSET_BATCH_SELECT_PREFIX, ASSET_BATCH_TEXT_PREFIX};
 use crate::features::NyaTermApp;
 use crate::features::text_inputs::TextInputSetup;
-use gpui::{Context, Window};
+use gpui::{Context, PathPromptOptions, SharedString, Window};
 use nyaterm_core::models::SshProfile;
 use nyaterm_core::models::connection_batch::{
     ConnectionBatchKind, ConnectionBatchSkipCounts, apply_connection_batch_edit,
@@ -350,6 +350,14 @@ impl NyaTermApp {
                 BatchFieldKey::RdpDomain,
                 t!("assets.batch.placeholderValue"),
             ),
+            (
+                BatchFieldKey::RdpDriveLetters,
+                t!("assets.batch.placeholderValue"),
+            ),
+            (
+                BatchFieldKey::RdpCustomDrivePath,
+                t!("assets.batch.placeholderValue"),
+            ),
             (BatchFieldKey::RdpWidth, t!("assets.batch.placeholderValue")),
             (
                 BatchFieldKey::RdpHeight,
@@ -619,6 +627,10 @@ impl NyaTermApp {
                 )),
             ),
             (
+                BatchFieldKey::RdpAudio,
+                options::rdp_audio_select_options(&selected_value(BatchFieldKey::RdpAudio)),
+            ),
+            (
                 BatchFieldKey::VncScaleMode,
                 options::vnc_scale_select_options(&selected_value(BatchFieldKey::VncScaleMode)),
             ),
@@ -767,6 +779,48 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         self.start_workspace.set_asset_batch_bool(field, value);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn prompt_asset_batch_custom_drive_path(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let field = BatchFieldKey::RdpCustomDrivePath;
+        let options = PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(SharedString::from(
+                t!("dialog.rdpCustomDrivePickPrompt").to_string(),
+            )),
+        };
+        let cancelled_status = t!("dialog.rdpCustomDriveSelectionCancelled").to_string();
+        let input = self.existing_text_input(field.text_input_id());
+        let receiver = cx.prompt_for_paths(options);
+        self.shell
+            .set_status(t!("dialog.rdpCustomDriveSelecting").to_string());
+        cx.spawn(async move |this, cx| {
+            let selected = match receiver.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => None,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(path) = selected {
+                    let path = path.display().to_string();
+                    this.start_workspace.set_asset_batch_value(field, &path);
+                    if let Some(input) = input {
+                        input.update(cx, |state, cx| state.set_content(&path, cx));
+                    }
+                    this.shell
+                        .set_status(t!("dialog.rdpCustomDriveSelected", path = path).to_string());
+                } else {
+                    this.shell.set_status(cancelled_status);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 

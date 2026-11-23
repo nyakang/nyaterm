@@ -25,6 +25,25 @@ impl NyaTermApp {
             entity.update(cx, |this, cx| update(this, window, cx))
         })
     }
+
+    /// Same as `update_in_main_window`, but pinned to the current RDP host
+    /// window: the detached fullscreen window while one is open, otherwise the
+    /// main window. RDP dynamic textures live in the rendering window's sprite
+    /// atlas, so frame upload, native child hosting and keyboard capture must
+    /// all follow the window that actually renders the surface.
+    pub(in crate::features) fn update_in_rdp_host_window<C: AppContext, R>(
+        this: &WeakEntity<Self>,
+        cx: &mut C,
+        update: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) -> R,
+    ) -> anyhow::Result<R> {
+        let Some(host) = this.read_with(cx, |this, _| this.rdp_host_window())? else {
+            return this.update_in(cx, update);
+        };
+        let entity = this.upgrade().context("entity released")?;
+        cx.update_window(host.into(), |_, window, cx| {
+            entity.update(cx, |this, cx| update(this, window, cx))
+        })
+    }
 }
 
 #[cfg(test)]

@@ -537,7 +537,7 @@ impl NyaTermApp {
             .map(|session| (session.viewport, session.viewport_scale_factor));
         let route = self.remote_desktop.routes.remove(session_id);
         let start_context = self.remote_desktop.take_start_context(session_id);
-        let _ = self.close_rdp_runtime(session_id);
+        let _ = self.close_rdp_runtime(session_id, cx);
         if let Some(route) = route {
             self.remote_desktop
                 .routes
@@ -734,6 +734,7 @@ impl NyaTermApp {
     pub(in crate::features) fn close_remote_desktop_runtime(
         &mut self,
         session_id: &str,
+        cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         match self
             .session
@@ -744,7 +745,7 @@ impl NyaTermApp {
                 .close_vnc_runtime(session_id)
                 .map_err(anyhow::Error::from),
             _ => self
-                .close_rdp_runtime(session_id)
+                .close_rdp_runtime(session_id, cx)
                 .map_err(anyhow::Error::from),
         }
     }
@@ -752,7 +753,11 @@ impl NyaTermApp {
     pub(in crate::features) fn close_rdp_runtime(
         &mut self,
         session_id: &str,
+        cx: &mut Context<Self>,
     ) -> Result<(), RdpError> {
+        if self.is_remote_desktop_fullscreen(session_id) {
+            self.exit_remote_desktop_fullscreen(cx);
+        }
         if self.session.active_id() == Some(session_id) {
             crate::features::remote_desktop::keyboard_capture::set_keyboard_capture(
                 self.remote_desktop.manager.clone(),

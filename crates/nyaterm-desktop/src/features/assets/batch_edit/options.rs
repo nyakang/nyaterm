@@ -226,6 +226,10 @@ pub(super) fn rdp_display_mode_select_options(selected: &str) -> Vec<NyaSelectOp
     choice_options(options::rdp_display_mode_choices(selected))
 }
 
+pub(super) fn rdp_audio_select_options(selected: &str) -> Vec<NyaSelectOption> {
+    choice_options(options::rdp_audio_choices(selected))
+}
+
 pub(super) fn vnc_scale_select_options(selected: &str) -> Vec<NyaSelectOption> {
     choice_options(options::vnc_scale_choices(selected))
 }

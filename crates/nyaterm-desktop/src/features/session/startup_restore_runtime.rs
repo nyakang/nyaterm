@@ -636,6 +636,7 @@ impl NyaTermApp {
                 security,
                 display,
                 clipboard,
+                redirection,
                 reconnect,
             } = &connection.config
             {
@@ -667,6 +668,7 @@ impl NyaTermApp {
                         enabled: reconnect.enabled,
                         max_attempts: reconnect.max_attempts,
                     },
+                    redirection: redirection.into(),
                 };
                 config.normalize_backend_settings();
                 self.remote_desktop.insert_disconnected(session_id.clone());

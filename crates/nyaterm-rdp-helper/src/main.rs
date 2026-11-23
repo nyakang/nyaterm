@@ -9,11 +9,12 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use ironrdp_client::config::{ClipboardType, ConfigBuilder, Destination};
+use ironrdp_cfg::AudioMode as IronAudioMode;
+use ironrdp_client::config::{ClipboardType, ConfigBuilder, Destination, DriveRedirection};
 use ironrdp_client::output_channel::{OutputEventReceiver, output_channel};
 use ironrdp_client::rdp::{
     AutoReconnectDecision, DesktopUpdate, RdpClient, RdpInputEvent as IronInput, RdpInputSender,
-    RdpOutputEvent,
+    RdpOutputEvent, RdpdrBackendFactory,
 };
 use ironrdp_input::{
     Database as InputDatabase, MouseButton, MousePosition, Operation, Scancode, WheelRotations,
@@ -23,11 +24,12 @@ use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp_pdu::rdp::client_info::PerformanceFlags;
 use nyaterm_remote_desktop::{
     CursorPosition, CursorShape, CursorVisibility, PROTOCOL_VERSION, Packet, PixelFormat,
-    RDP_FRAMEBUFFER_LIMITS, RdpCapability, RdpCertificateRequest, RdpCertificateResponse,
-    RdpControlMessage, RdpDisplayConfig, RdpError, RdpErrorKind, RdpFrameEvent, RdpInputEvent,
-    RdpServerCapabilities, RdpSessionConfig, RdpSessionState, RemoteCursorEvent, RemotePoint,
-    RemotePointerButton, RemotePointerEvent, RemoteWheelAxis, decode_control, encode_control,
-    encode_cursor_packet, encode_frame_packet_owned, read_packet, validate_committed_text,
+    RDP_ALL_DRIVES, RDP_FRAMEBUFFER_LIMITS, RdpAudioMode, RdpCapability, RdpCertificateRequest,
+    RdpCertificateResponse, RdpControlMessage, RdpDisplayConfig, RdpError, RdpErrorKind,
+    RdpFrameEvent, RdpInputEvent, RdpRedirectionConfig, RdpServerCapabilities, RdpSessionConfig,
+    RdpSessionState, RemoteCursorEvent, RemotePoint, RemotePointerButton, RemotePointerEvent,
+    RemoteWheelAxis, decode_control, encode_control, encode_cursor_packet,
+    encode_frame_packet_owned, parse_rdp_drive_letters, read_packet, validate_committed_text,
     validate_framebuffer_dimensions, write_packet_into,
 };
 use sha2::{Digest, Sha256};
@@ -54,6 +56,27 @@ enum Outbound {
 impl Outbound {
     fn control(message: RdpControlMessage) -> Self {
         Self::Control(Box::new(message))
+    }
+}
+
+/// COM apartment for the Windows RDPDR backend, which discovers printers and
+/// logical drives through COM while the IronRDP session connects.
+#[cfg(windows)]
+struct OleApartment(bool);
+
+#[cfg(windows)]
+impl OleApartment {
+    fn start() -> Self {
+        Self(unsafe { windows::Win32::System::Ole::OleInitialize(None) }.is_ok())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for OleApartment {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { windows::Win32::System::Ole::OleUninitialize() };
+        }
     }
 }
 
@@ -115,6 +138,14 @@ fn validate_active_session_id(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    // RDPDR diagnostics are ON by default. A "drive shows but \\tsclient\X is
+    // inaccessible" failure is completely invisible otherwise: the desktop host
+    // trims helper stderr to bounded metadata, so the IRP-level NTSTATUS that
+    // explains the failure can only reach a file. Set NYATERM_RDP_TRACE=0 to
+    // opt out (for quiet production sessions).
+    if std::env::var("NYATERM_RDP_TRACE").as_deref() != Ok("0") {
+        init_diagnostics();
+    }
     let provider_error = install_crypto_provider()
         .err()
         .map(|error| error.to_string());
@@ -129,6 +160,41 @@ async fn main() {
         eprintln!("RDP helper stopped: {error}");
         std::process::exit(1);
     }
+}
+
+fn init_diagnostics() {
+    // Write to a well-known temp file so a user can attach it after reproducing
+    // a redirection failure. Stderr from the helper is intentionally reduced to
+    // bounded metadata by the desktop host, so it cannot carry these details.
+    let path = std::env::temp_dir().join("nyaterm-rdp-diagnostic.log");
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("RDP diagnostics: cannot open {}: {error}", path.display());
+            return;
+        }
+    };
+    eprintln!("RDP diagnostics: writing to {}", path.display());
+    // The default filter must name every crate that emits on the RDPDR path:
+    // `ironrdp` alone does NOT match `ironrdp_rdpdr_native` (EnvFilter matches
+    // crate/target prefixes separated by `::`, and the underscore crate names
+    // are distinct targets). Include the native filesystem backend at debug so
+    // create-IRP failures carry their NTSTATUS, plus the portable channel and
+    // client at info for symbol/name/announce context.
+    let default_filter = "ironrdp=debug,ironrdp_rdpdr=debug,ironrdp_rdpdr_native=debug,ironrdp_client=info,info";
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::sync::Mutex::new(file))
+        .with_ansi(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("NYATERM_RDP_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
+        )
+        .with_target(true)
+        .try_init();
 }
 
 fn install_crypto_provider() -> anyhow::Result<()> {
@@ -248,18 +314,24 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                     },
                 )?;
                 let connection_gate = certificate_gate.clone();
-                let (iron_config, bridge) = build_config(
+                let (iron_config, bridge, rdpdr) = build_config(
                     &session_id,
                     &config,
                     output_tx.clone(),
                     connection_gate.clone(),
                 )?;
                 let (rdp_output_tx, rdp_output_rx) = output_channel(64);
-                let client = RdpClient::new(iron_config, rdp_output_tx).with_desktop_updates();
+                let rdpdr_attached = rdpdr.is_some();
+                let mut client = RdpClient::new(iron_config, rdp_output_tx).with_desktop_updates();
+                if let Some(factory) = rdpdr {
+                    client = client.with_rdpdr_backend_factory(factory);
+                }
                 let input_sender = client.input_sender();
-                bridge.set_input_sender(input_sender.clone());
+                if let Some(bridge) = bridge.as_deref() {
+                    bridge.set_input_sender(input_sender.clone());
+                }
                 iron_input = Some(input_sender.clone());
-                clipboard_bridge = Some(bridge);
+                clipboard_bridge = bridge;
                 let client_session_id = session_id.clone();
                 let client_output_tx = output_tx.clone();
                 client_task = Some(
@@ -267,6 +339,10 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                         .name("nyaterm-ironrdp".to_string())
                         .spawn(move || {
                             let result = catch_unwind(AssertUnwindSafe(|| {
+                                #[cfg(windows)]
+                                let _ole = rdpdr_attached.then(OleApartment::start);
+                                #[cfg(not(windows))]
+                                let _ = rdpdr_attached;
                                 let runtime = tokio::runtime::Builder::new_current_thread()
                                     .enable_all()
                                     .build()
@@ -386,14 +462,10 @@ async fn run(provider_error: Option<String>) -> anyhow::Result<()> {
                 generation: _,
             } => {
                 validate_active_session_id(active_session_id.as_deref(), &session_id)?;
+                // With clipboard redirection off there is no CLIPRDR channel to
+                // feed. The application already stops sending events for this
+                // session; ignore any in-flight event instead of failing it.
                 let Some(bridge) = clipboard_bridge.as_ref() else {
-                    send_error(
-                        &output_tx,
-                        &session_id,
-                        RdpErrorKind::Clipboard,
-                        "RDP clipboard channel is not connected",
-                        false,
-                    )?;
                     continue;
                 };
                 if let Err(error) = bridge.set_local_text(text) {
@@ -549,7 +621,11 @@ fn build_config(
     config: &RdpSessionConfig,
     output_tx: mpsc::SyncSender<Outbound>,
     certificate_gate: Arc<CertificateGate>,
-) -> anyhow::Result<(ironrdp_client::config::Config, Arc<ClipboardBridge>)> {
+) -> anyhow::Result<(
+    ironrdp_client::config::Config,
+    Option<Arc<ClipboardBridge>>,
+    Option<Box<dyn RdpdrBackendFactory + Send>>,
+)> {
     let destination = Destination::new(format!("{}:{}", config.host, config.port))?;
     let certificate_endpoint = destination.to_string();
     let port = config.port;
@@ -636,8 +712,25 @@ fn build_config(
     } else {
         32
     };
-    let clipboard = ClipboardBridge::new(session_id.to_string(), output_tx, true);
-    let clipboard_factory = clipboard.clone();
+    // The custom static channel is the only CLIPRDR backend. With the switch
+    // off, neither the channel nor its native clipboard watcher is created.
+    let clipboard = config
+        .redirection
+        .clipboard
+        .then(|| ClipboardBridge::new(session_id.to_string(), output_tx.clone(), true));
+    let rdpdr = rdpdr_selection(&config.redirection);
+    let audio_mode = match config.redirection.audio {
+        // Matches IMsRdpClientSecuredSettings::AudioRedirectionMode in the
+        // Microsoft COM docs: 0 redirects playback to this computer, 1 leaves
+        // it on the remote computer, 2 disables sound redirection. IronRDP's
+        // AudioMode uses the same audiomode numbering.
+        RdpAudioMode::Local => IronAudioMode::RedirectToClient,
+        RdpAudioMode::Remote => IronAudioMode::PlayOnServer,
+        RdpAudioMode::NoAudio => IronAudioMode::Disabled,
+    };
+    if rdpdr.is_none() && device_redirection_requested(&config.redirection) {
+        eprintln!("RDP device redirection unavailable on this platform; continuing without RDPDR");
+    }
     let use_credssp = config.use_nla && config.password.is_some();
     // The fork implements Progressive decoding, but this path has not been
     // validated end to end. Keep it disabled independently of the saved request.
@@ -647,7 +740,7 @@ fn build_config(
     // Options are what separate "the graphics pipeline was never asked for" from
     // "the server refused it" when a log is all you have.
     eprintln!(
-        "RDP session options width={} height={} scale={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={}",
+        "RDP session options width={} height={} scale={} depth={} gfx_requested={} gfx_effective={} perf=0x{:X} nla={} console={} clipboard={} drives={} printers={} ports={} smartcard={} microphone={} audio={:?}",
         config.display.width,
         config.display.height,
         config.display.desktop_scale_factor,
@@ -657,6 +750,13 @@ fn build_config(
         performance_flags_bits(&config.display),
         u8::from(use_credssp),
         u8::from(config.administrative_session),
+        u8::from(config.redirection.clipboard),
+        u8::from(rdpdr.as_ref().is_some_and(|selection| selection.drives)),
+        u8::from(rdpdr.as_ref().is_some_and(|selection| selection.printers)),
+        u8::from(rdpdr.as_ref().is_some_and(|selection| selection.ports)),
+        u8::from(rdpdr.as_ref().is_some_and(|selection| selection.smartcards)),
+        u8::from(config.redirection.microphone),
+        config.redirection.audio,
     );
     let mut builder = ConfigBuilder::new()
         .with_destination(destination)
@@ -692,8 +792,28 @@ fn build_config(
         .with_certificate_validation(ironrdp_tls::CertificateValidation::Strict)
         .with_certificate_validation_callback(verifier)
         // The custom static channel is the sole CLIPRDR backend on every platform.
-        .with_clipboard(ClipboardType::Disable);
-    builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
+        .with_clipboard(if clipboard.is_some() {
+            ClipboardType::Enable
+        } else {
+            ClipboardType::Disable
+        })
+        .with_audio_mode(audio_mode)
+        .with_audio_capture(config.redirection.microphone)
+        .with_rdpdr(rdpdr.is_some())
+        .with_drive_redirection(
+            if rdpdr.as_ref().is_some_and(|selection| selection.drives) {
+                // No watcher is attached, so never announce DynamicDrives.
+                drive_redirection(&config.redirection.drive_letters)
+            } else {
+                DriveRedirection::default()
+            },
+        )
+        .with_ports(rdpdr.as_ref().is_some_and(|selection| selection.ports))
+        .with_printers(rdpdr.as_ref().is_some_and(|selection| selection.printers))
+        .with_smartcard(rdpdr.as_ref().is_some_and(|selection| selection.smartcards));
+    if let Some(clipboard_factory) = clipboard.clone() {
+        builder = builder.with_static_channel(move |_| Some(clipboard_factory.cliprdr_client()));
+    }
     // Zero means the caller had no panel-derived scale to ask for, which is what
     // a fixed-size connection and every pre-existing saved connection send.
     // Negotiating the scale together with the size is what keeps the desktop from
@@ -709,7 +829,138 @@ fn build_config(
         );
     }
     let config = builder.build()?;
-    Ok((config, clipboard))
+    Ok((config, clipboard, rdpdr.map(|selection| selection.factory)))
+}
+
+/// RDPDR devices actually available on this client.
+///
+/// The channel is only attached with a backend factory: IronRDP otherwise
+/// registers a no-op device channel. Keep the advertised device bits and the
+/// factory in one value so a platform that cannot provide a device never
+/// advertises it to the server.
+struct RdpdrSelection {
+    factory: Box<dyn RdpdrBackendFactory + Send>,
+    drives: bool,
+    printers: bool,
+    ports: bool,
+    smartcards: bool,
+}
+
+fn device_redirection_requested(redirection: &RdpRedirectionConfig) -> bool {
+    redirection.drives || redirection.printers || redirection.ports || redirection.smartcards
+}
+
+/// Translate the editor's drive picker into IronRDP's `drivestoredirect`
+/// policy. `"*"` keeps the historical all-drives behavior; an explicit letter
+/// set is advertised as `C:\;D:\`, and an empty string advertises no drives.
+/// Derives the RDP share name announced for a configured local directory.
+/// Falls back to a stable name when the path has no usable final component.
+fn drive_name_for_path(path: &str, fallback: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && !name.contains('\0'))
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
+fn drive_redirection(spec: &str) -> DriveRedirection {
+    if spec.trim() == RDP_ALL_DRIVES {
+        return DriveRedirection::all().with_dynamic(false);
+    }
+    let value = parse_rdp_drive_letters(spec)
+        .into_iter()
+        .map(|letter| format!("{letter}:\\"))
+        .collect::<Vec<_>>()
+        .join(";");
+    DriveRedirection::parse(&value).with_dynamic(false)
+}
+
+fn rdpdr_selection(redirection: &RdpRedirectionConfig) -> Option<RdpdrSelection> {
+    #[cfg(windows)]
+    {
+        use ironrdp_rdpdr_native::{
+            FIRST_NAMED_DRIVE_DEVICE_ID, LogicalDriveSelection, RedirectedDrive, WindowsPortRedirection,
+            WindowsPrinterRedirection, WindowsPrinterSelection, WindowsRdpdrBackendFactory,
+        };
+
+        if !device_redirection_requested(redirection) {
+            return None;
+        }
+        // The custom directory is an independent named drive. Validate it in
+        // isolation so a bad path only drops that share, not drive redirection
+        // as a whole (the letter picks must still work).
+        let mut initial_drives = Vec::new();
+        if redirection.drives && !redirection.custom_drive_path.trim().is_empty() {
+            let path = redirection.custom_drive_path.trim();
+            match RedirectedDrive::new(
+                FIRST_NAMED_DRIVE_DEVICE_ID,
+                drive_name_for_path(path, "Custom"),
+                path,
+                false,
+            ) {
+                Ok(drive) => initial_drives.push(drive),
+                Err(error) => tracing::warn!(%error, path, "ignoring invalid custom RDP drive"),
+            }
+        }
+        let mut factory = WindowsRdpdrBackendFactory::from_drives(initial_drives).ok()?;
+        if redirection.drives {
+            // Announce exactly the letters selected in the connection editor.
+            // `"*"` expands to all 26 letters, preserving the old "every local
+            // drive" behavior; an empty string announces none. Do not probe
+            // volumes here: this runs before COM init on the IPC thread, and
+            // probing could omit the very drive the user selected.
+            factory = factory
+                .with_logical_drives(LogicalDriveSelection::from_letters(
+                    false,
+                    parse_rdp_drive_letters(&redirection.drive_letters),
+                ))
+                .ok()?;
+        }
+        let printers = if redirection.printers {
+            WindowsPrinterRedirection::new(WindowsPrinterSelection::All)
+        } else {
+            WindowsPrinterRedirection::disabled()
+        };
+        let factory = factory
+            .with_smartcard(redirection.smartcards)
+            .with_printer_redirection(printers)
+            .with_port_redirection(WindowsPortRedirection::from_enabled(redirection.ports));
+        Some(RdpdrSelection {
+            factory: Box::new(factory),
+            drives: redirection.drives,
+            printers: redirection.printers,
+            ports: redirection.ports,
+            smartcards: redirection.smartcards,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        use ironrdp_rdpdr_native::backend::NixRdpdrBackendFactory;
+
+        // Linux/macOS have no drive letters: the single configured directory
+        // (defaulting to home) is exposed as one share.
+        if !redirection.drives {
+            return None;
+        }
+        let configured = redirection.custom_drive_path.trim();
+        let (root, name) = if configured.is_empty() {
+            (dirs::home_dir()?.to_str()?.to_owned(), "HOME".to_owned())
+        } else {
+            (
+                configured.to_owned(),
+                drive_name_for_path(configured, "HOME"),
+            )
+        };
+        let factory = NixRdpdrBackendFactory::new(root).with_drive(1, name);
+        Some(RdpdrSelection {
+            factory: Box::new(factory),
+            drives: true,
+            printers: false,
+            ports: false,
+            smartcards: false,
+        })
+    }
 }
 
 fn graphics_pipeline_effective(_requested: bool) -> bool {
@@ -1581,13 +1832,15 @@ mod tests {
     use super::{
         CertificateGate, DesktopOutputState, DesktopPayload, Outbound, build_config,
         classify_error, classify_failure, convert_and_send_input, convert_input,
-        desktop_update_payload, error_chain, forward_full_frame_request, forward_output,
-        graphics_pipeline_effective, install_crypto_provider, is_transport_failure, output_channel,
-        performance_flags_bits, report_ironrdp_panic, rgb_u32_to_bgra, secure_attention_input,
+        desktop_update_payload, device_redirection_requested, drive_name_for_path, drive_redirection, error_chain,
+        forward_full_frame_request, forward_output, graphics_pipeline_effective,
+        install_crypto_provider, is_transport_failure, output_channel, performance_flags_bits,
+        rdpdr_selection, report_ironrdp_panic, rgb_u32_to_bgra, secure_attention_input,
         send_iron_input, send_reliable_iron_input, validate_active_session_id,
         validate_input_events,
     };
     use crate::client_name::resolve_client_name;
+    use ironrdp_cfg::PropertySetExt;
     use ironrdp_client::rdp::{DesktopUpdate, RdpInputEvent as IronInput, RdpInputSender};
     use ironrdp_input::{Database as InputDatabase, Operation, Scancode};
     use ironrdp_pdu::geometry::InclusiveRectangle;
@@ -1595,9 +1848,9 @@ mod tests {
     use ironrdp_pdu::input::mouse::PointerFlags;
     use ironrdp_pdu::input::mouse_x::PointerXFlags;
     use nyaterm_remote_desktop::{
-        RdpCertificatePolicy, RdpClipboardConfig, RdpControlMessage, RdpDisplayConfig,
-        RdpErrorKind, RdpInputEvent, RdpReconnectConfig, RdpSessionConfig, RemotePoint,
-        RemotePointerButton, RemotePointerEvent, RemoteWheelAxis,
+        RdpAudioMode, RdpCertificatePolicy, RdpClipboardConfig, RdpControlMessage,
+        RdpDisplayConfig, RdpErrorKind, RdpInputEvent, RdpReconnectConfig, RdpRedirectionConfig,
+        RdpSessionConfig, RemotePoint, RemotePointerButton, RemotePointerEvent, RemoteWheelAxis,
     };
 
     #[test]
@@ -1635,13 +1888,150 @@ mod tests {
             display: RdpDisplayConfig::default(),
             clipboard: RdpClipboardConfig::default(),
             reconnect: RdpReconnectConfig::default(),
+            redirection: Default::default(),
         }
+    }
+
+    #[test]
+    fn default_redirection_enables_only_the_clipboard() {
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let (config, clipboard, rdpdr) = build_config(
+            "session",
+            &helper_config(),
+            output_tx,
+            Arc::new(CertificateGate::default()),
+        )
+        .unwrap();
+        assert!(clipboard.is_some());
+        assert!(matches!(
+            config.channels().clipboard,
+            ironrdp_client::config::ClipboardType::Enable
+        ));
+        assert!(rdpdr.is_none());
+        assert!(!config.channels().sound);
+        assert!(!config.channels().audio_capture);
+        assert_eq!(
+            config.properties().audio_mode().unwrap(),
+            Some(ironrdp_cfg::AudioMode::Disabled)
+        );
+    }
+
+    #[test]
+    fn redirection_switches_reach_the_ironrdp_config() {
+        let mut source = helper_config();
+        source.redirection = RdpRedirectionConfig {
+            drives: true,
+            drive_letters: "DC".to_string(),
+            custom_drive_path: String::new(),
+            printers: true,
+            ports: true,
+            smartcards: true,
+            microphone: true,
+            webauthn: false,
+            clipboard: false,
+            audio: RdpAudioMode::Local,
+        };
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let (config, clipboard, rdpdr) = build_config(
+            "session",
+            &source,
+            output_tx,
+            Arc::new(CertificateGate::default()),
+        )
+        .unwrap();
+        assert!(clipboard.is_none());
+        assert!(matches!(
+            config.channels().clipboard,
+            ironrdp_client::config::ClipboardType::Disable
+        ));
+        assert!(config.channels().sound);
+        assert!(config.channels().audio_capture);
+        assert_eq!(
+            config.properties().audio_mode().unwrap(),
+            Some(ironrdp_cfg::AudioMode::RedirectToClient)
+        );
+        assert!(rdpdr.is_some());
+        // The picker result is advertised with mstsc's drivestoredirect syntax.
+        assert_eq!(config.channels().rdpdr.drives.to_string(), "C:\\;D:\\");
+        let selection = rdpdr_selection(&source.redirection).expect("device switches");
+        assert!(selection.drives);
+        // Unix only exposes the home-directory share; Windows mirrors every switch.
+        assert_eq!(selection.printers, cfg!(windows));
+        assert_eq!(selection.ports, cfg!(windows));
+        assert_eq!(selection.smartcards, cfg!(windows));
+        assert!(config.channels().rdpdr.enabled);
+    }
+
+    #[test]
+    fn remote_audio_leaves_playback_on_the_server() {
+        let mut source = helper_config();
+        source.redirection.audio = RdpAudioMode::Remote;
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let (config, _, _) = build_config(
+            "session",
+            &source,
+            output_tx,
+            Arc::new(CertificateGate::default()),
+        )
+        .unwrap();
+        assert!(!config.channels().sound);
+        assert_eq!(
+            config.properties().audio_mode().unwrap(),
+            Some(ironrdp_cfg::AudioMode::PlayOnServer)
+        );
+    }
+
+    #[test]
+    fn rdpdr_selection_follows_the_device_switches() {
+        let none = RdpRedirectionConfig::default();
+        assert!(!device_redirection_requested(&none));
+        assert!(rdpdr_selection(&none).is_none());
+
+        let smartcard_only = RdpRedirectionConfig {
+            smartcards: true,
+            ..RdpRedirectionConfig::default()
+        };
+        assert!(device_redirection_requested(&smartcard_only));
+        let selected = rdpdr_selection(&smartcard_only);
+        assert_eq!(selected.is_some(), cfg!(windows));
+    }
+
+    #[test]
+    fn drive_redirection_preserves_wildcard_and_explicit_selection() {
+        assert_eq!(drive_redirection("*").to_string(), "*");
+        assert_eq!(drive_redirection("").to_string(), "");
+        assert_eq!(drive_redirection("CD").to_string(), "C:\\;D:\\");
+        assert_eq!(drive_redirection("d").to_string(), "D:\\");
+    }
+
+    #[test]
+    fn custom_drive_name_uses_the_configured_directory() {
+        assert_eq!(
+            drive_name_for_path(r"C:\Users\name\Documents", "Custom"),
+            "Documents"
+        );
+        assert_eq!(drive_name_for_path("/home/name/data", "HOME"), "data");
+        assert_eq!(drive_name_for_path("", "HOME"), "HOME");
+        assert_eq!(drive_name_for_path("/", "HOME"), "HOME");
+    }
+
+    #[test]
+    fn custom_directory_does_not_change_the_letter_capability() {
+        // Only drive letters are expressible in `drivestoredirect`; the custom
+        // directory is announced as an independent named RDPDR share.
+        let mut redirection = RdpRedirectionConfig::default();
+        redirection.drives = true;
+        redirection.drive_letters = "C".into();
+        redirection.custom_drive_path = r"C:\Users\name\Documents".into();
+        assert_eq!(drive_redirection(&redirection.drive_letters).to_string(), "C:\\");
+        redirection.custom_drive_path.clear();
+        assert_eq!(drive_redirection(&redirection.drive_letters).to_string(), "C:\\");
     }
 
     #[test]
     fn helper_reports_the_resolved_system_client_name() {
         let (output_tx, _output_rx) = mpsc::sync_channel(1);
-        let (config, _) = build_config(
+        let (config, _, _) = build_config(
             "session",
             &helper_config(),
             output_tx,
@@ -1654,7 +2044,7 @@ mod tests {
     #[test]
     fn helper_keeps_graphics_pipeline_disabled_with_platform_decoders_available() {
         let (output_tx, _output_rx) = mpsc::sync_channel(1);
-        let (config, _) = build_config(
+        let (config, _, _) = build_config(
             "session",
             &helper_config(),
             output_tx,
@@ -1673,7 +2063,7 @@ mod tests {
             source.use_nla = use_nla;
             source.password = password_present.then(|| "test-password".into());
             let (output_tx, _output_rx) = mpsc::sync_channel(1);
-            let (config, _) = build_config(
+            let (config, _, _) = build_config(
                 "session",
                 &source,
                 output_tx,
@@ -1695,7 +2085,7 @@ mod tests {
             assert!(config.certificate_validation_callback().is_some());
             assert!(matches!(
                 config.channels().clipboard,
-                ironrdp_client::config::ClipboardType::Disable
+                ironrdp_client::config::ClipboardType::Enable
             ));
         }
     }
@@ -1704,7 +2094,7 @@ mod tests {
     fn certificate_exception_is_scoped_to_the_configured_endpoint() {
         let (output_tx, output_rx) = mpsc::sync_channel(1);
         let gate = Arc::new(CertificateGate::default());
-        let (config, _) =
+        let (config, _, _) =
             build_config("session", &helper_config(), output_tx, gate.clone()).unwrap();
         let callback = config.certificate_validation_callback().unwrap().clone();
         let (result_tx, result_rx) = mpsc::sync_channel(1);

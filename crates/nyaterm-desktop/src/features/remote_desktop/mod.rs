@@ -1,3 +1,4 @@
+mod fullscreen;
 mod input;
 mod keyboard_capture;
 #[cfg(windows)]

@@ -8,15 +8,15 @@ use super::{
     default_backspace_mode_telnet, default_baud_rate, default_data_bits,
     default_ftp_connect_timeout_ms, default_ftp_filename_encoding_mode, default_ftp_passive_mode,
     default_ftp_port, default_ftp_security_mode, default_ftp_tls_version, default_parity,
-    default_rdp_backend, default_rdp_certificate_policy, default_rdp_clipboard_mode,
-    default_rdp_color_depth, default_rdp_display_mode, default_rdp_height, default_rdp_port,
-    default_rdp_reconnect_attempts, default_rdp_width, default_sftp_shell_detection_timeout_ms,
-    default_ssh_port, default_ssh_user, default_stop_bits, default_telnet_auto_login_timeout_ms,
-    default_telnet_enter_mode, default_telnet_port, default_true, default_vnc_port,
-    default_vnc_reconnect_attempts, default_vnc_scale_mode, default_vnc_security_mode,
-    deserialize_rdp_backend, is_default_ftp_security_mode, is_default_ftp_tls_version,
-    is_default_sftp_shell_detection_timeout_ms, is_default_telnet_auto_login_config,
-    serialize_rdp_backend,
+    default_rdp_audio_mode, default_rdp_backend, default_rdp_certificate_policy,
+    default_rdp_clipboard_mode, default_rdp_color_depth, default_rdp_display_mode,
+    default_rdp_height, default_rdp_port, default_rdp_reconnect_attempts, default_rdp_width,
+    default_sftp_shell_detection_timeout_ms, default_ssh_port, default_ssh_user, default_stop_bits,
+    default_telnet_auto_login_timeout_ms, default_telnet_enter_mode, default_telnet_port,
+    default_true, default_vnc_port, default_vnc_reconnect_attempts, default_vnc_scale_mode,
+    default_vnc_security_mode, deserialize_rdp_backend, is_default_ftp_security_mode,
+    is_default_ftp_tls_version, is_default_sftp_shell_detection_timeout_ms,
+    is_default_telnet_auto_login_config, serialize_rdp_backend,
 };
 
 /// Default outbound idle interval for Telnet NOP keepalive, in seconds.
@@ -658,6 +658,8 @@ pub enum ConnectionType {
         #[serde(default)]
         clipboard: RdpClipboardSettings,
         #[serde(default)]
+        redirection: RdpRedirectionSettings,
+        #[serde(default)]
         reconnect: RdpReconnectSettings,
     },
     Vnc {
@@ -817,6 +819,66 @@ impl Default for RdpClipboardSettings {
             mode: default_rdp_clipboard_mode(),
         }
     }
+}
+
+/// Local resource redirection settings shared by both RDP backends.
+///
+/// Every device redirect is off by default to preserve the historical behavior;
+/// clipboard is the only one enabled by default. `audio` uses the editor values
+/// `no_audio`, `local` and `remote` (see `RdpAudioMode` in the protocol crate).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RdpRedirectionSettings {
+    #[serde(default)]
+    pub drives: bool,
+    /// Drive letters to redirect: `"*"` means all local drives (the legacy
+    /// behavior), an empty string means none, and uppercase letters such as
+    /// `"CD"` select individual drives. Kept as text so the editor can persist
+    /// an explicit picker result without a schema migration.
+    #[serde(default = "default_rdp_drive_letters")]
+    pub drive_letters: String,
+    /// An optional local directory mapped as an extra named RDP drive.
+    /// Empty means no custom directory. On Windows this is the editor's
+    /// "custom directory" checkbox; on Linux/macOS this is the single
+    /// configured directory (empty falls back to the user's home).
+    #[serde(default)]
+    pub custom_drive_path: String,
+    #[serde(default)]
+    pub printers: bool,
+    #[serde(default)]
+    pub ports: bool,
+    #[serde(default)]
+    pub smartcards: bool,
+    #[serde(default)]
+    pub microphone: bool,
+    #[serde(default)]
+    pub webauthn: bool,
+    /// Kept in sync with `RdpClipboardSettings::mode`; `true` by default.
+    #[serde(default = "default_true")]
+    pub clipboard: bool,
+    #[serde(default = "default_rdp_audio_mode")]
+    pub audio: String,
+}
+
+impl Default for RdpRedirectionSettings {
+    fn default() -> Self {
+        Self {
+            drives: false,
+            drive_letters: default_rdp_drive_letters(),
+            custom_drive_path: String::new(),
+            printers: false,
+            ports: false,
+            smartcards: false,
+            microphone: false,
+            webauthn: false,
+            clipboard: true,
+            audio: default_rdp_audio_mode(),
+        }
+    }
+}
+
+/// Default drive selection: all local drives, matching the pre-picker behavior.
+pub fn default_rdp_drive_letters() -> String {
+    "*".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

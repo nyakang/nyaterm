@@ -370,6 +370,7 @@ fn editor(group_id: Option<&str>, pending_group_name: Option<&str>) -> Connectio
         rdp_security: Default::default(),
         rdp_display: Default::default(),
         rdp_clipboard: Default::default(),
+        rdp_redirection: Default::default(),
         rdp_reconnect: Default::default(),
 
         vnc_security: Default::default(),

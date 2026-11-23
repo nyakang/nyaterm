@@ -10,7 +10,11 @@ struct NyaRdpConfig {
     uint64_t generation;
     NyaRdpText server, username, domain, password;
     uint32_t port, width, height, scale, color_depth;
-    uint32_t nla, clipboard, admin, reconnect, max_attempts, performance;
+    uint32_t nla, clipboard;
+    uint32_t redirect_drives, redirect_printers, redirect_ports;
+    uint32_t redirect_smartcards, redirect_microphone, redirect_webauthn;
+    uint32_t audio_mode;
+    uint32_t admin, reconnect, max_attempts, performance;
 };
 struct NyaRdpEvent { uint64_t generation; uint32_t kind; int32_t code; uint32_t extended; };
 struct NyaRdpRect { int32_t x, y, width, height; uint32_t scale; };
@@ -28,6 +32,7 @@ extern "C" {
 int32_t nya_rdp_create(const NyaRdpConfig*, NyaRdpHost**, uint32_t*) noexcept;
 int32_t nya_rdp_start(NyaRdpHost*) noexcept;
 int32_t nya_rdp_viewport(NyaRdpHost*, const NyaRdpRect*, uint32_t) noexcept;
+int32_t nya_rdp_reparent(NyaRdpHost*, uintptr_t) noexcept;
 int32_t nya_rdp_resize(NyaRdpHost*, uint32_t, uint32_t, uint32_t) noexcept;
 int32_t nya_rdp_smart_sizing(NyaRdpHost*, uint32_t) noexcept;
 int32_t nya_rdp_focus(NyaRdpHost*, uint32_t) noexcept;

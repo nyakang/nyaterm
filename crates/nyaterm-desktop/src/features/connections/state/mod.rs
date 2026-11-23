@@ -51,15 +51,16 @@ use self::password::EditorPasswordState;
 
 use self::editor_logic::{
     ConnectionEditorPlaceholder, add_connection_editor_agent_endpoint,
-    apply_connection_editor_shell_path, apply_connection_editor_working_dir,
-    clear_connection_editor_runtime_state, commit_connection_editor_new_group,
-    connection_editor_inline_panel_draft, editor_field_seeds, forwarding_endpoint_field_seeds,
-    insert_connection_editor_description_newline, move_connection_editor_agent_endpoint,
-    move_connection_editor_ssh_algorithm, remove_connection_editor_agent_endpoint,
-    select_connection_editor_agent_endpoint, select_saved_connection_after_editor_save,
-    set_connection_editor_agent_endpoint_type, set_connection_editor_error,
-    set_connection_editor_field_text, set_connection_editor_forwarding_endpoint_field,
-    set_connection_editor_icon, set_connection_editor_icon_auto_detect, set_connection_editor_kind,
+    apply_connection_editor_custom_drive_path, apply_connection_editor_shell_path,
+    apply_connection_editor_working_dir, clear_connection_editor_runtime_state,
+    commit_connection_editor_new_group, connection_editor_inline_panel_draft, editor_field_seeds,
+    forwarding_endpoint_field_seeds, insert_connection_editor_description_newline,
+    move_connection_editor_agent_endpoint, move_connection_editor_ssh_algorithm,
+    remove_connection_editor_agent_endpoint, select_connection_editor_agent_endpoint,
+    select_saved_connection_after_editor_save, set_connection_editor_agent_endpoint_type,
+    set_connection_editor_error, set_connection_editor_field_text,
+    set_connection_editor_forwarding_endpoint_field, set_connection_editor_icon,
+    set_connection_editor_icon_auto_detect, set_connection_editor_kind,
     set_connection_editor_password_source, set_connection_editor_select_value,
     set_connection_editor_serial_prompt_baud_rate, set_connection_editor_ssh_algorithm_enabled,
     set_connection_editor_ssh_algorithm_tab, set_connection_group_editor_error,
@@ -1611,6 +1612,10 @@ impl ConnectionFeatureState {
         self.editor.apply_working_dir(working_dir)
     }
 
+    pub fn apply_editor_custom_drive_path(&mut self, path: String) -> bool {
+        self.editor.apply_custom_drive_path(path)
+    }
+
     pub fn close_editor(&mut self) {
         self.editor.close();
     }
@@ -2525,6 +2530,10 @@ impl ConnectionEditorFeatureState {
 
     pub fn apply_working_dir(&mut self, working_dir: String) -> bool {
         apply_connection_editor_working_dir(&mut self.draft, working_dir)
+    }
+
+    pub fn apply_custom_drive_path(&mut self, path: String) -> bool {
+        apply_connection_editor_custom_drive_path(&mut self.draft, path)
     }
 
     pub fn close(&mut self) {

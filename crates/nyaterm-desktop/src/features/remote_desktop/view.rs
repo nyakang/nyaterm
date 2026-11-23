@@ -464,7 +464,7 @@ impl NyaTermApp {
                 }
             }))
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                if this.send_rdp_pointer(&move_id, event.position, None, false) {
+                if this.send_rdp_pointer(&move_id, event.position, None, false, cx) {
                     cx.stop_propagation();
                     this.mark_user_activity();
                     if remote_cursor_texture_visible {
@@ -482,6 +482,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::Left),
                         true,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -498,6 +499,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::Right),
                         true,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -514,6 +516,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::Middle),
                         true,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -528,6 +531,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::Left),
                         false,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -542,6 +546,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::Right),
                         false,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -556,6 +561,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::Middle),
                         false,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -564,12 +570,13 @@ impl NyaTermApp {
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(move |this, event: &MouseUpEvent, _, _cx| {
+                cx.listener(move |this, event: &MouseUpEvent, _, cx| {
                     if this.send_rdp_pointer(
                         &left_up_out_id,
                         event.position,
                         Some(RdpPointerButton::Left),
                         false,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -577,12 +584,13 @@ impl NyaTermApp {
             )
             .on_mouse_up_out(
                 MouseButton::Right,
-                cx.listener(move |this, event: &MouseUpEvent, _, _cx| {
+                cx.listener(move |this, event: &MouseUpEvent, _, cx| {
                     if this.send_rdp_pointer(
                         &right_up_out_id,
                         event.position,
                         Some(RdpPointerButton::Right),
                         false,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -590,12 +598,13 @@ impl NyaTermApp {
             )
             .on_mouse_up_out(
                 MouseButton::Middle,
-                cx.listener(move |this, event: &MouseUpEvent, _, _cx| {
+                cx.listener(move |this, event: &MouseUpEvent, _, cx| {
                     if this.send_rdp_pointer(
                         &middle_up_out_id,
                         event.position,
                         Some(RdpPointerButton::Middle),
                         false,
+                        cx,
                     ) {
                         this.mark_user_activity();
                     }
@@ -609,6 +618,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::X1),
                         true,
+                        cx,
                     ) {
                         cx.stop_propagation();
                         this.mark_user_activity();
@@ -623,6 +633,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::X2),
                         true,
+                        cx,
                     ) {
                         cx.stop_propagation();
                         this.mark_user_activity();
@@ -637,6 +648,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::X1),
                         false,
+                        cx,
                     ) {
                         cx.stop_propagation();
                         this.mark_user_activity();
@@ -651,6 +663,7 @@ impl NyaTermApp {
                         event.position,
                         Some(RdpPointerButton::X2),
                         false,
+                        cx,
                     ) {
                         cx.stop_propagation();
                         this.mark_user_activity();

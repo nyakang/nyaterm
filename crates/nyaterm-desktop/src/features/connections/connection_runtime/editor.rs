@@ -289,6 +289,7 @@ impl NyaTermApp {
             rdp_security: RdpSecuritySettings::default(),
             rdp_display: RdpDisplaySettings::default(),
             rdp_clipboard: RdpClipboardSettings::default(),
+            rdp_redirection: nyaterm_core::RdpRedirectionSettings::default(),
             rdp_reconnect: RdpReconnectSettings::default(),
 
             vnc_security: VncSecuritySettings::default(),
@@ -1273,6 +1274,49 @@ impl NyaTermApp {
                     );
                     this.shell
                         .set_status(t!("dialog.workingDirectorySelected", path = path).to_string());
+                } else {
+                    this.shell.set_status(cancelled_status);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(in crate::features) fn prompt_connection_editor_custom_drive_path(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        let options = PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(SharedString::from(
+                t!("dialog.rdpCustomDrivePickPrompt").to_string(),
+            )),
+        };
+        let cancelled_status = t!("dialog.rdpCustomDriveSelectionCancelled").to_string();
+        let receiver = cx.prompt_for_paths(options);
+        self.shell
+            .set_status(t!("dialog.rdpCustomDriveSelecting").to_string());
+        cx.spawn(async move |this, cx| {
+            let selected = match receiver.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => None,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(path) = selected {
+                    let path = path.display().to_string();
+                    this.connection_state
+                        .apply_editor_custom_drive_path(path.clone());
+                    this.connection_state.reset_editor_field(
+                        ConnectionEditorField::RdpCustomDrivePath,
+                        &path,
+                        cx,
+                    );
+                    this.shell
+                        .set_status(t!("dialog.rdpCustomDriveSelected", path = path).to_string());
                 } else {
                     this.shell.set_status(cancelled_status);
                 }

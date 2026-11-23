@@ -433,6 +433,7 @@ impl NyaTermApp {
         position: gpui::Point<gpui::Pixels>,
         button: Option<RemotePointerButton>,
         pressed: bool,
+        cx: &mut Context<Self>,
     ) -> bool {
         if self.session.metadata(session_id).is_some_and(|metadata| {
             matches!(
@@ -477,6 +478,10 @@ impl NyaTermApp {
                     &mut session.cursor_position,
                     remote,
                 );
+                // A trailing move must not sit in `pending_pointer` until the
+                // next 100 ms maintenance tick. Schedule a dedicated short
+                // timer that releases it in roughly one send interval.
+                self.schedule_pointer_flush(cx);
                 return true;
             }
         }
@@ -759,6 +764,29 @@ impl NyaTermApp {
         if let Some(surface) = self.remote_desktop.surfaces.get(session_id) {
             surface.update(cx, |_, cx| cx.notify());
         }
+    }
+
+    /// Schedule a one-shot short timer to release a coalesced pointer move.
+    ///
+    /// The 100 ms maintenance clock is deliberately coarse; waiting for it to
+    /// flush the last move of a gesture made the remote cursor visibly lag.
+    /// One task at a time is armed, so a high-rate move burst collapses into a
+    /// single wake that sends the newest position after one send interval.
+    pub(super) fn schedule_pointer_flush(&mut self, cx: &mut Context<Self>) {
+        if self.remote_desktop.pointer_flush_scheduled
+            || !self.remote_desktop.pointer_flush_is_pending()
+        {
+            return;
+        }
+        self.remote_desktop.pointer_flush_scheduled = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(POINTER_MOVE_INTERVAL).await;
+            let _ = this.update(cx, |this, _| {
+                this.remote_desktop.pointer_flush_scheduled = false;
+                this.drive_rdp_pointer_flush();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn drive_rdp_pointer_flush(&mut self) {

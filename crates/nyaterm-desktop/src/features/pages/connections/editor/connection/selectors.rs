@@ -49,7 +49,7 @@ impl NyaTermApp {
     }
 }
 
-pub(super) fn connection_editor_select_keys() -> [ConnectionEditorSelect; 36] {
+pub(super) fn connection_editor_select_keys() -> [ConnectionEditorSelect; 37] {
     [
         ConnectionEditorSelect::Group,
         ConnectionEditorSelect::SavedPassword,
@@ -71,6 +71,7 @@ pub(super) fn connection_editor_select_keys() -> [ConnectionEditorSelect; 36] {
         ConnectionEditorSelect::RdpBackend,
         ConnectionEditorSelect::RdpCertificatePolicy,
         ConnectionEditorSelect::RdpDisplayMode,
+        ConnectionEditorSelect::RdpAudio,
         ConnectionEditorSelect::VncSecurityMode,
         ConnectionEditorSelect::VncScaleMode,
         ConnectionEditorSelect::RecordingMode,
@@ -115,6 +116,7 @@ pub(super) fn connection_editor_select_id(select: ConnectionEditorSelect) -> &'s
         ConnectionEditorSelect::RdpBackend => "connection-editor-rdp-backend",
         ConnectionEditorSelect::RdpCertificatePolicy => "connection-editor-rdp-certificate-policy",
         ConnectionEditorSelect::RdpDisplayMode => "connection-editor-rdp-display-mode",
+        ConnectionEditorSelect::RdpAudio => "connection-editor-rdp-audio",
         ConnectionEditorSelect::VncSecurityMode => "connection-editor-vnc-security-mode",
         ConnectionEditorSelect::VncScaleMode => "connection-editor-vnc-scale-mode",
         ConnectionEditorSelect::RecordingMode => "connection-editor-recording-mode",

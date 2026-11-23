@@ -37,6 +37,7 @@ actions!(
         ToggleRightSidebar,
         TogglePaneFocus,
         ToggleNativeFullscreen,
+        ToggleRdpFullscreen,
         ZoomIn,
         ZoomOut,
         ResetZoom,

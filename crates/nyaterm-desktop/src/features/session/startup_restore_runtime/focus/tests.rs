@@ -444,6 +444,7 @@ fn rdp_and_vnc_restore_focus_the_remote_surface() {
                     display: Default::default(),
                     clipboard: Default::default(),
                     reconnect: Default::default(),
+                    redirection: Default::default(),
                 })
             } else {
                 SessionLaunchConfig::Vnc(VncSessionConfig {

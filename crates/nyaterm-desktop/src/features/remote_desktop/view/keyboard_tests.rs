@@ -78,6 +78,7 @@ fn focused_rdp_and_vnc_surfaces_keep_tab_and_shift_tab_out_of_local_navigation()
                     display: Default::default(),
                     clipboard: Default::default(),
                     reconnect: Default::default(),
+                    redirection: Default::default(),
                 })
             } else {
                 SessionLaunchConfig::Vnc(VncSessionConfig {

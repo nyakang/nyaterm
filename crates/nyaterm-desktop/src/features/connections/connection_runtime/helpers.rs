@@ -202,6 +202,7 @@ pub(super) fn connection_editor_from_saved(
         rdp_security: RdpSecuritySettings::default(),
         rdp_display: RdpDisplaySettings::default(),
         rdp_clipboard: RdpClipboardSettings::default(),
+        rdp_redirection: nyaterm_core::RdpRedirectionSettings::default(),
         rdp_reconnect: RdpReconnectSettings::default(),
 
         vnc_security: VncSecuritySettings::default(),
@@ -457,6 +458,7 @@ pub(super) fn connection_editor_from_saved(
             security,
             display,
             clipboard,
+            redirection,
             reconnect,
         } => {
             editor.host = host;
@@ -467,6 +469,7 @@ pub(super) fn connection_editor_from_saved(
             editor.rdp_security = security;
             editor.rdp_display = display;
             editor.rdp_clipboard = clipboard;
+            editor.rdp_redirection = redirection;
             editor.rdp_reconnect = reconnect;
         }
         ConnectionType::Vnc {
@@ -750,6 +753,7 @@ pub(super) fn build_saved_connection_from_editor(
                 security: editor.rdp_security.clone(),
                 display: editor.rdp_display.clone(),
                 clipboard: editor.rdp_clipboard.clone(),
+                redirection: editor.rdp_redirection.clone(),
                 reconnect: editor.rdp_reconnect.clone(),
             }
         }
@@ -1360,6 +1364,7 @@ pub(super) fn apply_session_defaults(
     editor.rdp_security = defaults.rdp_security.clone();
     editor.rdp_display = defaults.rdp_display.clone();
     editor.rdp_clipboard = defaults.rdp_clipboard.clone();
+    editor.rdp_redirection = defaults.rdp_redirection.clone();
     editor.rdp_reconnect = defaults.rdp_reconnect.clone();
     editor.vnc_security = defaults.vnc_security.clone();
     editor.vnc_display = defaults.vnc_display.clone();
@@ -2307,6 +2312,18 @@ mod tests {
             enabled: false,
             max_attempts: 17,
         };
+        let expected_redirection = nyaterm_core::RdpRedirectionSettings {
+            drives: true,
+            drive_letters: "*".to_string(),
+            custom_drive_path: String::new(),
+            printers: true,
+            ports: true,
+            smartcards: true,
+            microphone: true,
+            webauthn: false,
+            clipboard: false,
+            audio: "remote".to_string(),
+        };
         let expected_recording = ConnectionRecordingSettings {
             auto_start: Some(true),
             mode: Some(RecordingMode::Raw),
@@ -2329,6 +2346,7 @@ mod tests {
                 display: expected_display.clone(),
                 clipboard: expected_clipboard.clone(),
                 reconnect: expected_reconnect.clone(),
+                redirection: expected_redirection.clone(),
             },
             group_id: None,
             description: None,
@@ -2396,6 +2414,7 @@ mod tests {
             security,
             display,
             clipboard,
+            redirection,
             reconnect,
         } = saved.config
         else {
@@ -2411,6 +2430,7 @@ mod tests {
         assert_eq!(display, expected_display);
         assert_eq!(clipboard, expected_clipboard);
         assert_eq!(reconnect, expected_reconnect);
+        assert_eq!(redirection, expected_redirection);
         assert_eq!(saved.auth.expect("auth settings").mode, "none");
         assert_eq!(saved.recording, Some(expected_recording));
     }
@@ -2741,6 +2761,14 @@ pub(in crate::features) enum ConnectionEditorToggle {
     PostLogin,
     RdpUseNla,
     RdpAdministrativeSession,
+    RdpRedirectDrives,
+    RdpRedirectDriveLetter(char),
+    RdpCustomDriveToggled,
+    RdpRedirectPrinters,
+    RdpRedirectPorts,
+    RdpRedirectSmartcards,
+    RdpRedirectMicrophone,
+    RdpRedirectClipboard,
     RdpReconnect,
     RdpDisplayWallpaper,
     RdpDisplayThemes,

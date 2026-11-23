@@ -97,7 +97,16 @@ impl NyaTermApp {
         ) {
             self.android_view(session_id.clone(), cx)
         } else if self.remote_desktop.is_session(&session_id) {
-            self.remote_desktop_view(session_id.clone(), cx)
+            // An IronRDP session in its detached fullscreen window is rendered
+            // there. Rendering it here too would fight over the single viewport
+            // and the window-bound dynamic texture. ActiveX keeps its COM child
+            // on this window, so it still needs the normal view (and viewport)
+            // while the main window is natively fullscreen.
+            if self.is_remote_desktop_detached_fullscreen(&session_id) {
+                div().size_full().into_any_element()
+            } else {
+                self.remote_desktop_view(session_id.clone(), cx)
+            }
         } else if self.session_is_sftp_only(&session_id) {
             self.sftp_session_content(&session_id)
         } else {

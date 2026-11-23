@@ -21,7 +21,7 @@ pub(in crate::features) use child_window::{
 mod inspector_widgets;
 pub(in crate::features) use inspector_widgets::{
     empty_workspace_action, tab_action_button, tab_menu_item, tab_menu_item_enabled,
-    tab_menu_item_with_icon, tab_menu_separator,
+    tab_menu_item_with_icon, tab_menu_item_with_shortcut, tab_menu_separator,
 };
 
 mod stats;

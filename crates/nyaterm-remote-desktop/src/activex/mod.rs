@@ -34,6 +34,8 @@ pub enum NativeRdpConnectionEvent {
     Reconnecting,
     Disconnected(NativeRdpDisconnectInfo),
     Failed(RdpError),
+    /// Ctrl+Shift+Alt+F11 was pressed while the RDP child window had focus.
+    ToggleFullscreen,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

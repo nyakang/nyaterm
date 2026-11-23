@@ -165,6 +165,38 @@ pub fn menu_item(
     enabled: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    menu_item_with_shortcut_inner(palette, id, label, None, icon_path, enabled, on_click)
+}
+
+pub fn menu_item_with_shortcut(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<String>,
+    shortcut: impl Into<String>,
+    icon_path: Option<&'static str>,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    menu_item_with_shortcut_inner(
+        palette,
+        id,
+        label,
+        Some(shortcut.into()),
+        icon_path,
+        enabled,
+        on_click,
+    )
+}
+
+fn menu_item_with_shortcut_inner(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<String>,
+    shortcut: Option<String>,
+    icon_path: Option<&'static str>,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let id = id.into();
     let label = label.into();
     let text_color = rgb(palette.text);
@@ -199,6 +231,16 @@ pub fn menu_item(
             )
         })
         .child(div().min_w_0().flex_1().child(label))
+        .when_some(shortcut, |this, shortcut| {
+            this.child(
+                div()
+                    .flex_none()
+                    .pl_1()
+                    .text_xs()
+                    .text_color(icon_color)
+                    .child(shortcut),
+            )
+        })
 }
 
 pub fn menu_separator(palette: ThemePalette) -> impl IntoElement {
@@ -299,7 +341,7 @@ fn panel_header_shell(
 
 #[cfg(test)]
 mod tests {
-    use super::{menu_item, menu_separator};
+    use super::{menu_item, menu_item_with_shortcut, menu_separator};
     use crate::theme::theme_palette;
     use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px};
     use std::{cell::Cell, rc::Rc};
@@ -318,7 +360,17 @@ mod tests {
                     clicks.set(clicks.get() + 1)
                 }));
             }
-            menu.child(menu_separator(palette))
+            let shortcut_clicks = self.0.clone();
+            menu.child(menu_item_with_shortcut(
+                palette,
+                "shortcut",
+                "Shortcut",
+                "Ctrl+Shift+Alt+F11",
+                None,
+                true,
+                move |_, _, _| shortcut_clicks.set(shortcut_clicks.get() + 1),
+            ))
+            .child(menu_separator(palette))
         }
     }
 
