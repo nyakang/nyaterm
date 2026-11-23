@@ -280,6 +280,18 @@ impl NyaTermApp {
         self.save_interaction_settings(cx);
     }
 
+    pub(in crate::features) fn toggle_disable_alternate_screen(&mut self, cx: &mut Context<Self>) {
+        self.settings.toggle_disable_alternate_screen();
+        self.sync_terminal_screen_policy();
+        self.save_interaction_settings(cx);
+    }
+
+    pub(in crate::features) fn sync_terminal_screen_policy(&self) {
+        self.terminal.set_ignore_alternate_screen(
+            self.settings.summary().interaction_disable_alternate_screen,
+        );
+    }
+
     pub(in crate::features) fn toggle_interaction_alternate_scroll(
         &mut self,
         cx: &mut Context<Self>,

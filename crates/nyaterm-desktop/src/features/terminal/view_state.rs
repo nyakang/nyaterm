@@ -33,6 +33,12 @@ pub(in crate::features) struct TerminalFrameQueueMetrics {
 }
 
 impl TerminalFeatureState {
+    pub(in crate::features) fn set_ignore_alternate_screen(&self, enabled: bool) {
+        self.view
+            .frame_pipeline
+            .set_ignore_alternate_screen(enabled);
+    }
+
     pub(in crate::features) fn retains_transfer_session(&self, id: &str) -> bool {
         self.view.views.contains_key(id)
             || self.view.surfaces.contains_key(id)

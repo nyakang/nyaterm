@@ -109,6 +109,11 @@ impl SettingsFeatureState {
         self.summary.interaction_right_click_paste =
             action == nyaterm_core::TerminalRightClickAction::Paste;
     }
+    pub(in crate::features) fn toggle_disable_alternate_screen(&mut self) {
+        self.summary.interaction_disable_alternate_screen =
+            !self.summary.interaction_disable_alternate_screen;
+    }
+
     pub(in crate::features) fn toggle_interaction_alternate_scroll(&mut self) {
         self.summary.interaction_alternate_scroll = !self.summary.interaction_alternate_scroll;
     }
