@@ -2331,3 +2331,106 @@ fn alternate_scroll_setting_gates_wheel_arrow_keys_without_losing_remote_mode() 
         );
     });
 }
+
+fn assert_worker_alternate_screen_policy(
+    cx: &mut TestAppContext,
+    app: &gpui::Entity<crate::features::NyaTermApp>,
+    disabled: bool,
+) {
+    use nyaterm_terminal_runtime::frame::TerminalFrameEvent;
+
+    let pipeline = cx.read_entity(app, |app, _| app.terminal.view.frame_pipeline.clone());
+    // No surface or render call: output must already observe the changed policy.
+    pipeline.submit_output(
+        "policy-probe",
+        b"\x1b[?1049l\x1b[?1049h".to_vec(),
+        "UTF-8",
+        100,
+    );
+    pipeline.finish_pending_output().unwrap();
+    let alternate = pipeline
+        .take_events_for_transfer(&["policy-probe".into()])
+        .into_iter()
+        .filter_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => Some(frame.protocol_state.alternate_screen),
+            _ => None,
+        })
+        .next_back()
+        .unwrap();
+    assert_eq!(alternate, !disabled);
+}
+
+#[test]
+fn alternate_screen_policy_updates_without_paint_and_draft_cancel_restores_it() {
+    let root = TestConfigDir::new("nyaterm-alternate-screen-policy-draft");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "policy");
+    assert_worker_alternate_screen_policy(&mut cx, &app, false);
+    cx.update_entity(&app, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.toggle_interaction_alternate_scroll(cx);
+        assert!(!app.settings.summary().interaction_alternate_scroll);
+    });
+    assert_worker_alternate_screen_policy(&mut cx, &app, false);
+    cx.update_entity(&app, |app, cx| app.toggle_disable_alternate_screen(cx));
+    assert_worker_alternate_screen_policy(&mut cx, &app, true);
+    cx.update_entity(&app, |app, cx| {
+        app.toggle_interaction_alternate_scroll(cx);
+        assert!(app.settings.summary().interaction_alternate_scroll);
+    });
+    assert_worker_alternate_screen_policy(&mut cx, &app, true);
+    cx.update_entity(&app, |app, cx| app.cancel_settings(cx));
+    assert_worker_alternate_screen_policy(&mut cx, &app, false);
+
+    cx.update_entity(&app, |app, cx| {
+        let mut settings = app.settings.summary().clone();
+        settings.interaction_disable_alternate_screen = true;
+        app.apply_gpui_settings(settings, cx);
+    });
+    assert_worker_alternate_screen_policy(&mut cx, &app, true);
+}
+
+#[test]
+fn alternate_screen_policy_is_loaded_before_first_output_and_saved_independently() {
+    let root = TestConfigDir::new("nyaterm-alternate-screen-policy-startup");
+    {
+        let store = nyaterm_store::ConnectionStore::open(root.path().join("config")).unwrap();
+        let mut settings = store.load_app_settings_summary().unwrap();
+        settings.interaction_disable_alternate_screen = true;
+        settings.interaction_alternate_scroll = false;
+        store.save_interaction_settings(&settings).unwrap();
+    }
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "policy");
+    assert_worker_alternate_screen_policy(&mut cx, &app, true);
+    cx.update_entity(&app, |app, cx| {
+        app.begin_settings_draft(cx);
+        app.toggle_disable_alternate_screen(cx);
+        app.apply_settings_draft(false, cx);
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if cx.read_entity(&app, |app, _| !app.settings_draft_dirty()) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "alternate screen policy save did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_worker_alternate_screen_policy(&mut cx, &app, false);
+    cx.read_entity(&app, |app, _| {
+        let saved = app
+            .store_blocking_client()
+            .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                store.load_app_settings_summary()
+            })
+            .unwrap();
+        assert!(!saved.interaction_disable_alternate_screen);
+        assert!(!saved.interaction_alternate_scroll);
+    });
+}

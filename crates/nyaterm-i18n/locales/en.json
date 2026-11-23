@@ -3687,6 +3687,8 @@
     "mouseEventsRequireAltDesc": "Send mouse events to terminal applications only while Alt is held.",
     "alternateScroll": "Wheel sends arrow keys in full-screen apps",
     "alternateScrollDesc": "On the alternate screen (tmux, screen, less, vim) without mouse reporting, send the mouse wheel as Up/Down keys. Turn off to stop the wheel from cycling shell history. Enabled by default for compatibility. Disabling this does not enable scrolling through tmux history.",
+    "disableAlternateScreen": "Disable alternate screen",
+    "disableAlternateScreenDesc": "Keep newly started full-screen programs on the main screen so output can enter local scrollback. This is not tmux history; pane redraws may mix together and vim/less may leave their screen behind. Exit and reopen programs already on the alternate screen. Disabled by default.",
     "enableStartupLock": "Lock on startup",
     "enableStartupLockDesc": "Lock the application when it starts.",
     "enableIdleLock": "Lock when idle",

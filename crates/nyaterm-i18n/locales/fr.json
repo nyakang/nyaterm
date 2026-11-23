@@ -3687,6 +3687,8 @@
     "mouseEventsRequireAltDesc": "Envoyer les événements souris aux applications du terminal uniquement avec Alt enfoncé.",
     "alternateScroll": "La molette envoie les flèches en plein écran",
     "alternateScrollDesc": "Sur l'écran alternatif (tmux, screen, less, vim) sans rapport de souris, envoie la molette comme touches Haut/Bas. Désactivez pour éviter que la molette parcoure l'historique du shell. Activé par défaut pour préserver le comportement existant. Le désactiver ne permet pas de faire défiler l’historique de tmux.",
+    "disableAlternateScreen": "Désactiver l’écran alternatif",
+    "disableAlternateScreenDesc": "Garde les nouveaux programmes plein écran sur l’écran principal pour conserver leur sortie dans l’historique local. Ce n’est pas l’historique de tmux : les rafraîchissements des volets peuvent se mélanger et vim/less laisser leur écran à la sortie. Fermez puis rouvrez les programmes déjà sur l’écran alternatif. Désactivé par défaut.",
     "enableStartupLock": "Verrouiller au démarrage",
     "enableStartupLockDesc": "Verrouiller l'application au démarrage.",
     "enableIdleLock": "Verrouiller après inactivité",

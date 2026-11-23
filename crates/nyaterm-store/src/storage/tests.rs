@@ -10054,3 +10054,33 @@ fn removed_acp_profiles_are_not_resurrected_by_legacy_enabled_flags() {
         Some(vec![])
     );
 }
+
+#[test]
+fn settings_alternate_screen_policy_is_independent_and_preserves_legacy_documents() {
+    let dir = unique_temp_dir("settings-alternate-screen-policy");
+    let store = ConnectionStore::open(&dir).unwrap();
+    for alternate_scroll in [false, true] {
+        store
+            .save_settings_value(&serde_json::json!({
+                "interaction": {
+                    "alternate_scroll": alternate_scroll,
+                    "future_option": { "keep": 42 }
+                }
+            }))
+            .unwrap();
+        let mut settings = store.load_app_settings_summary().unwrap();
+        assert_eq!(settings.interaction_alternate_scroll, alternate_scroll);
+        assert!(!settings.interaction_disable_alternate_screen);
+        for disabled in [true, false] {
+            settings.interaction_disable_alternate_screen = disabled;
+            let saved = store.save_interaction_settings(&settings).unwrap();
+            assert_eq!(saved.interaction_alternate_scroll, alternate_scroll);
+            assert_eq!(saved.interaction_disable_alternate_screen, disabled);
+            let raw = store.load_settings_value().unwrap();
+            assert_eq!(raw["interaction"]["disable_alternate_screen"], disabled);
+            assert_eq!(raw["interaction"]["future_option"]["keep"], 42);
+        }
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
