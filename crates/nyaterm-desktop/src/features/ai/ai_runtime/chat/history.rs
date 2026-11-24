@@ -73,6 +73,28 @@ impl NyaTermApp {
         .detach();
     }
 
+    pub(in crate::features) fn new_ai_chat_from_history(&mut self, cx: &mut Context<Self>) {
+        self.sync_ai_active_scope(cx);
+        if self.ai.chat_or_agent_is_running() || self.ai.chat_messages().is_empty() {
+            return;
+        }
+        let mut draft = format!(
+            "Reference text from conversation {}. Review this history before continuing:\n\n",
+            self.ai.chat_session_id()
+        );
+        for message in self.ai.chat_messages() {
+            if draft.len() + message.content.len() > 256 * 1024 {
+                draft.push_str("\n[Remaining history omitted from this draft.]\n");
+                break;
+            }
+            draft.push_str(&format!("{:?}: {}\n\n", message.role, message.content));
+        }
+        self.start_new_ai_chat(cx);
+        self.ai.set_chat_prompt_draft(draft.clone());
+        self.reset_text_input("ai.chat.prompt", &draft, cx);
+        self.defer_ai_panel_snapshot_flush(cx);
+    }
+
     pub(in crate::features) fn start_new_ai_chat(&mut self, cx: &mut Context<Self>) {
         self.sync_ai_active_scope(cx);
         if self.ai.chat_or_agent_is_running() {

@@ -11,7 +11,7 @@ use nyaterm_ui::{
 };
 use rust_i18n::t;
 
-use super::components::{agent_kind_display_name, ai_send_button, execution_mode_label};
+use super::components::{ai_send_button, execution_mode_label};
 use super::layout::{COMPOSER_GAP, COMPOSER_HEIGHT_MAX, COMPOSER_PADDING};
 use super::{AI_COMPOSER_RESIZE_HANDLE_ID, AiPanel, AiPanelSnapshot, ai_agent_status_badge};
 use crate::features::view_widgets::{APP_OVERLAY_PRIORITY, horizontal_resize_handle_borderless};
@@ -341,16 +341,13 @@ impl AiPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = snapshot.chrome.palette;
-        let kinds = [
-            (AiAgentKind::Nyaterm, true),
-            (AiAgentKind::Codex, snapshot.codex_enabled),
-            (AiAgentKind::ClaudeCode, snapshot.claude_code_enabled),
-        ];
-        let items = kinds
+        let items = snapshot
+            .agent_choices
+            .clone()
             .into_iter()
-            .map(|(kind, enabled)| {
-                let selected = snapshot.agent_kind == kind;
-                let name = agent_kind_display_name(&kind);
+            .map(|(kind, name, enabled)| {
+                let selected =
+                    nyaterm_core::ai::external_agents::same_agent(&snapshot.agent_kind, &kind);
                 let label = if enabled {
                     name.to_string()
                 } else {
@@ -396,7 +393,7 @@ impl AiPanel {
                                     .flex_1()
                                     .text_size(px(11.))
                                     .text_ellipsis()
-                                    .child(agent_kind_display_name(&snapshot.agent_kind)),
+                                    .child(snapshot.agent_label.clone()),
                             )
                             .child(
                                 svg()

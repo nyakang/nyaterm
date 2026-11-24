@@ -50,6 +50,7 @@ impl NyaTermApp {
             settings.diagnostics_retention_days,
         );
         self.settings.replace_summary(settings);
+        self.sync_terminal_screen_policy();
         if command_blocks_changed {
             self.apply_terminal_command_blocks_setting(cx);
         }

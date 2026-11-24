@@ -75,14 +75,24 @@ impl std::fmt::Debug for McpEphemeralCredential {
     }
 }
 
+impl McpEphemeralCredential {
+    pub(in crate::features) fn revoke(&self) {
+        let removed = self
+            .generation_registry
+            .lock()
+            .map(|mut generations| generations.remove(&self.generation).is_some())
+            .unwrap_or(false);
+        if removed {
+            let _ = self.events.unbounded_send(McpHostEvent::GenerationExpired {
+                generation: self.generation.clone(),
+            });
+        }
+    }
+}
+
 impl Drop for McpEphemeralCredential {
     fn drop(&mut self) {
-        if let Ok(mut generations) = self.generation_registry.lock() {
-            generations.remove(&self.generation);
-        }
-        let _ = self.events.unbounded_send(McpHostEvent::GenerationExpired {
-            generation: self.generation.clone(),
-        });
+        self.revoke();
     }
 }
 

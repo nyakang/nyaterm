@@ -1,4 +1,5 @@
 pub mod completion;
+pub mod external_agents;
 pub mod proxy;
 pub mod reasoning_text;
 use std::collections::HashSet;
@@ -103,6 +104,7 @@ pub enum AiAgentKind {
     Nyaterm,
     Codex,
     ClaudeCode,
+    Acp(String),
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -208,7 +210,7 @@ pub fn validate_ai_session_scope(
     agent_kind: &AiAgentKind,
     owner_scope: &AiSessionScope,
 ) -> Result<(), &'static str> {
-    if &session.agent_kind != agent_kind {
+    if !external_agents::same_agent(&session.agent_kind, agent_kind) {
         return Err("AI session belongs to another agent type");
     }
     if session.scope.r#type != AiSessionScopeType::Unbound
@@ -525,6 +527,8 @@ pub struct AiCustomActionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiSettings {
     #[serde(default)]
+    pub external_agents: Option<Vec<external_agents::ExternalAgentProfile>>,
+    #[serde(default)]
     pub proxy: proxy::AiProxySettings,
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -640,6 +644,8 @@ pub struct AiSession {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSessionBackendMetadata {
+    #[serde(default)]
+    pub external_binding: Option<external_agents::ExternalSessionBinding>,
     #[serde(default)]
     pub backend: AiBackendKind,
     #[serde(default)]

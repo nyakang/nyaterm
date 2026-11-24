@@ -234,6 +234,9 @@ impl NyaTermApp {
             tracing::warn!(%error, "terminal encoding configuration rejected");
         }
         let terminal_frame_pipeline = TerminalFramePipeline::spawn(recording_writer.clone());
+        // Install host policy before the bridge can enqueue the first output.
+        terminal_frame_pipeline
+            .set_ignore_alternate_screen(settings.interaction_disable_alternate_screen);
         let system_appearance =
             crate::features::shell::system_theme::system_appearance(cx.window_appearance());
         let terminal_colors =

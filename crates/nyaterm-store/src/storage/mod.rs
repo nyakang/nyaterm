@@ -1319,6 +1319,17 @@ impl ConnectionStore {
                 |error| StorageError::InvalidData(format!("AI provider {}: {error}", index + 1)),
             )?;
         }
+        let mut agent_ids = std::collections::HashSet::new();
+        for profile in merged.external_agents.iter().flatten() {
+            profile
+                .validate()
+                .map_err(|message| StorageError::InvalidData(message.into()))?;
+            if !agent_ids.insert(&profile.id) {
+                return Err(StorageError::InvalidData(
+                    "Duplicate Agent profile identity".into(),
+                ));
+            }
+        }
         let encrypted = self.encrypt_ai_settings(merged.clone())?;
         let mut value = self.load_settings_value()?;
         let mut encrypted_value = serde_json::to_value(encrypted)?;
@@ -1678,6 +1689,16 @@ impl ConnectionStore {
         let crypto = self.credential_crypto()?;
         let master_key_token = self.load_master_key_token()?;
         let master_key_token = master_key_token.as_deref();
+        for profile in settings.external_agents.iter_mut().flatten() {
+            for variable in &mut profile.environment {
+                variable.value = decrypt_optional_secret(
+                    &crypto,
+                    master_key_token,
+                    &Some(variable.value.clone()),
+                )?
+                .unwrap_or_default();
+            }
+        }
         settings.proxy.password =
             decrypt_optional_secret(&crypto, master_key_token, &settings.proxy.password)?;
         for profile in &mut settings.provider_profiles {
@@ -1830,6 +1851,13 @@ fn encrypt_ai_settings_secrets(
     crypto: &CredentialCrypto,
     master_key_token: Option<&str>,
 ) -> Result<(), StorageError> {
+    for profile in settings.external_agents.iter_mut().flatten() {
+        for variable in &mut profile.environment {
+            variable.value =
+                encrypt_optional_secret(crypto, master_key_token, &Some(variable.value.clone()))?
+                    .unwrap_or_default();
+        }
+    }
     settings.proxy.password =
         encrypt_optional_secret(crypto, master_key_token, &settings.proxy.password)?;
     for profile in &mut settings.provider_profiles {

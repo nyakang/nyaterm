@@ -1,7 +1,7 @@
 use super::AiPanel;
 use gpui::{Context, IntoElement};
 pub(super) use nyaterm_ai_gpui::components::{
-    agent_kind_display_name, ai_command_target_label, ai_setup_step, execution_mode_label,
+    ai_command_target_label, ai_setup_step, execution_mode_label,
 };
 use nyaterm_ui::ThemePalette;
 pub(super) fn ai_send_button(

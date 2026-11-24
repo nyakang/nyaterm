@@ -768,27 +768,72 @@ fn pending_settings_preserve_masked_secret_until_a_new_draft_exists() {
 }
 
 #[test]
-fn external_agent_mcp_integration_toggles_fail_closed_setting() {
+fn external_profiles_keep_unknown_strategies_disabled_and_preserve_instance_identity() {
     let cx = TestAppContext::single();
     let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let mut state = state(&cx);
-
-    state.toggle_settings_codex_mcp_integration();
-    state.toggle_settings_claude_mcp_integration();
-    let disabled = state.pending_settings();
-    assert_eq!(disabled.codex.tool_integration_mode, None);
-    assert_eq!(disabled.claude_code.tool_integration_mode, None);
-
-    state.toggle_settings_codex_mcp_integration();
-    state.toggle_settings_claude_mcp_integration();
-    let enabled = state.pending_settings();
+    state
+        .edit_external_profile("builtin-claude", "enabled", String::new())
+        .unwrap();
+    assert!(nyaterm_core::ai::external_agents::is_enabled(
+        state.settings_config(),
+        &AiAgentKind::ClaudeCode
+    ));
+    let revision = state.settings_config().external_agents.as_ref().unwrap()[1].revision;
+    state
+        .edit_external_profile("builtin-claude", "model", "fixture-model".into())
+        .unwrap();
     assert_eq!(
-        enabled.codex.tool_integration_mode.as_deref(),
-        Some("nyaterm_mcp")
+        state.settings_config().external_agents.as_ref().unwrap()[1].revision,
+        revision
     );
+    state.settings.config.external_agents.as_mut().unwrap()[1]
+        .environment
+        .push(
+            nyaterm_core::ai::external_agents::AgentEnvironmentVariable {
+                id: "secret-row".into(),
+                name: "API_KEY".into(),
+                value: nyaterm_core::MASKED_SECRET_VALUE.into(),
+            },
+        );
+    state
+        .edit_external_profile("builtin-claude", "copy", String::new())
+        .unwrap();
+    let copy = state
+        .settings_config()
+        .external_agents
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap();
+    assert_ne!(copy.id, "builtin-claude");
+    assert!(!copy.enabled);
+    assert!(copy.environment[0].value.is_empty());
+    state
+        .edit_external_profile("builtin-claude", "strategy", "unknown".into())
+        .unwrap();
+    state
+        .edit_external_profile("builtin-claude", "enabled", String::new())
+        .unwrap();
+    assert!(!nyaterm_core::ai::external_agents::is_enabled(
+        state.settings_config(),
+        &AiAgentKind::ClaudeCode
+    ));
     assert_eq!(
-        enabled.claude_code.tool_integration_mode.as_deref(),
-        Some("nyaterm_mcp")
+        state.settings_config().external_agents.as_ref().unwrap()[1]
+            .strategy
+            .0,
+        "unknown"
+    );
+    state
+        .edit_external_profile("builtin-claude", "delete", String::new())
+        .unwrap();
+    assert!(
+        nyaterm_core::ai::external_agents::resolve_profile(
+            state.settings_config(),
+            &AiAgentKind::ClaudeCode
+        )
+        .is_none()
     );
 }
 
@@ -2090,7 +2135,9 @@ fn disabling_an_external_agent_falls_back_to_ask_for_its_existing_terminal_draft
     let mut state = state(&cx);
     state.settings.config.codex.enabled = true;
     state.set_chat_run_mode(AiMode::Agent, AiAgentKind::Codex);
-    state.toggle_settings_codex_enabled();
+    state
+        .edit_external_profile("builtin-codex", "enabled", String::new())
+        .unwrap();
     assert_eq!(state.chat_run_mode(), AiMode::Ask);
     assert_eq!(state.chat_agent_kind(), AiAgentKind::Nyaterm);
 }

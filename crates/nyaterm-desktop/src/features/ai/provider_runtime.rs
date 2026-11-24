@@ -48,11 +48,6 @@ impl NyaTermApp {
         self.ai.provider_view_mut().choices_open = open;
         self.request_settings_panel_refresh(cx);
     }
-    pub(in crate::features) fn toggle_ai_advanced(&mut self, cx: &mut Context<Self>) {
-        let open = !self.ai.provider_view().advanced_open;
-        self.ai.provider_view_mut().advanced_open = open;
-        self.request_settings_panel_refresh(cx);
-    }
     pub(in crate::features) fn add_ai_provider_preset(
         &mut self,
         kind: AiProviderKind,

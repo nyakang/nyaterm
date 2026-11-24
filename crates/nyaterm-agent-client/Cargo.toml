@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+agent-client-protocol.workspace = true
+blocking.workspace = true
+futures.workspace = true
+tokio.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 nyaterm-core.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

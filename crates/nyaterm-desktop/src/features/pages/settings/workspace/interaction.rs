@@ -129,6 +129,19 @@ impl SettingsPanel {
                     ))
                     .child(settings_form_row(
                         palette,
+                        t!("settings.disableAlternateScreen"),
+                        Some(SharedString::from(t!(
+                            "settings.disableAlternateScreenDesc"
+                        ))),
+                        settings_switch(
+                            palette,
+                            "interaction-disable-alternate-screen",
+                            self.settings.summary().interaction_disable_alternate_screen,
+                            cx.listener(|this, _, _, cx| this.toggle_disable_alternate_screen(cx)),
+                        ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
                         t!("settings.alternateScroll"),
                         Some(SharedString::from(t!("settings.alternateScrollDesc"))),
                         settings_switch(

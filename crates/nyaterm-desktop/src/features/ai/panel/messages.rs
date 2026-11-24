@@ -216,7 +216,7 @@ impl AiPanel {
     ) -> AnyElement {
         nyaterm_ai_gpui::messages::agent_turn_header(
             snapshot.chrome.palette,
-            &snapshot.agent_kind,
+            &snapshot.agent_label,
             snapshot.agent_mode,
             live,
         )

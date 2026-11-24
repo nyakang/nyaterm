@@ -157,6 +157,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-client-protocol"
+version = "5.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6720bf8b44f96762eaeb8e5869468a1b6aaec9b679b0862a22d07574ea2d8cb0"
+dependencies = [
+ "agent-client-protocol-derive",
+ "agent-client-protocol-schema",
+ "anyhow",
+ "futures",
+ "futures-concurrency",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "agent-client-protocol-derive"
+version = "5.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd38e8caca867056f167b830b2d4093efeb620c59648744c8cae23be39975fe1"
+dependencies = [
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "agent-client-protocol-schema"
+version = "1.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86bf185eeeb1eb20edcbd01bce65c4c2ed40c2f962e23ed9565db582cde1cc90"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "indexmap 2.14.2",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -183,7 +226,7 @@ dependencies = [
 [[package]]
 name = "alacritty_terminal"
 version = "0.26.1-dev"
-source = "git+https://github.com/nyakang/alacritty?rev=c81fc5409a47214ac4327c72e03e9349cd96fd30#c81fc5409a47214ac4327c72e03e9349cd96fd30"
+source = "git+https://github.com/nyakang/alacritty?rev=5d6bf676e3ff6ebf31000d572a8e027e943ec269#5d6bf676e3ff6ebf31000d572a8e027e943ec269"
 dependencies = [
  "arrayvec",
  "base64 0.22.1",
@@ -7255,8 +7298,14 @@ dependencies = [
 name = "nyaterm-agent-client"
 version = "2.0.8"
 dependencies = [
+ "agent-client-protocol",
+ "blocking",
+ "futures",
  "nyaterm-core",
+ "serde",
  "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "windows-sys 0.61.2",
 ]

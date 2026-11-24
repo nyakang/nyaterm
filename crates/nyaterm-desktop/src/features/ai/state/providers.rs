@@ -25,7 +25,6 @@ pub(in crate::features) struct ProviderSettingsView {
     pub tasks: Vec<std::sync::Arc<crate::ai_runtime::AiTask>>,
     pub selected_id: Option<String>,
     pub choices_open: bool,
-    pub advanced_open: bool,
     pub editing_model: Option<String>,
     pub statuses: HashMap<String, ConnectionStatus>,
     pub model_statuses: HashMap<String, ConnectionStatus>,

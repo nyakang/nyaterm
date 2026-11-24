@@ -1087,6 +1087,17 @@ impl TerminalCore {
         self.color_palette
     }
 
+    /// Ignore parsed requests to enter the alternate screen, preserving the byte stream.
+    /// Existing alternate-screen applications can still exit normally. This host
+    /// policy survives terminal resets and does not itself change the active screen.
+    pub fn set_ignore_alternate_screen(&mut self, enabled: bool) {
+        self.term.set_ignore_alternate_screen(enabled);
+    }
+
+    pub fn ignores_alternate_screen(&self) -> bool {
+        self.term.ignores_alternate_screen()
+    }
+
     /// Enable richer frames without changing the protocol grid or VT modes.
     pub fn set_logical_line_snapshots(&mut self, enabled: bool) {
         if self.logical_line_snapshots == enabled {

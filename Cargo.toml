@@ -69,6 +69,8 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+agent-client-protocol = { version = "=5.5.1", features = ["unstable_auth_status"] }
+blocking = "1"
 nyaterm-remote-monitor-gpui = { path = "crates/nyaterm-remote-monitor-gpui" }
 nyaterm-connections-gpui = { path = "crates/nyaterm-connections-gpui" }
 nyaterm-file-browser-gpui = { path = "crates/nyaterm-file-browser-gpui" }
@@ -258,7 +260,7 @@ picky = { version = "=7.0.0-rc.29", git = "https://github.com/nyakang/picky-rs",
 picky-asn1 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1-der = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1-x509 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
-alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "c81fc5409a47214ac4327c72e03e9349cd96fd30" }
+alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "5d6bf676e3ff6ebf31000d572a8e027e943ec269" }
 ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
 sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "df7ce588457cad66e6f3d0a46b3e35a86eec281b" }
 # The published ironrdp-client and ironrdp-connector packages declare their

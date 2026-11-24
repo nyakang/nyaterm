@@ -15,6 +15,10 @@ pub(crate) struct ExternalAgentChild {
 }
 
 impl ExternalAgentChild {
+    pub(crate) fn own_reader(&mut self, reader: JoinHandle<()>) {
+        self.readers.push(reader);
+    }
+
     pub fn spawn(command: &mut Command) -> std::io::Result<Self> {
         Ok(Self {
             child: AgentChild::spawn(command)?,

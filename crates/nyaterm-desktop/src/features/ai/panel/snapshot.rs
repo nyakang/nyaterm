@@ -1,4 +1,3 @@
-use super::components::agent_kind_display_name;
 use super::{
     AI_COMPOSER_RESIZE_HANDLE_ID, AiAgentStepPresentation, AiHeaderPresentation,
     AiMentionCandidate, AiModelChoice, AiPanelChrome, AiPanelSnapshot, AiTargetSession, harness,
@@ -14,6 +13,9 @@ use nyaterm_core::AiMode;
 use nyaterm_core::AiModelConfigItem;
 use nyaterm_core::AiProviderKind;
 use nyaterm_core::AiReasoningEffort;
+use nyaterm_core::ai::external_agents::{
+    display_name, is_enabled, model_label as model_label_for_agent, profiles,
+};
 use nyaterm_core::truncate_preview;
 use rust_i18n::t;
 use std::sync::Arc;
@@ -32,30 +34,11 @@ impl NyaTermApp {
                     .map(|model| truncate_preview(&model.name, 28))
             })
             .unwrap_or_else(|| t!("ai.notConfigured").to_string());
-        if self.ai.chat_run_mode() == AiMode::Agent {
-            match self.ai.chat_agent_kind() {
-                AiAgentKind::Codex => {
-                    model_label = self
-                        .ai
-                        .settings_config()
-                        .codex
-                        .default_model
-                        .clone()
-                        .filter(|model| !model.trim().is_empty())
-                        .unwrap_or_else(|| "Codex".to_string())
-                }
-                AiAgentKind::ClaudeCode => {
-                    model_label = self
-                        .ai
-                        .settings_config()
-                        .claude_code
-                        .default_model
-                        .clone()
-                        .filter(|model| !model.trim().is_empty())
-                        .unwrap_or_else(|| "Claude Code".to_string())
-                }
-                AiAgentKind::Nyaterm => {}
-            }
+        if self.ai.chat_run_mode() == AiMode::Agent
+            && self.ai.chat_agent_kind() != AiAgentKind::Nyaterm
+        {
+            model_label =
+                model_label_for_agent(self.ai.settings_config(), &self.ai.chat_agent_kind());
         }
         if let Some(active_id) = self.session.active_id() {
             let label = self
@@ -74,7 +57,7 @@ impl NyaTermApp {
             format!(
                 "{} · {}",
                 t!("ai.modeAgent"),
-                agent_kind_display_name(&self.ai.chat_agent_kind())
+                display_name(self.ai.settings_config(), &self.ai.chat_agent_kind())
             )
         } else {
             t!("ai.modeAsk").to_string()
@@ -340,28 +323,21 @@ impl NyaTermApp {
             agent_kind,
             reasoning_effort: self.ai.settings_config().default_reasoning_effort.clone(),
             reasoning_choices,
-            codex_enabled: self.ai.settings_config().codex.enabled,
-            claude_code_enabled: self.ai.settings_config().claude_code.enabled,
+            agent_choices: std::iter::once((AiAgentKind::Nyaterm, "NyaTerm".to_owned(), true))
+                .chain(profiles(self.ai.settings_config()).iter().map(|p| {
+                    (
+                        p.agent_kind(),
+                        p.name.clone(),
+                        is_enabled(self.ai.settings_config(), &p.agent_kind()),
+                    )
+                }))
+                .collect(),
+            agent_label: display_name(self.ai.settings_config(), &self.ai.chat_agent_kind()),
             external_agent,
-            external_model_label: match self.ai.chat_agent_kind() {
-                AiAgentKind::Codex => self
-                    .ai
-                    .settings_config()
-                    .codex
-                    .default_model
-                    .clone()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| "Codex".to_string()),
-                AiAgentKind::ClaudeCode => self
-                    .ai
-                    .settings_config()
-                    .claude_code
-                    .default_model
-                    .clone()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| "Claude Code".to_string()),
-                AiAgentKind::Nyaterm => String::new(),
-            },
+            external_model_label: model_label_for_agent(
+                self.ai.settings_config(),
+                &self.ai.chat_agent_kind(),
+            ),
             selected_model_id,
             selected_model_exists,
             model_label,
