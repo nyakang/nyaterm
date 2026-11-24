@@ -22,6 +22,7 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, IntoElement, KeyDownEvent, Render, Styled,
     Subscription, WeakEntity, Window, div, prelude::*, rgb,
 };
+use nyaterm_ui::child_window::shell::ChildWindowCloseHandler;
 use nyaterm_ui::{NyaWindowHandle, nya_root};
 
 use crate::features::{
@@ -130,7 +131,7 @@ impl Render for RemoteDesktopFullscreenWindow {
             .expect("fullscreen window outlives its app");
         let palette = app_entity.read(cx).theme_palette();
         let close_app = self.app.clone();
-        let on_close: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, cx| {
+        let on_close: ChildWindowCloseHandler = Rc::new(move |window, cx| {
             if let Some(app) = close_app.upgrade() {
                 app.update(cx, |app, cx| app.exit_remote_desktop_fullscreen(cx));
             }

@@ -113,8 +113,8 @@ def build(directory: Path, prefix: Path, *, macos: bool) -> dict:
                    "--disable-tools", "--disable-docs", "--disable-unit-tests", "--enable-vp9-highbitdepth"]
     if macos:
         arch = "arm64" if platform.machine() in ("arm64", "aarch64") else "x86_64"
-        vpx_options += ["--target=" + arch + "-darwin20-gcc", "--extra-cflags=-mmacosx-version-min=" + minimum,
-                        "--extra-ldflags=-mmacosx-version-min=" + minimum]
+        # libvpx reads LDFLAGS from env; configure has no --extra-ldflags option.
+        vpx_options += ["--target=" + arch + "-darwin20-gcc", "--extra-cflags=-mmacosx-version-min=" + minimum]
     if platform.machine() in ("x86_64", "AMD64"):
         vpx_options += ["--as=nasm"]
     run([vpx / "configure", *vpx_options], cwd=vpx, env=env)

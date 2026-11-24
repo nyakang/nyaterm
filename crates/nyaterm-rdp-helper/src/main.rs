@@ -573,16 +573,18 @@ fn spawn_stdin_reader(
         })
 }
 
+type BuiltRdpConfig = (
+    ironrdp_client::config::Config,
+    Option<Arc<ClipboardBridge>>,
+    Option<Box<dyn RdpdrBackendFactory + Send>>,
+);
+
 fn build_config(
     session_id: &str,
     config: &RdpSessionConfig,
     output_tx: mpsc::SyncSender<Outbound>,
     certificate_gate: Arc<CertificateGate>,
-) -> anyhow::Result<(
-    ironrdp_client::config::Config,
-    Option<Arc<ClipboardBridge>>,
-    Option<Box<dyn RdpdrBackendFactory + Send>>,
-)> {
+) -> anyhow::Result<BuiltRdpConfig> {
     let destination = Destination::new(format!("{}:{}", config.host, config.port))?;
     let certificate_endpoint = destination.to_string();
     let port = config.port;
@@ -1978,10 +1980,12 @@ mod tests {
     fn custom_directory_does_not_change_the_letter_capability() {
         // Only drive letters are expressible in `drivestoredirect`; the custom
         // directory is announced as an independent named RDPDR share.
-        let mut redirection = RdpRedirectionConfig::default();
-        redirection.drives = true;
-        redirection.drive_letters = "C".into();
-        redirection.custom_drive_path = r"C:\Users\name\Documents".into();
+        let mut redirection = RdpRedirectionConfig {
+            drives: true,
+            drive_letters: "C".into(),
+            custom_drive_path: r"C:\Users\name\Documents".into(),
+            ..RdpRedirectionConfig::default()
+        };
         assert_eq!(
             drive_redirection(&redirection.drive_letters).to_string(),
             "C:\\"

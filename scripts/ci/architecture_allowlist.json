@@ -8,6 +8,7 @@
     {"path": "crates/nyaterm-terminal-runtime/src/frame/frame_pipeline.rs", "max_count": 1, "reason": "TerminalFramePipeline owns, closes, and joins its frame worker."}
   ],
   "desktop_thread_builder": [
+    {"path": "crates/nyaterm-desktop/src/features/assets/batch_edit/tests.rs", "max_count": 1, "reason": "The batch-edit fixture runs its large debug patch-builder frame on an eight-MiB test thread and joins it before returning."},
     {"path": "crates/nyaterm-desktop/src/thread_owner.rs", "max_count": 1, "reason": "The central named-thread factory returns join handles to explicit lifecycle owners."},
     {"path": "crates/nyaterm-desktop/src/models/connections.rs", "max_count": 1, "reason": "CredentialAutofillMatchPipeline owns, stops, and joins its matcher worker."},
     {"path": "crates/nyaterm-desktop/src/features/remote_desktop/keyboard_capture.rs", "max_count": 1, "reason": "Windows keyboard capture owns the hook thread, posts WM_QUIT, unhooks, and joins it."},

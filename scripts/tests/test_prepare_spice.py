@@ -13,10 +13,28 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
 import prepare_spice
 import spice_unix
+import spice_source_runtime
 import native_headers
 
 
 class SpiceRuntimeTests(unittest.TestCase):
+    def test_macos_vpx_configure_uses_environment_for_linker_deployment_floor(self):
+        for arch, target in (("arm64", "arm64-darwin20-gcc"),
+                             ("x86_64", "x86_64-darwin20-gcc")):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with mock.patch.object(spice_source_runtime.platform, "machine", return_value=arch), \
+                     mock.patch.object(spice_source_runtime, "source", side_effect=lambda name, _: root / name), \
+                     mock.patch.object(spice_source_runtime, "output", return_value="/tool"), \
+                     mock.patch.object(spice_source_runtime, "run") as run:
+                    spice_source_runtime.build(root, root / "prefix", macos=True)
+                configure = next(call for call in run.call_args_list
+                                 if call.args[0][0] == root / "libvpx/configure")
+                self.assertIn("--target=" + target, configure.args[0])
+                self.assertFalse(any(str(arg).startswith("--extra-ldflags") for arg in configure.args[0]))
+                self.assertIn("-mmacosx-version-min=12.0", configure.kwargs["env"]["LDFLAGS"])
+                self.assertEqual(configure.kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"], "12.0")
+
     def test_source_extraction_rejects_links_and_traversal_before_writing(self):
         for name, kind in (("../outside", tarfile.REGTYPE), ("source/link", tarfile.SYMTYPE),
                            ("source/hardlink", tarfile.LNKTYPE), ("source/device", tarfile.CHRTYPE)):

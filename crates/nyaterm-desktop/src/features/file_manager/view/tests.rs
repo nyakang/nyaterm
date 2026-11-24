@@ -1655,7 +1655,7 @@ fn path_completion_fills_without_navigating_then_enters_and_escapes_in_two_steps
     }
     cx.executor().allow_parking();
     let root = TestTempDir::new("nyaterm-path-completion");
-    std::fs::create_dir_all(root.join("alpha/child")).unwrap();
+    std::fs::create_dir_all(root.join("alpha").join("child")).unwrap();
     std::fs::create_dir_all(root.join("alpine")).unwrap();
     cx.update(|cx| {
         nyaterm_ui::apply_component_theme(
@@ -1814,7 +1814,7 @@ fn path_completion_fills_without_navigating_then_enters_and_escapes_in_two_steps
                 .selected_path()
                 .unwrap()
                 .display_path,
-            root.join("alpha/child").to_str().unwrap()
+            root.join("alpha").join("child").to_str().unwrap()
         );
     });
     cx.simulate_keystrokes("enter");
@@ -1823,7 +1823,7 @@ fn path_completion_fills_without_navigating_then_enters_and_escapes_in_two_steps
         assert!(!workspace.read(cx).right.path_editing);
         assert_eq!(
             workspace.read(cx).right.path.display_path,
-            root.join("alpha/child").to_str().unwrap()
+            root.join("alpha").join("child").to_str().unwrap()
         )
     });
 }

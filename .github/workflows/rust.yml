@@ -213,6 +213,10 @@ jobs:
 
       # --no-fail-fast so one crate's failure stops masking every crate after it.
       - name: Test workspace
+        # Unoptimized GPUI element trees and connection serde fixtures exceed
+        # libtest's default 2 MiB stack in the debug test profile.
+        env:
+          RUST_MIN_STACK: '16777216'
         run: cargo test --workspace --locked --no-fail-fast
 
       - name: Install Python for Windows resource tests

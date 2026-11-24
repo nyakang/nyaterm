@@ -70,13 +70,11 @@ jobs:
           PY
           python -m unittest scripts.tests.test_prepare_spice
       - name: Check helper for target architecture
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: cargo check --locked -p nyaterm-spice-helper --all-targets --target "${TARGET}"
+        # Use the runner's default shell: Git Bash puts its coreutils link.exe
+        # ahead of the MSVC linker on Windows.
+        run: cargo check --locked -p nyaterm-spice-helper --all-targets --target "${{ matrix.target }}"
       - name: Run helper, lifecycle, TLS and plugin probes
         if: matrix.native
-        shell: bash
         run: |
           cargo test --locked --release -p nyaterm-spice-helper --lib
           cargo run --locked --release -p nyaterm-spice-helper --example probe -- --require-video
