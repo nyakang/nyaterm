@@ -257,7 +257,7 @@ impl TerminalFeatureState {
             .ensure_session(session_id, encoding, scrollback_limit);
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(test)]
     pub(in crate::features) fn request_frame_text_for_test(
         &self,
         session_id: &str,

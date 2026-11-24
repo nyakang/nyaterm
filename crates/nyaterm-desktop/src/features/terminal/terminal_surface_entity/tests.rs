@@ -5263,3 +5263,126 @@ fn reading_highlight_fingerprint_cost_probe() {
         });
     }
 }
+
+#[test]
+fn repeated_tab_close_releases_parser_surface_and_snapshot_owners() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::TerminalFrameEvent;
+    use crate::test_support::TestConfigDir;
+
+    let root = TestConfigDir::new("nyaterm-1348-desktop-lifetime");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    let (template, pipeline) = app.update(&mut cx, |app, cx| {
+        let mut metadata = app.session.metadata("fixture").unwrap().clone();
+        metadata.disconnected = true;
+        app.session.mark_session_disconnected("fixture");
+        app.close_session("fixture".into(), cx);
+        (metadata, app.terminal.view.frame_pipeline.clone())
+    });
+    let payload =
+        b"synthetic terminal output 0123456789 abcdefghijklmnopqrstuvwxyz\r\n".repeat(10000);
+    for round in 0..20 {
+        let ids: Vec<_> = (0..2).map(|tab| format!("ui-{round}-{tab}")).collect();
+        app.update(&mut cx, |app, cx| {
+            for id in &ids {
+                app.session.register_session_metadata(id, template.clone());
+                app.session.select_active_session(id);
+                app.terminal
+                    .seed_session_view(id.clone(), String::new(), "UTF-8");
+                app.ensure_terminal_surface(id, cx);
+            }
+        });
+        pipeline.set_snapshot_priority(ids.clone());
+        for id in &ids {
+            pipeline.ensure_session(id, "UTF-8", 5000);
+            pipeline.resize_session(id, 160, 48);
+            pipeline.submit_output(id, payload.clone(), "UTF-8", 5000);
+        }
+        pipeline.finish_pending_output().unwrap();
+        let events = pipeline.take_events_for_transfer(&ids);
+        let frames: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                events
+                    .iter()
+                    .filter_map(|event| match event {
+                        TerminalFrameEvent::Output(frame) if frame.session_id == *id => {
+                            frame.snapshot.clone()
+                        }
+                        _ => None,
+                    })
+                    .next_back()
+                    .expect("frame snapshot")
+            })
+            .collect();
+        drop(events);
+        let observations = app.update(&mut cx, |app, cx| {
+            ids.iter()
+                .zip(frames)
+                .map(|(id, snapshot)| {
+                    let surface = app.ensure_terminal_surface(id, cx);
+                    app.terminal.view.views.get_mut(id).unwrap().frame_snapshot =
+                        Some(snapshot.clone());
+                    let snapshot_weak = Arc::downgrade(&snapshot);
+                    let row_weak = Arc::downgrade(&snapshot.row_data[0]);
+                    let layout_weak = surface.update(cx, |surface, _| {
+                        surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+                            snapshot.clone(),
+                            TerminalScrollVisualState {
+                                session_id: id.clone(),
+                                history: snapshot.history,
+                                scroll_offset: 0,
+                                scroll_residual_lines: 0.0,
+                                display_offset: 0,
+                                scrollback_len: snapshot.scrollback_len,
+                                viewport_rows: snapshot.viewport_rows,
+                                has_new_while_scrolled: false,
+                                performance_overlay: None,
+                                skipped_output_chars: 0,
+                            },
+                        ));
+                        Arc::downgrade(&surface.layout_cache)
+                    });
+                    (surface.downgrade(), snapshot_weak, row_weak, layout_weak)
+                })
+                .collect::<Vec<_>>()
+        });
+        app.update(&mut cx, |app, cx| {
+            for id in &ids {
+                app.close_session(id.clone(), cx);
+            }
+            assert!(app.terminal.view.views.is_empty());
+            assert!(app.terminal.view.surfaces.is_empty());
+            assert!(app.session.ordered_sessions().is_empty());
+        });
+        pipeline.finish_pending_output().unwrap();
+        app.update(&mut cx, |app, cx| {
+            while pipeline.queued_event_count() > 0
+                || !app.terminal.view.pending_frame_events.is_empty()
+            {
+                app.drain_terminal_frame_events(cx);
+            }
+        });
+        cx.run_until_parked();
+        for (surface, snapshot, row, layout) in observations {
+            assert!(
+                surface.upgrade().is_none(),
+                "surface survived round {round}"
+            );
+            assert_eq!(
+                (
+                    snapshot.strong_count(),
+                    row.strong_count(),
+                    layout.strong_count()
+                ),
+                (0, 0, 0),
+                "view payload survived round {round}"
+            );
+        }
+        for id in ids {
+            assert!(pipeline.take_session_for_transfer(id).unwrap().is_none());
+        }
+    }
+}

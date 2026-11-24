@@ -210,11 +210,18 @@ impl NyaTermApp {
 
         if !self.session.pending_events_are_empty() {
             while let Some(event) = self.session.pop_pending_event() {
-                if let SessionEvent::Output { session_id, .. } = &event
-                    && !self.trzsz_output_ready(session_id)
-                {
-                    self.session.defer_pending_event(event);
-                    break;
+                if let SessionEvent::Output { session_id, .. } = &event {
+                    // Either UI queue can outlive the tab. Reject stale bytes
+                    // before sideband handling can defer them or create state.
+                    if !self.session.has_session(session_id)
+                        || self.terminal.session_id_is_retired(session_id)
+                    {
+                        continue;
+                    }
+                    if !self.trzsz_output_ready(session_id) {
+                        self.session.defer_pending_event(event);
+                        break;
+                    }
                 }
                 drained_events += 1;
                 match event {
@@ -538,7 +545,9 @@ impl NyaTermApp {
         bytes: usize,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.terminal.session_id_is_retired(&session_id) {
+        if !self.session.has_session(&session_id)
+            || self.terminal.session_id_is_retired(&session_id)
+        {
             return false;
         }
         self.note_trzsz_output_discontinuity(&session_id);
@@ -683,7 +692,9 @@ impl NyaTermApp {
         drain_timings: &mut SessionEventDrainTimings,
         cx: &mut Context<Self>,
     ) -> SessionOutputDrainStep {
-        if self.terminal.session_id_is_retired(&session_id) {
+        if !self.session.has_session(&session_id)
+            || self.terminal.session_id_is_retired(&session_id)
+        {
             return SessionOutputDrainStep::SidebandOnly {
                 chunk_duration: Duration::ZERO,
                 root_chrome_dirty: false,
@@ -939,6 +950,9 @@ impl NyaTermApp {
         pending_frame_outputs: &mut Vec<(String, Vec<u8>)>,
         timings: &mut SessionEventDrainTimings,
     ) {
+        pending_frame_outputs.retain(|(session_id, _)| {
+            self.session.has_session(session_id) && !self.terminal.session_id_is_retired(session_id)
+        });
         if pending_frame_outputs.is_empty() {
             return;
         }
@@ -971,6 +985,122 @@ impl NyaTermApp {
         !self.xymodem_transfer_active(session_id)
             && self.zmodem_output_can_bypass_detector(session_id, data)
             && self.trzsz_output_can_bypass_detector(session_id, data)
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use crate::features::shell::event_pump::helpers::SessionEventDrainTimings;
+    use crate::features::test_support::app_with_visible_local_session;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::test_support::TestTempDir;
+    use nyaterm_transport::SessionEvent;
+
+    #[test]
+    fn queued_output_after_close_does_not_recreate_parser_or_view() {
+        for bridge_queue in [false, true] {
+            let root = TestTempDir::new("nyaterm-close-queued-output");
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app_with_visible_local_session(&mut cx, root.path(), "closing");
+            cx.update_entity(&app, |app, cx| {
+                let metadata = app.session.metadata("closing").unwrap().clone();
+                app.session.register_session_metadata("live", metadata);
+                let events = [
+                    SessionEvent::Output {
+                        session_id: "live".into(),
+                        data: b"before\r\n".to_vec(),
+                    },
+                    SessionEvent::Output {
+                        session_id: "closing".into(),
+                        data: b"late output\r\n".to_vec(),
+                    },
+                    SessionEvent::OutputDropped {
+                        session_id: "closing".into(),
+                        bytes: 42,
+                    },
+                    SessionEvent::Output {
+                        session_id: "live".into(),
+                        data: b"after\r\n".to_vec(),
+                    },
+                ];
+                if bridge_queue {
+                    for event in events {
+                        app.session.push_event_bridge_ui_event_for_test(event);
+                    }
+                } else {
+                    app.session.extend_pending_events(events);
+                }
+                app.session.mark_session_disconnected("closing");
+                app.close_session("closing".into(), cx);
+                (app.terminal.recording_output_fence())().unwrap();
+                assert!(
+                    futures::executor::block_on(
+                        app.terminal.request_frame_text_for_test("closing")
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+
+                for _ in 0..16 {
+                    app.drain_session_events(cx);
+                }
+                assert!(app.session.pending_events_are_empty());
+                assert_eq!(app.session.event_bridge_queued_event_count(), 0);
+                (app.terminal.recording_output_fence())().unwrap();
+                app.drain_terminal_frame_events(cx);
+                assert!(
+                    futures::executor::block_on(
+                        app.terminal.request_frame_text_for_test("closing")
+                    )
+                    .unwrap()
+                    .is_none(),
+                    "queued output recreated a closed parser"
+                );
+                assert!(app.terminal.session_output("closing").is_none());
+                let text =
+                    futures::executor::block_on(app.terminal.request_frame_text_for_test("live"))
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(text.trim_end(), "before\nafter");
+            });
+        }
+    }
+
+    #[test]
+    fn output_batch_filters_sessions_closed_since_acceptance() {
+        let root = TestTempDir::new("nyaterm-close-output-batch");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "closing");
+        cx.update_entity(&app, |app, cx| {
+            let metadata = app.session.metadata("closing").unwrap().clone();
+            app.session.register_session_metadata("live", metadata);
+            let mut outputs = vec![
+                ("closing".into(), b"late output".to_vec()),
+                ("live".into(), b"live output".to_vec()),
+            ];
+            app.session.mark_session_disconnected("closing");
+            app.close_session("closing".into(), cx);
+            app.flush_pending_session_frame_outputs(
+                &mut outputs,
+                &mut SessionEventDrainTimings::default(),
+            );
+            assert!(outputs.is_empty());
+            (app.terminal.recording_output_fence())().unwrap();
+            assert!(
+                futures::executor::block_on(app.terminal.request_frame_text_for_test("closing"))
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                futures::executor::block_on(app.terminal.request_frame_text_for_test("live"))
+                    .unwrap()
+                    .unwrap()
+                    .trim_end(),
+                "live output"
+            );
+        });
     }
 }
 

@@ -308,3 +308,101 @@ async fn failed_registration_reaps_the_ready_worker_without_publishing_a_session
     );
     peer.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_detached_close_releases_shared_and_independent_ssh_owners() {
+    use crate::SessionEvent;
+    use std::collections::HashMap;
+    use std::time::Instant;
+    let (config, server_task) = server(Arc::new(Gate::default())).await;
+    tokio::task::spawn_blocking(move || {
+        let manager = SessionManager::new();
+        let payload =
+            b"synthetic SSH output 0123456789 abcdefghijklmnopqrstuvwxyz\r\n".repeat(16384);
+        for shared in [false, true] {
+            for round in 0..20 {
+                let first = open_ssh_multiplex_handle(config.clone()).unwrap();
+                let second = if shared {
+                    first.clone()
+                } else {
+                    open_ssh_multiplex_handle(config.clone()).unwrap()
+                };
+                let connections = [first, second];
+                let observations: Vec<_> = connections
+                    .iter()
+                    .map(|h| {
+                        (
+                            Arc::downgrade(&h.inner),
+                            Arc::downgrade(&h.inner.runtime),
+                            Arc::downgrade(&h.inner.target),
+                        )
+                    })
+                    .collect();
+                let sessions: Vec<_> = connections
+                    .iter()
+                    .map(|h| {
+                        manager
+                            .create_ssh_session_with_multiplex(config.clone(), h.clone())
+                            .unwrap()
+                    })
+                    .collect();
+                for session in &sessions {
+                    manager.write_raw(&session.id, &payload).unwrap();
+                }
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut received: HashMap<_, Vec<u8>> = sessions
+                    .iter()
+                    .map(|session| (session.id.clone(), Vec::new()))
+                    .collect();
+                while received.values().any(|bytes| bytes.len() < payload.len())
+                    && Instant::now() < deadline
+                {
+                    for event in manager.drain_events(256).unwrap().events {
+                        if let SessionEvent::Output { session_id, data } = event {
+                            received.get_mut(&session_id).unwrap().extend(data);
+                        }
+                    }
+                    if received.values().any(|bytes| bytes.len() < payload.len()) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                for bytes in received.values() {
+                    assert!(bytes == &payload, "incorrect SSH output in round {round}");
+                }
+                for session in &sessions {
+                    manager.close_detached(&session.id).unwrap();
+                }
+                assert!(manager.list_sessions().unwrap().is_empty());
+                for handle in &connections {
+                    handle.disconnect().unwrap();
+                }
+                drop(connections);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while observations.iter().any(|(inner, runtime, target)| {
+                    inner.strong_count() != 0
+                        || runtime.strong_count() != 0
+                        || target.strong_count() != 0
+                }) && Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                for (inner, runtime, target) in observations {
+                    assert_eq!(
+                        (
+                            inner.strong_count(),
+                            runtime.strong_count(),
+                            target.strong_count()
+                        ),
+                        (0, 0, 0),
+                        "SSH objects retained in round {round}, shared={shared}"
+                    );
+                }
+                drop(manager.drain_events(256).unwrap());
+            }
+        }
+    })
+    .await
+    .unwrap();
+    server_task.abort();
+    let _ = server_task.await;
+}
