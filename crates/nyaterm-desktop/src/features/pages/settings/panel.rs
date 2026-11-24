@@ -534,6 +534,8 @@ pub(in crate::features) struct SettingsPanel {
     slider_subscriptions: Vec<Subscription>,
     pub(in crate::features::pages::settings) theme_picker_controls:
         super::workspace::theme_designer::ThemePickerControls,
+    pub(in crate::features::pages::settings) keyword_color_pickers:
+        super::terminal::keywords::KeywordColorPickerControls,
     selects: SelectRegistry,
     select_subscriptions: Vec<Subscription>,
     ui_font_select_options: FontSelectOptionCache,
@@ -616,6 +618,7 @@ impl SettingsPanel {
                 window_subscription,
             ],
             theme_picker_controls: Default::default(),
+            keyword_color_pickers: Default::default(),
             selects: SelectRegistry::default(),
             select_subscriptions: Vec::new(),
             ui_font_select_options: FontSelectOptionCache::empty(),
@@ -712,7 +715,9 @@ impl SettingsPanel {
         self.snapshot = Some(snapshot);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |panel, window, cx| {
-                panel.sync_theme_picker_controls(window, cx)
+                panel.sync_theme_picker_controls(window, cx);
+                let rules = panel.settings.keyword_config().rules.clone();
+                panel.keyword_color_pickers.sync(&rules, window, cx);
             });
         })
         .detach();
@@ -1653,18 +1658,6 @@ impl SettingsPanel {
         self.with_app(cx, |app, cx| {
             app.handle_keyword_highlight_key_down(event, window, cx)
         })
-    }
-
-    pub(in crate::features) fn set_keyword_highlight_rule_color(
-        &mut self,
-        rule_id: String,
-        dark: bool,
-        color: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_app(cx, |app, cx| {
-            app.set_keyword_highlight_rule_color(rule_id, dark, color, cx);
-        });
     }
 
     pub(in crate::features) fn expand_keyword_highlight_rule(

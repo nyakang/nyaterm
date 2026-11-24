@@ -437,6 +437,8 @@ fn settings_owner_reconciles_keyword_highlight_edit_lifecycle() {
         patterns: Vec::new(),
         color_dark: "#ffffff".to_string(),
         color_light: "#000000".to_string(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         enabled: true,
     });
     state.begin_keyword_highlight_edit("first".to_string(), KeywordHighlightEditorField::Patterns);
@@ -598,13 +600,19 @@ fn settings_owner_controls_keyword_catalog_transitions() {
         patterns: vec!["WARN".to_string()],
         color_dark: "#ffffff".to_string(),
         color_light: "#000000".to_string(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         enabled: true,
     });
 
     assert!(state.toggle_keyword_highlights());
     state.toggle_keyword_highlight_builtin("builtin-error".to_string());
     assert!(state.toggle_keyword_highlight_rule("warning"));
-    assert!(state.set_keyword_highlight_rule_color("warning", true, "#123456".to_string()));
+    assert!(state.set_keyword_highlight_rule_color_field(
+        "warning",
+        KeywordHighlightEditorField::ColorDark,
+        "#123456".to_string(),
+    ));
     assert!(state.apply_keyword_highlight_rule_input(
         "warning",
         KeywordHighlightEditorField::Patterns,

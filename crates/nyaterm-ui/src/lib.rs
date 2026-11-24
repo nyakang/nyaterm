@@ -55,7 +55,7 @@ pub use document_editor::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocument
 pub use gpui_kit::component::collapsible::Collapsible as NyaCollapsible;
 pub use gpui_kit::component::color_picker::{
     ColorPicker as NyaColorPicker, ColorPickerEvent as NyaColorPickerEvent,
-    ColorPickerState as NyaColorPickerState,
+    ColorPickerState as NyaColorPickerState, ColorSelect,
 };
 pub use gpui_kit::component::input::{
     Copy as NyaCopy, Cut as NyaCut, Paste as NyaPaste, Redo as NyaRedo, SelectAll as NyaSelectAll,

@@ -11,7 +11,37 @@ pub struct ResolvedKeywordHighlightRule {
     pub name: String,
     pub patterns: Vec<String>,
     pub color: String,
+    /// Optional theme-selected highlight background. `None` keeps the legacy
+    /// behaviour (terminal background, or quick-highlight reverse lookup).
+    pub background: Option<String>,
     pub enabled: bool,
+}
+
+impl Default for ResolvedKeywordHighlightRule {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            patterns: Vec::new(),
+            color: String::new(),
+            background: None,
+            enabled: true,
+        }
+    }
+}
+
+/// Pick the theme-selected background of a rule, treating blank values as unset.
+pub fn keyword_highlight_rule_background(
+    rule: &KeywordHighlightRule,
+    is_dark: bool,
+) -> Option<String> {
+    let value = if is_dark {
+        &rule.bg_color_dark
+    } else {
+        &rule.bg_color_light
+    };
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Built-ins declare their matcher instead of guessing from regex punctuation.
@@ -211,6 +241,7 @@ pub fn get_builtin_keyword_rules_with_ansi(
             name: builtin_keyword_rule_label(id).to_string(),
             patterns: builtin_patterns(id),
             color: builtin_keyword_rule_swatch_ansi(id, ansi, is_dark),
+            background: None,
             enabled: true,
         })
         .collect()
@@ -234,6 +265,7 @@ pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
             } else {
                 rule.color_light.clone()
             },
+            background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
         });
     }
@@ -270,6 +302,7 @@ pub fn overlay_resolved_keyword_highlight_rules(
             } else {
                 rule.color_light.clone()
             },
+            background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
         })
         .collect();
@@ -764,6 +797,7 @@ pub fn get_builtin_keyword_rules(is_dark: bool) -> Vec<ResolvedKeywordHighlightR
             name: builtin_keyword_rule_label(id).to_string(),
             patterns: builtin_patterns(id),
             color: builtin_keyword_rule_swatch(id, is_dark).to_string(),
+            background: None,
             enabled: true,
         })
         .collect()
@@ -786,6 +820,7 @@ pub fn merge_keyword_highlight_rules_for_paint(
             } else {
                 rule.color_light.clone()
             },
+            background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
         });
     }
@@ -879,6 +914,8 @@ mod tests {
             patterns: vec![id.into()],
             color_dark: dark.into(),
             color_light: light.into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         }
     }
@@ -891,6 +928,7 @@ mod tests {
                 name: "G1".into(),
                 patterns: vec!["g1".into()],
                 color: "#111111".into(),
+                background: None,
                 enabled: true,
             },
             ResolvedKeywordHighlightRule {
@@ -898,6 +936,7 @@ mod tests {
                 name: "G2".into(),
                 patterns: vec!["g2".into()],
                 color: "#222222".into(),
+                background: None,
                 enabled: true,
             },
         ];
@@ -927,6 +966,7 @@ mod tests {
             name: "G1".into(),
             patterns: vec!["g1".into()],
             color: "#111111".into(),
+            background: None,
             enabled: true,
         }];
         let out = overlay_resolved_keyword_highlight_rules(&global, &[], true);
@@ -1022,6 +1062,8 @@ mod tests {
             patterns: vec!["panic".into()],
             color_dark: "#ff0000".into(),
             color_light: "#aa0000".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         }];
         let mut settings = HashMap::new();
@@ -1147,6 +1189,8 @@ mod palette_tests {
             patterns: vec!["hello".into()],
             color_dark: "#123456".into(),
             color_light: "#654321".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         };
         let disabled = HashMap::from([
@@ -1165,5 +1209,60 @@ mod palette_tests {
                 assert!(!rules.iter().find(|rule| &rule.id == id).unwrap().enabled);
             }
         }
+    }
+
+    #[test]
+    fn rule_background_is_selected_per_theme() {
+        use super::keyword_highlight_rule_background;
+
+        let custom = KeywordHighlightRule {
+            id: "custom".into(),
+            name: "Custom".into(),
+            patterns: vec!["error".into()],
+            color_dark: "#ff0000".into(),
+            color_light: "#00ff00".into(),
+            bg_color_dark: " #1a1a1a ".into(),
+            bg_color_light: "#fefefe".into(),
+            enabled: true,
+        };
+
+        assert_eq!(
+            keyword_highlight_rule_background(&custom, true).as_deref(),
+            Some("#1a1a1a")
+        );
+        assert_eq!(
+            keyword_highlight_rule_background(&custom, false).as_deref(),
+            Some("#fefefe")
+        );
+
+        let dark = merge_keyword_highlight_rules_for_paint_with_ansi(
+            std::slice::from_ref(&custom),
+            &HashMap::new(),
+            true,
+            [0; 16],
+        );
+        let light = merge_keyword_highlight_rules_for_paint_with_ansi(
+            std::slice::from_ref(&custom),
+            &HashMap::new(),
+            false,
+            [0; 16],
+        );
+        assert_eq!(dark[0].background.as_deref(), Some("#1a1a1a"));
+        assert_eq!(light[0].background.as_deref(), Some("#fefefe"));
+    }
+
+    #[test]
+    fn legacy_rule_json_without_background_stays_unset() {
+        let json = r##"{"id":"old","name":"Old","patterns":["x"],"color_dark":"#111111","color_light":"#222222","enabled":true}"##;
+        let rule: KeywordHighlightRule = serde_json::from_str(json).expect("legacy rule");
+        assert_eq!(rule.bg_color_dark, "");
+        assert_eq!(rule.bg_color_light, "");
+        assert!(
+            serde_json::to_value(&rule)
+                .unwrap()
+                .get("bg_color_dark")
+                .is_none(),
+            "unset background must not change legacy JSON shape"
+        );
     }
 }

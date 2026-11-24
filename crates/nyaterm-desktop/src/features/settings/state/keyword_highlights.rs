@@ -51,10 +51,11 @@ impl SettingsFeatureState {
         rule.enabled = !rule.enabled;
         true
     }
-    pub(in crate::features) fn set_keyword_highlight_rule_color(
+    /// Write a colour field (text or background, dark or light) of a rule.
+    pub(in crate::features) fn set_keyword_highlight_rule_color_field(
         &mut self,
         rule_id: &str,
-        dark: bool,
+        field: KeywordHighlightEditorField,
         color: String,
     ) -> bool {
         let Some(rule) = self
@@ -65,10 +66,12 @@ impl SettingsFeatureState {
         else {
             return false;
         };
-        if dark {
-            rule.color_dark = color;
-        } else {
-            rule.color_light = color;
+        match field {
+            KeywordHighlightEditorField::ColorDark => rule.color_dark = color,
+            KeywordHighlightEditorField::ColorLight => rule.color_light = color,
+            KeywordHighlightEditorField::BgDark => rule.bg_color_dark = color,
+            KeywordHighlightEditorField::BgLight => rule.bg_color_light = color,
+            _ => return false,
         }
         true
     }
@@ -93,6 +96,8 @@ impl SettingsFeatureState {
             }
             KeywordHighlightEditorField::ColorDark => rule.color_dark = text,
             KeywordHighlightEditorField::ColorLight => rule.color_light = text,
+            KeywordHighlightEditorField::BgDark => rule.bg_color_dark = text,
+            KeywordHighlightEditorField::BgLight => rule.bg_color_light = text,
         }
         self.begin_keyword_highlight_edit(rule_id.to_string(), field);
         true

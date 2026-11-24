@@ -385,6 +385,7 @@ fn keyword_rules_key_reuses_equal_rule_sets() {
         name: "Error".to_string(),
         patterns: vec!["error".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }]);
     let second = Arc::new(vec![ResolvedKeywordHighlightRule {
@@ -392,6 +393,7 @@ fn keyword_rules_key_reuses_equal_rule_sets() {
         name: "Error".to_string(),
         patterns: vec!["error".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }]);
 
@@ -1444,6 +1446,7 @@ fn row_layout_key_ignores_link_ranges_when_keyword_rules_can_paint() {
         name: "URL".to_string(),
         patterns: vec![r"https://[^\s]+".to_string()],
         color: "#8be9fd".to_string(),
+        background: None,
         enabled: true,
     };
     let keyword_rules = Arc::new(vec![keyword_rule]);
@@ -1495,6 +1498,7 @@ fn row_layout_key_tracks_precomputed_keyword_presence() {
         name: "Errors".to_string(),
         patterns: vec!["ERROR".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     };
     let element = NyaTerminalElement::new(
@@ -1555,6 +1559,7 @@ fn precomputed_keyword_match_does_not_reuse_plain_pending_row() {
         name: "Errors".to_string(),
         patterns: vec!["ERROR".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }];
     let highlighter = compile_terminal_keyword_highlighter(
@@ -1610,6 +1615,7 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
         name: "Options".into(),
         patterns: vec!["-[a-z]+".into()],
         color: "#ff2244".into(),
+        background: None,
         enabled: true,
     }];
     let highlighter = compile_terminal_keyword_highlighter(
@@ -1864,6 +1870,7 @@ fn no_wrap_does_not_reuse_output_colors_after_its_wrapped_context_changes() {
         name: "Whole error".into(),
         patterns: vec!["^ERROR\\s*$".into()],
         color: "#ff2244".into(),
+        background: None,
         enabled: true,
     }];
     let highlighter = compile_terminal_keyword_highlighter(
@@ -1915,11 +1922,13 @@ fn stale_keyword_cache_key_tracks_the_retained_ranges() {
             start_col: 5,
             end_col: 8,
             color: 0xff2244,
+            background: None,
         },
         crate::types::TerminalKeywordRange {
             start_col: 9,
             end_col: 13,
             color: 0xff2244,
+            background: None,
         },
     ];
     let first = TerminalKeywordHighlightLookup::Stale(&ranges[..1]);
@@ -2085,6 +2094,7 @@ fn plain_row_fast_path_rejects_enhanced_rows() {
         name: "Errors".to_string(),
         patterns: vec!["error".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     };
     let active_search = TerminalLineDecorations {

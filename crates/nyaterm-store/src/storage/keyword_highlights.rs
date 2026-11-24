@@ -47,6 +47,8 @@ pub(super) fn normalize_keyword_highlight_rule(
     if rule.color_light.trim().is_empty() {
         rule.color_light = "#0969da".to_string();
     }
+    rule.bg_color_dark = rule.bg_color_dark.trim().to_string();
+    rule.bg_color_light = rule.bg_color_light.trim().to_string();
     Some(rule)
 }
 
@@ -122,6 +124,8 @@ mod tests {
             patterns: vec!["warn  ".to_string()],
             color_dark: " ".to_string(),
             color_light: String::new(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         })
         .expect("rule");
@@ -139,6 +143,8 @@ mod tests {
                 patterns: vec![" ".to_string()],
                 color_dark: String::new(),
                 color_light: String::new(),
+                bg_color_dark: String::new(),
+                bg_color_light: String::new(),
                 enabled: true,
             })
             .is_none()

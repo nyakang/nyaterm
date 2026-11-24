@@ -102,6 +102,10 @@ pub(super) fn terminal_highlight_spans_compiled(
                 start_col: terminal_cell_col_for_byte_index(line, start),
                 end_col: terminal_cell_col_for_byte_index(line, end),
                 color,
+                background: compiled_keyword_rules
+                    .iter()
+                    .find(|rule| rule.color == color)
+                    .and_then(|rule| rule.background),
             })
             .collect::<Vec<_>>()
     });
@@ -349,7 +353,7 @@ pub(super) fn terminal_highlight_spans_with_keyword_ranges_and_options(
                 keyword_excluded_ranges,
                 &mut exclusion_cursor,
             )
-            && let Some(color) = terminal_keyword_color_for_range(
+            && let Some((color, background)) = terminal_keyword_color_for_range(
                 start_col,
                 end_col,
                 keyword_ranges,
@@ -357,7 +361,9 @@ pub(super) fn terminal_highlight_spans_with_keyword_ranges_and_options(
             )
         {
             style.color = Some(color);
-            style.bg = quick_highlight_background(color).or(style.bg);
+            style.bg = background
+                .or_else(|| quick_highlight_background(color))
+                .or(style.bg);
             style.keyword = true;
         }
         push_terminal_highlight_span(&mut spans, &text[start_byte..end_byte], style);
@@ -578,17 +584,19 @@ fn terminal_keyword_color_for_range(
     end_col: usize,
     keyword_ranges: &[TerminalKeywordRange],
     cursor: &mut TerminalRangeCursor,
-) -> Option<u32> {
+) -> Option<(u32, Option<u32>)> {
     if !cursor.ordered_non_overlapping {
         return keyword_ranges.iter().rev().find_map(|range| {
-            (range.start_col <= start_col && range.end_col >= end_col).then_some(range.color)
+            (range.start_col <= start_col && range.end_col >= end_col)
+                .then_some((range.color, range.background))
         });
     }
     while cursor.idx < keyword_ranges.len() && keyword_ranges[cursor.idx].end_col <= start_col {
         cursor.idx += 1;
     }
     keyword_ranges.get(cursor.idx).and_then(|range| {
-        (range.start_col <= start_col && range.end_col >= end_col).then_some(range.color)
+        (range.start_col <= start_col && range.end_col >= end_col)
+            .then_some((range.color, range.background))
     })
 }
 
@@ -867,6 +875,7 @@ mod tests {
         vec![CompiledKeywordRule {
             regex: regex::Regex::new(pattern).unwrap(),
             color,
+            background: None,
             priority: 0,
         }]
     }
@@ -883,6 +892,7 @@ mod tests {
                 start_col: 0,
                 end_col: 4,
                 color: text_color,
+                background: None,
             }]),
             &[],
             palette,
@@ -905,6 +915,7 @@ mod tests {
             start_col: 0,
             end_col: 24,
             color: 0xff2244,
+            background: None,
         }];
         let spans = terminal_highlight_spans_with_keyword_ranges(
             &row.text,
@@ -933,6 +944,7 @@ mod tests {
                 start_col: 2,
                 end_col: 7,
                 color: 0xff2244,
+                background: None,
             }]),
             &[],
             palette,
@@ -971,6 +983,7 @@ mod tests {
                 start_col: 0,
                 end_col: 5,
                 color: 0xff2244,
+                background: None,
             }]),
             &[],
             palette,
@@ -994,11 +1007,13 @@ mod tests {
                     start_col: 0,
                     end_col: 5,
                     color: 0xff2244,
+                    background: None,
                 },
                 TerminalKeywordRange {
                     start_col: 6,
                     end_col: 11,
                     color: 0xff2244,
+                    background: None,
                 },
             ]),
             &[(6, 11)],
@@ -1024,11 +1039,13 @@ mod tests {
                     start_col: 0,
                     end_col: 5,
                     color: 0x111111,
+                    background: None,
                 },
                 TerminalKeywordRange {
                     start_col: 1,
                     end_col: 4,
                     color: 0x222222,
+                    background: None,
                 },
             ]),
             &[],
@@ -1059,6 +1076,7 @@ mod tests {
                 start_col: start,
                 end_col: start + 1,
                 color: 0xff2244,
+                background: None,
             })
             .collect::<Vec<_>>();
 
@@ -1197,6 +1215,7 @@ mod tests {
                 start_col: 0,
                 end_col: 5,
                 color: 0xff2244,
+                background: None,
             }]),
             &[],
             palette,
@@ -1216,6 +1235,7 @@ mod tests {
                 start_col: 0,
                 end_col: 6,
                 color: 0xff2244,
+                background: None,
             }]),
             &[],
             palette,

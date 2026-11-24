@@ -123,6 +123,8 @@ pub(super) fn rule_from_selection(
         patterns: lines.iter().map(|line| regex::escape(line)).collect(),
         color_dark: color.dark.into(),
         color_light: color.light.into(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         enabled: true,
     })
 }

@@ -952,6 +952,8 @@ mod tests {
                     patterns: vec![regex::escape("ERROR")],
                     color_dark: "#123456".into(),
                     color_light: "#654321".into(),
+                    bg_color_dark: String::new(),
+                    bg_color_light: String::new(),
                     enabled: true,
                 }],
                 cx,

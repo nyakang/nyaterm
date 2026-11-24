@@ -308,6 +308,8 @@ impl NyaTermApp {
                 patterns: Vec::new(),
                 color_dark: "#79c0ff".to_string(),
                 color_light: "#0969da".to_string(),
+                bg_color_dark: String::new(),
+                bg_color_light: String::new(),
                 enabled: true,
             });
         self.ensure_keyword_highlight_inputs(&id, cx);
@@ -333,32 +335,40 @@ impl NyaTermApp {
         self.save_keyword_highlights(cx);
     }
 
-    pub(in crate::features) fn set_keyword_highlight_rule_color(
+    /// Set a text or background colour of a custom rule from a colour picker.
+    /// An empty value clears a background but falls back to the default text colour.
+    pub(in crate::features) fn set_keyword_highlight_rule_color_field(
         &mut self,
         rule_id: String,
-        dark: bool,
+        field: KeywordHighlightEditorField,
         color: &str,
         cx: &mut Context<Self>,
     ) {
+        let is_background = matches!(
+            field,
+            KeywordHighlightEditorField::BgDark | KeywordHighlightEditorField::BgLight
+        );
         let color = if color.trim().is_empty() {
-            if dark { "#79c0ff" } else { "#0969da" }.to_string()
+            if is_background {
+                String::new()
+            } else {
+                let dark = matches!(field, KeywordHighlightEditorField::ColorDark);
+                if dark { "#79c0ff" } else { "#0969da" }.to_string()
+            }
         } else {
             normalize_keyword_highlight_color(color)
         };
         if self
             .settings
-            .set_keyword_highlight_rule_color(&rule_id, dark, color.clone())
+            .set_keyword_highlight_rule_color_field(&rule_id, field, color.clone())
         {
-            let field = if dark {
-                KeywordHighlightEditorField::ColorDark
-            } else {
-                KeywordHighlightEditorField::ColorLight
-            };
-            self.reset_text_input(
-                &keyword_highlight_text_input_id(&rule_id, field),
-                &color,
-                cx,
-            );
+            if !is_background {
+                self.reset_text_input(
+                    &keyword_highlight_text_input_id(&rule_id, field),
+                    &color,
+                    cx,
+                );
+            }
             self.save_keyword_highlights(cx);
         }
     }
@@ -381,6 +391,8 @@ impl NyaTermApp {
                 KeywordHighlightEditorField::Patterns => rule.patterns.join("\n"),
                 KeywordHighlightEditorField::ColorDark => rule.color_dark.clone(),
                 KeywordHighlightEditorField::ColorLight => rule.color_light.clone(),
+                KeywordHighlightEditorField::BgDark => rule.bg_color_dark.clone(),
+                KeywordHighlightEditorField::BgLight => rule.bg_color_light.clone(),
             })
             .unwrap_or_default();
         let setup = match field {
@@ -388,9 +400,10 @@ impl NyaTermApp {
                 TextInputSetup::placeholder(t!("settings.keywordHighlightNewRule"))
             }
             KeywordHighlightEditorField::Patterns => TextInputSetup::multi_line(""),
-            KeywordHighlightEditorField::ColorDark | KeywordHighlightEditorField::ColorLight => {
-                TextInputSetup::placeholder("#rrggbb")
-            }
+            KeywordHighlightEditorField::ColorDark
+            | KeywordHighlightEditorField::ColorLight
+            | KeywordHighlightEditorField::BgDark
+            | KeywordHighlightEditorField::BgLight => TextInputSetup::placeholder("#rrggbb"),
         };
         let input = self.text_input(
             keyword_highlight_text_input_id(&rule_id, field),

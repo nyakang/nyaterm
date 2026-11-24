@@ -844,6 +844,8 @@ pub(crate) enum KeywordHighlightEditorField {
     Patterns,
     ColorDark,
     ColorLight,
+    BgDark,
+    BgLight,
 }
 
 impl KeywordHighlightEditorField {
@@ -851,8 +853,10 @@ impl KeywordHighlightEditorField {
         match self {
             Self::Name => Self::Patterns,
             Self::Patterns => Self::ColorDark,
-            Self::ColorDark => Self::ColorLight,
-            Self::ColorLight => Self::Name,
+            Self::ColorDark => Self::BgDark,
+            Self::BgDark => Self::ColorLight,
+            Self::ColorLight => Self::BgLight,
+            Self::BgLight => Self::Name,
         }
     }
 
@@ -862,6 +866,8 @@ impl KeywordHighlightEditorField {
             Self::Patterns => "patterns",
             Self::ColorDark => "color-dark",
             Self::ColorLight => "color-light",
+            Self::BgDark => "bg-dark",
+            Self::BgLight => "bg-light",
         }
     }
 
@@ -871,6 +877,8 @@ impl KeywordHighlightEditorField {
             "patterns" => Some(Self::Patterns),
             "color-dark" => Some(Self::ColorDark),
             "color-light" => Some(Self::ColorLight),
+            "bg-dark" => Some(Self::BgDark),
+            "bg-light" => Some(Self::BgLight),
             _ => None,
         }
     }

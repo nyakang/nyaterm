@@ -737,6 +737,14 @@ pub struct KeywordHighlightRule {
     pub color_dark: String,
     #[serde(default = "default_highlight_color_light")]
     pub color_light: String,
+    /// Optional dark-theme highlight background. Empty string means "no
+    /// explicit background" (terminal background or quick-highlight fallback).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bg_color_dark: String,
+    /// Optional light-theme highlight background. Empty string means "no
+    /// explicit background".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bg_color_light: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -749,6 +757,8 @@ impl Default for KeywordHighlightRule {
             patterns: Vec::new(),
             color_dark: default_highlight_color_dark(),
             color_light: default_highlight_color_light(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         }
     }

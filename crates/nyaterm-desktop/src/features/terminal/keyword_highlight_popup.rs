@@ -1102,6 +1102,8 @@ fn new_popup_rule() -> KeywordHighlightRule {
         patterns: Vec::new(),
         color_dark: "#79c0ff".into(),
         color_light: "#0969da".into(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         enabled: true,
     }
 }
@@ -1113,6 +1115,8 @@ fn empty_popup_rule() -> KeywordHighlightRule {
         patterns: Vec::new(),
         color_dark: "#79c0ff".into(),
         color_light: "#0969da".into(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         enabled: true,
     }
 }
@@ -1139,6 +1143,8 @@ fn prefill_rule_from_text(selection: String) -> Option<KeywordHighlightRule> {
         patterns: lines.iter().map(|line| regex::escape(line)).collect(),
         color_dark: "#79c0ff".into(),
         color_light: "#0969da".into(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         enabled: true,
     })
 }

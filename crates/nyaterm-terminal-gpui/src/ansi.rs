@@ -162,6 +162,7 @@ mod tests {
         vec![CompiledKeywordRule {
             regex: regex::Regex::new(pattern).unwrap(),
             color,
+            background: None,
             priority: 0,
         }]
     }

@@ -1308,6 +1308,7 @@ fn keyword_highlight_request_key_tracks_snapshot_and_rules() {
         name: "Alpha".to_string(),
         patterns: vec!["alpha".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }];
     let rules_key = terminal_keyword_rules_key(&rules);
@@ -1596,6 +1597,7 @@ fn keyword_highlight_deferred_task_coalesces_latest_snapshot_under_pressure() {
         name: "Beta".to_string(),
         patterns: vec!["beta".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }]);
 
@@ -1673,6 +1675,7 @@ fn cancelling_pending_keyword_highlights_keeps_published_highlights() {
         name: "Alpha".to_string(),
         patterns: vec!["alpha".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }];
     let rules = Arc::new(rules);
@@ -1794,6 +1797,7 @@ fn cached_keyword_highlighter_reuses_equal_rule_sets() {
         name: "Alpha".to_string(),
         patterns: vec!["alpha".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }]);
     let equivalent_rules = Arc::new(cached_rules.as_ref().clone());
@@ -1880,6 +1884,7 @@ fn scroll_without_target_snapshot_preserves_stale_paint_state() {
         name: "test".to_string(),
         patterns: vec!["test".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }]);
     surface.set_decorations_and_keywords(
@@ -2016,6 +2021,7 @@ fn restored_keyword_rules_report_paint_detail_change_without_new_frame() {
         name: "Alpha".to_string(),
         patterns: vec!["alpha".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
     }]);
     let decorations = vec![TerminalLineDecorations {
@@ -4915,6 +4921,7 @@ fn session_keyword_rules_overlay_global_without_mutating_global() {
         name: "Shared".into(),
         patterns: vec!["error".into()],
         color: "#111111".into(),
+        background: None,
         enabled: true,
     }]);
     let session = vec![
@@ -4924,6 +4931,8 @@ fn session_keyword_rules_overlay_global_without_mutating_global() {
             patterns: vec!["error".into()],
             color_dark: "#ff0000".into(),
             color_light: "#aa0000".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         },
         KeywordHighlightRule {
@@ -4932,6 +4941,8 @@ fn session_keyword_rules_overlay_global_without_mutating_global() {
             patterns: vec!["warn".into()],
             color_dark: "#00ff00".into(),
             color_light: "#00aa00".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
         },
     ];
@@ -4963,6 +4974,7 @@ fn regression_deleting_session_rule_removes_effective_rule_immediately() {
             name: "global".into(),
             patterns: vec!["global".into()],
             color: "#111111".into(),
+            background: None,
             enabled: true,
         };
         surface.set_decorations_and_keywords(Vec::new(), Arc::new(vec![global]), false, "block");
@@ -4973,6 +4985,8 @@ fn regression_deleting_session_rule_removes_effective_rule_immediately() {
                 patterns: vec!["session".into()],
                 color_dark: "#222222".into(),
                 color_light: "#333333".into(),
+                bg_color_dark: String::new(),
+                bg_color_light: String::new(),
                 enabled: true,
             }],
             cx,
@@ -4997,6 +5011,7 @@ fn regression_session_rules_reuse_effective_cache_and_restore_global_override() 
             name: "global".into(),
             patterns: vec!["global".into()],
             color: "#112233".into(),
+            background: None,
             enabled: true,
         }]);
         surface.set_decorations_and_keywords(Vec::new(), global.clone(), false, "block");
@@ -5007,6 +5022,8 @@ fn regression_session_rules_reuse_effective_cache_and_restore_global_override() 
                 patterns: vec!["session".into()],
                 color_dark: "#334455".into(),
                 color_light: "#556677".into(),
+                bg_color_dark: String::new(),
+                bg_color_light: String::new(),
                 enabled: false,
             }],
             cx,
@@ -5035,6 +5052,7 @@ fn keyword_rule_cache_cost_probe() {
                     name: format!("rule {index}"),
                     patterns: vec![format!("PATTERN_{index}")],
                     color: "#123456".into(),
+                    background: None,
                     enabled: true,
                 })
                 .collect::<Vec<_>>(),
@@ -5046,6 +5064,8 @@ fn keyword_rule_cache_cost_probe() {
                 patterns: vec![format!("SESSION_{index}")],
                 color_dark: "#234567".into(),
                 color_light: "#345678".into(),
+                bg_color_dark: String::new(),
+                bg_color_light: String::new(),
                 enabled: true,
             })
             .collect::<Vec<_>>();
@@ -5074,6 +5094,7 @@ fn keyword_rule_cache_cost_probe() {
                             name: rule.name.clone(),
                             patterns: rule.patterns.clone(),
                             color: rule.color_dark.clone(),
+                            background: None,
                             enabled: rule.enabled,
                         };
                         if let Some(existing) = old.iter_mut().find(|r| r.id == rule.id) {
@@ -5118,6 +5139,8 @@ fn reading_highlight_master_switch_cancels_session_rules_and_restores_them() {
             enabled: true,
             color_dark: "#ff0000".into(),
             color_light: "#0000ff".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             ..Default::default()
         }]);
         surface.set_keyword_highlight_source(true, rules.clone(), cx);
@@ -5155,6 +5178,8 @@ fn reading_master_switch_rejects_in_flight_results_and_can_restart() {
         enabled: true,
         color_dark: "#ff0000".into(),
         color_light: "#0000ff".into(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
         ..Default::default()
     }]);
     surface.update(&mut cx, |surface, cx| {
@@ -5229,6 +5254,8 @@ fn reading_highlight_fingerprint_cost_probe() {
                     ],
                     color_dark: "#123456".into(),
                     color_light: "#654321".into(),
+                    bg_color_dark: String::new(),
+                    bg_color_light: String::new(),
                     enabled: true,
                 })
                 .collect();
