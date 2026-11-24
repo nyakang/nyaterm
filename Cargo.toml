@@ -284,3 +284,10 @@ ironrdp-tls ={ git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5
 # published crate; without this both end up in the graph.
 [patch."https://github.com/zed-industries/reqwest.git"]
 zed-reqwest = { version = "0.12.15-zed" }
+
+# Local GPUI fork with AppKit modal-session support for Dialog windows.
+# The checked-out rev matches the one pinned above; only the macOS platform
+# layer differs. Remove this patch to go back to the published git source.
+[patch."https://github.com/nyakang/zed"]
+gpui = { path = "../zed/crates/gpui" }
+gpui_platform = { path = "../zed/crates/gpui_platform" }

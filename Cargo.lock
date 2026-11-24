@@ -989,7 +989,6 @@ dependencies = [
 [[package]]
 name = "bench_metrics"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1650,9 +1649,18 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
+dependencies = [
+ "gpui_util 0.1.0",
+ "indexmap 2.14.2",
+ "rustc-hash 2.1.3",
+]
+
+[[package]]
+name = "collections"
+version = "0.1.0"
 source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
- "gpui_util",
+ "gpui_util 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "indexmap 2.14.2",
  "rustc-hash 2.1.3",
 ]
@@ -2615,7 +2623,6 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4009,7 +4016,6 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -4019,19 +4025,19 @@ dependencies = [
  "bench_metrics",
  "bitflags 2.13.2",
  "chrono",
- "collections",
+ "collections 0.1.0",
  "derive_more",
  "embed-resource",
  "etagere",
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
- "gpui_macros",
+ "gpui_macros 0.1.0",
  "gpui_shared_string",
- "gpui_util",
+ "gpui_util 0.1.0",
  "hdrhistogram",
  "heapless",
- "http_client",
+ "http_client 0.1.0",
  "icu_segmenter",
  "image",
  "inventory",
@@ -4054,7 +4060,7 @@ dependencies = [
  "refineable",
  "regex",
  "resvg 0.46.0",
- "scheduler",
+ "scheduler 0.1.0",
  "schemars 1.2.2",
  "seahash",
  "serde",
@@ -4063,7 +4069,7 @@ dependencies = [
  "smallvec",
  "spin 0.10.1",
  "strum",
- "sum_tree",
+ "sum_tree 0.1.0",
  "taffy",
  "thiserror 2.0.20",
  "tiny-skia-path",
@@ -4091,7 +4097,7 @@ dependencies = [
  "data-url",
  "futures",
  "gpui",
- "gpui_macros",
+ "gpui_macros 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "html5ever",
  "instant",
  "itertools 0.13.0",
@@ -4110,7 +4116,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smol",
- "sum_tree",
+ "sum_tree 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "sys-locale",
  "tracing",
  "unicode-linebreak",
@@ -4132,7 +4138,7 @@ dependencies = [
  "gpui-base",
  "gpui-component-macros",
  "gpui-kit-assets",
- "gpui_macros",
+ "gpui_macros 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "instant",
  "itertools 0.13.0",
  "log",
@@ -4157,7 +4163,7 @@ dependencies = [
  "similar",
  "smallvec",
  "smol",
- "sum_tree",
+ "sum_tree 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "tracing",
  "tree-sitter",
  "tree-sitter-astro-next",
@@ -4215,9 +4221,9 @@ dependencies = [
  "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
- "gpui_macros",
+ "gpui_macros 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "gpui_platform",
- "gpui_web",
+ "gpui_web 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
 ]
 
 [[package]]
@@ -4237,13 +4243,12 @@ dependencies = [
 [[package]]
 name = "gpui_apple"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "async-task",
  "block2 0.6.2",
  "cbindgen",
- "collections",
+ "collections 0.1.0",
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "core-graphics",
@@ -4252,7 +4257,7 @@ dependencies = [
  "etagere",
  "futures",
  "gpui",
- "gpui_util",
+ "gpui_util 0.1.0",
  "image",
  "libc",
  "log",
@@ -4276,7 +4281,6 @@ dependencies = [
 [[package]]
 name = "gpui_ios"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -4297,7 +4301,6 @@ dependencies = [
 [[package]]
 name = "gpui_linux"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4307,13 +4310,13 @@ dependencies = [
  "bytemuck",
  "calloop",
  "calloop-wayland-source",
- "collections",
+ "collections 0.1.0",
  "filedescriptor",
  "futures",
  "gpui",
- "gpui_util",
- "gpui_wgpu",
- "http_client",
+ "gpui_util 0.1.0",
+ "gpui_wgpu 0.1.0",
+ "http_client 0.1.0",
  "image",
  "libc",
  "log",
@@ -4342,13 +4345,12 @@ dependencies = [
 [[package]]
 name = "gpui_macos"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "accesskit",
  "accesskit_macos",
  "anyhow",
  "block2 0.6.2",
- "collections",
+ "collections 0.1.0",
  "core-foundation 0.10.1",
  "core-foundation-sys",
  "core-graphics",
@@ -4358,7 +4360,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_apple",
- "gpui_util",
+ "gpui_util 0.1.0",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4372,12 +4374,22 @@ dependencies = [
  "objc2-user-notifications",
  "parking_lot",
  "raw-window-handle",
- "scheduler",
+ "scheduler 0.1.0",
  "semver",
  "serde_json",
  "smallvec",
  "strum",
  "uuid",
+]
+
+[[package]]
+name = "gpui_macros"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4394,7 +4406,6 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4402,19 +4413,27 @@ dependencies = [
  "gpui_ios",
  "gpui_linux",
  "gpui_macos",
- "gpui_web",
- "gpui_wgpu",
+ "gpui_web 0.1.0",
+ "gpui_wgpu 0.1.0",
  "gpui_windows",
 ]
 
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "schemars 1.2.2",
  "serde",
  "smol_str",
+]
+
+[[package]]
+name = "gpui_util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "which",
 ]
 
 [[package]]
@@ -4430,6 +4449,34 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "console_error_panic_hook",
+ "futures",
+ "gpui",
+ "gpui_wgpu 0.1.0",
+ "http_client 0.1.0",
+ "js-sys",
+ "log",
+ "parking_lot",
+ "raw-window-handle",
+ "scheduler 0.1.0",
+ "smallvec",
+ "unicode-properties",
+ "unicode-script",
+ "unicode-segmentation",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm_thread",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
+name = "gpui_web"
+version = "0.1.0"
 source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
@@ -4437,13 +4484,13 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "gpui",
- "gpui_wgpu",
- "http_client",
+ "gpui_wgpu 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
+ "http_client 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "js-sys",
  "log",
  "parking_lot",
  "raw-window-handle",
- "scheduler",
+ "scheduler 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
  "smallvec",
  "unicode-properties",
  "unicode-script",
@@ -4459,15 +4506,14 @@ dependencies = [
 [[package]]
 name = "gpui_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "bytemuck",
- "collections",
+ "collections 0.1.0",
  "cosmic-text",
  "etagere",
  "gpui",
- "gpui_util",
+ "gpui_util 0.1.0",
  "image",
  "itertools 0.14.0",
  "js-sys",
@@ -4485,26 +4531,51 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_windows"
+name = "gpui_wgpu"
 version = "0.1.0"
 source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "collections 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
+ "cosmic-text",
+ "etagere",
+ "gpui",
+ "gpui_util 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
+ "itertools 0.14.0",
+ "js-sys",
+ "log",
+ "parking_lot",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "swash",
+ "unicode-bidi",
+ "unicode-segmentation",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
+name = "gpui_windows"
+version = "0.1.0"
 dependencies = [
  "accesskit",
  "accesskit_windows",
  "anyhow",
- "collections",
+ "collections 0.1.0",
  "dunce",
  "etagere",
  "futures",
  "gpui",
- "gpui_util",
+ "gpui_util 0.1.0",
  "image",
  "itertools 0.14.0",
  "log",
  "parking_lot",
  "rand 0.9.5",
  "raw-window-handle",
- "scheduler",
+ "scheduler 0.1.0",
  "smallvec",
  "uuid",
  "windows 0.62.2",
@@ -4949,7 +5020,6 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4957,6 +5027,23 @@ dependencies = [
  "http",
  "http-body",
  "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "url",
+]
+
+[[package]]
+name = "http_client"
+version = "0.1.0"
+source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "http",
+ "http-body",
  "parking_lot",
  "serde",
  "serde_json",
@@ -10260,7 +10347,6 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "derive_refineable",
 ]
@@ -11109,6 +11195,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91c1b7e4904c873ef0710c1f407dde2e6287de2bebc1bbbf7d430bb7cbffd939"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "scheduler"
+version = "0.1.0"
+dependencies = [
+ "async-task",
+ "backtrace",
+ "chrono",
+ "flume",
+ "futures",
+ "parking_lot",
+ "rand 0.9.5",
+ "wasm_thread",
+ "web-time",
 ]
 
 [[package]]
@@ -12053,12 +12154,22 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
+dependencies = [
+ "heapless",
+ "rayon",
+ "tracing",
+ "ztracing 0.1.0",
+]
+
+[[package]]
+name = "sum_tree"
+version = "0.1.0"
 source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "heapless",
  "rayon",
  "tracing",
- "ztracing",
+ "ztracing 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
 ]
 
 [[package]]
@@ -16030,11 +16141,23 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
+dependencies = [
+ "tracing",
+ "ztracing_macro 0.1.0",
+]
+
+[[package]]
+name = "ztracing"
+version = "0.1.0"
 source = "git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282#5591fbd2d0ef56b9469e22216b9a91d833eb8282"
 dependencies = [
  "tracing",
- "ztracing_macro",
+ "ztracing_macro 0.1.0 (git+https://github.com/nyakang/zed?rev=5591fbd2d0ef56b9469e22216b9a91d833eb8282)",
 ]
+
+[[package]]
+name = "ztracing_macro"
+version = "0.1.0"
 
 [[package]]
 name = "ztracing_macro"

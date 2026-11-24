@@ -5,7 +5,7 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, ClickEvent, DispatchPhase, Div, FontWeight, IntoElement, MouseButton,
     MouseMoveEvent, Pixels, Point, PointerCancelEvent, SharedString, Stateful, TitlebarOptions,
-    Window, WindowControlArea, canvas, div, prelude::*, px, rgb, svg,
+    Window, WindowControlArea, canvas, div, point, prelude::*, px, rgb, svg,
 };
 
 use crate::theme::ThemePalette;
@@ -253,6 +253,11 @@ pub fn child_window_titlebar(title: impl Into<SharedString>) -> Option<TitlebarO
     (cfg!(target_os = "macos") || cfg!(target_os = "linux")).then(|| TitlebarOptions {
         title: Some(title.into()),
         appears_transparent: true,
+        // AppKit's default traffic-light position sits high in the native
+        // title bar, while our custom header below is 40px tall and centres its
+        // title vertically. Match the main window's calibration so the lights
+        // line up with the title text.
+        traffic_light_position: cfg!(target_os = "macos").then(|| point(px(9.), px(11.))),
         ..Default::default()
     })
 }

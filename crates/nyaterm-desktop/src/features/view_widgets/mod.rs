@@ -16,6 +16,7 @@ pub(in crate::features) use child_window::{
     ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, child_window_options,
     child_window_root, focus_child_window_shell_if_idle,
     init_key_bindings as init_child_window_key_bindings, modal_scrim_is_drawn,
+    modal_scrim_owns_input,
 };
 
 mod inspector_widgets;
