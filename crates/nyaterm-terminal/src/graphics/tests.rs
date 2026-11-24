@@ -15,6 +15,7 @@ fn placement(line: i32, col: usize, width_cells: usize, height_cells: usize) -> 
         height_cells,
         data: b"image".to_vec().into(),
         content_id: 1,
+        source_rect: None,
         name: None,
         kitty_id: None,
         placement_id: None,
@@ -41,7 +42,8 @@ fn kitty_image_event(id: u32, data: Vec<u8>, place: bool) -> GraphicsEvent {
         compressed: false,
         pixel_width: None,
         pixel_height: None,
-        quiet: 0,
+        quiet: None,
+        source_rect: None,
     }
 }
 
@@ -303,7 +305,8 @@ fn sixel_is_rasterized_into_snapshot() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -389,7 +392,8 @@ fn assembles_kitty_multi_chunk_payload() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -416,7 +420,8 @@ fn assembles_kitty_multi_chunk_payload() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         1,
@@ -454,7 +459,8 @@ fn place_only_reuses_stored_kitty_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -482,7 +488,8 @@ fn place_only_reuses_stored_kitty_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         2,
         5,
@@ -610,7 +617,8 @@ fn oversized_kitty_multi_chunk_transfer_fails_without_partial_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 2,
+            quiet: Some(2),
+            source_rect: None,
         },
         0,
         0,
@@ -637,7 +645,8 @@ fn oversized_kitty_multi_chunk_transfer_fails_without_partial_image() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 2,
+            quiet: Some(2),
+            source_rect: None,
         },
         0,
         0,
@@ -648,12 +657,7 @@ fn oversized_kitty_multi_chunk_transfer_fails_without_partial_image() {
 
     assert!(state.viewport_images(0, 24, 80).is_empty());
     assert!(!state.kitty_query_ok(GraphicsScreenKind::Primary, Some(42), None));
-    assert_eq!(result.pty_writes.len(), 1);
-    assert!(
-        String::from_utf8_lossy(&result.pty_writes[0]).contains("ENOENT"),
-        "{:?}",
-        result.pty_writes
-    );
+    assert!(result.pty_writes.is_empty());
 }
 
 #[test]
@@ -664,7 +668,7 @@ fn store_only_transmit_does_not_place() {
         GraphicsSegment::Event(GraphicsEvent::Image { place: false, .. }) => {}
         other => panic!("expected store-only transmit: {other:?}"),
     }
-    let segments = ingress.advance(b"\x1b_Ga=T,i=1,c=2,r=2,z=1;QUI=\x1b\\");
+    let segments = ingress.advance(b"\x1b_Ga=T,i=1,c=2,r=2,z=1,C=1;QUI=\x1b\\");
     match &segments[0] {
         GraphicsSegment::Event(GraphicsEvent::Image {
             place: true,
@@ -674,7 +678,8 @@ fn store_only_transmit_does_not_place() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
             ..
         }) => {}
         other => panic!("expected place+above: {other:?}"),
@@ -702,7 +707,8 @@ fn delete_all_clears_placements_and_store() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -747,7 +753,8 @@ fn delete_all_clears_placements_and_store() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -779,7 +786,8 @@ fn delete_image_without_free_keeps_store_for_replace() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -822,7 +830,8 @@ fn delete_image_without_free_keeps_store_for_replace() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         1,
         3,
@@ -858,7 +867,8 @@ fn delete_newest_and_placement_id() {
                 compressed: false,
                 pixel_width: None,
                 pixel_height: None,
-                quiet: 0,
+                quiet: None,
+                source_rect: None,
             },
             0,
             col,
@@ -929,7 +939,8 @@ fn delete_by_cell_column_and_z() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -955,7 +966,8 @@ fn delete_by_cell_column_and_z() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         10,
@@ -1084,7 +1096,8 @@ fn kitty_query_reports_existence() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -1142,7 +1155,8 @@ fn kitty_query_reports_existence() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,
@@ -1169,7 +1183,7 @@ fn kitty_query_reports_existence() {
 }
 
 #[test]
-fn kitty_quiet_always_emits_ok_on_store() {
+fn kitty_quiet_suppresses_success_on_store() {
     let mut state = TerminalGraphicsState::default();
     let result = state.handle(
         GraphicsEvent::Image {
@@ -1189,7 +1203,8 @@ fn kitty_quiet_always_emits_ok_on_store() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 2,
+            quiet: Some(2),
+            source_rect: None,
         },
         0,
         0,
@@ -1197,10 +1212,7 @@ fn kitty_quiet_always_emits_ok_on_store() {
         9,
         18,
     );
-    assert_eq!(result.pty_writes.len(), 1);
-    let msg = String::from_utf8_lossy(&result.pty_writes[0]);
-    assert!(msg.contains("i=2"), "{msg}");
-    assert!(msg.contains("OK"), "{msg}");
+    assert!(result.pty_writes.is_empty());
 }
 
 #[test]
@@ -1254,7 +1266,8 @@ fn place_with_cursor_motion_flag_reports_geometry() {
             compressed: false,
             pixel_width: None,
             pixel_height: None,
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         5,
@@ -1295,7 +1308,8 @@ fn kitty_rgb24_payload_is_rasterized() {
             compressed: false,
             pixel_width: Some(2),
             pixel_height: Some(1),
-            quiet: 0,
+            quiet: None,
+            source_rect: None,
         },
         0,
         0,

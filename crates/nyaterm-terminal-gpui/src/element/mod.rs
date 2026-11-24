@@ -16,8 +16,8 @@ use nyaterm_terminal::selection::{
     TerminalSelectionMode, expand_selection_range,
 };
 use nyaterm_terminal::{
-    TerminalLineId, TerminalSnapshot, terminal_cell_count, terminal_char_cell_width,
-    terminal_is_zero_width_mark,
+    GraphicsSourceRect, TerminalLineId, TerminalSnapshot, terminal_cell_count,
+    terminal_char_cell_width, terminal_is_zero_width_mark,
 };
 
 use crate::contrast::{
@@ -456,7 +456,29 @@ struct TerminalStrikethroughPaint {
 
 pub struct TerminalImagePaint {
     bounds: Bounds<Pixels>,
+    image_bounds: Bounds<Pixels>,
     image: std::sync::Arc<gpui::RenderImage>,
+}
+
+fn terminal_image_bounds(
+    bounds: Bounds<Pixels>,
+    image: &gpui::RenderImage,
+    source: Option<GraphicsSourceRect>,
+) -> Bounds<Pixels> {
+    let Some(source) = source else { return bounds };
+    let width_per_pixel = bounds.size.width / source.width as f32;
+    let height_per_pixel = bounds.size.height / source.height as f32;
+    let raster = image.size(0);
+    Bounds::new(
+        point(
+            bounds.origin.x - width_per_pixel * source.x as f32,
+            bounds.origin.y - height_per_pixel * source.y as f32,
+        ),
+        size(
+            width_per_pixel * u32::from(raster.width) as f32,
+            height_per_pixel * u32::from(raster.height) as f32,
+        ),
+    )
 }
 
 pub struct TerminalCursorGlyphPaint {
@@ -2355,6 +2377,7 @@ impl Element for NyaTerminalElement {
 
         // Graphics protocol placements (Kitty / iTerm2 / Sixel).
         // Kitty z>0 places above text; everything else stays under the glyph layer.
+        let mut decoded_images = HashMap::new();
         for image in &self.snapshot.images {
             if image.width_cells == 0 || image.height_cells == 0 {
                 continue;
@@ -2383,18 +2406,22 @@ impl Element for NyaTerminalElement {
             let w = px(image.image_width_cells as f32 * cell_w);
             let h = px(image.image_height_cells as f32 * cell_h);
             let rect = Bounds::new(point(x, y), size(w, h));
-            match crate::images::cached_render_image_in_window(
-                image.id,
-                image.content_id,
-                Arc::clone(&image.data),
-                &image_residents[&image.content_id],
-                window,
-                cx,
-            ) {
+            let decoded = decoded_images.entry(image.content_id).or_insert_with(|| {
+                crate::images::cached_render_image_in_window(
+                    image.id,
+                    image.content_id,
+                    Arc::clone(&image.data),
+                    &image_residents[&image.content_id],
+                    window,
+                    cx,
+                )
+            });
+            match decoded {
                 crate::images::CachedRenderImage::Ready(decoded) => {
                     let paint = TerminalImagePaint {
                         bounds: rect,
-                        image: decoded,
+                        image_bounds: terminal_image_bounds(rect, decoded, image.source_rect),
+                        image: Arc::clone(decoded),
                     };
                     if image.above_text {
                         plan.images_above.push(paint);
@@ -2739,7 +2766,7 @@ impl Element for NyaTerminalElement {
                 paint_outside(exclusion, image.bounds, window, cx, |window, _| {
                     let _ = window.paint_image(
                         image.bounds,
-                        image.bounds,
+                        image.image_bounds,
                         gpui::Corners::default(),
                         image.image.clone(),
                         0,
@@ -2795,7 +2822,7 @@ impl Element for NyaTerminalElement {
                 paint_outside(exclusion, image.bounds, window, cx, |window, _| {
                     let _ = window.paint_image(
                         image.bounds,
-                        image.bounds,
+                        image.image_bounds,
                         gpui::Corners::default(),
                         image.image.clone(),
                         0,

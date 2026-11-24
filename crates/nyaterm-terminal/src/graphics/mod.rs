@@ -59,7 +59,7 @@ pub enum GraphicsEvent {
         z_index: i32,
         /// Kitty `z>0` paints above text; otherwise under text.
         above_text: bool,
-        /// Kitty `C=1`: after placing, move cursor past the image.
+        /// Whether to move the cursor after placing (Kitty `C` defaults to 0).
         cursor_motion: bool,
         /// Kitty `f=` pixel format (24 / 32 / 100). `None` leaves payload as-is.
         format: Option<u32>,
@@ -69,13 +69,23 @@ pub enum GraphicsEvent {
         pixel_width: Option<u32>,
         /// Kitty `v=` pixel height (raw RGB/RGBA formats).
         pixel_height: Option<u32>,
-        /// Kitty `q=` response mode: 0=never, 1=errors only, 2=always.
-        quiet: u8,
+        /// Kitty `q=` response mode: 0=all, 1=errors only, 2=none.
+        quiet: Option<u8>,
+        /// Kitty `x,y,w,h` source region, in image pixels.
+        source_rect: Option<GraphicsSourceRect>,
     },
     /// Kitty `a=q` image/placement existence query.
     Query {
         image_id: Option<u32>,
         placement_id: Option<u32>,
+    },
+    /// A Kitty probe or rejected transfer that produces only a PTY response.
+    KittyReply {
+        image_id: Option<u32>,
+        placement_id: Option<u32>,
+        quiet: Option<u8>,
+        status: &'static str,
+        abort_transfer: bool,
     },
     /// Kitty `a=d` delete request.
     Delete {
@@ -363,7 +373,8 @@ fn classify_dcs(buf: &[u8], start: usize) -> SequenceClass {
                     compressed: false,
                     pixel_width: None,
                     pixel_height: None,
-                    quiet: 0,
+                    quiet: None,
+                    source_rect: None,
                 }),
             }
         }
@@ -464,43 +475,73 @@ fn parse_kitty_body(body: &[u8]) -> Option<GraphicsEvent> {
         params.insert(key, value);
     }
     let action = params.get("a").copied().unwrap_or("t");
+    let id = params
+        .get("i")
+        .and_then(|v| v.parse().ok())
+        .filter(|&id| id != 0);
+    let placement_id = params
+        .get("p")
+        .and_then(|v| v.parse().ok())
+        .filter(|&id| id != 0);
+    let direct = params.get("t").is_none_or(|&medium| medium == "d");
+    let quiet = params
+        .get("q")
+        .and_then(|v| v.parse::<u8>().ok())
+        .map(|level| level.min(2));
+    let format = params.get("f").and_then(|v| v.parse().ok());
+    let compressed = params.get("o").is_some_and(|v| matches!(*v, "z" | "Z"));
+    let pixel_width = params.get("s").and_then(|v| v.parse().ok());
+    let pixel_height = params.get("v").and_then(|v| v.parse().ok());
     match action {
         "d" | "D" => Some(parse_kitty_delete(&params)),
-        "q" | "Q" => {
-            let image_id = params.get("i").and_then(|v| v.parse().ok());
-            let placement_id = params.get("p").and_then(|v| v.parse().ok());
-            Some(GraphicsEvent::Query {
-                image_id,
+        "q" | "Q" if !payload.is_empty() || !direct => {
+            let status = if !direct {
+                "ENOTSUP:Unsupported transmission medium"
+            } else if decode_kitty_base64(payload)
+                .and_then(|data| {
+                    crate::kitty_payload::finalize_kitty_payload(
+                        data,
+                        Some(format.unwrap_or(32)),
+                        compressed,
+                        pixel_width,
+                        pixel_height,
+                    )
+                })
+                .is_some()
+            {
+                "OK"
+            } else {
+                "EINVAL:Invalid image data"
+            };
+            Some(GraphicsEvent::KittyReply {
+                image_id: id,
                 placement_id,
+                quiet,
+                status,
+                abort_transfer: false,
             })
         }
+        "q" | "Q" => Some(GraphicsEvent::Query {
+            image_id: id,
+            placement_id,
+        }),
         // t=transmit store, T=transmit+place, p=place existing id
-        "t" | "T" | "p" | "P" => {
-            let id = params.get("i").and_then(|v| v.parse().ok());
-            let placement_id = params.get("p").and_then(|v| v.parse().ok());
+        "t" | "T" | "p" | "P" if direct && params.get("U") != Some(&"1") => {
             let width_cells = params.get("c").and_then(|v| v.parse().ok());
             let height_cells = params.get("r").and_then(|v| v.parse().ok());
             let more = params.get("m").map(|v| *v == "1").unwrap_or(false);
             let z_index: i32 = params.get("z").and_then(|v| v.parse().ok()).unwrap_or(0);
             let above_text = z_index > 0;
-            let cursor_motion = params.get("C").map(|v| *v == "1").unwrap_or(false);
-            let format = params.get("f").and_then(|v| v.parse().ok());
-            let compressed = params
-                .get("o")
-                .map(|v| *v == "z" || *v == "Z")
-                .unwrap_or(false);
-            let pixel_width = params.get("s").and_then(|v| v.parse().ok());
-            let pixel_height = params.get("v").and_then(|v| v.parse().ok());
-            let quiet = params
-                .get("q")
-                .and_then(|v| v.parse::<u8>().ok())
-                .unwrap_or(0)
-                .min(2);
+            let cursor_motion = params.get("C").is_none_or(|&value| value != "1");
             let place = matches!(action, "T" | "p" | "P");
-            let data = if payload.is_empty() {
-                Vec::new()
-            } else {
-                decode_base64_ignore_ws(payload)
+            let Some(data) = decode_kitty_base64(payload) else {
+                return Some(GraphicsEvent::KittyReply {
+                    image_id: id,
+                    placement_id,
+                    quiet,
+                    status: "EINVAL:Invalid base64 payload",
+                    abort_transfer: true,
+                });
             };
             // place-only with id and no payload is valid (reuse stored image).
             if data.is_empty()
@@ -509,6 +550,7 @@ fn parse_kitty_body(body: &[u8]) -> Option<GraphicsEvent> {
                 && width_cells.is_none()
                 && height_cells.is_none()
                 && id.is_none()
+                && !params.contains_key("m")
             {
                 return None;
             }
@@ -533,10 +575,21 @@ fn parse_kitty_body(body: &[u8]) -> Option<GraphicsEvent> {
                 pixel_width,
                 pixel_height,
                 quiet,
+                source_rect: GraphicsSourceRect::from_params(&params),
             })
         }
         _ => None,
     }
+}
+
+fn decode_kitty_base64(payload: &[u8]) -> Option<Vec<u8>> {
+    use base64::Engine;
+    if payload.len() > GRAPHICS_PENDING_LIMIT {
+        return None;
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .ok()
 }
 
 fn parse_kitty_delete(params: &HashMap<&str, &str>) -> GraphicsEvent {
@@ -638,7 +691,8 @@ fn parse_iterm2_body(body: &[u8]) -> Option<GraphicsEvent> {
         compressed: false,
         pixel_width: None,
         pixel_height: None,
-        quiet: 0,
+        quiet: None,
+        source_rect: None,
     })
 }
 
@@ -714,6 +768,54 @@ fn decode_base64_std(input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Kitty source rectangle in pixels. Placements carry a rectangle clipped to the raster.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GraphicsSourceRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl GraphicsSourceRect {
+    fn from_params(params: &HashMap<&str, &str>) -> Option<Self> {
+        let pixel = |key| {
+            params
+                .get(key)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0)
+        };
+        let rect = Self {
+            x: pixel("x"),
+            y: pixel("y"),
+            width: pixel("w"),
+            height: pixel("h"),
+        };
+        (rect != Self::default()).then_some(rect)
+    }
+
+    fn clipped(self, (width, height): (u32, u32)) -> Option<Self> {
+        let remaining_width = width.saturating_sub(self.x);
+        let remaining_height = height.saturating_sub(self.y);
+        if remaining_width == 0 || remaining_height == 0 {
+            return None;
+        }
+        Some(Self {
+            width: if self.width == 0 {
+                remaining_width
+            } else {
+                self.width.min(remaining_width)
+            },
+            height: if self.height == 0 {
+                remaining_height
+            } else {
+                self.height.min(remaining_height)
+            },
+            ..self
+        })
+    }
+}
+
 /// Stable image placement retained by the terminal model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsPlacement {
@@ -728,6 +830,7 @@ pub struct GraphicsPlacement {
     pub height_cells: usize,
     pub data: Arc<[u8]>,
     pub content_id: u64,
+    pub source_rect: Option<GraphicsSourceRect>,
     pub name: Option<String>,
     /// Kitty image number used for delete / place-only reuse.
     pub kitty_id: Option<u32>,
@@ -770,6 +873,7 @@ pub struct GraphicsImageSnapshot {
     pub source_col_cells: usize,
     pub data: Arc<[u8]>,
     pub content_id: u64,
+    pub source_rect: Option<GraphicsSourceRect>,
     pub name: Option<String>,
     pub above_text: bool,
 }
@@ -777,7 +881,7 @@ pub struct GraphicsImageSnapshot {
 /// Result of applying a graphics event to terminal state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GraphicsHandleResult {
-    /// Kitty `C=1`: move text cursor past the placed image.
+    /// Move the text cursor past a placement when requested.
     pub cursor_motion: Option<GraphicsCursorMotion>,
     /// Kitty graphics protocol replies (`ESC_G … ST`) for the PTY.
     pub pty_writes: Vec<Vec<u8>>,
@@ -812,6 +916,7 @@ impl GraphicsCursorMotion {
 /// Mutable graphics state owned by [`crate::TerminalCore`].
 #[derive(Debug, Default)]
 struct PendingKittyTransfer {
+    id: Option<u32>,
     data: Vec<u8>,
     width_cells: Option<u16>,
     height_cells: Option<u16>,
@@ -820,16 +925,20 @@ struct PendingKittyTransfer {
     placement_id: Option<u32>,
     z_index: i32,
     above_text: bool,
+    cursor_motion: bool,
     format: Option<u32>,
     compressed: bool,
     pixel_width: Option<u32>,
     pixel_height: Option<u32>,
+    quiet: u8,
     overflowed: bool,
+    source_rect: Option<GraphicsSourceRect>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct StoredKittyImage {
     data: Arc<[u8]>,
+    content_id: u64,
     width_cells: Option<u16>,
     height_cells: Option<u16>,
     name: Option<String>,
@@ -843,8 +952,8 @@ pub struct TerminalGraphicsState {
     placements: Vec<GraphicsPlacement>,
     /// Kitty image number → last transmitted payload (for place-only / multi-place).
     kitty_store: HashMap<u32, StoredKittyImage>,
-    /// In-flight Kitty multi-chunk transfers keyed by image id (0 when absent).
-    pending_kitty: HashMap<u32, PendingKittyTransfer>,
+    /// Only the first chunk of a Kitty transfer carries image metadata.
+    pending_kitty: Option<PendingKittyTransfer>,
 }
 
 impl TerminalGraphicsState {
@@ -894,9 +1003,37 @@ impl TerminalGraphicsState {
                 placement_id,
             } => {
                 let ok = self.kitty_query_ok(screen, image_id, placement_id);
-                result
-                    .pty_writes
-                    .push(kitty_graphics_reply(image_id, placement_id, ok));
+                result.pty_writes.push(kitty_graphics_reply(
+                    image_id,
+                    placement_id,
+                    if ok { "OK" } else { "ENOENT" },
+                ));
+            }
+            GraphicsEvent::KittyReply {
+                image_id,
+                placement_id,
+                quiet,
+                status,
+                abort_transfer,
+            } => {
+                let aborted = if abort_transfer {
+                    self.pending_kitty.take()
+                } else {
+                    None
+                };
+                let image_id =
+                    image_id.or_else(|| aborted.as_ref().and_then(|transfer| transfer.id));
+                let placement_id = placement_id
+                    .or_else(|| aborted.as_ref().and_then(|transfer| transfer.placement_id));
+                let quiet = quiet
+                    .or_else(|| aborted.map(|transfer| transfer.quiet))
+                    .unwrap_or(0);
+                result.pty_writes.extend(kitty_reply_if_needed(
+                    quiet,
+                    image_id,
+                    placement_id,
+                    status,
+                ));
             }
             GraphicsEvent::Delete {
                 mode,
@@ -907,6 +1044,7 @@ impl TerminalGraphicsState {
                 row,
                 z,
             } => {
+                self.pending_kitty = None;
                 self.handle_delete(
                     mode,
                     free_data,
@@ -939,6 +1077,7 @@ impl TerminalGraphicsState {
                 pixel_width,
                 pixel_height,
                 quiet,
+                source_rect,
             } => {
                 if protocol == GraphicsProtocol::Kitty {
                     let (motion, reply) = self.handle_kitty_image(
@@ -958,6 +1097,7 @@ impl TerminalGraphicsState {
                         pixel_width,
                         pixel_height,
                         quiet,
+                        source_rect,
                         cursor_line,
                         cursor_col,
                         screen,
@@ -984,7 +1124,9 @@ impl TerminalGraphicsState {
                         None,
                         width_cells,
                         height_cells,
-                        data,
+                        image_content_id(&data),
+                        clamp_image_data_arc(data),
+                        None,
                         name,
                         cursor_line,
                         cursor_col,
@@ -995,9 +1137,7 @@ impl TerminalGraphicsState {
                         0,
                         above_text,
                     );
-                    if cursor_motion {
-                        result.cursor_motion = Some(motion);
-                    }
+                    result.cursor_motion = motion.filter(|_| cursor_motion);
                 }
             }
         }
@@ -1033,7 +1173,6 @@ impl TerminalGraphicsState {
                     self.placements
                         .retain(|placement| placement.screen != screen);
                     self.kitty_store.clear();
-                    self.pending_kitty.clear();
                 } else {
                     self.placements
                         .retain(|placement| placement.screen != screen);
@@ -1045,16 +1184,15 @@ impl TerminalGraphicsState {
                     return;
                 };
                 self.placements.retain(|p| {
-                    if p.screen == screen && p.kitty_id == Some(id) {
-                        freed_ids.push(id);
-                        false
-                    } else {
-                        true
-                    }
+                    !(p.screen == screen
+                        && p.kitty_id == Some(id)
+                        && placement_id.is_none_or(|pid| p.placement_id == Some(pid)))
                 });
-                if free_data {
+                if free_data
+                    && (placement_id.is_none()
+                        || !self.placements.iter().any(|p| p.kitty_id == Some(id)))
+                {
                     self.kitty_store.remove(&id);
-                    self.pending_kitty.remove(&id);
                 }
                 return;
             }
@@ -1076,7 +1214,6 @@ impl TerminalGraphicsState {
                             // Free only when no remaining placements share the image.
                             if !self.placements.iter().any(|p| p.kitty_id == Some(id)) {
                                 self.kitty_store.remove(&id);
-                                self.pending_kitty.remove(&id);
                             }
                         }
                     }
@@ -1156,7 +1293,6 @@ impl TerminalGraphicsState {
             for id in freed_ids {
                 if !self.placements.iter().any(|p| p.kitty_id == Some(id)) {
                     self.kitty_store.remove(&id);
-                    self.pending_kitty.remove(&id);
                 }
             }
         }
@@ -1180,7 +1316,8 @@ impl TerminalGraphicsState {
         compressed: bool,
         pixel_width: Option<u32>,
         pixel_height: Option<u32>,
-        quiet: u8,
+        quiet: Option<u8>,
+        source_rect: Option<GraphicsSourceRect>,
         cursor_line: i64,
         cursor_col: usize,
         screen: GraphicsScreenKind,
@@ -1188,14 +1325,19 @@ impl TerminalGraphicsState {
         cell_width_px: u16,
         cell_height_px: u16,
     ) -> (Option<GraphicsCursorMotion>, Option<Vec<u8>>) {
-        let kitty_key = id.unwrap_or(0);
+        let pending = self.pending_kitty.take().filter(|transfer| {
+            (id.is_none() || id == transfer.id) && (!data.is_empty() || !place || more)
+        });
+        let quiet = quiet
+            .or_else(|| pending.as_ref().map(|transfer| transfer.quiet))
+            .unwrap_or(0);
         // Place-only with no new payload: reuse stored image bytes.
         if place && data.is_empty() && !more {
             let stored = id.and_then(|k| self.get_stored_kitty_image(k));
             let Some(stored) = stored else {
                 return (
                     None,
-                    kitty_reply_if_needed(quiet, true, id, placement_id, false),
+                    kitty_reply_if_needed(quiet, id, placement_id, "ENOENT"),
                 );
             };
             let motion = self.push_placement(
@@ -1204,7 +1346,9 @@ impl TerminalGraphicsState {
                 placement_id,
                 width_cells.or(stored.width_cells),
                 height_cells.or(stored.height_cells),
-                stored.data.to_vec(),
+                stored.content_id,
+                stored.data,
+                source_rect,
                 name.or(stored.name),
                 cursor_line,
                 cursor_col,
@@ -1216,87 +1360,87 @@ impl TerminalGraphicsState {
                 above_text,
             );
             return (
-                cursor_motion.then_some(motion),
-                kitty_reply_if_needed(quiet, false, id, placement_id, true),
+                motion.filter(|_| cursor_motion),
+                kitty_reply_if_needed(quiet, id, placement_id, kitty_placement_status(motion)),
             );
         }
 
-        let entry = self.pending_kitty.entry(kitty_key).or_default();
-        if !data.is_empty() {
-            if entry.data.len().saturating_add(data.len()) <= MAX_KITTY_PENDING_BYTES {
-                entry.data.extend_from_slice(&data);
-            } else {
-                entry.data.clear();
-                entry.overflowed = true;
-            }
-        }
-        if width_cells.is_some() {
-            entry.width_cells = width_cells;
-        }
-        if height_cells.is_some() {
-            entry.height_cells = height_cells;
-        }
-        if name.is_some() {
-            entry.name = name;
-        }
-        entry.place |= place;
-        if placement_id.is_some() {
-            entry.placement_id = placement_id;
-        }
-        entry.z_index = z_index;
-        entry.above_text |= above_text;
-        if format.is_some() {
-            entry.format = format;
-        }
-        entry.compressed |= compressed;
-        if pixel_width.is_some() {
-            entry.pixel_width = pixel_width;
-        }
-        if pixel_height.is_some() {
-            entry.pixel_height = pixel_height;
-        }
-        if more {
-            return (None, None);
-        }
-        let finished = self.pending_kitty.remove(&kitty_key).unwrap_or_default();
-        if finished.overflowed {
-            return (
-                None,
-                kitty_reply_if_needed(quiet, true, id, placement_id, false),
-            );
-        }
-        let width_cells = finished.width_cells.or(width_cells);
-        let height_cells = finished.height_cells.or(height_cells);
-        let name = finished.name;
-        let place = finished.place || place;
-        let placement_id = finished.placement_id.or(placement_id);
-        let z_index = if finished.z_index != 0 {
-            finished.z_index
-        } else {
-            z_index
-        };
-        let above_text = finished.above_text || above_text || z_index > 0;
-        let format = finished.format.or(format);
-        let compressed = finished.compressed || compressed;
-        let pixel_width = finished.pixel_width.or(pixel_width);
-        let pixel_height = finished.pixel_height.or(pixel_height);
-        let data = crate::kitty_payload::finalize_kitty_payload(
-            finished.data,
+        let mut transfer = pending.unwrap_or_else(|| PendingKittyTransfer {
+            id,
+            placement_id,
+            width_cells,
+            height_cells,
+            name,
+            place,
+            z_index,
+            above_text,
+            cursor_motion,
             format,
             compressed,
             pixel_width,
             pixel_height,
-        );
+            source_rect,
+            ..PendingKittyTransfer::default()
+        });
+        transfer.quiet = quiet;
+        if transfer.data.len().saturating_add(data.len()) > MAX_KITTY_PENDING_BYTES {
+            transfer.data.clear();
+            transfer.overflowed = true;
+        } else if !transfer.overflowed {
+            transfer.data.extend_from_slice(&data);
+        }
+        if more {
+            self.pending_kitty = Some(transfer);
+            return (None, None);
+        }
+        let PendingKittyTransfer {
+            id,
+            placement_id,
+            width_cells,
+            height_cells,
+            name,
+            place,
+            z_index,
+            above_text,
+            cursor_motion,
+            format,
+            compressed,
+            pixel_width,
+            pixel_height,
+            overflowed,
+            data,
+            source_rect,
+            ..
+        } = transfer;
+        let data = (!overflowed)
+            .then(|| {
+                crate::kitty_payload::finalize_kitty_payload(
+                    data,
+                    format,
+                    compressed,
+                    pixel_width,
+                    pixel_height,
+                )
+            })
+            .flatten();
+        let Some(data) = data else {
+            let status = if overflowed {
+                "E2BIG:Image data exceeds transfer limit"
+            } else {
+                "EINVAL:Invalid image data"
+            };
+            return (None, kitty_reply_if_needed(quiet, id, placement_id, status));
+        };
 
-        if let Some(kitty_id) = id
-            && !data.is_empty()
-        {
-            let data = clamp_image_data_arc(data.clone());
+        let content_id = image_content_id(&data);
+        let data = clamp_image_data_arc(data);
+        if let Some(kitty_id) = id {
             let last_used = self.next_store_generation();
             self.kitty_store.insert(
                 kitty_id,
                 StoredKittyImage {
-                    data,
+                    data: Arc::clone(&data),
+                    content_id,
                     width_cells,
                     height_cells,
                     name: name.clone(),
@@ -1306,25 +1450,15 @@ impl TerminalGraphicsState {
         }
 
         if place {
-            let data = if data.is_empty() {
-                id.and_then(|k| self.get_stored_kitty_image(k).map(|s| s.data.to_vec()))
-                    .unwrap_or_default()
-            } else {
-                data
-            };
-            if data.is_empty() && width_cells.is_none() && height_cells.is_none() {
-                return (
-                    None,
-                    kitty_reply_if_needed(quiet, true, id, placement_id, false),
-                );
-            }
             let motion = self.push_placement(
                 GraphicsProtocol::Kitty,
                 id,
                 placement_id,
                 width_cells,
                 height_cells,
+                content_id,
                 data,
+                source_rect,
                 name,
                 cursor_line,
                 cursor_col,
@@ -1337,15 +1471,12 @@ impl TerminalGraphicsState {
             );
             self.prune_kitty_store();
             return (
-                cursor_motion.then_some(motion),
-                kitty_reply_if_needed(quiet, false, id, placement_id, true),
+                motion.filter(|_| cursor_motion),
+                kitty_reply_if_needed(quiet, id, placement_id, kitty_placement_status(motion)),
             );
         }
         self.prune_kitty_store();
-        (
-            None,
-            kitty_reply_if_needed(quiet, false, id, placement_id, true),
-        )
+        (None, kitty_reply_if_needed(quiet, id, placement_id, "OK"))
     }
 
     fn kitty_query_ok(
@@ -1431,7 +1562,9 @@ impl TerminalGraphicsState {
         placement_id: Option<u32>,
         width_cells: Option<u16>,
         height_cells: Option<u16>,
-        data: Vec<u8>,
+        content_id: u64,
+        data: Arc<[u8]>,
+        source_rect: Option<GraphicsSourceRect>,
         name: Option<String>,
         cursor_line: i64,
         cursor_col: usize,
@@ -1441,20 +1574,35 @@ impl TerminalGraphicsState {
         cell_height_px: u16,
         z_index: i32,
         above_text: bool,
-    ) -> GraphicsCursorMotion {
+    ) -> Option<GraphicsCursorMotion> {
+        let mut raster = peek_raster_size(&data);
+        let source_rect = match source_rect {
+            Some(source) => {
+                let clipped = source.clipped(raster?)?;
+                raster = Some((clipped.width, clipped.height));
+                Some(clipped)
+            }
+            None => None,
+        };
         let width = width_cells
             .map(|v| v as usize)
-            .unwrap_or_else(|| estimate_width_cells(&data, screen_cols, cell_width_px))
+            .unwrap_or_else(|| estimate_width_cells(raster, screen_cols, cell_width_px))
             .clamp(1, screen_cols.max(1));
         let height = height_cells
             .map(|v| v as usize)
-            .unwrap_or_else(|| estimate_height_cells(&data, width, cell_width_px, cell_height_px))
+            .unwrap_or_else(|| estimate_height_cells(raster, width, cell_width_px, cell_height_px))
             .clamp(1, 256);
         let internal = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        let content_id = image_content_id(&data);
-        let data = clamp_image_data_arc(data);
         let col = cursor_col.min(screen_cols.saturating_sub(1));
+        if let (Some(kitty_id), Some(placement_id)) = (kitty_id, placement_id) {
+            self.placements.retain(|placement| {
+                placement.screen != screen
+                    || placement.kitty_id != Some(kitty_id)
+                    || placement.placement_id != Some(placement_id)
+            });
+        }
+        self.prune_placement_payloads(&data);
         self.placements.push(GraphicsPlacement {
             id: internal,
             protocol,
@@ -1465,21 +1613,47 @@ impl TerminalGraphicsState {
             height_cells: height,
             data,
             content_id,
+            source_rect,
             name,
             kitty_id,
             placement_id,
             z_index,
             above_text,
         });
-        const MAX_PLACEMENTS: usize = 64;
+        const MAX_PLACEMENTS: usize = 8192;
         if self.placements.len() > MAX_PLACEMENTS {
             let drop_n = self.placements.len() - MAX_PLACEMENTS;
             let _ = self.placements.drain(..drop_n);
         }
-        GraphicsCursorMotion {
+        Some(GraphicsCursorMotion {
             start_col: col,
             width_cells: width,
             height_cells: height,
+        })
+    }
+
+    fn prune_placement_payloads(&mut self, incoming: &Arc<[u8]>) {
+        // Tiled previews can have thousands of placements backed by one raster.
+        // Keep the original bound on separately allocated payloads.
+        const MAX_PAYLOADS: usize = 64;
+        if self
+            .placements
+            .last()
+            .is_some_and(|p| Arc::ptr_eq(&p.data, incoming))
+        {
+            return;
+        }
+        let mut payloads = HashSet::from([incoming.as_ptr()]);
+        for placement in self.placements.iter().rev() {
+            let pointer = placement.data.as_ptr();
+            if payloads.len() == MAX_PAYLOADS && !payloads.contains(&pointer) {
+                break;
+            }
+            payloads.insert(pointer);
+        }
+        if payloads.len() == MAX_PAYLOADS {
+            self.placements
+                .retain(|p| payloads.contains(&p.data.as_ptr()));
         }
     }
 
@@ -1521,7 +1695,7 @@ impl TerminalGraphicsState {
     pub fn clear(&mut self) {
         self.placements.clear();
         self.kitty_store.clear();
-        self.pending_kitty.clear();
+        self.pending_kitty = None;
     }
 
     pub(crate) fn has_placements_for_screen(&self, screen: GraphicsScreenKind) -> bool {
@@ -1599,6 +1773,7 @@ impl TerminalGraphicsState {
                 source_col_cells: 0,
                 data: Arc::clone(&placement.data),
                 content_id: placement.content_id,
+                source_rect: placement.source_rect,
                 name: placement.name.clone(),
                 above_text: placement.above_text,
             });
@@ -1607,26 +1782,25 @@ impl TerminalGraphicsState {
     }
 }
 
-fn kitty_reply_if_needed(
-    quiet: u8,
-    is_error: bool,
-    image_id: Option<u32>,
-    placement_id: Option<u32>,
-    ok: bool,
-) -> Option<Vec<u8>> {
-    // q=0 never; q=1 errors only; q=2 always.
-    let send = match quiet {
-        0 => false,
-        1 => is_error || !ok,
-        _ => true,
-    };
-    if !send {
-        return None;
+fn kitty_placement_status(motion: Option<GraphicsCursorMotion>) -> &'static str {
+    if motion.is_some() {
+        "OK"
+    } else {
+        "EINVAL:Invalid source rectangle"
     }
-    Some(kitty_graphics_reply(image_id, placement_id, ok))
 }
 
-fn kitty_graphics_reply(image_id: Option<u32>, placement_id: Option<u32>, ok: bool) -> Vec<u8> {
+fn kitty_reply_if_needed(
+    quiet: u8,
+    image_id: Option<u32>,
+    placement_id: Option<u32>,
+    status: &str,
+) -> Option<Vec<u8>> {
+    (quiet < 2 && (quiet == 0 || status != "OK") && image_id.is_some())
+        .then(|| kitty_graphics_reply(image_id, placement_id, status))
+}
+
+fn kitty_graphics_reply(image_id: Option<u32>, placement_id: Option<u32>, status: &str) -> Vec<u8> {
     let mut ctrl = String::new();
     if let Some(id) = image_id {
         ctrl.push_str(&format!("i={id}"));
@@ -1637,7 +1811,6 @@ fn kitty_graphics_reply(image_id: Option<u32>, placement_id: Option<u32>, ok: bo
         }
         ctrl.push_str(&format!("p={pid}"));
     }
-    let status = if ok { "OK" } else { "ENOENT" };
     let mut out = Vec::with_capacity(ctrl.len() + 16);
     out.extend_from_slice(b"\x1b_G");
     out.extend_from_slice(ctrl.as_bytes());
@@ -1674,8 +1847,12 @@ fn placement_intersects_line(p: &GraphicsPlacement, line: i64) -> bool {
     line >= p.line && line < p.line.saturating_add(p.height_cells as i64)
 }
 
-fn estimate_width_cells(data: &[u8], screen_cols: usize, cell_width_px: u16) -> usize {
-    if let Some((w, _)) = peek_raster_size(data) {
+fn estimate_width_cells(
+    raster: Option<(u32, u32)>,
+    screen_cols: usize,
+    cell_width_px: u16,
+) -> usize {
+    if let Some((w, _)) = raster {
         let cell_w = f32::from(cell_width_px.max(1));
         ((w as f32 / cell_w).ceil() as usize)
             .max(1)
@@ -1686,12 +1863,12 @@ fn estimate_width_cells(data: &[u8], screen_cols: usize, cell_width_px: u16) -> 
 }
 
 fn estimate_height_cells(
-    data: &[u8],
+    raster: Option<(u32, u32)>,
     width_cells: usize,
     cell_width_px: u16,
     cell_height_px: u16,
 ) -> usize {
-    if let Some((w, h)) = peek_raster_size(data) {
+    if let Some((w, h)) = raster {
         if w == 0 {
             return 1;
         }
