@@ -291,6 +291,9 @@ impl NyaTermApp {
             SecurityUnlockAction::ViewPrivateKey(id) => {
                 self.view_security_private_key(id, window, cx);
             }
+            SecurityUnlockAction::OpenKeyEditor(id) => {
+                self.open_security_key_editor(Some(id), window, cx);
+            }
             SecurityUnlockAction::CopyPublicKey(id) => {
                 self.copy_security_public_key(id, window, cx);
             }
@@ -422,6 +425,122 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| {
             _ = window.draw(cx);
+        });
+    }
+
+    fn install_key_fixture(app: &Entity<NyaTermApp>, cx: &mut VisualTestContext) {
+        app.update(cx, |app, _| {
+            app.security.replace_catalog(
+                vec![nyaterm_core::SshKey {
+                    id: "saved-key".into(),
+                    name: "Saved key".into(),
+                    sort_order: 0,
+                    key: None,
+                    cert: None,
+                    passphrase: None,
+                    key_file_path: None,
+                    cert_file_path: None,
+                    has_key_data: true,
+                    has_cert_data: false,
+                }],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn ssh_key_edit_requires_successful_unlock_and_resumes_the_selected_key(
+        cx: &mut TestAppContext,
+    ) {
+        let root = TestTempDir::new("nyaterm-key-edit-unlock");
+        let (app, cx, _) = hosted(cx, root.path(), true);
+        install_key_fixture(&app, cx);
+        // Exercise authorization and late-result handling with a deterministic
+        // rejected job instead of waking GPUI's test scheduler from a real worker.
+        app.update(cx, |app, _| app.blocking_jobs.shutdown());
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_security_key_editor(Some("saved-key".into()), window, cx);
+                assert!(app.security.unlock_prompt_open());
+                assert!(app.security.key_editor().is_none());
+                assert!(!app.security.editor_busy());
+
+                let generation = app.security.unlock_dialog_generation();
+                let origin = window.window_handle();
+                let request = app.security.begin_unlock_request().unwrap().0;
+                app.finish_security_unlock(request, generation, origin, Ok(false), window, cx);
+                assert!(app.security.unlock_error().is_some());
+                assert!(app.security.key_editor().is_none());
+                assert!(!app.security.secrets_unlocked());
+
+                let request = app.security.begin_unlock_request().unwrap().0;
+                app.finish_security_unlock(request, generation, origin, Ok(true), window, cx);
+                assert!(app.security.secrets_unlocked());
+                assert!(!app.security.unlock_prompt_open());
+                assert_eq!(
+                    app.security.key_editor().unwrap().id.as_deref(),
+                    Some("saved-key")
+                );
+                assert!(app.security.editor_busy());
+                // Lock before the asynchronous secret load can finish.
+                app.security.lock_secrets();
+            });
+        });
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert!(app.security.key_editor().is_none());
+            assert!(!app.security.editor_busy());
+            assert!(!app.security.secrets_unlocked());
+        });
+    }
+
+    #[gpui::test]
+    fn ssh_key_edit_cancelled_unlock_does_not_open_editor(cx: &mut TestAppContext) {
+        let root = TestTempDir::new("nyaterm-key-edit-cancel");
+        let (app, cx, _) = hosted(cx, root.path(), true);
+        install_key_fixture(&app, cx);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_security_key_editor(Some("saved-key".into()), window, cx);
+            });
+        });
+        draw(cx);
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert!(!app.security.unlock_prompt_open());
+            assert!(!app.security.secrets_unlocked());
+            assert!(app.security.key_editor().is_none());
+            assert!(!app.security.editor_busy());
+        });
+    }
+
+    #[gpui::test]
+    fn ssh_key_edit_requires_master_password_but_new_key_does_not(cx: &mut TestAppContext) {
+        let root = TestTempDir::new("nyaterm-key-edit-master-required");
+        let (app, cx, _) = hosted(cx, root.path(), false);
+        install_key_fixture(&app, cx);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_security_key_editor(Some("saved-key".into()), window, cx);
+                assert!(app.security.master_required_prompt_open());
+                assert!(app.security.key_editor().is_none());
+                assert!(!app.security.editor_busy());
+            });
+        });
+        draw(cx);
+        cx.simulate_keystrokes("escape");
+        draw(cx);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_security_key_editor(None, window, cx);
+                assert!(app.security.key_editor().unwrap().id.is_none());
+                assert!(!app.security.editor_busy());
+                assert!(!app.security.unlock_prompt_open());
+                assert!(!app.security.master_required_prompt_open());
+            });
         });
     }
 

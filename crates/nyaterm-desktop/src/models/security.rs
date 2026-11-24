@@ -15,6 +15,7 @@ pub(crate) enum SecurityUnlockAction {
         revision: u64,
     },
     ViewPrivateKey(String),
+    OpenKeyEditor(String),
     CopyPublicKey(String),
     RevealPassword(String),
     CopyPassword(String),
