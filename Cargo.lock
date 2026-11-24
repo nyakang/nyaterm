@@ -1437,6 +1437,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cesu8"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
+
+[[package]]
 name = "cexpr"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1879,6 +1885,36 @@ dependencies = [
 
 [[package]]
 name = "cpal"
+version = "0.17.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8942da362c0f0d895d7cac616263f2f9424edc5687364dfd1d25ef7eba506d7"
+dependencies = [
+ "alsa",
+ "coreaudio-rs",
+ "dasp_sample",
+ "jni 0.21.1",
+ "js-sys",
+ "libc",
+ "mach2 0.5.0",
+ "ndk",
+ "ndk-context",
+ "num-derive 0.4.2",
+ "num-traits",
+ "objc2 0.6.4",
+ "objc2-audio-toolbox",
+ "objc2-avf-audio",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.61.3",
+]
+
+[[package]]
+name = "cpal"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
@@ -1887,7 +1923,7 @@ dependencies = [
  "block2 0.6.2",
  "coreaudio-rs",
  "dasp_sample",
- "jni",
+ "jni 0.22.4",
  "js-sys",
  "libc",
  "mach2 0.6.0",
@@ -5387,7 +5423,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 [[package]]
 name = "ironrdp-async"
 version = "0.12.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bytes",
  "ironrdp-connector",
@@ -5400,12 +5436,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-bulk"
 version = "0.2.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 
 [[package]]
 name = "ironrdp-cfg"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-propertyset",
 ]
@@ -5413,7 +5449,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-client"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -5433,8 +5469,12 @@ dependencies = [
  "ironrdp-propertyset",
  "ironrdp-rail",
  "ironrdp-rdcleanpath",
+ "ironrdp-rdpdr",
+ "ironrdp-rdpeai",
  "ironrdp-rdpei",
  "ironrdp-rdpemsc",
+ "ironrdp-rdpsnd",
+ "ironrdp-rdpsnd-native",
  "ironrdp-session",
  "ironrdp-svc",
  "ironrdp-tls",
@@ -5451,7 +5491,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -5463,7 +5503,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr-format"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-core",
  "png 0.18.1",
@@ -5472,7 +5512,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr-native"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-cliprdr",
  "ironrdp-cliprdr-format",
@@ -5490,7 +5530,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-connector"
 version = "0.12.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-core",
  "ironrdp-error",
@@ -5506,7 +5546,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-core"
 version = "0.3.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-error",
 ]
@@ -5514,7 +5554,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-displaycontrol"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -5526,7 +5566,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-dvc"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-bulk",
  "ironrdp-core",
@@ -5538,7 +5578,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-echo"
 version = "0.6.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -5549,7 +5589,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-egfx"
 version = "0.5.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -5563,7 +5603,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-egfx-native"
 version = "0.2.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-egfx",
  "tracing",
@@ -5573,12 +5613,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-error"
 version = "0.2.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 
 [[package]]
 name = "ironrdp-graphics"
 version = "0.11.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -5595,7 +5635,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-input"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bitvec",
  "ironrdp-pdu",
@@ -5605,7 +5645,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-mstsgu"
 version = "0.1.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
@@ -5628,7 +5668,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-pdu"
 version = "0.11.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bit_field",
  "bitflags 2.13.2",
@@ -5651,12 +5691,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-propertyset"
 version = "0.1.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 
 [[package]]
 name = "ironrdp-rail"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-core",
  "ironrdp-svc",
@@ -5665,15 +5705,56 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdcleanpath"
 version = "0.3.1"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "der 0.8.2",
 ]
 
 [[package]]
+name = "ironrdp-rdpdr"
+version = "0.9.0"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
+dependencies = [
+ "bitflags 2.13.2",
+ "getrandom 0.3.4",
+ "ironrdp-core",
+ "ironrdp-error",
+ "ironrdp-pdu",
+ "ironrdp-svc",
+ "tracing",
+]
+
+[[package]]
+name = "ironrdp-rdpdr-native"
+version = "0.9.0"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
+dependencies = [
+ "ironrdp-core",
+ "ironrdp-pdu",
+ "ironrdp-rdpdr",
+ "ironrdp-svc",
+ "nix 0.31.3",
+ "tracing",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "ironrdp-rdpeai"
+version = "0.2.0"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
+dependencies = [
+ "ironrdp-core",
+ "ironrdp-dvc",
+ "ironrdp-pdu",
+ "ironrdp-rdpsnd",
+ "ironrdp-svc",
+ "tracing",
+]
+
+[[package]]
 name = "ironrdp-rdpei"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -5686,7 +5767,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-rdpemsc"
 version = "0.0.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -5695,9 +5776,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironrdp-rdpsnd"
+version = "0.11.0"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
+dependencies = [
+ "bitflags 2.13.2",
+ "ironrdp-core",
+ "ironrdp-dvc",
+ "ironrdp-pdu",
+ "ironrdp-svc",
+ "sha1 0.11.0",
+ "tracing",
+]
+
+[[package]]
+name = "ironrdp-rdpsnd-native"
+version = "0.8.0"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
+dependencies = [
+ "cpal 0.17.3",
+ "ironrdp-core",
+ "ironrdp-error",
+ "ironrdp-rdpeai",
+ "ironrdp-rdpsnd",
+ "ringbuf",
+ "tracing",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "ironrdp-session"
 version = "0.13.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-bulk",
  "ironrdp-core",
@@ -5715,7 +5825,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-svc"
 version = "0.10.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "bitflags 2.13.2",
  "ironrdp-core",
@@ -5725,7 +5835,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-tls"
 version = "0.3.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "rustls-native-certs",
  "tokio",
@@ -5736,7 +5846,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-tokio"
 version = "0.12.0"
-source = "git+https://github.com/nyakang/IronRDP?rev=5d933375c13b0f95391f1aa1fff6488a647a35f7#5d933375c13b0f95391f1aa1fff6488a647a35f7"
+source = "git+https://github.com/nyakang/IronRDP?rev=644ac2cb964ba5b66493b9609d74ea5b5bef5968#644ac2cb964ba5b66493b9609d74ea5b5bef5968"
 dependencies = [
  "ironrdp-async",
  "ironrdp-connector",
@@ -5895,6 +6005,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
 dependencies = [
  "jiff-tzdb",
+]
+
+[[package]]
+name = "jni"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a87aa2bb7d2af34197c04845522473242e1aa17c12f4935d5856491a7fb8c97"
+dependencies = [
+ "cesu8",
+ "cfg-if",
+ "combine",
+ "jni-sys 0.3.1",
+ "log",
+ "thiserror 1.0.69",
+ "walkdir",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -6411,6 +6537,15 @@ name = "mach2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "mach2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
 dependencies = [
  "libc",
 ]
@@ -7611,11 +7746,13 @@ dependencies = [
  "arboard",
  "dirs",
  "hostname",
+ "ironrdp-cfg",
  "ironrdp-client",
  "ironrdp-cliprdr",
  "ironrdp-core",
  "ironrdp-input",
  "ironrdp-pdu",
+ "ironrdp-rdpdr-native",
  "ironrdp-svc",
  "ironrdp-tls",
  "nyaterm-core",
@@ -7624,7 +7761,9 @@ dependencies = [
  "sha2 0.11.0",
  "smallvec",
  "tokio",
+ "tracing",
  "uuid",
+ "windows 0.62.2",
  "x509-cert 0.2.5",
 ]
 
@@ -7694,7 +7833,7 @@ name = "nyaterm-spice-helper"
 version = "2.0.8"
 dependencies = [
  "base64 0.22.1",
- "cpal",
+ "cpal 0.18.2",
  "libc",
  "libloading 0.8.9",
  "nyaterm-core",
@@ -10395,6 +10534,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ringbuf"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b58b631e416dd7d84549d7e6a50f767e111f9b03e30d04f40072f6618f386aaf"
+dependencies = [
+ "crossbeam-utils",
+ "portable-atomic",
+ "portable-atomic-util",
+]
+
+[[package]]
 name = "rmcp"
 version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10827,7 +10977,7 @@ checksum = "1167586491e2b18b8bfbb293e8180ec17c201c4f076d7cb3070ca964e7598f98"
 dependencies = [
  "core-foundation 0.10.1",
  "core-foundation-sys",
- "jni",
+ "jni 0.22.4",
  "log",
  "once_cell",
  "rustls",
@@ -14723,6 +14873,15 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75283be5efb2831d37ea142365f009c02ec203cd29a3ebecbc093d52315b66d0"
+dependencies = [
+ "windows-targets 0.42.2",
+]
+
+[[package]]
+name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
@@ -14755,6 +14914,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-targets"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e5180c00cd44c9b1c88adb3693291f1cd93605ded80c250a75d472756b4d071"
+dependencies = [
+ "windows_aarch64_gnullvm 0.42.2",
+ "windows_aarch64_msvc 0.42.2",
+ "windows_i686_gnu 0.42.2",
+ "windows_i686_msvc 0.42.2",
+ "windows_x86_64_gnu 0.42.2",
+ "windows_x86_64_gnullvm 0.42.2",
+ "windows_x86_64_msvc 0.42.2",
 ]
 
 [[package]]
@@ -14819,6 +14993,12 @@ dependencies = [
 
 [[package]]
 name = "windows_aarch64_gnullvm"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "597a5118570b68bc08d8d59125332c54f1ba9d9adeedeef5b99b02ba2b0698f8"
+
+[[package]]
+name = "windows_aarch64_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
@@ -14831,6 +15011,12 @@ checksum = "a9d8416fa8b42f5c947f8482c43e7d89e73a173cead56d044f6a56104a6d1b53"
 
 [[package]]
 name = "windows_aarch64_msvc"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e08e8864a60f06ef0d0ff4ba04124db8b0fb3be5776a5cd47641e942e58c4d43"
+
+[[package]]
+name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
@@ -14840,6 +15026,12 @@ name = "windows_aarch64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9d782e804c2f632e395708e99a94275910eb9100b2114651e04744e9b125006"
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c61d927d8da41da96a81f029489353e68739737d3beca43145c8afec9a31a84f"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -14867,6 +15059,12 @@ checksum = "fa7359d10048f68ab8b09fa71c3daccfb0e9b559aed648a8f95469c27057180c"
 
 [[package]]
 name = "windows_i686_msvc"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44d840b6ec649f480a41c8d80f9c65108b92d89345dd94027bfe06ac444d1060"
+
+[[package]]
+name = "windows_i686_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
@@ -14876,6 +15074,12 @@ name = "windows_i686_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e7ac75179f18232fe9c285163565a57ef8d3c89254a30685b57d83a38d326c2"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8de912b8b8feb55c064867cf047dda097f92d51efad5b491dfb98f6bbb70cb36"
 
 [[package]]
 name = "windows_x86_64_gnu"
@@ -14891,6 +15095,12 @@ checksum = "9c3842cdd74a865a8066ab39c8a7a473c0778a3f29370b5fd6b4b9aa7df4a499"
 
 [[package]]
 name = "windows_x86_64_gnullvm"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26d41b46a36d453748aedef1486d5c7a85db22e56aff34643984ea85514e94a3"
+
+[[package]]
+name = "windows_x86_64_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
@@ -14900,6 +15110,12 @@ name = "windows_x86_64_gnullvm"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ffa179e2d07eee8ad8f57493436566c7cc30ac536a3379fdf008f47f6bb7ae1"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9aec5da331524158c6d1a4ac0ab1541149c0b9505fde06423b02f5ef0106b9f0"
 
 [[package]]
 name = "windows_x86_64_msvc"

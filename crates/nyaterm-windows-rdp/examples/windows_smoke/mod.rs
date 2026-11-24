@@ -244,6 +244,7 @@ fn saved_config(name: &str) -> Result<RdpSessionConfig> {
             enabled: reconnect.enabled,
             max_attempts: reconnect.max_attempts,
         },
+        redirection: Default::default(),
     };
     config.normalize_backend_settings();
     config.backend.validate_config(&config)?;

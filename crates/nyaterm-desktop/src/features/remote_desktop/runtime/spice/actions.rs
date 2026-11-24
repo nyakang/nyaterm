@@ -79,7 +79,12 @@ impl NyaTermApp {
         session.cursor_visible = false;
         session.cursor_shape = None;
         if let Some(texture) = session.cursor_texture.take() {
-            self.remote_desktop.pending_texture_removals.push(texture);
+            self.remote_desktop.pending_texture_removals.push(
+                crate::features::remote_desktop::state::PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                },
+            );
         }
         self.remote_desktop.spice_manager.configure_presentation(
             id,

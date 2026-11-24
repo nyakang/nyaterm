@@ -30,11 +30,15 @@ impl NyaTermApp {
         }
     }
 
-    pub(super) fn poll_active_rdp_clipboard(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn poll_active_rdp_clipboard(
+        &mut self,
+        window: &gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.security.screen_locked() {
             return false;
         }
-        let Some(session_id) = self.session.active_id_owned() else {
+        let Some(session_id) = self.remote_desktop_input_session(window).map(str::to_owned) else {
             return false;
         };
         if !self.remote_desktop.is_session(&session_id) {

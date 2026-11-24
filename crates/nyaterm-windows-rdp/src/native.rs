@@ -5,7 +5,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::time::Instant;
 
-use nyaterm_remote_desktop::{RdpDisplayConfig, RdpSessionConfig};
+use nyaterm_remote_desktop::{RdpAudioMode, RdpDisplayConfig, RdpSessionConfig};
 use zeroize::Zeroizing;
 
 use crate::cleanup::{Cleanup, CleanupAction};
@@ -43,10 +43,32 @@ struct Config {
     color_depth: u32,
     nla: u32,
     clipboard: u32,
+    redirect_drives: u32,
+    redirect_printers: u32,
+    redirect_ports: u32,
+    redirect_smartcards: u32,
+    redirect_microphone: u32,
+    redirect_webauthn: u32,
+    /// `AudioRedirectionMode` value from the Microsoft COM documentation:
+    /// 0 = redirect sounds to the client, 1 = play sounds at the remote
+    /// computer, 2 = disable sound redirection.
+    audio_mode: u32,
     admin: u32,
     reconnect: u32,
     max_attempts: u32,
     performance: u32,
+}
+
+/// Map the editor's audio choice to the documented `AudioRedirectionMode`
+/// values: 0 redirects sounds to this computer, 1 plays them on the remote
+/// computer, 2 disables sound redirection. See
+/// IMsRdpClientSecuredSettings::AudioRedirectionMode in the Microsoft COM docs.
+fn mstsc_audio_mode(audio: RdpAudioMode) -> u32 {
+    match audio {
+        RdpAudioMode::Local => 0,
+        RdpAudioMode::Remote => 1,
+        RdpAudioMode::NoAudio => 2,
+    }
 }
 
 /// Physical client coordinates, already intersected with the visible panel.
@@ -104,6 +126,7 @@ unsafe extern "C" {
     fn nya_rdp_create(config: *const Config, owner: *mut *mut c_void, stage: *mut u32) -> i32;
     fn nya_rdp_start(owner: *mut c_void) -> i32;
     fn nya_rdp_viewport(owner: *mut c_void, rect: *const Viewport, visible: u32) -> i32;
+    fn nya_rdp_reparent(owner: *mut c_void, parent: usize) -> i32;
     fn nya_rdp_resize(owner: *mut c_void, width: u32, height: u32, scale: u32) -> i32;
     fn nya_rdp_smart_sizing(owner: *mut c_void, enabled: u32) -> i32;
     fn nya_rdp_focus(owner: *mut c_void, child: u32) -> i32;
@@ -202,9 +225,11 @@ impl NativeRdpHost {
                 .encode_utf16()
                 .collect::<Vec<_>>(),
         );
+        let redirection = &config.redirection;
+        let audio_mode = mstsc_audio_mode(redirection.audio);
         let ffi = Config {
             size: size_of::<Config>() as u32,
-            version: 1,
+            version: 2,
             parent,
             generation,
             server: Text::new(&server),
@@ -217,7 +242,14 @@ impl NativeRdpHost {
             scale: config.display.desktop_scale_factor.max(100),
             color_depth: config.display.color_depth.into(),
             nla: config.use_nla.into(),
-            clipboard: 1,
+            clipboard: redirection.clipboard.into(),
+            redirect_drives: redirection.drives.into(),
+            redirect_printers: redirection.printers.into(),
+            redirect_ports: redirection.ports.into(),
+            redirect_smartcards: redirection.smartcards.into(),
+            redirect_microphone: redirection.microphone.into(),
+            redirect_webauthn: redirection.webauthn.into(),
+            audio_mode,
             admin: config.administrative_session.into(),
             reconnect: config.reconnect.enabled.into(),
             max_attempts: config.reconnect.max_attempts,
@@ -306,6 +338,19 @@ impl NativeRdpHost {
         Ok(())
     }
 
+    /// Move the ActiveX child to another top-level GPUI window. Inactive today:
+    /// ActiveX has no fullscreen and always stays in the main window, so the
+    /// requested parent never changes. Kept as a general hosting capability.
+    pub fn reparent(&mut self, parent: usize) -> Result<(), NativeRdpError> {
+        result("reparent", unsafe {
+            nya_rdp_reparent(self.owner.as_ptr(), parent)
+        })?;
+        // The same rect in a different parent is a different physical location.
+        // Force the next drive to reapply it.
+        self.last_viewport = None;
+        Ok(())
+    }
+
     pub fn resize(&mut self, width: u32, height: u32, scale: u32) -> Result<(), NativeRdpError> {
         tracing::trace!(target: "nyaterm_windows_rdp::presentation", width, height, scale, "updating remote display");
         result("resize", unsafe {
@@ -349,6 +394,7 @@ impl NativeRdpHost {
             10 => NativeRdpEventKind::AuthenticationWarningDisplayed,
             11 => NativeRdpEventKind::AuthenticationWarningDismissed,
             12 => NativeRdpEventKind::LogonError { code: event.code },
+            13 => NativeRdpEventKind::FullscreenToggle,
             _ => {
                 return Err(NativeRdpError {
                     operation: "unknown event",
@@ -526,7 +572,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    use nyaterm_remote_desktop::RdpSessionConfig;
+    use nyaterm_remote_desktop::{RdpAudioMode, RdpSessionConfig};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GWL_STYLE, GetWindowLongPtrW, MSG,
@@ -536,7 +582,7 @@ mod tests {
     use windows::core::w;
 
     use crate::NativeRdpEventKind;
-    use crate::native::{NativeRdpHost, Viewport, maintain_retired};
+    use crate::native::{NativeRdpHost, Viewport, maintain_retired, mstsc_audio_mode};
 
     unsafe extern "C" {
         fn nya_rdp_verify_connection_policy(owner: *mut std::ffi::c_void) -> i32;
@@ -556,6 +602,15 @@ mod tests {
             }
             unsafe { DestroyWindow(self.0).unwrap() };
         }
+    }
+
+    #[test]
+    fn audio_direction_follows_the_documented_com_values() {
+        // IMsRdpClientSecuredSettings::AudioRedirectionMode: 0 redirects to the
+        // client, 1 plays on the remote computer, 2 disables redirection.
+        assert_eq!(mstsc_audio_mode(RdpAudioMode::Local), 0);
+        assert_eq!(mstsc_audio_mode(RdpAudioMode::Remote), 1);
+        assert_eq!(mstsc_audio_mode(RdpAudioMode::NoAudio), 2);
     }
 
     #[test]

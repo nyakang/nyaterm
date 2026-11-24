@@ -88,6 +88,7 @@ impl NativeRdpLifecycle {
             }
             NativeRdpEventKind::CloseConfirmed => return false,
             NativeRdpEventKind::FocusReleased
+            | NativeRdpEventKind::FullscreenToggle
             | NativeRdpEventKind::Connecting
             | NativeRdpEventKind::AuthenticationWarningDisplayed
             | NativeRdpEventKind::AuthenticationWarningDismissed

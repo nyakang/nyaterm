@@ -67,3 +67,6 @@ use lifecycle::vnc_auth_failure_accepts_password_prompt;
 use lifecycle::vnc_retry_requires_password;
 #[cfg(windows)]
 pub(super) use resize::fit_window_display_metrics;
+
+#[cfg(test)]
+mod fullscreen_tests;

@@ -42,6 +42,7 @@ fn batch_field_is_select(field: BatchFieldKey) -> bool {
             | BatchFieldKey::TelnetEnterMode
             | BatchFieldKey::RdpBackend
             | BatchFieldKey::RdpDisplayMode
+            | BatchFieldKey::RdpAudio
             | BatchFieldKey::VncScaleMode
             | BatchFieldKey::RecordingMode
             | BatchFieldKey::AgentPolicy
@@ -475,6 +476,32 @@ impl NyaTermApp {
                         self.selects
                             .field(&field.select_id())
                             .map(|entity| NyaSelect::new(&entity)),
+                    )
+                    .into_any_element()
+            } else if field == BatchFieldKey::RdpCustomDrivePath {
+                let configured = draft.value(field);
+                let display = if configured.is_empty() {
+                    t!("dialog.rdpCustomDriveSelect").to_string()
+                } else {
+                    configured.to_string()
+                };
+                div()
+                    .w_full()
+                    .h(px(32.))
+                    .child(
+                        NyaButton::new(
+                            SharedString::from(format!("asset-batch-picker-{}", field.key())),
+                            display,
+                        )
+                        .form_control()
+                        .full_width()
+                        .label_left()
+                        .icon("icons/conn/folder.svg")
+                        .tooltip(t!("dialog.rdpCustomDrivePickPrompt"))
+                        .disabled(draft.saving() || !draft.field_available(field))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.prompt_asset_batch_custom_drive_path(cx)
+                        })),
                     )
                     .into_any_element()
             } else {

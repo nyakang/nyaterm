@@ -53,4 +53,5 @@ pub enum NativeRdpEventKind {
     AuthenticationWarningDisplayed,
     AuthenticationWarningDismissed,
     LogonError { code: i32 },
+    FullscreenToggle,
 }

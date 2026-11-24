@@ -303,10 +303,20 @@ impl NyaTermApp {
             session.uploads_stopped = false;
             session.framebuffer = None;
             if let Some(texture) = session.texture.take() {
-                self.remote_desktop.pending_texture_removals.push(texture);
+                self.remote_desktop.pending_texture_removals.push(
+                    crate::features::remote_desktop::state::PendingTextureRemoval {
+                        owner: session.texture_window,
+                        texture,
+                    },
+                );
             }
             if let Some(texture) = session.cursor_texture.take() {
-                self.remote_desktop.pending_texture_removals.push(texture);
+                self.remote_desktop.pending_texture_removals.push(
+                    crate::features::remote_desktop::state::PendingTextureRemoval {
+                        owner: session.texture_window,
+                        texture,
+                    },
+                );
             }
             session.cursor_shape = None;
             session.spice = Some(Default::default());

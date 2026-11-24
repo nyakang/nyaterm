@@ -46,6 +46,7 @@ pub(in crate::features) struct TabActionSupport {
     pub disconnect: bool,
     pub ai: bool,
     pub rdp_secure_attention: bool,
+    pub rdp_fullscreen: bool,
     pub android_screen: bool,
     pub split: bool,
     pub session_info: bool,
@@ -82,6 +83,9 @@ pub(in crate::features) struct TabActionPolicyInput {
     pub reconnect_pending: bool,
     pub terminal_available: bool,
     pub rdp_secure_attention_available: bool,
+    /// Whether the RDP backend can enter fullscreen. ActiveX uses the main
+    /// window; IronRDP uses a detached fullscreen window.
+    pub rdp_fullscreen_available: bool,
     pub locked: bool,
     pub tab_count: usize,
     pub tab_index: Option<usize>,
@@ -107,6 +111,8 @@ impl TabActionPolicy {
             disconnect: supports_terminal_actions || input.session == TabSessionCapability::AdbView,
             ai: supports_terminal_actions,
             rdp_secure_attention: input.session == TabSessionCapability::Rdp,
+            rdp_fullscreen: input.session == TabSessionCapability::Rdp
+                && input.rdp_fullscreen_available,
             android_screen: matches!(
                 input.session,
                 TabSessionCapability::AdbShell | TabSessionCapability::AdbView
@@ -165,6 +171,7 @@ impl TabActionPolicy {
             || self.support.disconnect
             || self.support.ai
             || self.support.rdp_secure_attention
+            || self.support.rdp_fullscreen
     }
 
     pub(in crate::features) fn supports_submenu(self, submenu: TabActionsSubmenu) -> bool {
@@ -191,6 +198,7 @@ mod tests {
             reconnect_pending: false,
             terminal_available: true,
             rdp_secure_attention_available: false,
+            rdp_fullscreen_available: false,
             locked: false,
             tab_count: 1,
             tab_index: Some(0),
@@ -267,6 +275,9 @@ mod tests {
         assert!(!unavailable.support.split);
         assert!(unavailable.support.rdp_secure_attention);
         assert!(!unavailable.availability.rdp_secure_attention);
+        // Default test input has no backend capability: the fullscreen item
+        // must be hidden.
+        assert!(!unavailable.support.rdp_fullscreen);
         assert!(unavailable.support.session_info);
         assert_eq!(
             unavailable.menu_groups(),
@@ -283,6 +294,17 @@ mod tests {
     }
 
     #[test]
+    fn rdp_fullscreen_requires_backend_support() {
+        let mut context = input(TabSessionCapability::Rdp);
+        let activex = TabActionPolicy::from_input(context);
+        assert!(!activex.support.rdp_fullscreen);
+
+        context.rdp_fullscreen_available = true;
+        let builtin = TabActionPolicy::from_input(context);
+        assert!(builtin.support.rdp_fullscreen);
+    }
+
+    #[test]
     fn vnc_omits_terminal_and_rdp_session_actions() {
         let mut context = input(TabSessionCapability::Vnc);
         context.has_source_connection = true;
@@ -290,6 +312,7 @@ mod tests {
 
         assert!(!policy.support.session_spawn);
         assert!(!policy.support.rdp_secure_attention);
+        assert!(!policy.support.rdp_fullscreen);
         assert!(policy.support.session_info);
         assert_eq!(
             policy.menu_groups(),

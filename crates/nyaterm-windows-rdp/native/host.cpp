@@ -11,7 +11,7 @@
 #include "mstscax.tlh"
 
 namespace {
-constexpr uint32_t kAbiVersion = 1;
+constexpr uint32_t kAbiVersion = 2;
 constexpr size_t kEventLimit = 256;
 constexpr HRESULT kBusy = HRESULT_FROM_WIN32(ERROR_BUSY);
 class RdpModule : public CAtlModuleT<RdpModule> {};
@@ -36,6 +36,10 @@ struct NyaRdpHost {
     uint32_t close_wait = 0;
     uint32_t callbacks = 0;
     bool desktop_scale = false;
+    // Expected policy, retained so the offline verification hook can assert
+    // what was actually applied to the COM control.
+    uint32_t redirect_clipboard = 1;
+    uint32_t audio_mode = 2;
     DWORD cookie = 0;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
@@ -62,6 +66,14 @@ HRESULT admit(NyaRdpHost* host) {
 
 LRESULT CALLBACK child_input(HWND window, UINT message, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR data) {
     auto* host = reinterpret_cast<NyaRdpHost*>(data);
+    // Ctrl+Shift+Alt+F11 is reserved for toggling NyaTerm RDP fullscreen. The
+    // RDP control owns keyboard focus while connected, so this must be caught
+    // on the child HWND before the keystroke is sent to the remote session.
+    if ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN) && wp == VK_F11 && GetKeyState(VK_CONTROL) < 0 && GetKeyState(VK_SHIFT) < 0 && GetKeyState(VK_MENU) < 0) {
+        SetFocus(host->parent);
+        host->emit(13);
+        return 0;
+    }
     if ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN) && wp == VK_HOME && GetKeyState(VK_CONTROL) < 0 && GetKeyState(VK_MENU) < 0) {
         SetFocus(host->parent);
         host->emit(7);
@@ -188,16 +200,17 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     if (FAILED(hr = host.advanced->put_AuthenticationLevel(2))) return hr;
     *stage = 110; // ConnectToAdministerServer
     if (FAILED(hr = host.advanced->put_ConnectToAdministerServer(config.admin ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
+    const auto flag = [](uint32_t value) { return value ? VARIANT_TRUE : VARIANT_FALSE; };
     *stage = 111; // RedirectClipboard
-    if (FAILED(hr = host.advanced->put_RedirectClipboard(VARIANT_TRUE))) return hr;
+    if (FAILED(hr = host.advanced->put_RedirectClipboard(flag(config.clipboard)))) return hr;
     *stage = 112; // RedirectDrives
-    if (FAILED(hr = host.advanced->put_RedirectDrives(VARIANT_FALSE))) return hr;
+    if (FAILED(hr = host.advanced->put_RedirectDrives(flag(config.redirect_drives)))) return hr;
     *stage = 113; // RedirectPrinters
-    if (FAILED(hr = host.advanced->put_RedirectPrinters(VARIANT_FALSE))) return hr;
+    if (FAILED(hr = host.advanced->put_RedirectPrinters(flag(config.redirect_printers)))) return hr;
     *stage = 114; // RedirectSmartCards
-    if (FAILED(hr = host.advanced->put_RedirectSmartCards(VARIANT_FALSE))) return hr;
+    if (FAILED(hr = host.advanced->put_RedirectSmartCards(flag(config.redirect_smartcards)))) return hr;
     *stage = 115; // RedirectPorts
-    if (FAILED(hr = host.advanced->put_RedirectPorts(VARIANT_FALSE))) return hr;
+    if (FAILED(hr = host.advanced->put_RedirectPorts(flag(config.redirect_ports)))) return hr;
     *stage = 116; // RedirectDevices
     if (FAILED(hr = host.advanced->put_RedirectDevices(VARIANT_FALSE))) return hr;
     *stage = 117; // RedirectPOSDevices
@@ -212,8 +225,8 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     if (FAILED(hr = resources->put_RedirectDynamicDrives(VARIANT_FALSE))) return hr;
     *stage = 120; // RedirectDynamicDevices
     if (FAILED(hr = resources->put_RedirectDynamicDevices(VARIANT_FALSE))) return hr;
-    *stage = 121; // AudioCaptureRedirectionMode
-    if (FAILED(hr = host.advanced->put_AudioCaptureRedirectionMode(VARIANT_FALSE))) return hr;
+    *stage = 121; // AudioCaptureRedirectionMode (microphone)
+    if (FAILED(hr = host.advanced->put_AudioCaptureRedirectionMode(flag(config.redirect_microphone)))) return hr;
     *stage = 122; // EnableAutoReconnect
     if (FAILED(hr = host.advanced->put_EnableAutoReconnect(config.reconnect ? VARIANT_TRUE : VARIANT_FALSE))) return hr;
     *stage = 123; // MaxReconnectAttempts
@@ -238,7 +251,7 @@ HRESULT configure(NyaRdpHost& host, const NyaRdpConfig& config, uint32_t* stage)
     *stage = 131;
     if (FAILED(hr = secured->put_KeyboardHookMode(1))) return hr;
     *stage = 132;
-    if (FAILED(hr = secured->put_AudioRedirectionMode(2))) return hr;
+    if (FAILED(hr = secured->put_AudioRedirectionMode(config.audio_mode))) return hr;
     if (config.password.len) {
         *stage = 133;
         CComQIPtr<IMsTscNonScriptable> secret(host.control);
@@ -281,7 +294,11 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
     if (!valid_text(config->server) || !config->server.len || !valid_text(config->username) ||
         !valid_text(config->domain) || !valid_text(config->password) || !config->port || config->port > 65535 ||
         config->width < 200 || config->width > 8192 || config->height < 200 || config->height > 8192 ||
-        config->scale < 100 || config->scale > 500 || config->max_attempts > 200 || config->clipboard != 1) return E_INVALIDARG;
+        config->scale < 100 || config->scale > 500 || config->max_attempts > 200 ||
+        config->clipboard > 1 || config->audio_mode > 2 ||
+        config->redirect_drives > 1 || config->redirect_printers > 1 || config->redirect_ports > 1 ||
+        config->redirect_smartcards > 1 || config->redirect_microphone > 1 ||
+        config->redirect_webauthn > 1) return E_INVALIDARG;
     const HWND parent = reinterpret_cast<HWND>(config->parent);
     if (!IsWindow(parent) || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return RPC_E_WRONG_THREAD;
     NyaRdpHost* host = new (std::nothrow) NyaRdpHost();
@@ -289,6 +306,8 @@ extern "C" int32_t nya_rdp_create(const NyaRdpConfig* config, NyaRdpHost** out, 
     HRESULT hr = E_FAIL;
     try {
         host->parent = parent; host->generation = config->generation;
+        host->redirect_clipboard = config->clipboard;
+        host->audio_mode = config->audio_mode;
         auto create = [&]() -> HRESULT {
             // DirectComposition applies the parent's child-clipping rules.
             // Keep this window-lifetime style once native children are hosted:
@@ -371,6 +390,33 @@ extern "C" int32_t nya_rdp_viewport(NyaRdpHost* host, const NyaRdpRect* rect, ui
     if (object) { const HRESULT result = object->SetObjectRects(&local, &local); if (FAILED(result)) return result; }
     if (!visible && IsChild(host->window, GetFocus())) SetFocus(host->parent);
     ShowWindow(host->window, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
+    EnumChildWindows(host->window, subclass_child, reinterpret_cast<LPARAM>(host));
+    return S_OK;
+} catch (...) { return E_FAIL; }
+
+extern "C" int32_t nya_rdp_reparent(NyaRdpHost* host, uintptr_t parent) noexcept try {
+    const HRESULT hr = admit(host); if (FAILED(hr)) return hr;
+    const HWND next = reinterpret_cast<HWND>(parent);
+    if (!next || !IsWindow(next) || GetWindowThreadProcessId(next, nullptr) != host->thread) return RPC_E_WRONG_THREAD;
+    if (next == host->parent) return S_OK;
+    if (!IsWindow(host->window)) return E_UNEXPECTED;
+    // DirectComposition inherits the new parent's child-clipping rules.
+    const LONG_PTR style = GetWindowLongPtrW(next, GWL_STYLE);
+    if (!(style & WS_CLIPCHILDREN)) {
+        SetLastError(ERROR_SUCCESS);
+        if (!SetWindowLongPtrW(next, GWL_STYLE, style | WS_CLIPCHILDREN)) {
+            const DWORD error = GetLastError();
+            if (error != ERROR_SUCCESS) return HRESULT_FROM_WIN32(error);
+        }
+    }
+    if (IsChild(host->window, GetFocus())) SetFocus(host->parent);
+    if (!SetParent(host->window, next)) return HRESULT_FROM_WIN32(GetLastError());
+    host->parent = next;
+    // Keep modal authentication UI and the Ctrl+Alt+Del release path on the
+    // window that now owns the control.
+    CComQIPtr<IMsRdpClientNonScriptable3> resources(host->control);
+    if (resources) resources->put_UIParentWindowHandle(reinterpret_cast<wireHWND>(next));
+    if (IsWindowVisible(host->window)) ShowWindow(host->window, SW_SHOWNOACTIVATE);
     EnumChildWindows(host->window, subclass_child, reinterpret_cast<LPARAM>(host));
     return S_OK;
 } catch (...) { return E_FAIL; }
@@ -486,7 +532,7 @@ extern "C" int32_t nya_rdp_verify_connection_policy(NyaRdpHost* host) noexcept t
     if (FAILED(hr = host->advanced->get_AuthenticationLevel(&authentication))) return hr;
     if (authentication != 2) return E_FAIL;
     if (FAILED(hr = host->advanced->get_RedirectClipboard(&enabled))) return hr;
-    if (enabled != VARIANT_TRUE) return E_FAIL;
+    if (enabled != (host->redirect_clipboard ? VARIANT_TRUE : VARIANT_FALSE)) return E_FAIL;
     CComQIPtr<IMsRdpClientNonScriptable3> resources(host->control);
     if (!resources) return E_NOINTERFACE;
     wireHWND ui_parent = nullptr;

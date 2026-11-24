@@ -565,6 +565,7 @@ mod tests {
                     display: Default::default(),
                     clipboard: Default::default(),
                     reconnect: Default::default(),
+                    redirection: Default::default(),
                 });
         });
         app

@@ -328,7 +328,7 @@ impl NyaTermApp {
             self.android.release_inputs(&session_id);
             self.android.stop_screen(&session_id);
         } else if self.remote_desktop.is_session(&session_id) {
-            let _ = self.close_remote_desktop_runtime(&session_id);
+            let _ = self.close_remote_desktop_runtime(&session_id, cx);
         } else if self
             .session
             .session_info(&session_id)
@@ -575,7 +575,7 @@ impl NyaTermApp {
 
         // Close live backend if still present.
         if self.remote_desktop.is_session(&old_id) {
-            let _ = self.close_remote_desktop_runtime(&old_id);
+            let _ = self.close_remote_desktop_runtime(&old_id, cx);
         } else {
             let _ = self.session.manager().close(&old_id);
         }

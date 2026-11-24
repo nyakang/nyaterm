@@ -209,7 +209,7 @@ impl NyaTermApp {
             ) {
                 Ok(())
             } else if self.remote_desktop.is_session(close_id) {
-                self.close_remote_desktop_runtime(close_id)
+                self.close_remote_desktop_runtime(close_id, cx)
             } else if self
                 .session
                 .session_info(close_id)
@@ -345,7 +345,7 @@ impl NyaTermApp {
         let was_active = self.session.active_id() == Some(pane_id.as_str());
         let disconnected = self.session.is_disconnected(&pane_id);
         let close_result = if self.remote_desktop.is_session(&pane_id) {
-            self.close_remote_desktop_runtime(&pane_id)
+            self.close_remote_desktop_runtime(&pane_id, cx)
         } else {
             self.session
                 .manager()

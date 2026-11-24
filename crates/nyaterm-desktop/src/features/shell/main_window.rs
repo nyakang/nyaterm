@@ -25,6 +25,27 @@ impl NyaTermApp {
             entity.update(cx, |this, cx| update(this, window, cx))
         })
     }
+
+    /// Visit both rendering windows without borrowing either across the other
+    /// update. Each callback processes only sessions owned by that window.
+    pub(in crate::features) fn update_in_remote_desktop_windows<C: AppContext, R>(
+        this: &WeakEntity<Self>,
+        cx: &mut C,
+        mut update: impl FnMut(&mut Self, &mut Window, &mut Context<Self>) -> R,
+    ) -> anyhow::Result<Vec<R>> {
+        let main = Self::update_in_main_window(this, cx, &mut update)?;
+        let mut results = vec![main];
+        let fullscreen = this.read_with(cx, |this, _| this.remote_desktop_fullscreen_window())?;
+        if let Some(fullscreen) = fullscreen {
+            let entity = this.upgrade().context("entity released")?;
+            if let Ok(result) = cx.update_window(fullscreen.into(), |_, window, cx| {
+                entity.update(cx, |this, cx| update(this, window, cx))
+            }) {
+                results.push(result);
+            }
+        }
+        Ok(results)
+    }
 }
 
 #[cfg(test)]

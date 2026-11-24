@@ -191,6 +191,10 @@ fn default_rdp_clipboard_mode() -> String {
     "text-and-files".to_string()
 }
 
+pub fn default_rdp_audio_mode() -> String {
+    "no_audio".to_string()
+}
+
 pub fn default_rdp_reconnect_attempts() -> u32 {
     5
 }

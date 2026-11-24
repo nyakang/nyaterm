@@ -1919,6 +1919,11 @@ fn connection_path_pickers_update_existing_inputs_and_preserve_them_on_cancel() 
             true,
             NyaTermApp::prompt_connection_editor_working_dir as PathPicker,
         ),
+        (
+            ConnectionEditorField::RdpCustomDrivePath,
+            true,
+            NyaTermApp::prompt_connection_editor_custom_drive_path as PathPicker,
+        ),
     ] {
         let input = cx.update_entity(&app, |app, _| {
             app.connection_state.editor_fields()[&field].clone()
@@ -1939,6 +1944,9 @@ fn connection_path_pickers_update_existing_inputs_and_preserve_them_on_cancel() 
                 let value = match field {
                     ConnectionEditorField::ShellPath => draft.shell_path,
                     ConnectionEditorField::WorkingDir => draft.working_dir,
+                    ConnectionEditorField::RdpCustomDrivePath => {
+                        draft.rdp_redirection.custom_drive_path.clone()
+                    }
                     _ => unreachable!(),
                 };
                 assert_eq!(value, selected.display().to_string());
@@ -2454,6 +2462,7 @@ fn connection_editor_state_with_secret_draft() -> ConnectionEditorState {
         rdp_security: Default::default(),
         rdp_display: Default::default(),
         rdp_clipboard: Default::default(),
+        rdp_redirection: Default::default(),
         rdp_reconnect: Default::default(),
 
         vnc_security: Default::default(),
@@ -2770,6 +2779,68 @@ fn mstsc_backend_selection_and_switching_preserve_other_rdp_settings() {
     assert_eq!(draft.rdp_display, display);
     assert_eq!(draft.rdp_reconnect, reconnect);
     assert!(draft.password == password);
+}
+
+#[test]
+fn rdp_local_resource_switches_update_draft_and_clipboard_mode() {
+    let mut editor = connection_editor_state_with_secret_draft();
+    editor.kind = ConnectionKindTab::Rdp;
+    let mut draft = Some(editor);
+
+    for flag in [
+        ConnectionEditorToggle::RdpRedirectDrives,
+        ConnectionEditorToggle::RdpRedirectPrinters,
+        ConnectionEditorToggle::RdpRedirectPorts,
+        ConnectionEditorToggle::RdpRedirectSmartcards,
+        ConnectionEditorToggle::RdpRedirectMicrophone,
+    ] {
+        assert!(toggle_connection_editor_flag(&mut draft, flag));
+    }
+    let editor = draft.as_ref().expect("draft remains open");
+    assert!(editor.rdp_redirection.drives);
+    assert!(editor.rdp_redirection.printers);
+    assert!(editor.rdp_redirection.ports);
+    assert!(editor.rdp_redirection.smartcards);
+    assert!(editor.rdp_redirection.microphone);
+    assert!(
+        editor.rdp_redirection.clipboard,
+        "clipboard stays on by default"
+    );
+
+    assert!(toggle_connection_editor_flag(
+        &mut draft,
+        ConnectionEditorToggle::RdpRedirectClipboard
+    ));
+    let editor = draft.as_ref().expect("draft remains open");
+    assert!(!editor.rdp_redirection.clipboard);
+    assert_eq!(editor.rdp_clipboard.mode, "disabled");
+
+    assert!(toggle_connection_editor_flag(
+        &mut draft,
+        ConnectionEditorToggle::RdpRedirectClipboard
+    ));
+    let editor = draft.as_ref().expect("draft remains open");
+    assert!(editor.rdp_redirection.clipboard);
+    assert_eq!(editor.rdp_clipboard.mode, "text-and-files");
+
+    // The custom-directory checkbox clears a configured path on toggle-off.
+    draft
+        .as_mut()
+        .expect("draft remains open")
+        .rdp_redirection
+        .custom_drive_path = "a custom directory".into();
+    assert!(toggle_connection_editor_flag(
+        &mut draft,
+        ConnectionEditorToggle::RdpCustomDriveToggled
+    ));
+    assert!(
+        draft
+            .as_ref()
+            .expect("draft remains open")
+            .rdp_redirection
+            .custom_drive_path
+            .is_empty()
+    );
 }
 
 #[test]

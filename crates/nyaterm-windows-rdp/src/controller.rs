@@ -22,6 +22,7 @@ static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy)]
 struct Presentation {
+    parent: usize,
     rect: NativeRdpRect,
     visible: bool,
     local_input: bool,
@@ -105,6 +106,7 @@ impl NativeRdpControl {
                 last_native_status: None,
             }),
             desired: Presentation {
+                parent: parent as usize,
                 rect,
                 visible: false,
                 local_input: false,
@@ -118,6 +120,13 @@ impl NativeRdpControl {
         })
     }
 
+    /// Change the top-level window that hosts the ActiveX child. Applied on the
+    /// next drive; an in-flight operation picks it up when it is committed.
+    pub fn set_parent(&mut self, parent: usize) {
+        if parent != 0 {
+            self.desired.parent = parent;
+        }
+    }
     pub fn set_bounds(&mut self, rect: NativeRdpRect) {
         if rect.validate().is_ok() {
             self.desired.rect = rect;
@@ -144,8 +153,12 @@ impl NativeRdpControl {
     }
 
     pub fn take_operation(&mut self) -> Option<NativeRdpOperation> {
+        let mut runtime = self.runtime.take()?;
+        // Creation must use the latest requested host too, not the one from
+        // when this control was first constructed.
+        runtime.parent = self.desired.parent;
         Some(NativeRdpOperation {
-            runtime: self.runtime.take()?,
+            runtime,
             presentation: self.desired,
             focus: self.focus_requested.replace(false),
             cancelled: self.cancelled.clone(),
@@ -288,6 +301,10 @@ impl Runtime {
             }
             return Ok(());
         };
+        if !presentation.closing && self.parent != presentation.parent {
+            host.reparent(presentation.parent)?;
+            self.parent = presentation.parent;
+        }
         let mut focus_surface = false;
         for _ in 0..256 {
             let Some(event) = host.poll()? else {
@@ -328,6 +345,10 @@ impl Runtime {
                             RdpErrorKind::Session,
                             format!("Windows RDP control failed (0x{:08X})", code as u32),
                         )));
+                }
+                NativeRdpEventKind::FullscreenToggle => {
+                    self.events
+                        .push_back(NativeRdpConnectionEvent::ToggleFullscreen);
                 }
                 _ => {}
             }
@@ -445,6 +466,16 @@ mod tests {
             &config,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_pending_host_change_reaches_initial_creation() {
+        let mut control = control();
+        control.set_parent(7);
+        let operation = control.take_operation().unwrap();
+        assert_eq!(operation.runtime.parent, 7);
+        // Do not run it: an invalid HWND is only used to check propagation.
+        drop(operation);
     }
 
     #[test]

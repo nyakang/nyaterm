@@ -979,6 +979,7 @@ fn rdp_session_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig {
         display: Default::default(),
         clipboard: Default::default(),
         reconnect: Default::default(),
+        redirection: Default::default(),
     }
 }
 
