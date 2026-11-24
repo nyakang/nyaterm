@@ -1358,6 +1358,7 @@ mod tests {
             ("ja", "2026-07-27 09:05 月"),
             ("ko", "2026-07-27 09:05 월"),
             ("fr", "lun. 2026-07-27 09:05"),
+            ("pt-BR", "seg., 2026-07-27 09:05"),
         ] {
             assert_eq!(
                 format_header_datetime(datetime, locale),
@@ -1369,7 +1370,7 @@ mod tests {
 
     #[test]
     fn localizes_every_weekday_without_falling_back() {
-        for locale in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+        for locale in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
             for weekday in [
                 time::Weekday::Monday,
                 time::Weekday::Tuesday,

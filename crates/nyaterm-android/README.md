@@ -32,7 +32,7 @@ maximum FPS (1–120), and bit rate (0.1–100 Mbps in the UI, still stored as
 100000–100000000 bits/s). Defaults are
 1280 pixels, 30 FPS and 8000000 bits/s. Screen sessions always enable the scrcpy
 control channel; there is no read-only mode. Desktop localizes Android labels,
-status codes and typed backend errors in all six supported languages.
+status codes and typed backend errors in all seven supported languages.
 
 ## Transfer and runtime guarantees
 

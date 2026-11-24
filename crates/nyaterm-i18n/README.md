@@ -1,6 +1,6 @@
 # nyaterm-i18n
 
-Owns NyaTerm's six unchanged translation catalogs, legacy locale aliases, stable
+Owns NyaTerm's seven unchanged translation catalogs, legacy locale aliases, stable
 picker ordering and one-time preload. It has no workspace or GPUI dependencies.
 
 Call `preload()` before translating on a platform UI thread. The generated

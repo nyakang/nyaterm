@@ -34,7 +34,7 @@ pub(in crate::features) fn cloud_sync_history_summary(entry: &CloudSyncHistoryEn
             "settings.syncPullSuccess",
             "settings.syncRecoverCurrentSuccess",
         ] {
-            if ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
+            if ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"]
                 .iter()
                 .any(|locale| entry.message.trim() == t!(key, locale = *locale).as_ref())
             {

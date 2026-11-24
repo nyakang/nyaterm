@@ -39,6 +39,16 @@ fn maps_google_language_codes_like_legacy() {
 }
 
 #[test]
+fn maps_brazilian_portuguese_language_codes() {
+    assert_eq!(google_translate_lang("pt-BR"), "pt");
+    assert_eq!(microsoft_translate_lang("pt-BR"), "pt-BR");
+    assert_eq!(deepl_translate_lang("pt-BR"), "PT-BR");
+    assert_eq!(baidu_translate_lang("pt-BR"), "pt");
+    assert_eq!(ali_translate_lang("pt-BR"), "pt");
+    assert_eq!(youdao_translate_lang("pt-BR"), "pt");
+}
+
+#[test]
 fn parses_google_translate_response() {
     let body = r#"{
         "sentences": [

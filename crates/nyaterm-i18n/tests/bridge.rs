@@ -19,7 +19,8 @@ fn shared_backend_preserves_caller_macros_fallback_interpolation_and_global_loca
     );
     let key = "language.name";
     assert_eq!(rust_i18n::t!(key, locale = "fr"), "Français");
-    assert_eq!(rust_i18n::available_locales!().len(), 6);
+    assert_eq!(rust_i18n::t!(key, locale = "pt-BR"), "Português (Brasil)");
+    assert_eq!(rust_i18n::available_locales!().len(), 7);
     assert_eq!(
         rust_i18n::t!(
             "updater.releaseDateShort",
