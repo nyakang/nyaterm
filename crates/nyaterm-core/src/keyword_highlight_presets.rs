@@ -796,6 +796,58 @@ pub fn merge_keyword_highlight_rules_for_paint(
     out
 }
 
+/// Canonical identity of highlight keywords derived from selected text: each
+/// trimmed, non-empty line is regex-escaped (matching the editor prefill) and
+/// then sorted, so selections carrying the same keywords in a different order
+/// or with blank-line/whitespace noise map to the same key.
+pub fn keyword_highlight_content_key(selected: &str) -> Option<Vec<String>> {
+    let mut patterns = selected
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(regex::escape)
+        .collect::<Vec<_>>();
+    if patterns.is_empty() {
+        return None;
+    }
+    patterns.sort_unstable();
+    Some(patterns)
+}
+
+/// The same canonical identity computed from a rule's stored patterns.
+pub fn keyword_highlight_rule_content_key(rule: &KeywordHighlightRule) -> Vec<String> {
+    let mut patterns = rule.patterns.clone();
+    patterns.sort_unstable();
+    patterns
+}
+
+/// Curated colors for one-click terminal selection highlighting.
+///
+/// Each entry is `(dark_theme_text, light_theme_text, dark_background)`.
+/// The first nine are the visible quick picks. The tenth (`#4c5560`) is kept
+/// for backward compatibility with persisted rules and is reused by the UI as
+/// the checked indicator for a rule with a custom color; it is never offered
+/// as a paintable swatch.
+///
+/// Quick highlights paint a saturated dark marker block with near-white text.
+/// The block is drawn explicitly, so it stays legible in both theme families:
+/// it contrasts against light terminal backgrounds and still separates from
+/// dark ones. Text/background contrast is >= 5.7 for every pair. The background
+/// value doubles as the menu swatch fill. Index order is stable and part of the
+/// UI contract; never reorder without migrating persisted selections.
+pub const KEYWORD_HIGHLIGHT_QUICK_COLORS: [(&str, &str, &str); 10] = [
+    ("#fff0ee", "#fff0ee", "#b3261e"), // red
+    ("#fff0d6", "#fff0d6", "#9e4000"), // orange
+    ("#fffbe0", "#fffbe0", "#7a6000"), // yellow
+    ("#dffee4", "#dffee4", "#196b33"), // green
+    ("#d4fff8", "#d4fff8", "#0b6e60"), // teal
+    ("#dcf0ff", "#dcf0ff", "#0f5f8a"), // cyan
+    ("#e2e8ff", "#e2e8ff", "#3352b5"), // blue
+    ("#f0e2ff", "#f0e2ff", "#6a2fbf"), // purple
+    ("#ffe6f5", "#ffe6f5", "#a32274"), // magenta
+    ("#f5f7fa", "#f5f7fa", "#4c5560"), // gray
+];
+
 /// Curated swatches for rule color pickers (Tauri DARK_PALETTE / LIGHT_PALETTE subset).
 pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str] {
     if is_dark {

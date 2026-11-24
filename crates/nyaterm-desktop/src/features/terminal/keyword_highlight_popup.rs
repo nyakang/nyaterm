@@ -284,10 +284,24 @@ impl KeywordHighlightWindow {
             closed: false,
             _subscriptions: subscriptions,
         };
-        if let Some(rule) = prefill_rule_from_text(prefill) {
-            this.selected[0] = Some(rule.id.clone());
-            this.session.push(rule);
-            this.detail = true;
+        if let Some(rule) = prefill_rule_from_text(prefill.clone()) {
+            // Reuse an existing session rule with identical text content instead
+            // of prefilling a second rule for the same selection: a quick color
+            // may already have created one, and saving both would duplicate it.
+            let key = nyaterm_core::keyword_highlight_content_key(&prefill);
+            let existing = key.as_ref().and_then(|key| {
+                this.session.iter().find(|candidate| {
+                    nyaterm_core::keyword_highlight_rule_content_key(candidate) == *key
+                })
+            });
+            if let Some(existing) = existing {
+                this.selected[0] = Some(existing.id.clone());
+                this.detail = true;
+            } else {
+                this.selected[0] = Some(rule.id.clone());
+                this.session.push(rule);
+                this.detail = true;
+            }
         }
         this.refresh_list();
         this.seed_inputs(cx);
@@ -1175,6 +1189,42 @@ mod tests {
                 .unwrap()
                 .is_match("192x168x1x1")
         );
+    }
+
+    #[test]
+    fn opening_editor_for_existing_content_reuses_rule_instead_of_prefilling_a_second() {
+        let dir = TestConfigDir::new("nyaterm-highlight-prefill-dedup");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+
+        // A quick color already created a session rule for this text.
+        let mut existing = prefill_rule_from_text("ERROR".into()).unwrap();
+        existing.id = "kh-quick-existing".into();
+        existing.color_dark = "#f44747".into();
+        cx.update_entity(&app, |app, cx| {
+            app.set_session_keyword_rules("local", vec![existing.clone()], cx);
+        });
+
+        // Opening the editor with the same selection must reuse that rule.
+        let editor = cx.new(|cx| {
+            KeywordHighlightWindow::new(
+                app.clone(),
+                "local".into(),
+                "ERROR".into(),
+                ChildWindowSpec::modal_editor("test".into(), 880., 600.).chrome(),
+                cx,
+            )
+        });
+        editor.read_with(&cx, |editor, _| {
+            assert_eq!(editor.session.len(), 1, "prefill added a duplicate rule");
+            assert_eq!(editor.session[0].id, "kh-quick-existing");
+            assert_eq!(
+                editor.selected[0].as_deref(),
+                Some("kh-quick-existing"),
+                "existing rule was not selected"
+            );
+        });
     }
 
     #[test]

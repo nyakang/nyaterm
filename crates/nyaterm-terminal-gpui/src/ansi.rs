@@ -1,4 +1,6 @@
-use crate::keywords::{CompiledKeywordRule, keyword_highlight_spans_compiled};
+use crate::keywords::{
+    CompiledKeywordRule, keyword_highlight_spans_compiled, quick_highlight_background,
+};
 use crate::types::TerminalHighlightSpan;
 use crate::{resolve_cell_bg, resolve_cell_fg};
 
@@ -130,10 +132,11 @@ fn push_ansi_segment(
     if text.is_empty() {
         return;
     }
+    let keyword_bg = keyword_color.and_then(quick_highlight_background);
     out.push(TerminalHighlightSpan {
         text: text.to_string(),
         color: Some(keyword_color.unwrap_or(default_color)),
-        bg,
+        bg: keyword_bg.or(bg),
         keyword: keyword_color.is_some(),
         underline: style.underline,
         strikeout: style.strikeout,

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
-use nyaterm_core::ResolvedKeywordHighlightRule;
+use nyaterm_core::{KEYWORD_HIGHLIGHT_QUICK_COLORS, ResolvedKeywordHighlightRule};
 use nyaterm_terminal::{TerminalSnapshot, TerminalSnapshotRow, terminal_cell_col_for_byte_index};
 
 use crate::element::{TerminalBufferMatch, TerminalSearchFlags};
@@ -1388,7 +1388,7 @@ pub(super) fn keyword_highlight_spans_compiled(
         spans.push(TerminalHighlightSpan {
             text: line[start..end].to_string(),
             color: Some(color),
-            bg: None,
+            bg: quick_highlight_background(color),
             keyword: true,
             underline: false,
             strikeout: false,
@@ -1656,6 +1656,21 @@ pub(super) fn parse_hex_rgb(value: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// Quick-pick rules render as a saturated dark marker block with near-white
+/// text. Their stored rule color is the text color; this maps it back to the
+/// matching background so keyword backgrounds can be painted as cell blocks.
+pub(super) fn quick_highlight_background(text_color: u32) -> Option<u32> {
+    KEYWORD_HIGHLIGHT_QUICK_COLORS
+        .iter()
+        .find_map(|(dark, light, background)| {
+            if parse_hex_rgb(dark) == Some(text_color) || parse_hex_rgb(light) == Some(text_color) {
+                parse_hex_rgb(background)
+            } else {
+                None
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1669,13 +1684,30 @@ mod tests {
         CompiledKeywordRule, MAX_KEYWORD_WRAPPED_GROUP_ROWS, TerminalKeywordHighlightLookup,
         TerminalKeywordHighlightSnapshot, compile_keyword_rules,
         compile_terminal_keyword_highlighter, keyword_highlight_spans_compiled,
-        keyword_matches_compiled, keyword_matches_highlighter,
+        keyword_matches_compiled, keyword_matches_highlighter, parse_hex_rgb,
         precompute_terminal_keyword_highlights, precompute_terminal_keyword_highlights_for_rows,
-        precompute_terminal_keyword_highlights_for_rows_with_stats, terminal_buffer_matches,
-        terminal_keyword_row_reuse_keys,
+        precompute_terminal_keyword_highlights_for_rows_with_stats, quick_highlight_background,
+        terminal_buffer_matches, terminal_keyword_row_reuse_keys,
     };
+    use crate::contrast::contrast_ratio;
     use crate::element::TerminalSearchFlags;
     use crate::types::TerminalKeywordRange;
+    use nyaterm_core::KEYWORD_HIGHLIGHT_QUICK_COLORS;
+
+    #[test]
+    fn quick_highlight_pairs_use_dark_backgrounds_and_light_text() {
+        for (dark, light, background) in KEYWORD_HIGHLIGHT_QUICK_COLORS {
+            let background = parse_hex_rgb(background).expect("quick background");
+            for text in [dark, light] {
+                let text = parse_hex_rgb(text).expect("quick text color");
+                assert!(
+                    contrast_ratio(text, background) >= 5.5,
+                    "{text:06x} on {background:06x} must stay highly legible"
+                );
+                assert_eq!(quick_highlight_background(text), Some(background));
+            }
+        }
+    }
 
     fn set_snapshot_row(
         snapshot: &mut TerminalSnapshot,

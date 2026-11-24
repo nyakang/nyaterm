@@ -1,8 +1,10 @@
 use std::time::Duration;
 
-use gpui::{Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
+use gpui::{App, Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
 use nyaterm_terminal::selection::{TerminalSelectionEndpoint, TerminalSelectionMode};
-use nyaterm_terminal::{TerminalScreen, TerminalSnapshot};
+use nyaterm_terminal::{
+    TerminalScreen, TerminalSnapshot, terminal_text_cell_slice, terminal_text_cells,
+};
 
 use crate::features::NyaTermApp;
 use crate::features::terminal::LostTerminalSelectionRecovery;
@@ -425,13 +427,11 @@ impl NyaTermApp {
             return;
         }
         if event.click_count == 2 {
-            let word = self.word_bounds_at_for_visual_geometry(event.position, &geometry);
-            self.terminal.selection.selection = Some(TerminalSelection::from_range(
-                TerminalBufferCellPos::new(endpoint.position.line, word.0),
-                TerminalBufferCellPos::new(
-                    endpoint.position.line,
-                    word.1.saturating_sub(1).max(word.0),
-                ),
+            self.terminal.selection.selection = Some(terminal_word_selection_for_visual_geometry(
+                event.position,
+                &geometry,
+                &endpoint,
+                self.settings.summary().interaction_word_separators.as_str(),
             ));
             self.terminal.selection.session_id = selection_session_id;
             self.terminal.selection.dragging = false;
@@ -1181,16 +1181,46 @@ impl NyaTermApp {
         }
     }
 
-    fn word_bounds_at_for_visual_geometry(
+    /// Resolve the word under a pointer position without changing the real
+    /// terminal selection. This mirrors double-click word selection: unwrapped
+    /// layout uses logical lines, otherwise the core xterm-style word bounds
+    /// are applied to the painted snapshot.
+    pub(in crate::features) fn terminal_word_text_at_pointer_for_session(
         &self,
+        session_id: &str,
         position: gpui::Point<gpui::Pixels>,
-        geometry: &TerminalHitTestGeometry,
-    ) -> (usize, usize) {
-        terminal_word_bounds_for_visual_geometry(
-            position,
-            geometry,
-            self.settings.summary().interaction_word_separators.as_str(),
-        )
+        cx: &App,
+    ) -> Option<String> {
+        let geometry = self.terminal_hit_test_geometry_for_session(Some(session_id), cx)?;
+        let separators = self.settings.summary().interaction_word_separators.as_str();
+        let selection = if geometry.unwrapped.is_some() {
+            terminal_logical_selection_at_pointer(position, &geometry, Some(separators))?
+        } else {
+            let endpoint = self
+                .terminal_selection_endpoint_in_current_history(
+                    position,
+                    &geometry,
+                    Some(session_id),
+                )
+                .or_else(|| {
+                    Self::terminal_selection_endpoint_for_visual_geometry(position, &geometry)
+                })?;
+            terminal_word_selection_for_visual_geometry(position, &geometry, &endpoint, separators)
+        };
+        let text = self
+            .terminal
+            .view
+            .views
+            .get(session_id)
+            .and_then(|view| terminal_selected_text_for_view(view, selection))
+            .or_else(|| {
+                terminal_word_text_from_geometry_snapshot(&geometry, position, separators)
+            })?;
+        let word = text.trim();
+        if word.is_empty() || word.chars().all(|ch| separators.contains(ch)) {
+            return None;
+        }
+        Some(word.to_string())
     }
 
     fn terminal_selection_endpoint_for_visual_geometry(
@@ -1349,6 +1379,48 @@ fn terminal_word_bounds_for_visual_geometry(
         .min(geometry.snapshot_rows.saturating_sub(1));
     let col = terminal_cell_for_visual_geometry(position, geometry).col;
     terminal_word_bounds_at_snapshot_row(col, geometry.snapshot.as_ref(), snapshot_row, separators)
+}
+
+/// Build the exact selection a double-click would create at `position`.
+/// Both the start and the end must come from the word bounds: using the
+/// clicked cell as the start truncates the word when the pointer is inside it.
+fn terminal_word_selection_for_visual_geometry(
+    position: gpui::Point<gpui::Pixels>,
+    geometry: &TerminalHitTestGeometry,
+    endpoint: &TerminalSelectionEndpoint,
+    separators: &str,
+) -> TerminalSelection {
+    let (start, end) = terminal_word_bounds_for_visual_geometry(position, geometry, separators);
+    TerminalSelection::from_range(
+        TerminalBufferCellPos::new(endpoint.position.line, start),
+        TerminalBufferCellPos::new(endpoint.position.line, end.saturating_sub(1).max(start)),
+    )
+}
+
+/// Last-resort extraction from the painted snapshot when the view's frame or
+/// scrollback snapshots no longer contain the exact snapshot used for hit
+/// testing (for example during a frame handoff).
+fn terminal_word_text_from_geometry_snapshot(
+    geometry: &TerminalHitTestGeometry,
+    position: gpui::Point<gpui::Pixels>,
+    separators: &str,
+) -> Option<String> {
+    let snapshot_row = terminal_snapshot_row_for_visual_geometry(position, geometry)
+        .min(geometry.snapshot_rows.saturating_sub(1));
+    let col = terminal_cell_for_visual_geometry(position, geometry).col;
+    let (start, end) = terminal_word_bounds_at_snapshot_row(
+        col,
+        geometry.snapshot.as_ref(),
+        snapshot_row,
+        separators,
+    );
+    let line = geometry.snapshot.line(snapshot_row)?;
+    let cells = terminal_text_cells(line);
+    Some(terminal_text_cell_slice(
+        &cells,
+        start,
+        end.min(cells.len()),
+    ))
 }
 
 #[cfg(test)]

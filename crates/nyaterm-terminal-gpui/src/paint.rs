@@ -8,7 +8,7 @@ use nyaterm_terminal::{
 };
 
 use crate::ansi::ansi_to_highlight_spans_compiled;
-use crate::keywords::{CompiledKeywordRule, keyword_matches_compiled};
+use crate::keywords::{CompiledKeywordRule, keyword_matches_compiled, quick_highlight_background};
 use crate::types::{TerminalHighlightSpan, TerminalKeywordRange, TerminalPaintGeometry};
 
 pub(super) fn flush_bg(
@@ -357,6 +357,7 @@ pub(super) fn terminal_highlight_spans_with_keyword_ranges_and_options(
             )
         {
             style.color = Some(color);
+            style.bg = quick_highlight_background(color).or(style.bg);
             style.keyword = true;
         }
         push_terminal_highlight_span(&mut spans, &text[start_byte..end_byte], style);
@@ -835,7 +836,7 @@ mod tests {
         terminal_highlight_spans_have_distinct_neighbors,
         terminal_highlight_spans_with_keyword_ranges, terminal_keyword_exclusion_ranges,
     };
-    use crate::keywords::{CompiledKeywordRule, compile_keyword_rules};
+    use crate::keywords::{CompiledKeywordRule, compile_keyword_rules, quick_highlight_background};
     use crate::types::{TerminalHighlightSpan, TerminalKeywordRange};
 
     fn plain_span(text: &str) -> TerminalHighlightSpan {
@@ -868,6 +869,29 @@ mod tests {
             color,
             priority: 0,
         }]
+    }
+
+    #[test]
+    fn quick_keyword_ranges_paint_dark_background_with_light_text() {
+        let palette = nyaterm_ui::theme_palette("github-dark");
+        let text_color = 0xfff0ee;
+        let expected_bg = quick_highlight_background(text_color).expect("quick background");
+        let spans = terminal_highlight_spans_with_keyword_ranges(
+            "deny",
+            None,
+            Some(&[TerminalKeywordRange {
+                start_col: 0,
+                end_col: 4,
+                color: text_color,
+            }]),
+            &[],
+            palette,
+        );
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].color, Some(text_color));
+        assert_eq!(spans[0].bg, Some(expected_bg));
+        assert!(spans[0].keyword);
     }
 
     #[test]

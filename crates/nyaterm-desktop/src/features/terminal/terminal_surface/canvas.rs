@@ -931,6 +931,7 @@ impl NyaTermApp {
                                     cx.listener(
                                         move |this, event: &gpui::MouseDownEvent, window, cx| {
                                             this.activate_workspace_pane(session_id.clone(), cx);
+                                            this.clear_terminal_context_word();
                                             window.focus(&this.terminal.input.focus, cx);
                                             if let Some(cell) = this
                                                 .point_to_terminal_cell_for_session(
@@ -964,7 +965,11 @@ impl NyaTermApp {
                                                     this.clear_terminal_selection(cx);
                                                 }
                                                 nyaterm_core::TerminalRightClickAction::Menu => {
-                                                    this.prepare_terminal_context_menu(cx);
+                                                    this.prepare_terminal_context_menu(
+                                                        &session_id,
+                                                        event.position,
+                                                        cx,
+                                                    );
                                                 }
                                                 nyaterm_core::TerminalRightClickAction::None => {}
                                             }

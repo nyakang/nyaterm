@@ -30,8 +30,8 @@ use crate::glyphs::{
 };
 use crate::keywords::{
     TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey,
-    terminal_keyword_row_reuse_key, terminal_keyword_row_reuse_keys_for_rows,
-    terminal_keyword_rules_key,
+    quick_highlight_background, terminal_keyword_row_reuse_key,
+    terminal_keyword_row_reuse_keys_for_rows, terminal_keyword_rules_key,
 };
 use crate::paint::{
     apply_search_ranges, line_strike_color, push_col_range_bg, terminal_cell_text_at_col,
@@ -2159,7 +2159,7 @@ impl Element for NyaTerminalElement {
                 } else {
                     glyph_spans
                 };
-                let background_ranges = snapshot_row
+                let mut background_ranges = snapshot_row
                     .map(|row| {
                         terminal_background_ranges_for_cells(
                             &row.cells,
@@ -2168,6 +2168,20 @@ impl Element for NyaTerminalElement {
                         )
                     })
                     .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
+                // Cell backgrounds are authoritative for normal rows, so the
+                // marker background from quick highlights must be overlaid
+                // explicitly. It paints below the shaped text.
+                if let Some(ranges) = keyword_ranges {
+                    background_ranges.extend(ranges.iter().filter_map(|range| {
+                        quick_highlight_background(range.color).map(|bg| {
+                            TerminalRowBackgroundRange {
+                                bg,
+                                start: range.start_col,
+                                end: range.end_col,
+                            }
+                        })
+                    }));
+                }
                 let text_decorations = terminal_text_decorations_for_row(
                     glyph_spans,
                     snapshot_row.map(|row| row.cells.as_ref()),
