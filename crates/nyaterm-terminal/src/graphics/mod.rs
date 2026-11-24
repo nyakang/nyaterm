@@ -4,6 +4,9 @@
 //! payloads are intercepted *before* Alacritty's ANSI processor so their
 //! binary/base64 bodies never pollute the character grid.
 
+mod placements;
+
+use self::placements::Placements;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -525,6 +528,19 @@ fn parse_kitty_body(body: &[u8]) -> Option<GraphicsEvent> {
             image_id: id,
             placement_id,
         }),
+        "t" | "T" | "p" | "P" if !direct || params.get("U") == Some(&"1") => {
+            Some(GraphicsEvent::KittyReply {
+                image_id: id,
+                placement_id,
+                quiet,
+                status: if !direct {
+                    "ENOTSUP:Unsupported transmission medium"
+                } else {
+                    "ENOTSUP:Unicode placements are not supported"
+                },
+                abort_transfer: true,
+            })
+        }
         // t=transmit store, T=transmit+place, p=place existing id
         "t" | "T" | "p" | "P" if direct && params.get("U") != Some(&"1") => {
             let width_cells = params.get("c").and_then(|v| v.parse().ok());
@@ -949,7 +965,7 @@ struct StoredKittyImage {
 pub struct TerminalGraphicsState {
     next_id: u64,
     store_generation: u64,
-    placements: Vec<GraphicsPlacement>,
+    placements: Placements,
     /// Kitty image number → last transmitted payload (for place-only / multi-place).
     kitty_store: HashMap<u32, StoredKittyImage>,
     /// Only the first chunk of a Kitty transfer carries image metadata.
@@ -1200,14 +1216,13 @@ impl TerminalGraphicsState {
                 let idx = self
                     .placements
                     .iter()
-                    .enumerate()
                     .rev()
-                    .find(|(_, p)| {
+                    .find(|p| {
                         p.screen == screen && image_id.is_none_or(|id| p.kitty_id == Some(id))
                     })
-                    .map(|(i, _)| i);
+                    .map(|p| p.id);
                 if let Some(idx) = idx {
-                    let removed = self.placements.remove(idx);
+                    let removed = self.placements.remove(idx).expect("existing placement");
                     if let Some(id) = removed.kitty_id {
                         freed_ids.push(id);
                         if free_data {
@@ -1432,9 +1447,26 @@ impl TerminalGraphicsState {
             return (None, kitty_reply_if_needed(quiet, id, placement_id, status));
         };
 
+        // Never acknowledge and cache a truncated raster. Failed replacements
+        // leave the old image and its placements intact.
+        if data.len() > MAX_IMAGE_BYTES {
+            return (
+                None,
+                kitty_reply_if_needed(
+                    quiet,
+                    id,
+                    placement_id,
+                    "E2BIG:Image data exceeds storage limit",
+                ),
+            );
+        }
         let content_id = image_content_id(&data);
-        let data = clamp_image_data_arc(data);
+        let data: Arc<[u8]> = Arc::from(data);
         if let Some(kitty_id) = id {
+            // The store is shared across screens; all references to the old
+            // image must disappear, including placements on the hidden screen.
+            self.placements
+                .retain(|placement| placement.kitty_id != Some(kitty_id));
             let last_used = self.next_store_generation();
             self.kitty_store.insert(
                 kitty_id,
@@ -1595,13 +1627,6 @@ impl TerminalGraphicsState {
         let internal = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let col = cursor_col.min(screen_cols.saturating_sub(1));
-        if let (Some(kitty_id), Some(placement_id)) = (kitty_id, placement_id) {
-            self.placements.retain(|placement| {
-                placement.screen != screen
-                    || placement.kitty_id != Some(kitty_id)
-                    || placement.placement_id != Some(placement_id)
-            });
-        }
         self.prune_placement_payloads(&data);
         self.placements.push(GraphicsPlacement {
             id: internal,
@@ -1621,10 +1646,7 @@ impl TerminalGraphicsState {
             above_text,
         });
         const MAX_PLACEMENTS: usize = 8192;
-        if self.placements.len() > MAX_PLACEMENTS {
-            let drop_n = self.placements.len() - MAX_PLACEMENTS;
-            let _ = self.placements.drain(..drop_n);
-        }
+        self.placements.trim_oldest(MAX_PLACEMENTS);
         Some(GraphicsCursorMotion {
             start_col: col,
             width_cells: width,
@@ -1662,9 +1684,7 @@ impl TerminalGraphicsState {
             return;
         }
         let delta = i64::try_from(delta).unwrap_or(i64::MAX);
-        for placement in &mut self.placements {
-            placement.line = placement.line.saturating_sub(delta);
-        }
+        self.placements.shift_lines(delta);
     }
 
     pub fn retain_line_range(&mut self, topmost: i32, bottommost: i32) {
@@ -1726,7 +1746,7 @@ impl TerminalGraphicsState {
         // Our placements store line as the cursor line at insert time (0-based
         // from top of primary screen, negative into scrollback).
         let mut images = Vec::new();
-        for placement in &self.placements {
+        for placement in self.placements.iter() {
             if placement.screen != screen {
                 continue;
             }
