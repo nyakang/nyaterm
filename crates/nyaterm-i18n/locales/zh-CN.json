@@ -1550,6 +1550,12 @@
     "zoomOut": "缩小"
   },
   "fileExplorer": {
+    "pathCompletionLoading": "正在加载目录…",
+    "pathCompletionEmpty": "没有匹配的目录",
+    "pathCompletionUnavailable": "无法访问目录",
+    "pathCompletionTimeout": "目录查询超时",
+    "pathCompletionHome": "正在解析主目录…",
+    "pathCompletionTruncated": "仅显示部分结果",
     "clipboardEmpty": "文件剪贴板为空或已被替换",
     "clipboardMoving": "选中的剪切项正在移动，请等待完成",
     "transferSourceUnavailable": "来源连接不可用，请重新连接后重试。",

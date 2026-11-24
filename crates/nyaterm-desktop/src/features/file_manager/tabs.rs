@@ -179,7 +179,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let key = WorkspaceTabId::FileManager(id.to_string()).layout_key();
-        self.file_manager.remove(id);
+        if let Some(workspace) = self.file_manager.remove(id) {
+            workspace.update(cx, |workspace, _| {
+                workspace.left.completion.reset();
+                workspace.right.completion.reset();
+            });
+        }
         if let Some(mut tree) = self.shell.terminal_window_tree() {
             let next = tree.remove_tab(&key);
             self.shell.restore_terminal_window_tree(next);

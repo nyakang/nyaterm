@@ -61,6 +61,7 @@ impl NyaTermApp {
                     if let Ok(home) = result {
                         pane.home_dir = home;
                     }
+                    workspace.refresh_path_completion(pane_id, cx);
                     cx.notify();
                 });
             });

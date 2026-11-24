@@ -7,13 +7,13 @@ use crate::models::{
     TransferBrowserPathMenuKind, TransferBrowserPathMenuState,
 };
 use gpui::{
-    Context, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, SharedString,
+    Context, IntoElement, MouseButton, MouseDownEvent, SharedString,
     StatefulInteractiveElement as _, Window, deferred, div, prelude::*, px, rgb, svg,
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_files::file_browser::listing::natural_compare;
 use nyaterm_files::sftp::SftpFileEntry;
-use nyaterm_ui::{NyaInput, NyaScrollable};
+use nyaterm_ui::{NyaInputShell, NyaScrollable};
 use rust_i18n::t;
 
 /// The browser path bar.
@@ -40,10 +40,11 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
     let history_paths = browser
         .visited_history
         .iter()
-        .take(5)
+        .take(if browser.path_completion_edited { 0 } else { 5 })
         .cloned()
         .collect::<Vec<_>>();
     let palette = chrome.palette;
+    let completion_height = (snapshot.panel_height - metrics.row_height() - 48.).clamp(28., 224.);
     // Built by `begin_transfer_browser_path_edit`, which is the only thing that
     // can set `path_editing`. Render only reads it.
     let path_input = browser
@@ -73,7 +74,48 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         .min_w_0()
                         .flex_1()
                         .text_color(rgb(palette.text))
-                        .child(NyaInput::new(&field).text_size(px(metrics.font_size))),
+                        .child({
+                            let enter = cx.entity();
+                            let tab = cx.entity();
+                            let escape = cx.entity();
+                            NyaInputShell::new("transfer-path-completion-input", &field)
+                                .bare()
+                                .height(px(metrics.control_height))
+                                .on_plain_enter(move |window, cx| {
+                                    enter.update(cx, |panel, cx| {
+                                        panel.with_app(cx, |app, cx| {
+                                            app.submit_transfer_browser_path_edit(window, cx)
+                                        })
+                                    })
+                                })
+                                .on_vertical_navigation(cx.listener(|panel, down, _, cx| {
+                                    panel.with_app(cx, |app, cx| {
+                                        app.transfer.path_completion_mut().move_selection(*down);
+                                        cx.notify();
+                                    })
+                                }))
+                                .on_completion_tab(move |window, cx| {
+                                    tab.update(cx, |panel, cx| {
+                                        panel.with_app(cx, |app, cx| {
+                                            let index = app
+                                                .transfer
+                                                .browser_view()
+                                                .completion
+                                                .presentation
+                                                .selected
+                                                .unwrap_or(0);
+                                            app.accept_transfer_path_candidate(index, window, cx)
+                                        })
+                                    })
+                                })
+                                .on_escape(move |window, cx| {
+                                    escape.update(cx, |panel, cx| {
+                                        panel.with_app(cx, |app, cx| {
+                                            app.escape_transfer_path_completion(window, cx)
+                                        })
+                                    })
+                                })
+                        }),
                 )
                 .into_any_element()
         });
@@ -111,24 +153,6 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             .flex()
                             .items_center()
                             .font_family(crate::features::shell::gpui_code_font_family())
-                            .capture_key_down(cx.listener(
-                                |panel, event: &KeyDownEvent, window, cx| {
-                                    panel.with_app(cx, |this, cx| {
-                                        this.mark_user_activity();
-                                        match event.keystroke.key.as_str() {
-                                            "enter" => {
-                                                cx.stop_propagation();
-                                                this.submit_transfer_browser_path_edit(window, cx);
-                                            }
-                                            "escape" => {
-                                                cx.stop_propagation();
-                                                this.cancel_transfer_browser_path_edit(window, cx);
-                                            }
-                                            _ => {}
-                                        }
-                                    })
-                                },
-                            ))
                             .children(path_input),
                     )
                 })
@@ -199,7 +223,9 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                         .right_0()
                         // Include the history popup in the outside-click boundary.
                         .h(px(metrics.row_height()
-                            + if history_paths.is_empty() {
+                            + if browser.path_completion.visible() {
+                                completion_height
+                            } else if history_paths.is_empty() {
                                 0.
                             } else {
                                 metrics.control_height * history_paths.len() as f32 + 3.
@@ -209,6 +235,42 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                                 this.cancel_transfer_browser_path_edit(window, cx);
                             });
                         }))
+                        .when(browser.path_completion.visible(), |shell| {
+                            let entity = cx.entity();
+                            shell.child(
+                                div()
+                                    .absolute()
+                                    .top(px(metrics.row_height()))
+                                    .left_0()
+                                    .right_0()
+                                    .child(nyaterm_file_browser_gpui::completion::path_candidates(
+                                        "transfer-path-completion",
+                                        &browser.path_completion,
+                                        palette,
+                                        &browser.path_completion_scroll,
+                                        completion_height,
+                                        move |index, expected_path, window, cx| {
+                                            entity.update(cx, |panel, cx| {
+                                                panel.with_app(cx, |app, cx| {
+                                                    if app
+                                                        .transfer
+                                                        .browser_view()
+                                                        .completion
+                                                        .presentation
+                                                        .candidates
+                                                        .get(index)
+                                                        .is_some_and(|c| &c.path == expected_path)
+                                                    {
+                                                        app.accept_transfer_path_candidate(
+                                                            index, window, cx,
+                                                        );
+                                                    }
+                                                })
+                                            });
+                                        },
+                                    )),
+                            )
+                        })
                         .when(!history_paths.is_empty(), |this| {
                             this.child(
                                 div()
@@ -550,6 +612,11 @@ impl NyaTermApp {
         }
         let path = normalized_transfer_browser_path(self.transfer.browser_view().path);
         self.transfer.begin_browser_path_edit(path);
+        let anchor = nyaterm_files::sftp::RemoteFilePath {
+            display_path: self.transfer.browser_view().path.clone(),
+            raw_path_token: self.transfer.browser_view().raw_path_token.clone(),
+        };
+        self.transfer.path_completion_mut().begin(anchor);
         self.forget_text_inputs("transfer.browser.path");
         self.start_transfer_browser_home_dir_job(cx);
         let field = self.text_input(
@@ -558,6 +625,22 @@ impl NyaTermApp {
             TextInputSetup::placeholder(t!("fileExplorer.editPath")),
             cx,
         );
+        field.update(cx, |field, cx| field.enable_position_tracking(cx));
+        self.transfer.path_completion_mut().subscription = Some(cx.subscribe(
+            &field,
+            |app, _, event: &nyaterm_ui::NyaInputPositionChanged, cx| {
+                if !app.transfer.browser_view().path_editing {
+                    return;
+                }
+                if !event.0 {
+                    app.transfer.path_completion_mut().hide();
+                    app.transfer.path_completion_mut().suppressed = false;
+                    app.defer_transfer_panel_snapshot_flush(cx);
+                } else if !app.transfer.browser_view().completion.suppressed {
+                    app.refresh_transfer_path_completion(cx);
+                }
+            },
+        ));
         window.focus(&field.read(cx).focus_handle(), cx);
         // The input is not in the window's dispatch tree until the next paint.
         // Set its selection directly instead of dispatching SelectAll too early.
@@ -608,7 +691,14 @@ impl NyaTermApp {
             return;
         }
         self.mark_user_activity();
-        self.transfer.update_browser_path_draft(text);
+        self.transfer.update_browser_path_draft(text.clone());
+        if let Some(field) = self.existing_text_input("transfer.browser.path")
+            && field.read(cx).value(cx) != text
+        {
+            field.update(cx, |field, cx| field.set_content_silent(&text, cx));
+        }
+        self.transfer.path_completion_mut().changed();
+        self.refresh_transfer_path_completion(cx);
         cx.notify();
     }
 
@@ -617,30 +707,7 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.transfer.browser_view().path_draft.trim().is_empty() {
-            self.transfer
-                .set_browser_status("enter a remote directory path");
-            cx.notify();
-            return;
-        }
-        let path = expand_transfer_browser_home_path(
-            self.transfer.browser_view().path_draft,
-            self.transfer.browser_view().home_dir,
-        );
-        if path == "~" || path.starts_with("~/") || path.starts_with("~\\") {
-            let status = if self.transfer.browser_view().home_dir_pending {
-                "remote home is still resolving".to_string()
-            } else {
-                "remote home is unavailable for this session".to_string()
-            };
-            self.transfer.set_browser_status(status);
-            cx.notify();
-            return;
-        }
-        self.transfer.finish_browser_path_edit();
-        self.forget_text_inputs("transfer.browser.path");
-        self.open_transfer_browser_directory(path, window, cx);
-        self.restore_transfer_browser_focus(window, cx);
+        self.submit_completed_transfer_path(window, cx);
     }
 }
 
@@ -1049,31 +1116,12 @@ fn display_transfer_browser_home_path(path: &str, home_dir: &str) -> String {
     path
 }
 
-fn expand_transfer_browser_home_path(path: &str, home_dir: &str) -> String {
-    let trimmed = path.trim();
-    let home_dir = normalized_transfer_browser_path(home_dir);
-    if home_dir.is_empty() || home_dir == "." {
-        return normalized_transfer_browser_path(trimmed);
-    }
-    if trimmed == "~" {
-        return home_dir;
-    }
-    if let Some(suffix) = trimmed.strip_prefix("~/") {
-        return normalized_transfer_browser_path(&remote_child_path(&home_dir, suffix));
-    }
-    if let Some(suffix) = trimmed.strip_prefix("~\\") {
-        return normalized_transfer_browser_path(&remote_child_path(&home_dir, suffix));
-    }
-    normalized_transfer_browser_path(trimmed)
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::{
         TransferBrowserPathMetrics, build_transfer_browser_breadcrumbs,
-        collapse_transfer_browser_breadcrumbs, expand_transfer_browser_home_path,
-        transfer_browser_child_directories,
+        collapse_transfer_browser_breadcrumbs, transfer_browser_child_directories,
     };
     use nyaterm_files::sftp::{SftpFileEntry, SftpFileType};
 
@@ -1239,44 +1287,6 @@ mod tests {
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
             vec![".hidden", "dir2", "dir10"]
-        );
-    }
-
-    #[test]
-    fn typed_paths_expand_home_and_preserve_unicode_spaces_and_relative_paths() {
-        for (input, expected) in [
-            ("~", "/home/nya"),
-            ("~/中文 folder", "/home/nya/中文 folder"),
-            ("~\\中文 folder", "/home/nya/中文 folder"),
-            (" /var/中文 folder/ ", "/var/中文 folder"),
-            ("../relative dir", "../relative dir"),
-        ] {
-            assert_eq!(
-                expand_transfer_browser_home_path(input, "/home/nya"),
-                expected
-            );
-        }
-        assert_eq!(expand_transfer_browser_home_path("~/dir", ""), "~/dir");
-        assert_eq!(expand_transfer_browser_home_path("~\\dir", ""), "~\\dir");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn typed_windows_paths_preserve_drive_and_unc_roots() {
-        for path in [
-            r"C:\",
-            r"C:\中文 folder",
-            r"\\server\share\",
-            r"\\server\share\中文 folder",
-        ] {
-            assert_eq!(
-                expand_transfer_browser_home_path(path, r"C:\Users\nya"),
-                path
-            );
-        }
-        assert_eq!(
-            expand_transfer_browser_home_path(r"~\中文 folder", r"C:\Users\nya"),
-            r"C:\Users\nya\中文 folder"
         );
     }
 }

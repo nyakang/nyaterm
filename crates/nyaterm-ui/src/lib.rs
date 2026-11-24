@@ -71,8 +71,8 @@ pub use gpui_kit::component::slider::{
 pub use gpui_kit::component::tag::Tag as NyaTag;
 pub use hover_card::NyaHoverCard;
 pub use input::{
-    NyaInput, NyaInputEvent, NyaInputKind, NyaInputLabels, NyaInputShell, NyaInputState,
-    NyaSearchInput, NyaTextArea, set_nya_input_label_provider,
+    NyaInput, NyaInputEvent, NyaInputKind, NyaInputLabels, NyaInputPositionChanged, NyaInputShell,
+    NyaInputState, NyaSearchInput, NyaTextArea, set_nya_input_label_provider,
 };
 pub use markdown::NyaMarkdown;
 pub use menu::{

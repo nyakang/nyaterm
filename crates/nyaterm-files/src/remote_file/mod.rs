@@ -481,6 +481,112 @@ impl RemoteFileService {
         ShellRemote::new(self.config.clone(), self.multiplex.clone(), kind)
     }
 
+    pub(crate) fn encode_completion_suffix(&self, text: &str) -> anyhow::Result<Vec<u8>> {
+        crate::sftp::SftpPathCodec::from_ssh_config(&self.config)?.encode_path(text)
+    }
+
+    pub(crate) fn list_completion_directory(
+        &self,
+        path: &RemoteFilePath,
+        limits: crate::file_browser::completion::CompletionLimits,
+        control: SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<crate::file_browser::completion::CompletionListing> {
+        use crate::file_browser::completion::CompletionListing;
+        // Completion must not probe/select backends or persist preferences.
+        let kind = self
+            .selected_backend()
+            .ok_or_else(|| anyhow::anyhow!("file source unavailable"))?;
+        if kind == RemoteFileBackendKind::Sftp {
+            return self
+                .sftp_service
+                .list_completion_directory(path, limits, control, deadline);
+        }
+        self.require_display_path(path)?;
+        let command = match kind {
+            RemoteFileBackendKind::ScpEnhanced => format!(
+                "LC_ALL=C find {} -mindepth 1 -maxdepth 1 -printf '%f\\0%y\\0%s\\0%T@\\0%m\\0%u\\0%g\\0%p\\0'",
+                shell_quote_path(&path.display_path)
+            ),
+            RemoteFileBackendKind::ScpNormal => format!(
+                "LC_ALL=C ls -la -n {}",
+                shell_quote_path(&path.display_path)
+            ),
+            RemoteFileBackendKind::Sftp => unreachable!(),
+        };
+        let (mut output, mut complete) = self.shell(kind).exec_completion(
+            command,
+            limits.name_bytes,
+            Some(if kind == RemoteFileBackendKind::ScpEnhanced {
+                (0, limits.entries.saturating_mul(8))
+            } else {
+                (b'\n', limits.entries.saturating_add(1))
+            }),
+            control,
+            deadline,
+        )?;
+        if complete {
+            anyhow::ensure!(output.exit_status == Some(0), "directory unavailable");
+        }
+        if kind == RemoteFileBackendKind::ScpEnhanced && !complete {
+            let end = output
+                .stdout
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| **b == 0)
+                .enumerate()
+                .filter(|(n, _)| (n + 1) % 8 == 0)
+                .map(|(_, (i, _))| i + 1)
+                .last()
+                .unwrap_or(0);
+            output.stdout.truncate(end);
+        }
+        if kind == RemoteFileBackendKind::ScpNormal && !complete {
+            output.stdout.truncate(
+                output
+                    .stdout
+                    .iter()
+                    .rposition(|b| *b == b'\n')
+                    .map_or(0, |i| i + 1),
+            );
+        }
+        let mut entries = if kind == RemoteFileBackendKind::ScpEnhanced {
+            parse_enhanced_listing(path, &output.stdout)?
+        } else {
+            parse_normal_listing(path, &output.stdout)?
+        };
+        if entries.len() > limits.entries {
+            entries.truncate(limits.entries);
+            complete = false;
+        }
+        Ok(CompletionListing { entries, complete })
+    }
+
+    pub(crate) fn completion_target_is_directory(
+        &self,
+        path: &RemoteFilePath,
+        control: SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<bool> {
+        let kind = self
+            .selected_backend()
+            .ok_or_else(|| anyhow::anyhow!("file source unavailable"))?;
+        if kind == RemoteFileBackendKind::Sftp {
+            return self
+                .sftp_service
+                .completion_target_is_directory(path, control, deadline);
+        }
+        self.require_display_path(path)?;
+        let (output, _) = self.shell(kind).exec_completion(
+            format!("test -d {}", shell_quote_path(&path.display_path)),
+            1024,
+            None,
+            control,
+            deadline,
+        )?;
+        Ok(output.exit_status == Some(0))
+    }
+
     /// Bounded SFTP-only enumeration; never probes a shell fallback or changes
     /// the file manager's persisted backend preference.
     pub fn list_directory_lightweight(

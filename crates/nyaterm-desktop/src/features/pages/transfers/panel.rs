@@ -48,6 +48,9 @@ pub(in crate::features) struct TransferBrowserPresentation {
     pub terminal_cwd: Option<String>,
     pub home_dir: String,
     pub path_editing: bool,
+    pub path_completion: nyaterm_file_browser_gpui::completion::CompletionPresentation,
+    pub path_completion_scroll: ScrollHandle,
+    pub path_completion_edited: bool,
     pub expanded_children_path: Option<String>,
     /// The filtered, sorted listing straight from the state's memo. A progress batch
     /// leaves the memo alone, so this is a refcount bump on the hot path.
@@ -1037,6 +1040,74 @@ mod tests {
     }
 
     #[test]
+    fn path_completion_in_sidebar_fills_then_navigates_selected_child() {
+        use nyaterm_file_browser_gpui::completion::CompletionStatus;
+        let test_dir = TestConfigDir::new("nyaterm-sidebar-completion");
+        std::fs::create_dir_all(test_dir.path().join("alpha/child")).unwrap();
+        let mut cx = TestAppContext::single();
+        cx.executor().allow_parking();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted_file_browser(&mut cx, test_dir.path());
+        let button = vcx.debug_bounds("transfer-browser-path-edit").unwrap();
+        vcx.simulate_click(button.center(), Modifiers::none());
+        draw_path_fixture(vcx);
+        vcx.simulate_input(&test_dir.path().join("al").display().to_string());
+        let wait_for_candidate = |vcx: &mut VisualTestContext, name: &str| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                draw_path_fixture(vcx);
+                vcx.executor().advance_clock(Duration::from_millis(20));
+                if vcx.update(|_, cx| {
+                    let completion = &app.read(cx).transfer.browser_view().completion.presentation;
+                    completion.status == CompletionStatus::Ready
+                        && completion
+                            .candidates
+                            .first()
+                            .is_some_and(|c| c.label == name)
+                }) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "completion timed out: {name}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait_for_candidate(vcx, "alpha");
+        vcx.update(|_, cx| {
+            assert!(
+                app.read(cx)
+                    .transfer
+                    .browser_view()
+                    .completion
+                    .presentation
+                    .selected
+                    .is_none()
+            );
+        });
+        vcx.simulate_keystrokes("tab");
+        wait_for_candidate(vcx, "child");
+        vcx.update(|_, cx| {
+            let browser = app.read(cx).transfer.browser_view();
+            assert!(browser.path_editing);
+            assert_eq!(browser.path, "/remote");
+            assert!(
+                browser
+                    .path_draft
+                    .ends_with(if cfg!(windows) { "alpha\\" } else { "alpha/" })
+            );
+        });
+        vcx.simulate_keystrokes("down enter");
+        wait_for_browser(vcx, &app);
+        vcx.update(|_, cx| {
+            let browser = app.read(cx).transfer.browser_view();
+            assert!(!browser.path_editing);
+            assert_eq!(
+                browser.path,
+                test_dir.path().join("alpha/child").to_str().unwrap()
+            );
+        });
+    }
+
+    #[test]
     fn path_edit_button_builds_a_focused_selected_input_and_preserves_editing_shortcuts() {
         let test_dir = TestConfigDir::new("nyaterm-path-edit");
         let mut cx = TestAppContext::single();
@@ -1085,6 +1156,19 @@ mod tests {
             );
             assert!(app.read(cx).transfer.browser_view().search.is_empty());
         });
+        vcx.simulate_keystrokes("escape");
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.transfer.browser_view().path_editing);
+            assert!(
+                !app.transfer
+                    .browser_view()
+                    .completion
+                    .presentation
+                    .visible()
+            );
+        });
+        draw_path_fixture(vcx);
         vcx.simulate_keystrokes("escape");
         vcx.update(|window, cx| {
             let app = app.read(cx);

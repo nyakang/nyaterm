@@ -1550,6 +1550,12 @@
     "zoomOut": "축소"
   },
   "fileExplorer": {
+    "pathCompletionLoading": "디렉터리 불러오는 중…",
+    "pathCompletionEmpty": "일치하는 디렉터리가 없습니다",
+    "pathCompletionUnavailable": "디렉터리에 접근할 수 없습니다",
+    "pathCompletionTimeout": "디렉터리 조회 시간이 초과되었습니다",
+    "pathCompletionHome": "홈 디렉터리 확인 중…",
+    "pathCompletionTruncated": "일부 결과만 표시합니다",
     "clipboardEmpty": "파일 클립보드가 비어 있거나 다른 내용으로 바뀌었습니다",
     "clipboardMoving": "잘라낸 항목을 이동 중입니다. 완료될 때까지 기다려 주세요",
     "transferSourceUnavailable": "원본 연결을 사용할 수 없습니다. 다시 연결한 후 시도하세요.",

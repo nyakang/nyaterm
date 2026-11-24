@@ -1550,6 +1550,12 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "pathCompletionLoading": "正在載入目錄…",
+    "pathCompletionEmpty": "沒有符合的目錄",
+    "pathCompletionUnavailable": "無法存取目錄",
+    "pathCompletionTimeout": "目錄查詢逾時",
+    "pathCompletionHome": "正在解析家目錄…",
+    "pathCompletionTruncated": "僅顯示部分結果",
     "clipboardEmpty": "檔案剪貼簿為空或已被取代",
     "clipboardMoving": "選取的剪下項目正在移動，請等待完成",
     "transferSourceUnavailable": "來源連線無法使用，請重新連線後重試。",

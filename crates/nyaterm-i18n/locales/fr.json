@@ -1550,6 +1550,12 @@
     "zoomOut": "Zoom arrière"
   },
   "fileExplorer": {
+    "pathCompletionLoading": "Chargement des dossiers…",
+    "pathCompletionEmpty": "Aucun dossier correspondant",
+    "pathCompletionUnavailable": "Dossier inaccessible",
+    "pathCompletionTimeout": "La recherche de dossiers a expiré",
+    "pathCompletionHome": "Résolution du dossier personnel…",
+    "pathCompletionTruncated": "Résultats partiels",
     "clipboardEmpty": "Le presse-papiers de fichiers est vide ou a été remplacé",
     "clipboardMoving": "Les éléments coupés sont déjà en cours de déplacement ; attendez la fin",
     "transferSourceUnavailable": "La connexion source est indisponible. Reconnectez-vous et réessayez.",

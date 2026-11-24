@@ -1550,6 +1550,12 @@
     "zoomOut": "Zoom Out"
   },
   "fileExplorer": {
+    "pathCompletionLoading": "Loading directories…",
+    "pathCompletionEmpty": "No matching directories",
+    "pathCompletionUnavailable": "Directory unavailable",
+    "pathCompletionTimeout": "Directory lookup timed out",
+    "pathCompletionHome": "Resolving home directory…",
+    "pathCompletionTruncated": "Showing partial results",
     "clipboardEmpty": "The file clipboard is empty or has been replaced",
     "clipboardMoving": "The cut items are already being moved; wait for completion",
     "transferSourceUnavailable": "The source connection is unavailable. Reconnect and try again.",

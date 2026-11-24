@@ -1550,6 +1550,12 @@
     "zoomOut": "縮小"
   },
   "fileExplorer": {
+    "pathCompletionLoading": "ディレクトリを読み込み中…",
+    "pathCompletionEmpty": "一致するディレクトリがありません",
+    "pathCompletionUnavailable": "ディレクトリにアクセスできません",
+    "pathCompletionTimeout": "ディレクトリ検索がタイムアウトしました",
+    "pathCompletionHome": "ホームディレクトリを確認中…",
+    "pathCompletionTruncated": "一部の結果を表示しています",
     "clipboardEmpty": "ファイルのクリップボードは空か、置き換えられています",
     "clipboardMoving": "切り取った項目を移動中です。完了するまでお待ちください",
     "transferSourceUnavailable": "接続元を利用できません。再接続して再試行してください。",

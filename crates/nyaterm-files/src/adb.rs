@@ -226,6 +226,92 @@ impl AdbFileService {
             })
             .collect()
     }
+    pub(crate) fn completion_target_is_directory(
+        &self,
+        path: &RemoteFilePath,
+        control: &SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<bool> {
+        let mut raw = raw_path(path)?;
+        // A trailing separator resolves directory symlinks even with LST2.
+        if !raw.ends_with(b"/") {
+            raw.push(b'/');
+        }
+        let check = || {
+            self.check_transfer(control)?;
+            if std::time::Instant::now() >= deadline {
+                return Err(AdbError::Timeout);
+            }
+            Ok(())
+        };
+        Ok(self
+            .runtime
+            .with_sync(check, |stream| stream.stat_with_cancel(&raw, check))?
+            .mode
+            & 0o170000
+            == 0o040000)
+    }
+
+    pub(crate) fn list_completion_directory(
+        &self,
+        path: &RemoteFilePath,
+        limits: crate::file_browser::completion::CompletionLimits,
+        control: &SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<crate::file_browser::completion::CompletionListing> {
+        use crate::file_browser::completion::CompletionListing;
+        let parent = raw_path(path)?;
+        let mut listing = CompletionListing {
+            entries: Vec::new(),
+            complete: true,
+        };
+        let mut bytes = 0usize;
+        let check = || {
+            self.check_transfer(control)?;
+            if std::time::Instant::now() >= deadline {
+                return Err(AdbError::Timeout);
+            }
+            Ok(())
+        };
+        let result = self.runtime.with_sync(check, |stream| {
+            stream.list_visit_with_cancel(&parent, check, |entry| {
+                if listing.entries.len() >= limits.entries
+                    || bytes.saturating_add(entry.name.len()) > limits.name_bytes
+                {
+                    listing.complete = false;
+                    return Err(AdbError::Protocol("completion budget"));
+                }
+                if entry.name.is_empty() || entry.name.contains(&b'/') || entry.name.contains(&0) {
+                    return Err(AdbError::Protocol("file name"));
+                }
+                bytes += entry.name.len();
+                let mut raw = parent.clone();
+                if raw.last() != Some(&b'/') {
+                    raw.push(b'/');
+                }
+                raw.extend_from_slice(&entry.name);
+                let path = RemoteFilePath::from_raw(String::from_utf8_lossy(&raw), &raw);
+                listing.entries.push(SftpFileEntry {
+                    name: String::from_utf8_lossy(&entry.name).into_owned(),
+                    path: path.display_path,
+                    raw_path_token: path.raw_path_token,
+                    file_type: kind(entry.stat.mode),
+                    size: None,
+                    permissions: None,
+                    modified_at: None,
+                    owner: String::new(),
+                    group: String::new(),
+                    symlink_target_is_directory: false,
+                });
+                Ok(())
+            })
+        });
+        if listing.complete {
+            result?;
+        }
+        Ok(listing)
+    }
+
     pub fn remote_file_properties(
         &self,
         path: &RemoteFilePath,

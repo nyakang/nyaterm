@@ -138,6 +138,45 @@ impl FtpFileService {
     pub fn list_dir(&self, path: &str) -> Result<Vec<FtpEntry>, FtpError> {
         self.list_dir_with_control(path, &SftpTransferControl::new())
     }
+    pub(crate) fn completion_target_is_directory(
+        &self,
+        path: &str,
+        control: &SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> Result<bool, FtpError> {
+        validate_path(path)?;
+        let path = format!("{}/", path.trim_end_matches('/'));
+        let mut lease = self.lock_stream_until(control, Some(deadline))?;
+        // Never change the shared connection's CWD just to inspect a link.
+        let line = lease.command(|stream| stream.mlst(Some(&path)))?;
+        Ok(entry_from_mlst_line(&line, &path).is_some_and(|entry| entry.is_directory()))
+    }
+
+    pub(crate) fn list_completion_directory(
+        &self,
+        path: &crate::sftp::RemoteFilePath,
+        limits: crate::file_browser::completion::CompletionLimits,
+        control: &SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<crate::file_browser::completion::CompletionListing> {
+        use crate::file_browser::completion::CompletionListing;
+        validate_path(&path.display_path)?;
+        let mut lease = self.lock_stream_until(control, Some(deadline))?;
+        let mut result =
+            completion_list(&mut lease, &path.display_path, self.encoding, true, limits);
+        if matches!(result, Err(FtpError::Protocol(_))) {
+            result = completion_list(&mut lease, &path.display_path, self.encoding, false, limits);
+        }
+        let (entries, complete) = result?;
+        Ok(CompletionListing {
+            entries: entries
+                .iter()
+                .map(crate::file_browser::entry_from_ftp_entry)
+                .collect(),
+            complete,
+        })
+    }
+
     pub fn stat(&self, path: &str) -> Result<FtpEntry, FtpError> {
         self.stat_with_control(path, &SftpTransferControl::new())
     }
@@ -673,4 +712,75 @@ fn list(
         Ok(entries)
     })();
     lease.complete(data, result)
+}
+
+// Unlike full listings, completion stops receiving at its budget. ABOR plus the
+// existing NOOP fence consumes completion replies before the lease is reused.
+fn completion_list(
+    lease: &mut Lease<'_>,
+    path: &str,
+    encoding: CharacterEncoding,
+    machine: bool,
+    limits: crate::file_browser::completion::CompletionLimits,
+) -> Result<(Vec<FtpEntry>, bool), FtpError> {
+    let verb = if machine { "MLSD" } else { "LIST" };
+    let (_, mut data) = lease.command(|stream| {
+        stream.custom_data_command(
+            format!("{verb} {path}"),
+            &[Status::AboutToSend, Status::AlreadyOpen],
+        )
+    })?;
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; CHUNK_BYTES];
+    let mut complete = true;
+    let result = (|| {
+        let mut lines = 0usize;
+        loop {
+            lease.watch.check()?;
+            let read = data.read(&mut chunk).map_err(io_error)?;
+            if read == 0 {
+                break;
+            }
+            lease.watch.progress();
+            for byte in &chunk[..read] {
+                if bytes.len() >= limits.name_bytes || lines >= limits.entries {
+                    complete = false;
+                    return Err(FtpError::LimitExceeded);
+                }
+                bytes.push(*byte);
+                if *byte == b'\n' {
+                    lines += 1;
+                }
+            }
+        }
+        Ok(())
+    })();
+    let finished = lease.complete(data, result);
+    if complete {
+        finished?;
+    } else {
+        if !matches!(finished, Err(FtpError::LimitExceeded)) {
+            finished?;
+        }
+        // A truncated line is not a directory entry, especially in multibyte encodings.
+        bytes.truncate(bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1));
+    }
+    let (text, _, invalid) = encoding.codec().decode(&bytes);
+    if invalid {
+        return Err(FtpError::UnsupportedEncoding);
+    }
+    let lines: Vec<_> = text.lines().map(str::to_owned).collect();
+    let entries = entries_from_lines(&lines, path, machine);
+    if machine && !lines.is_empty() && entries.is_empty() {
+        return Err(FtpError::Protocol("unsupported listing".into()));
+    }
+    for entry in &entries {
+        if !crate::file_browser::valid_file_browser_child_name(
+            crate::file_browser::FileBrowserBackendKind::Remote,
+            &entry.name,
+        ) {
+            return Err(FtpError::InvalidPath);
+        }
+    }
+    Ok((entries, complete))
 }

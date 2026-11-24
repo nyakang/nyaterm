@@ -5,6 +5,7 @@ rust_i18n::i18n!(
     fallback = "en",
     backend = SharedCatalogBackend
 );
+pub mod completion;
 pub mod editor;
 pub mod formatting;
 pub mod path_navigation;

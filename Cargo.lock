@@ -12064,7 +12064,7 @@ dependencies = [
 [[package]]
 name = "suppaftp"
 version = "13.0.0"
-source = "git+https://github.com/nyakang/suppaftp?rev=6e91f7ab21b8d9f136a997d51cbd1e4591ba8147#6e91f7ab21b8d9f136a997d51cbd1e4591ba8147"
+source = "git+https://github.com/nyakang/suppaftp?rev=8a9882d1f591711cd83fad3ca370b14a44623025#8a9882d1f591711cd83fad3ca370b14a44623025"
 dependencies = [
  "jiff 1.0.1",
  "lazy-regex",

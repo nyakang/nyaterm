@@ -254,7 +254,7 @@ opt-level = 1
 # IronRDP crate to that one path so client, helper and their siblings resolve
 # to a single copy and their traits unify.
 ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
-suppaftp = { git = "https://github.com/nyakang/suppaftp", rev = "6e91f7ab21b8d9f136a997d51cbd1e4591ba8147" }
+suppaftp = { git = "https://github.com/nyakang/suppaftp", rev = "8a9882d1f591711cd83fad3ca370b14a44623025" }
 # Keep Picky and its ASN.1 types on the same stable-RSA fork revision.
 picky = { version = "=7.0.0-rc.29", git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }

@@ -301,6 +301,10 @@ impl NyaTermApp {
                         }
                     }
                     NyaInputEvent::Blurred(_) => {
+                        if subscription_id.as_ref() == "transfer.browser.path" {
+                            app.transfer.path_completion_mut().hide();
+                            app.defer_transfer_panel_snapshot_flush(cx);
+                        }
                         if let Some(host) = subscription_id.strip_prefix("tmux.command.") {
                             app.on_tmux_command_blurred(host, cx);
                         }

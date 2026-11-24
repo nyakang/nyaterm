@@ -1,7 +1,6 @@
 use super::pane::PaneId;
 use super::workspace::FileManagerWorkspace;
 use gpui::{AppContext as _, Context, Entity, Window};
-use nyaterm_files::sftp::RemoteFilePath;
 use nyaterm_ui::{NyaInputEvent, NyaInputState};
 
 pub(super) struct FileManagerPaneInputs {
@@ -12,7 +11,11 @@ pub(super) struct FileManagerPaneInputs {
 impl FileManagerPaneInputs {
     pub(super) fn new(cx: &mut Context<FileManagerWorkspace>) -> Self {
         Self {
-            path: cx.new(|cx| NyaInputState::new(cx, "").submit_on_enter(true)),
+            path: cx.new(|cx| {
+                NyaInputState::new(cx, "")
+                    .submit_on_enter(true)
+                    .track_position()
+            }),
             search: cx.new(|cx| {
                 NyaInputState::new(cx, "")
                     .placeholder(rust_i18n::t!("fileExplorer.searchPlaceholder"))
@@ -25,68 +28,37 @@ impl FileManagerWorkspace {
     pub(super) fn install_input_subscriptions(&mut self, cx: &mut Context<Self>) {
         for pane in [PaneId::Left, PaneId::Right] {
             let path = self.inputs(pane).path.clone();
-            self.input_subscriptions
-                .push(cx.subscribe(&path, move |this, _, event, cx| {
-                    if let NyaInputEvent::Submitted(value) = event {
-                        if !this.pane(pane).path_editing {
-                            return;
+            self.input_subscriptions.push(cx.subscribe(
+                &path,
+                move |this, _, event, cx| match event {
+                    NyaInputEvent::Changed(_) => {
+                        if this.pane(pane).path_editing {
+                            this.pane_mut(pane).completion.changed();
+                            this.refresh_path_completion(pane, cx);
                         }
-                        let endpoint = this.pane(pane).endpoint.clone();
-                        let id = this.id.clone();
-                        let app = this.app.clone();
-                        let workspace = cx.weak_entity();
-                        let value = value.as_str();
-                        if value.trim().is_empty() {
-                            return;
-                        }
-                        let value = if value == "~"
-                            || value.starts_with("~/")
-                            || value.starts_with("~\\")
-                        {
-                            let home = &this.pane(pane).home_dir;
-                            if home.is_empty() {
-                                this.pane_mut(pane).error = Some(
-                                    if this.pane(pane).home_dir_pending {
-                                        "home directory is still resolving"
-                                    } else {
-                                        "home directory is unavailable for this source"
-                                    }
-                                    .to_string(),
-                                );
-                                cx.notify();
-                                return;
-                            }
-                            if value == "~" {
-                                home.clone()
-                            } else {
-                                nyaterm_files::file_browser::file_browser_join(
-                                    this.pane(pane).endpoint.kind(),
-                                    home,
-                                    &value[2..],
-                                )
-                            }
-                        } else {
-                            value.to_string()
-                        };
-                        let path = if value == this.pane(pane).path.display_path {
-                            this.pane(pane).path.clone()
-                        } else {
-                            RemoteFilePath::new(value.clone())
-                        };
-                        this.focus_pending = true;
-                        this.pane_mut(pane).path_editing = false;
-                        cx.defer(move |cx| {
-                            if let Some(workspace) = workspace.upgrade()
-                                && workspace.read(cx).pane(pane).endpoint == endpoint
-                            {
-                                let _ = app.update(cx, |app, cx| {
-                                    app.navigate_file_manager_pane(id, pane, path, cx)
-                                });
-                            }
-                        });
+                    }
+                    NyaInputEvent::Submitted(_) => this.submit_path_edit(pane, cx),
+                    NyaInputEvent::Blurred(_) => {
+                        this.pane_mut(pane).completion.hide();
                         cx.notify();
                     }
-                }));
+                },
+            ));
+            self.input_subscriptions.push(cx.subscribe(
+                &path,
+                move |this, _, event: &nyaterm_ui::NyaInputPositionChanged, cx| {
+                    if !this.pane(pane).path_editing {
+                        return;
+                    }
+                    if !event.0 {
+                        this.pane_mut(pane).completion.hide();
+                        this.pane_mut(pane).completion.suppressed = false;
+                        cx.notify();
+                    } else if !this.pane(pane).completion.suppressed {
+                        this.refresh_path_completion(pane, cx);
+                    }
+                },
+            ));
             let search = self.inputs(pane).search.clone();
             self.input_subscriptions
                 .push(cx.subscribe(&search, move |this, _, event, cx| {
@@ -112,7 +84,11 @@ impl FileManagerWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A new edit takes precedence over deferred focus restoration after navigation.
+        self.focus_pending = false;
         self.active = pane;
+        let anchor = self.pane(pane).path.clone();
+        self.pane_mut(pane).completion.begin(anchor);
         let path = self.pane(pane).path.display_path.clone();
         self.pane_mut(pane).path_menu = None;
         self.pane_mut(pane).path_editing = true;
@@ -144,6 +120,7 @@ impl FileManagerWorkspace {
     ) {
         self.active = pane;
         self.pane_mut(pane).path_editing = false;
+        self.pane_mut(pane).completion.reset();
         self.pane_mut(pane).path_menu = None;
         self.pane_mut(pane).search_expanded = true;
         if let Some(text) = initial {

@@ -138,6 +138,7 @@ pub(in crate::features) struct TransferBrowserView<'a> {
     pub home_dir_pending: bool,
     pub path_draft: &'a String,
     pub path_editing: bool,
+    pub completion: &'a crate::features::path_completion::PathCompletionState,
     pub entries: &'a Arc<Vec<SftpFileEntry>>,
     pub loading: bool,
     pub error: &'a Option<String>,
@@ -173,6 +174,7 @@ pub(super) struct TransferBrowserState {
     pub(super) home_dir_pending: bool,
     pub(super) path_draft: String,
     pub(super) path_editing: bool,
+    pub(super) completion: crate::features::path_completion::PathCompletionState,
     /// Shared, and always replaced whole.
     ///
     /// The browser listing is swapped in and out of caches and navigation snapshots,
@@ -400,6 +402,7 @@ impl TransferFeatureState {
                 home_dir_pending: false,
                 path_draft: String::new(),
                 path_editing: false,
+                completion: Default::default(),
                 entries: Arc::new(Vec::new()),
                 loading: false,
                 error: None,

@@ -157,6 +157,13 @@ impl NyaTermApp {
         self.ai.invalidate_provider_jobs();
         self.ai.cancel_all_chats_and_agents();
         let agent_worker = self.ai.shutdown_agent_management_worker();
+        self.transfer.path_completion_mut().reset();
+        for workspace in self.file_manager.all_workspaces() {
+            workspace.update(cx, |workspace, _| {
+                workspace.left.completion.reset();
+                workspace.right.completion.reset();
+            });
+        }
         let stop_jobs = self.blocking_jobs.begin_shutdown();
         let stop_transfers = self.transfer.begin_bulk_shutdown();
         let ssh_connections = self.session.ssh_connection_pool();

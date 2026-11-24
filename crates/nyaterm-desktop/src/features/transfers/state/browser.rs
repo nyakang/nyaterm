@@ -26,6 +26,12 @@ pub(in crate::features) struct TransferSessionTransferBundle {
 }
 
 impl TransferFeatureState {
+    pub(in crate::features) fn path_completion_mut(
+        &mut self,
+    ) -> &mut crate::features::path_completion::PathCompletionState {
+        &mut self.browser.completion
+    }
+
     pub(in crate::features) fn detach_sessions_for_transfer(
         &mut self,
         session_ids: &[String],
@@ -60,6 +66,7 @@ impl TransferFeatureState {
             home_dir_pending: self.browser.home_dir_pending,
             path_draft: &self.browser.path_draft,
             path_editing: self.browser.path_editing,
+            completion: &self.browser.completion,
             entries: &self.browser.entries,
             loading: self.browser.loading,
             error: &self.browser.error,
@@ -404,11 +411,13 @@ impl TransferFeatureState {
     pub(in crate::features) fn finish_browser_path_edit(&mut self) {
         self.browser.path_draft.clear();
         self.browser.path_editing = false;
+        self.browser.completion.reset();
         self.browser.pending_cwd_sync = false;
     }
 
     pub(in crate::features) fn dismiss_browser_path_edit(&mut self) {
         self.browser.path_editing = false;
+        self.browser.completion.reset();
     }
 
     pub(in crate::features) fn open_browser_favorites_menu(
@@ -474,6 +483,7 @@ impl TransferFeatureState {
         self.browser.home_dir_pending = false;
         self.browser.path_draft.clear();
         self.browser.path_editing = false;
+        self.browser.completion.reset();
         self.browser.entries = cache.entries;
         self.browser.loading = false;
         self.browser.error = None;
@@ -505,6 +515,7 @@ impl TransferFeatureState {
         self.browser.home_dir_pending = false;
         self.browser.path_draft.clear();
         self.browser.path_editing = false;
+        self.browser.completion.reset();
         self.browser.entries = Arc::new(Vec::new());
         self.browser.loading = false;
         self.browser.error = None;
@@ -533,6 +544,7 @@ impl TransferFeatureState {
         self.browser.raw_path_token = path.raw_path_token;
         self.browser.path_draft.clear();
         self.browser.path_editing = false;
+        self.browser.completion.reset();
         self.browser.pending_cwd_sync = false;
         self.browser.path_menu = None;
         self.browser.selected_remote_path = None;
@@ -934,6 +946,7 @@ impl TransferBrowserState {
     fn cancel_path_edit(&mut self) {
         self.path_draft.clear();
         self.path_editing = false;
+        self.completion.reset();
         self.status = "remote directory path edit cancelled".to_string();
     }
 
