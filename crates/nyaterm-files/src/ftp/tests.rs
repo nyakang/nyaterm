@@ -1682,3 +1682,37 @@ fn cancelling_after_uploading_a_chunk_keeps_the_old_destination() {
     assert_eq!(result.unwrap_err().to_string(), SFTP_TRANSFER_CANCELLED);
     assert_eq!(server.read("/file").unwrap(), b"original");
 }
+
+#[test]
+fn path_completion_budget_aborts_and_fences_before_the_next_listing() {
+    use crate::file_browser::completion::CompletionLimits;
+    let server = TreeServer::start(vec![
+        ("/alpha", FakeNode::Directory),
+        ("/beta", FakeNode::Directory),
+        ("/file", FakeNode::File(vec![])),
+    ]);
+    let service = FtpFileService::connect(
+        server.config(),
+        FtpLogin::Anonymous {
+            username: "anonymous".into(),
+        },
+    )
+    .unwrap();
+    let listing = service
+        .list_completion_directory(
+            &RemoteFilePath::new("/"),
+            CompletionLimits {
+                entries: 1,
+                name_bytes: 1024,
+            },
+            &SftpTransferControl::new(),
+            std::time::Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(!listing.complete);
+    assert_eq!(listing.entries.len(), 1);
+    assert_eq!(service.list_dir("/").unwrap().len(), 3);
+    let commands = server.commands();
+    assert!(commands.iter().any(|c| c.starts_with("ABOR")));
+    assert!(commands.iter().any(|c| c.starts_with("NOOP")));
+}

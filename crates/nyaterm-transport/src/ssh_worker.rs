@@ -172,7 +172,9 @@ pub(crate) fn run_ssh_worker(
     tmux_active: Arc<AtomicBool>,
     sessions: Arc<Mutex<HashMap<String, ManagedSession>>>,
 ) {
+    // Each session owns a runtime; keep its I/O workers independent of CPU count.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .thread_name("nyaterm-ssh")
         .build()

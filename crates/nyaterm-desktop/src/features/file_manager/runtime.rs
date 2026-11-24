@@ -288,6 +288,31 @@ impl NyaTermApp {
         path: &RemoteFilePath,
         cx: &mut Context<Self>,
     ) {
+        // A mutation can affect a completion's parent even when the pane is
+        // currently displaying another directory. Invalidate editor caches too.
+        for workspace in self.file_manager.all_workspaces() {
+            workspace.update(cx, |workspace, cx| {
+                for pane in [PaneId::Left, PaneId::Right] {
+                    if workspace.pane(pane).endpoint == *endpoint {
+                        workspace.pane_mut(pane).completion.hide();
+                        workspace.pane_mut(pane).completion.suppressed = false;
+                        workspace.refresh_path_completion(pane, cx);
+                    }
+                }
+            });
+        }
+        if self
+            .transfer
+            .browser_view()
+            .completion
+            .source
+            .as_ref()
+            .is_some_and(|(source, _, _)| source == endpoint)
+        {
+            self.transfer.path_completion_mut().hide();
+            self.transfer.path_completion_mut().suppressed = false;
+            self.refresh_transfer_path_completion(cx);
+        }
         let backend = self.file_browser_backend_for_endpoint(endpoint);
         let targets: Vec<_> = self
             .file_manager

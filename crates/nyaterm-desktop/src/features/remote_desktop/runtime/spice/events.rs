@@ -137,6 +137,7 @@ impl NyaTermApp {
         {
             return;
         }
+        session.texture_window = Some(window.window_handle());
         match crate::features::remote_desktop::runtime::framebuffer::upload_prepared_frame(
             window,
             &mut session.texture,
@@ -223,7 +224,7 @@ impl NyaTermApp {
                 cx.notify();
             }
             SpiceControl::ClipboardOffer { text } => {
-                let allowed = !self.security.screen_locked() && self.session.active_id() == Some(id) && self.session.metadata(id).is_some_and(|m| matches!(&m.launch_config, SessionLaunchConfig::Spice(config) if config.session.settings.clipboard.can_receive()));
+                let allowed = !self.security.screen_locked() && !self.remote_desktop.fullscreen_window.is_some_and(|host| cx.active_window() == Some(host.into())) && self.session.active_id() == Some(id) && self.session.metadata(id).is_some_and(|m| matches!(&m.launch_config, SessionLaunchConfig::Spice(config) if config.session.settings.clipboard.can_receive()));
                 if allowed
                     && session
                         .clipboard
@@ -269,7 +270,12 @@ impl NyaTermApp {
                     spice.displayed = None;
                     session.framebuffer = None;
                     if let Some(texture) = session.texture.take() {
-                        self.remote_desktop.pending_texture_removals.push(texture);
+                        self.remote_desktop.pending_texture_removals.push(
+                            crate::features::remote_desktop::state::PendingTextureRemoval {
+                                owner: session.texture_window,
+                                texture,
+                            },
+                        );
                     }
                 }
             }

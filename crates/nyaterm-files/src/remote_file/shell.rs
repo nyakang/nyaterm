@@ -24,6 +24,94 @@ pub(super) struct ShellRemote {
 }
 
 impl ShellRemote {
+    pub(super) fn exec_completion(
+        &self,
+        command: String,
+        limit: usize,
+        records: Option<(u8, usize)>,
+        control: crate::sftp::SftpTransferControl,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<(ShellOutput, bool)> {
+        let multiplex = self.multiplex.clone();
+        let config = self.config.clone();
+        let operation = async move {
+            let run = async {
+                let owner = SshChannelConnection::connect(&config, multiplex.as_ref()).await?;
+                let mut channel = owner.open_session().await?;
+                let result = async {
+                    channel.exec(true, command.into_bytes()).await?;
+                    channel.eof().await?;
+                    let mut output = ShellOutput::default();
+                    let mut eof = false;
+                    let mut complete = true;
+                    let mut delimiters = 0usize;
+                    loop {
+                        let message = control.until_cancelled(channel.wait()).await?;
+                        let incoming = match &message {
+                            Some(
+                                ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. },
+                            ) => data.len(),
+                            _ => 0,
+                        };
+                        if output
+                            .stdout
+                            .len()
+                            .saturating_add(output.stderr.len())
+                            .saturating_add(incoming)
+                            > limit
+                        {
+                            // Retain only the bounded stdout prefix; the parser ignores its final partial record.
+                            if let Some(ChannelMsg::Data { data }) = &message {
+                                let available =
+                                    limit.saturating_sub(output.stdout.len() + output.stderr.len());
+                                output
+                                    .stdout
+                                    .extend_from_slice(&data[..available.min(data.len())]);
+                            }
+                            complete = false;
+                            break;
+                        }
+                        if let (Some((delimiter, maximum)), Some(ChannelMsg::Data { data })) =
+                            (records, &message)
+                            && let Some(index) = data.iter().position(|byte| {
+                                if *byte == delimiter {
+                                    delimiters += 1;
+                                }
+                                delimiters > maximum
+                            })
+                        {
+                            output.stdout.extend_from_slice(&data[..index]);
+                            complete = false;
+                            break;
+                        }
+                        if !apply_channel_message(&mut output, &mut eof, message) {
+                            break;
+                        }
+                    }
+                    Ok((output, complete))
+                }
+                .await;
+                let _ = tokio::time::timeout(Duration::from_millis(200), channel.close()).await;
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(200),
+                    owner.close("directory completion completed"),
+                )
+                .await;
+                result
+            };
+            tokio::time::timeout(
+                deadline.saturating_duration_since(std::time::Instant::now()),
+                control.until_cancelled(run),
+            )
+            .await??
+        };
+        if let Some(multiplex) = self.multiplex.as_ref() {
+            multiplex.block_on(operation)
+        } else {
+            nyaterm_transport::ssh_execution::run_ssh_exec_operation(operation)
+        }
+    }
+
     pub(super) fn new(
         config: SshSessionConfig,
         multiplex: Option<SshMultiplexHandle>,

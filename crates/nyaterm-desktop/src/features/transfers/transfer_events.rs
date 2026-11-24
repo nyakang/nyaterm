@@ -1768,6 +1768,13 @@ impl NyaTermApp {
         {
             self.open_transfer_default(entry, window, cx);
         }
+        if self.transfer.browser_view().path_editing
+            && !self.transfer.browser_view().home_dir_pending
+            && self.transfer.browser_view().completion.presentation.status
+                == nyaterm_file_browser_gpui::completion::CompletionStatus::WaitingHome
+        {
+            self.refresh_transfer_path_completion(cx);
+        }
         if browser_listing_completed
             && let Some(session_id) = job_session_id.as_deref()
             && let Some(backend) = self

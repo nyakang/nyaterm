@@ -10,7 +10,10 @@ use std::time::Instant;
 
 use crate::models::event_wake::{ANY_INTEREST, EventWake};
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui::{Bounds, DynamicTexture, FocusHandle, Pixels, Subscription};
+use gpui::{
+    AnyWindowHandle, App, AppContext as _, Bounds, DynamicTexture, FocusHandle, Pixels,
+    Subscription, Window,
+};
 use nyaterm_remote_desktop::{
     CertificatePromptReason, ClipboardTracker, CursorPosition, CursorShape, KeyMapper,
     RdpCapability, RdpCertificateRequest, RdpDisplayMetrics, RdpError, RdpErrorKind,
@@ -32,13 +35,20 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     pub(in crate::features) restore_pending: Option<String>,
     pub(super) inputs: HashMap<String, gpui::Entity<super::input::RemoteDesktopInput>>,
     pub(super) surfaces: HashMap<String, gpui::Entity<super::surface::RemoteDesktopSurface>>,
+    /// Session currently shown fullscreen. Kept here so Ctrl+Shift+Alt+F11,
+    /// the session menu and window close all unwind the same state instead of
+    /// leaving stale fullscreen state behind.
+    pub(super) fullscreen_session: Option<String>,
+    /// Handle of the detached fullscreen window hosting `fullscreen_session`.
+    /// `None` while the session renders in the normal workspace pane.
+    pub(super) fullscreen_window: Option<nyaterm_ui::NyaWindowHandle>,
     pub(super) drain_cursor: usize,
     pub(super) last_clipboard_poll: Option<Instant>,
     pub(super) metrics_enabled: bool,
     pub(super) metrics_last_report: Instant,
     pub(super) metrics_control_events: usize,
     pub(super) metrics_frame_updates: usize,
-    pub(super) pending_texture_removals: Vec<DynamicTexture>,
+    pub(super) pending_texture_removals: Vec<PendingTextureRemoval>,
     pub(super) focus_subscriptions: Vec<Subscription>,
     pub(super) spice_pointer_capture: Option<spice::SpicePointerCapture>,
     /// Signalled by both session managers after they enqueue. Taken once by
@@ -47,8 +57,34 @@ pub(in crate::features) struct RemoteDesktopFeatureState {
     wake_rx: Option<UnboundedReceiver<()>>,
     /// True while the periodic-maintenance clock task is alive.
     periodic_clock_armed: bool,
+    /// True while a one-shot short timer is scheduled to flush a coalesced
+    /// pointer move. Separates pointer responsiveness from the 100 ms
+    /// maintenance cadence so a trailing move never waits a full tick.
+    pub(super) pointer_flush_scheduled: bool,
     #[cfg(windows)]
     pub(super) native_shutting_down: bool,
+}
+
+/// A texture must be released from the atlas that allocated it, even after
+/// its session moves to another window or is removed.
+pub(super) struct PendingTextureRemoval {
+    pub(super) owner: Option<AnyWindowHandle>,
+    pub(super) texture: DynamicTexture,
+}
+
+impl PendingTextureRemoval {
+    pub(super) fn remove(self, window: &mut Window, cx: &mut App) {
+        if let Some(owner) = self.owner.filter(|owner| *owner != window.window_handle()) {
+            cx.defer(move |cx| {
+                // Closing a window already drops its atlas.
+                let _ = cx.update_window(owner, |_, window, _| {
+                    window.remove_dynamic_texture(self.texture);
+                });
+            });
+        } else {
+            window.remove_dynamic_texture(self.texture);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -70,6 +106,7 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) state: RemoteDesktopViewState,
     pub(super) framebuffer: Option<RemoteDesktopFrameSource>,
     pub(super) texture: Option<DynamicTexture>,
+    pub(super) texture_window: Option<AnyWindowHandle>,
     pub(super) texture_dirty: bool,
     /// Scratch buffer for packing dirty rectangles before texture uploads.
     ///
@@ -131,6 +168,7 @@ impl Default for RemoteDesktopSessionState {
             state: RemoteDesktopViewState::Connecting,
             framebuffer: None,
             texture: None,
+            texture_window: None,
             texture_dirty: false,
             upload_staging: Vec::new(),
             uploads_stopped: false,
@@ -207,16 +245,42 @@ impl RemoteDesktopFeatureState {
             .collect()
     }
 
+    pub(super) fn invalidate_session_textures(&mut self, session_id: &str) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            for texture in [session.texture.take(), session.cursor_texture.take()]
+                .into_iter()
+                .flatten()
+            {
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
+            }
+            session.texture_window = None;
+            session.texture_dirty = session.framebuffer.is_some();
+        }
+        self.wake.signal(ANY_INTEREST);
+    }
+
     pub(in crate::features) fn release_inactive_textures(&mut self, active: &str) {
         for (id, session) in &mut self.sessions {
-            if id == active {
+            if id == active
+                || (self.fullscreen_window.is_some()
+                    && self.fullscreen_session.as_deref() == Some(id.as_str()))
+            {
                 continue;
             }
             if let Some(texture) = session.texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
             if let Some(texture) = session.cursor_texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
             session.cursor_repaint_pending = false;
             #[cfg(windows)]
@@ -317,6 +381,8 @@ impl RemoteDesktopFeatureState {
             restore_pending: None,
             inputs: HashMap::new(),
             surfaces: HashMap::new(),
+            fullscreen_session: None,
+            fullscreen_window: None,
             drain_cursor: 0,
             last_clipboard_poll: None,
             metrics_enabled: std::env::var("NYATERM_RDP_METRICS").as_deref() == Ok("1"),
@@ -329,6 +395,7 @@ impl RemoteDesktopFeatureState {
             wake,
             wake_rx: Some(wake_rx),
             periodic_clock_armed: false,
+            pointer_flush_scheduled: false,
             #[cfg(windows)]
             native_shutting_down: false,
         }
@@ -457,14 +524,26 @@ impl RemoteDesktopFeatureState {
         self.inputs.remove(session_id);
         self.surfaces.remove(session_id);
         self.routes.remove(session_id);
+        if self.fullscreen_session.as_deref() == Some(session_id) {
+            // State is cleared here; the detached window's root observes this
+            // and removes itself on its next frame.
+            self.fullscreen_session = None;
+            self.fullscreen_window = None;
+        }
         self.spice_routes.remove(session_id);
         if let Some(mut session) = self.sessions.remove(session_id) {
             session.start_attempt.cancel();
             if let Some(texture) = session.texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
             if let Some(texture) = session.cursor_texture.take() {
-                self.pending_texture_removals.push(texture);
+                self.pending_texture_removals.push(PendingTextureRemoval {
+                    owner: session.texture_window,
+                    texture,
+                });
             }
         }
         // Resource disposal must run even when the last helper is already gone.
@@ -578,6 +657,23 @@ mod tests {
     }
 
     #[test]
+    fn remove_session_clears_fullscreen_state_for_that_session_only() {
+        let cx = gpui::TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let focus = cx.update(|cx| cx.focus_handle());
+        let mut state = RemoteDesktopFeatureState::new(focus);
+        state.fullscreen_session = Some("rdp-a".to_string());
+
+        // Removing a different session must not affect the fullscreen owner.
+        state.remove_session("rdp-b");
+        assert_eq!(state.fullscreen_session.as_deref(), Some("rdp-a"));
+
+        // Removing the owner clears the bookkeeping so no stale id lingers.
+        state.remove_session("rdp-a");
+        assert_eq!(state.fullscreen_session, None);
+    }
+
+    #[test]
     fn failed_session_transition_clears_transient_protocol_state() {
         let cx = gpui::TestAppContext::single();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -670,6 +766,7 @@ mod tests {
             display: RdpDisplayConfig::default(),
             clipboard: RdpClipboardConfig::default(),
             reconnect: RdpReconnectConfig::default(),
+            redirection: Default::default(),
         });
         let config = session.native_rdp_config.as_ref().unwrap().clone();
         assert!(state.native_presentation_needed(), "pending native config");

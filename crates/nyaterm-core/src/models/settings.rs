@@ -634,6 +634,9 @@ pub struct AppSettingsSummary {
     /// reporting, the wheel is sent as Up/Down cursor keys (DECSET 1007).
     #[serde(default = "default_true")]
     pub interaction_alternate_scroll: bool,
+    /// Host policy: keep future full-screen output on the primary screen.
+    #[serde(default)]
+    pub interaction_disable_alternate_screen: bool,
     #[serde(default = "default_true")]
     pub interaction_terminal_zoom_enabled: bool,
     pub interaction_command_suggestions_enabled: bool,
@@ -875,6 +878,7 @@ impl Default for AppSettingsSummary {
             interaction_terminal_right_click_action: TerminalRightClickAction::Menu,
             interaction_mouse_events_require_alt: false,
             interaction_alternate_scroll: true,
+            interaction_disable_alternate_screen: false,
             interaction_terminal_zoom_enabled: true,
             interaction_command_suggestions_enabled: true,
             interaction_credential_autofill_enabled: true,
@@ -1117,6 +1121,28 @@ fn default_highlight_color_light() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn alternate_screen_policy_defaults_off_independently_of_wheel_setting() {
+        use super::AppSettingsSummary;
+
+        assert!(!AppSettingsSummary::default().interaction_disable_alternate_screen);
+        for wheel in [false, true] {
+            let mut raw = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+            raw.as_object_mut()
+                .unwrap()
+                .remove("interaction_disable_alternate_screen");
+            raw["interaction_alternate_scroll"] = serde_json::json!(wheel);
+            let mut settings: AppSettingsSummary = serde_json::from_value(raw).unwrap();
+            assert!(!settings.interaction_disable_alternate_screen);
+            assert_eq!(settings.interaction_alternate_scroll, wheel);
+            settings.interaction_disable_alternate_screen = true;
+            let saved = serde_json::to_value(&settings).unwrap();
+            let loaded: AppSettingsSummary = serde_json::from_value(saved).unwrap();
+            assert!(loaded.interaction_disable_alternate_screen);
+            assert_eq!(loaded.interaction_alternate_scroll, wheel);
+        }
+    }
+
     #[test]
     fn mac_matcher_defaults_on_for_legacy_settings_and_preserves_explicit_false() {
         for value in [serde_json::json!({}), serde_json::json!({"ipv4": false})] {

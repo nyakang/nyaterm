@@ -175,6 +175,21 @@ impl ConnectionStore {
             .ok_or_else(|| {
                 StorageError::InvalidData(format!("AI session {session_id} not found"))
             })?;
+        if !nyaterm_core::ai::external_agents::same_agent(&session.agent_kind, &agent_kind) {
+            return Err(StorageError::InvalidData(
+                "External session belongs to another Agent instance".into(),
+            ));
+        }
+        if let Some(binding) = &backend_metadata.external_binding
+            && (nyaterm_core::ai::external_agents::profile_id(&agent_kind)
+                != Some(binding.profile_id.as_str())
+                || binding.external_id != external_session_id
+                || binding.protocol != "acp_v1")
+        {
+            return Err(StorageError::InvalidData(
+                "Invalid ACP session binding".into(),
+            ));
+        }
         session.agent_kind = agent_kind;
         session.external_session_id = Some(external_session_id);
         session.backend_metadata = Some(backend_metadata);
@@ -565,6 +580,7 @@ mod tests {
                 AiAgentKind::Codex,
                 "thread-1".to_string(),
                 AiSessionBackendMetadata {
+                    external_binding: None,
                     backend: AiBackendKind::Codex,
                     external_thread_id: Some("thread-1".to_string()),
                     codex_terminal_tools_version: Some(1),
@@ -819,5 +835,55 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).ok();
+    }
+    #[test]
+    fn acp_binding_preserves_legacy_history_and_rejects_another_instance() {
+        use nyaterm_core::ai::external_agents::ExternalSessionBinding;
+        let dir = unique_temp_dir("acp-history-binding");
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .append_ai_user_message_scoped(
+                "legacy",
+                None,
+                "saved history".into(),
+                AiAgentKind::ClaudeCode,
+                AiSessionScope::default(),
+            )
+            .unwrap();
+        let binding = ExternalSessionBinding {
+            profile_id: "builtin-claude".into(),
+            protocol: "acp_v1".into(),
+            revision: 0,
+            external_id: "external".into(),
+            working_directory: "cwd".into(),
+            config_directory: None,
+            source_session_id: None,
+            extra: Default::default(),
+        };
+        let metadata = AiSessionBackendMetadata {
+            external_binding: Some(binding),
+            ..Default::default()
+        };
+        store
+            .set_ai_session_external_metadata(
+                "legacy",
+                AiAgentKind::Acp("builtin-claude".into()),
+                "external".into(),
+                metadata.clone(),
+            )
+            .unwrap();
+        let before = store.load_ai_history().unwrap();
+        assert!(
+            store
+                .set_ai_session_external_metadata(
+                    "legacy",
+                    AiAgentKind::Acp("another-profile".into()),
+                    "external".into(),
+                    metadata
+                )
+                .is_err()
+        );
+        assert_eq!(store.load_ai_history().unwrap(), before);
+        assert_eq!(before.messages[0].content, "saved history");
     }
 }

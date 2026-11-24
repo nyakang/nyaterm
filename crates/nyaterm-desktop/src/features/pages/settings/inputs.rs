@@ -33,6 +33,16 @@ use crate::models::{
 impl NyaTermApp {
     /// Rebase existing buffers after a save or rollback without creating inactive inputs.
     pub(in crate::features) fn reset_ai_settings_inputs(&mut self, cx: &mut Context<Self>) {
+        for (id, value, _) in acp_input_values(self.ai.settings_config()) {
+            if let Some(input) = self.existing_text_input(&id) {
+                input.update(cx, |state, cx| state.set_content_silent(&value, cx));
+            }
+        }
+        let valid = acp_input_values(self.ai.settings_config())
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        self.retain_acp_inputs(&valid);
         let config = self.ai.settings_config().clone();
         for (field, value) in [
             (AiInputField::RequestUserAgent, config.request_user_agent),
@@ -171,39 +181,10 @@ impl NyaTermApp {
 
     /// The AI Agents tab owns the external-agent registry inputs.
     pub(in crate::features) fn ensure_ai_agent_inputs(&mut self, cx: &mut Context<Self>) {
-        let settings = self.ai.settings_config().clone();
-        for (field, value) in [
-            (
-                AiInputField::CodexExecutable,
-                settings.codex.executable_path.unwrap_or_default(),
-            ),
-            (
-                AiInputField::CodexDefaultModel,
-                settings.codex.default_model.unwrap_or_default(),
-            ),
-            (
-                AiInputField::CodexConfigDirectory,
-                settings.codex.config_directory.unwrap_or_default(),
-            ),
-            (
-                AiInputField::ClaudeExecutable,
-                settings.claude_code.executable_path.unwrap_or_default(),
-            ),
-            (
-                AiInputField::ClaudeDefaultModel,
-                settings.claude_code.default_model.unwrap_or_default(),
-            ),
-            (
-                AiInputField::ClaudeConfigDirectory,
-                settings.claude_code.config_directory.unwrap_or_default(),
-            ),
-        ] {
-            self.ensure_text_input(
-                format!("ai.input.{}", field.input_key()),
-                &value,
-                TextInputSetup::default(),
-                cx,
-            );
+        let values = acp_input_values(self.ai.settings_config());
+        self.retain_acp_inputs(&values.iter().map(|(id, _, _)| id.clone()).collect());
+        for (id, value, secret) in values {
+            self.ensure_text_input(id, &value, secret_input_setup(secret), cx);
         }
     }
 
@@ -819,6 +800,42 @@ impl NyaTermApp {
     }
 }
 
+fn acp_input_values(settings: &nyaterm_core::AiSettings) -> Vec<(String, String, bool)> {
+    let mut values = Vec::new();
+    for profile in nyaterm_core::ai::external_agents::profiles(settings) {
+        for (field, value) in [
+            ("name", profile.name.clone()),
+            ("strategy", profile.strategy.0.clone()),
+            ("executable", profile.executable.clone()),
+            (
+                "args",
+                serde_json::to_string(&profile.args).unwrap_or_else(|_| "[]".into()),
+            ),
+            ("cwd", profile.working_directory.clone().unwrap_or_default()),
+            (
+                "config",
+                profile.config_directory.clone().unwrap_or_default(),
+            ),
+            ("model", profile.default_model.clone().unwrap_or_default()),
+        ] {
+            values.push((format!("ai.agent.{}.{field}", profile.id), value, false));
+        }
+        for env in &profile.environment {
+            values.push((
+                format!("ai.agent.{}.env.{}.name", profile.id, env.id),
+                env.name.clone(),
+                false,
+            ));
+            values.push((
+                format!("ai.agent.{}.env.{}.value", profile.id, env.id),
+                env.value.expose_secret().to_owned(),
+                true,
+            ));
+        }
+    }
+    values
+}
+
 /// Every tab, so the tests below cannot silently miss one that gets added.
 #[cfg(test)]
 pub(in crate::features::pages::settings) const ALL_SETTINGS_TABS: [SettingsTab; 15] = [
@@ -1033,26 +1050,24 @@ mod tests {
             app.ensure_settings_tab_inputs(SettingsTab::AiAgents, cx);
             let baseline = app.ai.settings_config().clone();
             app.reset_text_input("ai.input.request-user-agent", "edited-agent", cx);
-            app.reset_text_input("ai.input.codex-executable", "edited-codex", cx);
+            app.reset_text_input("ai.agent.builtin-codex.executable", "edited-codex", cx);
             app.reset_number_input("ai.number.timeout-ms", "9000", cx);
             app.apply_ai_input(
                 crate::models::AiInputField::RequestUserAgent,
                 "edited-agent".into(),
                 cx,
             );
-            app.apply_ai_input(
-                crate::models::AiInputField::CodexExecutable,
-                "edited-codex".into(),
-                cx,
-            );
+            app.apply_acp_profile_input("builtin-codex.executable", "edited-codex".into(), cx);
             app.set_ai_timeout_ms(9000, cx);
             app.cancel_settings(cx);
             assert_eq!(app.ai.settings_config(), &baseline);
             for (id, expected) in [
                 ("ai.input.request-user-agent", baseline.request_user_agent),
                 (
-                    "ai.input.codex-executable",
-                    baseline.codex.executable_path.unwrap_or_default(),
+                    "ai.agent.builtin-codex.executable",
+                    baseline.external_agents.as_ref().unwrap()[0]
+                        .executable
+                        .clone(),
                 ),
             ] {
                 assert_eq!(

@@ -113,6 +113,18 @@ fn three_states_require_explicit_clear_and_keep_removes_patch() {
 }
 #[test]
 fn mixed_booleans_require_choice_and_secret_drafts_are_discarded() {
+    // The patch builder is a large generated match. In debug builds its stack
+    // frame can exceed the default 2 MiB test-thread stack after the SPICE
+    // fields were added, so give this case enough headroom.
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(mixed_booleans_require_choice_and_secret_drafts_are_discarded_case)
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread should not panic");
+}
+
+fn mixed_booleans_require_choice_and_secret_drafts_are_discarded_case() {
     let mut draft = AssetBatchEditDraft::default();
     draft.start(
         vec!["a".into()],

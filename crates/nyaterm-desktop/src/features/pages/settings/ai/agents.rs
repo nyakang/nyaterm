@@ -4,7 +4,7 @@ use crate::features::mcp::McpHostStatus;
 use crate::features::pages::settings::panel::SettingsPanel;
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
 use nyaterm_core::ai::mcp_execution::McpTerminalExecutionMode;
-use nyaterm_core::{AiPermissionMode, CodexThreadMode, McpTerminalDisplayMode};
+use nyaterm_core::{AiPermissionMode, McpTerminalDisplayMode};
 use nyaterm_ui::{NyaButton, NyaSelectOption};
 use rust_i18n::t;
 
@@ -35,343 +35,240 @@ impl SettingsPanel {
         let settings = self.ai.settings_config().clone();
         let status = self.ai.agent_management.clone();
         let columns = if self.content_width >= 1024. { 2 } else { 1 };
-        let mut codex_options = vec![NyaSelectOption::new(
-            "__none__",
-            t!("ai.useCodexDefaultModel"),
-        )];
-        codex_options.extend(
-            status
-                .codex_models
-                .iter()
-                .map(|name| NyaSelectOption::new(name.clone(), name.clone())),
-        );
-        if let Some(name) = &settings.codex.default_model
-            && !status.codex_models.contains(name)
-        {
-            codex_options.push(NyaSelectOption::new(name.clone(), name.clone()));
-        }
-        let codex_model = self.form_select_control(
-            "ai-codex-default-model",
-            codex_options,
-            Some(
-                settings
-                    .codex
-                    .default_model
-                    .clone()
-                    .unwrap_or_else(|| "__none__".into()),
-            ),
-            status.pending,
-            cx,
-        );
-        let thread = self.form_select_control(
-            "ai-codex-thread-mode",
-            vec![
-                NyaSelectOption::new("persistent", t!("ai.codex.persistent")),
-                NyaSelectOption::new("ephemeral", t!("ai.codex.ephemeral")),
-            ],
-            Some(
-                if settings.codex.thread_mode == CodexThreadMode::Persistent {
-                    "persistent"
-                } else {
-                    "ephemeral"
+        let mut local = div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(div().text_size(px(12.)).child(t!("ai.acp.installHint")));
+        for profile in nyaterm_core::ai::external_agents::profiles(&settings) {
+            let id = profile.id.clone();
+            let mut card = div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .p_3()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .rounded_md()
+                .child(div().text_size(px(14.)).child(profile.name.clone()));
+            let mut fields = div().grid().grid_cols(columns).gap_3();
+            for (field, label) in [
+                ("name", t!("ai.acp.name")),
+                ("strategy", t!("ai.acp.strategy")),
+                ("executable", t!("ai.acp.executable")),
+                ("args", t!("ai.acp.args")),
+                ("cwd", t!("ai.acp.cwd")),
+                ("config", t!("ai.acp.config")),
+                ("model", t!("ai.acp.model")),
+            ] {
+                let selector = format!("acp-profile-field-{id}-{field}");
+                fields = fields.child(
+                    div()
+                        .min_w_0()
+                        .debug_selector(move || selector.clone())
+                        .child(ai_field(
+                            palette,
+                            label,
+                            None,
+                            self.existing_text_input_box(format!("ai.agent.{id}.{field}"), false),
+                        )),
+                );
+            }
+            card = card.child(fields);
+            for variable in &profile.environment {
+                let row_id = variable.id.clone();
+                let delete_id = id.clone();
+                card = card.child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().child(self.existing_text_input_box(
+                            format!("ai.agent.{id}.env.{row_id}.name"),
+                            false,
+                        )))
+                        .child(div().flex_1().min_w_0().child(self.existing_text_input_box(
+                            format!("ai.agent.{id}.env.{row_id}.value"),
+                            false,
+                        )))
+                        .child(
+                            NyaButton::new(format!("acp-env-remove-{row_id}"), "−")
+                                .small()
+                                .on_click(cx.listener(move |panel, _, _, cx| {
+                                    panel.with_app(cx, |app, cx| {
+                                        app.edit_acp_profile(
+                                            &delete_id,
+                                            &format!("env.{row_id}.delete"),
+                                            String::new(),
+                                            cx,
+                                        )
+                                    });
+                                })),
+                        ),
+                );
+            }
+            let mut actions = div().flex().flex_wrap().gap_2();
+            for (action, label) in [
+                (
+                    "enabled",
+                    if profile.enabled {
+                        t!("ai.acp.disable")
+                    } else {
+                        t!("ai.acp.enable")
+                    },
+                ),
+                (
+                    "persistent",
+                    if profile.persistent {
+                        t!("ai.acp.persistentOn")
+                    } else {
+                        t!("ai.acp.persistentOff")
+                    },
+                ),
+                ("add-env", t!("ai.acp.addEnv")),
+                ("copy", t!("ai.acp.copy")),
+                ("delete", t!("ai.acp.delete")),
+            ] {
+                let id = id.clone();
+                actions = actions.child(
+                    NyaButton::new(format!("acp-{id}-{action}"), label)
+                        .small()
+                        .disabled(
+                            action == "enabled"
+                                && !profile.enabled
+                                && nyaterm_agent_client::acp::policy::admit_execution(profile)
+                                    .is_err(),
+                        )
+                        .on_click(cx.listener(move |panel, _, _, cx| {
+                            panel.with_app(cx, |app, cx| {
+                                app.edit_acp_profile(&id, action, String::new(), cx)
+                            })
+                        })),
+                );
+            }
+            let inspect_id = id.clone();
+            actions = actions.child(
+                NyaButton::new(format!("acp-inspect-{id}"), t!("ai.acp.check"))
+                    .small()
+                    .disabled(status.pending)
+                    .on_click(cx.listener(move |panel, _, _, cx| {
+                        panel.with_app(cx, |app, cx| app.inspect_acp_profile(&inspect_id, cx))
+                    })),
+            );
+            card = card.child(actions);
+            if nyaterm_agent_client::acp::policy::admit_execution(profile).is_err() {
+                card = card.child(div().text_size(px(12.)).child(t!("ai.acp.blocked")));
+            }
+            if let Some(state) = status.profiles.get(&id) {
+                let mut account = div().flex().flex_wrap().gap_2();
+                for (method, label) in &state.auth_methods {
+                    let (id, method) = (id.clone(), method.clone());
+                    account = account.child(
+                        NyaButton::new(format!("acp-login-{id}-{method}"), label.clone())
+                            .small()
+                            .disabled(status.pending)
+                            .on_click(cx.listener(move |panel, _, _, cx| {
+                                panel.with_app(cx, |app, cx| {
+                                    app.acp_account_action(&id, Some(method.clone()), cx)
+                                })
+                            })),
+                    );
                 }
-                .into(),
-            ),
-            false,
-            cx,
-        );
-        let codex_permission = self.form_select_control(
-            "ai-codex-permission",
-            permissions(),
-            Some(permission(&settings.codex.permission_mode)),
-            false,
-            cx,
-        );
-        let codex_header = div()
+                if state.logout {
+                    let logout_id = id.clone();
+                    account = account.child(
+                        NyaButton::new(format!("acp-logout-{id}"), t!("ai.acp.logout"))
+                            .small()
+                            .disabled(status.pending)
+                            .on_click(cx.listener(move |panel, _, _, cx| {
+                                panel.with_app(cx, |app, cx| {
+                                    app.acp_account_action(&logout_id, None, cx)
+                                })
+                            })),
+                    );
+                }
+                card = card.child(account);
+
+                card =
+                    card.child(
+                        div()
+                            .text_size(px(12.))
+                            .child(state.error.clone().unwrap_or_else(
+                                || match state.authenticated {
+                                    Some(true) => t!("ai.acp.connected").into(),
+                                    Some(false) => t!("ai.acp.loginRequired").into(),
+                                    None => t!("ai.acp.authUnknown").into(),
+                                },
+                            )),
+                    );
+            }
+            local = local.child(card);
+        }
+        if let Some(error) = status.error.clone() {
+            local = local.child(div().text_color(rgb(palette.warning)).child(error));
+        }
+        let mut detect = div()
             .flex()
             .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap_3()
+            .gap_2()
             .child(
-                div().flex().flex_col().gap_1().child("OpenAI Codex").child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.text_muted))
-                        .child(t!("ai.codexDesc")),
-                ),
+                NyaButton::new("acp-refresh", t!("ai.acp.refresh"))
+                    .small()
+                    .disabled(status.pending)
+                    .on_click(cx.listener(|panel, _, _, cx| panel.refresh_ai_agents(cx))),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(agent_badge(
-                        palette,
-                        status.codex_version.is_some(),
-                        t!("ai.installed"),
-                        t!("ai.notInstalled"),
-                    ))
-                    .child(agent_badge(
-                        palette,
-                        status.codex_connected,
-                        t!("ai.connected"),
-                        t!("ai.disconnected"),
-                    ))
-                    .child(settings_switch(
-                        palette,
-                        "ai-codex-enabled",
-                        settings.codex.enabled,
-                        cx.listener(|panel, _, _, cx| panel.toggle_ai_codex_enabled(cx)),
-                    )),
-            );
-        let mut codex = div()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .bg(rgb(palette.bg))
-            .p_4()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(codex_header)
-            .child(ai_field(
-                palette,
-                t!("ai.codexPath"),
-                None,
-                self.existing_text_input_box("ai.input.codex-executable", false),
-            ))
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(columns)
-                    .gap_4()
-                    .child(
-                        ai_field(palette, t!("ai.codex.threadMode"), None, thread)
-                            .debug_selector(|| "ai-agent-thread-field".into()),
-                    )
-                    .child(
-                        ai_field(palette, t!("ai.codexDefaultModel"), None, codex_model)
-                            .debug_selector(|| "ai-agent-model-field".into()),
-                    )
-                    .child(ai_field(
-                        palette,
-                        t!("ai.permission.title"),
-                        None,
-                        codex_permission,
-                    )),
-            )
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(2)
-                    .gap_2()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(format!(
-                        "{}: {}",
-                        t!("ai.codexVersion"),
-                        status.codex_version.as_deref().unwrap_or("-")
-                    ))
-                    .child(format!(
-                        "{}: {}",
-                        t!("ai.codexAuthMode"),
-                        status.codex_auth_mode.as_deref().unwrap_or("-")
-                    ))
-                    .child(format!(
-                        "{}: {}",
-                        t!("ai.codexPlan"),
-                        status.codex_plan.as_deref().unwrap_or("-")
-                    ))
-                    .child(format!(
-                        "{}: {}",
-                        t!("ai.codexEmail"),
-                        status.codex_email.as_deref().unwrap_or("-")
-                    )),
-            );
-        if let Some(url) = &status.verification_url {
-            codex = codex.child(
-                div()
-                    .rounded_md()
-                    .bg(rgb(palette.surface))
-                    .p_3()
-                    .child(url.clone())
-                    .child(status.user_code.clone().unwrap_or_default()),
-            );
-        }
-        codex = codex.child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .child(
-                    NyaButton::new("ai-codex-status", t!("ai.refreshStatus"))
+            .when(status.pending, |actions| {
+                actions.child(
+                    NyaButton::new("acp-cancel-inspect", t!("ai.acp.cancel"))
                         .small()
-                        .disabled(status.pending)
-                        .on_click(cx.listener(|panel, _, _, cx| panel.refresh_codex_account(cx))),
-                )
-                .child(
-                    NyaButton::new("ai-codex-login", t!("ai.codexLogin"))
-                        .small()
-                        .disabled(status.pending)
-                        .on_click(
-                            cx.listener(|panel, _, _, cx| panel.start_codex_login(false, cx)),
-                        ),
-                )
-                .child(
-                    NyaButton::new("ai-codex-device", t!("ai.codexDeviceCodeLogin"))
-                        .small()
-                        .disabled(status.pending)
-                        .on_click(cx.listener(|panel, _, _, cx| panel.start_codex_login(true, cx))),
-                )
-                .when(status.login_id.is_some(), |row| {
-                    row.child(
-                        NyaButton::new("ai-codex-cancel", t!("ai.cancelLogin"))
-                            .small()
-                            .on_click(cx.listener(|panel, _, _, cx| panel.cancel_codex_login(cx))),
-                    )
-                })
-                .when(status.user_code.is_some(), |row| {
-                    row.child(
-                        NyaButton::new("ai-codex-copy", t!("ai.copyCode"))
-                            .small()
-                            .on_click(
-                                cx.listener(|panel, _, _, cx| panel.copy_codex_device_code(cx)),
-                            ),
-                    )
-                })
-                .child(
-                    NyaButton::new("ai-codex-models", t!("ai.refreshModels"))
-                        .small()
-                        .disabled(status.pending)
                         .on_click(cx.listener(|panel, _, _, cx| {
-                            panel.with_app(cx, |app, cx| app.refresh_codex_models(cx));
+                            panel.with_app(cx, |app, cx| {
+                                app.ai.cancel_agent_management();
+                                app.request_settings_panel_refresh(cx);
+                            })
                         })),
                 )
-                .child(
-                    NyaButton::new("ai-codex-logout", t!("ai.codexLogout"))
-                        .small()
-                        .disabled(status.pending)
-                        .on_click(cx.listener(|panel, _, _, cx| panel.logout_codex(cx))),
-                ),
-        );
-        let claude_permission = self.form_select_control(
-            "ai-claude-permission",
-            permissions(),
-            Some(permission(&settings.claude_code.permission_mode)),
+            });
+
+        for (strategy, label) in [
+            ("codex", std::borrow::Cow::Borrowed("+ Codex")),
+            ("claude", std::borrow::Cow::Borrowed("+ Claude")),
+            ("custom", t!("ai.acp.addCustom")),
+        ] {
+            detect = detect.child(
+                NyaButton::new(format!("acp-add-{strategy}"), label)
+                    .small()
+                    .on_click(cx.listener(move |panel, _, _, cx| {
+                        panel.with_app(cx, |app, cx| {
+                            app.edit_acp_profile("", "add", strategy.into(), cx)
+                        })
+                    })),
+            );
+        }
+        let default_agent = self.form_select_control(
+            "ai-default-agent",
+            std::iter::once(NyaSelectOption::new("nyaterm", "NyaTerm"))
+                .chain(
+                    nyaterm_core::ai::external_agents::profiles(&settings)
+                        .iter()
+                        .map(|profile| {
+                            NyaSelectOption::new(profile.id.clone(), profile.name.clone())
+                        }),
+                )
+                .collect(),
+            Some(
+                nyaterm_core::ai::external_agents::profile_id(&settings.default_agent_kind)
+                    .unwrap_or("nyaterm")
+                    .into(),
+            ),
             false,
             cx,
         );
-        let claude = div()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(palette.border))
-            .bg(rgb(palette.bg))
-            .p_4()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div().flex().flex_col().gap_1().child("Claude Code").child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.text_muted))
-                                .child(t!("ai.claudeCodeDesc")),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(agent_badge(
-                                palette,
-                                status.claude_version.is_some(),
-                                t!("ai.installed"),
-                                t!("ai.notInstalled"),
-                            ))
-                            .child(agent_badge(
-                                palette,
-                                status.claude_connected,
-                                t!("ai.connected"),
-                                t!("ai.disconnected"),
-                            ))
-                            .child(settings_switch(
-                                palette,
-                                "ai-claude-enabled",
-                                settings.claude_code.enabled,
-                                cx.listener(|panel, _, _, cx| panel.toggle_ai_claude_enabled(cx)),
-                            )),
-                    ),
-            )
-            .child(ai_field(
-                palette,
-                t!("ai.claudeCodePath"),
-                None,
-                self.existing_text_input_box("ai.input.claude-executable", false),
-            ))
-            .child(
-                div()
-                    .grid()
-                    .grid_cols(columns)
-                    .gap_4()
-                    .child(ai_field(
-                        palette,
-                        t!("ai.claudeCodeDefaultModel"),
-                        None,
-                        self.existing_text_input_box("ai.input.claude-default-model", false),
-                    ))
-                    .child(ai_field(
-                        palette,
-                        t!("ai.permission.title"),
-                        None,
-                        claude_permission,
-                    )),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(palette.text_muted))
-                    .child(format!(
-                        "{}: {}",
-                        t!("ai.claudeCodeVersion"),
-                        status.claude_version.as_deref().unwrap_or("-")
-                    )),
-            )
-            .child(
-                div().flex().flex_wrap().gap_2().child(
-                    NyaButton::new("ai-claude-status", t!("ai.refreshClaudeStatus"))
-                        .small()
-                        .disabled(status.pending)
-                        .on_click(cx.listener(|panel, _, _, cx| panel.refresh_claude_account(cx))),
-                ),
-            );
-        let detect = NyaButton::new("ai-agents-detect", t!("ai.detect"))
-            .small()
-            .icon("icons/fe/refresh.svg")
-            .disabled(status.pending)
-            .on_click(cx.listener(|panel, _, _, cx| panel.refresh_ai_agents(cx)));
-        let local = div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(codex)
-            .child(claude)
-            .when_some(status.error, |body, error| {
-                body.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.warning))
-                        .child(nyaterm_core::sanitize_ai_diagnostic(&error, 500)),
-                )
-            });
+        local = local.child(ai_field(
+            palette,
+            t!("ai.defaultAgent"),
+            None,
+            default_agent,
+        ));
         let mcp_permission = self.form_select_control(
             "ai-mcp-permission",
             permissions(),
@@ -536,98 +433,6 @@ impl SettingsPanel {
                     }),
                 ),
             );
-        let advanced_open = self.ai.providers.advanced_open;
-        let advanced_button = NyaButton::new("ai-advanced-toggle", t!("settings.advanced"))
-            .full_width()
-            .on_click(cx.listener(|panel, _, _, cx| {
-                panel.with_app(cx, |app, cx| app.toggle_ai_advanced(cx));
-            }));
-        let mut advanced = div().child(advanced_button);
-        if advanced_open {
-            let default_agent = self.form_select_control(
-                "ai-default-agent",
-                vec![
-                    NyaSelectOption::new("nyaterm", "NyaTerm"),
-                    NyaSelectOption::new("codex", "Codex"),
-                    NyaSelectOption::new("claude_code", "Claude Code"),
-                ],
-                Some(
-                    match settings.default_agent_kind {
-                        nyaterm_core::AiAgentKind::Nyaterm => "nyaterm",
-                        nyaterm_core::AiAgentKind::Codex => "codex",
-                        nyaterm_core::AiAgentKind::ClaudeCode => "claude_code",
-                    }
-                    .into(),
-                ),
-                false,
-                cx,
-            );
-            let external_permission = self.form_select_control(
-                "ai-external-permission",
-                permissions(),
-                Some(permission(&settings.external_agent_permission_mode)),
-                false,
-                cx,
-            );
-            advanced = advanced.child(
-                div()
-                    .pt_4()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(ai_field(
-                        palette,
-                        t!("ai.defaultAgent"),
-                        None,
-                        default_agent,
-                    ))
-                    .child(ai_field(
-                        palette,
-                        t!("ai.externalPermission"),
-                        None,
-                        external_permission,
-                    ))
-                    .child(ai_field(
-                        palette,
-                        format!("Codex · {}", t!("ai.configDirectory")),
-                        None,
-                        self.existing_text_input_box("ai.input.codex-config-directory", false),
-                    ))
-                    .child(ai_field(
-                        palette,
-                        format!("Claude Code · {}", t!("ai.configDirectory")),
-                        None,
-                        self.existing_text_input_box("ai.input.claude-config-directory", false),
-                    ))
-                    .child(settings_form_row(
-                        palette,
-                        "Codex MCP",
-                        None,
-                        settings_switch(
-                            palette,
-                            "ai-codex-mcp-integration",
-                            settings.codex.tool_integration_mode.as_deref() == Some("nyaterm_mcp"),
-                            cx.listener(|panel, _, _, cx| {
-                                panel.toggle_ai_codex_mcp_integration(cx)
-                            }),
-                        ),
-                    ))
-                    .child(settings_form_row(
-                        palette,
-                        "Claude Code MCP",
-                        None,
-                        settings_switch(
-                            palette,
-                            "ai-claude-mcp-integration",
-                            settings.claude_code.tool_integration_mode.as_deref()
-                                == Some("nyaterm_mcp"),
-                            cx.listener(|panel, _, _, cx| {
-                                panel.toggle_ai_claude_mcp_integration(cx)
-                            }),
-                        ),
-                    )),
-            );
-        }
         div()
             .flex()
             .flex_col()
@@ -644,26 +449,5 @@ impl SettingsPanel {
                 div(),
                 mcp,
             ))
-            .child(advanced)
     }
-}
-fn agent_badge(
-    palette: crate::theme::ThemePalette,
-    active: bool,
-    yes: impl Into<gpui::SharedString>,
-    no: impl Into<gpui::SharedString>,
-) -> impl IntoElement {
-    div()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .px_2()
-        .py_1()
-        .text_size(px(11.))
-        .text_color(rgb(if active {
-            palette.success
-        } else {
-            palette.text_muted
-        }))
-        .child(if active { yes.into() } else { no.into() })
 }

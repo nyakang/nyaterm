@@ -251,6 +251,7 @@ fn fit_window_rdp_config(name: &str) -> nyaterm_remote_desktop::RdpSessionConfig
         },
         clipboard: RdpClipboardConfig::default(),
         reconnect: RdpReconnectConfig::default(),
+        redirection: Default::default(),
     }
 }
 
@@ -1272,7 +1273,7 @@ fn closing_a_native_rdp_session_skips_the_helper_manager() {
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
     let app = app_with_visible_local_session(&mut cx, root.path(), "local");
     cx.update(|cx| {
-        app.update(cx, |app, _| {
+        app.update(cx, |app, cx| {
             let session = RemoteDesktopSessionState {
                 native_rdp_config: Some(fit_window_rdp_config("native")),
                 ..Default::default()
@@ -1281,7 +1282,7 @@ fn closing_a_native_rdp_session_skips_the_helper_manager() {
                 .sessions
                 .insert("native-close".into(), session);
             assert!(
-                app.close_rdp_runtime("native-close").is_ok(),
+                app.close_rdp_runtime("native-close", cx).is_ok(),
                 "native sessions have no helper session to close"
             );
             assert!(!app.remote_desktop.sessions.contains_key("native-close"));
@@ -1314,7 +1315,7 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
     }
     let (_, cx) = cx.add_window_view(|_, _| EmptyView);
     cx.update(|window, cx| {
-        app.update(cx, |app, _| {
+        app.update(cx, |app, cx| {
             app.remote_desktop.insert_connecting("healthy".into());
             app.remote_desktop.insert_connecting("broken".into());
             app.reset_rdp_framebuffer("healthy", 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
@@ -1342,7 +1343,7 @@ fn texture_failure_isolated_and_inactive_framebuffer_can_rebuild() {
                 pixels
             );
             for old in app.remote_desktop.pending_texture_removals.drain(..) {
-                window.remove_dynamic_texture(old);
+                old.remove(window, cx);
             }
             app.prepare_remote_desktop_textures("healthy", window);
             assert_ne!(

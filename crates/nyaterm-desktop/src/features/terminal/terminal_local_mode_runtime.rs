@@ -25,6 +25,34 @@ fn row_content_end(row: &nyaterm_terminal::TerminalSnapshotRow) -> usize {
         .unwrap_or(0)
 }
 
+/// Absolute line of the last row that actually carries content in a snapshot.
+///
+/// A terminal keeps a full grid of blank rows past the last output; the reader
+/// must never let its caret or selection reach those rows, otherwise Shift +
+/// navigation can select them and copying emits trailing empty lines.
+///
+/// This is only conclusive while the snapshot covers the end of the buffer
+/// (`display_offset == 0`). When scrolled into history, the newest rows are
+/// outside the snapshot, so callers keep the wider buffer bound instead —
+/// clamping there would stop PageDown from walking back toward newer output.
+fn snapshot_last_content_line(snapshot: &nyaterm_terminal::TerminalSnapshot) -> usize {
+    let (start, end) = terminal_snapshot_absolute_range(snapshot);
+    let screen_end = end.saturating_sub(1).max(start);
+    if snapshot.display_offset != 0 {
+        // Scrolled into history: the newest rows are outside this window. Keep
+        // the whole-buffer bound so PageDown can still walk forward to them.
+        return snapshot.total_rows.saturating_sub(1).max(screen_end);
+    }
+    let last_row = snapshot
+        .rows()
+        .iter()
+        .rposition(|row| {
+            !row.cleared && row.cells.iter().any(|cell| !cell.text().trim().is_empty())
+        })
+        .unwrap_or(0);
+    start.saturating_add(last_row).min(screen_end)
+}
+
 fn local_mode_endpoint_boundary(
     endpoint: nyaterm_terminal::selection::TerminalSelectionEndpoint,
 ) -> TerminalBufferCellPos {
@@ -68,8 +96,10 @@ impl NyaTermApp {
             .map(|view| view.scroll_offset)
             .unwrap_or(0);
         let snapshot = self.terminal_snapshot_for_session(Some(&session_id), offset);
-        let (absolute_start, absolute_end) = terminal_snapshot_absolute_range(&snapshot);
-        let last_line = absolute_end.saturating_sub(1).max(absolute_start);
+        let (absolute_start, _) = terminal_snapshot_absolute_range(&snapshot);
+        // Seed the caret on the last row with real content, never on the blank
+        // screen rows that follow the output.
+        let last_line = snapshot_last_content_line(&snapshot);
 
         let cursor = self
             .terminal
@@ -80,14 +110,10 @@ impl NyaTermApp {
             .filter(|position| position.line >= absolute_start && position.line <= last_line)
             .unwrap_or_else(|| {
                 let row = last_line.saturating_sub(absolute_start);
-                let col = snapshot
-                    .row(row)
-                    .and_then(|line| {
-                        line.cells
-                            .iter()
-                            .position(|cell| !cell.text.trim().is_empty())
-                    })
-                    .unwrap_or(0);
+                // Land just after the last glyph of the final content row, not
+                // at its first cell. `row_content_end` is the same insertion
+                // point End uses, so entering and pressing End agree.
+                let col = snapshot.row(row).map_or(0, row_content_end);
                 TerminalBufferCellPos::new(last_line, col)
             });
 
@@ -201,14 +227,14 @@ impl NyaTermApp {
         let snapshot = self.terminal_snapshot_for_session(Some(&session_id), offset);
         let (absolute_start, absolute_end) = terminal_snapshot_absolute_range(&snapshot);
         let page_rows = self.active_terminal_page_rows();
-        // Navigate over the whole buffer, not just the current viewport. The
-        // viewport's first/last line used to clamp PageUp/PageDown to the
-        // visible window, so the caret never left it and the view never
-        // followed. Using the full buffer lets the caret move out and makes
-        // `reveal` scroll the viewport to keep it visible.
+        // Navigate over the whole retained buffer, but stop at the last row
+        // that actually carries content. The range starts at 0 so PageUp/Down
+        // can leave the visible window and let `reveal` scroll after it; the
+        // upper bound is the final non-blank row so Down/PageDown/BufferEnd can
+        // never land on (or select through) the empty rows past the output.
         let viewport = LocalModeViewport {
             first_line: 0,
-            last_line: snapshot.total_rows.saturating_sub(1),
+            last_line: snapshot_last_content_line(&snapshot),
             page_rows,
             cols: snapshot.cols,
         };
@@ -259,8 +285,12 @@ impl NyaTermApp {
             .unwrap_or(0);
         let next_snapshot = self.terminal_snapshot_for_session(Some(&session_id), next_offset);
         let (next_start, _) = terminal_snapshot_absolute_range(&next_snapshot);
-        let next_row = moved.line.saturating_sub(next_start);
-        let target_row = (moved.line >= next_start)
+        // Reveal may have brought the live screen back into view (offset 0),
+        // whose snapshot exposes the real final content row. Clamp once more
+        // so paging back to the bottom never parks the caret on blank rows.
+        let final_line = moved.line.min(snapshot_last_content_line(&next_snapshot));
+        let next_row = final_line.saturating_sub(next_start);
+        let target_row = (final_line >= next_start)
             .then(|| next_snapshot.row(next_row))
             .flatten();
         let next_content_end = target_row.map_or(moved.col, row_content_end);
@@ -282,7 +312,7 @@ impl NyaTermApp {
                 matches!(motion, LocalModeMotion::Right),
             )
         });
-        let next = TerminalBufferCellPos::new(moved.line, next_col);
+        let next = TerminalBufferCellPos::new(final_line, next_col);
 
         if shift {
             let anchor = self.terminal.local_mode.anchor.unwrap_or(current);
@@ -350,14 +380,14 @@ impl NyaTermApp {
         let offset = view.scroll_offset;
         let Some(change) = history.changes_since(self.terminal.local_mode.history) else {
             let snapshot = self.terminal_snapshot_for_session(Some(session_id), offset);
-            let (start, end) = terminal_snapshot_absolute_range(&snapshot);
+            let (start, _) = terminal_snapshot_absolute_range(&snapshot);
             self.terminal.local_mode.history = history;
             self.terminal.local_mode.cursor.line = self
                 .terminal
                 .local_mode
                 .cursor
                 .line
-                .clamp(start, end.saturating_sub(1).max(start));
+                .clamp(start, snapshot_last_content_line(&snapshot));
             self.terminal.local_mode.cursor.col =
                 self.terminal.local_mode.cursor.col.min(snapshot.cols);
             self.terminal.local_mode.anchor = None;
@@ -456,26 +486,24 @@ impl NyaTermApp {
             Some(session_id),
         )?;
         let (absolute_start, _) = terminal_snapshot_absolute_range(&geometry.snapshot);
-        let row = endpoint.position.line.saturating_sub(absolute_start);
-        let content_end = geometry
-            .snapshot
-            .row(row)
-            .and_then(|line| {
-                line.cells
-                    .iter()
-                    .rposition(|cell| !cell.text().is_empty())
-                    .map(|index| index + (line.cells[index].width.max(1) as usize))
-            })
-            .unwrap_or(0);
+        // Clicks below the last output land on blank screen rows. Snap them to
+        // the final content row and re-derive the column from that row, so a
+        // drag cannot select (or copy) the empty rows past the output.
+        let line = endpoint
+            .position
+            .line
+            .min(snapshot_last_content_line(&geometry.snapshot));
+        let row = line.saturating_sub(absolute_start);
+        let content_end = geometry.snapshot.row(row).map_or(0, row_content_end);
         let col = local_mode_insertion_col(endpoint.position.col, endpoint.side, content_end);
-        let col = geometry.snapshot.row(row).map_or(col, |line| {
+        let col = geometry.snapshot.row(row).map_or(col, |row| {
             local_mode_cell_boundary(
-                &line.cells,
+                &row.cells,
                 col,
                 endpoint.side == nyaterm_terminal::selection::TerminalCellSide::Right,
             )
         });
-        Some(TerminalBufferCellPos::new(endpoint.position.line, col))
+        Some(TerminalBufferCellPos::new(line, col))
     }
 
     fn apply_local_mode_selection(
@@ -1082,6 +1110,146 @@ mod regression_tests {
             assert!(app.write_session_input_recorded("a", b"test").is_err());
             assert!(app.write_session_raw_input_recorded("a", b"\x04").is_err());
             assert!(app.write_session_sensitive_input("a", b"test").is_err());
+        });
+    }
+
+    fn key_event(key: &str, modifiers: Modifiers) -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: Keystroke {
+                modifiers,
+                key: key.into(),
+                key_char: None,
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    /// Without a prior selection, entering the reader places the caret just
+    /// after the last glyph of the final content row, not at column 0.
+    #[test]
+    fn entering_reader_places_caret_at_end_of_last_content_line() {
+        let dir = TestConfigDir::new("nyaterm-reading-enter-eol");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            // Seed output's last row is "third" (5 cells wide).
+            assert_eq!(app.terminal.local_mode.cursor.line, 2);
+            assert_eq!(app.terminal.local_mode.cursor.col, 5);
+        });
+    }
+
+    /// The seed output has 3 content rows but a 24-row screen, so rows 3..23
+    /// are blank. Reader navigation and selection must stay within row 2.
+    #[test]
+    fn reading_navigation_never_enters_blank_rows_past_output() {
+        let dir = TestConfigDir::new("nyaterm-reading-blank-rows-nav");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            // Enter places the caret on the last content row, not screen row 23.
+            assert_eq!(app.terminal.local_mode.cursor.line, 2);
+
+            // BufferEnd / Down / PageDown must all stop at the last content row.
+            app.handle_terminal_local_mode_key(
+                &key_event(
+                    "end",
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                ),
+                cx,
+            );
+            assert_eq!(app.terminal.local_mode.cursor.line, 2);
+            app.handle_terminal_local_mode_key(&key_event("down", Modifiers::default()), cx);
+            assert_eq!(app.terminal.local_mode.cursor.line, 2);
+            app.handle_terminal_local_mode_key(&key_event("pagedown", Modifiers::default()), cx);
+            assert_eq!(app.terminal.local_mode.cursor.line, 2);
+
+            // Shift+PageDown cannot extend the selection into blank rows.
+            app.handle_terminal_local_mode_key(
+                &key_event(
+                    "home",
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                ),
+                cx,
+            );
+            app.handle_terminal_local_mode_key(
+                &key_event(
+                    "pagedown",
+                    Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                ),
+                cx,
+            );
+            assert!(app.terminal.local_mode.cursor.line <= 2);
+
+            // Select from the top through the end of the last content row; the
+            // copied text must stop at "third" with no trailing empty lines.
+            app.handle_terminal_local_mode_key(
+                &key_event(
+                    "home",
+                    Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                ),
+                cx,
+            );
+            let shift = Modifiers {
+                shift: true,
+                ..Default::default()
+            };
+            app.handle_terminal_local_mode_key(&key_event("down", shift), cx);
+            app.handle_terminal_local_mode_key(&key_event("down", shift), cx);
+            app.handle_terminal_local_mode_key(&key_event("end", shift), cx);
+            let text = app.selected_terminal_text().unwrap();
+            assert!(text.contains("first word"));
+            assert!(text.contains("third"));
+            assert!(
+                !text.ends_with('\n'),
+                "selection reached blank rows: {text:?}"
+            );
+            assert!(
+                text.lines().all(|line| !line.trim().is_empty()),
+                "blank row copied: {text:?}"
+            );
+        });
+    }
+
+    /// A mouse press in the blank area below the output must snap to the last
+    /// content row instead of selecting the empty rows.
+    #[test]
+    fn reading_mouse_never_selects_blank_rows_past_output() {
+        let dir = TestConfigDir::new("nyaterm-reading-blank-rows-mouse");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "a");
+        app.update(&mut cx, |app, cx| {
+            seed_reader(app, cx);
+            let origin = pointer(app, 0.25, 20.5, cx);
+            assert!(app.handle_terminal_local_mode_mouse_down(
+                Some("a"),
+                &gpui::MouseDownEvent {
+                    position: origin,
+                    button: gpui::MouseButton::Left,
+                    click_count: 1,
+                    ..Default::default()
+                },
+                cx
+            ));
+            // Caret snapped to the last content row (line 2), not line 20.
+            assert_eq!(app.terminal.local_mode.cursor.line, 2);
         });
     }
 

@@ -44,7 +44,7 @@ impl NyaTermApp {
         limits: FramebufferLimits,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
+        let visible = self.remote_desktop_session_visible(session_id, window);
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -96,7 +96,7 @@ impl NyaTermApp {
         // surface, so that queue is never drained: keeping the framebuffer
         // current on the CPU and uploading it when the window is presented
         // again is what keeps a streaming desktop from growing without bound.
-        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
+        let visible = self.remote_desktop_session_visible(session_id, window);
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -267,6 +267,7 @@ impl NyaTermApp {
         {
             return;
         }
+        session.texture_window = Some(window.window_handle());
         let result = upload_prepared_frame(window, &mut session.texture, &presentation);
         if matches!(result, Ok(false)) {
             self.remote_desktop
@@ -317,7 +318,7 @@ impl NyaTermApp {
         cursors: Vec<RemoteCursorEvent>,
         window: &mut Window,
     ) {
-        let visible = self.session.active_id() == Some(session_id) && window.is_visible();
+        let visible = self.remote_desktop_session_visible(session_id, window);
         let Some(session) = self.remote_desktop.sessions.get_mut(session_id) else {
             return;
         };
@@ -373,7 +374,10 @@ impl NyaTermApp {
     }
 
     fn resume_remote_desktop_uploads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session_id) = self.session.active_id().map(str::to_string) else {
+        let Some(session_id) = self
+            .remote_desktop_input_session(window)
+            .map(str::to_string)
+        else {
             return;
         };
         if self
@@ -393,6 +397,9 @@ impl NyaTermApp {
         session_id: &str,
         window: &mut Window,
     ) {
+        if !self.remote_desktop_session_in_window(session_id, window) {
+            return;
+        }
         // Never queue an upload the renderer cannot drain yet (see
         // `apply_rdp_frame_batch`). Framebuffer changes are already flagged dirty.
         if !window.is_visible() {
@@ -428,6 +435,7 @@ fn prepare_textures(
     session: &mut RemoteDesktopSessionState,
     window: &mut Window,
 ) -> anyhow::Result<()> {
+    session.texture_window = Some(window.window_handle());
     if let Some(framebuffer) = session
         .framebuffer
         .as_ref()

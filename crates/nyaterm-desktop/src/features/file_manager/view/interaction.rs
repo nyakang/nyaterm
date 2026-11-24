@@ -119,8 +119,7 @@ impl FileManagerWorkspace {
         });
         if input_focused {
             if key == "escape" && self.active_pane().path_editing {
-                self.pane_mut(self.active).path_editing = false;
-                self.focus_pane(self.active, window, cx);
+                self.escape_path_completion(self.active, window, cx);
                 cx.stop_propagation();
             } else if key == "escape" {
                 self.clear_or_close_search(self.active, window, cx);

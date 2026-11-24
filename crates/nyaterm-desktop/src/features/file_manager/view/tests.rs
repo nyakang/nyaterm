@@ -1104,6 +1104,9 @@ fn measured_workspace_switches_to_single_pane_and_keeps_input_focus(cx: &mut Tes
     });
     cx.simulate_keystrokes("escape");
     draw_file_manager(cx);
+    cx.read(|cx| assert!(workspace.read(cx).right.path_editing));
+    cx.simulate_keystrokes("escape");
+    draw_file_manager(cx);
     cx.update(|window, cx| {
         let state = workspace.read(cx);
         assert!(!state.right.path_editing);
@@ -1624,4 +1627,203 @@ fn replacing_file_clipboard_with_text_prevents_stale_file_paste(cx: &mut TestApp
         });
     });
     assert_eq!(std::fs::read(root.join("source.txt")).unwrap(), b"source");
+}
+
+#[gpui::test]
+fn path_completion_fills_without_navigating_then_enters_and_escapes_in_two_steps(
+    cx: &mut TestAppContext,
+) {
+    use nyaterm_file_browser_gpui::completion::CompletionStatus;
+    fn wait_for_completion(
+        cx: &mut VisualTestContext,
+        description: &str,
+        condition: impl Fn(&App) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(20));
+            if cx.read(&condition) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {description}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    cx.executor().allow_parking();
+    let root = TestTempDir::new("nyaterm-path-completion");
+    std::fs::create_dir_all(root.join("alpha/child")).unwrap();
+    std::fs::create_dir_all(root.join("alpine")).unwrap();
+    cx.update(|cx| {
+        nyaterm_ui::apply_component_theme(
+            crate::theme::theme_palette("dark"),
+            gpui::font("Segoe UI"),
+            gpui::px(14.),
+            cx,
+        )
+    });
+    // Match startup: component bindings must exist before the app captures its
+    // shortcut baseline; later settings saves rebuild that baseline.
+    let app = app_with_visible_local_session(cx, root.path(), "path-completion-test");
+    let original = root.path().to_string_lossy().into_owned();
+    let workspace = workspace(cx, &app, &original);
+    let fixture = cx.new(|_| FileManagerLayoutFixture {
+        workspace: workspace.clone(),
+        width: 900.,
+    });
+    let (_, cx) =
+        cx.add_window_view(move |window, cx| nyaterm_ui::nya_root(fixture.clone(), window, cx));
+    draw_file_manager(cx);
+    cx.update(|window, cx| {
+        workspace.update(cx, |state, cx| {
+            state.begin_path_edit(PaneId::Right, window, cx)
+        })
+    });
+    draw_file_manager(cx);
+    cx.simulate_input("al");
+    wait_for_completion(cx, "directory candidates", |cx| {
+        workspace.read(cx).right.completion.presentation.status == CompletionStatus::Ready
+    });
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert_eq!(
+            state
+                .right
+                .completion
+                .presentation
+                .candidates
+                .iter()
+                .map(|c| c.label.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "alpine"]
+        );
+        assert!(state.right.completion.presentation.selected.is_none());
+        assert!(!state.left.completion.presentation.visible());
+        assert_eq!(state.right.path.display_path, original);
+    });
+    draw_file_manager(cx);
+    cx.simulate_keystrokes("down tab");
+    wait_for_completion(cx, "next directory candidates", |cx| {
+        let state = workspace.read(cx);
+        state.right.completion.presentation.status == CompletionStatus::Ready
+            && state
+                .right
+                .completion
+                .presentation
+                .candidates
+                .first()
+                .is_some_and(|c| c.label == "child")
+    });
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert!(state.right.path_editing);
+        assert_eq!(state.right.path.display_path, original);
+        assert!(
+            state
+                .inputs(PaneId::Right)
+                .path
+                .read(cx)
+                .value(cx)
+                .ends_with(if cfg!(windows) { "alpha\\" } else { "alpha/" })
+        );
+    });
+    draw_file_manager(cx);
+    cx.simulate_keystrokes("escape");
+    cx.read(|cx| {
+        assert!(workspace.read(cx).right.path_editing);
+        assert!(!workspace.read(cx).right.completion.presentation.visible());
+    });
+    draw_file_manager(cx);
+    cx.simulate_keystrokes("enter");
+    wait_for_listings(cx, &workspace);
+    cx.read(|cx| {
+        assert_eq!(
+            workspace
+                .read(cx)
+                .right
+                .path
+                .display_path
+                .trim_end_matches(['/', '\\']),
+            root.join("alpha").to_str().unwrap()
+        );
+        assert!(!workspace.read(cx).right.path_editing);
+    });
+    draw_file_manager(cx);
+    cx.update(|window, cx| {
+        workspace.update(cx, |state, cx| {
+            state.begin_path_edit(PaneId::Right, window, cx)
+        })
+    });
+    draw_file_manager(cx);
+    cx.simulate_keystrokes("backspace");
+    cx.read(|cx| {
+        assert_eq!(
+            workspace
+                .read(cx)
+                .inputs(PaneId::Right)
+                .path
+                .read(cx)
+                .value(cx),
+            ""
+        )
+    });
+    wait_for_completion(cx, "child completion", |cx| {
+        workspace.read(cx).right.completion.presentation.status == CompletionStatus::Ready
+    });
+    draw_file_manager(cx);
+    cx.read(|cx| {
+        assert_eq!(
+            workspace
+                .read(cx)
+                .right
+                .completion
+                .presentation
+                .candidates
+                .iter()
+                .map(|c| c.label.as_str())
+                .collect::<Vec<_>>(),
+            ["child"]
+        );
+    });
+    cx.update(|window, cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .inputs(PaneId::Right)
+                .path
+                .read(cx)
+                .component_focus_handle(cx)
+                .is_focused(window)
+        );
+    });
+    cx.update(|window, cx| {
+        let field = workspace.read(cx).inputs(PaneId::Right).path.clone();
+        assert!(!field.update(cx, |input, cx| input.is_composing(window, cx)));
+        assert!(field.read(cx).selection_at_end(cx));
+    });
+    cx.simulate_keystrokes("down");
+    cx.read(|cx| {
+        assert_eq!(
+            workspace
+                .read(cx)
+                .right
+                .completion
+                .selected_path()
+                .unwrap()
+                .display_path,
+            root.join("alpha/child").to_str().unwrap()
+        );
+    });
+    cx.simulate_keystrokes("enter");
+    wait_for_listings(cx, &workspace);
+    cx.read(|cx| {
+        assert!(!workspace.read(cx).right.path_editing);
+        assert_eq!(
+            workspace.read(cx).right.path.display_path,
+            root.join("alpha/child").to_str().unwrap()
+        )
+    });
 }

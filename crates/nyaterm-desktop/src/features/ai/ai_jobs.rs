@@ -101,6 +101,22 @@ pub(in crate::features) fn run_ai_ask_job(
         return Err("AI request cancelled".to_string());
     }
 
+    if request.agent_kind != AiAgentKind::Nyaterm {
+        if request.mode != AiMode::Agent {
+            return Err("External agents require Agent mode".into());
+        }
+        return super::acp_runtime::run_external(
+            &store,
+            &settings,
+            &request,
+            &history,
+            mcp_credential.ok_or("External Agent requires a request-scoped MCP credential")?,
+            stream_tx.as_ref(),
+            &cancel,
+            job_id,
+        );
+    }
+
     if request.mode != AiMode::Agent
         && matches!(
             request.agent_kind,
@@ -211,6 +227,7 @@ pub(in crate::features) fn run_ai_ask_job(
         if settings.record_history && persistent {
             let thread_id = completion.thread_id;
             let metadata = AiSessionBackendMetadata {
+                external_binding: None,
                 backend: AiBackendKind::Codex,
                 external_thread_id: Some(thread_id.clone()),
                 codex_terminal_tools_version: Some(nyaterm_core::ai::CODEX_TERMINAL_TOOLS_VERSION),
@@ -305,6 +322,7 @@ pub(in crate::features) fn run_ai_ask_job(
                 let external_session_id = external_session_id.to_string();
                 let stored_external_session_id = external_session_id.clone();
                 let metadata = AiSessionBackendMetadata {
+                    external_binding: None,
                     backend: AiBackendKind::ClaudeCode,
                     external_thread_id: Some(external_session_id),
                     codex_terminal_tools_version: None,
@@ -363,6 +381,7 @@ pub(in crate::features) fn run_ai_ask_job(
         if settings.record_history {
             if let Some(external_session_id) = completion.external_session_id {
                 let metadata = AiSessionBackendMetadata {
+                    external_binding: None,
                     backend: AiBackendKind::ClaudeCode,
                     external_thread_id: Some(external_session_id.clone()),
                     codex_terminal_tools_version: None,
@@ -508,7 +527,7 @@ pub(in crate::features) fn ai_job_cancelled(cancel: &Arc<AtomicBool>) -> bool {
     cancel.load(Ordering::Relaxed)
 }
 
-fn record_external_agent_audit(
+pub(super) fn record_external_agent_audit(
     store: &StoreBlockingClient,
     request: &AiChatRequest,
     source: &str,

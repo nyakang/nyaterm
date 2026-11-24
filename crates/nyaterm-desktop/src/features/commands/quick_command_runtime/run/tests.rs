@@ -783,6 +783,7 @@ fn helper_backed_and_disconnected_sessions_are_never_terminal_sync_targets() {
             display: Default::default(),
             clipboard: Default::default(),
             reconnect: Default::default(),
+            redirection: Default::default(),
         });
         app.session
             .metadata_mut(&fixture.ids[2])

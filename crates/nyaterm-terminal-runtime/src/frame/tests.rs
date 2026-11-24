@@ -3098,3 +3098,84 @@ fn terminal_frame_event_queue_delivers_snapshot_reply_after_critical_pressure() 
     };
     assert_eq!(reply.offset, 0);
 }
+
+#[test]
+fn seed_applies_alternate_screen_policy_before_replaying_output() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.set_ignore_alternate_screen(true);
+    pipeline.seed_session("review", "\x1b[?1049hrestored output", "UTF-8", 1000);
+    pipeline.submit_output("review", b"more output".to_vec(), "UTF-8", 1000);
+    pipeline.finish_pending_output().unwrap();
+    let protocol = pipeline
+        .take_events_for_transfer(&["review".into()])
+        .into_iter()
+        .find_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => Some(frame.protocol_state),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        !protocol.alternate_screen,
+        "seed replay must honor the policy before entering alternate screen"
+    );
+}
+
+#[test]
+fn alternate_screen_policy_reaches_background_new_and_reconnected_sessions() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.ensure_session("existing", "UTF-8", 100);
+    pipeline.set_snapshot_priority(Vec::new());
+    pipeline.set_ignore_alternate_screen(true);
+    pipeline.ensure_session("new", "UTF-8", 100);
+    pipeline.seed_session("seeded", "\x1b[?1049hseed", "UTF-8", 100);
+    pipeline.submit_output("from-output", b"\x1b[?1049hnew".to_vec(), "UTF-8", 100);
+    assert!(pipeline.rekey_session("new", "reconnected", "UTF-8", 100));
+    for id in ["existing", "reconnected", "seeded", "from-output"] {
+        pipeline.submit_output(id, b"\x1b[?1049houtput".to_vec(), "UTF-8", 100);
+        let session = pipeline.take_session_for_transfer(id).unwrap().unwrap();
+        assert!(session.screen.ignores_alternate_screen(), "{id}");
+        assert!(!session.screen.alternate_screen(), "{id}");
+        // Destination policy must replace the source policy in both directions.
+        let target = TerminalFramePipeline::default();
+        target
+            .insert_sessions_from_transfer(vec![(id.into(), session)])
+            .unwrap();
+        target.submit_output(id, b"\x1b[?1049h".to_vec(), "UTF-8", 100);
+        let session = target.take_session_for_transfer(id).unwrap().unwrap();
+        assert!(!session.screen.ignores_alternate_screen());
+        assert!(session.screen.alternate_screen());
+        pipeline
+            .insert_sessions_from_transfer(vec![(id.into(), session)])
+            .unwrap();
+        pipeline.submit_output(id, b"\x1b[?1049l\x1b[?1049h".to_vec(), "UTF-8", 100);
+        let session = pipeline.take_session_for_transfer(id).unwrap().unwrap();
+        assert!(session.screen.ignores_alternate_screen());
+        assert!(!session.screen.alternate_screen());
+    }
+}
+
+#[test]
+fn alternate_screen_policy_changes_are_ordered_with_output() {
+    let pipeline = TerminalFramePipeline::default();
+    pipeline.submit_output("s1", b"\x1b[?1049h\x1b[?1049$p".to_vec(), "UTF-8", 100);
+    pipeline.set_ignore_alternate_screen(true);
+    pipeline.submit_output(
+        "s1",
+        b"\x1b[?1049l\x1b[?1049h\x1b[?1049$p".to_vec(),
+        "UTF-8",
+        100,
+    );
+    pipeline.set_ignore_alternate_screen(false);
+    pipeline.submit_output("s1", b"\x1b[?1049h\x1b[?1049$p".to_vec(), "UTF-8", 100);
+    pipeline.finish_pending_output().unwrap();
+    let replies: Vec<u8> = pipeline
+        .take_events_for_transfer(&["s1".into()])
+        .into_iter()
+        .filter_map(|event| match event {
+            TerminalFrameEvent::Output(frame) => Some(frame.effects.pty_write.concat()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(replies, b"\x1b[?1049;1$y\x1b[?1049;2$y\x1b[?1049;1$y");
+}

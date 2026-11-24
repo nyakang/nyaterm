@@ -11,8 +11,28 @@ use std::thread;
 use crate::action_links::{ActionLinkAction, ActionLinkTarget};
 
 use super::event_wake::{ANY_INTEREST, EventWake};
-
 pub(crate) use nyaterm_connections_gpui::models::{ConnectionEditorSection, ConnectionKindTab};
+
+/// Logical drive letters currently present on this machine (Windows only).
+/// Shared by the drive picker and its toggle handler so an explicit selection
+/// never contains drives the user cannot see in the editor.
+pub(crate) fn local_drive_letters() -> Vec<char> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+        let mask = unsafe { GetLogicalDrives() };
+        ('A'..='Z')
+            .filter(|letter| {
+                let index = u32::from(*letter as u8 - b'A');
+                mask & (1 << index) != 0
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConnectionEditorSelect {
@@ -42,6 +62,7 @@ pub(crate) enum ConnectionEditorSelect {
     RdpBackend,
     RdpCertificatePolicy,
     RdpDisplayMode,
+    RdpAudio,
     VncSecurityMode,
     VncScaleMode,
     RecordingMode,
@@ -124,6 +145,7 @@ pub(crate) enum ConnectionEditorField {
     TelnetAutoLoginMaxRetries,
     RdpDisplayWidth,
     RdpDisplayHeight,
+    RdpCustomDrivePath,
     RdpReconnectAttempts,
     VncReconnectAttempts,
     SpiceTcpPort,
@@ -187,7 +209,7 @@ impl ConnectionEditorField {
             Self::SpiceCaPem | Self::SpiceCertificateSubject => ConnectionEditorSection::Security,
             Self::SpiceReconnectAttempts => ConnectionEditorSection::Session,
             Self::RdpDisplayWidth | Self::RdpDisplayHeight => ConnectionEditorSection::Display,
-            Self::RdpReconnectAttempts | Self::VncReconnectAttempts => {
+            Self::RdpCustomDrivePath | Self::RdpReconnectAttempts | Self::VncReconnectAttempts => {
                 ConnectionEditorSection::Session
             }
             Self::FtpInitialDirectory
@@ -321,6 +343,7 @@ pub(crate) struct ConnectionEditorState {
     pub(crate) rdp_security: nyaterm_core::RdpSecuritySettings,
     pub(crate) rdp_display: nyaterm_core::RdpDisplaySettings,
     pub(crate) rdp_clipboard: nyaterm_core::RdpClipboardSettings,
+    pub(crate) rdp_redirection: nyaterm_core::RdpRedirectionSettings,
     pub(crate) rdp_reconnect: nyaterm_core::RdpReconnectSettings,
 
     pub(crate) spice: spice::SpiceEditorDraft,

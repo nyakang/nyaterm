@@ -119,6 +119,7 @@ fn test_config() -> RdpSessionConfig {
         display: RdpDisplayConfig::default(),
         clipboard: RdpClipboardConfig::default(),
         reconnect: RdpReconnectConfig::default(),
+        redirection: Default::default(),
     }
 }
 

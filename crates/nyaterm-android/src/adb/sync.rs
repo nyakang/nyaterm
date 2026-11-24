@@ -213,9 +213,25 @@ impl SyncStream {
         path: &[u8],
         mut check: impl FnMut() -> AdbResult<()>,
     ) -> AdbResult<Vec<DirectoryEntry>> {
+        let mut entries = Vec::new();
+        self.list_visit_with_cancel(path, &mut check, |entry| {
+            entries.push(entry);
+            Ok(())
+        })?;
+        Ok(entries)
+    }
+
+    /// A visitor may stop enumeration with an error. The runtime discards that
+    /// Sync channel because the unread response cannot be reused safely.
+    pub fn list_visit_with_cancel(
+        &mut self,
+        path: &[u8],
+        mut check: impl FnMut() -> AdbResult<()>,
+        mut visit: impl FnMut(DirectoryEntry) -> AdbResult<()>,
+    ) -> AdbResult<()> {
         let progress = &mut |_| check();
         self.request(if self.list_v2 { b"LIS2" } else { b"LIST" }, path, progress)?;
-        let mut entries = Vec::new();
+        let mut count = 0usize;
         loop {
             let tag = self.tag(progress)?;
             let mut data = vec![0; if self.list_v2 { 72 } else { 16 }];
@@ -248,16 +264,17 @@ impl SyncStream {
                     u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize,
                 )
             };
-            if length > PATH_LIMIT || entries.len() >= LIST_LIMIT {
+            if length > PATH_LIMIT || count >= LIST_LIMIT {
                 return Err(AdbError::Protocol("directory limit"));
             }
             let mut name = vec![0; length];
             self.read(&mut name, progress)?;
             if name != b"." && name != b".." {
-                entries.push(DirectoryEntry { name, stat });
+                count += 1;
+                visit(DirectoryEntry { name, stat })?;
             }
         }
-        Ok(entries)
+        Ok(())
     }
 
     pub fn receive_controlled(

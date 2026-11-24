@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use nyaterm_core::SecretString;
+use nyaterm_core::{RdpRedirectionSettings, SecretString};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 13;
@@ -95,19 +95,28 @@ pub struct RdpSessionConfig {
     pub administrative_session: bool,
     pub display: RdpDisplayConfig,
     pub clipboard: RdpClipboardConfig,
+    /// Local resource redirection. Default keeps devices off and clipboard on.
+    #[serde(default)]
+    pub redirection: RdpRedirectionConfig,
     pub reconnect: RdpReconnectConfig,
 }
 
 impl RdpSessionConfig {
     /// Apply backend policy to an ephemeral launch configuration, never stored data.
-    /// RDP always enables text and file clipboard redirection. Legacy modes remain
-    /// serializable for saved sessions, backups, and sync compatibility.
-    /// Selecting Windows uses system authentication; unknown auth modes remain errors.
+    /// Clipboard follows the new switch; legacy modes remain serializable for
+    /// saved sessions, backups, and sync compatibility.
+    /// Selecting Windows uses system authentication and drops WebAuthn, which
+    /// mstscax has no property for; unknown auth modes remain errors.
     pub fn normalize_backend_settings(&mut self) {
-        self.clipboard.mode = RdpClipboardMode::TextAndFiles;
+        self.clipboard.mode = if self.redirection.clipboard {
+            RdpClipboardMode::TextAndFiles
+        } else {
+            RdpClipboardMode::Disabled
+        };
         if self.backend == RdpBackend::Windows {
             self.windows_authentication
                 .get_or_insert_with(|| "system".into());
+            self.redirection.webauthn = false;
         }
     }
 }
@@ -128,6 +137,7 @@ impl fmt::Debug for RdpSessionConfig {
             .field("administrative_session", &self.administrative_session)
             .field("display", &self.display)
             .field("clipboard", &self.clipboard)
+            .field("redirection", &self.redirection)
             .field("reconnect", &self.reconnect)
             .finish()
     }
@@ -304,6 +314,146 @@ pub enum RdpClipboardMode {
     TextOnly,
     #[default]
     TextAndFiles,
+}
+
+/// Playback destination selected in the Local resources panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RdpAudioMode {
+    /// Do not play remote audio anywhere (the historical client behavior).
+    #[default]
+    NoAudio,
+    /// Play remote audio on this computer.
+    Local,
+    /// Leave audio playing on the remote computer.
+    Remote,
+}
+
+/// Parse an editor/CLI audio mode, falling back to `no_audio` for unknown values.
+pub fn parse_rdp_audio_mode(value: &str) -> RdpAudioMode {
+    match value {
+        "local" | "play_on_local" | "redirect" => RdpAudioMode::Local,
+        "remote" | "play_on_remote" | "resource_only" => RdpAudioMode::Remote,
+        _ => RdpAudioMode::NoAudio,
+    }
+}
+
+/// Sentinel for "redirect every local drive", matching mstsc's `drivestoredirect:s:*`.
+pub const RDP_ALL_DRIVES: &str = "*";
+
+/// Default drive selection for newly created connections.
+pub fn default_rdp_drive_letters() -> String {
+    RDP_ALL_DRIVES.to_string()
+}
+
+/// Parse the persisted drive selection into distinct uppercase letters.
+/// `"*"` expands to every letter; an empty string selects nothing.
+pub fn parse_rdp_drive_letters(spec: &str) -> Vec<char> {
+    if spec.trim() == RDP_ALL_DRIVES {
+        return ('A'..='Z').collect();
+    }
+    let mut letters: Vec<char> = spec
+        .chars()
+        .filter_map(|letter| {
+            let upper = letter.to_ascii_uppercase();
+            ('A'..='Z').contains(&upper).then_some(upper)
+        })
+        .collect();
+    letters.sort_unstable();
+    letters.dedup();
+    letters
+}
+
+/// Toggle a single drive letter, preserving the wildcard only when all 26
+/// letters remain selected.
+pub fn toggle_rdp_drive_letter(spec: &str, letter: char) -> String {
+    let letter = letter.to_ascii_uppercase();
+    if !('A'..='Z').contains(&letter) {
+        return spec.to_string();
+    }
+    let mut letters = parse_rdp_drive_letters(spec);
+    match letters.iter().position(|value| *value == letter) {
+        Some(index) => {
+            letters.remove(index);
+        }
+        None => letters.push(letter),
+    }
+    if letters.len() == 26 {
+        RDP_ALL_DRIVES.to_string()
+    } else {
+        letters.into_iter().collect()
+    }
+}
+
+/// Local resource redirection carried to both RDP backends.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RdpRedirectionConfig {
+    #[serde(default)]
+    pub drives: bool,
+    /// See [`parse_rdp_drive_letters`] for the accepted values.
+    #[serde(default = "default_rdp_drive_letters")]
+    pub drive_letters: String,
+    /// Optional local directory announced as an extra RDPDR share. Empty
+    /// disables it on Windows; on Linux/macOS an empty value falls back to
+    /// the home directory so the single configured share keeps working.
+    #[serde(default)]
+    pub custom_drive_path: String,
+    #[serde(default)]
+    pub printers: bool,
+    #[serde(default)]
+    pub ports: bool,
+    #[serde(default)]
+    pub smartcards: bool,
+    #[serde(default)]
+    pub microphone: bool,
+    /// Not supported by mstscax; normalized off for the Windows backend.
+    #[serde(default)]
+    pub webauthn: bool,
+    /// Mirrors `RdpClipboardConfig::mode` and is on by default.
+    #[serde(default = "default_redirection_true")]
+    pub clipboard: bool,
+    #[serde(default)]
+    pub audio: RdpAudioMode,
+}
+
+fn default_redirection_true() -> bool {
+    true
+}
+
+impl Default for RdpRedirectionConfig {
+    fn default() -> Self {
+        Self {
+            drives: false,
+            drive_letters: default_rdp_drive_letters(),
+            custom_drive_path: String::new(),
+            printers: false,
+            ports: false,
+            smartcards: false,
+            microphone: false,
+            webauthn: false,
+            clipboard: true,
+            audio: RdpAudioMode::NoAudio,
+        }
+    }
+}
+
+impl From<&RdpRedirectionSettings> for RdpRedirectionConfig {
+    fn from(settings: &RdpRedirectionSettings) -> Self {
+        Self {
+            drives: settings.drives,
+            // Old saved sessions deserialize to `"*"` via serde's default, so
+            // an explicit empty string here really means "no drives selected".
+            drive_letters: settings.drive_letters.clone(),
+            custom_drive_path: settings.custom_drive_path.clone(),
+            printers: settings.printers,
+            ports: settings.ports,
+            smartcards: settings.smartcards,
+            microphone: settings.microphone,
+            webauthn: settings.webauthn,
+            clipboard: settings.clipboard,
+            audio: parse_rdp_audio_mode(&settings.audio),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1186,12 +1336,14 @@ pub fn parse_vnc_scale_mode(value: &str) -> VncScaleMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, MAX_WIDTH, MIN_HEIGHT, RdpBackend,
-        RdpCertificatePolicy, RdpClipboardConfig, RdpClipboardMode, RdpDisplayConfig,
-        RdpDisplayMetrics, RdpDisplayMode, RdpSessionConfig, parse_rdp_backend,
+        CommittedTextError, MAX_COMMITTED_TEXT_BYTES, MAX_WIDTH, MIN_HEIGHT, RDP_ALL_DRIVES,
+        RdpAudioMode, RdpBackend, RdpCertificatePolicy, RdpClipboardConfig, RdpClipboardMode,
+        RdpDisplayConfig, RdpDisplayMetrics, RdpDisplayMode, RdpReconnectConfig,
+        RdpRedirectionConfig, RdpSessionConfig, parse_rdp_audio_mode, parse_rdp_backend,
         parse_rdp_certificate_policy, parse_rdp_clipboard_mode, parse_rdp_display_mode,
-        validate_committed_text,
+        parse_rdp_drive_letters, toggle_rdp_drive_letter, validate_committed_text,
     };
+    use nyaterm_core::RdpRedirectionSettings;
 
     #[test]
     fn vnc_password_hint_is_optional_and_defaults_to_no_prompt() {
@@ -1350,5 +1502,109 @@ mod tests {
             validate_committed_text("line\nfeed"),
             Err(CommittedTextError::ContainsControl)
         );
+    }
+
+    fn rdp_session_config() -> RdpSessionConfig {
+        RdpSessionConfig {
+            relay: None,
+            backend: RdpBackend::Builtin,
+            windows_authentication: None,
+            name: "test".into(),
+            host: "127.0.0.1".into(),
+            port: 3389,
+            username: "user".into(),
+            domain: String::new(),
+            password: None,
+            use_nla: true,
+            certificate_policy: RdpCertificatePolicy::default(),
+            administrative_session: false,
+            display: RdpDisplayConfig::default(),
+            clipboard: RdpClipboardConfig::default(),
+            redirection: RdpRedirectionConfig::default(),
+            reconnect: RdpReconnectConfig::default(),
+        }
+    }
+
+    #[test]
+    fn redirection_defaults_keep_devices_off_and_clipboard_on() {
+        let default = RdpRedirectionConfig::default();
+        assert!(!default.drives);
+        assert!(!default.printers);
+        assert!(!default.ports);
+        assert!(!default.smartcards);
+        assert!(!default.microphone);
+        assert!(!default.webauthn);
+        assert!(default.clipboard);
+        assert_eq!(default.audio, RdpAudioMode::NoAudio);
+        assert_eq!(default.drive_letters, RDP_ALL_DRIVES);
+        assert!(default.custom_drive_path.is_empty());
+
+        let core = RdpRedirectionSettings::default();
+        assert!(core.clipboard);
+        assert_eq!(core.audio, "no_audio");
+        assert!(!core.drives && !core.printers && !core.ports && !core.smartcards);
+        assert_eq!(core.drive_letters, RDP_ALL_DRIVES);
+        assert!(core.custom_drive_path.is_empty());
+    }
+
+    #[test]
+    fn drive_letters_parse_and_toggle() {
+        assert_eq!(parse_rdp_drive_letters("*").len(), 26);
+        assert_eq!(parse_rdp_drive_letters("dcD,"), vec!['C', 'D']);
+        assert!(parse_rdp_drive_letters("").is_empty());
+        assert_eq!(
+            toggle_rdp_drive_letter("*", 'b'),
+            "ACDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+        assert_eq!(toggle_rdp_drive_letter("C", 'd'), "CD");
+        assert_eq!(toggle_rdp_drive_letter("CD", 'c'), "D");
+        assert_eq!(toggle_rdp_drive_letter("D", '1'), "D");
+    }
+
+    #[test]
+    fn audio_mode_parses_editor_values() {
+        assert_eq!(parse_rdp_audio_mode("local"), RdpAudioMode::Local);
+        assert_eq!(parse_rdp_audio_mode("remote"), RdpAudioMode::Remote);
+        assert_eq!(parse_rdp_audio_mode("no_audio"), RdpAudioMode::NoAudio);
+        assert_eq!(parse_rdp_audio_mode("unexpected"), RdpAudioMode::NoAudio);
+    }
+
+    #[test]
+    fn redirection_conversion_preserves_every_field() {
+        let settings = RdpRedirectionSettings {
+            drives: true,
+            drive_letters: "CD".into(),
+            custom_drive_path: r"C:\Users\name\Documents".into(),
+            printers: true,
+            ports: true,
+            smartcards: true,
+            microphone: true,
+            webauthn: true,
+            clipboard: false,
+            audio: "remote".into(),
+        };
+        let config = RdpRedirectionConfig::from(&settings);
+        assert!(config.drives && config.printers && config.ports && config.smartcards);
+        assert!(config.microphone && config.webauthn);
+        assert!(!config.clipboard);
+        assert_eq!(config.drive_letters, "CD");
+        assert_eq!(config.custom_drive_path, r"C:\Users\name\Documents");
+        assert_eq!(config.audio, RdpAudioMode::Remote);
+    }
+
+    #[test]
+    fn normalize_follows_clipboard_switch_and_drops_webauthn_on_windows() {
+        let mut config = rdp_session_config();
+        config.normalize_backend_settings();
+        assert_eq!(config.clipboard.mode, RdpClipboardMode::TextAndFiles);
+
+        config.redirection.clipboard = false;
+        config.normalize_backend_settings();
+        assert_eq!(config.clipboard.mode, RdpClipboardMode::Disabled);
+
+        config.backend = RdpBackend::Windows;
+        config.redirection.webauthn = true;
+        config.normalize_backend_settings();
+        assert!(!config.redirection.webauthn);
     }
 }

@@ -4,7 +4,8 @@ use std::path::Path;
 use crate::{
     AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
     ConnectionUsernameSource, RdpClipboardSettings, RdpDisplaySettings, RdpReconnectSettings,
-    RdpSecuritySettings, SavedPassword, SecretString, SerialConnectPrompt, SerialFlowControl,
+    RdpRedirectionSettings, RdpSecuritySettings, SavedPassword, SecretString, SerialConnectPrompt,
+    SerialFlowControl,
 };
 
 use super::{
@@ -634,6 +635,7 @@ fn connection_config(session: &MobaSession, username: String) -> ConnectionType 
             security: RdpSecuritySettings::default(),
             display: RdpDisplaySettings::default(),
             clipboard: RdpClipboardSettings::default(),
+            redirection: RdpRedirectionSettings::default(),
             reconnect: RdpReconnectSettings::default(),
         },
         MobaProtocol::Telnet => ConnectionType::Telnet {

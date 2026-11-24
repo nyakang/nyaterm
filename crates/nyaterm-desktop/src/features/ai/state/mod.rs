@@ -687,11 +687,10 @@ impl AiFeatureState {
 
     pub(in crate::features) fn chat_run_mode(&self) -> AiMode {
         if self.chat.run_mode == AiMode::Agent
-            && match self.chat.agent_kind {
-                AiAgentKind::Codex => !self.settings.config.codex.enabled,
-                AiAgentKind::ClaudeCode => !self.settings.config.claude_code.enabled,
-                AiAgentKind::Nyaterm => false,
-            }
+            && !nyaterm_core::ai::external_agents::is_enabled(
+                &self.settings.config,
+                &self.chat.agent_kind,
+            )
         {
             return AiMode::Ask;
         }
@@ -709,12 +708,13 @@ impl AiFeatureState {
     /// The agent runtime to restore when switching from Ask to Agent, falling
     /// back to NyaTerm when the remembered external runtime was disabled.
     pub(in crate::features) fn last_agent_kind(&self) -> AiAgentKind {
-        match self.panel.last_agent_kind {
-            AiAgentKind::Codex if !self.settings.config.codex.enabled => AiAgentKind::Nyaterm,
-            AiAgentKind::ClaudeCode if !self.settings.config.claude_code.enabled => {
-                AiAgentKind::Nyaterm
-            }
-            ref kind => kind.clone(),
+        if nyaterm_core::ai::external_agents::is_enabled(
+            &self.settings.config,
+            &self.panel.last_agent_kind,
+        ) {
+            self.panel.last_agent_kind.clone()
+        } else {
+            AiAgentKind::Nyaterm
         }
     }
 
@@ -724,11 +724,7 @@ impl AiFeatureState {
         kind: AiAgentKind,
     ) -> bool {
         if mode == AiMode::Agent
-            && match kind {
-                AiAgentKind::Codex => !self.settings.config.codex.enabled,
-                AiAgentKind::ClaudeCode => !self.settings.config.claude_code.enabled,
-                AiAgentKind::Nyaterm => false,
-            }
+            && !nyaterm_core::ai::external_agents::is_enabled(&self.settings.config, &kind)
         {
             return false;
         }
@@ -998,6 +994,25 @@ impl AiFeatureState {
         };
         self.chat.prepared_request = None;
         launch
+    }
+
+    pub(in crate::features) fn cancel_external_profile_runs(&mut self, id: &str) {
+        let visible = self.active_scope_key.clone();
+        let scopes = self.inactive_scopes.keys().cloned().collect::<Vec<_>>();
+        if nyaterm_core::ai::external_agents::profile_id(&self.chat.agent_kind) == Some(id)
+            && self.chat_or_agent_is_running()
+        {
+            self.cancel_chat_and_agent();
+        }
+        for scope in scopes {
+            self.switch_scope(&scope);
+            if nyaterm_core::ai::external_agents::profile_id(&self.chat.agent_kind) == Some(id)
+                && self.chat_or_agent_is_running()
+            {
+                self.cancel_chat_and_agent();
+            }
+        }
+        self.switch_scope(&visible);
     }
 
     pub(in crate::features) fn cancel_all_chats_and_agents(&mut self) {
@@ -2329,8 +2344,13 @@ impl AiFeatureState {
         self.agent_management.set_error(error);
     }
 
-    pub(in crate::features) fn submit_agent_command(&mut self, command: AgentCommand) -> bool {
-        self.agent_management.submit(command)
+    pub(in crate::features) fn submit_agent_command(
+        &mut self,
+        command: AgentCommand,
+        store: nyaterm_store::StoreBlockingClient,
+        executor: gpui::BackgroundExecutor,
+    ) -> bool {
+        self.agent_management.submit(command, store, executor)
     }
 
     pub(in crate::features) fn take_agent_events(

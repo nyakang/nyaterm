@@ -232,12 +232,20 @@ impl SessionEventBridge {
             .assign_session_event_consumer(session_id, self.consumer_id);
     }
 
+    /// Finish submission of any dequeued output before the caller removes the
+    /// frame session. Otherwise a late batch can recreate the removed parser.
     pub fn release_session(&self, session_id: &str) {
+        let _gate = self
+            .state
+            .transfer_gate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         if let Ok(mut control) = self.state.control.lock() {
             control.owned_sessions.remove(session_id);
             control.protocol_consumers.remove(session_id);
             control.ui_routed_sessions.remove(session_id);
             control.pending_ui_sessions.remove(session_id);
+            control.session_encodings.remove(session_id);
         }
         self.session_manager
             .clear_session_event_consumer(session_id, self.consumer_id);
@@ -1070,6 +1078,109 @@ mod tests {
     use crate::frame::{TerminalFrameOutputSubmission, TerminalFramePipeline};
     use nyaterm_recording::pipeline::RecordingWritePipeline;
     use nyaterm_transport::{SessionEvent, SessionManager};
+
+    #[test]
+    fn release_waits_for_pending_output_before_parser_removal() {
+        let manager = Arc::new(SessionManager::new());
+        let pipeline = TerminalFramePipeline::default();
+        let bridge =
+            SessionEventBridge::spawn(manager, pipeline.clone(), None, "UTF-8".into(), 1000);
+        bridge.claim_session("live");
+        let mut probes = HashMap::new();
+        let mut closed_ids = Vec::new();
+        let mut expected_live_text = String::new();
+        for round in 0..20 {
+            let id = format!("closing-{round}");
+            bridge.claim_session(&id);
+            bridge.configure(
+                "UTF-8".into(),
+                1000,
+                [
+                    (id.clone(), "UTF-8".into()),
+                    ("live".into(), "UTF-8".into()),
+                ]
+                .into(),
+            );
+            pipeline.ensure_session(&id, "UTF-8", 1000);
+            pipeline.finish_pending_output().unwrap();
+
+            // Reproduce a worker batch paused between routing and submission.
+            // Closing runs on another thread, as it does in the application.
+            let gate = bridge.state.transfer_gate.lock().unwrap();
+            let mut pending = Vec::new();
+            let live_text = format!("round-{round}\r\n");
+            expected_live_text.push_str(&format!("round-{round}\n"));
+            for (session_id, data) in [
+                (id.clone(), b"closing output\r\n".repeat(256)),
+                ("live".into(), live_text.into_bytes()),
+            ] {
+                bridge_route_event(
+                    &bridge.state,
+                    &pipeline,
+                    None,
+                    &mut probes,
+                    &mut pending,
+                    SessionEvent::Output { session_id, data },
+                    Instant::now(),
+                );
+            }
+            assert_eq!(pending.len(), 2);
+            let released_before_flush = std::thread::scope(|scope| {
+                let (started_tx, started_rx) = mpsc::channel();
+                let (done_tx, done_rx) = mpsc::channel();
+                let bridge = &bridge;
+                let pipeline = &pipeline;
+                let id = &id;
+                scope.spawn(move || {
+                    started_tx.send(()).unwrap();
+                    bridge.release_session(id);
+                    bridge.clear_session(id);
+                    pipeline.remove_session(id);
+                    pipeline.finish_pending_output().unwrap();
+                    done_tx.send(()).unwrap();
+                });
+                started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let early = done_rx.recv_timeout(Duration::from_millis(50)).is_ok();
+                // Always unblock the closer before asserting, including on failure.
+                flush_bridge_direct_outputs(pipeline, &mut pending);
+                drop(gate);
+                if !early {
+                    done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                early
+            });
+            pipeline.finish_pending_output().unwrap();
+            assert!(
+                futures::executor::block_on(pipeline.request_all_text(id.clone()))
+                    .unwrap()
+                    .is_none(),
+                "late output recreated {id}"
+            );
+            assert!(!released_before_flush, "release overtook a pending batch");
+            assert!(
+                !bridge
+                    .state
+                    .control
+                    .lock()
+                    .unwrap()
+                    .session_encodings
+                    .contains_key(&id)
+            );
+            closed_ids.push(id);
+            drop(pipeline.take_events_for_transfer(&closed_ids));
+        }
+        let live_text = futures::executor::block_on(pipeline.request_all_text("live".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(live_text.trim_end(), expected_live_text.trim_end());
+        for id in closed_ids {
+            assert!(
+                futures::executor::block_on(pipeline.request_all_text(id))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn protocol_handoff_extracts_only_its_session_and_keeps_migration_consumer() {

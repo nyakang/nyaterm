@@ -4,27 +4,12 @@ use crate::theme::ThemePalette;
 
 pub(in crate::features) use nyaterm_ui::presentation::{
     action_button as tab_action_button, menu_item as tab_menu_item_enabled_with_icon,
+    menu_item_with_shortcut as tab_menu_item_enabled_with_shortcut_icon,
     menu_separator as tab_menu_separator, shortcut_action as empty_workspace_action,
 };
 
-pub(in crate::features) fn tab_menu_item(
-    palette: ThemePalette,
-    id: impl Into<String>,
-    label: impl Into<String>,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    tab_menu_item_enabled(palette, id, label, true, on_click)
-}
-
-pub(in crate::features) fn tab_menu_item_enabled(
-    palette: ThemePalette,
-    id: impl Into<String>,
-    label: impl Into<String>,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    let id = id.into();
-    let icon_path = match id.as_str() {
+fn tab_menu_icon(id: &str) -> Option<&'static str> {
+    match id {
         "tab-ctx-rename" => Some("icons/session/rename.svg"),
         "tab-ctx-lock" => Some("icons/lock.svg"),
         "tab-ctx-unlock" => Some("icons/unlock.svg"),
@@ -36,6 +21,8 @@ pub(in crate::features) fn tab_menu_item_enabled(
         "tab-ctx-reconnect" => Some("icons/session/reconnect.svg"),
         "tab-ctx-disconnect" => Some("icons/session/disconnect.svg"),
         "tab-ctx-rdp-secure-attention" => Some("icons/security.svg"),
+        "tab-ctx-rdp-fullscreen" => Some("icons/window/maximize.svg"),
+        "tab-ctx-rdp-exit-fullscreen" => Some("icons/menu/close-fullscreen.svg"),
         "tab-ctx-split-h" | "tab-ctx-window-below" | "tab-ctx-tile-h" => {
             Some("icons/menu/horizontal.svg")
         }
@@ -50,7 +37,41 @@ pub(in crate::features) fn tab_menu_item_enabled(
         "tab-ctx-close-right" => Some("icons/menu/arrow-bar-to-right.svg"),
         "tab-ctx-info" => Some("icons/menu/info.svg"),
         _ => None,
-    };
+    }
+}
+
+pub(in crate::features) fn tab_menu_item(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<String>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    tab_menu_item_enabled(palette, id, label, true, on_click)
+}
+
+pub(in crate::features) fn tab_menu_item_with_shortcut(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<String>,
+    shortcut: impl Into<String>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let id = id.into();
+    let icon_path = tab_menu_icon(&id);
+    tab_menu_item_enabled_with_shortcut_icon(
+        palette, id, label, shortcut, icon_path, true, on_click,
+    )
+}
+
+pub(in crate::features) fn tab_menu_item_enabled(
+    palette: ThemePalette,
+    id: impl Into<String>,
+    label: impl Into<String>,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let id = id.into();
+    let icon_path = tab_menu_icon(&id);
     tab_menu_item_enabled_with_icon(palette, id, label, icon_path, enabled, on_click)
 }
 

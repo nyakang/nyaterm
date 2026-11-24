@@ -166,7 +166,7 @@ fn same_saved_remote_desktop_hands_each_route_to_its_own_tab_without_stealing_se
                 app.remote_desktop
                     .start_matches(&routes[1].0, &second_request)
             );
-            let _ = app.close_remote_desktop_runtime(&routes[0].0);
+            let _ = app.close_remote_desktop_runtime(&routes[0].0, cx);
             assert!(first_attempt.is_cancelled());
             assert!(!second_attempt.is_cancelled());
         });

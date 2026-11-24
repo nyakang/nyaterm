@@ -22,10 +22,37 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let app = cx.entity();
-        div()
-            .size_full()
-            .bg(rgb(0x101010))
-            .child(
+        // A GPUI layer below the ActiveX child window is invisible while the
+        // control paints its own black surface during negotiation. Lift the
+        // status text into the native overlay scene so it sits above that child
+        // window, and only while the session is still connecting: once logged
+        // on, the real desktop must show through unobstructed.
+        let connecting = self
+            .remote_desktop
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.state == RemoteDesktopViewState::Connecting);
+        let mut view = div().size_full().relative().bg(rgb(0x101010)).child(
+            canvas(
+                move |bounds, window, cx| {
+                    let clipped = bounds
+                        .intersect(&Bounds::new(gpui::Point::default(), window.viewport_size()));
+                    let app = app.clone();
+                    let session_id = session_id.clone();
+                    let scale = window.scale_factor();
+                    window.defer(cx, move |_, cx| {
+                        app.update(cx, |this, cx| {
+                            this.update_rdp_viewport(&session_id, clipped, scale, cx);
+                        });
+                    });
+                    bounds
+                },
+                |_, _, _, _| {},
+            )
+            .size_full(),
+        );
+        if connecting {
+            view = view.child(nyaterm_ui::nya_passive_overlay(
                 div()
                     .absolute()
                     .inset_0()
@@ -34,29 +61,9 @@ impl NyaTermApp {
                     .justify_center()
                     .text_color(rgb(0x999999))
                     .child(rust_i18n::t!("remoteDesktop.connecting").to_string()),
-            )
-            .child(
-                canvas(
-                    move |bounds, window, cx| {
-                        let clipped = bounds.intersect(&Bounds::new(
-                            gpui::Point::default(),
-                            window.viewport_size(),
-                        ));
-                        let app = app.clone();
-                        let session_id = session_id.clone();
-                        let scale = window.scale_factor();
-                        window.defer(cx, move |_, cx| {
-                            app.update(cx, |this, cx| {
-                                this.update_rdp_viewport(&session_id, clipped, scale, cx);
-                            });
-                        });
-                        bounds
-                    },
-                    |_, _, _, _| {},
-                )
-                .size_full(),
-            )
-            .into_any_element()
+            ));
+        }
+        view.into_any_element()
     }
 
     fn ensure_native_rdp(
@@ -154,9 +161,10 @@ impl NyaTermApp {
         if self.remote_desktop.native_shutting_down {
             return false;
         }
-        // Native children are hosted only by the main window. Any other window
-        // lacks `native_child_surfaces`, and failing to enable overlays there
-        // would fail every native session.
+        // ActiveX fullscreen is the main window's native fullscreen mode, so
+        // native child presentation is always driven from that window.
+        // Any other window lacks `native_child_surfaces`, and failing to enable
+        // overlays there would fail every native session.
         if self
             .shell
             .main_window()
@@ -246,6 +254,7 @@ impl NyaTermApp {
         let details_open = self.session.dialog_session_info_is_open();
         let active_session = self.session.active_id().map(str::to_string);
         let mut display_warning = None;
+        let mut fullscreen_toggles = Vec::new();
         for (id, session) in &mut self.remote_desktop.sessions {
             let Some(native) = session.native_rdp.as_mut() else {
                 continue;
@@ -266,8 +275,24 @@ impl NyaTermApp {
             native.set_local_input(obscured, active_session.as_deref() == Some(id.as_str()));
             let events: Vec<_> = std::iter::from_fn(|| native.poll_connection()).collect();
             for event in events {
-                apply_native_connection_event(session, event);
+                if matches!(event, NativeRdpConnectionEvent::ToggleFullscreen)
+                    && active_session.as_deref() == Some(id.as_str())
+                {
+                    fullscreen_toggles.push(id.clone());
+                } else {
+                    apply_native_connection_event(session, event);
+                }
                 dirty = true;
+            }
+        }
+        // The ActiveX child HWND consumes Ctrl+Shift+Alt+F11 before GPUI sees
+        // it. Toggle after the session borrow ends so the main window can enter
+        // or leave native fullscreen.
+        for id in fullscreen_toggles {
+            if self.has_remote_desktop_fullscreen() {
+                self.exit_remote_desktop_fullscreen(cx);
+            } else {
+                self.toggle_remote_desktop_fullscreen(&id, window, cx);
             }
         }
         if let Some(message) = display_warning {
@@ -300,6 +325,9 @@ pub(super) fn apply_native_connection_event(
             session.state = RemoteDesktopViewState::Failed;
             session.error = Some(error.into());
         }
+        // Handled by the event drain, which owns the window and fullscreen
+        // state. Reaching this helper is harmless.
+        NativeRdpConnectionEvent::ToggleFullscreen => {}
     }
     if !native_rdp_state_is_displayable(session.state)
         && let Some(native) = session.native_rdp.as_mut()

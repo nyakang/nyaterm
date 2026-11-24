@@ -6,7 +6,7 @@ use gpui::{AnyElement, Context, IntoElement, SharedString, deferred, div, prelud
 use nyaterm_files::file_browser::file_browser_name;
 use nyaterm_files::sftp::RemoteFilePath;
 use nyaterm_ui::file_navigation::{BreadcrumbMenu, BreadcrumbRow, PathMetrics, breadcrumb_row};
-use nyaterm_ui::{NyaInput, NyaScrollable};
+use nyaterm_ui::{NyaInputShell, NyaScrollable};
 use rust_i18n::t;
 
 use nyaterm_file_browser_gpui::path_navigation::{breadcrumbs, child_paths};
@@ -150,7 +150,37 @@ impl FileManagerWorkspace {
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                     window.focus(&focus, cx)
                 })
-                .child(NyaInput::new(&field).text_size(px(metrics.font_size)))
+                .child({
+                    let enter = cx.entity();
+                    let tab = cx.entity();
+                    let escape = cx.entity();
+                    NyaInputShell::new(format!("fm-path-input-{}", pane.as_str()), &field)
+                        .bare()
+                        .height(px(metrics.control_height))
+                        .on_plain_enter(move |_, cx| {
+                            enter.update(cx, |this, cx| this.submit_path_edit(pane, cx))
+                        })
+                        .on_vertical_navigation(cx.listener(move |this, down, _, cx| {
+                            this.pane_mut(pane).completion.move_selection(*down);
+                            cx.notify();
+                        }))
+                        .on_completion_tab(move |window, cx| {
+                            tab.update(cx, |this, cx| {
+                                let index = this
+                                    .pane(pane)
+                                    .completion
+                                    .presentation
+                                    .selected
+                                    .unwrap_or(0);
+                                this.accept_path_candidate(pane, index, window, cx)
+                            })
+                        })
+                        .on_escape(move |window, cx| {
+                            escape.update(cx, |this, cx| {
+                                this.escape_path_completion(pane, window, cx)
+                            })
+                        })
+                })
                 .into_any_element()
         } else {
             div()
@@ -257,7 +287,7 @@ impl FileManagerWorkspace {
                         )),
                     ),
             );
-        let recent = state.path_editing.then(|| {
+        let recent = (state.path_editing && !state.completion.edited).then(|| {
             state
                 .recent_paths
                 .iter()
@@ -308,78 +338,109 @@ impl FileManagerWorkspace {
                 .unwrap_or(0.)
                 .clamp(0., (pane_width - popup_width).max(0.))
         };
-        let popup = match &state.path_menu {
-            Some(PanePathMenu::Paths(paths)) => {
-                Some(self.path_entries(palette, pane, paths.clone(), None, cx))
-            }
-            Some(PanePathMenu::Children {
-                path,
-                branch,
-                result,
-                access_generation,
-                ..
-            }) => {
-                let current_access = state
-                    .endpoint
-                    .session_id()
-                    .and_then(|id| self.read_app(cx, |app| app.file_access_generation(id)));
-                if current_access != *access_generation {
-                    None
-                } else {
-                    Some(match result {
-                        None => div()
-                            .px_2()
-                            .py_1()
-                            .child(t!("fileExplorer.loadingChildDirectories").to_string())
-                            .into_any_element(),
-                        Some(Ok(entries)) => {
-                            let hidden = self.read_app(cx, |app| {
-                                app.settings.summary().ui_file_explorer_show_hidden_files
-                            });
-                            let entries = child_paths(entries, hidden);
-                            if entries.is_empty() {
+        let completing = state.path_editing && state.completion.presentation.visible();
+        let popup = if completing {
+            let entity = cx.entity();
+            Some(
+                nyaterm_file_browser_gpui::completion::path_candidates(
+                    format!("fm-path-completion-{}", pane.as_str()),
+                    &state.completion.presentation,
+                    palette,
+                    &state.completion.scroll,
+                    self.pane_bounds[if pane == PaneId::Left { 0 } else { 1 }]
+                        .map(|b| (f32::from(b.size.height) - 130.).clamp(28., 224.))
+                        .unwrap_or(224.),
+                    move |index, expected_path, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            if this
+                                .pane(pane)
+                                .completion
+                                .presentation
+                                .candidates
+                                .get(index)
+                                .is_some_and(|c| &c.path == expected_path)
+                            {
+                                this.accept_path_candidate(pane, index, window, cx);
+                            }
+                        });
+                    },
+                )
+                .into_any_element(),
+            )
+        } else {
+            match &state.path_menu {
+                Some(PanePathMenu::Paths(paths)) => {
+                    Some(self.path_entries(palette, pane, paths.clone(), None, cx))
+                }
+                Some(PanePathMenu::Children {
+                    path,
+                    branch,
+                    result,
+                    access_generation,
+                    ..
+                }) => {
+                    let current_access = state
+                        .endpoint
+                        .session_id()
+                        .and_then(|id| self.read_app(cx, |app| app.file_access_generation(id)));
+                    if current_access != *access_generation {
+                        None
+                    } else {
+                        Some(match result {
+                            None => div()
+                                .px_2()
+                                .py_1()
+                                .child(t!("fileExplorer.loadingChildDirectories").to_string())
+                                .into_any_element(),
+                            Some(Ok(entries)) => {
+                                let hidden = self.read_app(cx, |app| {
+                                    app.settings.summary().ui_file_explorer_show_hidden_files
+                                });
+                                let entries = child_paths(entries, hidden);
+                                if entries.is_empty() {
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .child(t!("fileExplorer.noChildDirectories").to_string())
+                                        .into_any_element()
+                                } else {
+                                    self.path_entries(palette, pane, entries, branch.as_ref(), cx)
+                                }
+                            }
+                            Some(Err(_)) => {
+                                let path = path.clone();
+                                let branch = branch.clone();
                                 div()
                                     .px_2()
                                     .py_1()
-                                    .child(t!("fileExplorer.noChildDirectories").to_string())
+                                    .flex()
+                                    .flex_col()
+                                    .child(t!("fileExplorer.childDirectoriesFailed").to_string())
+                                    .child(super::small_button(
+                                        format!("fm-children-retry-{}", pane.as_str()),
+                                        t!("common.retry").to_string(),
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.request_path_children(
+                                                pane,
+                                                path.clone(),
+                                                branch.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ))
                                     .into_any_element()
-                            } else {
-                                self.path_entries(palette, pane, entries, branch.as_ref(), cx)
                             }
-                        }
-                        Some(Err(_)) => {
-                            let path = path.clone();
-                            let branch = branch.clone();
-                            div()
-                                .px_2()
-                                .py_1()
-                                .flex()
-                                .flex_col()
-                                .child(t!("fileExplorer.childDirectoriesFailed").to_string())
-                                .child(super::small_button(
-                                    format!("fm-children-retry-{}", pane.as_str()),
-                                    t!("common.retry").to_string(),
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.request_path_children(
-                                            pane,
-                                            path.clone(),
-                                            branch.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ))
-                                .into_any_element()
-                        }
-                    })
+                        })
+                    }
                 }
+                Some(PanePathMenu::Favorites) => {
+                    Some(self.favorites_menu(palette, pane, favorites, cx))
+                }
+                None => recent
+                    .filter(|paths| !paths.is_empty())
+                    .map(|paths| self.path_entries(palette, pane, paths, None, cx)),
             }
-            Some(PanePathMenu::Favorites) => {
-                Some(self.favorites_menu(palette, pane, favorites, cx))
-            }
-            None => recent
-                .filter(|paths| !paths.is_empty())
-                .map(|paths| self.path_entries(palette, pane, paths, None, cx)),
         };
         let max_popup_height = self.pane_bounds[if pane == PaneId::Left { 0 } else { 1 }]
             .map(|bounds| (f32::from(bounds.size.height) - 130.).clamp(28., 324.))
@@ -396,11 +457,15 @@ impl FileManagerWorkspace {
                         .flex()
                         .flex_col()
                         .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
+                            this.pane_mut(pane).completion.reset();
                             this.pane_mut(pane).path_editing = false;
                             this.pane_mut(pane).path_menu = None;
                             cx.notify();
                         }))
                         .when_some(popup, |shell, popup| {
+                            if completing {
+                                return shell.child(popup);
+                            }
                             shell.child(
                                 div()
                                     .min_w_0()

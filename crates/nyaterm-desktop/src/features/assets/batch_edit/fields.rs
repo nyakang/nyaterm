@@ -142,6 +142,16 @@ pub(in crate::features) enum BatchFieldKey {
     RdpDisableCursorBlinking,
     RdpAutoReconnect,
     RdpReconnectAttempts,
+    RdpRedirectClipboard,
+    RdpRedirectDrives,
+    RdpDriveLetters,
+    RdpCustomDrivePath,
+    RdpRedirectPrinters,
+    RdpRedirectPorts,
+    RdpRedirectSmartcards,
+    RdpRedirectMicrophone,
+    RdpRedirectWebauthn,
+    RdpAudio,
     VncScaleMode,
     VncClipboard,
     VncShared,
@@ -175,7 +185,17 @@ impl BatchFieldKey {
             | Self::RdpDisableCursorShadow
             | Self::RdpDisableCursorBlinking
             | Self::RdpAutoReconnect
-            | Self::RdpReconnectAttempts => Some(RdpBatchFieldGroup::SecurityAndDisplay),
+            | Self::RdpReconnectAttempts
+            | Self::RdpRedirectClipboard
+            | Self::RdpRedirectDrives
+            | Self::RdpDriveLetters
+            | Self::RdpCustomDrivePath
+            | Self::RdpRedirectPrinters
+            | Self::RdpRedirectPorts
+            | Self::RdpRedirectSmartcards
+            | Self::RdpRedirectMicrophone
+            | Self::RdpRedirectWebauthn
+            | Self::RdpAudio => Some(RdpBatchFieldGroup::SecurityAndDisplay),
             _ => None,
         }
     }
@@ -300,6 +320,16 @@ impl BatchFieldKey {
             Self::RdpDisableCursorBlinking => "display.rdp-disable-cursor-blinking",
             Self::RdpAutoReconnect => "display.rdp-auto-reconnect",
             Self::RdpReconnectAttempts => "display.rdp-reconnect-attempts",
+            Self::RdpRedirectClipboard => "display.rdp-redirect-clipboard",
+            Self::RdpRedirectDrives => "display.rdp-redirect-drives",
+            Self::RdpDriveLetters => "display.rdp-drive-letters",
+            Self::RdpCustomDrivePath => "display.rdp-custom-drive-path",
+            Self::RdpRedirectPrinters => "display.rdp-redirect-printers",
+            Self::RdpRedirectPorts => "display.rdp-redirect-ports",
+            Self::RdpRedirectSmartcards => "display.rdp-redirect-smartcards",
+            Self::RdpRedirectMicrophone => "display.rdp-redirect-microphone",
+            Self::RdpRedirectWebauthn => "display.rdp-redirect-webauthn",
+            Self::RdpAudio => "display.rdp-audio",
             Self::VncScaleMode => "display.vnc-scale-mode",
             Self::VncClipboard => "display.vnc-clipboard",
             Self::VncShared => "display.vnc-shared",
@@ -450,6 +480,16 @@ impl BatchFieldKey {
             Self::RdpDisableCursorBlinking => "dialog.rdpDisableCursorBlinking",
             Self::RdpAutoReconnect => "dialog.rdpAutoReconnect",
             Self::RdpReconnectAttempts => "dialog.rdpReconnectAttempts",
+            Self::RdpRedirectClipboard => "dialog.rdpRedirectClipboard",
+            Self::RdpRedirectDrives => "dialog.rdpRedirectDrives",
+            Self::RdpDriveLetters => "dialog.rdpDriveLetters",
+            Self::RdpCustomDrivePath => "dialog.rdpCustomDrive",
+            Self::RdpRedirectPrinters => "dialog.rdpRedirectPrinters",
+            Self::RdpRedirectPorts => "dialog.rdpRedirectPorts",
+            Self::RdpRedirectSmartcards => "dialog.rdpRedirectSmartcards",
+            Self::RdpRedirectMicrophone => "dialog.rdpRedirectMicrophone",
+            Self::RdpRedirectWebauthn => "dialog.rdpRedirectWebauthn",
+            Self::RdpAudio => "dialog.rdpAudio",
             Self::VncScaleMode => "dialog.vncScaleMode",
             Self::VncClipboard => "dialog.vncClipboard",
             Self::VncShared => "dialog.vncSharedSession",
@@ -506,6 +546,13 @@ impl BatchFieldKey {
                 | Self::RdpDisableCursorShadow
                 | Self::RdpDisableCursorBlinking
                 | Self::RdpAutoReconnect
+                | Self::RdpRedirectClipboard
+                | Self::RdpRedirectDrives
+                | Self::RdpRedirectPrinters
+                | Self::RdpRedirectPorts
+                | Self::RdpRedirectSmartcards
+                | Self::RdpRedirectMicrophone
+                | Self::RdpRedirectWebauthn
                 | Self::VncClipboard
                 | Self::VncShared
                 | Self::VncViewOnly
@@ -530,7 +577,7 @@ impl BatchFieldKey {
 
 /// Fields the batch editor writes. Each one keeps its connection-editor
 /// position; the connection editor labels stay in place for the rest.
-pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 127] = [
+pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 137] = [
     BatchFieldKey::SpiceTcpPort,
     BatchFieldKey::SpiceTlsPort,
     BatchFieldKey::SpiceHttpProxy,
@@ -630,6 +677,16 @@ pub(in crate::features) const EDITABLE_FIELDS: [BatchFieldKey; 127] = [
     BatchFieldKey::RdpDisableCursorBlinking,
     BatchFieldKey::RdpAutoReconnect,
     BatchFieldKey::RdpReconnectAttempts,
+    BatchFieldKey::RdpRedirectClipboard,
+    BatchFieldKey::RdpRedirectDrives,
+    BatchFieldKey::RdpDriveLetters,
+    BatchFieldKey::RdpCustomDrivePath,
+    BatchFieldKey::RdpRedirectPrinters,
+    BatchFieldKey::RdpRedirectPorts,
+    BatchFieldKey::RdpRedirectSmartcards,
+    BatchFieldKey::RdpRedirectMicrophone,
+    BatchFieldKey::RdpRedirectWebauthn,
+    BatchFieldKey::RdpAudio,
     BatchFieldKey::VncScaleMode,
     BatchFieldKey::VncClipboard,
     BatchFieldKey::VncShared,
@@ -796,6 +853,16 @@ impl BatchFieldKey {
             Self::RdpBackend
             | Self::RdpAutoReconnect
             | Self::RdpReconnectAttempts
+            | Self::RdpRedirectClipboard
+            | Self::RdpRedirectDrives
+            | Self::RdpDriveLetters
+            | Self::RdpCustomDrivePath
+            | Self::RdpRedirectPrinters
+            | Self::RdpRedirectPorts
+            | Self::RdpRedirectSmartcards
+            | Self::RdpRedirectMicrophone
+            | Self::RdpRedirectWebauthn
+            | Self::RdpAudio
             | Self::VncClipboard
             | Self::VncShared
             | Self::VncViewOnly
@@ -857,6 +924,8 @@ impl BatchFieldKey {
             | Self::TelnetAutoLoginSuccessPrompt
             | Self::TelnetAutoLoginFailurePrompt
             | Self::RdpDomain
+            | Self::RdpDriveLetters
+            | Self::RdpCustomDrivePath
             | Self::AdbDirectory
             | Self::FtpInitialDirectory
             | Self::FtpLocalInitialDirectory
@@ -911,6 +980,10 @@ impl BatchFieldKey {
             Self::SshAlgorithmMode => "secure".to_string(),
             Self::RdpBackend => "builtin".to_string(),
             Self::RdpCertificatePolicy => nyaterm_core::models::default_rdp_certificate_policy(),
+            Self::RdpDriveLetters => nyaterm_core::models::default_rdp_drive_letters(),
+            Self::RdpAudio => nyaterm_core::models::default_rdp_audio_mode(),
+            Self::RdpCustomDrivePath => String::new(),
+            Self::RdpRedirectClipboard => "true".to_string(),
             Self::RdpDisplayMode => "fit-window".to_string(),
             Self::RdpWidth => nyaterm_core::models::default_rdp_width().to_string(),
             Self::RdpHeight => nyaterm_core::models::default_rdp_height().to_string(),
@@ -1394,6 +1467,43 @@ const RDP_SESSION: &[BatchRowSpec] = &[
         BatchRowLayout::Stack,
         &[spec(BatchFieldKey::RdpReconnectAttempts)],
     ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectClipboard)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectDrives)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpDriveLetters)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpCustomDrivePath)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectPrinters)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectPorts)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectSmartcards)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectMicrophone)],
+    ),
+    row(
+        BatchRowLayout::Stack,
+        &[spec(BatchFieldKey::RdpRedirectWebauthn)],
+    ),
+    row(BatchRowLayout::Stack, &[spec(BatchFieldKey::RdpAudio)]),
 ];
 
 const SPICE_BASIC: &[BatchRowSpec] = &[

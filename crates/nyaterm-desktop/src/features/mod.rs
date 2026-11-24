@@ -17,6 +17,7 @@ mod networktools;
 mod notes;
 mod pages;
 mod panels;
+mod path_completion;
 mod perf;
 pub(crate) mod plugins;
 mod recording;

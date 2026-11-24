@@ -86,6 +86,14 @@ pub(super) fn select_initial_value(
             }
             .to_string(),
         ),
+        BatchFieldKey::RdpAudio => Some(
+            match value {
+                "play_on_local" | "redirect" => "local",
+                "play_on_remote" | "resource_only" => "remote",
+                other => other,
+            }
+            .to_string(),
+        ),
         // Keep the original reference/default sentinel for display lookup. Empty
         // options are filtered from Set mode; removing a value requires Clear.
         BatchFieldKey::Account
@@ -247,7 +255,17 @@ pub(in crate::features) fn batch_field_in_kind(
         | BatchFieldKey::RdpDisableCursorShadow
         | BatchFieldKey::RdpDisableCursorBlinking
         | BatchFieldKey::RdpAutoReconnect
-        | BatchFieldKey::RdpReconnectAttempts => kind == Rdp,
+        | BatchFieldKey::RdpReconnectAttempts
+        | BatchFieldKey::RdpRedirectClipboard
+        | BatchFieldKey::RdpRedirectDrives
+        | BatchFieldKey::RdpDriveLetters
+        | BatchFieldKey::RdpCustomDrivePath
+        | BatchFieldKey::RdpRedirectPrinters
+        | BatchFieldKey::RdpRedirectPorts
+        | BatchFieldKey::RdpRedirectSmartcards
+        | BatchFieldKey::RdpRedirectMicrophone
+        | BatchFieldKey::RdpRedirectWebauthn
+        | BatchFieldKey::RdpAudio => kind == Rdp,
         BatchFieldKey::VncScaleMode
         | BatchFieldKey::VncClipboard
         | BatchFieldKey::VncShared
@@ -732,6 +750,46 @@ pub(in crate::features) fn field_display_value(
         },
         BatchFieldKey::RdpReconnectAttempts => match &connection.config {
             ConnectionType::Rdp { reconnect, .. } => Some(reconnect.max_attempts.to_string()),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectClipboard => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.clipboard)),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectDrives => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.drives)),
+            _ => None,
+        },
+        BatchFieldKey::RdpDriveLetters => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(redirection.drive_letters.clone()),
+            _ => None,
+        },
+        BatchFieldKey::RdpCustomDrivePath => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(redirection.custom_drive_path.clone()),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectPrinters => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.printers)),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectPorts => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.ports)),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectSmartcards => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.smartcards)),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectMicrophone => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.microphone)),
+            _ => None,
+        },
+        BatchFieldKey::RdpRedirectWebauthn => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(bool_text(redirection.webauthn)),
+            _ => None,
+        },
+        BatchFieldKey::RdpAudio => match &connection.config {
+            ConnectionType::Rdp { redirection, .. } => Some(redirection.audio.clone()),
             _ => None,
         },
         BatchFieldKey::VncScaleMode => match &connection.config {

@@ -1,3 +1,4 @@
+mod path_completion;
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
 use self::browser::transfer_browser_view;

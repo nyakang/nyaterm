@@ -1,3 +1,4 @@
+mod completion;
 mod inputs;
 mod layout;
 mod navigation_runtime;

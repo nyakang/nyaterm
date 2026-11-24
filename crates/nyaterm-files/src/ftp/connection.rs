@@ -69,7 +69,7 @@ impl Lease<'_> {
                 let _ = data.get_ref().get_ref().shutdown(Shutdown::Both);
                 // A completion reply can race ABOR. A NOOP fence must be the next
                 // reply before any cleanup command may mutate server paths.
-                if self.stream.abort(data).is_err() || self.stream.noop().is_err() {
+                if self.stream.abort_with_fence(data).is_err() {
                     self.io.close();
                 }
                 Err(error)
@@ -221,7 +221,18 @@ impl FtpFileService {
     }
 
     pub(super) fn lock_stream(&self, control: &SftpTransferControl) -> Result<Lease<'_>, FtpError> {
+        self.lock_stream_until(control, None)
+    }
+
+    pub(super) fn lock_stream_until(
+        &self,
+        control: &SftpTransferControl,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Lease<'_>, FtpError> {
         loop {
+            if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                return Err(FtpError::Timeout);
+            }
             self.ensure_available()?;
             if control.is_cancelled() {
                 return Err(FtpError::Cancelled);
@@ -230,7 +241,18 @@ impl FtpFileService {
                 Ok(stream) => {
                     return Ok(Lease {
                         stream,
-                        watch: Operation::for_transfer(Arc::clone(&self.io), control.clone())?,
+                        watch: if let Some(deadline) = deadline {
+                            let control = control.clone();
+                            Operation::start(
+                                Arc::clone(&self.io),
+                                move || {
+                                    control.is_cancelled() || std::time::Instant::now() >= deadline
+                                },
+                                || false,
+                            )?
+                        } else {
+                            Operation::for_transfer(Arc::clone(&self.io), control.clone())?
+                        },
                         io: Arc::clone(&self.io),
                         secure: self.config.security_mode != FtpSecurityMode::None,
                     });

@@ -396,6 +396,7 @@ impl NyaTermApp {
         let rdp_certificate_options =
             options::rdp_certificate_policy_choices(&editor.rdp_security.certificate_policy);
         let rdp_display_options = options::rdp_display_mode_choices(&editor.rdp_display.mode);
+        let rdp_audio_options = options::rdp_audio_choices(&editor.rdp_redirection.audio);
         let vnc_security_options = options::vnc_security_choices(&editor.vnc_security.mode);
         let vnc_scale_options = options::vnc_scale_choices(&editor.vnc_display.scale_mode);
         let recording_mode = editor
@@ -562,6 +563,11 @@ impl NyaTermApp {
             (
                 ConnectionEditorSelect::RdpDisplayMode,
                 rdp_display_options.as_slice(),
+                String::new(),
+            ),
+            (
+                ConnectionEditorSelect::RdpAudio,
+                rdp_audio_options.as_slice(),
                 String::new(),
             ),
             (

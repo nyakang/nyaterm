@@ -102,8 +102,8 @@ pub(in crate::features) struct AiPanelSnapshot {
     pub agent_mode: bool,
     pub running: bool,
     pub agent_kind: AiAgentKind,
-    pub codex_enabled: bool,
-    pub claude_code_enabled: bool,
+    pub agent_choices: Vec<(AiAgentKind, String, bool)>,
+    pub agent_label: String,
     pub reasoning_effort: AiReasoningEffort,
     pub reasoning_choices: Arc<[AiReasoningEffort]>,
     pub external_agent: bool,
@@ -1693,10 +1693,15 @@ impl AiPanel {
                                         .text_color(rgb(palette.text_dimmed))
                                         .child(format!(
                                             "{}{}",
-                                            agent_kind_label(&session.agent_kind),
+                                            agent_kind_label(
+                                                &session.agent_kind,
+                                                &snapshot.agent_choices
+                                            ),
                                             if occupied {
                                                 t!("ai.historyInUse")
-                                            } else if session.external_session_id.is_some() {
+                                            } else if session.backend_metadata.as_ref().is_some_and(
+                                                |metadata| metadata.external_binding.is_some()
+                                            ) {
                                                 t!("ai.historyResume")
                                             } else {
                                                 "".into()
@@ -1817,6 +1822,31 @@ impl AiPanel {
                             .child(t!("ai.clearHistory")),
                     ),
             )
+            .when(
+                snapshot.agent_kind != AiAgentKind::Nyaterm && !snapshot.messages.is_empty(),
+                |this| {
+                    this.child(
+                        div().px_2().py_1().child(
+                            nyaterm_ui::NyaButton::new(
+                                "ai-new-from-history",
+                                t!("ai.acp.newFromHistory"),
+                            )
+                            .small()
+                            .full_width()
+                            .disabled(snapshot.running)
+                            .on_click(cx.listener(
+                                |panel, _, _, cx| {
+                                    panel.with_app(cx, |app, cx| {
+                                        app.new_ai_chat_from_history(cx);
+                                        app.ai.close_history();
+                                        app.defer_ai_panel_snapshot_flush(cx);
+                                    })
+                                },
+                            )),
+                        ),
+                    )
+                },
+            )
             .when_some(snapshot.history_error.as_ref(), |this, error| {
                 this.child(
                     div()
@@ -1922,12 +1952,20 @@ impl gpui::Render for AiPanel {
     }
 }
 
-fn agent_kind_label(kind: &AiAgentKind) -> &'static str {
+fn agent_kind_label(kind: &AiAgentKind, choices: &[(AiAgentKind, String, bool)]) -> String {
+    if let Some((_, name, _)) = choices
+        .iter()
+        .find(|(candidate, _, _)| nyaterm_core::ai::external_agents::same_agent(kind, candidate))
+    {
+        return name.clone();
+    }
     match kind {
         AiAgentKind::Nyaterm => "NyaTerm",
+        AiAgentKind::Acp(id) => return format!("ACP · {}", nyaterm_core::truncate_preview(id, 12)),
         AiAgentKind::Codex => "Codex",
         AiAgentKind::ClaudeCode => "Claude",
     }
+    .into()
 }
 
 fn ai_agent_status_badge(snapshot: &AiPanelSnapshot) -> impl IntoElement {

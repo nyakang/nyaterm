@@ -660,3 +660,24 @@ fn legacy_ftp_without_new_settings_stays_compatible_and_rejects_cloud_extensions
     assert_eq!(applied["future_ftp"], "local");
     assert!(applied.get("ftp_security_mode").is_none());
 }
+
+#[test]
+fn external_agent_executables_environment_and_permissions_stay_device_local() {
+    let scope = SyncScope {
+        ai: true,
+        ..Default::default()
+    };
+    let baseline = BTreeMap::from([("settings".into(), json!({"ai":{}}).to_string())]);
+    let local = BTreeMap::from([(
+        "settings".into(),
+        json!({"ai":{"external_agents":[{
+            "id":"local-agent", "enabled":true, "executable":"private-device-path",
+            "environment":[{"id":"secret-row","name":"TOKEN","value":"private-fixture"}]
+        }]}})
+        .to_string(),
+    )]);
+    assert_eq!(
+        project_entities(&baseline, &scope).unwrap().values,
+        project_entities(&local, &scope).unwrap().values
+    );
+}

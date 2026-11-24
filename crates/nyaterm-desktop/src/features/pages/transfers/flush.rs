@@ -73,6 +73,7 @@ impl NyaTermApp {
     }
 
     fn build_transfer_snapshot(&mut self, cx: &gpui::App) -> TransferSnapshot {
+        self.validate_transfer_path_completion();
         let chrome = self.transfer_chrome();
         let active_session_id = self.session.active_id().map(str::to_string);
         let availability = transfer_browser_availability(
@@ -132,6 +133,9 @@ impl NyaTermApp {
                 .and_then(|session| self.transfer_browser_cwd_for_session(session)),
             home_dir: browser.home_dir.clone(),
             path_editing: browser.path_editing,
+            path_completion: browser.completion.presentation.clone(),
+            path_completion_scroll: browser.completion.scroll.clone(),
+            path_completion_edited: browser.completion.edited,
             expanded_children_path: browser
                 .path_menu
                 .as_ref()

@@ -69,6 +69,8 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
+agent-client-protocol = { version = "=5.5.1", features = ["unstable_auth_status"] }
+blocking = "1"
 nyaterm-remote-monitor-gpui = { path = "crates/nyaterm-remote-monitor-gpui" }
 nyaterm-connections-gpui = { path = "crates/nyaterm-connections-gpui" }
 nyaterm-file-browser-gpui = { path = "crates/nyaterm-file-browser-gpui" }
@@ -118,7 +120,14 @@ gpui_platform = { git = "https://github.com/nyakang/zed", rev = "5591fbd2d0ef56b
 hayro = { version = "=0.7.1", features = ["embed-fonts"] }
 hex = "0.4"
 hmac = "0.13"
-ironrdp-input = "0.9.0"
+# All IronRDP crates come from the local `nyaterm` branch of the IronRDP
+# checkout. That branch is based on 5d93337 with two NyaTerm-specific fixes:
+# RDPDR announces the real client name instead of the hard-coded "IronRDP",
+# and rdpsnd-native drops the unused Opus/CMake dependency. Using a single
+# path source keeps every sibling crate (and its traits) unified.
+ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-cfg = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-rdpdr-native = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
 jsonc-parser = { version = "0.34", features = ["serde"] }
 keyring = { version = "3.6", features = [
     "apple-native",
@@ -240,31 +249,36 @@ debug = "full"
 opt-level = 1
 
 [patch.crates-io]
-suppaftp = { git = "https://github.com/nyakang/suppaftp", rev = "6e91f7ab21b8d9f136a997d51cbd1e4591ba8147" }
+# IronRDP is sourced from the local `nyaterm` branch of the sibling checkout
+# (see the workspace dependency comment above). Patch every registry-facing
+# IronRDP crate to that one path so client, helper and their siblings resolve
+# to a single copy and their traits unify.
+ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+suppaftp = { git = "https://github.com/nyakang/suppaftp", rev = "8a9882d1f591711cd83fad3ca370b14a44623025" }
 # Keep Picky and its ASN.1 types on the same stable-RSA fork revision.
 picky = { version = "=7.0.0-rc.29", git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1-der = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
 picky-asn1-x509 = { git = "https://github.com/nyakang/picky-rs", rev = "1977c9f86465e63966b69e4e6368064a33d32c8f" }
-alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "c81fc5409a47214ac4327c72e03e9349cd96fd30" }
-ironrdp-client = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
+alacritty_terminal = { git = "https://github.com/nyakang/alacritty", rev = "5d6bf676e3ff6ebf31000d572a8e027e943ec269" }
+ironrdp-connector = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
 sspi = { git = "https://github.com/nyakang/sspi-rs", rev = "df7ce588457cad66e6f3d0a46b3e35a86eec281b" }
 # The published ironrdp-client and ironrdp-connector packages declare their
-# sibling crates as registry dependencies, but in the IronRDP repository those
-# are path dependencies, so patching the two above to git pulls the siblings
-# from git as well. Without these entries the graph holds both a registry and a
-# git copy of each and the SvcClientProcessor impls stop unifying. The versions
-# are identical on both sides. `ironrdp-tls` is here for the same reason:
-# `nyaterm-rdp-helper` names its certificate-validation types directly, because
-# ironrdp-client does not re-export them.
-ironrdp-cliprdr = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-core = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-error = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
-ironrdp-tls = { git = "https://github.com/nyakang/IronRDP", rev = "5d933375c13b0f95391f1aa1fff6488a647a35f7" }
+# sibling crates as registry dependencies, but in the local checkout those are
+# path dependencies. Patch every sibling to the same local path so the graph
+# holds a single copy of each; otherwise SvcClientProcessor/RdpdrBackendFactory
+# impls stop unifying. `ironrdp-tls` is here for the same reason: the helper
+# names its certificate-validation types directly (client does not re-export).
+ironrdp-cliprdr = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-core = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-error = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-input = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-pdu = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-rdpeai = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-rdpsnd = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-rdpsnd-native = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-svc = { git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
+ironrdp-tls ={ git = "https://github.com/nyakang/IronRDP", rev = "644ac2cb964ba5b66493b9609d74ea5b5bef5968" }
 
 # gpui-kit takes zed-reqwest from git while this workspace uses the
 # published crate; without this both end up in the graph.

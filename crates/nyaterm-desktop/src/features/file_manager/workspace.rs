@@ -59,37 +59,54 @@ impl FileManagerWorkspace {
         seed: FileManagerSeed,
         cx: &mut Context<Self>,
     ) -> Self {
-        let observation = cx.observe(&app, |this, app, cx| {
-            for pane in [&mut this.left, &mut this.right] {
-                if let Some(super::pane::PanePathMenu::Children {
-                    access_generation, ..
-                }) = &pane.path_menu
-                    && *access_generation
-                        != pane
-                            .endpoint
-                            .session_id()
-                            .and_then(|id| app.read(cx).file_access_generation(id))
-                {
-                    pane.path_menu = None;
+        let observation =
+            cx.observe(&app, |this, app, cx| {
+                for pane in [&mut this.left, &mut this.right] {
+                    if pane.completion.source.as_ref().is_some_and(
+                        |(endpoint, access, generation)| {
+                            endpoint != &pane.endpoint
+                                || *generation != pane.generation
+                                || !pane.path_editing
+                                || endpoint
+                                    .session_id()
+                                    .is_some_and(|id| app.read(cx).session.is_disconnected(id))
+                                || *access
+                                    != endpoint
+                                        .session_id()
+                                        .and_then(|id| app.read(cx).file_access_generation(id))
+                        },
+                    ) {
+                        pane.completion.reset();
+                    }
+                    if let Some(super::pane::PanePathMenu::Children {
+                        access_generation, ..
+                    }) = &pane.path_menu
+                        && *access_generation
+                            != pane
+                                .endpoint
+                                .session_id()
+                                .and_then(|id| app.read(cx).file_access_generation(id))
+                    {
+                        pane.path_menu = None;
+                    }
                 }
-            }
-            let can_bind = [&this.left, &this.right].into_iter().any(|pane| {
-                if let PaneEndpoint::OfflineConnection(id) = &pane.endpoint {
-                    app.read(cx)
-                        .session_id_for_connection(id)
-                        .is_some_and(|session| !app.read(cx).session.is_disconnected(&session))
-                } else {
-                    false
-                }
-            });
-            if can_bind {
-                let app = app.downgrade();
-                cx.defer(move |cx| {
-                    let _ = app.update(cx, |app, cx| app.bind_file_manager_sources(cx));
+                let can_bind = [&this.left, &this.right].into_iter().any(|pane| {
+                    if let PaneEndpoint::OfflineConnection(id) = &pane.endpoint {
+                        app.read(cx)
+                            .session_id_for_connection(id)
+                            .is_some_and(|session| !app.read(cx).session.is_disconnected(&session))
+                    } else {
+                        false
+                    }
                 });
-            }
-            cx.notify();
-        });
+                if can_bind {
+                    let app = app.downgrade();
+                    cx.defer(move |cx| {
+                        let _ = app.update(cx, |app, cx| app.bind_file_manager_sources(cx));
+                    });
+                }
+                cx.notify();
+            });
         let mut workspace = Self {
             app: app.downgrade(),
             id,
@@ -181,7 +198,9 @@ impl FileManagerWorkspace {
         self.left.path_menu = None;
         self.right.path_menu = None;
         self.left.path_editing = false;
+        self.left.completion.reset();
         self.right.path_editing = false;
+        self.right.completion.reset();
         self.active = self.active.other();
     }
 

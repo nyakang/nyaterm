@@ -25,6 +25,11 @@ pub enum NyaInputEvent {
     Blurred(String),
 }
 
+/// Selection changes are separate from text edits, so ordinary form subscribers
+/// do not receive synthetic Changed events when the caret moves.
+#[derive(Clone, Copy)]
+pub struct NyaInputPositionChanged(pub bool);
+
 /// Semantic purpose stays stable while the user reveals or hides the value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NyaInputKind {
@@ -328,6 +333,9 @@ pub struct NyaInputState {
     focus: FocusHandle,
     focused: bool,
     subscription: Option<Subscription>,
+    track_position: bool,
+    position_observation: Option<Subscription>,
+    position_at_end: Option<bool>,
 }
 
 impl NyaInputState {
@@ -363,7 +371,45 @@ impl NyaInputState {
             focus: cx.focus_handle(),
             focused: false,
             subscription: None,
+            track_position: false,
+            position_observation: None,
+            position_at_end: None,
         }
+    }
+
+    pub fn track_position(mut self) -> Self {
+        self.track_position = true;
+        self
+    }
+
+    pub fn enable_position_tracking(&mut self, cx: &mut Context<Self>) {
+        self.track_position = true;
+        self.install_position_observation(cx);
+    }
+
+    pub fn selection_at_end(&self, cx: &App) -> bool {
+        let Some(ComponentState::Input(input)) = &self.state else {
+            return false;
+        };
+        let input = input.read(cx);
+        let range = input.selected_range();
+        range.start == range.end && range.end == input.value().len()
+    }
+
+    fn install_position_observation(&mut self, cx: &mut Context<Self>) {
+        if !self.track_position || self.position_observation.is_some() {
+            return;
+        }
+        let Some(ComponentState::Input(input)) = &self.state else {
+            return;
+        };
+        self.position_observation = Some(cx.observe(input, |this, _, cx| {
+            let at_end = this.selection_at_end(cx);
+            if this.position_at_end != Some(at_end) {
+                this.position_at_end = Some(at_end);
+                cx.emit(NyaInputPositionChanged(at_end));
+            }
+        }));
     }
 
     pub fn single_line(cx: &mut Context<Self>, seed: impl Into<SharedString>) -> Self {
@@ -542,6 +588,8 @@ impl NyaInputState {
     /// renders again. `clear` queues a replacement for the next render instead.
     pub fn discard_content(&mut self, cx: &mut Context<Self>) {
         self.subscription = None;
+        self.position_observation = None;
+        self.position_at_end = None;
         self.state = None;
         self.seed = SharedString::default();
         self.pending_value = None;
@@ -725,6 +773,7 @@ impl NyaInputState {
         register_nya_input_focus(&state.focus_handle(cx), cx);
         self.subscription = Some(subscription);
         self.state = Some(state.clone());
+        self.install_position_observation(cx);
         self.applied_masked = masked;
         state
     }
@@ -789,6 +838,7 @@ fn component_placeholder(placeholder: SharedString, multi_line: bool, code: bool
 }
 
 impl EventEmitter<NyaInputEvent> for NyaInputState {}
+impl EventEmitter<NyaInputPositionChanged> for NyaInputState {}
 
 impl Focusable for NyaInputState {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -1012,6 +1062,7 @@ impl RenderOnce for NyaInput {
 type KeyDownHandler = Box<dyn Fn(&KeyDownEvent, &mut Window, &mut App) + 'static>;
 type VerticalNavigationHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type SecondaryEnterHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
+type CompletionTabHandler = Box<dyn Fn(&mut Window, &mut App) -> bool + 'static>;
 
 fn prepare_input_component(
     input_state: &Entity<NyaInputState>,
@@ -1062,6 +1113,8 @@ pub struct NyaInputShell {
     on_key_down: Option<KeyDownHandler>,
     on_vertical_navigation: Option<VerticalNavigationHandler>,
     on_plain_enter: Option<SecondaryEnterHandler>,
+    on_completion_tab: Option<CompletionTabHandler>,
+    on_escape: Option<SecondaryEnterHandler>,
     on_secondary_enter: Option<SecondaryEnterHandler>,
     tab_navigation: bool,
     context_menu_labels: Option<[SharedString; 4]>,
@@ -1085,6 +1138,8 @@ impl NyaInputShell {
             on_key_down: None,
             on_vertical_navigation: None,
             on_plain_enter: None,
+            on_completion_tab: None,
+            on_escape: None,
             on_secondary_enter: None,
             tab_navigation: false,
             context_menu_labels: None,
@@ -1191,6 +1246,20 @@ impl NyaInputShell {
         self
     }
 
+    /// Return true when Tab accepted a completion; otherwise move focus forward.
+    pub fn on_completion_tab(
+        mut self,
+        handler: impl Fn(&mut Window, &mut App) -> bool + 'static,
+    ) -> Self {
+        self.on_completion_tab = Some(Box::new(handler));
+        self
+    }
+
+    pub fn on_escape(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_escape = Some(Box::new(handler));
+        self
+    }
+
     /// Take Ctrl/Cmd+Enter before the field sees it. A multi-line field binds
     /// that keystroke to a newline and stops propagation, so an `on_key_down`
     /// on an ancestor never receives it.
@@ -1223,6 +1292,8 @@ impl RenderOnce for NyaInputShell {
             on_key_down,
             on_vertical_navigation,
             on_plain_enter,
+            on_completion_tab,
+            on_escape,
             on_secondary_enter,
             tab_navigation,
             context_menu_labels,
@@ -1438,7 +1509,34 @@ impl RenderOnce for NyaInputShell {
                 }
             });
         }
-        if tab_navigation {
+        if let Some(handler) = on_escape {
+            let state = owner.clone();
+            container = container.capture_action(move |_: &Escape, window, cx| {
+                if !state.update(cx, |state, cx| state.is_composing(window, cx)) {
+                    cx.stop_propagation();
+                    handler(window, cx);
+                }
+            });
+        }
+        if let Some(handler) = on_completion_tab {
+            let state = owner.clone();
+            let reverse = owner.clone();
+            container = container
+                .capture_action(move |_: &IndentInline, window, cx| {
+                    cx.stop_propagation();
+                    if !state.update(cx, |state, cx| state.is_composing(window, cx))
+                        && !handler(window, cx)
+                    {
+                        window.focus_next(cx);
+                    }
+                })
+                .capture_action(move |_: &OutdentInline, window, cx| {
+                    cx.stop_propagation();
+                    if !reverse.update(cx, |state, cx| state.is_composing(window, cx)) {
+                        window.focus_prev(cx);
+                    }
+                });
+        } else if tab_navigation {
             container = container
                 .capture_action(move |_: &IndentInline, window, cx| {
                     cx.stop_propagation();
@@ -2425,6 +2523,86 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(position.get(), 1);
+    }
+
+    #[gpui::test]
+    fn completion_keys_preserve_composition_and_report_caret_position(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        struct Fixture {
+            field: gpui::Entity<NyaInputState>,
+            tabs: Rc<Cell<usize>>,
+            escapes: Rc<Cell<usize>>,
+        }
+        impl Render for Fixture {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                let tabs = self.tabs.clone();
+                let escapes = self.escapes.clone();
+                div().w(px(300.)).child(
+                    super::NyaInputShell::new("completion-test", &self.field)
+                        .height(px(32.))
+                        .on_completion_tab(move |_, _| {
+                            tabs.set(tabs.get() + 1);
+                            true
+                        })
+                        .on_escape(move |_, _| escapes.set(escapes.get() + 1)),
+                )
+            }
+        }
+        cx.update(gpui_kit::init);
+        let tabs = Rc::new(Cell::new(0));
+        let escapes = Rc::new(Cell::new(0));
+        let (fixture, cx) = cx.add_window_view({
+            let tabs = tabs.clone();
+            let escapes = escapes.clone();
+            move |_, cx| Fixture {
+                field: cx.new(|cx| NyaInputState::new(cx, "目录").track_position()),
+                tabs,
+                escapes,
+            }
+        });
+        let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+        let positions = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _subscription = cx.update(|window, cx| {
+            _ = window.draw(cx);
+            field.update(cx, |field, cx| field.focus_with_cursor_at_end(window, cx));
+            let positions = positions.clone();
+            cx.subscribe(
+                &field,
+                move |_, event: &super::NyaInputPositionChanged, _| {
+                    positions.borrow_mut().push(event.0)
+                },
+            )
+        });
+        cx.run_until_parked();
+        assert!(field.read_with(cx, |field, cx| field.selection_at_end(cx)));
+        cx.simulate_keystrokes("left");
+        cx.run_until_parked();
+        assert!(!field.read_with(cx, |field, cx| field.selection_at_end(cx)));
+        cx.simulate_keystrokes("right tab escape");
+        cx.run_until_parked();
+        assert_eq!(tabs.get(), 1);
+        assert_eq!(escapes.get(), 1);
+        assert!(positions.borrow().contains(&false));
+        assert_eq!(positions.borrow().last(), Some(&true));
+        cx.update(|window, cx| {
+            field
+                .read(cx)
+                .component_state()
+                .unwrap()
+                .update(cx, |state, cx| {
+                    state.replace_and_mark_text_in_range(None, "拼", Some(0..1), window, cx);
+                });
+        });
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(tabs.get(), 1, "Tab must not fill during composition");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(escapes.get(), 1, "Escape belongs to the input method");
     }
 
     #[gpui::test]

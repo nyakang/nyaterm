@@ -91,6 +91,7 @@ pub(in crate::features) struct BrowserPaneState {
     pub generation: u64,
     pub selection_anchor: Option<String>,
     pub path_editing: bool,
+    pub completion: crate::features::path_completion::PathCompletionState,
     pub row_height: u32,
     pub visible_columns: Vec<String>,
     pub last_successful_path: Option<RemoteFilePath>,
@@ -141,6 +142,7 @@ impl BrowserPaneState {
             generation: 0,
             selection_anchor: None,
             path_editing: false,
+            completion: Default::default(),
             row_height: 30,
             visible_columns: ["name", "size", "modified", "permissions"]
                 .map(str::to_string)
@@ -157,6 +159,7 @@ impl BrowserPaneState {
 
     pub(super) fn open_path_menu(&mut self, menu: PanePathMenu) {
         self.path_editing = false;
+        self.completion.reset();
         self.menu_selection = 0;
         self.menu_scroll = ScrollHandle::new();
         self.path_menu = Some(menu);
@@ -249,6 +252,7 @@ impl BrowserPaneState {
         self.generation = self.generation.wrapping_add(1);
         self.path_menu = None;
         self.path_editing = false;
+        self.completion.reset();
         // All navigation entry points share this intent, including breadcrumbs and history.
         self.select_after_load = (self.endpoint.kind() == FileBrowserBackendKind::Remote
             && self.path != path
@@ -375,6 +379,7 @@ impl BrowserPaneState {
         self.disconnected = false;
         self.search.clear();
         self.path_editing = false;
+        self.completion.reset();
         self.selection_anchor = None;
         self.history_target = None;
         self.loading = false;

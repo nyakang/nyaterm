@@ -689,13 +689,14 @@ mod tests {
             let mut source = crate::tests::helper_config();
             source.clipboard.mode = mode;
             let (output_tx, _output_rx) = mpsc::sync_channel(1);
-            let (_config, bridge) = build_config(
+            let (_config, bridge, _) = build_config(
                 "fixture",
                 &source,
                 output_tx,
                 Arc::new(CertificateGate::default()),
             )
             .unwrap();
+            let bridge = bridge.expect("default redirection keeps the clipboard on");
             let backend = TextClipboardBackend { bridge };
             assert!(
                 backend

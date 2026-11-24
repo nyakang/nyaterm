@@ -5,88 +5,88 @@ use crate::features::NyaTermApp;
 use crate::features::ai::agent_management::AgentCommand;
 
 impl NyaTermApp {
-    pub(in crate::features) fn refresh_codex_models(&mut self, cx: &mut Context<Self>) {
-        self.submit_ai_agent_command(
-            AgentCommand::Models {
-                codex: self.ai.settings_config().codex.executable_path.clone(),
-            },
-            cx,
-        );
+    pub(in crate::features) fn edit_acp_profile(
+        &mut self,
+        id: &str,
+        action: &str,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        match self.ai.edit_external_profile(id, action, value) {
+            Ok(true) => {
+                if !matches!(action, "name" | "add" | "copy") {
+                    self.ai.cancel_external_profile_runs(id);
+                }
+                self.ensure_ai_agent_inputs(cx);
+                self.defer_settings_persistence(cx);
+                self.defer_ai_panel_snapshot_flush(cx);
+            }
+            Err(error) => self.ai.set_agent_management_error(error.into()),
+            _ => {}
+        }
+        self.request_settings_panel_refresh(cx);
+    }
+
+    pub(in crate::features) fn apply_acp_profile_input(
+        &mut self,
+        rest: &str,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((id, field)) = rest.split_once('.') {
+            self.edit_acp_profile(id, field, text, cx);
+        }
+    }
+
+    pub(in crate::features) fn inspect_acp_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(profile) =
+            nyaterm_core::ai::external_agents::profiles(self.ai.settings_config())
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+        {
+            self.submit_ai_agent_command(
+                AgentCommand::Acp {
+                    profile: Box::new(profile),
+                    operation: nyaterm_agent_client::acp::AgentOperation::Inspect,
+                },
+                cx,
+            );
+        }
     }
 
     pub(in crate::features) fn refresh_ai_agents(&mut self, cx: &mut Context<Self>) {
-        let settings = self.ai.settings_config();
-        let command = AgentCommand::Refresh {
-            codex: settings.codex.executable_path.clone(),
-            claude: settings.claude_code.executable_path.clone(),
-        };
-        self.submit_ai_agent_command(command, cx);
-    }
-
-    pub(in crate::features) fn refresh_codex_account(&mut self, cx: &mut Context<Self>) {
         self.submit_ai_agent_command(
-            AgentCommand::Account {
-                codex: self.ai.settings_config().codex.executable_path.clone(),
-            },
+            AgentCommand::Refresh(
+                nyaterm_core::ai::external_agents::profiles(self.ai.settings_config()).to_vec(),
+            ),
             cx,
         );
     }
 
-    pub(in crate::features) fn refresh_claude_account(&mut self, cx: &mut Context<Self>) {
-        self.submit_ai_agent_command(
-            AgentCommand::ClaudeAccount {
-                claude: self
-                    .ai
-                    .settings_config()
-                    .claude_code
-                    .executable_path
-                    .clone(),
-            },
-            cx,
-        );
-    }
-
-    pub(in crate::features) fn start_codex_login(
+    pub(in crate::features) fn acp_account_action(
         &mut self,
-        device_code: bool,
+        id: &str,
+        method: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        self.submit_ai_agent_command(
-            AgentCommand::Login {
-                codex: self.ai.settings_config().codex.executable_path.clone(),
-                device_code,
-            },
-            cx,
-        );
-    }
-
-    pub(in crate::features) fn cancel_codex_login(&mut self, cx: &mut Context<Self>) {
-        let Some(login_id) = self.ai.agent_management_view().login_id.clone() else {
-            return;
-        };
-        self.submit_ai_agent_command(
-            AgentCommand::Cancel {
-                codex: self.ai.settings_config().codex.executable_path.clone(),
-                login_id,
-            },
-            cx,
-        );
-    }
-
-    pub(in crate::features) fn logout_codex(&mut self, cx: &mut Context<Self>) {
-        self.submit_ai_agent_command(
-            AgentCommand::Logout {
-                codex: self.ai.settings_config().codex.executable_path.clone(),
-            },
-            cx,
-        );
-    }
-
-    pub(in crate::features) fn copy_codex_device_code(&mut self, cx: &mut Context<Self>) {
-        if let Some(code) = self.ai.agent_management_view().user_code.clone() {
-            self.copy_text_with_feedback("copy-codex-device-code", code, cx);
-        } else {
-            self.copy_text_with_feedback("copy-codex-device-code", String::new(), cx);
+        if let Some(profile) =
+            nyaterm_core::ai::external_agents::profiles(self.ai.settings_config())
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+        {
+            let operation = match method {
+                Some(method) => nyaterm_agent_client::acp::AgentOperation::Authenticate { method },
+                None => nyaterm_agent_client::acp::AgentOperation::Logout,
+            };
+            self.submit_ai_agent_command(
+                AgentCommand::Acp {
+                    profile: Box::new(profile),
+                    operation,
+                },
+                cx,
+            );
         }
     }
 
@@ -133,7 +133,10 @@ impl NyaTermApp {
         if self.ai.agent_management_view().pending {
             return;
         }
-        let started = self.ai.submit_agent_command(command);
+        let store = self.store_blocking_client();
+        let started =
+            self.ai
+                .submit_agent_command(command, store, cx.background_executor().clone());
         self.request_settings_panel_refresh(cx);
         if !started {
             return;

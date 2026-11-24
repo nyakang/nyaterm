@@ -811,3 +811,42 @@ fn cancellation_at_commit_never_renames_the_staged_upload() {
             .all(|key| !key.windows(9).any(|s| s == b".nyaterm-"))
     );
 }
+
+#[test]
+fn adb_completion_keeps_raw_names_and_discards_a_truncated_sync_channel() {
+    use crate::adb::test_support::Node;
+    use crate::file_browser::completion::CompletionLimits;
+    use std::time::{Duration, Instant};
+    let fixture = AdbFixture::new();
+    for name in [b"/device/\xff".as_slice(), b"/device/\xfe"] {
+        fixture.device.lock().unwrap().nodes.insert(
+            name.to_vec(),
+            Node {
+                mode: 0o040755,
+                data: vec![],
+                modified: 0,
+            },
+        );
+    }
+    let path = RemoteFilePath::new("/device");
+    let listing = fixture
+        .service
+        .list_completion_directory(
+            &path,
+            CompletionLimits {
+                entries: 1,
+                name_bytes: 1024,
+            },
+            &SftpTransferControl::new(),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+    assert!(!listing.complete);
+    assert_eq!(listing.entries.len(), 1);
+    assert!(listing.entries[0].raw_path_token.is_some());
+    let next = fixture.service.list_dir_path(&path).unwrap();
+    assert_eq!(next.len(), 2);
+    assert_eq!(next[0].name, next[1].name);
+    assert_ne!(next[0].identity_key(), next[1].identity_key());
+    assert!(fixture.service.runtime.is_valid());
+}

@@ -68,15 +68,22 @@ impl NyaTermApp {
                 let drain_started_at = Instant::now();
                 // Arm before draining, so a frame enqueued in between still
                 // signals rather than waiting for the next one.
-                let drained = NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
-                    this.remote_desktop.arm_event_wake();
-                    // Any event means a session exists; the periodic clock is scoped
-                    // to that, and every reconnect is scheduled from an event handler.
-                    this.ensure_remote_desktop_periodic_clock(cx);
-                    let drained = this.drain_remote_desktop_queues(window, cx);
-                    let software_renderer =
-                        crate::platform::is_software_renderer(this.shell.renderer());
-                    (drained, software_renderer)
+                let _ = this.update(cx, |this, _| this.remote_desktop.arm_event_wake());
+                let drained =
+                    NyaTermApp::update_in_remote_desktop_windows(&this, cx, |this, window, cx| {
+                        // Any event means a session exists; the periodic clock is scoped
+                        // to that, and every reconnect is scheduled from an event handler.
+                        this.ensure_remote_desktop_periodic_clock(cx);
+                        let drained = this.drain_remote_desktop_queues(window, cx);
+                        let software_renderer =
+                            crate::platform::is_software_renderer(this.shell.renderer());
+                        (drained, software_renderer)
+                    });
+                let drained = drained.map(|results| {
+                    (
+                        results.iter().any(|(dirty, _)| *dirty),
+                        results.first().is_some_and(|(_, software)| *software),
+                    )
                 });
                 match drained {
                     Err(_) => break,
@@ -106,15 +113,22 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.sync_vnc_presentation_visibility(window);
-        self.sync_spice_presentation_visibility(window);
+        if self
+            .remote_desktop
+            .fullscreen_window
+            .is_none_or(|host| host.window_id() != window.window_handle().window_id())
+        {
+            self.sync_vnc_presentation_visibility(window);
+            self.sync_spice_presentation_visibility(window);
+        }
         for texture in self.remote_desktop.pending_texture_removals.drain(..) {
-            window.remove_dynamic_texture(texture);
+            texture.remove(window, cx);
         }
         let mut ids = self
             .remote_desktop
             .sessions
             .keys()
+            .filter(|id| self.remote_desktop_session_in_window(id, window))
             .cloned()
             .collect::<Vec<_>>();
         ids.sort_unstable();
@@ -186,7 +200,7 @@ impl NyaTermApp {
                     .sessions
                     .get(&session_id)
                     .map(|session| session.state);
-            if self.session.active_id() == Some(session_id.as_str())
+            if self.remote_desktop_session_visible(&session_id, window)
                 && let Some(surface) = self.remote_desktop.surfaces.get(&session_id)
             {
                 surface.update(cx, |_, cx| cx.notify());
@@ -250,21 +264,21 @@ impl NyaTermApp {
             loop {
                 let Ok(delay) = this.update(cx, |this, _| {
                     let cursor_repaint_pending = this
-                        .session
-                        .active_id()
-                        .and_then(|session_id| this.remote_desktop.sessions.get(session_id))
-                        .is_some_and(|session| session.cursor_repaint_pending);
-                    remote_desktop_periodic_delay(
-                        this.remote_desktop.pointer_flush_is_pending(),
-                        cursor_repaint_pending,
-                    )
+                        .remote_desktop
+                        .sessions
+                        .values()
+                        .any(|session| session.cursor_repaint_pending);
+                    // Pointer flushes now have their own one-shot short timer.
+                    // Keeping them off this clock stops a move burst from
+                    // running the whole maintenance pass at 125 Hz.
+                    remote_desktop_periodic_delay(false, cursor_repaint_pending)
                 }) else {
                     break;
                 };
                 cx.background_executor().timer(delay).await;
                 // `update_in`: keyboard-capture sync needs the window.
                 let Ok(keep_running) =
-                    NyaTermApp::update_in_main_window(&this, cx, |this, window, cx| {
+                    NyaTermApp::update_in_remote_desktop_windows(&this, cx, |this, window, cx| {
                         if this.drive_remote_desktop_periodic(window, cx) {
                             cx.notify();
                         }
@@ -313,7 +327,7 @@ impl NyaTermApp {
                         );
                     }
                 }
-                if !keep_running {
+                if !keep_running.into_iter().any(|running| running) {
                     #[cfg(windows)]
                     if nyaterm_windows_rdp::retired_count() != 0 {
                         continue;
@@ -346,6 +360,15 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Native children, reconnects and job scheduling remain on the main
+        // window. Only input/clipboard work follows the focused detached view.
+        if self
+            .remote_desktop
+            .fullscreen_window
+            .is_some_and(|host| host.window_id() == window.window_handle().window_id())
+        {
+            return self.drive_remote_desktop_window_input(window, cx);
+        }
         for (id, session) in &self.remote_desktop.sessions {
             if session.uploads_stopped
                 || matches!(
@@ -375,10 +398,27 @@ impl NyaTermApp {
         self.drive_spice_resize();
         dirty |= self.drive_rdp_reconnects(cx);
         self.settle_remote_desktop_restore(cx);
-        self.sync_rdp_keyboard_capture(window);
-        dirty |= self.poll_active_rdp_clipboard(cx);
+        dirty |= self.drive_remote_desktop_window_input(window, cx);
         self.report_rdp_metrics();
         dirty
+    }
+
+    fn drive_remote_desktop_window_input(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if cx
+            .active_window()
+            .is_some_and(|active| active != window.window_handle())
+        {
+            return false;
+        }
+        self.sync_rdp_keyboard_capture(window);
+        if !window.is_window_active() {
+            return false;
+        }
+        self.poll_active_rdp_clipboard(window, cx)
     }
 
     pub(super) fn apply_vnc_control_event(
@@ -460,7 +500,11 @@ impl NyaTermApp {
             }
             VncRuntimeEvent::Frame { .. } => {}
             VncRuntimeEvent::Clipboard { text, .. } => {
-                if self.session.active_id() == Some(session_id) {
+                if self.remote_desktop_input_session(window) == Some(session_id)
+                    && cx
+                        .active_window()
+                        .is_none_or(|active| active == window.window_handle())
+                {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
@@ -611,7 +655,11 @@ impl NyaTermApp {
                 self.apply_remote_cursor_batch(session_id, vec![event], window);
             }
             RdpRuntimeEvent::Clipboard { text, .. } => {
-                if self.session.active_id() != Some(session_id) {
+                if self.remote_desktop_input_session(window) != Some(session_id)
+                    || cx
+                        .active_window()
+                        .is_some_and(|active| active != window.window_handle())
+                {
                     return;
                 }
                 let accepted = self
