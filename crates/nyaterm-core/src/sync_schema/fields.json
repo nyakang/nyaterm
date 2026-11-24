@@ -68,6 +68,7 @@
       "backend": "local",
       "security": "local",
       "display": "local",
+      "redirection": "local",
       "clipboard": "local",
       "reconnect": "local",
       "shared": "local",

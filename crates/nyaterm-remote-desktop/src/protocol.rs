@@ -356,7 +356,7 @@ pub fn parse_rdp_drive_letters(spec: &str) -> Vec<char> {
         .chars()
         .filter_map(|letter| {
             let upper = letter.to_ascii_uppercase();
-            ('A'..='Z').contains(&upper).then_some(upper)
+            upper.is_ascii_uppercase().then_some(upper)
         })
         .collect();
     letters.sort_unstable();
@@ -368,7 +368,7 @@ pub fn parse_rdp_drive_letters(spec: &str) -> Vec<char> {
 /// letters remain selected.
 pub fn toggle_rdp_drive_letter(spec: &str, letter: char) -> String {
     let letter = letter.to_ascii_uppercase();
-    if !('A'..='Z').contains(&letter) {
+    if !letter.is_ascii_uppercase() {
         return spec.to_string();
     }
     let mut letters = parse_rdp_drive_letters(spec);

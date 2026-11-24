@@ -19,15 +19,19 @@ pub fn resolve(executable: &str) -> Result<PathBuf, AgentError> {
     if path.components().count() > 1 {
         return Err(AgentError::Missing);
     }
-    let mut roots: Vec<PathBuf> = std::env::var_os("PATH")
+    let roots: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).collect())
         .unwrap_or_default();
     #[cfg(windows)]
-    for (variable, suffix) in [("APPDATA", "npm"), ("LOCALAPPDATA", "pnpm")] {
-        if let Some(root) = std::env::var_os(variable) {
-            roots.push(PathBuf::from(root).join(suffix));
+    let roots = {
+        let mut roots = roots;
+        for (variable, suffix) in [("APPDATA", "npm"), ("LOCALAPPDATA", "pnpm")] {
+            if let Some(root) = std::env::var_os(variable) {
+                roots.push(PathBuf::from(root).join(suffix));
+            }
         }
-    }
+        roots
+    };
     for root in roots {
         for extension in if cfg!(windows) {
             &["", ".exe", ".cmd"][..]

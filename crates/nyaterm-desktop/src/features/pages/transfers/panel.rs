@@ -1043,7 +1043,7 @@ mod tests {
     fn path_completion_in_sidebar_fills_then_navigates_selected_child() {
         use nyaterm_file_browser_gpui::completion::CompletionStatus;
         let test_dir = TestConfigDir::new("nyaterm-sidebar-completion");
-        std::fs::create_dir_all(test_dir.path().join("alpha/child")).unwrap();
+        std::fs::create_dir_all(test_dir.path().join("alpha").join("child")).unwrap();
         let mut cx = TestAppContext::single();
         cx.executor().allow_parking();
         let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -1102,7 +1102,12 @@ mod tests {
             assert!(!browser.path_editing);
             assert_eq!(
                 browser.path,
-                test_dir.path().join("alpha/child").to_str().unwrap()
+                test_dir
+                    .path()
+                    .join("alpha")
+                    .join("child")
+                    .to_str()
+                    .unwrap()
             );
         });
     }

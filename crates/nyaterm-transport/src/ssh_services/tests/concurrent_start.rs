@@ -310,6 +310,32 @@ async fn failed_registration_reaps_the_ready_worker_without_publishing_a_session
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_worker_can_release_the_last_multiplex_owner_without_panicking() {
+    let (config, peer) = server(Arc::new(Gate::default())).await;
+    tokio::task::spawn_blocking(move || {
+        let manager = SessionManager::new();
+        let connection = open_ssh_multiplex_handle(config.clone()).unwrap();
+        let runtime = Arc::downgrade(&connection.inner.runtime);
+        let session = manager
+            .create_ssh_session_with_multiplex(config, connection)
+            .unwrap();
+        let Some(crate::session::ManagedSession::Ssh(mut transport)) =
+            manager.sessions.lock().unwrap().remove(&session.id)
+        else {
+            panic!("expected SSH transport");
+        };
+        transport.command_tx.close();
+        // The normal close path discards join errors. Observe the worker here
+        // so a panic while dropping its last runtime owner fails this test.
+        transport.worker_thread.take().unwrap().join().unwrap();
+        assert!(runtime.upgrade().is_none());
+    })
+    .await
+    .unwrap();
+    peer.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_detached_close_releases_shared_and_independent_ssh_owners() {
     use crate::SessionEvent;
     use std::collections::HashMap;

@@ -559,6 +559,22 @@ fn staged_quick_command_cancellation_only_affects_competing_sync_target() {
         }
     });
     fixture.send(r"echo foo\pbar");
+    // The UI time budget can yield between targets. Cancel only after both
+    // initial chunks have been sent, while still inside the one-second pause.
+    for tick in 0..100 {
+        if fixture
+            .cx
+            .read(|cx| fixture.app.read(cx).commands.staged_send_progress() == Some(2))
+        {
+            break;
+        }
+        assert!(tick < 99, "initial chunks did not reach both targets");
+        fixture
+            .cx
+            .executor()
+            .advance_clock(Duration::from_millis(1));
+        fixture.cx.run_until_parked();
+    }
     fixture.cx.update_entity(&fixture.app, |app, _| {
         app.write_session_sensitive_input(&fixture.ids[1], b"manual")
             .unwrap();

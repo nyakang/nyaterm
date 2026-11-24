@@ -186,6 +186,12 @@ pub(crate) fn run_ssh_worker(
         }
     };
 
+    // A detached close can release the manager's last connection owner while
+    // this future is still running. Keep the multiplex runtime alive until we
+    // leave the async context, where dropping a Tokio runtime is permitted.
+    let multiplex_runtime = multiplex
+        .as_ref()
+        .map(|handle| handle.inner.runtime.clone());
     runtime.block_on(async move {
         if config.runtime_mode == nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp {
             let result = async {
@@ -312,6 +318,7 @@ pub(crate) fn run_ssh_worker(
         )
         .await;
     });
+    drop(multiplex_runtime);
 }
 
 #[allow(clippy::too_many_arguments)]
