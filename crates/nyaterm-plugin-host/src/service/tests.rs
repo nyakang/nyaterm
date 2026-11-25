@@ -512,8 +512,7 @@ fn real_guest_fault_updates_catalog_without_another_request_or_polling() {
     let root = TestTempDir::new("nyaterm-plugin-service-fault-event");
     let (service, mut events) = PluginService::start(runtime(&root)).unwrap();
     install(&service, &root, "broken");
-    // Consume the installation notification before executing the guest.
-    block_on(events.next()).unwrap();
+    assert_eq!(service.snapshot().plugins[0].status, PluginStatus::Running);
     let OperationReply::Invocation(call) = block_on(
         service
             .submit(invocation(&service, "broken", "loop"))
@@ -525,14 +524,27 @@ fn real_guest_fault_updates_catalog_without_another_request_or_polling() {
     };
     assert!(block_on(call.result()).is_err());
     let (done, completed) = mpsc::sync_channel(1);
+    let observer = service.clone();
     let listener = thread::spawn(move || {
-        done.send(block_on(events.next()).is_some()).unwrap();
+        let faulted = block_on(async {
+            // Native startup and installation share this stream. Keep their
+            // queued events and inspect the snapshot only when an event arrives.
+            while events.next().await.is_some() {
+                let snapshot = observer.snapshot();
+                if snapshot.stopped {
+                    return false;
+                }
+                if snapshot.plugins[0].status == PluginStatus::Faulted {
+                    return true;
+                }
+            }
+            false
+        });
+        done.send(faulted).unwrap();
     });
     let outcome = completed.recv_timeout(WAIT);
-    let faulted = service.snapshot().plugins[0].status;
     service.shutdown();
     listener.join().unwrap();
     assert!(outcome.unwrap());
-    assert_eq!(faulted, PluginStatus::Faulted);
     assert!(service.snapshot().stopped);
 }
