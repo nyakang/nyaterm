@@ -731,7 +731,6 @@ impl NyaTermApp {
             self.connection_state.editor_agent_identity_picker_is_open();
         let credential_overlay = self.connection_state.editor_credential_overlay();
         let baud_popover_open = self.connection_state.editor_baud_popover_is_open();
-        let validation_error = self.connection_editor_validation_error(&editor);
         let save_enabled = !self.connection_state.editor_save_in_flight();
         let width = if native_window {
             viewport.0
@@ -1180,11 +1179,7 @@ impl NyaTermApp {
                 navigation_width,
                 protocol_select,
                 protocol_kinds,
-                validation_error: editor
-                    .error
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .or(validation_error),
+                validation_error: editor.error.clone(),
             },
             cx,
         );

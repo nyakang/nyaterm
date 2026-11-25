@@ -82,23 +82,6 @@ fn save_editor_connection(
 mod tests;
 
 impl NyaTermApp {
-    pub(in crate::features) fn connection_editor_validation_error(
-        &self,
-        editor: &ConnectionEditorState,
-    ) -> Option<String> {
-        // Default session settings have no identity fields, so validation uses
-        // the lenient defaults builder instead of the strict connection one.
-        let built = if editor.defaults_mode {
-            build_default_session_settings(editor).map(|_| ())
-        } else {
-            build_saved_connection_from_editor(editor).map(|_| ())
-        };
-        built
-            .and_then(|_| validate_editor_account(editor, self.security.passwords()))
-            .err()
-            .map(|error| self.connection_editor_validation_message(&error))
-    }
-
     fn connection_editor_validation_message(
         &self,
         error: &ConnectionEditorValidationError,
