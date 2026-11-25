@@ -436,7 +436,7 @@ pub(crate) fn resolve_helper(package: &str, env_var: &str) -> Result<PathBuf, St
         // Debug builds only produce the helper when its package is built too, so
         // name the command instead of leaving a bare missing-file error.
         Err(format!(
-            "{filename} is missing beside NyaTerm ({}); build it with `cargo build -p {package}`",
+            "{filename} is missing beside NyaTerm ({}); install it in Plugins or run `cargo build -p {package}` in nyaterm-plugins/native",
             path.display()
         ))
     }

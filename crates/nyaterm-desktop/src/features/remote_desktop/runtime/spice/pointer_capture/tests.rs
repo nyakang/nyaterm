@@ -45,9 +45,10 @@ fn spice_pointer_capture_releases_on_shortcut_revocation_and_session_changes() {
                         tls_port: None,
                         proxy: None,
                         extra: Default::default(),
-                    },
-                    username: SecretString::default(),
-                    password: SecretString::default(),
+                    }
+                    .into(),
+                    username: SecretString::default().into(),
+                    password: SecretString::default().into(),
                     settings: Default::default(),
                     credential_lifetime: Default::default(),
                     tcp_relay: None,

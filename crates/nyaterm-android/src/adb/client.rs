@@ -34,14 +34,7 @@ pub struct AdbDevice {
     pub status: DeviceStatus,
 }
 
-/// Immutable binding. Reconnection creates a new binding and generation.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeviceBinding {
-    pub server: SocketAddr,
-    pub serial: String,
-    pub transport_id: Option<u64>,
-    pub generation: u64,
-}
+pub use nyaterm_native_protocol::android::settings::DeviceBinding;
 
 #[derive(Clone, Debug)]
 pub struct AdbClient {

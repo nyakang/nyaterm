@@ -459,12 +459,16 @@ impl PluginPanel {
             );
             let downloadable = matches!(
                 component.status,
-                NativeStatus::Missing | NativeStatus::NeedsUpdate | NativeStatus::Damaged
+                NativeStatus::Missing
+                    | NativeStatus::NeedsUpdate
+                    | NativeStatus::UpdateAvailable
+                    | NativeStatus::Damaged
             );
             let label = t!(match component.status {
                 NativeStatus::Missing => "plugins.nativeMissing",
                 NativeStatus::Installing => "plugins.working",
                 NativeStatus::Ready => "plugins.enabled",
+                NativeStatus::UpdateAvailable => "plugins.update",
                 NativeStatus::Disabled => "plugins.nativeDisabled",
                 NativeStatus::NeedsUpdate => "plugins.nativeNeedsUpdate",
                 NativeStatus::Damaged => "plugins.loadFailed",
@@ -475,6 +479,7 @@ impl PluginPanel {
                 NativeStatus::Ready => RowTone::Active,
                 NativeStatus::Installing
                 | NativeStatus::NeedsUpdate
+                | NativeStatus::UpdateAvailable
                 | NativeStatus::PendingUninstall => RowTone::Warning,
                 NativeStatus::Damaged => RowTone::Danger,
                 NativeStatus::Missing | NativeStatus::Disabled => RowTone::Neutral,
@@ -494,7 +499,11 @@ impl PluginPanel {
                     .small()
                     .compact()
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.install_native(id, cx);
+                        if component.status == NativeStatus::UpdateAvailable {
+                            this.native_operation(id, NativeAction::Install, cx);
+                        } else {
+                            this.install_native(id, cx);
+                        }
                     })),
                 );
             }
@@ -515,6 +524,22 @@ impl PluginPanel {
                     .disabled(installing)
                     .on_click(cx.listener(move |this, _, _, cx| this.browse_native(id, cx))),
             ];
+            items.push(
+                NyaMenuItem::action(t!("tray.update"))
+                    .disabled(installing)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.native_operation(id, NativeAction::Probe, cx)
+                    })),
+            );
+            if component.rollback_available {
+                items.push(
+                    NyaMenuItem::action(t!("plugins.nativeRollback"))
+                        .disabled(installing)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.native_operation(id, NativeAction::Rollback, cx)
+                        })),
+                );
+            }
             if installed {
                 items.push(
                     NyaMenuItem::action(t!(if enabled {
@@ -566,6 +591,15 @@ impl PluginPanel {
                 format!("{label} · {:.1} MiB", size as f64 / 1048576.)
             } else {
                 label
+            };
+            let metadata = match (&component.installed_version, &component.available_version) {
+                (Some(installed), Some(available))
+                    if component.status == NativeStatus::UpdateAvailable =>
+                {
+                    format!("{metadata} · {installed} → {available}")
+                }
+                (Some(installed), _) => format!("{metadata} · {installed}"),
+                _ => metadata,
             };
             let progress = if installing {
                 component

@@ -54,7 +54,7 @@ class WindowsMsiTests(unittest.TestCase):
                 for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
                     names = package_native.artifact_names(target, version)
                     self.assertEqual(sum(name.endswith(".msi") for name in names), int(expected))
-                    self.assertEqual(len(names), 7 if expected else 6)
+                    self.assertEqual(len(names), 3 if expected else 2)
 
     def test_msi_version_obeys_three_field_windows_installer_limits(self) -> None:
         for version, expected in (("v2.0.0", "2.0.0"), ("2.0.0+build.7", "2.0.0"),

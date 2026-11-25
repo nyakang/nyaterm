@@ -1527,7 +1527,7 @@ fn unsupported_activex_never_queues_a_helper_or_waits_for_layout_on_start_or_ret
                 token: "12345678901234567890123456789012".into(),
             }),
         ] {
-            config.relay = relay;
+            config.relay = relay.map(Into::into);
             app.session
                 .metadata_mut("unsupported")
                 .unwrap()

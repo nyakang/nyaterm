@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+semver.workspace = true
 nyaterm-core.workspace = true
 nyaterm-store.workspace = true
 futures.workspace = true

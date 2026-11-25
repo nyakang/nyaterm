@@ -4654,6 +4654,7 @@
     "uploading": "送信中: %{fileName} (%{percent}%)"
   },
   "plugins": {
+    "nativeRollback": "Roll back to previous component version",
     "permissionScope": "オリジン、絶対ディレクトリ、実行ファイル、または接続 ID",
     "grant": "このスコープを許可",
     "revoke": "権限を取り消す",

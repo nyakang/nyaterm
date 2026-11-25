@@ -4654,6 +4654,7 @@
     "uploading": "보내는 중: %{fileName} (%{percent}%)"
   },
   "plugins": {
+    "nativeRollback": "Roll back to previous component version",
     "permissionScope": "오리진, 절대 디렉터리, 실행 파일 또는 연결 ID",
     "grant": "이 범위 허용",
     "revoke": "권한 철회",

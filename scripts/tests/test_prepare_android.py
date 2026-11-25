@@ -360,7 +360,7 @@ class MsvcToolDiscoveryTests(unittest.TestCase):
                 prepare_android.find_msvc_lib()
 
 
-@unittest.skipUnless(sys.platform == "win32", "requires Windows MSVC and prepared FFmpeg")
+@unittest.skipUnless(sys.platform == "win32" and shutil.which("cl.exe") and (prepare_android.STAGING / "ffmpeg").is_dir(), "requires Windows MSVC and prepared FFmpeg")
 class WindowsFfmpegTests(unittest.TestCase):
     def test_real_install_and_cached_repairs_link_all_four_versioned_dlls(self) -> None:
         target = os.environ.get("TARGET") or next(line.removeprefix("host: ") for line in

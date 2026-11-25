@@ -7,12 +7,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::plugins::{ErrorCode, PluginError, PluginResult, validate_resource_path};
 
+pub mod catalog;
 pub const SCHEMA: u32 = 1;
+pub const PACKAGE_SCHEMA: u32 = 2;
+pub const RUNTIME: &str = env!("NYATERM_COMPONENT_RUNTIME");
 pub const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 pub const MAX_FILES: usize = 4096;
 pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-pub const BUILD_ID: &str = env!("NYATERM_COMPONENT_BUILD_ID");
 pub const TARGET: &str = env!("NYATERM_COMPONENT_TARGET");
 pub const PUBLIC_KEY: &str = "RWSZPSpWBhqvgoiKJDtMwSvT1VUNZFVd4bU6qiNFGMYMAcM91M5b1bSb";
 
@@ -27,6 +29,14 @@ pub enum NativeComponentId {
 
 impl NativeComponentId {
     pub const ALL: [Self; 4] = [Self::Spice, Self::Rdp, Self::Vnc, Self::Android];
+    pub fn ipc_version(self) -> u32 {
+        match self {
+            Self::Vnc => nyaterm_native_protocol::protocol::VNC_PROTOCOL_VERSION,
+            Self::Rdp => nyaterm_native_protocol::protocol::PROTOCOL_VERSION,
+            Self::Spice => nyaterm_native_protocol::spice::protocol::SPICE_PROTOCOL_VERSION.into(),
+            Self::Android => nyaterm_native_protocol::android::ipc::PROTOCOL_VERSION,
+        }
+    }
     pub fn slug(self) -> &'static str {
         match self {
             Self::Spice => "spice",
@@ -80,10 +90,13 @@ pub struct NativeFile {
 pub struct NativeManifest {
     pub schema_version: u32,
     pub component: NativeComponentId,
-    pub app_version: String,
+    pub component_version: String,
+    pub host_version: String,
+    pub ipc_version: u32,
+    pub runtime: String,
     pub build_id: String,
     pub target: String,
-    /// The application build pins the helper's IPC implementation as well as its resources.
+    /// Relative executable path inside the independently signed component.
     pub entry: String,
     pub files: BTreeMap<String, NativeFile>,
 }
@@ -93,19 +106,23 @@ impl NativeManifest {
         &self,
         id: NativeComponentId,
         version: &str,
-        build: &str,
+        runtime: &str,
         target: &str,
     ) -> PluginResult<()> {
-        if self.schema_version != SCHEMA
+        if self.schema_version != PACKAGE_SCHEMA
             || self.component != id
-            || self.app_version != version
-            || self.build_id != build
+            || !catalog::compatible(&self.host_version, version)
+            || semver::Version::parse(&self.component_version).is_err()
+            || self.ipc_version != id.ipc_version()
+            || self.runtime != runtime
+            || self.build_id.len() != 40
+            || !self.build_id.bytes().all(|b| b.is_ascii_hexdigit())
             || self.target != target
             || self.entry != id.helper(target)
         {
             return Err(PluginError::new(
                 ErrorCode::Incompatible,
-                "Native component does not match this application build and platform",
+                "Native component does not match this host, IPC protocol and platform",
             ));
         }
         if self.files.is_empty()
@@ -178,12 +195,16 @@ pub enum NativeStatus {
     Ready,
     Disabled,
     NeedsUpdate,
+    UpdateAvailable,
     Damaged,
     PendingUninstall,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeSnapshot {
+    pub installed_version: Option<String>,
+    pub available_version: Option<String>,
+    pub rollback_available: bool,
     pub id: NativeComponentId,
     pub status: NativeStatus,
     pub downloaded: u64,
@@ -211,10 +232,13 @@ mod tests {
     fn manifest() -> NativeManifest {
         let id = NativeComponentId::Spice;
         NativeManifest {
-            schema_version: 1,
+            schema_version: 2,
             component: id,
-            app_version: "2.0.8".into(),
-            build_id: "abc".into(),
+            component_version: "1.0.0".into(),
+            host_version: ">=2.0.8, <3".into(),
+            ipc_version: id.ipc_version(),
+            runtime: "windows-msvc".into(),
+            build_id: "a".repeat(40),
             target: "x86_64-pc-windows-msvc".into(),
             entry: id.helper("windows"),
             files: BTreeMap::from([(
@@ -228,20 +252,38 @@ mod tests {
         }
     }
     #[test]
-    fn same_version_different_build_is_rejected() {
+    fn component_version_is_independent_but_host_range_is_enforced() {
         let m = manifest();
-        assert!(m.validate(m.component, "2.0.8", "abc", &m.target).is_ok());
-        assert!(m.validate(m.component, "2.0.8", "def", &m.target).is_err());
+        assert!(
+            m.validate(m.component, "2.0.8", "windows-msvc", &m.target)
+                .is_ok()
+        );
+        assert!(
+            m.validate(m.component, "2.1.0", "windows-msvc", &m.target)
+                .is_ok()
+        );
+        assert!(
+            m.validate(m.component, "3.0.0", "windows-msvc", &m.target)
+                .is_err()
+        );
     }
     #[test]
     fn inventory_rejects_path_aliases_and_wrong_platform() {
         let mut m = manifest();
         assert!(
-            m.validate(m.component, "2.0.8", "abc", "aarch64-pc-windows-msvc")
-                .is_err()
+            m.validate(
+                m.component,
+                "2.0.8",
+                "windows-msvc",
+                "aarch64-pc-windows-msvc"
+            )
+            .is_err()
         );
         m.files
             .insert("../escape".into(), m.files.values().next().unwrap().clone());
-        assert!(m.validate(m.component, "2.0.8", "abc", &m.target).is_err());
+        assert!(
+            m.validate(m.component, "2.0.8", "windows-msvc", &m.target)
+                .is_err()
+        );
     }
 }

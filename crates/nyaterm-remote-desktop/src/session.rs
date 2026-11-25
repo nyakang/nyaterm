@@ -1037,7 +1037,7 @@ fn spawn_reader(
                 &state,
                 RdpErrorKind::Protocol,
                 format!(
-                    "RDP helper ended before IPC {PROTOCOL_VERSION} handshake; rebuild the helper matching this application"
+                    "RDP helper ended before IPC {PROTOCOL_VERSION} handshake; install a component supporting this IPC version"
                 ),
             );
             return;
@@ -1102,7 +1102,7 @@ fn handle_control(
             return Err(RdpError::new(
                 RdpErrorKind::Protocol,
                 format!(
-                    "RDP helper protocol version {version} does not match {PROTOCOL_VERSION}; rebuild the helper matching this application"
+                    "RDP helper protocol version {version} does not match {PROTOCOL_VERSION}; install a component supporting this IPC version"
                 ),
             ));
         }

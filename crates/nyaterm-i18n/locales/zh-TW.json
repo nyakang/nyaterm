@@ -4654,6 +4654,7 @@
     "uploading": "傳送中: %{fileName} (%{percent}%)"
   },
   "plugins": {
+    "nativeRollback": "回復到上一元件版本",
     "permissionScope": "網路來源、絕對目錄、程式路徑或連線 ID",
     "grant": "授權此範圍",
     "revoke": "撤銷權限",

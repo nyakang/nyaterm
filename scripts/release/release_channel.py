@@ -66,8 +66,6 @@ def validate_candidate(directory: Path, version: str) -> None:
 
 def stage(store, directory: Path, version: str) -> None:
     validate_candidate(directory, version)
-    import native_components
-    native_components.publish(store, directory)
     for path in sorted(directory.iterdir()):
         store.put(f"releases/v{version}/{path.name}", path, immutable=True)
 

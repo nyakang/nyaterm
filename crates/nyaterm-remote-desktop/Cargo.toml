@@ -10,6 +10,7 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+nyaterm-native-protocol.workspace = true
 anyhow.workspace = true
 nyaterm-core = { path = "../nyaterm-core" }
 serde.workspace = true
@@ -20,4 +21,9 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+nyaterm-native-protocol = { workspace = true, features = ["test-support"] }
 nyaterm-core = { workspace = true, features = ["test-support"] }
+
+[[test]]
+name = "spice_lifecycle"
+required-features = ["test-support"]

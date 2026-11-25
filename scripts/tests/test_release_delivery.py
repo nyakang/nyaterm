@@ -15,7 +15,6 @@ import unittest
 from unittest.mock import patch, Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
-import native_components
 import artifact_catalog
 import generate_release_metadata
 import release_channel
@@ -65,19 +64,6 @@ class DeliveryTests(unittest.TestCase):
         self.store = MemoryStore()
         for name in artifact_catalog.expected(self.version, include_focal=True):
             (self.dist / name).write_bytes(name.encode())
-        for (target, variant), names in artifact_catalog.packages(self.version, include_focal=True).items():
-            for name in names:
-                if not native_components.is_component(Path(name)): continue
-                component = name.rsplit("_component_", 1)[1][:-4]
-                native_target = target + ("-glibc231" if variant == "glibc231" else "")
-                payload = self.root / (name + "-payload")
-                payload.mkdir()
-                helper = f"nyaterm-{component}-helper" + (".exe" if "windows" in target else "")
-                (payload / helper).write_bytes(b"fixture")
-                native_components.write_package(payload, self.dist / name, component, self.version, self.sha, native_target)
-        verify = native_components.verify
-        verifier = patch.object(native_components, "verify", side_effect=lambda path: verify(path, signed=False))
-        verifier.start(); self.addCleanup(verifier.stop)
         for template in generate_release_metadata.updater_artifacts(self.version).values():
             (self.dist / (template.format(version=self.version) + ".sig")).write_text("signature", encoding="utf-8")
         generate_release_metadata.generate(self.dist, version=self.version, tag="v" + self.version,

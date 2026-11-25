@@ -56,7 +56,7 @@ class SpiceReleaseTests(unittest.TestCase):
         for target in TARGETS:
             with self.subTest(target=target):
                 self.assertNotIn("nyaterm-spice-helper", package_native.helper_bins(target))
-                self.assertTrue(any("component_spice" in name for name in package_native.component_artifact_names(target, "2.0.8")))
+                self.assertFalse(any("_component_" in name for name in package_native.artifact_names(target, "2.0.8")))
                 entries = spice_fixture(target)
                 with mock.patch.object(spice_release, "locked_files", side_effect=fixture_spice_locked_files):
                     spice_release.verify_resources(entries.__getitem__, target)

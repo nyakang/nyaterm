@@ -1012,10 +1012,11 @@ mod tests {
                                     port: None,
                                     tls_port: Some(5901),
                                     proxy: None,
-                                },
+                                }
+                                .into(),
                                 username: "private-user".into(),
                                 password: "private-password".into(),
-                                settings: SpiceSettings::default(),
+                                settings: SpiceSettings::default().into(),
                                 credential_lifetime: SpiceCredentialLifetime::Temporary,
                                 tcp_relay: None,
                                 tls_relay: None,

@@ -312,23 +312,6 @@ def create_package(binary_dir, output, version, opengl, deb=False):
         for name in BINARIES:
             shutil.copy2(binary_dir / name, stage / name)
             (stage / name).chmod(0o755)
-        import native_components
-        build = os.environ["NYATERM_COMPONENT_BUILD_ID"]
-        for component in native_components.IDS:
-            component_root = Path(directory) / ("component-" + component)
-            component_root.mkdir()
-            helper = "nyaterm-" + component + "-helper"
-            shutil.copy2(binary_dir / helper, component_root / helper)
-            (component_root / helper).chmod(0o755)
-            if component == "android":
-                stage_android(binary_dir, component_root)
-                for notice in ("NOTICE.md", "LICENSE.scrcpy"):
-                    shutil.copy2(ROOT / "crates/nyaterm-android/assets" / notice, component_root / notice)
-            if component == "spice":
-                stage_spice(binary_dir, component_root)
-            audit(component_root / helper, android=component == "android")
-            shutil.copy2(ROOT / "LICENSE", component_root / "LICENSE")
-            native_components.write_package(component_root, output / (label + "_component_" + component + ".zip"), component, version, build, "x86_64-unknown-linux-gnu-glibc231")
         android_reports = []
         spice_reports = []
         reports = [audit(stage / name, android=name == "nyaterm-android-helper") for name in BINARIES]

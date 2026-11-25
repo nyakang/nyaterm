@@ -220,32 +220,17 @@ def target_info(target: str) -> TargetInfo:
         raise ValueError(f"unsupported release target: {target}") from error
 
 
-def component_build_id() -> str:
-    value = os.environ.get("NYATERM_COMPONENT_BUILD_ID") or subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT_DIR, text=True).strip()
-    if not re.fullmatch(r"[0-9a-f]{40}(?:-[0-9]+-[0-9]+)?", value):
-        raise ValueError("native components require the full source commit identity")
-    if "-" not in value and os.environ.get("GITHUB_RUN_ID", "").isdigit():
-        value += "-" + os.environ["GITHUB_RUN_ID"] + "-" + os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-    return value
-
-
-def component_artifact_names(target: str, version: str) -> set[str]:
-    return {f"NyaTerm_{version}_{target_info(target).label}_component_{id}.zip"
-            for id in ("spice", "rdp", "vnc", "android")}
-
-
 def artifact_names(target: str, version: str) -> set[str]:
     info = target_info(target)
     prefix = f"{APP_NAME}_{validate_artifact_version(version)}_{info.label}"
     if info.os_name == "macos":
-        return {f"{prefix}.dmg", f"{prefix}.app.tar.gz"} | component_artifact_names(target, version)
+        return {f"{prefix}.dmg", f"{prefix}.app.tar.gz"}
     if info.os_name == "linux":
-        return {f"{prefix}.AppImage", f"{prefix}.deb", f"{prefix}.rpm"} | component_artifact_names(target, version)
+        return {f"{prefix}.AppImage", f"{prefix}.deb", f"{prefix}.rpm"}
     names = {f"{prefix}_portable.zip", f"{prefix}-setup.exe"}
     if includes_windows_msi(version):
         names.add(f"{prefix}.msi")
-    return names | component_artifact_names(target, version)
+    return names
 
 
 def includes_windows_msi(artifact_version: str) -> bool:
@@ -286,7 +271,6 @@ def build_binary(package: str, name: str, target: str) -> Path:
         "--release", "--target", target, "--locked",
     ]
     environment = os.environ.copy()
-    environment["NYATERM_COMPONENT_BUILD_ID"] = component_build_id()
     environment["NYATERM_COMPONENT_TARGET"] = target
     if target.endswith("-windows-msvc"):
         # Keep Rust and every C/C++ dependency on the same static CRT. The ATL
@@ -305,14 +289,8 @@ def build_binary(package: str, name: str, target: str) -> Path:
 
 
 def build_application(target: str) -> Path:
-    import prepare_android
-    _, prefix = prepare_android.prepare(target)
-    if prefix is None:
-        raise RuntimeError("Android decoder dependencies were not prepared")
-    os.environ["FFMPEG_DIR"] = str(prefix)
-    spice_runtime(target)
     binary = build_binary("nyaterm-app", APP_BIN, target)
-    for name in (*helper_bins(target), *(f"nyaterm-{id}-helper" for id in ("spice", "rdp", "vnc", "android"))):
+    for name in helper_bins(target):
         build_binary(name, name, target)
     return binary
 
@@ -378,9 +356,7 @@ def copy_android_resources(destination: Path, target: str) -> list[Path]:
 def copy_release_documents(destination: Path, version: str) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     completion_licenses = ROOT_DIR / "crates/nyaterm-core/assets/completion"
-    android_licenses = ROOT_DIR / "crates" / "nyaterm-android" / "assets"
-    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo",
-                 android_licenses / "NOTICE.md", android_licenses / "LICENSE.scrcpy"]
+    documents = [LICENSE_PATH, completion_licenses / "NOTICE.txt", completion_licenses / "LICENSE.carapace", completion_licenses / "LICENSE.nucleo"]
     (destination / "LICENSE").write_text("\n\n".join(path.read_text(encoding="utf-8") for path in documents), encoding="utf-8")
     (destination / "VERSION").write_text(f"{version}\n", encoding="utf-8")
 
@@ -1000,8 +976,6 @@ def main() -> None:
     else:
         create_windows_packages(binary, info, version, artifact_version)
 
-    import native_components
-    native_components.build_packages(info.target, version, artifact_version, component_build_id())
 
     actual = {path.name for path in DIST_DIR.iterdir() if path.is_file()}
     expected = artifact_names(info.target, artifact_version)

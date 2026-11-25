@@ -11,7 +11,7 @@ class AurWorkflowTests(unittest.TestCase):
     def test_package_contents_checked_inside_arch_container(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('contents="$(bsdtar -tf /pkg/*.pkg.tar.zst)"', workflow)
-        self.assertIn("for binary in nyaterm nyaterm-rdp-helper nyaterm-vnc-helper nyaterm-mcp; do", workflow)
+        self.assertIn("for binary in nyaterm nyaterm-mcp; do", workflow)
         self.assertNotIn("bsdtar -tf aur/*.pkg.tar.zst", workflow)
 
     def test_required_desktop_libraries_are_declared(self) -> None:

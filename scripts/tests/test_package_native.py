@@ -71,8 +71,6 @@ def staged_package(target: str):
 
 class PackageNativeTests(unittest.TestCase):
     def setUp(self):
-        identity = mock.patch.object(package_native, "component_build_id", return_value="a" * 40)
-        identity.start(); self.addCleanup(identity.stop)
         from scripts.tests.test_verify_native_package import stage_android_fixture, stage_spice_fixture
         patcher = mock.patch.object(package_native, "copy_android_resources", side_effect=stage_android_fixture)
         patcher.start(); self.addCleanup(patcher.stop)
@@ -315,7 +313,7 @@ class PackageNativeTests(unittest.TestCase):
             {
                 "NyaTerm_main-snapshot_windows_x64_portable.zip",
                 "NyaTerm_main-snapshot_windows_x64-setup.exe",
-            } | package_native.component_artifact_names("x86_64-pc-windows-msvc", "main-snapshot"),
+            },
         )
 
     def test_all_release_targets_have_expected_artifact_names(self) -> None:
@@ -351,7 +349,7 @@ class PackageNativeTests(unittest.TestCase):
         }
         for target, names in expected.items():
             with self.subTest(target=target):
-                self.assertEqual(package_native.artifact_names(target, "v2.0.0"), names | package_native.component_artifact_names(target, "v2.0.0"))
+                self.assertEqual(package_native.artifact_names(target, "v2.0.0"), names)
 
     def test_release_binary_always_uses_explicit_target_directory(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):

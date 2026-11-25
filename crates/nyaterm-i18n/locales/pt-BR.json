@@ -4654,6 +4654,7 @@
     "uploading": "Enviando: %{fileName} (%{percent}%)"
   },
   "plugins": {
+    "nativeRollback": "Roll back to previous component version",
     "permissionScope": "Origem, diretório absoluto, executável ou ID da conexão",
     "grant": "Autorizar este escopo",
     "revoke": "Revogar permissões",

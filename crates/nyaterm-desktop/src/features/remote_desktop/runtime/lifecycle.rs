@@ -274,10 +274,10 @@ impl NyaTermApp {
                                 if let Some(metadata) = app.session.metadata_mut(&session_id) {
                                     match &mut metadata.launch_config {
                                         crate::models::SessionLaunchConfig::Rdp(config) => {
-                                            config.relay = Some(route.endpoint.clone())
+                                            config.relay = Some(route.endpoint.clone().into())
                                         }
                                         crate::models::SessionLaunchConfig::Vnc(config) => {
-                                            config.relay = Some(route.endpoint.clone())
+                                            config.relay = Some(route.endpoint.clone().into())
                                         }
                                         _ => {}
                                     }
@@ -418,10 +418,10 @@ impl NyaTermApp {
                             if let Some(metadata) = app.session.metadata_mut(&session_id) {
                                 match &mut metadata.launch_config {
                                     crate::models::SessionLaunchConfig::Rdp(config) => {
-                                        config.relay = Some(route.endpoint.clone())
+                                        config.relay = Some(route.endpoint.clone().into())
                                     }
                                     crate::models::SessionLaunchConfig::Vnc(config) => {
-                                        config.relay = Some(route.endpoint.clone())
+                                        config.relay = Some(route.endpoint.clone().into())
                                     }
                                     _ => return,
                                 }
@@ -518,7 +518,8 @@ impl NyaTermApp {
         {
             authentication_disabled =
                 remote_desktop_authentication_disabled(connection.auth.as_ref());
-            config.password = inline_remote_desktop_password(connection.auth.as_ref());
+            config.password =
+                inline_remote_desktop_password(connection.auth.as_ref()).map(Into::into);
             if config.password.is_none()
                 && let Some(password_id) = remote_desktop_password_id(connection.auth.as_ref())
             {
@@ -602,7 +603,8 @@ impl NyaTermApp {
             && let Some(connection_id) = metadata.source_connection_id.as_deref()
             && let Some(connection) = self.connection_state.connection_by_id(connection_id)
         {
-            config.password = inline_remote_desktop_password(connection.auth.as_ref());
+            config.password =
+                inline_remote_desktop_password(connection.auth.as_ref()).map(Into::into);
             if config.password.is_none() {
                 password_id = remote_desktop_password_id(connection.auth.as_ref());
             }
@@ -734,13 +736,13 @@ impl NyaTermApp {
                 };
                 match &mut metadata.launch_config {
                     crate::models::SessionLaunchConfig::Rdp(config) if !vnc => {
-                        config.password = Some(password);
+                        config.password = Some(password.into());
                     }
                     crate::models::SessionLaunchConfig::Vnc(config) if vnc => {
-                        config.password = Some(password);
+                        config.password = Some(password.into());
                     }
                     crate::models::SessionLaunchConfig::Spice(config) => {
-                        config.session.password = password;
+                        config.session.password = password.into();
                     }
                     _ => return,
                 }

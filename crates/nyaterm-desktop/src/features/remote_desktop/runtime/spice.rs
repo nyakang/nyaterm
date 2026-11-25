@@ -53,10 +53,10 @@ impl NyaTermApp {
             name: rust_i18n::t!("spice.temporaryTitle").to_string(),
             session: nyaterm_remote_desktop::spice::protocol::SpiceSessionConfig {
                 session_id: id.clone(),
-                endpoint: document.endpoint,
-                username: document.username,
-                password: document.password,
-                settings: document.settings,
+                endpoint: document.endpoint.into(),
+                username: document.username.into(),
+                password: document.password.into(),
+                settings: document.settings.into(),
                 credential_lifetime:
                     nyaterm_remote_desktop::spice::protocol::SpiceCredentialLifetime::Temporary,
                 tcp_relay: None,

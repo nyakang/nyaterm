@@ -221,18 +221,7 @@ print(count.value)
                 self.assertEqual(len(report["binaries"]), 2)
                 self.assertEqual(report["android_runtime"], [])
                 self.assertEqual(report["spice_runtime"], [])
-            import native_components
-            packages = list((root / "dist").glob("*_component_*.zip"))
-            self.assertEqual(len(packages), 4)
-            for package in packages:
-                manifest, files = native_components.inspect(package)
-                self.assertEqual(manifest["target"], "x86_64-unknown-linux-gnu-glibc231")
-                self.assertIn(manifest["entry"], files)
-                if manifest["component"] == "android":
-                    self.assertIn("adb/adb", files)
-                    self.assertIn("NOTICE.md", files)
-                if manifest["component"] == "spice":
-                    self.assertIn("spice/SOURCE.json", files)
+            self.assertEqual(list((root / "dist").glob("*_component_*.zip")), [])
             self.assertTrue(archive.with_name(archive.name + ".sha256").is_file())
 
     def test_packaging_refuses_validation_on_newer_host(self):

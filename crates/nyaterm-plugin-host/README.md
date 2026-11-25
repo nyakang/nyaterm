@@ -78,3 +78,7 @@ Manifest 声明能力不等于外部资源授权。未授权的操作被拒绝�
 - 五个示例包和 SDK 生命周期 fixture 已重新构建。
 
 真实 SSH/SFTP、四类原生会话、多窗口交互，以及 Linux/macOS 联机行为仍需要相应环境验收。
+
+## 独立原生组件
+
+Android/RDP/VNC/SPICE 已迁入 nyaterm-plugins/native；宿主通过精确 Git revision 引用 IPC 契约。安装、手动更新、回退、版本租约及签名索引见 [组件维护说明](../../NATIVE_COMPONENTS.md)。

@@ -1,8 +1,8 @@
 use crate::package::{io_error, read_bounded, reject_path_links};
 use minisign_verify::{PublicKey, Signature};
 use nyaterm_core::plugins::native::{
-    BUILD_ID, MAX_ARCHIVE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES, MAX_PAYLOAD_BYTES,
-    NativeComponentId, NativeManifest, PUBLIC_KEY, TARGET,
+    MAX_ARCHIVE_BYTES, MAX_FILES, MAX_MANIFEST_BYTES, MAX_PAYLOAD_BYTES, NativeComponentId,
+    NativeManifest, PUBLIC_KEY, RUNTIME, TARGET,
 };
 use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult, validate_resource_path};
 use sha2::{Digest, Sha256};
@@ -20,13 +20,13 @@ fn invalid() -> PluginError {
 
 struct Trust<'a> {
     version: &'a str,
-    build: &'a str,
+    runtime: &'a str,
     target: &'a str,
     key: &'a str,
 }
 const TRUST: Trust<'static> = Trust {
     version: env!("CARGO_PKG_VERSION"),
-    build: BUILD_ID,
+    runtime: RUNTIME,
     target: TARGET,
     key: PUBLIC_KEY,
 };
@@ -41,7 +41,7 @@ fn manifest(root: &Path, id: NativeComponentId, trust: &Trust<'_>) -> PluginResu
         .verify(&raw, &signature, false)
         .map_err(|_| invalid())?;
     let manifest: NativeManifest = serde_json::from_slice(&raw).map_err(|_| invalid())?;
-    manifest.validate(id, trust.version, trust.build, trust.target)?;
+    manifest.validate(id, trust.version, trust.runtime, trust.target)?;
     Ok(manifest)
 }
 
@@ -202,6 +202,13 @@ pub(super) fn extract(
     Ok(())
 }
 
+pub(super) fn manifest_digest(root: &Path) -> PluginResult<String> {
+    Ok(hex::encode(Sha256::digest(read_bounded(
+        &root.join("component.json"),
+        MAX_MANIFEST_BYTES,
+    )?)))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::native::package::{Trust, verify_with_trust};
@@ -231,7 +238,7 @@ mod tests {
     fn trust() -> Trust<'static> {
         Trust {
             version: "2.0.8",
-            build: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            runtime: "windows-msvc",
             target: "x86_64-pc-windows-msvc",
             key: include_str!("../../tests/fixtures/native/public-key.txt"),
         }
@@ -249,10 +256,10 @@ mod tests {
         assert!(verify().is_err());
     }
     #[test]
-    fn signature_and_build_identity_are_both_required() {
+    fn signature_and_runtime_compatibility_are_both_required() {
         let root = fixture();
         let mut wrong = trust();
-        wrong.build = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        wrong.runtime = "glibc-2.31";
         assert!(
             verify_with_trust(root.path(), NativeComponentId::Vnc, &|| Ok(()), &wrong).is_err()
         );

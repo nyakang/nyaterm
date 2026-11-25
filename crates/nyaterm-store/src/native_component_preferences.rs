@@ -1,10 +1,13 @@
 //! Native component preferences have their own contract; V1 plugin preferences stay unchanged.
+use nyaterm_core::plugins::native::catalog::NativeSelection;
 use nyaterm_core::plugins::native::{NativePreferences, SCHEMA};
 use nyaterm_core::plugins::{ErrorCode, PluginError, PluginResult};
 use redb::{Database, ReadableDatabase, TableDefinition};
 use std::path::Path;
 
 const TABLE: TableDefinition<&str, &str> = TableDefinition::new("native_components_v1");
+const SELECTIONS: TableDefinition<&str, &str> =
+    TableDefinition::new("native_component_selections_v1");
 pub struct NativePreferenceStore {
     database: Database,
 }
@@ -15,6 +18,35 @@ fn error() -> PluginError {
     )
 }
 impl NativePreferenceStore {
+    pub fn selection(&self, identity: &str) -> PluginResult<NativeSelection> {
+        let transaction = self.database.begin_read().map_err(|_| error())?;
+        let table = match transaction.open_table(SELECTIONS) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(NativeSelection::default()),
+            Err(_) => return Err(error()),
+        };
+        let Some(raw) = table.get(identity).map_err(|_| error())? else {
+            return Ok(NativeSelection::default());
+        };
+        if raw.value().len() > 4096 {
+            return Err(error());
+        }
+        let selection: NativeSelection = serde_json::from_str(raw.value()).map_err(|_| error())?;
+        selection.validate()?;
+        Ok(selection)
+    }
+
+    pub fn save_selection(&self, identity: &str, selection: &NativeSelection) -> PluginResult<()> {
+        selection.validate()?;
+        let raw = serde_json::to_string(selection).map_err(|_| error())?;
+        let transaction = self.database.begin_write().map_err(|_| error())?;
+        transaction
+            .open_table(SELECTIONS)
+            .map_err(|_| error())?
+            .insert(identity, raw.as_str())
+            .map_err(|_| error())?;
+        transaction.commit().map_err(|_| error())
+    }
     pub fn open(path: &Path) -> PluginResult<Self> {
         let store = Self {
             database: Database::create(path).map_err(|_| error())?,
@@ -61,6 +93,51 @@ mod tests {
     use crate::native_component_preferences::NativePreferenceStore;
     use nyaterm_core::plugins::native::{NativeComponentId, NativePreference};
     use nyaterm_core::test_support::TestTempDir;
+    #[test]
+    fn version_selection_is_atomic_and_does_not_replace_existing_preferences() {
+        use nyaterm_core::plugins::native::catalog::{InstalledComponent, NativeSelection};
+        let root = TestTempDir::new("nyaterm-native-selection");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let path = root.join("native.redb");
+        let store = NativePreferenceStore::open(&path).unwrap();
+        let mut preferences = store.load().unwrap();
+        preferences.components.insert(
+            NativeComponentId::Vnc,
+            NativePreference {
+                disabled: true,
+                uninstall_pending: false,
+            },
+        );
+        store.save(&preferences).unwrap();
+        let identity = "vnc/x86_64-pc-windows-msvc/windows-msvc";
+        let selection = NativeSelection {
+            active: Some(InstalledComponent {
+                version: "1.1.0".into(),
+                digest: "a".repeat(64),
+            }),
+            previous: None,
+        };
+        store.save_selection(identity, &selection).unwrap();
+        let invalid = NativeSelection {
+            active: Some(InstalledComponent {
+                version: "../bad".into(),
+                digest: "b".repeat(64),
+            }),
+            previous: None,
+        };
+        assert!(store.save_selection(identity, &invalid).is_err());
+        drop(store);
+        let reopened = NativePreferenceStore::open(&path).unwrap();
+        assert_eq!(reopened.load().unwrap(), preferences);
+        assert_eq!(reopened.selection(identity).unwrap(), selection);
+        assert!(
+            reopened
+                .selection("vnc/another-target/runtime")
+                .unwrap()
+                .active
+                .is_none()
+        );
+    }
     #[test]
     fn native_preferences_round_trip_without_changing_plugin_preferences() {
         let root = TestTempDir::new("nyaterm-native-preferences");

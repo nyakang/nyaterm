@@ -166,11 +166,13 @@ impl NyaTermApp {
                     .expect("checked SPICE session");
                 spice.next_transfer_id = spice.next_transfer_id.saturating_add(1);
                 let transfer_id = spice.next_transfer_id;
-                match this
-                    .remote_desktop
-                    .spice_manager
-                    .send(&id, SpiceControl::SendFiles { transfer_id, paths })
-                {
+                match this.remote_desktop.spice_manager.send(
+                    &id,
+                    SpiceControl::SendFiles {
+                        transfer_id,
+                        paths: paths.into_iter().map(Into::into).collect(),
+                    },
+                ) {
                     Ok(()) => {
                         spice.transfer = Some(SpiceTransferView {
                             id: transfer_id,

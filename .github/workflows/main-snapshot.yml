@@ -70,17 +70,6 @@ jobs:
           cache-key: main-snapshot-preflight
       - name: Install Linux system dependencies
         uses: ./.github/actions/install-linux-deps
-      - name: Prepare Android native dependencies
-        shell: bash
-        run: |
-          python3 scripts/release/prepare_android.py
-          python3 - <<'PY'
-          import os, subprocess
-          from pathlib import Path
-          target = subprocess.check_output(['rustc', '-vV'], text=True).split('host: ')[1].splitlines()[0]
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write(f'FFMPEG_DIR={(Path("target/android-deps/ffmpeg") / target).resolve()}\n')
-          PY
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
       - name: Test packaging and release helpers
@@ -145,28 +134,6 @@ jobs:
           python scripts/release/release_provenance.py verify
           --dist release-assets --records provenance --version "$VERSION"
           --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" --artifact-version main-snapshot
-      - name: Install component signing tools
-        run: sudo apt-get update && sudo apt-get install -y minisign
-      - name: Sign and publish immutable native components
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
-          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          R2_BUCKET: nyaterm
-        run: |
-          set -euo pipefail
-          test -n "${TAURI_SIGNING_PRIVATE_KEY_B64}"
-          TAURI_SIGNING_PRIVATE_KEY="$(printf '%s' "${TAURI_SIGNING_PRIVATE_KEY_B64}" | base64 --decode)"
-          export TAURI_SIGNING_PRIVATE_KEY
-          python3 scripts/release/native_components.py sign --dist release-assets
-          unset TAURI_SIGNING_PRIVATE_KEY
-          python3 scripts/release/native_components.py publish --dist release-assets
       - name: Back up current snapshot
         env:
           GH_TOKEN: ${{ github.token }}

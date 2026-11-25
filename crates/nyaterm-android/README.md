@@ -1,3 +1,7 @@
+> Android helper implementation, scrcpy assets and release tooling now belong to
+> `nyaterm-plugins/native`. See [independent component maintenance](../../NATIVE_COMPONENTS.md).
+> Build/preparation commands below describe the helper workspace, not this app workspace.
+
 # Native Android connections
 
 Saved Android connections open a terminal. Files use the existing sidebar and
@@ -78,7 +82,7 @@ worker wakes directly on frames, credit, visibility or refresh; restoring a stat
 screen or moving it to another window does not require new media. Decoded frames
 are shared immutably without deep copies. Both sides retain at most two idle pixel
 buffers and return frame credit with recycled storage after upload or discard.
-App and helper must be built and packaged together. A transferred tab recreates focus, event wakes and GPU textures
+App and helper are independently versioned and packaged; IPC compatibility is required. A transferred tab recreates focus, event wakes and GPU textures
 in its destination window. Different valid leases for the same saved connection reject
 the move before attachment so the source can roll back atomically.
 
@@ -112,7 +116,7 @@ official macOS ADB is universal.
 Run `python3 scripts/release/prepare_android.py` from the repository root and
 export its reported `FFMPEG_DIR` before Cargo commands. Build
 `nyaterm-android-helper` beside `nyaterm`. `NYATERM_ANDROID_HELPER` overrides the
-helper path. `package_native.py` prepares and packages the same dependencies.
+helper path. The independent repository native/scripts/release/components.py prepares and packages these dependencies.
 FFmpeg builds require a C compiler, make, pkg-config and libclang; Windows uses
 MSVC and MSYS2 sh/make. Linux ARM64 additionally uses cmake, Ninja and the libraries
 listed in the release workflow.
@@ -125,7 +129,7 @@ H.264 decoding/parsing and BGRA scaling. The pinned ffmpeg-next 8.1.0 needs its
 format feature because of unconditional imports; avformat contains no demuxers
 or protocols. Packages include dependency notices, licenses, source URLs,
 checksums and configure parameters. Dynamic libraries can be replaced/relinked.
-See [scrcpy notices](assets/NOTICE.md) and [license](assets/LICENSE.scrcpy).
+scrcpy notices and license are maintained alongside the helper assets in nyaterm-plugins/native/crates/nyaterm-android-helper/assets.
 
 ## Input and compatibility
 
@@ -161,7 +165,7 @@ still changes only NyaTerm's local image scale. Cmd alone does not simulate Ctrl
 Moving outside the visible image, losing focus, hiding the screen, changing its
 geometry or local transform, or an input failure ends the gesture. Press again
 to start a new one. All active fingers are released together on interruption.
-The application and Android helper must both use IPC version 5; older helpers
+The application and Android helper must both use IPC version 6; older helpers
 are rejected by the existing version handshake. Saved settings are unchanged.
 
 Unicode uses explicit paste or the device input method. Host IME does not

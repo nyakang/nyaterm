@@ -232,7 +232,7 @@ fn saved_config(name: &str) -> Result<RdpSessionConfig> {
         port,
         username,
         domain,
-        password,
+        password: password.map(Into::into),
         use_nla: security.use_nla,
         certificate_policy: parse_rdp_certificate_policy(&security.certificate_policy),
         administrative_session: security.administrative_session,

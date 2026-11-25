@@ -30,7 +30,7 @@ def names(target: str, variant: str, artifact_version: str) -> set[str]:
     if (target, variant) != (FOCAL_TARGET, "glibc231") or artifact_version == "main-snapshot":
         raise ValueError("unsupported package target/variant")
     prefix = f"NyaTerm_{artifact_version}_linux_x64_glibc231"
-    return {prefix + suffix for suffix in (".tar.gz", ".tar.gz.sha256", ".deb", ".deb.sha256")} | {prefix + "_component_" + id + ".zip" for id in ("spice", "rdp", "vnc", "android")}
+    return {prefix + suffix for suffix in (".tar.gz", ".tar.gz.sha256", ".deb", ".deb.sha256")}
 
 
 def expected(artifact_version: str, *, include_focal: bool = False) -> set[str]:

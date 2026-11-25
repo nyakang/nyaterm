@@ -87,33 +87,12 @@ jobs:
         uses: ./.github/actions/install-linux-deps
         with:
           extra_packages: curl file patchelf desktop-file-utils dpkg-dev rpm libclang-dev cmake ninja-build libgtest-dev libprotobuf-dev protobuf-compiler libusb-1.0-0-dev libssl-dev zlib1g-dev libbrotli-dev liblz4-dev libpcre2-dev libzstd-dev
-      - name: Test RPM resource integrity
-        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          command -v rpmbuild
-          command -v rpm2cpio
-          python -m unittest scripts.tests.test_android_release_integration.AndroidReleaseTests.test_real_rpm_preserves_android_resource_bytes
       - name: Install AppImage tooling
         if: runner.os == 'Linux'
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: bash scripts/ci/install-appimagetool.sh "${TARGET}"
-      - name: Install Android native build tools (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: brew install pkg-config
-      - name: Install Android native build tools (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install llvm -y --no-progress
-      - name: Set up MSYS2 for Android native dependencies
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MSYS
-          path-type: inherit
-          install: make
       - name: Install NSIS
         if: runner.os == 'Windows'
         shell: pwsh
@@ -133,33 +112,6 @@ jobs:
       - name: Prepare bundled ConPTY
         if: runner.os == 'Windows'
         run: python scripts/release/prepare_conpty.py
-      - name: Install SPICE preparation modules
-        run: python -m pip install pefile==2024.8.26 zstandard==0.25.0 pyparsing==3.2.5
-      - name: Install SPICE native build dependencies
-        if: runner.os != 'Windows'
-        shell: bash
-        run: bash scripts/ci/install-spice-deps.sh
-      - name: Prepare private SPICE runtime
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          python - <<'PY'
-          import os, sys
-          sys.path.insert(0, 'scripts/release')
-          import prepare_spice
-          target = os.environ['TARGET']
-          runtime = prepare_spice.prepare(target)
-          prepare_spice.verify_runtime(runtime, target)
-          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
-              stream.write(f'NYATERM_SPICE_RUNTIME={runtime}\n')
-              stream.write(f'NYATERM_TEST_SPICE_RUNTIME={runtime}\n')
-          PY
-          python -m unittest scripts.tests.test_prepare_spice scripts.tests.test_spice_release_integration
-      - name: Probe Unix SPICE relocation and video plugins
-        if: runner.os != 'Windows'
-        shell: bash
-        run: python scripts/ci/probe_spice_runtime.py "${NYATERM_SPICE_RUNTIME}"
       - name: Package native application
         if: runner.os != 'Windows'
         shell: bash
@@ -170,12 +122,6 @@ jobs:
           NYATERM_VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
         run: python scripts/release/package_native.py "${TARGET}"
-      - name: Prepare Android native dependencies (Windows MSYS2)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        env:
-          TARGET: ${{ matrix.target }}
-        run: python scripts/release/prepare_android.py --target "${TARGET}"
       - name: Package native application (Windows MSVC)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -194,20 +140,6 @@ jobs:
           Write-Host "Using MSVC linker: $linker"
           python scripts/release/package_native.py "$env:TARGET"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Upload failed FFmpeg configuration log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-config-${{ matrix.label }}
-          path: target/android-deps/ffmpeg-build/**/ffbuild/config.log
-          if-no-files-found: ignore
-          retention-days: 7
-      - name: Test Windows FFmpeg import library links and cached repair
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-        run: python scripts/ci/test_scripts.py --suite android-ffmpeg
       - name: Verify native package
         shell: bash
         env:

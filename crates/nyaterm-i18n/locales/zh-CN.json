@@ -4654,6 +4654,7 @@
     "uploading": "发送中: %{fileName} (%{percent}%)"
   },
   "plugins": {
+    "nativeRollback": "回退到上一组件版本",
     "permissionScope": "网络来源、绝对目录、程序路径或连接 ID",
     "grant": "授权此范围",
     "revoke": "撤销权限",
