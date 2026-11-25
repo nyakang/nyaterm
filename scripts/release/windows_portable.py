@@ -19,7 +19,6 @@ def payload_files(target: str) -> tuple[str, ...]:
         *LAYOUT["helper_files"],
         *LAYOUT["support_files"],
         *LAYOUT["conpty_files"][target],
-        *LAYOUT.get("spice_files", {}).get(target, []),
         LAYOUT["marker"],
     )
 

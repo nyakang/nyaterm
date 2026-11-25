@@ -347,8 +347,9 @@ Use package-specific checks while iterating:
 * `cargo test -p <crate-name>`
 * `cargo run -p nyaterm-app --bin nyaterm`
 
-Builtin/IronRDP, VNC and Android screen run in helper processes that the application resolves
-beside its own executable. Windows Native RDP is the explicitly selected
+SPICE, Builtin/IronRDP, VNC and Android run in isolated helper processes acquired
+through the official native component registry in `nyaterm-plugin-host`. Debug builds
+can also resolve helpers beside the application executable. Windows Native RDP is the explicitly selected
 in-process system-component exception and requires MSVC with ATL when building.
 `cargo run -p nyaterm-app --bin nyaterm` builds only the application, so build the
 helpers into the same target directory first or the helper backends fail with
@@ -361,9 +362,10 @@ A bare `cargo build` or `cargo check` covers the app and helpers: they are the w
 `default-members`. `NYATERM_RDP_HELPER` and `NYATERM_VNC_HELPER` override the
 lookup with an explicit path; `NYATERM_ANDROID_HELPER` does the same for Android.
 See `crates/nyaterm-android/README.md` for pinned dependencies and acceptance probes.
-`scripts/release/package_native.py` is what puts the
-helpers next to the application in release packages; its `HELPER_BINS` list must
-name every helper.
+`scripts/release/package_native.py` produces slim application packages containing MCP
+and four separately signed native component ZIPs. `HELPER_BINS` lists only base
+helpers; the portable layout's `native_helper_files` lists optional component helpers. See
+`crates/nyaterm-plugin-host/README.md` for component identity, publication and portable migration.
 
 Before review, run the relevant broader checks:
 

@@ -12,6 +12,7 @@ from pathlib import Path
 import generate_release_metadata
 import package_native
 import artifact_catalog
+import native_components
 
 
 def identity(source_sha: str, version: str, run_id: str) -> dict[str, object]:
@@ -56,12 +57,22 @@ def record_v2(dist: Path, target: str, source_sha: str, version: str, run_id: st
     pinned = artifact_catalog.toolchain(root)
     if not compiler.startswith(f"rustc {pinned} "):
         raise ValueError("compiler does not match pinned Rust toolchain")
+    for name in artifact_catalog.names(target, variant, label):
+        path = dist / name
+        if native_components.is_component(path):
+            manifest, _ = native_components.inspect(path)
+            expected_target = target + ("-glibc231" if variant == "glibc231" else "")
+            build = manifest["build_id"]
+            if (manifest["app_version"] != version or manifest["target"] != expected_target
+                    or build.split("-", 1)[0] != source_sha
+                    or ("-" in build and build.split("-")[1] != run_id)):
+                raise ValueError("component identity does not match build provenance")
     result = identity(source_sha, version, run_id)
     result.update(schema_version=2, target=target, variant=variant, artifact_version=label,
                   compiler=compiler, toolchain=pinned,
                   lockfile_sha256=artifact_catalog.text_sha256(root / "Cargo.lock"),
                   build_config_sha256=artifact_catalog.build_config_digest(variant, root),
-                  artifacts={name: artifact_catalog.sha256(dist / name)
+                  artifacts={name: (native_components.provenance_hash(dist / name) if native_components.is_component(dist / name) else artifact_catalog.sha256(dist / name))
                              for name in sorted(artifact_catalog.names(target, variant, label))})
     return result
 

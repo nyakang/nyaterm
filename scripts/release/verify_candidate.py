@@ -20,6 +20,9 @@ PUBLIC_KEY_PATH = Path(__file__).with_name("updater-public-key.txt")
 def verify(directory: Path, records: Path, *, version: str, source_sha: str, run_id: str) -> None:
     release_provenance.verify_v2(directory, records, source_sha, version, run_id, include_focal=True)
     release_channel.validate_candidate(directory, version)
+    import native_components
+    for path in directory.glob("*_component_*.zip"):
+        native_components.verify(path)
     manifest = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
     with tempfile.TemporaryDirectory(prefix="nyaterm-candidate-signatures-") as folder:
         public = Path(folder) / "public.key"
