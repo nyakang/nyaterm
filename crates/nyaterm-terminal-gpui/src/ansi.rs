@@ -1,6 +1,4 @@
-use crate::keywords::{
-    CompiledKeywordRule, keyword_highlight_spans_compiled, quick_highlight_background,
-};
+use crate::keywords::{CompiledKeywordRule, keyword_highlight_spans_compiled};
 use crate::types::TerminalHighlightSpan;
 use crate::{resolve_cell_bg, resolve_cell_fg};
 
@@ -38,14 +36,17 @@ pub(super) fn ansi_to_highlight_spans_compiled(
             .collect();
     }
 
-    // Flatten keyword color map by byte offset, then re-slice per ANSI span.
+    // Flatten keyword color and background maps by byte offset, then re-slice
+    // per ANSI span. The background is the one of the rule that matched.
     let mut keyword_color_at = vec![None; line.len()];
+    let mut keyword_bg_at = vec![None; line.len()];
     let mut offset = 0usize;
     for span in &keyword {
         let end = offset + span.text.len();
         if span.keyword {
             for idx in offset..end.min(keyword_color_at.len()) {
                 keyword_color_at[idx] = span.color;
+                keyword_bg_at[idx] = span.bg;
             }
         }
         offset = end;
@@ -68,21 +69,24 @@ pub(super) fn ansi_to_highlight_spans_compiled(
                 &s.text,
                 bg.unwrap_or(palette.terminal_bg),
                 None,
+                None,
                 bg,
                 s.style,
             );
             continue;
         }
         if s.style.reverse || s.style.fg.is_some() || s.style.fg_rgb.is_some() {
-            push_ansi_segment(&mut out, &s.text, color, None, bg, s.style);
+            push_ansi_segment(&mut out, &s.text, color, None, None, bg, s.style);
             continue;
         }
 
         let mut segment_start = 0usize;
         let mut segment_keyword_color = keyword_color_at.get(start).copied().flatten();
+        let mut segment_keyword_bg = keyword_bg_at.get(start).copied().flatten();
         for (offset, _) in s.text.char_indices().skip(1) {
             let keyword_color = keyword_color_at.get(start + offset).copied().flatten();
-            if keyword_color == segment_keyword_color {
+            let keyword_bg = keyword_bg_at.get(start + offset).copied().flatten();
+            if keyword_color == segment_keyword_color && keyword_bg == segment_keyword_bg {
                 continue;
             }
             push_ansi_segment(
@@ -90,17 +94,20 @@ pub(super) fn ansi_to_highlight_spans_compiled(
                 &s.text[segment_start..offset],
                 color,
                 segment_keyword_color,
+                segment_keyword_bg,
                 bg,
                 s.style,
             );
             segment_start = offset;
             segment_keyword_color = keyword_color;
+            segment_keyword_bg = keyword_bg;
         }
         push_ansi_segment(
             &mut out,
             &s.text[segment_start..],
             color,
             segment_keyword_color,
+            segment_keyword_bg,
             bg,
             s.style,
         );
@@ -126,13 +133,13 @@ fn push_ansi_segment(
     text: &str,
     default_color: u32,
     keyword_color: Option<u32>,
+    keyword_bg: Option<u32>,
     bg: Option<u32>,
     style: nyaterm_terminal::CellStyle,
 ) {
     if text.is_empty() {
         return;
     }
-    let keyword_bg = keyword_color.and_then(quick_highlight_background);
     out.push(TerminalHighlightSpan {
         text: text.to_string(),
         color: Some(keyword_color.unwrap_or(default_color)),

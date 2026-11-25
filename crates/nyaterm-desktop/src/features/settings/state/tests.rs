@@ -15,7 +15,8 @@ use crate::features::{
     FontCatalogState,
 };
 use crate::models::{
-    ConfigPathPromptKind, KeywordHighlightEditorField, SnapshotPasswordPromptKind,
+    ConfigPathPromptKind, KeywordHighlightEditorField, KeywordMatchOption,
+    SnapshotPasswordPromptKind,
 };
 
 fn settings_state() -> SettingsFeatureState {
@@ -440,6 +441,9 @@ fn settings_owner_reconciles_keyword_highlight_edit_lifecycle() {
         bg_color_dark: String::new(),
         bg_color_light: String::new(),
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     });
     state.begin_keyword_highlight_edit("first".to_string(), KeywordHighlightEditorField::Patterns);
     let interaction = state.keyword_highlight_presentation();
@@ -603,6 +607,9 @@ fn settings_owner_controls_keyword_catalog_transitions() {
         bg_color_dark: String::new(),
         bg_color_light: String::new(),
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     });
 
     assert!(state.toggle_keyword_highlights());
@@ -626,6 +633,56 @@ fn settings_owner_controls_keyword_catalog_transitions() {
     assert!(!config.rules[0].enabled);
     assert_eq!(config.rules[0].color_dark, "#123456");
     assert_eq!(config.rules[0].patterns, ["WARN", "ERROR"]);
+}
+
+#[test]
+fn matching_options_flip_independently_on_a_rule() {
+    let mut state = settings_state();
+    state.add_keyword_highlight_rule(KeywordHighlightRule {
+        id: "warning".to_string(),
+        name: "warning".to_string(),
+        patterns: vec!["WARN".to_string()],
+        color_dark: "#ffffff".to_string(),
+        color_light: "#000000".to_string(),
+        bg_color_dark: String::new(),
+        bg_color_light: String::new(),
+        enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
+    });
+
+    assert_eq!(
+        state.toggle_keyword_highlight_rule_match_option(
+            "warning",
+            KeywordMatchOption::CaseSensitive
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        state.toggle_keyword_highlight_rule_match_option("warning", KeywordMatchOption::WholeWord),
+        Some(true)
+    );
+    let rule = &state.keyword_config().rules[0];
+    assert!(rule.case_sensitive);
+    assert!(rule.whole_word);
+    // The regex option keeps its default until it is toggled.
+    assert!(rule.use_regex);
+
+    assert_eq!(
+        state.toggle_keyword_highlight_rule_match_option("warning", KeywordMatchOption::Regex),
+        Some(false)
+    );
+    assert!(!state.keyword_config().rules[0].use_regex);
+
+    // An unknown rule is reported instead of silently ignored.
+    assert_eq!(
+        state.toggle_keyword_highlight_rule_match_option(
+            "missing",
+            KeywordMatchOption::CaseSensitive
+        ),
+        None
+    );
 }
 
 #[test]

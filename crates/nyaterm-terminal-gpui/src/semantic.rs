@@ -47,6 +47,9 @@ pub(super) struct SemanticMatch {
     pub color: u32,
     // Priority breaks ties only when two whole matches have identical bounds.
     pub priority: u16,
+    /// The background of the rule that matched. A user rule keeps its own
+    /// background; a built-in role range stays transparent.
+    pub background: Option<u32>,
     pub(super) permissions: bool,
 }
 
@@ -212,6 +215,7 @@ impl SemanticHighlighter {
                 end: range.end,
                 color,
                 priority,
+                background: None,
                 permissions: false,
             });
         }
@@ -228,18 +232,42 @@ impl SemanticHighlighter {
         context: &SemanticContext,
         user_matches: &[(usize, usize, u32)],
     ) -> Vec<(usize, usize, u32)> {
+        // The three part view has no room for a background, so a user match
+        // keeps a transparent one here. The paint uses
+        // `ranges_with_background`, which carries the real background.
+        let user_matches: Vec<(usize, usize, u32, Option<u32>)> = user_matches
+            .iter()
+            .map(|&(start, end, color)| (start, end, color, None))
+            .collect();
+        self.ranges_with_background(line, context, &user_matches)
+            .into_iter()
+            .map(|(start, end, color, _)| (start, end, color))
+            .collect()
+    }
+
+    /// The ranges with the background of the rule that produced them.
+    ///
+    /// A user rule keeps its own background and a built-in role range stays
+    /// transparent, so the paint never has to guess a background from a colour.
+    pub fn ranges_with_background(
+        &self,
+        line: &str,
+        context: &SemanticContext,
+        user_matches: &[(usize, usize, u32, Option<u32>)],
+    ) -> Vec<(usize, usize, u32, Option<u32>)> {
         if self.is_empty() {
             return user_matches.to_vec();
         }
-        let mut ranges: Vec<(usize, usize, u32)> = Vec::new();
-        let mut append = |start, end, color| {
+        let mut ranges: Vec<(usize, usize, u32, Option<u32>)> = Vec::new();
+        let mut append = |start, end, color, background| {
             if let Some(last) = ranges.last_mut()
                 && last.1 == start
                 && last.2 == color
+                && last.3 == background
             {
                 last.1 = end;
             } else {
-                ranges.push((start, end, color));
+                ranges.push((start, end, color, background));
             }
         };
         for found in self.whole_matches(line, context, user_matches) {
@@ -257,10 +285,11 @@ impl SemanticHighlighter {
                         found.start + index,
                         found.start + index + 1,
                         self.child_color(id),
+                        None,
                     );
                 }
             } else {
-                append(found.start, found.end, found.color);
+                append(found.start, found.end, found.color, found.background);
             }
         }
         ranges
@@ -270,7 +299,7 @@ impl SemanticHighlighter {
         &self,
         line: &str,
         context: &SemanticContext,
-        user_matches: &[(usize, usize, u32)],
+        user_matches: &[(usize, usize, u32, Option<u32>)],
     ) -> Vec<SemanticMatch> {
         // The prompt prefix is the eye's anchor for where input starts, so it is
         // derived from the line shape as well as from the shell anchors. Anchors
@@ -303,12 +332,13 @@ impl SemanticHighlighter {
         // Each source advances in text order. Keep one pending match per source,
         // choose the leftmost/longest whole token, then skip its interior.
         let mut sources: Vec<Box<dyn Iterator<Item = SemanticMatch> + '_>> = Vec::new();
-        sources.push(Box::new(user_matches.iter().map(|&(start, end, color)| {
+        sources.push(Box::new(user_matches.iter().map(|&(start, end, color, background)| {
             SemanticMatch {
                 start,
                 end,
                 color,
                 priority: 0,
+                background,
                 permissions: false,
             }
         })));
@@ -335,6 +365,7 @@ impl SemanticHighlighter {
                         end: field.range.end,
                         color,
                         priority: field.priority,
+                        background: None,
                         permissions: field.rule == "builtin-permissions",
                     })
                 });
@@ -359,6 +390,7 @@ impl SemanticHighlighter {
                         end,
                         color,
                         priority: 80,
+                        background: None,
                         permissions: false,
                     })
                 },
@@ -406,6 +438,7 @@ impl SemanticHighlighter {
                                             end: hyphen,
                                             color: rule.color,
                                             priority: rule.priority,
+                                            background: None,
                                             permissions: false,
                                         });
                                     }
@@ -419,6 +452,7 @@ impl SemanticHighlighter {
                                 end: cursor,
                                 color: rule.color,
                                 priority: rule.priority,
+                                background: None,
                                 permissions: false,
                             })
                         })
@@ -439,6 +473,7 @@ impl SemanticHighlighter {
                     end: found.end(),
                     color: rule.color,
                     priority: 60,
+                    background: None,
                     permissions: false,
                 })
             })));
@@ -455,6 +490,7 @@ impl SemanticHighlighter {
                         end: candidate.end(),
                         color,
                         priority: 30,
+                        background: None,
                         permissions: false,
                     })
                 },
@@ -479,6 +515,7 @@ impl SemanticHighlighter {
                             end,
                             color,
                             priority: 20,
+                            background: None,
                             permissions: true,
                         })
                     }),
@@ -718,6 +755,7 @@ impl SemanticHighlighter {
                         end: range.end,
                         color: self.child_color("builtin-info"),
                         priority: 50,
+                        background: None,
                         permissions: false,
                     });
                 }

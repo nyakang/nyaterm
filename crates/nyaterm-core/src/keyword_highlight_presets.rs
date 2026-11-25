@@ -15,6 +15,12 @@ pub struct ResolvedKeywordHighlightRule {
     /// behaviour (terminal background, or quick-highlight reverse lookup).
     pub background: Option<String>,
     pub enabled: bool,
+    /// Match the pattern case sensitively.
+    pub case_sensitive: bool,
+    /// Only match when the pattern is surrounded by word boundaries.
+    pub whole_word: bool,
+    /// Interpret the pattern as a regular expression.
+    pub use_regex: bool,
 }
 
 impl Default for ResolvedKeywordHighlightRule {
@@ -26,6 +32,9 @@ impl Default for ResolvedKeywordHighlightRule {
             color: String::new(),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }
     }
 }
@@ -243,6 +252,9 @@ pub fn get_builtin_keyword_rules_with_ansi(
             color: builtin_keyword_rule_swatch_ansi(id, ansi, is_dark),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         })
         .collect()
 }
@@ -267,6 +279,9 @@ pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
             },
             background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
+            case_sensitive: rule.case_sensitive,
+            whole_word: rule.whole_word,
+            use_regex: rule.use_regex,
         });
     }
     for builtin in get_builtin_keyword_rules_with_ansi(ansi, is_dark) {
@@ -279,10 +294,11 @@ pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
 /// Resolve a set of session-scoped user rules to paint rules using the active
 /// theme, then overlay them on top of the resolved global rules by id.
 ///
-/// A session rule with an id equal to a global rule replaces that rule in
-/// place (so per-session tweaks win without affecting other sessions). New
-/// session-only ids are appended. The input order of `global` and `session`
-/// is otherwise preserved.
+/// A session rule with an id equal to a global rule replaces that rule, so
+/// per-session tweaks win without affecting other sessions. Session rules come
+/// first in the result: the list order is the match priority, and a rule the
+/// user scoped to this session has to outrank the global rules it shadows.
+/// The global rules keep their relative order and follow the session rules.
 pub fn overlay_resolved_keyword_highlight_rules(
     global: &[ResolvedKeywordHighlightRule],
     session_rules: &[KeywordHighlightRule],
@@ -304,21 +320,22 @@ pub fn overlay_resolved_keyword_highlight_rules(
             },
             background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
+            case_sensitive: rule.case_sensitive,
+            whole_word: rule.whole_word,
+            use_regex: rule.use_regex,
         })
         .collect();
 
-    let mut out = global.to_vec();
-    let mut positions: std::collections::HashMap<String, usize> = out
-        .iter()
-        .enumerate()
-        .map(|(index, rule)| (rule.id.clone(), index))
-        .collect();
-    for session_rule in resolved_session {
-        if let Some(&index) = positions.get(&session_rule.id) {
-            out[index] = session_rule;
-        } else {
-            positions.insert(session_rule.id.clone(), out.len());
-            out.push(session_rule);
+    // A session rule replaces the global rule that shares its id, so that
+    // global rule drops out instead of showing up twice.
+    // The set owns its ids: borrowing them from `resolved_session` would keep
+    // that vector borrowed while it is moved into `out`.
+    let session_ids: std::collections::HashSet<String> =
+        resolved_session.iter().map(|rule| rule.id.clone()).collect();
+    let mut out = resolved_session;
+    for rule in global {
+        if !session_ids.contains(rule.id.as_str()) {
+            out.push(rule.clone());
         }
     }
     out
@@ -799,6 +816,9 @@ pub fn get_builtin_keyword_rules(is_dark: bool) -> Vec<ResolvedKeywordHighlightR
             color: builtin_keyword_rule_swatch(id, is_dark).to_string(),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         })
         .collect()
 }
@@ -822,6 +842,9 @@ pub fn merge_keyword_highlight_rules_for_paint(
             },
             background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
+            case_sensitive: rule.case_sensitive,
+            whole_word: rule.whole_word,
+            use_regex: rule.use_regex,
         });
     }
     for builtin in get_builtin_keyword_rules(is_dark) {
@@ -917,11 +940,14 @@ mod tests {
             bg_color_dark: String::new(),
             bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }
     }
 
     #[test]
-    fn session_overlay_replaces_same_id_and_appends_new() {
+    fn session_overlay_replaces_same_id_and_outranks_the_global_rules() {
         let global = vec![
             ResolvedKeywordHighlightRule {
                 id: "g1".into(),
@@ -930,6 +956,9 @@ mod tests {
                 color: "#111111".into(),
                 background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
             ResolvedKeywordHighlightRule {
                 id: "g2".into(),
@@ -938,6 +967,9 @@ mod tests {
                 color: "#222222".into(),
                 background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
         ];
         let session = vec![
@@ -947,16 +979,41 @@ mod tests {
 
         let dark = overlay_resolved_keyword_highlight_rules(&global, &session, true);
         assert_eq!(dark.len(), 3);
+        // The list order is the match priority, so the session rules come
+        // first and the global rules they do not shadow follow them.
         assert_eq!(dark[0].id, "g1");
         assert_eq!(dark[0].color, "#ff0000", "session rule wins on same id");
-        assert_eq!(dark[1].id, "g2");
-        assert_eq!(dark[1].color, "#222222");
-        assert_eq!(dark[2].id, "s1");
-        assert_eq!(dark[2].color, "#00ff00");
+        assert_eq!(dark[1].id, "s1");
+        assert_eq!(dark[1].color, "#00ff00");
+        assert_eq!(dark[2].id, "g2");
+        assert_eq!(dark[2].color, "#222222");
 
         let light = overlay_resolved_keyword_highlight_rules(&global, &session, false);
         assert_eq!(light[0].color, "#aa0000", "light theme uses light colour");
-        assert_eq!(light[2].color, "#00aa00");
+        assert_eq!(light[1].color, "#00aa00");
+    }
+
+    /// A session rule that does not shadow any global rule still has to sit
+    /// in front of every global rule, so it wins a tie on the same span.
+    #[test]
+    fn session_only_rules_lead_the_priority_order() {
+        let global = vec![ResolvedKeywordHighlightRule {
+            id: "g1".into(),
+            name: "G1".into(),
+            patterns: vec!["g1".into()],
+            color: "#111111".into(),
+            background: None,
+            enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
+        }];
+        let session = vec![rule("s1", "#00ff00", "#00aa00")];
+
+        let out = overlay_resolved_keyword_highlight_rules(&global, &session, true);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, "s1");
+        assert_eq!(out[1].id, "g1");
     }
 
     #[test]
@@ -968,6 +1025,9 @@ mod tests {
             color: "#111111".into(),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let out = overlay_resolved_keyword_highlight_rules(&global, &[], true);
         assert_eq!(out, global);
@@ -1065,6 +1125,9 @@ mod tests {
             bg_color_dark: String::new(),
             bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let mut settings = HashMap::new();
         settings.insert("builtin-error".into(), false);
@@ -1192,6 +1255,9 @@ mod palette_tests {
             bg_color_dark: String::new(),
             bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         };
         let disabled = HashMap::from([
             ("builtin-info".to_string(), false),
@@ -1224,6 +1290,9 @@ mod palette_tests {
             bg_color_dark: " #1a1a1a ".into(),
             bg_color_light: "#fefefe".into(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         };
 
         assert_eq!(

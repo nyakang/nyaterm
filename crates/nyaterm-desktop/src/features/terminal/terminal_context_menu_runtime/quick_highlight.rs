@@ -65,9 +65,22 @@ pub(super) fn quick_color(index: usize) -> Option<QuickColor> {
 
 /// Select a swatch as checked when a session rule exists whose keyword set is
 /// exactly the current selection and whose colors match this quick color.
+///
+/// Quick swatches materialise their background into the rule, so a blank value
+/// still counts (it keeps the paint-time lookup) while any other background
+/// means the rule no longer looks like the swatch.
 fn rule_matches_quick_color(rule: &KeywordHighlightRule, color: QuickColor) -> bool {
-    rule.color_dark.eq_ignore_ascii_case(color.dark)
-        && rule.color_light.eq_ignore_ascii_case(color.light)
+    if !rule.color_dark.eq_ignore_ascii_case(color.dark)
+        || !rule.color_light.eq_ignore_ascii_case(color.light)
+    {
+        return false;
+    }
+    [&rule.bg_color_dark, &rule.bg_color_light]
+        .iter()
+        .all(|background| {
+            let background = background.trim();
+            background.is_empty() || background.eq_ignore_ascii_case(color.background)
+        })
 }
 
 /// Whether a rule uses one of the colors a user can still pick from the menu.
@@ -104,6 +117,10 @@ pub(super) fn quick_rule_name(selected: &str) -> Option<String> {
 /// Build the session rule a swatch would create for `selected`. The keyword
 /// set is the trimmed non-empty lines, regex-escaped, matching the editor's
 /// prefill policy so one-click and the popup agree on what a selection means.
+///
+/// Both theme backgrounds are stored explicitly: the popup then shows the same
+/// colour pair the terminal paints, instead of an empty "inherit" background
+/// whose value only existed inside the renderer.
 pub(super) fn rule_from_selection(
     selected: &str,
     color: QuickColor,
@@ -123,9 +140,12 @@ pub(super) fn rule_from_selection(
         patterns: lines.iter().map(|line| regex::escape(line)).collect(),
         color_dark: color.dark.into(),
         color_light: color.light.into(),
-        bg_color_dark: String::new(),
-        bg_color_light: String::new(),
+        bg_color_dark: color.background.into(),
+        bg_color_light: color.background.into(),
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     })
 }
 
@@ -202,6 +222,8 @@ impl NyaTermApp {
             // may have been renamed or refined in the popup since it was added.
             existing.color_dark = rule.color_dark;
             existing.color_light = rule.color_light;
+            existing.bg_color_dark = rule.bg_color_dark;
+            existing.bg_color_light = rule.bg_color_light;
             existing.enabled = true;
         } else {
             rules.push(rule);
@@ -284,6 +306,8 @@ mod tests {
         );
         assert_eq!(rule.color_dark, color.dark);
         assert_eq!(rule.color_light, color.light);
+        assert_eq!(rule.bg_color_dark, color.background);
+        assert_eq!(rule.bg_color_light, color.background);
         assert!(rule.enabled);
         assert!(rule_from_selection(" \n ", color).is_none());
     }
@@ -377,6 +401,38 @@ mod tests {
                 app.selected_quick_highlight_color("local", "other text"),
                 Some(2)
             );
+        });
+    }
+
+    #[test]
+    fn quick_color_stores_the_swatch_background_for_both_themes() {
+        let dir = TestConfigDir::new("nyaterm-quick-highlight-background");
+        let mut cx = TestAppContext::single();
+        let _cleanup = TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "local");
+
+        cx.update_entity(&app, |app, cx| {
+            let color = quick_color(2).unwrap();
+            app.apply_quick_highlight_color("local", "ERROR", 2, cx);
+            let rules = app.session_keyword_rules("local").unwrap();
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].bg_color_dark, color.background);
+            assert_eq!(rules[0].bg_color_light, color.background);
+
+            // Recolouring rewrites the stored background to the new swatch, so
+            // the popup keeps showing the pair the terminal actually paints.
+            let next = quick_color(6).unwrap();
+            app.apply_quick_highlight_color("local", "ERROR", 6, cx);
+            let rules = app.session_keyword_rules("local").unwrap();
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].bg_color_dark, next.background);
+            assert_eq!(rules[0].bg_color_light, next.background);
+
+            // A hand-edited background no longer reports the swatch as applied.
+            let mut edited = rules[0].clone();
+            edited.bg_color_dark = "#000000".into();
+            app.set_session_keyword_rules("local", vec![edited], cx);
+            assert_eq!(app.selected_quick_highlight_color("local", "ERROR"), None);
         });
     }
 

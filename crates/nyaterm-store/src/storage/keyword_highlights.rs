@@ -127,6 +127,9 @@ mod tests {
             bg_color_dark: String::new(),
             bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         })
         .expect("rule");
 
@@ -146,6 +149,9 @@ mod tests {
                 bg_color_dark: String::new(),
                 bg_color_light: String::new(),
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             })
             .is_none()
         );

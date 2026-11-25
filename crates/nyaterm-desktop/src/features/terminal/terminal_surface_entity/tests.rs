@@ -1310,6 +1310,9 @@ fn keyword_highlight_request_key_tracks_snapshot_and_rules() {
         color: "#ff0000".to_string(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }];
     let rules_key = terminal_keyword_rules_key(&rules);
     let rows = 0..snapshot.row_count();
@@ -1599,6 +1602,9 @@ fn keyword_highlight_deferred_task_coalesces_latest_snapshot_under_pressure() {
         color: "#ff0000".to_string(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
 
     cx.update_entity(&surface, |surface, cx| {
@@ -1677,6 +1683,9 @@ fn cancelling_pending_keyword_highlights_keeps_published_highlights() {
         color: "#ff0000".to_string(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }];
     let rules = Arc::new(rules);
     let highlighter = Arc::new(compile_terminal_keyword_highlighter(
@@ -1799,6 +1808,9 @@ fn cached_keyword_highlighter_reuses_equal_rule_sets() {
         color: "#ff0000".to_string(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
     let equivalent_rules = Arc::new(cached_rules.as_ref().clone());
     assert!(!Arc::ptr_eq(&cached_rules, &equivalent_rules));
@@ -1886,6 +1898,9 @@ fn scroll_without_target_snapshot_preserves_stale_paint_state() {
         color: "#ff0000".to_string(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
     surface.set_decorations_and_keywords(
         vec![TerminalLineDecorations {
@@ -2023,6 +2038,9 @@ fn restored_keyword_rules_report_paint_detail_change_without_new_frame() {
         color: "#ff0000".to_string(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
     let decorations = vec![TerminalLineDecorations {
         search_ranges: vec![(1, 5)],
@@ -4923,6 +4941,9 @@ fn session_keyword_rules_overlay_global_without_mutating_global() {
         color: "#111111".into(),
         background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
     let session = vec![
         KeywordHighlightRule {
@@ -4934,6 +4955,9 @@ fn session_keyword_rules_overlay_global_without_mutating_global() {
             bg_color_dark: String::new(),
             bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         },
         KeywordHighlightRule {
             id: "kh-session-only".into(),
@@ -4944,6 +4968,9 @@ fn session_keyword_rules_overlay_global_without_mutating_global() {
             bg_color_dark: String::new(),
             bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         },
     ];
 
@@ -4976,6 +5003,9 @@ fn regression_deleting_session_rule_removes_effective_rule_immediately() {
             color: "#111111".into(),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         };
         surface.set_decorations_and_keywords(Vec::new(), Arc::new(vec![global]), false, "block");
         surface.set_session_keyword_rules(
@@ -4988,6 +5018,9 @@ fn regression_deleting_session_rule_removes_effective_rule_immediately() {
                 bg_color_dark: String::new(),
                 bg_color_light: String::new(),
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             }],
             cx,
         );
@@ -5013,6 +5046,9 @@ fn regression_session_rules_reuse_effective_cache_and_restore_global_override() 
             color: "#112233".into(),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }]);
         surface.set_decorations_and_keywords(Vec::new(), global.clone(), false, "block");
         surface.set_session_keyword_rules(
@@ -5025,6 +5061,9 @@ fn regression_session_rules_reuse_effective_cache_and_restore_global_override() 
                 bg_color_dark: String::new(),
                 bg_color_light: String::new(),
                 enabled: false,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             }],
             cx,
         );
@@ -5054,6 +5093,9 @@ fn keyword_rule_cache_cost_probe() {
                     color: "#123456".into(),
                     background: None,
                     enabled: true,
+                    case_sensitive: false,
+                    whole_word: false,
+                    use_regex: true,
                 })
                 .collect::<Vec<_>>(),
         );
@@ -5067,6 +5109,9 @@ fn keyword_rule_cache_cost_probe() {
                 bg_color_dark: String::new(),
                 bg_color_light: String::new(),
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             })
             .collect::<Vec<_>>();
         for panes in [1, 4, 8] {
@@ -5096,6 +5141,9 @@ fn keyword_rule_cache_cost_probe() {
                             color: rule.color_dark.clone(),
                             background: None,
                             enabled: rule.enabled,
+                            case_sensitive: false,
+                            whole_word: false,
+                            use_regex: true,
                         };
                         if let Some(existing) = old.iter_mut().find(|r| r.id == rule.id) {
                             *existing = resolved;
@@ -5257,6 +5305,9 @@ fn reading_highlight_fingerprint_cost_probe() {
                     bg_color_dark: String::new(),
                     bg_color_light: String::new(),
                     enabled: true,
+                    case_sensitive: false,
+                    whole_word: false,
+                    use_regex: true,
                 })
                 .collect();
             surface.set_session_keyword_rules(rules, cx);

@@ -311,6 +311,9 @@ impl NyaTermApp {
                 bg_color_dark: String::new(),
                 bg_color_light: String::new(),
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             });
         self.ensure_keyword_highlight_inputs(&id, cx);
         let input = self.text_input(

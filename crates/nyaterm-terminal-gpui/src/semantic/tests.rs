@@ -1361,6 +1361,9 @@ fn whole_match_ties_are_deterministic_and_user_marks_do_not_split_strings() {
             color: "#123456".into(),
             background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         },
     );
     let highlighter = compile_terminal_keyword_highlighter(

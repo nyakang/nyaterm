@@ -6,7 +6,9 @@ use gpui::{
 };
 
 use crate::features::pages::settings::panel::SettingsPanel;
+use crate::features::view_widgets::keyword_match_option_toggles;
 use crate::models::KeywordHighlightEditorField;
+use crate::models::KeywordMatchOption;
 use crate::theme::ThemePalette;
 use nyaterm_core::keyword_highlight_presets::{
     builtin_keyword_rule_ids, builtin_keyword_rule_is_specialized, builtin_keyword_rule_label,
@@ -219,8 +221,7 @@ impl SettingsPanel {
                                 cx,
                             );
                         });
-                        if let Some(picker) =
-                            this.keyword_color_pickers.get(&clear_rule_id, field)
+                        if let Some(picker) = this.keyword_color_pickers.get(&clear_rule_id, field)
                         {
                             picker.update(cx, |picker, cx| picker.clear_value(window, cx));
                         }
@@ -440,10 +441,39 @@ impl SettingsPanel {
                                     )
                                 };
                                 let patterns_control = if is_open && keyword_highlighting_enabled {
-                                    let input = self.existing_text_input_box(Self::keyword_highlight_text_input_id(
+                                    let toggle_rule_id = rule.id.clone();
+                                    let panel = cx.entity().downgrade();
+                                    let input = self.existing_text_input_box_with(
+                                        Self::keyword_highlight_text_input_id(
                                             &rule.id,
                                             KeywordHighlightEditorField::Patterns,
-                                        ), true);
+                                        ),
+                                        true,
+                                        |shell| {
+                                            shell.bottom_right(keyword_match_option_toggles(
+                                                palette,
+                                                rule.case_sensitive,
+                                                rule.whole_word,
+                                                rule.use_regex,
+                                                std::rc::Rc::new(
+                                                    move |option: KeywordMatchOption,
+                                                          _window: &mut Window,
+                                                          cx: &mut App| {
+                                                        let toggle_rule_id = toggle_rule_id.clone();
+                                                        panel
+                                                            .update(cx, |panel, cx| {
+                                                                panel.toggle_keyword_highlight_rule_match_option(
+                                                                    toggle_rule_id,
+                                                                    option,
+                                                                    cx,
+                                                                );
+                                                            })
+                                                            .ok();
+                                                    },
+                                                ),
+                                            ))
+                                        },
+                                    );
                                     div()
                                         .id(SharedString::from(format!(
                                             "settings-keyword-rule-patterns-{}",

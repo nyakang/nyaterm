@@ -2,6 +2,7 @@
 
 use super::SettingsFeatureState;
 use crate::models::KeywordHighlightEditorField;
+use crate::models::KeywordMatchOption;
 use gpui::FocusHandle;
 use nyaterm_core::{KeywordHighlightConfig, KeywordHighlightRule};
 
@@ -101,6 +102,23 @@ impl SettingsFeatureState {
         }
         self.begin_keyword_highlight_edit(rule_id.to_string(), field);
         true
+    }
+    /// Toggle one of the matching options of a rule and report the new state.
+    ///
+    /// `None` means the rule does not exist.
+    pub(in crate::features) fn toggle_keyword_highlight_rule_match_option(
+        &mut self,
+        rule_id: &str,
+        option: KeywordMatchOption,
+    ) -> Option<bool> {
+        let rule = self
+            .keyword_config
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == rule_id)?;
+        let enabled = !option.is_enabled(rule);
+        option.apply(rule, enabled);
+        Some(enabled)
     }
     /// Toggle field-level highlighting for recognised command output.
     pub(in crate::features) fn toggle_line_role_highlights(&mut self) -> Option<bool> {

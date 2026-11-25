@@ -67,6 +67,7 @@ zip.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+gpui-kit-assets.workspace = true
 nyaterm-remote-monitor-gpui = { workspace = true, features = ["test-support"] }
 nyaterm-host-tools-gpui = { workspace = true, features = ["test-support"] }
 nyaterm-terminal-runtime = { workspace = true, features = ["test-support"] }

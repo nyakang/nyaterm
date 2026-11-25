@@ -96,6 +96,10 @@ impl gpui::Global for InputLabelsProvider {}
 /// side (8 + 8 + 1 + 1).
 const MULTI_LINE_FRAME_HEIGHT: f32 = 18.;
 
+/// The strip a bottom-right control floats in, measured from the bottom
+/// edge of the field: the control's own height plus its offset.
+const CORNER_CONTROL_STRIP_PX: f32 = 24.;
+
 /// Resolve labels at render time so existing inputs follow language changes.
 pub fn set_nya_input_label_provider(provider: impl Fn() -> NyaInputLabels + 'static, cx: &mut App) {
     cx.set_global(InputLabelsProvider(Box::new(provider)));
@@ -1110,6 +1114,9 @@ pub struct NyaInputShell {
     fill_height: bool,
     trailing: Vec<AnyElement>,
     footer: Option<AnyElement>,
+    /// A control that floats in the bottom right corner of the field, for
+    /// example the matching options of a pattern box.
+    bottom_right: Option<AnyElement>,
     on_key_down: Option<KeyDownHandler>,
     on_vertical_navigation: Option<VerticalNavigationHandler>,
     on_plain_enter: Option<SecondaryEnterHandler>,
@@ -1135,6 +1142,7 @@ impl NyaInputShell {
             fill_height: false,
             trailing: Vec::new(),
             footer: None,
+            bottom_right: None,
             on_key_down: None,
             on_vertical_navigation: None,
             on_plain_enter: None,
@@ -1221,6 +1229,15 @@ impl NyaInputShell {
         self
     }
 
+    /// Float a control in the bottom right corner of the field.
+    ///
+    /// The field keeps a free strip below its text, so the control never
+    /// covers what the user typed.
+    pub fn bottom_right(mut self, child: impl IntoElement) -> Self {
+        self.bottom_right = Some(child.into_any_element());
+        self
+    }
+
     /// Route Up/Down actions to a choice list while retaining IME ownership.
     /// The callback receives true for Down and false for Up.
     pub fn on_vertical_navigation(
@@ -1289,6 +1306,7 @@ impl RenderOnce for NyaInputShell {
             fill_height,
             trailing,
             footer,
+            bottom_right,
             on_key_down,
             on_vertical_navigation,
             on_plain_enter,
@@ -1334,6 +1352,7 @@ impl RenderOnce for NyaInputShell {
         let debug_selector = id.to_string();
         let prefix_debug_selector = format!("{}-prefix", id);
         let has_footer = footer.is_some();
+        let has_corner = bottom_right.is_some();
         let input_surface = input_surface_color(cx);
         let input = match state {
             ComponentState::Input(state) => {
@@ -1402,6 +1421,46 @@ impl RenderOnce for NyaInputShell {
                         ),
                     )
                     .child(footer.unwrap())
+                    .into_any_element()
+            }
+            // A corner control belongs to the frame, so the frame moves from
+            // the text area onto a wrapper that also carries the free strip
+            // the control floats in.
+            ComponentState::Textarea(state) if has_corner => {
+                let theme = cx.theme();
+                let focused = state.read(cx).focus_handle(cx).is_focused(window);
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .h(if fill_height {
+                        gpui::relative(1.)
+                    } else {
+                        height.unwrap_or(px(88.)).into()
+                    })
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(if focused { theme.ring } else { theme.input })
+                    .bg(input_surface)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_hidden()
+                            // The strip keeps the text clear of the control.
+                            .pb(px(CORNER_CONTROL_STRIP_PX))
+                            .child(
+                                Textarea::new(&state)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .disabled(disabled)
+                                    .readonly(readonly)
+                                    .h_full(),
+                            ),
+                    )
                     .into_any_element()
             }
             ComponentState::Textarea(state) if content_height => Textarea::new(&state)
@@ -1553,6 +1612,18 @@ impl RenderOnce for NyaInputShell {
         }
         let container = container
             .child(input)
+            .when_some(bottom_right, |this, corner| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom_1()
+                        .right_1()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(corner),
+                )
+            })
             .when_some(height_limits, |this, (lower, upper)| {
                 let measured_owner = owner.clone();
                 this.child(

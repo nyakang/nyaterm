@@ -30,7 +30,7 @@ use crate::glyphs::{
 };
 use crate::keywords::{
     TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey,
-    quick_highlight_background, terminal_keyword_row_reuse_key,
+    terminal_keyword_row_reuse_key,
     terminal_keyword_row_reuse_keys_for_rows, terminal_keyword_rules_key,
 };
 use crate::paint::{
@@ -1246,6 +1246,24 @@ pub(super) fn terminal_background_ranges_for_cells(
     out
 }
 
+/// Keyword highlights paint as cell blocks below the shaped text. Only a rule
+/// that declares a background paints a block; a rule without one stays
+/// transparent, so clearing a background really clears it.
+fn terminal_keyword_background_ranges(
+    ranges: &[crate::types::TerminalKeywordRange],
+) -> Vec<TerminalRowBackgroundRange> {
+    ranges
+        .iter()
+        .filter_map(|range| {
+            range.background.map(|bg| TerminalRowBackgroundRange {
+                bg,
+                start: range.start_col,
+                end: range.end_col,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 fn terminal_underline_ranges_for_spans(
     spans: &[TerminalHighlightSpan],
@@ -2168,19 +2186,12 @@ impl Element for NyaTerminalElement {
                         )
                     })
                     .unwrap_or_else(|| terminal_background_ranges_for_spans(&background_spans));
-                // Cell backgrounds are authoritative for normal rows, so the
-                // marker background from quick highlights must be overlaid
-                // explicitly. It paints below the shaped text.
+                // Cell backgrounds are authoritative for normal rows, so keyword
+                // backgrounds must be overlaid explicitly. A rule only paints a
+                // background when it carries one, so a cleared background stays
+                // transparent. It paints below the shaped text.
                 if let Some(ranges) = keyword_ranges {
-                    background_ranges.extend(ranges.iter().filter_map(|range| {
-                        quick_highlight_background(range.color).map(|bg| {
-                            TerminalRowBackgroundRange {
-                                bg,
-                                start: range.start_col,
-                                end: range.end_col,
-                            }
-                        })
-                    }));
+                    background_ranges.extend(terminal_keyword_background_ranges(ranges));
                 }
                 let text_decorations = terminal_text_decorations_for_row(
                     glyph_spans,

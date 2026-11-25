@@ -98,6 +98,9 @@ fn keyword_highlight_native_probe() {
             Arc::make_mut(&mut surface.keyword_rules).extend((0..rule_count).map(|i| nyaterm_core::ResolvedKeywordHighlightRule {
                 id: format!("probe-{i}"), name: format!("Probe {i}"),
                 patterns: vec![format!(r"\bprobe_{i}_[0-9]+\b")], color: "#ff0000".into(), background: None, enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             }));
             surface
         })).collect();

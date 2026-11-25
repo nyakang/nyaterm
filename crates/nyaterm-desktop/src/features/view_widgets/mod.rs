@@ -25,6 +25,9 @@ pub(in crate::features) use inspector_widgets::{
     tab_menu_item_with_icon, tab_menu_item_with_shortcut, tab_menu_separator,
 };
 
+mod keyword_match_options;
+pub(in crate::features) use keyword_match_options::keyword_match_option_toggles;
+
 mod rows;
 pub(in crate::features) use rows::cloud_sync_history_row;
 
