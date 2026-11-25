@@ -2633,7 +2633,6 @@
     "memoryShared": "共有メモリ",
     "memorySwap": "Swap（使用量 / 合計）",
     "swapDisabled": "無効",
-    "memoryBuffersNote": "キャッシュには Buffers が含まれます。重複して加算しないでください。",
     "allInterfaces": "すべてのインターフェース",
     "collectingNetworkHistory": "ネットワーク履歴を収集中…",
     "download": "ダウンロード",

@@ -2150,10 +2150,6 @@ fn memory_details(palette: nyaterm_ui::ThemePalette, memory: &MemoryInfo) -> gpu
             t!("resourceMonitor.memoryShared").to_string(),
             optional_resource_bytes(memory.shared),
         ),
-        (
-            t!("resourceMonitor.memorySwap").to_string(),
-            memory_swap_value(memory),
-        ),
     ];
     div()
         .debug_selector(|| "stats-memory-details".to_string())
@@ -2177,14 +2173,38 @@ fn memory_details(palette: nyaterm_ui::ThemePalette, memory: &MemoryInfo) -> gpu
                         .child(value),
                 )
         }))
-        .when(memory.buffers.is_some(), |this| {
-            this.child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(rgb(palette.text_dimmed))
-                    .child(t!("resourceMonitor.memoryBuffersNote").to_string()),
-            )
-        })
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pt_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .text_size(px(11.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("resourceMonitor.memorySwap").to_string())
+                        .child(
+                            div()
+                                .font_family(gpui_code_font_family())
+                                .text_right()
+                                .child(memory_swap_value(memory)),
+                        ),
+                )
+                .when_some(
+                    memory
+                        .swap_total
+                        .filter(|total| *total > 0)
+                        .zip(memory.swap_used),
+                    |this, (total, used)| {
+                        this.child(resource_progress_bar(palette, used as f64 / total as f64))
+                    },
+                ),
+        )
 }
 
 fn cpu_core_row(palette: nyaterm_ui::ThemePalette, index: u32, usage: f64) -> gpui::Div {

@@ -2633,7 +2633,6 @@
     "memoryShared": "Shared",
     "memorySwap": "Swap (used / total)",
     "swapDisabled": "Not enabled",
-    "memoryBuffersNote": "Buffers are included in cache; do not add them again.",
     "allInterfaces": "All interfaces",
     "collectingNetworkHistory": "Collecting network history…",
     "download": "Download",

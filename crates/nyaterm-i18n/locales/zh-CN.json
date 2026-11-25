@@ -2633,7 +2633,6 @@
     "memoryShared": "共享内存",
     "memorySwap": "Swap（已用 / 总量）",
     "swapDisabled": "未启用",
-    "memoryBuffersNote": "缓存已包含 Buffers，请勿重复相加。",
     "allInterfaces": "全部网卡",
     "collectingNetworkHistory": "正在收集网络历史数据…",
     "download": "下载",

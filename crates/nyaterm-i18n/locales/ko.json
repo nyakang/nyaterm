@@ -2633,7 +2633,6 @@
     "memoryShared": "공유 메모리",
     "memorySwap": "Swap (사용 / 전체)",
     "swapDisabled": "비활성화",
-    "memoryBuffersNote": "캐시에 Buffers가 포함되어 있으므로 다시 더하지 마세요.",
     "allInterfaces": "모든 인터페이스",
     "collectingNetworkHistory": "네트워크 기록 수집 중…",
     "download": "다운로드",
