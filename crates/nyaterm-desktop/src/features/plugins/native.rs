@@ -13,6 +13,16 @@ fn interrupted() -> PluginError {
     PluginError::new(ErrorCode::Cancelled, "Native component request cancelled")
 }
 
+pub(in crate::features::plugins) fn native_display_name(id: NativeComponentId) -> String {
+    let key = format!("plugins.nativeNames.{}", id.slug());
+    t!(&key).to_string()
+}
+
+pub(in crate::features::plugins) fn native_description(id: NativeComponentId) -> String {
+    let key = format!("plugins.nativeDescriptions.{}", id.slug());
+    t!(&key).to_string()
+}
+
 impl NyaTermApp {
     pub(in crate::features) fn native_component_service(
         &self,
@@ -84,12 +94,14 @@ impl NyaTermApp {
                 let reply = Rc::new(RefCell::new(Some(reply)));
                 NyaTermApp::update_in_main_window(&this, cx, move |app, window, cx| {
                     let confirm = reply.clone();
+                    let display_name = native_display_name(id);
                     app.open_confirm_dialog_with_cancel(
                         (
-                            t!("plugins.nativeInstallTitle", name = id.title()).to_string(),
+                            t!("plugins.nativeInstallTitle", name = display_name.as_str())
+                                .to_string(),
                             t!(
                                 "plugins.nativeInstallMessage",
-                                name = id.title(),
+                                name = display_name.as_str(),
                                 size = size
                             )
                             .to_string(),

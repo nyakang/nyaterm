@@ -1,17 +1,28 @@
+mod list;
+
 use crate::features::NyaTermApp;
 use crate::features::plugins::process::PluginProcess;
+use crate::theme::ThemePalette;
 use gpui::{
-    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    Subscription, Task, WeakEntity, Window, div, px, rgb,
+    AppContext, Context, Div, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    rgb, svg,
 };
 use nyaterm_core::command_draft::DraftOrigin;
 use nyaterm_core::plugins::invocation::{ActionInput, ActionResult, parse_parameter};
 use nyaterm_core::plugins::manifest::{ParameterKind, ResultKind};
 use nyaterm_core::plugins::{ErrorCode, MAX_TEXT_BYTES, PluginError, PluginStatus};
-use nyaterm_plugin_host::manager::{Contribution, InvocationLease, PluginSource};
+use nyaterm_plugin_host::manager::{
+    CatalogSnapshot, Contribution, InvocationLease, PluginSnapshot, PluginSource,
+};
 use nyaterm_plugin_host::service::{OperationReply, PluginOperation};
+use nyaterm_ui::icons::mono_icon;
 use nyaterm_ui::notification::{NyaNotificationKind, NyaNotificationWindowExt as _};
-use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaInput, NyaInputState, NyaScrollable};
+use nyaterm_ui::presentation::progress_bar;
+use nyaterm_ui::{
+    NyaButton, NyaButtonVariant, NyaDropdownMenu, NyaInput, NyaInputEvent, NyaInputState,
+    NyaMenuItem, NyaScrollable, NyaSwitch,
+};
 use rust_i18n::t;
 
 struct ParameterInput {
@@ -31,9 +42,16 @@ struct Preview {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PendingKind {
+pub(super) enum PendingKind {
     Management,
     Invocation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusTone {
+    Info,
+    Success,
+    Error,
 }
 
 struct PendingOperation {
@@ -46,9 +64,11 @@ pub(in crate::features) struct PluginPanel {
     pub(super) process: Entity<PluginProcess>,
     search: Entity<NyaInputState>,
     pub(super) discover: bool,
+    pub(super) native_collapsed: bool,
     pub(super) tool_panels:
         std::collections::BTreeMap<(String, String), super::tool_panel::ToolPanel>,
     developer_tools: bool,
+    expanded_plugin: Option<String>,
     permission_scope: Entity<NyaInputState>,
     selected_permission: Option<(String, String, u64)>,
     text: Entity<NyaInputState>,
@@ -57,14 +77,16 @@ pub(in crate::features) struct PluginPanel {
     selected: Option<Contribution>,
     preview: Option<Preview>,
     status: String,
+    status_tone: StatusTone,
     // Catalog notifications may arrive after an operation's reply. Keep its
     // management feedback until the user selects an action or starts new work.
-    status_kind: Option<PendingKind>,
+    pub(super) status_kind: Option<PendingKind>,
     pending: Option<PendingOperation>,
     generation: u64,
     #[cfg(test)]
     completion_gate: Option<futures::channel::oneshot::Receiver<()>>,
     _subscription: Subscription,
+    _search_subscription: Subscription,
 }
 
 impl PluginPanel {
@@ -134,21 +156,29 @@ impl PluginPanel {
                 this.parameters.clear();
                 this.output.update(cx, |state, cx| state.clear(cx));
                 if !this.busy() && this.status_kind != Some(PendingKind::Management) {
-                    this.status = t!("plugins.actionChanged").to_string();
+                    this.set_status(t!("plugins.actionChanged"), StatusTone::Error);
                 }
             }
             cx.notify();
+        });
+        let search = cx.new(|cx| NyaInputState::new(cx, "").placeholder(t!("plugins.search")));
+        let search_subscription = cx.subscribe(&search, |_, _, event, cx| {
+            if matches!(event, NyaInputEvent::Changed(_)) {
+                cx.notify();
+            }
         });
         Self {
             app,
             process,
             discover: true,
+            native_collapsed: false,
             tool_panels: std::collections::BTreeMap::new(),
             developer_tools: false,
+            expanded_plugin: None,
             selected_permission: None,
             permission_scope: cx
                 .new(|cx| NyaInputState::new(cx, "").placeholder(t!("plugins.permissionScope"))),
-            search: cx.new(|cx| NyaInputState::new(cx, "").placeholder(t!("plugins.search"))),
+            search,
 
             text: cx.new(|cx| {
                 NyaInputState::new(cx, "")
@@ -164,13 +194,50 @@ impl PluginPanel {
             selected: None,
             preview: None,
             status: String::new(),
+            status_tone: StatusTone::Info,
             status_kind: None,
             pending: None,
             generation: 0,
             #[cfg(test)]
             completion_gate: None,
             _subscription: subscription,
+            _search_subscription: search_subscription,
         }
+    }
+
+    fn set_status(&mut self, status: impl Into<String>, tone: StatusTone) {
+        self.status = status.into();
+        self.status_tone = tone;
+    }
+
+    pub(super) fn close_workbench_if_idle(&mut self, cx: &mut Context<Self>) {
+        if self.busy() || (self.selected.is_none() && self.preview.is_none()) {
+            return;
+        }
+        self.selected = None;
+        self.preview = None;
+        self.parameters.clear();
+        self.output.update(cx, |state, cx| state.clear(cx));
+        if self.status_kind == Some(PendingKind::Invocation) {
+            self.status.clear();
+            self.status_kind = None;
+        }
+    }
+
+    fn close_workbench(&mut self, cx: &mut Context<Self>) {
+        if self.can_cancel() {
+            self.pending.take();
+            self.generation += 1;
+        } else if self.busy() {
+            return;
+        }
+        self.selected = None;
+        self.preview = None;
+        self.parameters.clear();
+        self.output.update(cx, |state, cx| state.clear(cx));
+        self.status.clear();
+        self.status_kind = None;
+        cx.notify();
     }
 
     fn select(&mut self, contribution: Contribution, cx: &mut Context<Self>) {
@@ -212,21 +279,21 @@ impl PluginPanel {
         };
         self.status_kind = Some(kind);
         let Some(service) = self.process.read(cx).service.clone() else {
-            self.status = t!("plugins.unavailable").to_string();
+            self.set_status(t!("plugins.unavailable"), StatusTone::Error);
             cx.notify();
             return;
         };
         let task = match service.submit(operation) {
             Ok(task) => task,
             Err(error) => {
-                self.status = error.message;
+                self.set_status(error.message, StatusTone::Error);
                 cx.notify();
                 return;
             }
         };
         self.generation += 1;
         let generation = self.generation;
-        self.status = t!("plugins.working").to_string();
+        self.set_status(t!("plugins.working"), StatusTone::Info);
         #[cfg(test)]
         let completion_gate = self.completion_gate.take();
         let task = cx.spawn(async move |this, cx| {
@@ -270,7 +337,7 @@ impl PluginPanel {
                                 .iter()
                                 .any(|c| c.id == contribution_id && c.revision == revision)
                         {
-                            this.status = t!("plugins.actionChanged").to_string();
+                            this.set_status(t!("plugins.actionChanged"), StatusTone::Error);
                             cx.notify();
                             return;
                         }
@@ -280,7 +347,7 @@ impl PluginPanel {
                             }
                             ActionResult::Text(text) if text.is_empty() => {
                                 this.preview = None;
-                                this.status = t!("plugins.done").to_string();
+                                this.set_status(t!("plugins.done"), StatusTone::Success);
                                 cx.notify();
                                 return;
                             }
@@ -298,12 +365,12 @@ impl PluginPanel {
                             title,
                             lease,
                         });
-                        this.status = t!("plugins.ready").to_string();
+                        this.set_status(t!("plugins.ready"), StatusTone::Success);
                     }
-                    Ok(None) => this.status = t!("plugins.done").to_string(),
+                    Ok(None) => this.set_status(t!("plugins.done"), StatusTone::Success),
                     Err(error) => {
                         this.preview = None;
-                        this.status = error.message;
+                        this.set_status(error.message, StatusTone::Error);
                     }
                 }
                 cx.notify();
@@ -332,7 +399,7 @@ impl PluginPanel {
                     input.parameters.insert(parameter.id.clone(), value);
                 }
                 Err(error) => {
-                    self.status = error.message;
+                    self.set_status(error.message, StatusTone::Error);
                     cx.notify();
                     return;
                 }
@@ -358,7 +425,7 @@ impl PluginPanel {
         }
         self.pending.take();
         self.generation += 1;
-        self.status = t!("plugins.cancelled").to_string();
+        self.set_status(t!("plugins.cancelled"), StatusTone::Info);
         cx.notify();
     }
 
@@ -387,7 +454,7 @@ impl PluginPanel {
                 .iter()
                 .any(|c| c.id == preview.contribution_id && c.revision == preview.revision)
         {
-            self.status = t!("plugins.actionChanged").to_string();
+            self.set_status(t!("plugins.actionChanged"), StatusTone::Error);
             cx.notify();
             return;
         }
@@ -402,13 +469,13 @@ impl PluginPanel {
                 .to_owned(),
             revision: preview.revision,
         };
-        self.status = match self.app.update(cx, |app, cx| {
+        match self.app.update(cx, |app, cx| {
             app.fill_plugin_draft(&output, replace, origin, cx)
         }) {
-            Ok(Ok(())) => t!("plugins.draftFilled").to_string(),
-            Ok(Err(error)) => error.message,
-            Err(_) => t!("plugins.unavailable").to_string(),
-        };
+            Ok(Ok(())) => self.set_status(t!("plugins.draftFilled"), StatusTone::Success),
+            Ok(Err(error)) => self.set_status(error.message, StatusTone::Error),
+            Err(_) => self.set_status(t!("plugins.unavailable"), StatusTone::Error),
+        }
         cx.notify();
     }
 
@@ -424,21 +491,21 @@ impl PluginPanel {
         let task = match service.native.submit(id, action) {
             Ok(task) => task,
             Err(error) => {
-                self.status = error.message;
+                self.set_status(error.message, StatusTone::Error);
                 cx.notify();
                 return;
             }
         };
         self.status_kind = Some(PendingKind::Management);
-        self.status = t!("plugins.working").to_string();
+        self.set_status(t!("plugins.working"), StatusTone::Info);
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.status = match result {
-                    Ok(Ok(())) => t!("plugins.nativeDone").to_string(),
-                    Ok(Err(error)) => error.message,
-                    Err(_) => t!("plugins.unavailable").to_string(),
-                };
+                match result {
+                    Ok(Ok(())) => this.set_status(t!("plugins.nativeDone"), StatusTone::Success),
+                    Ok(Err(error)) => this.set_status(error.message, StatusTone::Error),
+                    Err(_) => this.set_status(t!("plugins.unavailable"), StatusTone::Error),
+                }
                 cx.notify();
             });
         })
@@ -537,434 +604,504 @@ fn status_label(status: PluginStatus) -> String {
     .to_string()
 }
 
-impl Render for PluginPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = self
-            .app
-            .upgrade()
-            .map(|app| app.read(cx).theme_palette())
-            .unwrap_or_else(|| crate::theme::theme_palette("dark"));
-        let snapshot = self.process.read(cx).snapshot.clone();
-        let mut content = div()
-            .id("plugins-scroll")
-            .flex_1()
+fn status_tone(status: PluginStatus) -> list::RowTone {
+    match status {
+        PluginStatus::Enabled | PluginStatus::Running => list::RowTone::Active,
+        PluginStatus::Installed => list::RowTone::Neutral,
+        PluginStatus::Incompatible | PluginStatus::LoadFailed | PluginStatus::Faulted => {
+            list::RowTone::Danger
+        }
+    }
+}
+
+fn parameter_kind_label(kind: ParameterKind) -> &'static str {
+    match kind {
+        ParameterKind::String => "text",
+        ParameterKind::Integer => "int",
+        ParameterKind::Boolean => "bool",
+    }
+}
+
+fn empty_hint(icon_path: &'static str, text: String, palette: ThemePalette) -> Div {
+    div()
+        .w_full()
+        .flex_none()
+        .py_6()
+        .px_3()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .text_center()
+        .child(
+            svg()
+                .size(px(20.))
+                .path(icon_path)
+                .text_color(rgb(palette.text_dimmed)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .line_height(px(18.))
+                .text_color(rgb(palette.text_muted))
+                .child(text),
+        )
+}
+
+impl PluginPanel {
+    fn render_status_banner(&self, palette: ThemePalette, cx: &mut Context<Self>) -> Div {
+        let (dot, border, fg) = match self.status_tone {
+            StatusTone::Info => (palette.primary, palette.border, palette.text_muted),
+            StatusTone::Success => (palette.success, palette.border, palette.text),
+            StatusTone::Error => (palette.danger, palette.danger, palette.danger),
+        };
+        let mut row = div()
+            .w_full()
             .min_w_0()
-            .min_h_0()
-            .p_2()
+            .flex_none()
+            .px(px(10.))
+            .py(px(6.))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(border))
+            .bg(rgb(palette.surface_elevated))
             .flex()
-            .flex_col()
-            .gap_3()
+            .items_center()
+            .gap_2()
             .child(
                 div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        NyaButton::new("extensions-discover", t!("plugins.discover")).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.discover = true;
-                                this.operation(PluginOperation::RefreshStore, cx);
-                            }),
-                        ),
-                    )
-                    .child(
-                        NyaButton::new("extensions-installed", t!("plugins.installed")).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.discover = false;
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        NyaButton::new("extensions-import", t!("plugins.importFile"))
-                            .disabled(self.busy())
-                            .on_click(cx.listener(|this, _, _, cx| this.browse(false, cx))),
-                    )
-                    .child(
-                        NyaButton::new("extensions-developer", t!("plugins.developerTools"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.developer_tools = !this.developer_tools;
-                                cx.notify();
-                            })),
-                    ),
+                    .w(px(6.))
+                    .h(px(6.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(rgb(dot)),
             )
-            .child(div().child(self.status.clone()));
-        if self.developer_tools {
-            content = content.child(
-                NyaButton::new("extensions-development-load", t!("plugins.development"))
-                    .disabled(self.busy())
-                    .on_click(cx.listener(|this, _, _, cx| this.browse(true, cx))),
-            );
-        }
-        if self.discover {
-            content = content.child(div().w_full().h(px(32.)).child(NyaInput::new(&self.search)));
-            if let Some(service) = self.process.read(cx).service() {
-                let catalog = service.store_catalog.read().unwrap().clone();
-                if let Some(catalog) = catalog {
-                    let query = self.search.read(cx).value(cx).to_lowercase();
-                    for listing in catalog.extensions.iter().filter(|listing| {
-                        format!(
-                            "{} {} {}",
-                            listing.name, listing.description, listing.publisher
-                        )
-                        .to_lowercase()
-                        .contains(&query)
-                    }) {
-                        let id = listing.id.clone();
-                        let compatible = listing
-                            .compatible_release(env!("CARGO_PKG_VERSION"))
-                            .is_some();
-                        content = content.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(listing.name.clone())
-                                .child(listing.description.clone())
-                                .child(
-                                    NyaButton::new(
-                                        format!("store-install-{id}"),
-                                        t!("plugins.install"),
-                                    )
-                                    .disabled(self.busy() || !compatible)
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.operation(
-                                                PluginOperation::InstallFromStore {
-                                                    id: id.clone(),
-                                                },
-                                                cx,
-                                            )
-                                        },
-                                    )),
-                                ),
-                        );
-                    }
-                } else {
-                    content = content.child(t!("plugins.storeRefreshHint").to_string());
-                }
-            }
-        }
-        if let Some((id, capability, expected_revision)) = self.selected_permission.clone() {
-            content = content.child(
+            .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(format!("{id}: {}", capability_label(&capability)))
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(32.))
-                            .child(NyaInput::new(&self.permission_scope)),
-                    )
-                    .child(
-                        NyaButton::new("extension-grant", t!("plugins.grant"))
-                            .disabled(self.busy())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let scope = this.permission_scope.read(cx).value(cx).to_string();
-                                this.operation(
-                                    PluginOperation::Authorize {
-                                        id: id.clone(),
-                                        expected_revision,
-                                        capability: capability.clone(),
-                                        scope,
-                                    },
-                                    cx,
-                                );
-                                this.selected_permission = None;
-                            })),
-                    ),
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(rgb(fg))
+                    .child(self.status.clone()),
+            );
+        if !self.busy() {
+            row = row.child(
+                NyaButton::new("plugins-dismiss-status", "")
+                    .icon("icons/close.svg")
+                    .small()
+                    .compact()
+                    .variant(NyaButtonVariant::Ghost)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.status.clear();
+                        this.status_kind = None;
+                        cx.notify();
+                    })),
             );
         }
-        if let Some(error) = snapshot.startup_error {
-            content = content.child(div().text_color(rgb(palette.danger)).child(error.message));
-        }
-        if let Some(service) = self.process.read(cx).service() {
-            use nyaterm_core::plugins::native::NativeStatus;
-            use nyaterm_plugin_host::native::NativeAction;
-            content = content.child(div().child(t!("plugins.nativeTitle")));
-            for component in service.native.snapshot() {
-                let id = component.id;
-                let label = t!(match component.status {
-                    NativeStatus::Missing => "plugins.nativeMissing",
-                    NativeStatus::Installing => "plugins.working",
-                    NativeStatus::Ready => "plugins.enabled",
-                    NativeStatus::Disabled => "plugins.nativeDisabled",
-                    NativeStatus::NeedsUpdate => "plugins.nativeNeedsUpdate",
-                    NativeStatus::Damaged => "plugins.loadFailed",
-                    NativeStatus::PendingUninstall => "plugins.nativePendingUninstall",
-                })
-                .to_string();
-                let installing = component.status == NativeStatus::Installing;
-                let mut card = div()
-                    .w_full()
-                    .p_3()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .rounded_lg()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(div().child(format!("{} · {}", id.title(), label)));
-                if installing {
-                    card = card.child(div().child(format!(
-                            "{:.1} / {} MiB",
-                            component.downloaded as f64 / 1048576.,
-                            component
-                                .download_size
-                                .map(|n| format!("{:.1}", n as f64 / 1048576.))
-                                .unwrap_or_else(|| "?".into())
-                        )));
-                }
-                if let Some(error) = component.error {
-                    card = card.child(div().text_color(rgb(palette.danger)).child(error.message));
-                }
-                let enabled = !matches!(
-                    component.status,
-                    NativeStatus::Disabled | NativeStatus::PendingUninstall
-                );
-                card = card.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(
-                            NyaButton::new(
-                                format!("native-install-{}", id.slug()),
-                                t!("plugins.nativeDownload"),
-                            )
-                            .disabled(
-                                installing
-                                    || matches!(
-                                        component.status,
-                                        NativeStatus::Ready
-                                            | NativeStatus::Disabled
-                                            | NativeStatus::PendingUninstall
-                                    ),
-                            )
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    let _ = this.app.update(cx, |app, cx| {
-                                        app.ensure_native_component(
-                                            id,
-                                            |_| true,
-                                            |app, result, cx| {
-                                                if let Err(error) = result {
-                                                    app.shell.set_status(error.message);
-                                                }
-                                                cx.notify();
-                                            },
-                                            cx,
-                                        )
-                                    });
-                                },
-                            )),
-                        )
-                        .child(
-                            NyaButton::new(
-                                format!("native-import-{}", id.slug()),
-                                t!("plugins.nativeImport"),
-                            )
-                            .disabled(installing)
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.browse_native(id, cx);
-                                },
-                            )),
-                        )
-                        .child(
-                            NyaButton::new(
-                                format!("native-enable-{}", id.slug()),
-                                if enabled {
-                                    t!("plugins.disable")
-                                } else {
-                                    t!("plugins.enable")
-                                },
-                            )
-                            .disabled(installing)
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.native_operation(id, NativeAction::Enable(!enabled), cx)
-                                },
-                            )),
-                        )
-                        .child(
-                            NyaButton::new(
-                                format!("native-remove-{}", id.slug()),
-                                t!("plugins.uninstall"),
-                            )
-                            .disabled(installing)
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.native_operation(id, NativeAction::Uninstall, cx)
-                                },
-                            )),
-                        )
-                        .child(
-                            NyaButton::new(
-                                format!("native-cancel-{}", id.slug()),
-                                t!("common.cancel"),
-                            )
-                            .disabled(!installing)
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    if let Some(service) = this.process.read(cx).service() {
-                                        service.native.cancel(id);
-                                    }
-                                },
-                            )),
-                        ),
-                );
-                content = content.child(card);
+        row
+    }
+
+    fn render_store_section(
+        &self,
+        snapshot: &CatalogSnapshot,
+        query: &str,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> (usize, Option<Div>) {
+        let Some(service) = self.process.read(cx).service() else {
+            return (0, None);
+        };
+        let catalog = service.store_catalog.read().unwrap().clone();
+        let Some(catalog) = catalog else {
+            if !query.is_empty() {
+                return (0, None);
             }
-        }
-        if !self.discover && snapshot.plugins.is_empty() {
-            content = content.child(div().child(t!("plugins.empty")));
-        }
-        for plugin in snapshot.plugins {
-            if self.discover {
-                continue;
-            }
-            let name = plugin
-                .manifest
-                .as_ref()
-                .map_or(plugin.id.clone(), |m| format!("{} · {}", m.name, m.version));
-            let mut card = div()
+            let card = div()
+                .debug_selector(|| "extensions-store-empty".to_string())
                 .w_full()
                 .min_w_0()
                 .flex_none()
+                .mt_1()
                 .p_3()
-                .rounded_lg()
+                .rounded_md()
                 .border_1()
                 .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface_elevated))
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().child(format!("{name} · {}", status_label(plugin.status))))
-                .child(div().text_color(rgb(palette.text_muted)).child(format!(
-                    "{} · {}",
-                    plugin.id,
-                    match &plugin.source {
-                        PluginSource::Managed => t!("plugins.managed").to_string(),
-                        PluginSource::Development(path) =>
-                            format!("{}: {}", t!("plugins.development"), path.display()),
-                    }
-                )));
-            if let Some(manifest) = &plugin.manifest {
-                card = card.child(div().child(manifest.description.clone())).child(
-                    div().text_color(rgb(palette.text_muted)).child(format!(
-                        "{} · API {} · schema {} · NyaTerm {}",
-                        manifest.authors.join(", "),
-                        manifest.api_version,
-                        manifest.schema_version,
-                        manifest.host_version
-                    )),
-                );
-            }
-            if let Some(error) = &plugin.error {
-                card = card.child(
+                .child(
                     div()
-                        .text_color(rgb(palette.danger))
-                        .child(error.message.clone()),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(mono_icon(
+                            "icons/extensions.svg",
+                            rgb(palette.primary).into(),
+                            16.,
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.text))
+                                .child(t!("plugins.discover")),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .line_height(px(18.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("plugins.storeRefreshHint").to_string()),
+                )
+                .child(
+                    div().flex().items_center().child(
+                        NyaButton::new("extensions-load-store", t!("plugins.loadStore"))
+                            .icon("icons/fe/refresh.svg")
+                            .small()
+                            .compact()
+                            .variant(NyaButtonVariant::Primary)
+                            .loading(
+                                self.busy() && self.status_kind == Some(PendingKind::Management),
+                            )
+                            .disabled(self.busy())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.operation(PluginOperation::RefreshStore, cx)
+                            })),
+                    ),
                 );
+            return (0, Some(card));
+        };
+
+        let listings: Vec<_> = catalog
+            .extensions
+            .iter()
+            .filter(|listing| {
+                list::matches_query(
+                    query,
+                    &[&listing.name, &listing.description, &listing.publisher],
+                )
+            })
+            .collect();
+        let count = listings.len();
+        if count == 0 && !query.is_empty() {
+            return (0, None);
+        }
+
+        let mut section = div()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(list::section(
+                t!("plugins.discover").to_string(),
+                count,
+                palette,
+            ));
+        for listing in listings {
+            let id = listing.id.clone();
+            let installed = snapshot.plugins.iter().any(|plugin| plugin.id == id);
+            let compatible = listing
+                .compatible_release(env!("CARGO_PKG_VERSION"))
+                .is_some();
+            let tone = if installed {
+                Some(list::RowTone::Active)
+            } else if !compatible {
+                Some(list::RowTone::Danger)
+            } else {
+                None
+            };
+            let metadata = if !compatible {
+                format!("{} · {}", listing.publisher, t!("plugins.incompatible"))
+            } else {
+                listing.publisher.clone()
+            };
+            section = section.child(list::extension_row(
+                list::ExtensionRowSpec {
+                    id: format!("store-row-{id}"),
+                    icon: "icons/extensions.svg",
+                    name: listing.name.clone(),
+                    description: listing.description.clone(),
+                    metadata,
+                    tone,
+                    progress: None,
+                    selected: false,
+                },
+                palette,
+                NyaButton::new(
+                    format!("store-install-{id}"),
+                    t!(if installed {
+                        "plugins.installed"
+                    } else {
+                        "plugins.install"
+                    }),
+                )
+                .small()
+                .compact()
+                .disabled(self.busy() || !compatible || installed)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.operation(PluginOperation::InstallFromStore { id: id.clone() }, cx)
+                })),
+            ));
+        }
+        (count, Some(section))
+    }
+
+    fn render_plugin_card(
+        &self,
+        plugin: &PluginSnapshot,
+        snapshot: &CatalogSnapshot,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let card_selector = format!("plugin-card-{}", plugin.id);
+        let toggle_id = plugin.id.clone();
+        let reload_id = plugin.id.clone();
+        let update_id = plugin.id.clone();
+        let uninstall_id = plugin.id.clone();
+        let enabled = plugin.enabled;
+
+        let source_label = match &plugin.source {
+            PluginSource::Managed => t!("plugins.managed").to_string(),
+            PluginSource::Development(path) => {
+                format!("{}: {}", t!("plugins.development"), path.display())
             }
-            let toggle_id = plugin.id.clone();
-            let reload_id = plugin.id.clone();
-            let update_id = plugin.id.clone();
-            let uninstall_id = plugin.id.clone();
-            let enabled = plugin.enabled;
-            card = card.child(
+        };
+
+        let menu = NyaDropdownMenu::new(format!("plugins-manage-menu-{}", plugin.id))
+            .icon("icons/session/more.svg")
+            .tooltip(t!("plugins.manage"))
+            .disabled(self.busy())
+            .items([
+                NyaMenuItem::action(if enabled {
+                    t!("plugins.disable")
+                } else {
+                    t!("plugins.enable")
+                })
+                .disabled(self.busy())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.operation(
+                        PluginOperation::Enable {
+                            id: toggle_id.clone(),
+                            enabled: !enabled,
+                        },
+                        cx,
+                    )
+                })),
+                NyaMenuItem::action(t!("plugins.reload"))
+                    .disabled(self.busy())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.operation(
+                            PluginOperation::Reload {
+                                id: reload_id.clone(),
+                            },
+                            cx,
+                        )
+                    })),
+                NyaMenuItem::action(t!("plugins.update"))
+                    .disabled(self.busy())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let from_store =
+                            this.process.read(cx).service().is_some_and(|service| {
+                                service.store_catalog.read().unwrap().as_ref().is_some_and(
+                                    |catalog| {
+                                        catalog.extensions.iter().any(|entry| entry.id == update_id)
+                                    },
+                                )
+                            });
+                        if from_store {
+                            this.operation(
+                                PluginOperation::InstallFromStore {
+                                    id: update_id.clone(),
+                                },
+                                cx,
+                            );
+                        } else {
+                            this.browse_update(update_id.clone(), cx);
+                        }
+                    })),
+                NyaMenuItem::separator(),
+                NyaMenuItem::action(t!("plugins.uninstall"))
+                    .danger()
+                    .disabled(self.busy())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.operation(
+                            PluginOperation::Uninstall {
+                                id: uninstall_id.clone(),
+                            },
+                            cx,
+                        )
+                    })),
+            ]);
+
+        let mut card = div()
+            .debug_selector(move || card_selector.clone())
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .mb_1()
+            .p(px(10.))
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(palette.border))
+            .bg(rgb(palette.surface_elevated))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
                 div()
+                    .min_w_0()
                     .flex()
-                    .flex_wrap()
+                    .items_center()
                     .gap_2()
                     .child(
-                        NyaButton::new(
-                            format!("plugins-toggle-{}", plugin.id),
-                            if enabled {
-                                t!("plugins.disable")
-                            } else {
-                                t!("plugins.enable")
-                            },
-                        )
-                        .disabled(self.busy())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.operation(
-                                PluginOperation::Enable {
-                                    id: toggle_id.clone(),
-                                    enabled: !enabled,
-                                },
-                                cx,
-                            )
-                        })),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(rgb(palette.text_muted))
+                            .child(format!("{} · {source_label}", plugin.id)),
                     )
-                    .child(
-                        NyaButton::new(
-                            format!("plugins-reload-{}", plugin.id),
-                            t!("plugins.reload"),
-                        )
-                        .disabled(self.busy())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.operation(
-                                PluginOperation::Reload {
-                                    id: reload_id.clone(),
-                                },
-                                cx,
-                            )
-                        })),
-                    )
-                    .child(
-                        NyaButton::new(
-                            format!("plugins-update-{}", plugin.id),
-                            t!("plugins.update"),
-                        )
-                        .full_width()
-                        .tooltip(t!("plugins.update"))
-                        .disabled(self.busy())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let from_store =
-                                this.process.read(cx).service().is_some_and(|service| {
-                                    service.store_catalog.read().unwrap().as_ref().is_some_and(
-                                        |catalog| {
-                                            catalog
-                                                .extensions
-                                                .iter()
-                                                .any(|entry| entry.id == update_id)
-                                        },
-                                    )
-                                });
-                            if from_store {
-                                this.operation(
-                                    PluginOperation::InstallFromStore {
-                                        id: update_id.clone(),
-                                    },
-                                    cx,
-                                );
-                            } else {
-                                this.browse_update(update_id.clone(), cx);
-                            }
-                        })),
-                    )
-                    .child(
-                        NyaButton::new(
-                            format!("plugins-uninstall-{}", plugin.id),
-                            t!("plugins.uninstall"),
-                        )
-                        .full_width()
-                        .tooltip(t!("plugins.retainedData"))
-                        .variant(NyaButtonVariant::Danger)
-                        .disabled(self.busy())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.operation(
-                                PluginOperation::Uninstall {
-                                    id: uninstall_id.clone(),
-                                },
-                                cx,
-                            )
-                        })),
-                    ),
+                    .child(menu),
             );
-            if let Some(requests) = snapshot.permission_requests.get(&plugin.id) {
+
+        if let Some(manifest) = &plugin.manifest {
+            if !manifest.description.is_empty() {
+                card = card.child(
+                    div()
+                        .text_xs()
+                        .line_height(px(18.))
+                        .text_color(rgb(palette.text))
+                        .child(manifest.description.clone()),
+                );
+            }
+            card = card.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(rgb(palette.text_dimmed))
+                    .child(format!(
+                        "API {} · schema {} · NyaTerm {}",
+                        manifest.api_version, manifest.schema_version, manifest.host_version
+                    )),
+            );
+        }
+
+        if let Some(error) = &plugin.error {
+            card = card.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(palette.danger))
+                    .text_xs()
+                    .text_color(rgb(palette.danger))
+                    .child(error.message.clone()),
+            );
+        }
+
+        let plugin_contributions: Vec<_> = snapshot
+            .contributions
+            .iter()
+            .filter(|c| c.plugin_id == plugin.id)
+            .cloned()
+            .collect();
+        if !plugin_contributions.is_empty() {
+            let mut actions_group = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pt_1()
+                .border_t_1()
+                .border_color(rgb(palette.border))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(palette.text_muted))
+                        .child(t!("plugins.actionsSection")),
+                );
+            for contribution in plugin_contributions {
+                let selected = contribution.clone();
+                actions_group = actions_group.child(
+                    NyaButton::new(
+                        format!("plugins-action-{}", contribution.id),
+                        contribution.action.name.clone(),
+                    )
+                    .icon("icons/play.svg")
+                    .small()
+                    .full_width()
+                    .label_left()
+                    .tooltip(contribution.action.description.clone())
+                    .disabled(self.busy())
+                    .on_click(cx.listener(move |this, _, _, cx| this.select(selected.clone(), cx))),
+                );
+            }
+            card = card.child(actions_group);
+        }
+
+        let pending_requests = snapshot.permission_requests.get(&plugin.id);
+        let grantable_capabilities: Vec<_> = plugin
+            .manifest
+            .as_ref()
+            .map(|manifest| {
+                manifest
+                    .capabilities
+                    .iter()
+                    .filter(|capability| !matches!(capability.as_str(), "storage" | "ui"))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if pending_requests.is_some_and(|r| !r.is_empty()) || !grantable_capabilities.is_empty() {
+            let mut perm_group = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .pt_1()
+                .border_t_1()
+                .border_color(rgb(palette.border))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.text_muted))
+                                .child(t!("plugins.permissionsSection")),
+                        )
+                        .child({
+                            let revoke_id = plugin.id.clone();
+                            NyaButton::new(format!("revoke-{}", plugin.id), t!("plugins.revoke"))
+                                .small()
+                                .compact()
+                                .variant(NyaButtonVariant::Ghost)
+                                .disabled(self.busy())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.operation(
+                                        PluginOperation::RevokeAuthorizations {
+                                            id: revoke_id.clone(),
+                                        },
+                                        cx,
+                                    )
+                                }))
+                        }),
+                );
+
+            if let Some(requests) = pending_requests {
                 for (index, grant) in requests.iter().enumerate() {
                     use nyaterm_core::plugins::extension::Scope;
                     let scope = match &grant.scope {
@@ -980,14 +1117,25 @@ impl Render for PluginPanel {
                         .to_owned();
                     let id = plugin.id.clone();
                     let expected_revision = plugin.revision;
-                    let label = format!(
-                        "{} · {} · {}",
-                        t!("plugins.grant"),
-                        capability_label(&capability),
-                        scope
-                    );
-                    card = card.child(
+                    let label = if scope.is_empty() {
+                        format!(
+                            "{} · {}",
+                            t!("plugins.grant"),
+                            capability_label(&capability)
+                        )
+                    } else {
+                        format!(
+                            "{} · {} ({scope})",
+                            t!("plugins.grant"),
+                            capability_label(&capability)
+                        )
+                    };
+                    perm_group = perm_group.child(
                         NyaButton::new(format!("request-{id}-{index}"), label)
+                            .small()
+                            .full_width()
+                            .label_left()
+                            .variant(NyaButtonVariant::Primary)
                             .disabled(self.busy())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.operation(
@@ -1003,299 +1151,721 @@ impl Render for PluginPanel {
                     );
                 }
             }
-            if let Some(manifest) = &plugin.manifest {
-                let mut permissions = div().flex().flex_wrap().gap_2();
-                for capability in &manifest.capabilities {
-                    if matches!(capability.as_str(), "storage" | "ui") {
-                        continue;
-                    }
+
+            if !grantable_capabilities.is_empty() {
+                let mut chips = div().flex().flex_wrap().gap_1();
+                for capability in grantable_capabilities {
                     let id = plugin.id.clone();
-                    let capability = capability.clone();
                     let revision = plugin.revision;
-                    permissions = permissions.child(
+                    let active =
+                        self.selected_permission
+                            .as_ref()
+                            .is_some_and(|(sel_id, sel_cap, _)| {
+                                sel_id == &id && sel_cap == &capability
+                            });
+                    chips = chips.child(
                         NyaButton::new(
                             format!("grant-{id}-{capability}"),
                             capability_label(&capability),
                         )
+                        .small()
+                        .compact()
+                        .selected(active)
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.selected_permission =
-                                Some((id.clone(), capability.clone(), revision));
+                            if active {
+                                this.selected_permission = None;
+                            } else {
+                                this.selected_permission =
+                                    Some((id.clone(), capability.clone(), revision));
+                            }
                             cx.notify();
                         })),
                     );
                 }
-                let id = plugin.id.clone();
-                permissions = permissions.child(
-                    NyaButton::new(format!("revoke-{id}"), t!("plugins.revoke"))
+                perm_group = perm_group.child(chips);
+            }
+
+            if let Some((sel_id, capability, expected_revision)) = self.selected_permission.clone()
+                && sel_id == plugin.id
+            {
+                perm_group = perm_group.child(
+                    div()
+                        .p_2()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(rgb(palette.border))
+                        .bg(rgb(palette.surface))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.text))
+                                .child(capability_label(&capability)),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(30.))
+                                .child(NyaInput::new(&self.permission_scope)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        NyaButton::new("extension-grant", t!("plugins.grant"))
+                                            .small()
+                                            .full_width()
+                                            .variant(NyaButtonVariant::Primary)
+                                            .disabled(self.busy())
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                let scope = this
+                                                    .permission_scope
+                                                    .read(cx)
+                                                    .value(cx)
+                                                    .to_string();
+                                                this.operation(
+                                                    PluginOperation::Authorize {
+                                                        id: sel_id.clone(),
+                                                        expected_revision,
+                                                        capability: capability.clone(),
+                                                        scope,
+                                                    },
+                                                    cx,
+                                                );
+                                                this.selected_permission = None;
+                                            })),
+                                    ),
+                                )
+                                .child(
+                                    NyaButton::new("extension-grant-cancel", t!("common.cancel"))
+                                        .small()
+                                        .compact()
+                                        .variant(NyaButtonVariant::Ghost)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.selected_permission = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                );
+            }
+
+            card = card.child(perm_group);
+        }
+
+        card
+    }
+
+    fn render_installed_section(
+        &self,
+        snapshot: &CatalogSnapshot,
+        query: &str,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> (usize, Div) {
+        let matching: Vec<_> = snapshot
+            .plugins
+            .iter()
+            .filter(|plugin| list::matches_plugin(plugin, query))
+            .collect();
+        let count = matching.len();
+        let mut section = div()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(2.));
+        if count == 0 && !query.is_empty() {
+            return (0, section);
+        }
+
+        section = section.child(list::section(
+            t!("plugins.installed").to_string(),
+            count,
+            palette,
+        ));
+        if snapshot.plugins.is_empty() {
+            section = section.child(empty_hint(
+                "icons/extensions.svg",
+                t!("plugins.empty").to_string(),
+                palette,
+            ));
+            return (0, section);
+        }
+
+        for plugin in matching {
+            let name = plugin.manifest.as_ref().map_or(plugin.id.clone(), |m| {
+                format!("{} · v{}", m.name, m.version)
+            });
+            let has_selected_perm = self
+                .selected_permission
+                .as_ref()
+                .is_some_and(|(sel_id, _, _)| sel_id == &plugin.id);
+            let expanded =
+                self.expanded_plugin.as_deref() == Some(plugin.id.as_str()) || has_selected_perm;
+            let detail_id = plugin.id.clone();
+            let toggle_id = plugin.id.clone();
+            let enabled = plugin.enabled;
+            let metadata = plugin.manifest.as_ref().map_or_else(
+                || status_label(plugin.status),
+                |m| {
+                    if m.authors.is_empty() {
+                        status_label(plugin.status)
+                    } else {
+                        format!("{} · {}", m.authors.join(", "), status_label(plugin.status))
+                    }
+                },
+            );
+
+            let actions = div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    NyaSwitch::new(format!("plugins-switch-{}", plugin.id))
+                        .checked(enabled)
                         .disabled(self.busy())
+                        .tooltip(if enabled {
+                            t!("plugins.disable")
+                        } else {
+                            t!("plugins.enable")
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.operation(
-                                PluginOperation::RevokeAuthorizations { id: id.clone() },
+                                PluginOperation::Enable {
+                                    id: toggle_id.clone(),
+                                    enabled: !enabled,
+                                },
                                 cx,
                             )
                         })),
-                );
-                content = content.child(permissions);
-            }
-            let mut actions = div().flex().flex_wrap().gap_2();
-            for contribution in snapshot
-                .contributions
-                .iter()
-                .filter(|c| c.plugin_id == plugin.id)
-            {
-                let selected = contribution.clone();
-                actions = actions.child(
-                    NyaButton::new(
-                        format!("plugins-action-{}", contribution.id),
-                        contribution.action.name.clone(),
-                    )
-                    .full_width()
-                    .tooltip(contribution.action.name.clone())
-                    .disabled(self.busy())
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(selected.clone(), cx))),
-                );
-            }
-            content = content.child(card.child(actions));
-        }
-        if !self.discover {
-            use nyaterm_core::plugins::extension::PanelElement;
-            for ((owner, panel_id), panel) in &self.tool_panels {
-                let mut view = div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_3()
-                    .child(panel.title.clone());
-                for (index, element) in panel.elements.iter().enumerate() {
-                    match element {
-                        PanelElement::Text { text } => {
-                            view = view.child(text.clone());
-                        }
-                        PanelElement::Log { text } => {
-                            view = view.child(
-                                div()
-                                    .id(format!("log-{owner}-{panel_id}-{index}"))
-                                    .w_full()
-                                    .h(px(180.))
-                                    .overflow_y_scrollbar()
-                                    .child(text.clone()),
-                            );
-                        }
-                        PanelElement::Table { columns, rows } => {
-                            let mut table = div().flex().flex_col().w_full();
-                            let mut header = div().flex().w_full();
-                            for column in columns {
-                                header = header
-                                    .child(div().flex_1().min_w_0().px_2().child(column.clone()));
-                            }
-                            table = table.child(header);
-                            for row in rows {
-                                let mut cells = div().flex().w_full();
-                                for cell in row {
-                                    cells = cells
-                                        .child(div().flex_1().min_w_0().px_2().child(cell.clone()));
+                )
+                .child(
+                    NyaButton::new(format!("plugin-details-{}", plugin.id), "")
+                        .icon(if expanded {
+                            "icons/chevron-up.svg"
+                        } else {
+                            "icons/chevron-down.svg"
+                        })
+                        .variant(NyaButtonVariant::Ghost)
+                        .small()
+                        .compact()
+                        .selected(expanded)
+                        .tooltip(t!("plugins.manage"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if expanded {
+                                this.expanded_plugin = None;
+                                if this
+                                    .selected_permission
+                                    .as_ref()
+                                    .is_some_and(|(id, _, _)| id == &detail_id)
+                                {
+                                    this.selected_permission = None;
                                 }
-                                table = table.child(cells);
+                            } else {
+                                this.expanded_plugin = Some(detail_id.clone());
                             }
-                            view = view.child(
+                            cx.notify();
+                        })),
+                );
+
+            section = section.child(list::extension_row(
+                list::ExtensionRowSpec {
+                    id: format!("plugin-row-{}", plugin.id),
+                    icon: "icons/extensions.svg",
+                    name,
+                    description: plugin
+                        .manifest
+                        .as_ref()
+                        .map_or_else(String::new, |m| m.description.clone()),
+                    metadata,
+                    tone: Some(status_tone(plugin.status)),
+                    progress: None,
+                    selected: expanded,
+                },
+                palette,
+                actions,
+            ));
+            if expanded {
+                section = section.child(self.render_plugin_card(plugin, snapshot, palette, cx));
+            }
+        }
+        (count, section)
+    }
+
+    fn render_tool_panels(
+        &self,
+        snapshot: &CatalogSnapshot,
+        palette: ThemePalette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        use nyaterm_core::plugins::extension::PanelElement;
+        let mut container = div()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_2();
+        for ((owner, panel_id), panel) in &self.tool_panels {
+            let mut view = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p(px(10.))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface_elevated))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(panel.title.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette.text_dimmed))
+                                .child(owner.clone()),
+                        ),
+                );
+            for (index, element) in panel.elements.iter().enumerate() {
+                match element {
+                    PanelElement::Text { text } => {
+                        view = view.child(
+                            div()
+                                .text_xs()
+                                .line_height(px(18.))
+                                .text_color(rgb(palette.text))
+                                .child(text.clone()),
+                        );
+                    }
+                    PanelElement::Log { text } => {
+                        view = view.child(
+                            div()
+                                .id(format!("log-{owner}-{panel_id}-{index}"))
+                                .w_full()
+                                .h(px(160.))
+                                .p_2()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(rgb(palette.border))
+                                .bg(rgb(palette.surface))
+                                .text_xs()
+                                .overflow_y_scrollbar()
+                                .child(text.clone()),
+                        );
+                    }
+                    PanelElement::Table { columns, rows } => {
+                        let mut table = div().flex().flex_col().w_full().text_xs();
+                        let mut header = div()
+                            .flex()
+                            .w_full()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(rgb(palette.border))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(palette.text_muted));
+                        for column in columns {
+                            header = header.child(
                                 div()
-                                    .id(format!("table-{owner}-{panel_id}-{index}"))
-                                    .w_full()
-                                    .h(px(200.))
-                                    .overflow_y_scrollbar()
-                                    .child(table),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .px_2()
+                                    .truncate()
+                                    .child(column.clone()),
                             );
                         }
-                        PanelElement::Input { id, label, .. } => {
-                            if let Some(input) = panel.inputs.get(id) {
-                                view = view
-                                    .child(label.clone())
-                                    .child(div().w_full().h(px(32.)).child(NyaInput::new(input)));
+                        table = table.child(header);
+                        for row in rows {
+                            let mut cells = div()
+                                .flex()
+                                .w_full()
+                                .py_1()
+                                .border_b_1()
+                                .border_color(rgb(palette.border));
+                            for cell in row {
+                                cells = cells.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .px_2()
+                                        .truncate()
+                                        .child(cell.clone()),
+                                );
                             }
+                            table = table.child(cells);
                         }
-                        PanelElement::Progress {
-                            label,
-                            completed,
-                            total,
-                        } => {
-                            view = view.child(format!("{label}: {completed}/{total}"));
-                        }
-                        PanelElement::Button { action, label } => {
-                            let contribution = snapshot
-                                .contributions
-                                .iter()
-                                .find(|contribution| contribution.id == format!("{owner}:{action}"))
-                                .cloned();
-                            let inputs = panel.inputs.clone();
-                            let session = panel.session.clone();
-                            view = view.child(
-                                NyaButton::new(
-                                    format!("panel-{owner}-{panel_id}-{index}"),
-                                    label.clone(),
+                        view = view.child(
+                            div()
+                                .id(format!("table-{owner}-{panel_id}-{index}"))
+                                .w_full()
+                                .h(px(180.))
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(rgb(palette.border))
+                                .bg(rgb(palette.surface))
+                                .overflow_y_scrollbar()
+                                .child(table),
+                        );
+                    }
+                    PanelElement::Input { id, label, .. } => {
+                        if let Some(input) = panel.inputs.get(id) {
+                            view = view
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(palette.text_muted))
+                                        .child(label.clone()),
                                 )
-                                .disabled(self.busy() || contribution.is_none())
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        if let Some(contribution) = &contribution {
-                                            let mut input = ActionInput {
-                                                text: session.as_ref().map(|session| {
-                                                    serde_json::json!({"session": session})
-                                                        .to_string()
-                                                }),
-                                                ..Default::default()
-                                            };
-                                            for parameter in &contribution.action.parameters {
-                                                if let Some(field) = inputs.get(&parameter.id) {
-                                                    match parse_parameter(
-                                                        parameter.kind,
-                                                        &field.read(cx).value(cx),
-                                                    ) {
-                                                        Ok(value) => {
-                                                            input.parameters.insert(
-                                                                parameter.id.clone(),
-                                                                value,
-                                                            );
-                                                        }
-                                                        Err(error) => {
-                                                            this.status = error.message;
-                                                            cx.notify();
-                                                            return;
-                                                        }
+                                .child(div().w_full().h(px(32.)).child(NyaInput::new(input)));
+                        }
+                    }
+                    PanelElement::Progress {
+                        label,
+                        completed,
+                        total,
+                    } => {
+                        let ratio = if *total > 0 {
+                            *completed as f64 / *total as f64
+                        } else {
+                            0.
+                        };
+                        view = view.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .text_xs()
+                                        .text_color(rgb(palette.text_muted))
+                                        .child(div().truncate().child(label.clone()))
+                                        .child(format!("{completed}/{total}")),
+                                )
+                                .child(progress_bar(palette, ratio)),
+                        );
+                    }
+                    PanelElement::Button { action, label } => {
+                        let contribution = snapshot
+                            .contributions
+                            .iter()
+                            .find(|contribution| contribution.id == format!("{owner}:{action}"))
+                            .cloned();
+                        let inputs = panel.inputs.clone();
+                        let session = panel.session.clone();
+                        view = view.child(
+                            NyaButton::new(
+                                format!("panel-{owner}-{panel_id}-{index}"),
+                                label.clone(),
+                            )
+                            .small()
+                            .disabled(self.busy() || contribution.is_none())
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if let Some(contribution) = &contribution {
+                                        let mut input = ActionInput {
+                                            text: session.as_ref().map(|session| {
+                                                serde_json::json!({"session": session}).to_string()
+                                            }),
+                                            ..Default::default()
+                                        };
+                                        for parameter in &contribution.action.parameters {
+                                            if let Some(field) = inputs.get(&parameter.id) {
+                                                match parse_parameter(
+                                                    parameter.kind,
+                                                    &field.read(cx).value(cx),
+                                                ) {
+                                                    Ok(value) => {
+                                                        input
+                                                            .parameters
+                                                            .insert(parameter.id.clone(), value);
+                                                    }
+                                                    Err(error) => {
+                                                        this.set_status(
+                                                            error.message,
+                                                            StatusTone::Error,
+                                                        );
+                                                        cx.notify();
+                                                        return;
                                                     }
                                                 }
                                             }
-                                            this.operation(
-                                                PluginOperation::Invoke {
-                                                    contribution_id: contribution.id.clone(),
-                                                    expected_revision: contribution.revision,
-                                                    input,
-                                                },
-                                                cx,
-                                            );
                                         }
-                                    },
-                                )),
-                            );
-                        }
+                                        this.operation(
+                                            PluginOperation::Invoke {
+                                                contribution_id: contribution.id.clone(),
+                                                expected_revision: contribution.revision,
+                                                input,
+                                            },
+                                            cx,
+                                        );
+                                    }
+                                },
+                            )),
+                        );
                     }
                 }
-                content = content.child(view);
             }
+            container = container.child(view);
         }
+        container
+    }
+
+    fn render_workbench(&self, palette: ThemePalette, cx: &mut Context<Self>) -> Div {
+        let mut bench = div()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .pt_1()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .debug_selector(|| "plugins-back-to-list".to_string())
+                    .flex()
+                    .items_center()
+                    .child(
+                        NyaButton::new("plugins-back-to-list-btn", t!("plugins.backToList"))
+                            .icon("icons/fe/back.svg")
+                            .small()
+                            .compact()
+                            .variant(NyaButtonVariant::Ghost)
+                            .disabled(self.busy() && !self.can_cancel())
+                            .on_click(cx.listener(|this, _, _, cx| this.close_workbench(cx))),
+                    ),
+            );
+
         if let Some(selected) = &self.selected {
             let mut form = div()
                 .w_full()
                 .min_w_0()
                 .flex_none()
-                .p_3()
-                .rounded_lg()
+                .p(px(10.))
+                .rounded_md()
                 .border_1()
                 .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface_elevated))
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().child(format!("{} · {}", selected.action.name, selected.id)))
-                .child(div().child(selected.action.description.clone()));
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.text))
+                                .child(selected.action.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(rgb(palette.text_dimmed))
+                                .child(selected.id.clone()),
+                        ),
+                );
+            if !selected.action.description.is_empty() {
+                form = form.child(
+                    div()
+                        .text_xs()
+                        .line_height(px(18.))
+                        .text_color(rgb(palette.text_muted))
+                        .child(selected.action.description.clone()),
+                );
+            }
             for parameter in &self.parameters {
-                form = form.child(div().child(parameter.name.clone())).child(
-                    div()
-                        .w_full()
-                        .flex_none()
-                        .h(px(32.))
-                        .child(NyaInput::new(&parameter.input)),
-                );
-            }
-            if selected.action.result == ResultKind::Text {
-                form = form.child(div().child(t!("plugins.explicitText"))).child(
-                    div()
-                        .w_full()
-                        .flex_none()
-                        .h(px(120.))
-                        .child(NyaInput::new(&self.text)),
-                );
-            }
-            form = form.child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
+                form = form
                     .child(
-                        NyaButton::new("plugins-invoke", t!("plugins.invoke"))
-                            .full_width()
-                            .tooltip(t!("plugins.invoke"))
-                            .variant(NyaButtonVariant::Primary)
-                            .disabled(self.busy())
-                            .on_click(cx.listener(|this, _, _, cx| this.invoke(cx))),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_1()
+                            .text_xs()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_color(rgb(palette.text))
+                                            .child(parameter.name.clone()),
+                                    )
+                                    .when(parameter.required, |row| {
+                                        row.child(div().text_color(rgb(palette.danger)).child("*"))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette.text_dimmed))
+                                    .child(parameter_kind_label(parameter.kind)),
+                            ),
                     )
-                    .child(
-                        NyaButton::new("plugins-cancel", t!("plugins.cancel"))
-                            .disabled(!self.can_cancel())
-                            .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
-                    ),
-            );
-            content = content.child(form);
-        }
-        if let Some(preview) = &self.preview {
-            let mut result =
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .flex_none()
-                    .p_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(div().child(format!("{} · {}", preview.title, preview.plugin_id)))
                     .child(
                         div()
                             .w_full()
                             .flex_none()
-                            .h(px(150.))
-                            .child(NyaInput::new(&self.output)),
+                            .h(px(32.))
+                            .child(NyaInput::new(&parameter.input)),
+                    );
+            }
+            if selected.action.result == ResultKind::Text {
+                form = form
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(palette.text_muted))
+                            .child(t!("plugins.explicitText")),
                     )
-                    .child(NyaButton::new("plugins-copy", t!("plugins.copy")).on_click(
-                        cx.listener(|this, _, window, cx| {
-                            let value = this.output.read(cx).value(cx);
-                            let copied = !value.is_empty();
-                            if copied {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
-                            }
-                            window.notify_operation(
-                                "copy-plugin-result",
-                                if copied {
-                                    NyaNotificationKind::Success
-                                } else {
-                                    NyaNotificationKind::Warning
-                                },
-                                t!(if copied {
-                                    "common.copied"
-                                } else {
-                                    "common.nothingToCopy"
-                                })
-                                .to_string(),
-                                cx,
-                            );
-                        }),
-                    ));
+                    .child(
+                        div()
+                            .w_full()
+                            .flex_none()
+                            .h(px(110.))
+                            .child(NyaInput::new(&self.text)),
+                    );
+            }
+            let mut action_row = div().flex_none().flex().items_center().gap_1().child(
+                div().flex_1().min_w_0().child(
+                    NyaButton::new("plugins-invoke", t!("plugins.invoke"))
+                        .icon("icons/play.svg")
+                        .small()
+                        .full_width()
+                        .tooltip(t!("plugins.invoke"))
+                        .variant(NyaButtonVariant::Primary)
+                        .loading(self.can_cancel())
+                        .disabled(self.busy())
+                        .on_click(cx.listener(|this, _, _, cx| this.invoke(cx))),
+                ),
+            );
+            if self.can_cancel() {
+                action_row = action_row.child(
+                    NyaButton::new("plugins-cancel", t!("plugins.cancel"))
+                        .small()
+                        .compact()
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+                );
+            }
+            form = form.child(action_row);
+            bench = bench.child(form);
+        }
+
+        if let Some(preview) = &self.preview {
+            let mut result = div()
+                .w_full()
+                .min_w_0()
+                .flex_none()
+                .p(px(10.))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(palette.border))
+                .bg(rgb(palette.surface_elevated))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(preview.title.clone()),
+                        )
+                        .child(
+                            NyaButton::new("plugins-copy", "")
+                                .icon("icons/copy.svg")
+                                .small()
+                                .compact()
+                                .variant(NyaButtonVariant::Ghost)
+                                .tooltip(t!("plugins.copy"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let value = this.output.read(cx).value(cx);
+                                    let copied = !value.is_empty();
+                                    if copied {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            value,
+                                        ));
+                                    }
+                                    window.notify_operation(
+                                        "copy-plugin-result",
+                                        if copied {
+                                            NyaNotificationKind::Success
+                                        } else {
+                                            NyaNotificationKind::Warning
+                                        },
+                                        t!(if copied {
+                                            "common.copied"
+                                        } else {
+                                            "common.nothingToCopy"
+                                        })
+                                        .to_string(),
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .flex_none()
+                        .h(px(150.))
+                        .child(NyaInput::new(&self.output)),
+                );
             if preview.kind == ResultKind::Command {
                 result = result.child(
                     div()
                         .flex()
-                        .flex_wrap()
-                        .gap_2()
+                        .flex_col()
+                        .gap_1()
                         .child(
                             NyaButton::new("plugins-fill", t!("plugins.fill"))
+                                .small()
                                 .full_width()
+                                .variant(NyaButtonVariant::Primary)
                                 .tooltip(t!("plugins.fill"))
                                 .on_click(cx.listener(|this, _, _, cx| this.fill(false, cx))),
                         )
                         .child(
                             NyaButton::new("plugins-replace", t!("plugins.replace"))
+                                .small()
                                 .full_width()
                                 .tooltip(t!("plugins.replace"))
                                 .on_click(cx.listener(|this, _, _, cx| this.fill(true, cx))),
@@ -1304,6 +1874,7 @@ impl Render for PluginPanel {
             } else {
                 result = result.child(
                     NyaButton::new("plugins-reuse", t!("plugins.reuse"))
+                        .small()
                         .full_width()
                         .tooltip(t!("plugins.reuse"))
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1313,8 +1884,100 @@ impl Render for PluginPanel {
                         })),
                 );
             }
-            content = content.child(result);
+            bench = bench.child(result);
         }
+
+        bench
+    }
+}
+
+impl Render for PluginPanel {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = self
+            .app
+            .upgrade()
+            .map(|app| app.read(cx).theme_palette())
+            .unwrap_or_else(|| crate::theme::theme_palette("dark"));
+        let snapshot = self.process.read(cx).snapshot.clone();
+        let query = self.search.read(cx).value(cx).trim().to_lowercase();
+        let toolbar = self.toolbar(snapshot.plugins.len(), palette, cx);
+
+        let mut content = div()
+            .id("plugins-scroll")
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .px_2()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_1();
+
+        if !self.status.is_empty() {
+            content = content.child(self.render_status_banner(palette, cx));
+        }
+        if let Some(error) = &snapshot.startup_error {
+            content = content.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(palette.danger))
+                    .text_xs()
+                    .text_color(rgb(palette.danger))
+                    .child(error.message.clone()),
+            );
+        }
+
+        if self.selected.is_some() || self.preview.is_some() {
+            content = content.child(self.render_workbench(palette, cx));
+        } else {
+            if self.developer_tools {
+                content = content.child(
+                    NyaButton::new("extensions-development-load", t!("plugins.development"))
+                        .icon("icons/session/folder-open.svg")
+                        .small()
+                        .full_width()
+                        .disabled(self.busy())
+                        .on_click(cx.listener(|this, _, _, cx| this.browse(true, cx))),
+                );
+            }
+
+            if self.discover {
+                let (store_matches, store_view) =
+                    self.render_store_section(&snapshot, &query, palette, cx);
+                let (native_matches, native_view) = self.native_list(&query, palette, cx);
+                if let Some(store_view) = store_view {
+                    content = content.child(store_view);
+                }
+                content = content.child(native_view);
+                if !query.is_empty() && store_matches == 0 && native_matches == 0 {
+                    content = content.child(empty_hint(
+                        "icons/ai/search.svg",
+                        t!("plugins.noMatches").to_string(),
+                        palette,
+                    ));
+                }
+            } else {
+                let (installed_matches, installed_view) =
+                    self.render_installed_section(&snapshot, &query, palette, cx);
+                let (native_matches, native_view) = self.native_list(&query, palette, cx);
+                content = content.child(installed_view);
+                if !self.tool_panels.is_empty() && query.is_empty() {
+                    content = content.child(self.render_tool_panels(&snapshot, palette, cx));
+                }
+                content = content.child(native_view);
+                if !query.is_empty() && installed_matches == 0 && native_matches == 0 {
+                    content = content.child(empty_hint(
+                        "icons/ai/search.svg",
+                        t!("plugins.noMatches").to_string(),
+                        palette,
+                    ));
+                }
+            }
+        }
+
         div()
             .size_full()
             .min_w_0()
@@ -1325,6 +1988,7 @@ impl Render for PluginPanel {
             .text_color(rgb(palette.text))
             .text_sm()
             .whitespace_normal()
+            .child(toolbar)
             .child(content.overflow_y_scrollbar())
     }
 }
@@ -1598,6 +2262,63 @@ mod tests {
             app.open_panel(NavItem::Plugins, cx);
         });
         vcx.run_until_parked();
+        // Sidebar rows and their actions must fit without horizontal scrolling,
+        // including at the minimum practical panel width.
+        for width in [240., 360., 500.] {
+            vcx.simulate_resize(gpui::size(gpui::px(width), gpui::px(700.)));
+            for discover in [true, false] {
+                vcx.update_entity(&panel, |panel, cx| {
+                    panel.discover = discover;
+                    cx.notify();
+                });
+                for _ in 0..3 {
+                    vcx.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                    vcx.run_until_parked();
+                }
+                for selector in ["native-row-spice", "native-row-spice-actions"] {
+                    let bounds = vcx.debug_bounds(selector).unwrap();
+                    assert!(bounds.left() >= gpui::px(0.));
+                    assert!(bounds.right() <= gpui::px(width));
+                    assert!(bounds.size.height <= gpui::px(110.));
+                }
+                if discover {
+                    let store_empty = vcx.debug_bounds("extensions-store-empty").unwrap();
+                    assert!(store_empty.left() >= gpui::px(0.));
+                    assert!(store_empty.right() <= gpui::px(width));
+                } else {
+                    let plugin_bounds = vcx.debug_bounds("plugin-row-diagnostic-command").unwrap();
+                    let native_bounds = vcx.debug_bounds("native-row-spice").unwrap();
+                    assert!(plugin_bounds.top() < native_bounds.top());
+                }
+            }
+        }
+        vcx.update_entity(&panel, |panel, cx| {
+            panel
+                .search
+                .update(cx, |search, cx| search.set_content("VnC", cx));
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(vcx.debug_bounds("native-row-vnc").is_some());
+        assert!(vcx.debug_bounds("native-row-spice").is_none());
+        assert!(vcx.debug_bounds("plugin-row-diagnostic-command").is_none());
+        vcx.simulate_resize(gpui::size(gpui::px(240.), gpui::px(700.)));
+        vcx.update_entity(&panel, |panel, cx| {
+            panel.search.update(cx, |search, cx| search.clear(cx));
+            panel.expanded_plugin = Some("diagnostic-command".into());
+            cx.notify();
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let card_bounds = vcx.debug_bounds("plugin-card-diagnostic-command").unwrap();
+        assert!(card_bounds.left() >= gpui::px(0.));
+        assert!(card_bounds.right() <= gpui::px(240.));
         let contribution = service.snapshot().contributions[0].clone();
         vcx.update_entity(&panel, |panel, cx| {
             panel.select(contribution, cx);
@@ -1622,6 +2343,9 @@ mod tests {
             });
             vcx.run_until_parked();
         }
+        let back_bounds = vcx.debug_bounds("plugins-back-to-list").unwrap();
+        assert!(back_bounds.left() >= gpui::px(0.));
+        assert!(back_bounds.right() <= gpui::px(240.));
         let generation = vcx.read(|cx| panel.read(cx).generation);
         vcx.update_entity(&app, |app, cx| {
             app.hide_activity_entry("plugins".into(), cx);
