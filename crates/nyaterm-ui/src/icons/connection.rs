@@ -250,7 +250,7 @@ pub fn default_connection_icon_for_kind(kind: &str) -> IconDef {
         "VNC" => "vnc",
         "SPICE" => "spice",
         "FTP" => "ftp",
-        "ADB" | "Android" | "Android (ADB)" => "android",
+        "ADB" => "android",
         _ => DEFAULT_CONNECTION_ICON,
     };
     lookup(key).expect("protocol defaults must be registered connection icons")
@@ -446,7 +446,7 @@ mod tests {
         }))
         .expect("saved Android connection must load without an explicit icon");
         let android = lookup("android").expect("Android logo must be registered");
-        for kind in [connection.kind_label(), "Android (ADB)", "ADB", "Android"] {
+        for kind in [connection.kind_label(), "ADB"] {
             assert_eq!(
                 resolve_connection_icon(connection.icon.as_deref(), kind),
                 android
