@@ -268,6 +268,27 @@ pub(super) fn extension_row(
 }
 
 impl PluginPanel {
+    pub(super) fn install_native(&self, id: NativeComponentId, cx: &mut Context<Self>) {
+        let app = self.app.clone();
+        // Acquiring the service reads this panel through NyaTermApp. Release the
+        // click listener's panel update before entering that application flow.
+        cx.defer(move |cx| {
+            let _ = app.update(cx, |app, cx| {
+                app.ensure_native_component(
+                    id,
+                    |_| true,
+                    |app, result, cx| {
+                        if let Err(error) = result {
+                            app.shell.set_status(error.message);
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
     pub(super) fn toolbar(
         &self,
         installed_count: usize,
@@ -473,19 +494,7 @@ impl PluginPanel {
                     .small()
                     .compact()
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let _ = this.app.update(cx, |app, cx| {
-                            app.ensure_native_component(
-                                id,
-                                |_| true,
-                                |app, result, cx| {
-                                    if let Err(error) = result {
-                                        app.shell.set_status(error.message);
-                                    }
-                                    cx.notify();
-                                },
-                                cx,
-                            )
-                        });
+                        this.install_native(id, cx);
                     })),
                 );
             }

@@ -2001,12 +2001,42 @@ mod tests {
     use crate::models::{ActivityBarZone, NavItem};
     use futures::executor::block_on;
     use gpui::{AppContext, TestAppContext};
+    use nyaterm_core::plugins::native::NativeComponentId;
     use nyaterm_core::runtime::{AppRuntime, RuntimeMode};
     use nyaterm_core::test_support::TestTempDir;
     use nyaterm_plugin_host::service::{PluginOperation, PluginService};
     use rust_i18n::t;
     use std::path::Path;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn native_install_releases_panel_update_before_acquiring_service() {
+        let root = TestTempDir::new("nyaterm-native-install-panel");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "native-install");
+        let process = cx.new(|_| PluginProcess::empty());
+        let panel = cx.new(|cx| PluginPanel::new(app.downgrade(), process, cx));
+        cx.update_entity(&app, |app, _| {
+            app.plugins.panel = panel.clone();
+            app.plugins.native_launch_fixture = None;
+        });
+
+        for id in NativeComponentId::ALL {
+            cx.update_entity(&app, |app, _| app.shell.set_status("before install"));
+            // Exercise the button's handler while the panel is leased, without
+            // a launch fixture that would bypass the real panel/service lookup.
+            cx.update_entity(&panel, |panel, cx| {
+                panel.install_native(id, cx);
+                assert_eq!(app.read(cx).shell.status(), "before install");
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                cx.read(|cx| app.read(cx).shell.status().to_string()),
+                "Native component request cancelled"
+            );
+        }
+    }
 
     #[test]
     fn catalog_changes_preserve_management_waiter_and_success_or_error_feedback() {
