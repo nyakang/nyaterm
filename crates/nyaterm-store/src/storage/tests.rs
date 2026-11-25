@@ -3617,9 +3617,7 @@ fn save_general_settings_preserves_every_shipped_ui_language() {
 
     for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
         summary.language = language.to_string();
-        let saved = store
-            .save_general_settings(&summary)
-            .expect("save general");
+        let saved = store.save_general_settings(&summary).expect("save general");
         assert_eq!(saved.language, language, "saved summary for {language}");
         let raw = store.load_settings_value().expect("raw");
         assert_eq!(

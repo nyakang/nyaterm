@@ -40,12 +40,15 @@ fn maps_google_language_codes_like_legacy() {
 
 #[test]
 fn maps_brazilian_portuguese_language_codes() {
-    assert_eq!(google_translate_lang("pt-BR"), "pt");
-    assert_eq!(microsoft_translate_lang("pt-BR"), "pt-BR");
-    assert_eq!(deepl_translate_lang("pt-BR"), "PT-BR");
-    assert_eq!(baidu_translate_lang("pt-BR"), "pt");
-    assert_eq!(ali_translate_lang("pt-BR"), "pt");
-    assert_eq!(youdao_translate_lang("pt-BR"), "pt");
+    // The translation picker stores the legacy "pt" identifier.
+    for language in ["pt", "pt-BR", "pt_BR"] {
+        assert_eq!(google_translate_lang(language), "pt");
+        assert_eq!(microsoft_translate_lang(language), "pt-BR");
+        assert_eq!(deepl_translate_lang(language), "PT-BR");
+        assert_eq!(baidu_translate_lang(language), "pt");
+        assert_eq!(ali_translate_lang(language), "pt");
+        assert_eq!(youdao_translate_lang(language), "pt");
+    }
 }
 
 #[test]

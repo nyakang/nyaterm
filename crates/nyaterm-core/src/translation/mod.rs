@@ -116,7 +116,7 @@ pub fn microsoft_translate_lang(lang: &str) -> &str {
     match lang.trim() {
         "zh-CN" | "zh_CN" | "zh" => "zh-Hans",
         "zh-TW" | "zh_TW" => "zh-Hant",
-        "pt-BR" | "pt_BR" => "pt-BR",
+        "pt" | "pt-BR" | "pt_BR" => "pt-BR",
         "" => "zh-Hans",
         value => value,
     }
