@@ -491,7 +491,10 @@ impl PluginPanel {
         let task = match service.native.submit(id, action) {
             Ok(task) => task,
             Err(error) => {
-                self.set_status(error.message, StatusTone::Error);
+                self.set_status(
+                    crate::features::plugins::native::native_error_message(&error),
+                    StatusTone::Error,
+                );
                 cx.notify();
                 return;
             }
@@ -503,7 +506,10 @@ impl PluginPanel {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(Ok(())) => this.set_status(t!("plugins.nativeDone"), StatusTone::Success),
-                    Ok(Err(error)) => this.set_status(error.message, StatusTone::Error),
+                    Ok(Err(error)) => this.set_status(
+                        crate::features::plugins::native::native_error_message(&error),
+                        StatusTone::Error,
+                    ),
                     Err(_) => this.set_status(t!("plugins.unavailable"), StatusTone::Error),
                 }
                 cx.notify();

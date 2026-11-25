@@ -39,6 +39,8 @@ pub enum ErrorCode {
     Storage,
     Io,
     Shutdown,
+    NativeCatalogUnavailable,
+    NativeNetwork,
 }
 
 /// Diagnostics are deliberately bounded and never include guest trap stacks or input values.

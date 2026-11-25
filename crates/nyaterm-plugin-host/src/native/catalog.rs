@@ -10,17 +10,34 @@ use crate::package::io_error;
 
 const INDEX: &str = "https://downloads.nyaterm.app/native/v1/index.json";
 
+pub(super) fn network_error() -> PluginError {
+    PluginError::new(
+        ErrorCode::NativeNetwork,
+        "Cannot download native components; check the network and retry",
+    )
+}
+
+fn check_status(status: reqwest::StatusCode) -> PluginResult<()> {
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(PluginError::new(
+            ErrorCode::NativeCatalogUnavailable,
+            "Native component releases are not published yet; retry later or import an official signed package",
+        ));
+    }
+    if !status.is_success() {
+        return Err(network_error());
+    }
+    Ok(())
+}
+
 fn download(
     url: &str,
     limit: u64,
     cancel: &impl Fn() -> PluginResult<()>,
 ) -> PluginResult<Vec<u8>> {
     cancel()?;
-    let mut response = client()?
-        .get(url)
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|_| io_error())?;
+    let mut response = client()?.get(url).send().map_err(|_| network_error())?;
+    check_status(response.status())?;
     if response.content_length().is_some_and(|size| size > limit) {
         return Err(io_error());
     }
@@ -28,7 +45,7 @@ fn download(
     let mut buffer = [0; 16384];
     loop {
         cancel()?;
-        let count = response.read(&mut buffer).map_err(|_| io_error())?;
+        let count = response.read(&mut buffer).map_err(|_| network_error())?;
         if count == 0 {
             return Ok(bytes);
         }
@@ -93,7 +110,29 @@ fn parse(bytes: &[u8], signature: &[u8], key: &str) -> PluginResult<NativeIndex>
 
 #[cfg(test)]
 mod tests {
-    use crate::native::catalog::parse;
+    use crate::native::catalog::{check_status, parse};
+    use nyaterm_core::plugins::ErrorCode;
+
+    #[test]
+    fn unpublished_catalog_is_distinct_from_network_failure() {
+        assert_eq!(
+            check_status(reqwest::StatusCode::NOT_FOUND)
+                .unwrap_err()
+                .code,
+            ErrorCode::NativeCatalogUnavailable
+        );
+        for status in [
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            reqwest::StatusCode::FOUND,
+        ] {
+            assert_eq!(
+                check_status(status).unwrap_err().code,
+                ErrorCode::NativeNetwork
+            );
+        }
+        assert!(check_status(reqwest::StatusCode::OK).is_ok());
+    }
 
     #[test]
     fn index_authentication_precedes_release_selection() {

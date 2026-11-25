@@ -13,6 +13,17 @@ fn interrupted() -> PluginError {
     PluginError::new(ErrorCode::Cancelled, "Native component request cancelled")
 }
 
+pub(in crate::features::plugins) fn native_error_message(error: &PluginError) -> String {
+    let key = match error.code {
+        ErrorCode::NativeCatalogUnavailable => "plugins.nativeCatalogUnavailable",
+        ErrorCode::NativeNetwork => "plugins.nativeNetworkError",
+        ErrorCode::Incompatible => "plugins.nativeIncompatibleError",
+        ErrorCode::InvalidManifest => "plugins.nativeVerificationError",
+        _ => return error.message.clone(),
+    };
+    t!(key).to_string()
+}
+
 pub(in crate::features::plugins) fn native_display_name(id: NativeComponentId) -> String {
     let key = format!("plugins.nativeNames.{}", id.slug());
     t!(&key).to_string()
@@ -140,6 +151,10 @@ impl NyaTermApp {
                 service.acquire(id)?.await.map_err(|_| interrupted())?
             }
             .await;
+            let result = result.map_err(|mut error| {
+                error.message = native_error_message(&error);
+                error
+            });
             let _ = this.update(cx, |app, cx| complete(app, result, cx));
         })
         .detach();

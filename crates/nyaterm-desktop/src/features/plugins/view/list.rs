@@ -1,4 +1,6 @@
-use crate::features::plugins::native::{native_description, native_display_name};
+use crate::features::plugins::native::{
+    native_description, native_display_name, native_error_message,
+};
 use crate::features::plugins::view::{PendingKind, PluginPanel};
 use crate::theme::ThemePalette;
 use gpui::{
@@ -490,10 +492,10 @@ impl PluginPanel {
                 actions = actions.child(
                     NyaButton::new(
                         format!("native-install-{}", id.slug()),
-                        t!(if component.status == NativeStatus::Missing {
-                            "plugins.install"
-                        } else {
-                            "plugins.nativeDownload"
+                        t!(match component.status {
+                            NativeStatus::Missing => "plugins.install",
+                            NativeStatus::Damaged => "plugins.nativeRepair",
+                            _ => "plugins.update",
                         }),
                     )
                     .small()
@@ -635,7 +637,7 @@ impl PluginPanel {
                         .border_color(rgb(palette.danger))
                         .text_xs()
                         .text_color(rgb(palette.danger))
-                        .child(error.message),
+                        .child(native_error_message(&error)),
                 );
             }
         }

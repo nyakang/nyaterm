@@ -377,7 +377,7 @@ fn change(
                         .get(&release.as_ref().ok_or_else(io_error)?.url)
                         .send()
                         .and_then(|r| r.error_for_status())
-                        .map_err(|_| io_error())?;
+                        .map_err(|_| catalog::network_error())?;
                     if response
                         .content_length()
                         .is_some_and(|n| n > MAX_ARCHIVE_BYTES)
@@ -391,7 +391,9 @@ fn change(
                     let mut total = 0u64;
                     loop {
                         cancel()?;
-                        let n = response.read(&mut buffer).map_err(|_| io_error())?;
+                        let n = response
+                            .read(&mut buffer)
+                            .map_err(|_| catalog::network_error())?;
                         if n == 0 {
                             break;
                         }
