@@ -5,7 +5,8 @@ use super::{
 use nyaterm_transport::{SftpSettings, SshSessionConfig};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{
-    Attrs, Data, FileAttributes, Handle, OpenFlags, Packet, Status, StatusCode, Version,
+    Attrs, Data, FileAttributes, Handle, OpenFlags, Packet, SftpHandle, SftpString, Status,
+    StatusCode, Version,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -87,10 +88,11 @@ impl russh_sftp::server::Handler for Peer {
     async fn open(
         &mut self,
         id: u32,
-        filename: String,
+        filename: SftpString,
         flags: OpenFlags,
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
+        let filename = std::str::from_utf8(filename.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         if flags.contains(OpenFlags::CREATE) {
             files.files.insert(filename.clone(), Vec::new());
@@ -109,17 +111,18 @@ impl russh_sftp::server::Handler for Peer {
         }
         Ok(Handle {
             id,
-            handle: filename,
+            handle: filename.into(),
         })
     }
 
     async fn write(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
+        let handle = std::str::from_utf8(handle.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         let content = files.files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?;
         let offset = offset as usize;
@@ -131,10 +134,11 @@ impl russh_sftp::server::Handler for Peer {
     async fn read(
         &mut self,
         id: u32,
-        handle: String,
+        handle: SftpHandle,
         offset: u64,
         len: u32,
     ) -> Result<Data, Self::Error> {
+        let handle = std::str::from_utf8(handle.as_bytes()).unwrap().to_owned();
         let files = self.files.lock().unwrap();
         let content = files.files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
         let offset = offset as usize;
@@ -148,11 +152,12 @@ impl russh_sftp::server::Handler for Peer {
         })
     }
 
-    async fn close(&mut self, id: u32, _handle: String) -> Result<Status, Self::Error> {
+    async fn close(&mut self, id: u32, _handle: SftpHandle) -> Result<Status, Self::Error> {
         Ok(ok(id))
     }
 
-    async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+    async fn stat(&mut self, id: u32, path: SftpString) -> Result<Attrs, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         let files = self.files.lock().unwrap();
         let content = files.files.get(&path).ok_or(StatusCode::NoSuchFile)?;
         Ok(Attrs {
@@ -177,9 +182,10 @@ impl russh_sftp::server::Handler for Peer {
     async fn setstat(
         &mut self,
         id: u32,
-        path: String,
+        path: SftpString,
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
+        let path = std::str::from_utf8(path.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         if attrs.uid.is_some() || attrs.gid.is_some() {
             files.ownership_changes += 1;
@@ -212,14 +218,17 @@ impl russh_sftp::server::Handler for Peer {
     async fn rename(
         &mut self,
         id: u32,
-        oldpath: String,
-        newpath: String,
+        oldpath: SftpString,
+        newpath: SftpString,
     ) -> Result<Status, Self::Error> {
+        let oldpath = std::str::from_utf8(oldpath.as_bytes()).unwrap().to_owned();
+        let newpath = std::str::from_utf8(newpath.as_bytes()).unwrap().to_owned();
         rename(&mut self.files.lock().unwrap(), &oldpath, &newpath, false)?;
         Ok(ok(id))
     }
 
-    async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+    async fn remove(&mut self, id: u32, filename: SftpString) -> Result<Status, Self::Error> {
+        let filename = std::str::from_utf8(filename.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
         if files.fail_cleanup && filename.contains(".nyaterm-backup-") {
             return Err(StatusCode::Failure);
