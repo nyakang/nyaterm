@@ -286,9 +286,14 @@ def spice_file_names(root: Path) -> list[str]:
 
 
 def verify_native_resources(read, target: str, *, names=None) -> None:
-    import spice_release
-    verify_android_resources(read, target)
-    spice_release.verify_resources(read, target, names=names)
+    for name in [*windows_portable.LAYOUT["native_helper_files"], "spice/SOURCE.json", "android-resources.json"]:
+        if "windows" not in target:
+            name = name.removesuffix(".exe")
+        try:
+            read(name)
+        except (KeyError, FileNotFoundError):
+            continue
+        raise RuntimeError("Base package contains optional native component: " + name)
 
 
 def verify_android_resources(read, target: str) -> None:
@@ -596,7 +601,6 @@ def verify_windows_msi_database(metadata: dict, target: str, version: str) -> di
         files[relative] = row["File"]
     required = {"NyaTerm.exe", "LICENSE", "VERSION", "icon.ico", *helper_filenames(target),
                 *(name for name in windows_portable.LAYOUT["support_files"] if not name.startswith("conpty/")),
-                *windows_portable.LAYOUT["spice_files"][target],
                 "conpty/LICENSE.txt", *(f"conpty/{p.as_posix()}" for p in package_native.conpty_files(target))}
     if set(files) != required or len(components) != len(files):
         raise RuntimeError(f"MSI installed file set mismatch: missing {sorted(required - files.keys())}, "

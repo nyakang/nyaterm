@@ -55,13 +55,14 @@ class SpiceReleaseTests(unittest.TestCase):
     def test_every_release_target_has_a_complete_runtime_and_helper_contract(self):
         for target in TARGETS:
             with self.subTest(target=target):
-                self.assertIn("nyaterm-spice-helper", package_native.helper_bins(target))
+                self.assertNotIn("nyaterm-spice-helper", package_native.helper_bins(target))
+                self.assertTrue(any("component_spice" in name for name in package_native.component_artifact_names(target, "2.0.8")))
                 entries = spice_fixture(target)
                 with mock.patch.object(spice_release, "locked_files", side_effect=fixture_spice_locked_files):
                     spice_release.verify_resources(entries.__getitem__, target)
                 if "windows" in target:
                     self.assertEqual(set(entries), set(windows_portable.LAYOUT["spice_files"][target]))
-                    self.assertTrue(set(entries) <= set(windows_portable.payload_files(target)))
+                    self.assertTrue(set(entries).isdisjoint(windows_portable.payload_files(target)))
 
     def test_artifact_rejects_missing_plugins_modified_bytes_and_wrong_target(self):
         target = "x86_64-pc-windows-msvc"

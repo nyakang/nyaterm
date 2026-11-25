@@ -159,6 +159,7 @@ impl NyaTermApp {
             self.notify_locked_tab_close_blocked(cx);
             return;
         }
+        self.extension_session_event(&session_id, false, cx);
         let preferred_next = self.shell.terminal_window_tree().and_then(|mut root| {
             let group = root.leaf_for_tab(&session_id).map(str::to_string)?;
             let groups = root.leaf_ids();

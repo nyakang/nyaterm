@@ -203,7 +203,7 @@ fn score_term(item: &QuickSwitchItem, term: &SearchTerm, fuzzy: Option<u32>) -> 
                             .is_some_and(|detail| detail.to_lowercase().contains(query)),
                     ) * 160
                 }
-                QuickSwitchItem::Session { .. } => 0,
+                QuickSwitchItem::Session { .. } | QuickSwitchItem::Extension { .. } => 0,
             };
             // A mixed name/number query must not fuzzy-match scattered digits.
             let fuzzy_score = if query.bytes().any(|ch| ch.is_ascii_digit()) {
@@ -261,7 +261,7 @@ fn item_endpoint(item: &QuickSwitchItem) -> Option<(&str, u16)> {
             | ConnectionType::LocalTerminal { .. }
             | ConnectionType::Serial { .. } => None,
         },
-        QuickSwitchItem::Pending { .. } => None,
+        QuickSwitchItem::Pending { .. } | QuickSwitchItem::Extension { .. } => None,
     }
 }
 

@@ -67,11 +67,12 @@ only sibling `$ORIGIN` paths are accepted, every non-libc dependency must be
 bundled, and system libc/loader copies are rejected. The application/helper
 SONAME allowlist is not widened to accept decoder dependencies. CPAL playback
 uses focal's system `libasound2`. The compatibility DEB registers `.vv` as an
-alternate handler. Extracted tarball/DEB smoke checks load video elements and
-exercise the packaged SPICE helper handshake/disconnect without a guest.
+alternate handler. Component ZIP smoke checks load video elements and exercise the packaged SPICE
+helper handshake/disconnect without a guest; application archives remain slim.
 
-The archive includes `abi-report.json`, all helpers, ADB, FFmpeg, Android resource
-hashes, a portable-mode marker, license, target-side read-only diagnosis and Chinese offline instructions. It
+The slim archive includes `abi-report.json`, the application, MCP, a portable-mode
+marker, license, read-only diagnosis and Chinese offline instructions. Protocol
+helpers, ADB and FFmpeg are separate signed components. The application archive
 also includes a **private CPU OpenGL fallback runtime**. `start-nyaterm.sh` now
 defaults to the system graphics stack, where GPUI prefers available hardware GPUs;
 `start-nyaterm.sh --software` selects the bundled fallback without requiring
@@ -111,7 +112,7 @@ existing single-instance lock. Restore only backups supported by the destination
 version, and keep the original backup before testing an older compatibility build.
 
 Debian `Depends` is generated with focal's `dpkg-shlibdeps` over the application
-and all five helpers, ADB and FFmpeg, plus `bash` for the launcher. The SPICE decoder
+and MCP, plus `bash` for the launcher. Protocol components are installed separately. The SPICE decoder
 closure is private and audited separately; its only external dependencies are
 glibc/loader components. Missing package ownership or
 dependency metadata fails packaging. The SONAME audit remains a separate ABI gate.
@@ -255,3 +256,7 @@ userspace, **not** the destination's Linux 5.4 kernel, custom security patches,
 real NVIDIA driver or real network services. Finish acceptance on that machine
 using `OFFLINE-README.zh-CN.md`. No private glibc or system driver replacement is
 shipped; default system-driver mode still needs a working graphics driver.
+
+## Native components
+
+The application archive is slim. RDP, VNC, SPICE and Android are emitted as four separate component ZIPs with the `x86_64-unknown-linux-gnu-glibc231` identity. CI signs their manifests and publishes them before the application. First use installs a matching component through Plugins; offline users must import matching signed ZIPs. See `crates/nyaterm-plugin-host/README.md` for migration and publication details.

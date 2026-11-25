@@ -136,16 +136,32 @@ def main():
         with tarfile.open(archives[0]) as archive:
             archive.extractall(directory)
         application = next(Path(directory).glob("*/nyaterm"))
-        android_probe(application)
-        spice_probe(application)
+        # Exercise the independently packaged components before CI signs them.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
+        import native_components
+        components = list(dist.glob("*_linux_x64_glibc231_component_*.zip"))
+        if len(components) != 4:
+            raise RuntimeError("expected all four focal native components")
+        for component in components:
+            manifest, files = native_components.inspect(component)
+            root = Path(directory) / ("component-" + manifest["component"])
+            for name, entry in manifest["files"].items():
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(files[name])
+                destination.chmod(0o755 if entry["executable"] else 0o644)
+            if manifest["component"] == "android":
+                android_probe(root / manifest["entry"])
+            if manifest["component"] == "spice":
+                spice_probe(root / manifest["entry"])
         debs = list(dist.glob("NyaTerm_*_linux_x64_glibc231.deb"))
         if debs:
             if len(debs) != 1:
                 raise RuntimeError("expected one focal deb")
             installed = Path(directory) / "installed"
             subprocess.run(["dpkg-deb", "--extract", str(debs[0]), str(installed)], check=True)
-            android_probe(installed / "opt/nyaterm-compat/nyaterm")
-            spice_probe(installed / "opt/nyaterm-compat/nyaterm")
+            if not (installed / "opt/nyaterm-compat/nyaterm").is_file():
+                raise RuntimeError("compatibility DEB is missing the application")
         (output / "android-runtime.txt").write_text("PASS: packaged ADB, FFmpeg loader, helper IPC and checksums\n")
         (output / "spice-runtime.txt").write_text("PASS: packaged SPICE libraries, video elements, helper IPC and checksums\n")
         with (output / "application.log").open("w") as log:

@@ -24,6 +24,11 @@ export FFMPEG_DIR="$NYATERM_ANDROID_DEPS_DIR/ffmpeg/x86_64-unknown-linux-gnu"
 export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
 # Default members include the MCP bridge; the Windows-only RDP integration is
 # not shipped in the focal package.
+export NYATERM_COMPONENT_BUILD_ID="$(git rev-parse HEAD)"
+if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+  export NYATERM_COMPONENT_BUILD_ID="${NYATERM_COMPONENT_BUILD_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+fi
+export NYATERM_COMPONENT_TARGET=x86_64-unknown-linux-gnu-glibc231
 cargo build --release --locked --target x86_64-unknown-linux-gnu
 rustc -Vv > "$CARGO_TARGET_DIR/compiler.txt"
 binary_dir="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release"

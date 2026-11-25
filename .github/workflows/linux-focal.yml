@@ -18,6 +18,7 @@ permissions:
 
 env:
   NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+  NYATERM_EXTENSION_PUBLIC_KEY: ${{ vars.NYATERM_EXTENSION_PUBLIC_KEY }}
 
 jobs:
   build:
@@ -57,8 +58,10 @@ jobs:
           NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
         run: >-
           docker run --rm --user "$(id -u):$(id -g)"
+          -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT
           -e NYATERM_FOCAL_DEB
           -e NYATERM_GITHUB_GIST_CLIENT_ID
+          -e NYATERM_EXTENSION_PUBLIC_KEY
           -v "$PWD:/src" -w /src nyaterm-focal
       - name: Verify CPU fallback without Vulkan or NVIDIA
         run: >-

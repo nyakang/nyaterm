@@ -74,6 +74,74 @@ impl NyaTermApp {
         config: SessionLaunchConfig,
         cx: &mut Context<Self>,
     ) {
+        use nyaterm_core::plugins::native::NativeComponentId;
+        if self.remote_desktop.helper_launches.contains_key(session_id) {
+            return;
+        }
+        let Some(session) = self.remote_desktop.sessions.get(session_id) else {
+            return;
+        };
+        let token = session.start_token.clone();
+        let id = session_id.to_string();
+        self.remote_desktop
+            .helper_launches
+            .insert(id.clone(), token.clone());
+        let component = match &config {
+            SessionLaunchConfig::Rdp(_) => NativeComponentId::Rdp,
+            SessionLaunchConfig::Vnc(_) => NativeComponentId::Vnc,
+            SessionLaunchConfig::Spice(_) => NativeComponentId::Spice,
+            _ => return,
+        };
+        let request_id = id.clone();
+        let request_token = token.clone();
+        self.ensure_native_component(
+            component,
+            move |app| {
+                app.remote_desktop
+                    .start_matches(&request_id, &request_token)
+            },
+            move |app, result, cx| {
+                if app.remote_desktop.helper_launches.get(&id) != Some(&token) {
+                    return;
+                }
+                app.remote_desktop.helper_launches.remove(&id);
+                if !app.remote_desktop.start_matches(&id, &token) {
+                    return;
+                }
+                match result {
+                    Ok(component) => {
+                        app.spawn_remote_desktop_helper_with_component(&id, config, component, cx)
+                    }
+                    Err(error) => {
+                        app.remote_desktop.routes.remove(&id);
+                        app.remote_desktop.spice_routes.remove(&id);
+                        if let Some(session) = app.remote_desktop.sessions.get_mut(&id) {
+                            session.start_attempt.cancel();
+                            super::events::set_remote_view_error(
+                                session,
+                                nyaterm_remote_desktop::RdpError::new(
+                                    nyaterm_remote_desktop::RdpErrorKind::HelperMissing,
+                                    error.message,
+                                )
+                                .into(),
+                            );
+                        }
+                        app.settle_remote_desktop_restore(cx);
+                        cx.notify();
+                    }
+                }
+            },
+            cx,
+        );
+    }
+
+    fn spawn_remote_desktop_helper_with_component(
+        &mut self,
+        session_id: &str,
+        config: SessionLaunchConfig,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+        cx: &mut Context<Self>,
+    ) {
         if self.remote_desktop.helper_launches.contains_key(session_id) {
             return;
         }
@@ -108,17 +176,17 @@ impl NyaTermApp {
                 } else {
                     match (&manager, config) {
                         (HelperManager::Rdp(manager), SessionLaunchConfig::Rdp(config)) => manager
-                            .create_session_with_id(id.clone(), config)
+                            .create_session_with_launch(id.clone(), config, component)
                             .map(|_| ())
                             .map_err(Into::into),
                         (HelperManager::Vnc(manager), SessionLaunchConfig::Vnc(config)) => manager
-                            .create_session_with_id(id.clone(), config)
+                            .create_session_with_launch(id.clone(), config, component)
                             .map(|_| ())
                             .map_err(Into::into),
                         (HelperManager::Spice(manager), SessionLaunchConfig::Spice(mut config)) => {
                             config.session.session_id = id.clone();
                             manager
-                                .create_session(config.session)
+                                .create_session_with_launch(config.session, component)
                                 .map(|_| ())
                                 .map_err(super::spice::spice_error)
                         }

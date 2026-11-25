@@ -323,6 +323,7 @@ impl EventQueue {
 }
 
 struct SessionRecord {
+    _component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     state: Arc<Mutex<RdpSessionState>>,
     capabilities: Arc<Mutex<Option<RdpServerCapabilities>>>,
     queue: Arc<EventQueue>,
@@ -385,7 +386,25 @@ impl RdpSessionManager {
     pub fn create_session_with_id(
         &self,
         session_id: String,
+        config: RdpSessionConfig,
+    ) -> Result<String, RdpError> {
+        self.create_session_with_component(session_id, config, None)
+    }
+
+    pub fn create_session_with_launch(
+        &self,
+        session_id: String,
+        config: RdpSessionConfig,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+    ) -> Result<String, RdpError> {
+        self.create_session_with_component(session_id, config, Some(component))
+    }
+
+    fn create_session_with_component(
+        &self,
+        session_id: String,
         mut config: RdpSessionConfig,
+        component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     ) -> Result<String, RdpError> {
         config.normalize_backend_settings();
         config.backend.validate_config(&config)?;
@@ -413,7 +432,10 @@ impl RdpSessionManager {
             sessions.remove(&session_id);
         }
         self.ensure_reaper()?;
-        let helper = resolve_helper_path()?;
+        let helper = match &component {
+            Some(component) => component.executable.clone(),
+            None => resolve_helper_path()?,
+        };
         let helper_process::HelperProcess {
             mut child,
             stdin,
@@ -444,6 +466,7 @@ impl RdpSessionManager {
         let state = Arc::new(Mutex::new(RdpSessionState::Connecting));
         let capabilities = Arc::new(Mutex::new(None));
         let mut record = SessionRecord {
+            _component: component,
             state: state.clone(),
             capabilities: capabilities.clone(),
             queue: queue.clone(),
@@ -1376,6 +1399,7 @@ mod tests {
         manager.sessions.lock().unwrap().insert(
             "s".to_string(),
             SessionRecord {
+                _component: None,
                 state: Arc::new(Mutex::new(RdpSessionState::Connected)),
                 capabilities: Arc::new(Mutex::new(None)),
                 queue: queue.clone(),
@@ -1395,6 +1419,7 @@ mod tests {
         manager.sessions.lock().unwrap().insert(
             "s".to_string(),
             SessionRecord {
+                _component: None,
                 state: Arc::new(Mutex::new(RdpSessionState::Connected)),
                 capabilities: Arc::new(Mutex::new(None)),
                 queue: Arc::new(EventQueue::default()),

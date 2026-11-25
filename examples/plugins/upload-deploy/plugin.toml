@@ -1,0 +1,57 @@
+schema_version = 2
+id = "upload-deploy"
+name = "Upload and deploy"
+version = "1.0.0"
+publisher = "nyakang"
+authors = ["NyaTerm"]
+description = "Upload a file and run an independent SSH deployment task."
+host_version = ">=2.0.8"
+api_version = "2.0.0"
+component = "plugin.wasm"
+capabilities = ["ui", "remote_files_write", "local_files_read", "remote_execute"]
+
+[contributions]
+terminal_menu = ["open"]
+file_menu = ["open"]
+
+[[actions]]
+id = "open"
+name = "Upload and deploy"
+description = "Open from a connected SSH session."
+result = "text"
+
+[[actions]]
+id = "stop"
+name = "Stop"
+description = "Cancel the current task."
+result = "text"
+
+[[actions]]
+id = "deploy"
+name = "Upload and deploy"
+description = "Run the configured operation."
+result = "text"
+
+[[actions.parameters]]
+id = "local_root"
+name = "local_root"
+kind = "string"
+required = false
+
+[[actions.parameters]]
+id = "local_path"
+name = "local_path"
+kind = "string"
+required = false
+
+[[actions.parameters]]
+id = "remote_path"
+name = "remote_path"
+kind = "string"
+required = false
+
+[[actions.parameters]]
+id = "command"
+name = "command"
+kind = "string"
+required = false

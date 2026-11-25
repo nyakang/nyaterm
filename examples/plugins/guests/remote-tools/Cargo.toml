@@ -1,0 +1,11 @@
+[package]
+name = "remote-tools"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nyaterm-plugin-api.workspace = true
+serde_json = "1"

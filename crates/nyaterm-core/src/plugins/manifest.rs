@@ -16,12 +16,16 @@ pub struct PluginManifest {
     pub name: String,
     pub version: String,
     pub authors: Vec<String>,
+    #[serde(default = "local_publisher")]
+    pub publisher: String,
     pub description: String,
     pub host_version: String,
     pub api_version: String,
     pub component: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub contributions: crate::plugins::extension::Contributions,
     pub actions: Vec<ActionManifest>,
 }
 
@@ -74,12 +78,16 @@ pub struct ParameterManifest {
     pub default: Option<String>,
 }
 
+fn local_publisher() -> String {
+    "local".into()
+}
+
 impl PluginManifest {
     pub fn parse(raw: &str, host_version: &str) -> PluginResult<Self> {
         let invalid = || {
             PluginError::new(
                 ErrorCode::InvalidManifest,
-                "Invalid plugin.toml; check the V1 manifest specification",
+                "Invalid plugin.toml; check the V2 manifest specification",
             )
         };
         if raw.len() > MAX_MANIFEST_BYTES {
@@ -109,6 +117,13 @@ impl PluginManifest {
             )
         };
         validate_id(&self.id)?;
+        validate_id(&self.publisher)?;
+        if self.id.starts_with("nyaterm-native-") {
+            return Err(PluginError::new(
+                ErrorCode::InvalidManifest,
+                "Official native component IDs are reserved",
+            ));
+        }
         if self.schema_version != MANIFEST_SCHEMA || self.api_version != API_VERSION {
             return Err(PluginError::new(
                 ErrorCode::Incompatible,
@@ -124,11 +139,12 @@ impl PluginManifest {
                 "Plugin requires a different NyaTerm version",
             ));
         }
-        if !self.capabilities.is_empty() {
-            return Err(PluginError::new(
-                ErrorCode::Incompatible,
-                "V1 supports no additional host capabilities",
-            ));
+        let mut capabilities = BTreeSet::new();
+        for capability in &self.capabilities {
+            crate::plugins::extension::Capability::parse(capability).map_err(|_| invalid())?;
+            if !capabilities.insert(capability) {
+                return Err(invalid());
+            }
         }
         if self.name.trim().is_empty()
             || self.name.len() > 160
@@ -178,6 +194,18 @@ impl PluginManifest {
                 if let Some(value) = &parameter.default {
                     crate::plugins::invocation::parse_parameter(parameter.kind, value)?;
                 }
+            }
+        }
+        for contribution in self
+            .contributions
+            .terminal_menu
+            .iter()
+            .chain(&self.contributions.file_menu)
+            .chain(&self.contributions.session_connected)
+            .chain(&self.contributions.session_disconnected)
+        {
+            if !ids.contains(contribution) {
+                return Err(invalid());
             }
         }
         Ok(())

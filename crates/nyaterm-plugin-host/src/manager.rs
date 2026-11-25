@@ -28,6 +28,7 @@ pub enum PluginSource {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PluginSnapshot {
+    pub session_events_authorized: bool,
     pub id: String,
     pub manifest: Option<PluginManifest>,
     pub enabled: bool,
@@ -47,6 +48,7 @@ pub struct Contribution {
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct CatalogSnapshot {
+    pub permission_requests: BTreeMap<String, Vec<nyaterm_core::plugins::extension::Grant>>,
     pub plugins: Vec<PluginSnapshot>,
     pub contributions: Vec<Contribution>,
     pub startup_error: Option<PluginError>,
@@ -135,6 +137,7 @@ impl Invocation {
 /// All catalog mutations are serialized by the service's one management worker.
 /// Windows only receive immutable snapshots, never a second mutable registry.
 pub struct PluginManager {
+    environment: Arc<crate::environment::ExtensionEnvironment>,
     root: PathBuf,
     host_version: String,
     engine: Arc<RuntimeEngine>,
@@ -147,9 +150,12 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
+    pub fn set_host_adapter(&self, adapter: Arc<dyn crate::tasks::HostAdapter>) {
+        self.environment.set_desktop(adapter);
+    }
     pub fn for_runtime(runtime: &AppRuntime) -> PluginResult<Self> {
         Self::open(
-            runtime.data_dir().join("plugins"),
+            runtime.data_dir().join("plugins/v2"),
             env!("CARGO_PKG_VERSION"),
             RuntimeLimits::default(),
         )
@@ -174,7 +180,10 @@ impl PluginManager {
         let store = PluginPreferenceStore::open(&preferences_path)?;
         let preferences = store.load()?;
         let engine = RuntimeEngine::new()?;
+        let environment = crate::environment::ExtensionEnvironment::open(root.join("host"))?;
+        engine.set_host_factory(environment.clone());
         let mut manager = Self {
+            environment,
             root,
             host_version: host_version.into(),
             engine,
@@ -205,7 +214,7 @@ impl PluginManager {
             templates,
             component,
         } = load(directory, &self.host_version)?;
-        // Even disabled installations must prove that their actual ABI initializes.
+        // Disabled installations also compile and validate the actual interface; guest code activates on first use.
         let instance = component
             .as_ref()
             .map(|bytes| {
@@ -278,6 +287,7 @@ impl PluginManager {
 
     pub fn snapshot(&self) -> CatalogSnapshot {
         let mut snapshot = CatalogSnapshot {
+            permission_requests: self.environment.requests(),
             stopped: self.stopped,
             ..CatalogSnapshot::default()
         };
@@ -304,6 +314,10 @@ impl PluginManager {
                 PluginStatus::Installed
             };
             snapshot.plugins.push(PluginSnapshot {
+                session_events_authorized: entry
+                    .instance
+                    .as_ref()
+                    .is_some_and(|instance| instance.token().allows_session_events()),
                 id: id.clone(),
                 manifest: entry.manifest.clone(),
                 enabled: entry.enabled,
@@ -361,6 +375,96 @@ impl PluginManager {
     pub fn reload(&mut self, id: &str) -> PluginResult<()> {
         let prepared = self.plan_load(id, false)?.run()?;
         self.commit(prepared).map(|_| ())
+    }
+
+    pub fn authorize(
+        &mut self,
+        id: &str,
+        expected_revision: u64,
+        capability: &str,
+        scope: &str,
+    ) -> PluginResult<()> {
+        use nyaterm_core::plugins::extension::{Capability, Grant, Scope};
+        self.ensure_active()?;
+        if self
+            .entries
+            .get(id)
+            .is_none_or(|entry| entry.revision != expected_revision)
+        {
+            return Err(PluginError::new(
+                ErrorCode::Cancelled,
+                "Extension changed; review its permissions again",
+            ));
+        }
+        validate_id(id)?;
+        let package = load(&self.root.join("installed").join(id), &self.host_version)?;
+        let capability = Capability::parse(capability).map_err(|_| {
+            PluginError::new(ErrorCode::InvalidManifest, "Unknown extension capability")
+        })?;
+        let scope = match capability {
+            Capability::Network => {
+                let url = reqwest::Url::parse(scope).map_err(|_| io_error())?;
+                if !matches!(url.scheme(), "https" | "http")
+                    || url.host_str().is_none()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                {
+                    return Err(io_error());
+                }
+                Scope::Origin {
+                    origin: url.origin().ascii_serialization(),
+                }
+            }
+            Capability::LocalFilesRead | Capability::LocalFilesWrite => {
+                let path = std::path::Path::new(scope);
+                reject_link(path)?;
+                if !path.is_absolute() || !path.is_dir() {
+                    return Err(io_error());
+                }
+                Scope::Directory {
+                    path: scope.to_owned(),
+                }
+            }
+            Capability::ProcessExecute => {
+                let path = std::path::Path::new(scope);
+                reject_link(path)?;
+                if !path.is_absolute() || !path.is_file() {
+                    return Err(io_error());
+                }
+                Scope::Executable {
+                    path: scope.to_owned(),
+                }
+            }
+            Capability::RemoteFilesRead
+            | Capability::RemoteFilesWrite
+            | Capability::RemoteExecute
+            | Capability::TerminalRead
+            | Capability::TerminalWrite => {
+                if scope.is_empty() || scope.len() > 256 {
+                    return Err(io_error());
+                }
+                Scope::Connection {
+                    id: scope.to_owned(),
+                }
+            }
+            _ => Scope::Plugin,
+        };
+        self.environment.grant(
+            &package.manifest,
+            package.component.as_deref().unwrap_or_default(),
+            Grant { capability, scope },
+        )
+    }
+
+    pub fn revoke_authorizations(&mut self, id: &str) -> PluginResult<()> {
+        self.ensure_active()?;
+        validate_id(id)?;
+        let package = load(&self.root.join("installed").join(id), &self.host_version)?;
+        self.environment.revoke(
+            &package.manifest,
+            package.component.as_deref().unwrap_or_default(),
+        )?;
+        self.set_enabled(id, false)
     }
 
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> PluginResult<()> {
@@ -526,7 +630,7 @@ mod tests {
         let root = TestTempDir::new("nyaterm-preparation-revision");
         let source = root.join("source");
         fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("plugin.toml"), "schema_version = 1\nid = \"fixture\"\nname = \"Fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"Fixture\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"1.0.0\"\ncomponent = \"plugin.wasm\"\n[[actions]]\nid = \"count\"\nname = \"Count\"\ndescription = \"Count\"\nresult = \"text\"\n").unwrap();
+        fs::write(source.join("plugin.toml"), "schema_version = 2\nid = \"fixture\"\nname = \"Fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"Fixture\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"2.0.0\"\ncomponent = \"plugin.wasm\"\n[[actions]]\nid = \"count\"\nname = \"Count\"\ndescription = \"Count\"\nresult = \"text\"\n").unwrap();
         fs::write(
             source.join("plugin.wasm"),
             include_bytes!("../tests/fixtures/lifecycle.wasm"),

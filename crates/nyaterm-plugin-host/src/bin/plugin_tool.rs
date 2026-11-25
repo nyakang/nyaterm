@@ -2,9 +2,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use nyaterm_plugin_host::manager::PluginManager;
 use nyaterm_plugin_host::package::{StagingDirectory, load, snapshot};
-use nyaterm_plugin_host::runtime::RuntimeLimits;
+use nyaterm_plugin_host::runtime::RuntimeEngine;
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
@@ -17,6 +16,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("Built component: {output}");
         }
         [operation, input] if operation == "validate" => validate(Path::new(input))?,
+        [operation, input] if operation == "inspect" => inspect(Path::new(input), true)?,
+        [operation, input] if operation == "catalog" => {
+            let bytes = fs::read(input)?;
+            let catalog = nyaterm_core::plugins::catalog::Catalog::parse(&bytes)?;
+            println!("{}", serde_json::json!({"protocol_version": 2, "catalog": catalog}));
+        }
         [operation, input, output] if operation == "pack" => {
             validate(Path::new(input))?;
             let temporary = temporary_root()?;
@@ -32,7 +37,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             result?;
             println!("Packaged plugin: {output}");
         }
-        _ => return Err("Usage: nyaterm-plugin-tool component <core.wasm> <component.wasm> | validate <directory-or.zip> | pack <directory-or.zip> <output.zip>".into()),
+        _ => return Err("Usage: nyaterm-plugin-tool component <core.wasm> <component.wasm> | inspect <directory-or.zip> | validate <directory-or.zip> | pack <directory-or.zip> <output.zip>".into()),
     }
     Ok(())
 }
@@ -44,19 +49,26 @@ fn temporary_root() -> Result<PathBuf, std::io::Error> {
 }
 
 fn validate(input: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    inspect(input, false)
+}
+
+fn inspect(input: &Path, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let root = temporary_root()?;
     let result = (|| {
-        let mut manager = PluginManager::open(
-            root.join("host"),
-            env!("CARGO_PKG_VERSION"),
-            RuntimeLimits::default(),
-        )?;
-        let id = manager.install(input, false)?;
-        let manifest = load(
-            &root.join("host/installed").join(id),
-            env!("CARGO_PKG_VERSION"),
-        )?
-        .manifest;
+        let stage = StagingDirectory::new(&root)?;
+        snapshot(input, &stage.path)?;
+        let package = load(&stage.path, env!("CARGO_PKG_VERSION"))?;
+        if let Some(component) = &package.component {
+            RuntimeEngine::new()?.validate_component(component)?;
+        }
+        let manifest = package.manifest;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"protocol_version": 2, "manifest": manifest})
+            );
+            return Ok(());
+        }
         println!(
             "Validated {} {} (API {}, {} actions)",
             manifest.id,

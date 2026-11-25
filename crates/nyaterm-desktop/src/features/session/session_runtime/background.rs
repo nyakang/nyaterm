@@ -1092,6 +1092,7 @@ impl NyaTermApp {
                         );
                     }
                 }
+                self.extension_session_event(&session_id, true, cx);
                 if let Some(custom_name) = pending
                     .as_ref()
                     .and_then(|pending| pending.custom_name.clone())

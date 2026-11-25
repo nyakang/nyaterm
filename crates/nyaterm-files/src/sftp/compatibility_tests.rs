@@ -4,6 +4,7 @@ use super::{
 };
 use nyaterm_transport::{SftpSettings, SshSessionConfig};
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::SftpString;
 use russh_sftp::protocol::{Status, StatusCode, Version};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,8 +34,8 @@ impl russh_sftp::server::Handler for Peer {
     async fn rename(
         &mut self,
         id: u32,
-        _oldpath: String,
-        _newpath: String,
+        _oldpath: SftpString,
+        _newpath: SftpString,
     ) -> Result<Status, Self::Error> {
         self.renames.fetch_add(1, Ordering::SeqCst);
         Ok(Status {

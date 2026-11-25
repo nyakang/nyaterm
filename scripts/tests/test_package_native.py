@@ -71,6 +71,8 @@ def staged_package(target: str):
 
 class PackageNativeTests(unittest.TestCase):
     def setUp(self):
+        identity = mock.patch.object(package_native, "component_build_id", return_value="a" * 40)
+        identity.start(); self.addCleanup(identity.stop)
         from scripts.tests.test_verify_native_package import stage_android_fixture, stage_spice_fixture
         patcher = mock.patch.object(package_native, "copy_android_resources", side_effect=stage_android_fixture)
         patcher.start(); self.addCleanup(patcher.stop)
@@ -136,7 +138,7 @@ class PackageNativeTests(unittest.TestCase):
                         self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"],
                                          "-C\x1fdebuginfo=1\x1f-C\x1ftarget-feature=+crt-static")
                     else:
-                        self.assertIsNone(environment)
+                        self.assertEqual(environment["NYATERM_COMPONENT_TARGET"], target)
 
     def test_portable_packages_match_shared_contract_for_both_architectures(self) -> None:
         for target in ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"):
@@ -229,54 +231,23 @@ class PackageNativeTests(unittest.TestCase):
                 with tarfile.open(archive) as handle:
                     self.assertIn(f"{identity.macos_bundle_name}/Contents/MacOS/NyaTerm", handle.getnames())
 
-    def test_spice_signatures_are_reflected_in_manifest_before_bundle_signing(self) -> None:
+    def test_base_macos_bundle_signs_mcp_without_optional_native_resources(self) -> None:
         with staged_package("aarch64-apple-darwin") as (root, binary, info):
-            signed = set()
-
-            def sign(command, **kwargs):
-                if command[0] != "codesign":
-                    return
-                if "--verify" in command:
-                    self.assertIn("--deep", command)
-                    return
-                self.assertNotIn("--deep", command)
-                path = Path(command[-1])
-                if path.is_file():
-                    path.write_bytes(path.read_bytes() + b"signature")
-                    signed.add(path)
-                else:
-                    runtime = path / "Contents/MacOS/spice"
-                    manifest = json.loads((runtime / "SOURCE.json").read_bytes())
-                    native = [runtime / name for name in manifest["files"] if name.endswith((".dylib", ".so"))]
-                    self.assertTrue(native)
-                    self.assertTrue(set(native) <= signed)
-                    for name, digest in manifest["files"].items():
-                        self.assertEqual(hashlib.sha256((runtime / name).read_bytes()).hexdigest(), digest)
-
-            with mock.patch.object(package_native, "run", side_effect=sign):
+            with mock.patch.object(package_native, "run") as run:
                 package_native.create_macos_packages(binary, info, "2.0.0", "2.0.0")
-            archive = next((root / "dist").glob("*.tar.gz"))
-            import spice_release
-            with tarfile.open(archive) as handle:
-                prefix = "NyaTerm.app/Contents/MacOS/"
-                spice_release.verify_resources(
-                    lambda name: handle.extractfile(prefix + name).read(), info.target,
-                    names=[name.removeprefix(prefix) for name in handle.getnames() if handle.getmember(name).isfile()],
-                )
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertTrue(any(command[0] == "codesign" and command[-1].endswith("nyaterm-mcp") for command in commands))
+            with tarfile.open(next((root / "dist").glob("*.tar.gz"))) as archive:
+                self.assertFalse(any("/spice/" in name or "/adb/" in name or "-helper" in name for name in archive.getnames()))
 
-    def test_nsis_removes_owned_spice_directories_from_leaves_to_root(self) -> None:
+    def test_nsis_base_installer_does_not_own_optional_component_directories(self) -> None:
         with staged_package("x86_64-pc-windows-msvc") as (root, binary, info):
             package_native.create_windows_packages(binary, info, "2.0.0", "2.0.0")
-            script = (root / "work/nyaterm-installer.nsi").read_text()
-            paths = package_native.windows_portable.LAYOUT["spice_files"][info.target]
-            parents = {parent for name in paths for parent in Path(name).parents if parent != Path(".")}
-            for parent in parents:
-                command = f'RMDir "$INSTDIR\\{package_native.nsis_relative_path(parent)}"'
-                self.assertIn(command, script)
-                if parent.parent != Path("."):
-                    outer = f'RMDir "$INSTDIR\\{package_native.nsis_relative_path(parent.parent)}"'
-                    self.assertLess(script.index(command), script.index(outer))
-            self.assertNotIn('RMDir /r "$INSTDIR', script)
+            script = (root / "work/nyaterm-installer.nsi").read_text(encoding="utf-8")
+            self.assertNotIn('File "spice', script)
+            self.assertNotIn('RMDir "$INSTDIR\\spice', script)
+            self.assertFalse((root / "work/windows-installer/spice").exists())
+            self.assertFalse((root / "work/windows-installer/adb").exists())
 
     def test_run_with_retry_retries_transient_command_failures(self) -> None:
         failure = subprocess.CalledProcessError(1, ["hdiutil", "create"])
@@ -344,7 +315,7 @@ class PackageNativeTests(unittest.TestCase):
             {
                 "NyaTerm_main-snapshot_windows_x64_portable.zip",
                 "NyaTerm_main-snapshot_windows_x64-setup.exe",
-            },
+            } | package_native.component_artifact_names("x86_64-pc-windows-msvc", "main-snapshot"),
         )
 
     def test_all_release_targets_have_expected_artifact_names(self) -> None:
@@ -380,7 +351,7 @@ class PackageNativeTests(unittest.TestCase):
         }
         for target, names in expected.items():
             with self.subTest(target=target):
-                self.assertEqual(package_native.artifact_names(target, "v2.0.0"), names)
+                self.assertEqual(package_native.artifact_names(target, "v2.0.0"), names | package_native.component_artifact_names(target, "v2.0.0"))
 
     def test_release_binary_always_uses_explicit_target_directory(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
@@ -396,7 +367,7 @@ class PackageNativeTests(unittest.TestCase):
         )
 
     def test_helper_binaries_resolve_beside_the_application(self) -> None:
-        self.assertIn("nyaterm-rdp-helper", package_native.HELPER_BINS)
+        self.assertNotIn("nyaterm-rdp-helper", package_native.HELPER_BINS)
         self.assertIn("nyaterm-mcp", package_native.HELPER_BINS)
         with mock.patch.dict("os.environ", {}, clear=True):
             linux = package_native.helper_binary_paths("x86_64-unknown-linux-gnu")

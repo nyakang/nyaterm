@@ -155,7 +155,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let invoke = |service: &nyaterm_plugin_host::service::PluginService| {
+        let invoke = |service: &std::sync::Arc<nyaterm_plugin_host::service::PluginService>| {
             let reply = block_on(
                 service
                     .submit(PluginOperation::Invoke {

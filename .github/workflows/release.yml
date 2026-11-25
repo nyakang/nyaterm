@@ -54,6 +54,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
   NYATERM_GITHUB_GIST_CLIENT_ID: ${{ vars.NYATERM_GITHUB_GIST_CLIENT_ID }}
+  NYATERM_EXTENSION_PUBLIC_KEY: ${{ vars.NYATERM_EXTENSION_PUBLIC_KEY }}
   DOWNLOAD_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
 
 jobs:
@@ -412,10 +413,13 @@ jobs:
           for file in "${files[@]}"; do
             npx --yes @tauri-apps/cli@2.10.0 signer sign --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" "${file}"
           done
+          python3 scripts/release/native_components.py sign --dist dist-release
           unset TAURI_SIGNING_PRIVATE_KEY
           python3 scripts/release/verify_updater_signatures.py \
             --dist dist-release --version "${VERSION}" \
             --public-key "${RUNNER_TEMP}/nyaterm-updater.pub"
+      - name: Verify native component signatures
+        run: python3 scripts/release/native_components.py verify --dist dist-release
       - name: Test signature rejection
         run: python3 -m unittest scripts.tests.test_verify_updater_signatures -v
       - name: Generate checksums and manifests
@@ -493,6 +497,8 @@ jobs:
       R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
+      - name: Install component signature verifier
+        run: sudo apt-get update && sudo apt-get install -y minisign
       - uses: actions/checkout@v4
         with:
           persist-credentials: false

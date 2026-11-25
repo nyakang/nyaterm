@@ -301,15 +301,7 @@ fn validate_payload_path(root: &Path, name: &str, required: bool) -> Result<(), 
 }
 
 fn commit_names(architecture: UpdateArchitecture) -> Vec<&'static str> {
-    // Replace the private runtime as one unit. Otherwise an obsolete plugin
-    // absent from the new inventory could survive and still be discovered by
-    // the native loader. User data never lives under this program directory.
-    windows_portable_layout()
-        .files(architecture)
-        .into_iter()
-        .filter(|name| !name.starts_with("spice/"))
-        .chain(std::iter::once("spice"))
-        .collect()
+    windows_portable_layout().files(architecture)
 }
 
 pub(super) fn commit_portable_files_with(
@@ -718,9 +710,6 @@ mod tests {
                     for name in files.iter().filter(|name| !old_files.contains(name)) {
                         std::fs::remove_file(target.join(name)).unwrap();
                     }
-                    if !old_complete {
-                        std::fs::remove_dir_all(target.join("spice")).unwrap();
-                    }
                     std::fs::create_dir_all(target.join("data")).unwrap();
                     std::fs::write(target.join("data/user.db"), b"user-data").unwrap();
                     std::fs::create_dir(&work).unwrap();
@@ -764,39 +753,30 @@ mod tests {
     }
 
     #[test]
-    fn portable_spice_runtime_replacement_removes_old_plugins_and_rollback_restores_them() {
+    fn portable_base_update_and_rollback_preserve_managed_native_components() {
         let architecture = UpdateArchitecture::X86_64;
-        let root = TestTempDir::new("nyaterm-portable-spice-replace");
+        let root = TestTempDir::new("nyaterm-portable-components");
         let (staged, target, work) = (root.join("staged"), root.join("target"), root.join("work"));
         write_files(&staged, architecture, b"new");
         write_files(&target, architecture, b"old");
         std::fs::create_dir(&work).unwrap();
-        let obsolete = target.join("spice/gstreamer-1.0/obsolete-plugin.dll");
-        std::fs::write(&obsolete, b"old-plugin").unwrap();
+        let component = target.join("data/plugins/native/spice/build/platform/spice/plugin.dll");
+        std::fs::create_dir_all(component.parent().unwrap()).unwrap();
+        std::fs::write(&component, b"signed-component").unwrap();
         let failed =
             commit_portable_files_with(&staged, &target, &work, architecture, |from, to| {
-                if from == staged.join("spice") {
-                    Err("injected runtime replacement failure".into())
+                if from == staged.join("nyaterm-mcp.exe") {
+                    Err("injected base update failure".into())
                 } else {
                     rename(from, to)
                 }
             })
             .unwrap_err();
         assert!(!failed.recovery_required);
-        assert_eq!(std::fs::read(&obsolete).unwrap(), b"old-plugin");
-        assert_eq!(
-            std::fs::read(target.join("spice/SOURCE.json")).unwrap(),
-            b"old"
-        );
-        // Earlier new files were removed by rollback; reconstruct a new staged
-        // package just as a retry does after validating its signed archive.
+        assert_eq!(std::fs::read(&component).unwrap(), b"signed-component");
         write_files(&staged, architecture, b"new");
         commit_portable_files_with(&staged, &target, &work, architecture, rename).unwrap();
-        assert!(!obsolete.exists());
-        assert_eq!(
-            std::fs::read(target.join("spice/SOURCE.json")).unwrap(),
-            b"new"
-        );
+        assert_eq!(std::fs::read(&component).unwrap(), b"signed-component");
     }
 
     #[test]

@@ -348,6 +348,12 @@ impl NyaTermApp {
         self.close_quick_switch(cx);
         self.mark_user_activity();
         match item {
+            QuickSwitchItem::Extension { contribution, .. } => {
+                self.open_panel(crate::models::NavItem::Plugins, cx);
+                self.plugins.panel.update(cx, |panel, cx| {
+                    panel.run_contribution(contribution, None, cx)
+                });
+            }
             QuickSwitchItem::Session { id, .. } => {
                 self.select_session(id, cx);
             }

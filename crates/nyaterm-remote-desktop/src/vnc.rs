@@ -317,6 +317,7 @@ impl EventQueue {
 }
 
 struct SessionRecord {
+    _component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     presentation_worker: Option<PresentationWorker>,
     state: Arc<Mutex<VncSessionState>>,
     capabilities: Arc<Mutex<Option<VncServerCapabilities>>>,
@@ -435,6 +436,24 @@ impl VncSessionManager {
         session_id: String,
         config: VncSessionConfig,
     ) -> Result<String, VncError> {
+        self.create_session_with_component(session_id, config, None)
+    }
+
+    pub fn create_session_with_launch(
+        &self,
+        session_id: String,
+        config: VncSessionConfig,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+    ) -> Result<String, VncError> {
+        self.create_session_with_component(session_id, config, Some(component))
+    }
+
+    fn create_session_with_component(
+        &self,
+        session_id: String,
+        config: VncSessionConfig,
+        component: Option<nyaterm_core::plugins::native::NativeLaunch>,
+    ) -> Result<String, VncError> {
         // Validate before spawning so a bad configuration never costs a process.
         validate_vnc_config(&config)?;
         {
@@ -451,7 +470,10 @@ impl VncSessionManager {
             sessions.remove(&session_id);
         }
         self.ensure_reaper()?;
-        let helper = resolve_helper_path()?;
+        let helper = match &component {
+            Some(component) => component.executable.clone(),
+            None => resolve_helper_path()?,
+        };
         let helper_process::HelperProcess {
             mut child,
             stdin,
@@ -482,6 +504,7 @@ impl VncSessionManager {
         let state = Arc::new(Mutex::new(VncSessionState::Connecting));
         let capabilities = Arc::new(Mutex::new(None));
         let mut record = SessionRecord {
+            _component: component,
             presentation_worker: None,
             state: state.clone(),
             capabilities: capabilities.clone(),
