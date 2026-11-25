@@ -1,9 +1,12 @@
-use nyaterm_remote_desktop::Framebuffer;
-use nyaterm_remote_desktop::presentation::VncPresentationId;
+use nyaterm_remote_desktop::presentation::RemotePresentationId;
 
-/// VNC pixels belong to its background compositor; desktop keeps only GPU metadata.
+/// Pixels belong to background compositors; desktop keeps only GPU metadata.
 pub(in crate::features::remote_desktop) enum RemoteDesktopFrameSource {
-    Rdp(Framebuffer),
+    Rdp {
+        width: u32,
+        height: u32,
+        id: RemotePresentationId,
+    },
     Spice {
         width: u32,
         height: u32,
@@ -12,22 +15,16 @@ pub(in crate::features::remote_desktop) enum RemoteDesktopFrameSource {
     Vnc {
         width: u32,
         height: u32,
-        id: VncPresentationId,
+        id: RemotePresentationId,
     },
 }
 
-impl From<Framebuffer> for RemoteDesktopFrameSource {
-    fn from(framebuffer: Framebuffer) -> Self {
-        Self::Rdp(framebuffer)
-    }
-}
-
 impl RemoteDesktopFrameSource {
-    pub(in crate::features::remote_desktop) fn vnc_presentation_is_stale(
+    pub(in crate::features::remote_desktop) fn presentation_is_stale(
         &self,
-        incoming: VncPresentationId,
+        incoming: RemotePresentationId,
     ) -> bool {
-        let Self::Vnc { id, .. } = self else {
+        let (Self::Vnc { id, .. } | Self::Rdp { id, .. }) = self else {
             return false;
         };
         (incoming.epoch, incoming.generation, incoming.sequence)
@@ -36,29 +33,15 @@ impl RemoteDesktopFrameSource {
 
     pub(in crate::features::remote_desktop) fn width(&self) -> u32 {
         match self {
-            Self::Rdp(framebuffer) => framebuffer.width(),
-            Self::Vnc { width, .. } | Self::Spice { width, .. } => *width,
+            Self::Rdp { width, .. } | Self::Vnc { width, .. } | Self::Spice { width, .. } => *width,
         }
     }
 
     pub(in crate::features::remote_desktop) fn height(&self) -> u32 {
         match self {
-            Self::Rdp(framebuffer) => framebuffer.height(),
-            Self::Vnc { height, .. } | Self::Spice { height, .. } => *height,
-        }
-    }
-
-    pub(in crate::features::remote_desktop) fn as_rdp(&self) -> Option<&Framebuffer> {
-        match self {
-            Self::Rdp(framebuffer) => Some(framebuffer),
-            Self::Vnc { .. } | Self::Spice { .. } => None,
-        }
-    }
-
-    pub(in crate::features::remote_desktop) fn as_rdp_mut(&mut self) -> Option<&mut Framebuffer> {
-        match self {
-            Self::Rdp(framebuffer) => Some(framebuffer),
-            Self::Vnc { .. } | Self::Spice { .. } => None,
+            Self::Rdp { height, .. } | Self::Vnc { height, .. } | Self::Spice { height, .. } => {
+                *height
+            }
         }
     }
 }
@@ -66,58 +49,66 @@ impl RemoteDesktopFrameSource {
 #[cfg(test)]
 mod tests {
     use super::RemoteDesktopFrameSource;
-    use nyaterm_remote_desktop::presentation::VncPresentationId;
+    use nyaterm_remote_desktop::presentation::RemotePresentationId;
 
     #[test]
-    fn vnc_surface_rejects_older_epochs_generations_and_pixel_revisions() {
-        let id = VncPresentationId {
+    fn remote_surfaces_reject_older_epochs_generations_and_pixel_revisions() {
+        let id = RemotePresentationId {
             epoch: 2,
             generation: 3,
             sequence: 100,
         };
-        let source = RemoteDesktopFrameSource::Vnc {
-            width: 1920,
-            height: 1080,
-            id,
-        };
-        for stale in [
-            VncPresentationId {
-                epoch: 1,
-                generation: 4,
-                sequence: 200,
+        for source in [
+            RemoteDesktopFrameSource::Rdp {
+                width: 1920,
+                height: 1080,
+                id,
             },
-            VncPresentationId {
-                epoch: 2,
-                generation: 2,
-                sequence: 200,
-            },
-            VncPresentationId {
-                epoch: 2,
-                generation: 3,
-                sequence: 99,
+            RemoteDesktopFrameSource::Vnc {
+                width: 1920,
+                height: 1080,
+                id,
             },
         ] {
-            assert!(source.vnc_presentation_is_stale(stale));
-        }
-        for fresh in [
-            id,
-            VncPresentationId {
-                epoch: 2,
-                generation: 3,
-                sequence: 101,
-            },
-            VncPresentationId {
-                epoch: 2,
-                generation: 4,
-                sequence: 100,
-            },
-            VncPresentationId {
-                epoch: 3,
-                generation: 1,
-                sequence: 0,
-            },
-        ] {
-            assert!(!source.vnc_presentation_is_stale(fresh));
+            for stale in [
+                RemotePresentationId {
+                    epoch: 1,
+                    generation: 4,
+                    sequence: 200,
+                },
+                RemotePresentationId {
+                    epoch: 2,
+                    generation: 2,
+                    sequence: 200,
+                },
+                RemotePresentationId {
+                    epoch: 2,
+                    generation: 3,
+                    sequence: 99,
+                },
+            ] {
+                assert!(source.presentation_is_stale(stale));
+            }
+            for fresh in [
+                id,
+                RemotePresentationId {
+                    epoch: 2,
+                    generation: 3,
+                    sequence: 101,
+                },
+                RemotePresentationId {
+                    epoch: 2,
+                    generation: 4,
+                    sequence: 100,
+                },
+                RemotePresentationId {
+                    epoch: 3,
+                    generation: 1,
+                    sequence: 0,
+                },
+            ] {
+                assert!(!source.presentation_is_stale(fresh));
+            }
         }
     }
 }

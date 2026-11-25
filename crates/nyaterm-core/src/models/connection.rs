@@ -764,8 +764,8 @@ pub struct RdpDisplaySettings {
     pub height: u32,
     #[serde(default = "default_rdp_color_depth")]
     pub color_depth: u8,
-    /// Persisted request for RDPEGFX. The helper currently disables this path
-    /// pending end-to-end validation; saved requests are retained for future support.
+    /// Persisted request for RDPEGFX at 32-bit color depth. Older helpers may
+    /// retain the request without enabling the graphics channel.
     #[serde(default)]
     pub graphics_pipeline: bool,
     /// mRemoteNG `DisplayWallpaper`. Polarity is the client's: false means the

@@ -1,6 +1,7 @@
+use super::tests::rdp_presentation;
 use gpui::{AppContext as _, Context, Entity, IntoElement, Render, TestAppContext, Window};
 use nyaterm_core::test_support::TestTempDir;
-use nyaterm_remote_desktop::{PixelFormat, RDP_FRAMEBUFFER_LIMITS, RdpFrameEvent};
+use nyaterm_remote_desktop::RDP_FRAMEBUFFER_LIMITS;
 use nyaterm_ui::NyaWindowHandle;
 
 use crate::features::NyaTermApp;
@@ -64,21 +65,7 @@ fn fullscreen_and_main_sessions_keep_separate_frame_and_input_windows() {
             assert!(!app.remote_desktop_session_in_window(other, window));
             assert_eq!(app.remote_desktop_input_session(window), Some(own));
             app.reset_rdp_framebuffer(own, 1, 8, 8, RDP_FRAMEBUFFER_LIMITS, window);
-            app.apply_rdp_frame_batch(
-                own,
-                vec![RdpFrameEvent::Bitmap {
-                    epoch: 1,
-                    full: false,
-                    x: 0,
-                    y: 0,
-                    width: 2,
-                    height: 2,
-                    stride: 8,
-                    format: PixelFormat::Bgra8,
-                    pixels: vec![1; 16].into(),
-                }],
-                window,
-            );
+            app.apply_rdp_presentation(own, rdp_presentation(1, 1, 1), window);
             let session = &app.remote_desktop.sessions[own];
             assert!(session.texture.is_some());
             assert_eq!(session.texture_window, Some(window.window_handle()));
@@ -119,6 +106,7 @@ fn moving_or_closing_a_session_keeps_the_retired_textures_original_window() {
                     RDP_FRAMEBUFFER_LIMITS,
                     window,
                 );
+                app.apply_rdp_presentation("fullscreen-session", rdp_presentation(1, 1, 0), window);
                 app.remote_desktop.sessions["fullscreen-session"]
                     .texture
                     .unwrap()
@@ -139,7 +127,9 @@ fn moving_or_closing_a_session_keeps_the_retired_textures_original_window() {
             for retired in app.remote_desktop.pending_texture_removals.drain(..) {
                 retired.remove(window, cx);
             }
-            app.prepare_remote_desktop_textures("fullscreen-session", window);
+            app.remote_desktop.fullscreen_session = Some("fullscreen-session".into());
+            app.remote_desktop.fullscreen_window = Some(main);
+            app.apply_rdp_presentation("fullscreen-session", rdp_presentation(1, 2, 1), window);
             assert_eq!(
                 app.remote_desktop.sessions["fullscreen-session"].texture_window,
                 Some(main.into())

@@ -548,7 +548,11 @@ mod tests {
     };
 
     fn packet(version: u32) -> crate::Packet {
-        encode_control(&RdpControlMessage::ClientHello { version }).expect("small control packet")
+        encode_control(&RdpControlMessage::ClientHello {
+            version,
+            frame_update_complete: false,
+        })
+        .expect("small control packet")
     }
 
     fn mailbox_writer() -> IpcWriter {

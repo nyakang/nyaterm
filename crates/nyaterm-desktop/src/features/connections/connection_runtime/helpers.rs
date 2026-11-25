@@ -2788,6 +2788,7 @@ pub(in crate::features) enum ConnectionEditorToggle {
     RdpRedirectMicrophone,
     RdpRedirectClipboard,
     RdpReconnect,
+    RdpGraphicsPipeline,
     RdpDisplayWallpaper,
     RdpDisplayThemes,
     RdpFontSmoothing,

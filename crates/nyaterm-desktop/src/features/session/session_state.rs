@@ -222,7 +222,7 @@ impl NyaTermApp {
                     if native_engine {
                         t!("sessionInfo.windowsManaged").to_string()
                     } else {
-                        t!("sessionInfo.bitmapUpdates").to_string()
+                        t!("sessionInfo.notMeasured").to_string()
                     },
                 ));
                 details.push((
@@ -237,7 +237,7 @@ impl NyaTermApp {
                             } else {
                                 no()
                             },
-                            t!("sessionInfo.forcedOff"),
+                            t!("sessionInfo.notMeasured"),
                         )
                     },
                 ));

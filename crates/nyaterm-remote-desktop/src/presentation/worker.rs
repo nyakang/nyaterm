@@ -5,6 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::frame::{FramebufferLimits, VNC_FRAMEBUFFER_LIMITS};
 use crate::heartbeat::Heartbeat;
 use crate::ipc::FRAME_PAYLOAD_LIMIT;
 use crate::protocol::{QueueWaker, RemoteFrameEvent, VncError, VncErrorKind};
@@ -15,6 +16,7 @@ use super::{VncPresentation, VncPresentationConfig, VncPresentationId, VncPresen
 const INGRESS_ITEMS: usize = 64;
 
 enum Command {
+    Clear,
     Frame(RemoteFrameEvent),
     Complete { epoch: u64, sequence: u64 },
 }
@@ -65,14 +67,17 @@ impl PresentationClient {
         if bytes > FRAME_PAYLOAD_LIMIT {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
-                "VNC ingress pixels exceed the byte limit",
+                "remote desktop ingress pixels exceed the byte limit",
             ));
         }
         let mut state = self.0.mailbox.lock().unwrap_or_else(|p| p.into_inner());
+        let blocked_at = Instant::now();
+        let mut blocked = false;
         while !state.closed
             && (state.commands.len() >= INGRESS_ITEMS
                 || state.ingress_bytes.saturating_add(bytes) > FRAME_PAYLOAD_LIMIT)
         {
+            blocked = true;
             self.0.heartbeat.blocked(true);
             state = self
                 .0
@@ -80,6 +85,12 @@ impl PresentationClient {
                 .wait(state)
                 .unwrap_or_else(|p| p.into_inner());
             self.0.heartbeat.blocked(false);
+        }
+        if blocked {
+            state.metrics.ingress_blocked_nanoseconds = state
+                .metrics
+                .ingress_blocked_nanoseconds
+                .saturating_add(u64::try_from(blocked_at.elapsed().as_nanos()).unwrap_or(u64::MAX));
         }
         if state.closed {
             return Ok(false);
@@ -92,6 +103,14 @@ impl PresentationClient {
         }
         state.ingress_bytes += bytes;
         state.commands.push_back(command);
+        state.metrics.ingress_items_high_water = state
+            .metrics
+            .ingress_items_high_water
+            .max(state.commands.len());
+        state.metrics.ingress_bytes_high_water = state
+            .metrics
+            .ingress_bytes_high_water
+            .max(state.ingress_bytes);
         drop(state);
         self.0.changed.notify_all();
         Ok(true)
@@ -124,9 +143,33 @@ impl PresentationClient {
         self.0.changed.notify_all();
     }
 
+    pub(crate) fn discard(&self) {
+        let mut state = self.0.mailbox.lock().unwrap_or_else(|p| p.into_inner());
+        if state.closed {
+            return;
+        }
+        state.epoch = None;
+        state.generation = state.generation.saturating_add(1);
+        state.presentation = None;
+        state.taken = None;
+        state.acknowledged = None;
+        state.commands.clear();
+        state.ingress_bytes = 0;
+        state.commands.push_back(Command::Clear);
+        drop(state);
+        self.0.changed.notify_all();
+    }
+
     pub(crate) fn take(&self) -> Option<VncPresentation> {
         let mut state = self.0.mailbox.lock().unwrap_or_else(|p| p.into_inner());
         let presentation = state.presentation.take()?;
+        if state.closed
+            || !state.visible
+            || state.epoch != Some(presentation.id.epoch)
+            || state.generation != presentation.id.generation
+        {
+            return None;
+        }
         state.taken = Some(presentation.id);
         Some(presentation)
     }
@@ -176,6 +219,24 @@ impl PresentationWorker {
         wake: Option<QueueWaker>,
         failed: impl Fn(VncError) + Send + 'static,
     ) -> io::Result<Self> {
+        Self::spawn_with_limits(
+            name,
+            config,
+            VNC_FRAMEBUFFER_LIMITS,
+            heartbeat,
+            wake,
+            failed,
+        )
+    }
+
+    pub(crate) fn spawn_with_limits(
+        name: String,
+        config: VncPresentationConfig,
+        limits: FramebufferLimits,
+        heartbeat: Arc<Heartbeat>,
+        wake: Option<QueueWaker>,
+        failed: impl Fn(VncError) + Send + 'static,
+    ) -> io::Result<Self> {
         let shared = Arc::new(Shared {
             mailbox: Mutex::new(Mailbox {
                 commands: VecDeque::new(),
@@ -196,13 +257,13 @@ impl PresentationWorker {
         let client = PresentationClient(Arc::clone(&shared));
         let worker_client = client.clone();
         let thread = nyaterm_core::runtime::worker::spawn(name, move || {
-            let result = catch_unwind(AssertUnwindSafe(|| run(&shared, wake)));
+            let result = catch_unwind(AssertUnwindSafe(|| run(&shared, wake, limits)));
             let error = match result {
                 Ok(Ok(())) => None,
                 Ok(Err(error)) => Some(error),
                 Err(_) => Some(VncError::new(
                     VncErrorKind::Internal,
-                    "VNC presentation worker panicked",
+                    "remote desktop presentation worker panicked",
                 )),
             };
             if let Some(error) = error {
@@ -230,8 +291,12 @@ impl Drop for PresentationWorker {
     }
 }
 
-fn run(shared: &Shared, wake: Option<QueueWaker>) -> Result<(), VncError> {
-    let mut compositor = Compositor::default();
+fn run(
+    shared: &Shared,
+    wake: Option<QueueWaker>,
+    limits: FramebufferLimits,
+) -> Result<(), VncError> {
+    let mut compositor = Compositor::with_limits(limits);
     let mut published = None;
     let mut published_at: Option<Instant> = None;
     let mut observed_generation = 0;
@@ -289,6 +354,13 @@ fn run(shared: &Shared, wake: Option<QueueWaker>) -> Result<(), VncError> {
         if let Some(command) = command {
             let start = Instant::now();
             let (rectangles, completed_updates) = match command {
+                Command::Clear => {
+                    compositor = Compositor::with_limits(limits);
+                    compositor.set_generation(generation);
+                    published = None;
+                    published_at = None;
+                    (0, 0)
+                }
                 Command::Frame(RemoteFrameEvent::Reset {
                     epoch,
                     width,

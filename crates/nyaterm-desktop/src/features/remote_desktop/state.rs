@@ -2,7 +2,7 @@ pub(super) mod frame_source;
 pub(super) mod resize;
 pub(super) mod spice;
 use frame_source::RemoteDesktopFrameSource;
-use nyaterm_remote_desktop::presentation::VncPresentationConfig;
+use nyaterm_remote_desktop::presentation::{RdpPresentationConfig, VncPresentationConfig};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -108,12 +108,6 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) texture: Option<DynamicTexture>,
     pub(super) texture_window: Option<AnyWindowHandle>,
     pub(super) texture_dirty: bool,
-    /// Scratch buffer for packing dirty rectangles before texture uploads.
-    ///
-    /// Capacity survives between frames so steady-state uploads allocate
-    /// nothing; without it every rectangle allocated a fresh multi-megabyte
-    /// staging buffer in the upload path.
-    pub(super) upload_staging: Vec<u8>,
     pub(super) uploads_stopped: bool,
     pub(super) cursor_shape: Option<CursorShape>,
     pub(super) cursor_position: CursorPosition,
@@ -170,7 +164,6 @@ impl Default for RemoteDesktopSessionState {
             texture: None,
             texture_window: None,
             texture_dirty: false,
-            upload_staging: Vec::new(),
             uploads_stopped: false,
             cursor_shape: None,
             cursor_position: CursorPosition::default(),
@@ -288,6 +281,8 @@ impl RemoteDesktopFeatureState {
                 native.set_visible(false);
             }
             session.texture_dirty = session.framebuffer.is_some();
+            self.manager
+                .set_presentation_visible(id, false, RdpPresentationConfig::default());
             self.vnc_manager
                 .set_presentation_visible(id, false, VncPresentationConfig::default());
         }
@@ -346,7 +341,9 @@ impl RemoteDesktopFeatureState {
 
     pub(in crate::features) fn new(focus: FocusHandle) -> Self {
         let (wake, wake_rx) = EventWake::new();
-        let manager = Arc::new(RdpSessionManager::new());
+        let manager = Arc::new(RdpSessionManager::with_presentation_pipeline(
+            RdpPresentationConfig::default(),
+        ));
         let vnc_manager = Arc::new(VncSessionManager::with_presentation_pipeline(
             VncPresentationConfig::default(),
         ));

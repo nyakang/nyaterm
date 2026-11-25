@@ -37,6 +37,7 @@ fn recv(stdout: &mut impl std::io::Read) -> RdpControlMessage {
 fn client_hello() -> RdpControlMessage {
     RdpControlMessage::ClientHello {
         version: PROTOCOL_VERSION,
+        frame_update_complete: false,
     }
 }
 
@@ -48,6 +49,7 @@ fn assert_server_hello(message: RdpControlMessage) {
             capabilities: RdpServerCapabilities {
                 committed_unicode_text: true,
                 secure_attention: true,
+                frame_update_complete: true,
             },
         }
     ));
@@ -154,6 +156,11 @@ fn non_client_hello_messages() -> Vec<RdpControlMessage> {
             width: 800,
             height: 600,
         },
+        RdpControlMessage::FrameUpdateComplete {
+            session_id: "test-session".to_string(),
+            epoch: 1,
+            sequence: 1,
+        },
         RdpControlMessage::State {
             session_id: "test-session".to_string(),
             state: RdpSessionState::Connecting,
@@ -218,6 +225,11 @@ fn helper_only_messages() -> Vec<RdpControlMessage> {
             epoch: 1,
             width: 800,
             height: 600,
+        },
+        RdpControlMessage::FrameUpdateComplete {
+            session_id: "test-session".to_string(),
+            epoch: 1,
+            sequence: 1,
         },
         RdpControlMessage::State {
             session_id: "test-session".to_string(),
@@ -364,6 +376,7 @@ fn every_non_client_hello_message_and_frame_fail_before_hello() {
 fn repeated_hello_wrong_version_and_helper_only_messages_fail_closed() {
     assert_helper_rejects(vec![RdpControlMessage::ClientHello {
         version: PROTOCOL_VERSION - 1,
+        frame_update_complete: false,
     }]);
     assert_helper_rejects(vec![client_hello(), client_hello()]);
     for message in helper_only_messages() {
@@ -436,7 +449,10 @@ fn heartbeat_responds_on_a_static_session_and_preserves_sequence() {
 fn older_and_newer_helpers_are_explicitly_incompatible_with_version_thirteen() {
     assert_eq!(PROTOCOL_VERSION, 13);
     for version in [9, 10, PROTOCOL_VERSION + 1] {
-        assert_helper_rejects(vec![RdpControlMessage::ClientHello { version }]);
+        assert_helper_rejects(vec![RdpControlMessage::ClientHello {
+            version,
+            frame_update_complete: false,
+        }]);
     }
     assert_helper_rejects(vec![RdpControlMessage::Ping { sequence: 1 }]);
     assert_helper_rejects(vec![
@@ -463,12 +479,38 @@ fn session_start_rolls_back_each_worker_creation_failure() {
 
 #[test]
 #[ignore = "requires independently built native helper"]
+fn presentation_session_start_rolls_back_each_worker_creation_failure() {
+    use nyaterm_remote_desktop::presentation::RdpPresentationConfig;
+
+    for stage in 0..7 {
+        let manager = nyaterm_remote_desktop::RdpSessionManager::with_presentation_pipeline(
+            RdpPresentationConfig::default(),
+        );
+        let _failure = nyaterm_core::runtime::worker::fail_after(stage);
+        let result =
+            manager.create_session_with_id("presentation-spawn-failure".into(), test_config());
+        assert!(
+            matches!(result, Err(error) if error.kind == RdpErrorKind::Ipc),
+            "presentation startup stage {stage} must return Ipc"
+        );
+        assert!(manager.state("presentation-spawn-failure").is_none());
+    }
+}
+
+#[test]
+#[ignore = "requires independently built native helper"]
 fn mismatched_client_receives_actual_helper_version_before_exit() {
     for version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
         let mut child = spawn_helper();
         let mut stdin = child.stdin.take().unwrap();
         let mut stdout = child.stdout.take().unwrap();
-        send(&mut stdin, &RdpControlMessage::ClientHello { version });
+        send(
+            &mut stdin,
+            &RdpControlMessage::ClientHello {
+                version,
+                frame_update_complete: false,
+            },
+        );
         assert_server_hello(recv(&mut stdout));
         drop(stdin);
         assert!(!child.wait().unwrap().success());

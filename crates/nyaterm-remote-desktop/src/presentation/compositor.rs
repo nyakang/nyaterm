@@ -77,7 +77,7 @@ impl Compositor {
         let Some(framebuffer) = self.framebuffer.as_mut() else {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
-                "VNC pixels preceded a desktop reset",
+                "remote desktop pixels preceded a desktop reset",
             ));
         };
         let rect = match framebuffer.apply(frame) {
@@ -90,7 +90,7 @@ impl Compositor {
         self.revision = self.revision.checked_add(1).ok_or_else(|| {
             VncError::new(
                 VncErrorKind::Protocol,
-                "VNC presentation sequence exhausted",
+                "remote desktop presentation sequence exhausted",
             )
         })?;
         for y in rect.y / TILE_SIZE..=(rect.y + rect.height - 1) / TILE_SIZE {
@@ -106,7 +106,7 @@ impl Compositor {
         let Some(framebuffer) = self.framebuffer.as_ref() else {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
-                "VNC completion preceded a desktop reset",
+                "remote desktop completion preceded a desktop reset",
             ));
         };
         if epoch != framebuffer.epoch() {
@@ -115,7 +115,7 @@ impl Compositor {
         if sequence <= self.update_sequence {
             return Err(VncError::new(
                 VncErrorKind::Protocol,
-                "VNC update completion is out of order",
+                "remote desktop update completion is out of order",
             ));
         }
         self.update_sequence = sequence;
@@ -233,7 +233,7 @@ fn frame_error(error: FramebufferError) -> VncError {
     } else {
         VncErrorKind::Protocol
     };
-    VncError::new(kind, format!("VNC composition failed: {error}"))
+    VncError::new(kind, format!("remote desktop composition failed: {error}"))
 }
 
 fn pack(fb: &Framebuffer, rect: DirtyRect) -> Result<VncUploadRegion, VncError> {
@@ -245,7 +245,7 @@ fn pack(fb: &Framebuffer, rect: DirtyRect) -> Result<VncUploadRegion, VncError> 
     pixels.try_reserve_exact(bytes).map_err(|_| {
         VncError::new(
             VncErrorKind::ResourceExhausted,
-            "failed to allocate VNC upload pixels",
+            "failed to allocate remote desktop upload pixels",
         )
     })?;
     let stride = fb.width() as usize * 4;

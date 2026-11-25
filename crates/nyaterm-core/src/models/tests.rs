@@ -244,7 +244,7 @@ fn rdp_connection_defaults_and_endpoint_match_tauri_shape() {
     assert_eq!(display.color_depth, 32);
     // Written before these keys existed: absent must mean the current default,
     // not a failed read and not a silently off capability.
-    // The unavailable EGFX path stays off for legacy connections.
+    // Legacy connections keep their original opt-in default.
     assert!(!display.graphics_pipeline);
     assert!(display.display_wallpaper);
     assert!(display.display_themes);

@@ -114,7 +114,7 @@ fn focused_rdp_and_vnc_surfaces_keep_tab_and_shift_tab_out_of_local_navigation()
                     )
                     .unwrap();
                 let session = app.remote_desktop.sessions.get_mut("remote").unwrap();
-                session.framebuffer = Some(framebuffer.into());
+                session.framebuffer = Some(crate::features::remote_desktop::state::frame_source::RemoteDesktopFrameSource::Rdp { width: 8, height: 8, id: nyaterm_remote_desktop::presentation::RemotePresentationId { epoch: 1, generation: 1, sequence: 1 } });
                 session.texture = Some(texture);
             });
             KeyboardFixture {

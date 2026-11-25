@@ -1,13 +1,17 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 use uuid::Uuid;
 
 use crate::heartbeat::{Heartbeat, Supervisor};
 use crate::helper_process;
+use crate::presentation::{
+    PresentationClient, PresentationWorker, RdpPresentation, RdpPresentationConfig,
+    RdpPresentationId, RdpPresentationMetrics,
+};
 use crate::protocol::{MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH};
 use crate::{
     CursorPosition, CursorShape, CursorVisibility, FRAME_PAYLOAD_LIMIT, PROTOCOL_VERSION,
@@ -42,6 +46,8 @@ struct EventQueueState {
     cursor_position: Option<CursorPosition>,
     cursor_visibility: Option<CursorVisibility>,
     current_epoch: Option<u64>,
+    frame_update_complete: bool,
+    update_sequence: u64,
     closed: bool,
 }
 
@@ -98,6 +104,7 @@ fn control_byte_cost(event: &RdpRuntimeEvent) -> usize {
 }
 
 struct EventQueue {
+    presentation: OnceLock<PresentationClient>,
     state: Mutex<EventQueueState>,
     space_available: Condvar,
     frame_item_limit: usize,
@@ -114,6 +121,7 @@ impl Default for EventQueue {
 impl EventQueue {
     fn with_limits(frame_item_limit: usize, frame_byte_limit: usize) -> Self {
         Self {
+            presentation: OnceLock::new(),
             state: Mutex::new(EventQueueState::default()),
             space_available: Condvar::new(),
             frame_item_limit,
@@ -196,6 +204,17 @@ impl EventQueue {
     }
 
     fn push_reset(&self, session_id: &str, epoch: u64, width: u32, height: u32) -> bool {
+        if let Some(presentation) = self.presentation.get()
+            && !presentation
+                .frame(RdpFrameEvent::Reset {
+                    epoch,
+                    width,
+                    height,
+                })
+                .unwrap_or(false)
+        {
+            return false;
+        }
         {
             let mut state = self
                 .state
@@ -205,6 +224,7 @@ impl EventQueue {
                 return false;
             }
             state.current_epoch = Some(epoch);
+            state.update_sequence = 0;
             state.frames.clear();
             state.frame_bytes = 0;
             state.cursor_shape = None;
@@ -220,6 +240,81 @@ impl EventQueue {
                 height,
             },
         })
+    }
+
+    /// Only the IPC reader submits pixels, preserving reset and completion order.
+    fn receive_frame(&self, frame: RdpFrameEvent) -> Result<bool, RdpError> {
+        let Some(presentation) = self.presentation.get() else {
+            return Ok(self.push_frame(frame));
+        };
+        let RdpFrameEvent::Bitmap { epoch, .. } = &frame else {
+            return Err(RdpError::new(
+                RdpErrorKind::Protocol,
+                "unexpected reset in frame packet",
+            ));
+        };
+        let epoch = *epoch;
+        let sequence = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if state.closed {
+                return Ok(false);
+            }
+            if state.current_epoch != Some(epoch) {
+                return Ok(true);
+            }
+            if state.frame_update_complete {
+                None
+            } else {
+                state.update_sequence = state.update_sequence.checked_add(1).ok_or_else(|| {
+                    RdpError::new(RdpErrorKind::Protocol, "RDP update sequence exhausted")
+                })?;
+                Some(state.update_sequence)
+            }
+        };
+        if !presentation.frame(frame).map_err(presentation_error)? {
+            return Ok(false);
+        }
+        if let Some(sequence) = sequence {
+            return presentation
+                .complete(epoch, sequence)
+                .map_err(presentation_error);
+        }
+        Ok(true)
+    }
+
+    fn complete_update(&self, epoch: u64, sequence: u64) -> Result<(), RdpError> {
+        let Some(presentation) = self.presentation.get() else {
+            return Err(RdpError::new(
+                RdpErrorKind::Protocol,
+                "unrequested RDP update completion",
+            ));
+        };
+        {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if state.closed {
+                return Ok(());
+            }
+            if !state.frame_update_complete {
+                return Err(RdpError::new(
+                    RdpErrorKind::Protocol,
+                    "unnegotiated RDP update completion",
+                ));
+            }
+            if state.current_epoch != Some(epoch) {
+                return Ok(());
+            }
+            if sequence <= state.update_sequence {
+                return Err(RdpError::new(
+                    RdpErrorKind::Protocol,
+                    "RDP update completion is out of order",
+                ));
+            }
+            state.update_sequence = sequence;
+        }
+        presentation
+            .complete(epoch, sequence)
+            .map_err(presentation_error)?;
+        Ok(())
     }
 
     fn push_frame(&self, frame: RdpFrameEvent) -> bool {
@@ -305,6 +400,9 @@ impl EventQueue {
     }
 
     fn close(&self) {
+        if let Some(presentation) = self.presentation.get() {
+            presentation.close();
+        }
         let mut state = self
             .state
             .lock()
@@ -323,6 +421,7 @@ impl EventQueue {
 }
 
 struct SessionRecord {
+    presentation_worker: Option<PresentationWorker>,
     _component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     state: Arc<Mutex<RdpSessionState>>,
     capabilities: Arc<Mutex<Option<RdpServerCapabilities>>>,
@@ -336,6 +435,7 @@ struct SessionRecord {
 
 #[derive(Default)]
 pub struct RdpSessionManager {
+    presentation_config: Option<RdpPresentationConfig>,
     sessions: Mutex<HashMap<String, SessionRecord>>,
     reaper: Mutex<Option<Reaper<SessionRecord>>>,
     pending_certificates: Arc<Mutex<HashMap<String, String>>>,
@@ -347,6 +447,55 @@ pub struct RdpSessionManager {
 impl RdpSessionManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Compose ordered deltas in the background instead of exposing raw pixels.
+    pub fn with_presentation_pipeline(config: RdpPresentationConfig) -> Self {
+        let mut manager = Self::default();
+        manager.presentation_config = Some(config);
+        manager
+    }
+
+    pub fn take_presentation(&self, session_id: &str) -> Option<RdpPresentation> {
+        self.presentation_client(session_id)?.take()
+    }
+
+    pub fn acknowledge_presentation(&self, session_id: &str, id: RdpPresentationId) {
+        if let Some(client) = self.presentation_client(session_id) {
+            client.acknowledge(id);
+        }
+    }
+
+    pub fn set_presentation_visible(
+        &self,
+        session_id: &str,
+        visible: bool,
+        config: RdpPresentationConfig,
+    ) {
+        if let Some(client) = self.presentation_client(session_id) {
+            client.set_visible(visible, config);
+        }
+    }
+
+    pub fn invalidate_presentation(&self, session_id: &str) {
+        if let Some(client) = self.presentation_client(session_id) {
+            client.invalidate();
+        }
+    }
+
+    pub fn presentation_metrics(&self, session_id: &str) -> Option<RdpPresentationMetrics> {
+        Some(self.presentation_client(session_id)?.metrics())
+    }
+
+    fn presentation_client(&self, session_id: &str) -> Option<PresentationClient> {
+        self.sessions
+            .lock()
+            .ok()?
+            .get(session_id)?
+            .queue
+            .presentation
+            .get()
+            .cloned()
     }
 
     /// Install the waker every session queue signals after enqueuing.
@@ -466,6 +615,7 @@ impl RdpSessionManager {
         let state = Arc::new(Mutex::new(RdpSessionState::Connecting));
         let capabilities = Arc::new(Mutex::new(None));
         let mut record = SessionRecord {
+            presentation_worker: None,
             _component: component,
             state: state.clone(),
             capabilities: capabilities.clone(),
@@ -476,6 +626,39 @@ impl RdpSessionManager {
             stderr: Some(stderr),
             supervisor: None,
         };
+        if let Some(config) = self.presentation_config {
+            let failure_queue = queue.clone();
+            let failure_state = state.clone();
+            let failure_id = session_id.clone();
+            let worker = match PresentationWorker::spawn_with_limits(
+                format!("nyaterm-rdp-presentation-{session_id}"),
+                config,
+                crate::RDP_FRAMEBUFFER_LIMITS,
+                queue.heartbeat.clone(),
+                self.queue_waker(),
+                move |error| {
+                    let error = presentation_error(error);
+                    push_reader_error(
+                        &failure_id,
+                        &failure_queue,
+                        &failure_state,
+                        error.kind,
+                        error.message,
+                    );
+                },
+            ) {
+                Ok(worker) => worker,
+                Err(error) => {
+                    cleanup_child(&mut record);
+                    return Err(RdpError::new(
+                        RdpErrorKind::Ipc,
+                        format!("failed to start RDP presentation worker: {error}"),
+                    ));
+                }
+            };
+            let _ = queue.presentation.set(worker.client.clone());
+            record.presentation_worker = Some(worker);
+        }
         record.reader = match spawn_reader(
             session_id.clone(),
             stdout,
@@ -530,6 +713,7 @@ impl RdpSessionManager {
             &record.writer,
             &RdpControlMessage::ClientHello {
                 version: PROTOCOL_VERSION,
+                frame_update_complete: self.presentation_config.is_some(),
             },
         );
         if let Err(error) = start_result {
@@ -992,11 +1176,11 @@ fn spawn_reader(
                             RdpError::new(RdpErrorKind::Protocol, error.to_string())
                         })
                     })
-                    .map(|(frame_session, frame)| {
-                        if frame_session != session_id {
-                            return;
+                    .and_then(|(frame_session, frame)| {
+                        if frame_session == session_id {
+                            queue.receive_frame(frame)?;
                         }
-                        queue.push_frame(frame);
+                        Ok(())
                     }),
                 PacketType::Cursor => require_server_hello(hello_received, "cursor packet")
                     .and_then(|()| {
@@ -1115,6 +1299,12 @@ fn handle_control(
                 "RDP helper capabilities were already confirmed",
             ));
         }
+        queue
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .frame_update_complete =
+            queue.presentation.get().is_some() && confirmed.frame_update_complete;
         *slot = Some(confirmed);
         *hello_received = true;
         return Ok(());
@@ -1150,11 +1340,29 @@ fn handle_control(
         } if event_session == session_id => {
             queue.push_reset(session_id, epoch, width, height);
         }
+        RdpControlMessage::FrameUpdateComplete {
+            session_id: event_session,
+            epoch,
+            sequence,
+        } if event_session == session_id => {
+            queue.complete_update(epoch, sequence)?;
+        }
         RdpControlMessage::State {
             session_id: event_session,
             state: new_state,
             message,
         } if event_session == session_id => {
+            if matches!(
+                new_state,
+                RdpSessionState::Connecting | RdpSessionState::Reconnecting
+            ) {
+                if let Some(presentation) = queue.presentation.get() {
+                    presentation.discard();
+                }
+                let mut queued = queue.state.lock().unwrap_or_else(|p| p.into_inner());
+                queued.current_epoch = None;
+                queued.update_sequence = 0;
+            }
             set_state(state, new_state.clone());
             queue.push_control(RdpRuntimeEvent::State {
                 session_id: session_id.to_string(),
@@ -1252,6 +1460,15 @@ fn push_reader_error(
     });
 }
 
+fn presentation_error(error: crate::VncError) -> RdpError {
+    let kind = match error.kind {
+        crate::VncErrorKind::ResourceExhausted => RdpErrorKind::ResourceExhausted,
+        crate::VncErrorKind::Internal => RdpErrorKind::Ipc,
+        _ => RdpErrorKind::Protocol,
+    };
+    RdpError::new(kind, error.message)
+}
+
 fn set_state(state: &Arc<Mutex<RdpSessionState>>, new_state: RdpSessionState) {
     *state
         .lock()
@@ -1260,6 +1477,9 @@ fn set_state(state: &Arc<Mutex<RdpSessionState>>, new_state: RdpSessionState) {
 
 fn cleanup_child(record: &mut SessionRecord) {
     record.queue.close();
+    if let Some(mut worker) = record.presentation_worker.take() {
+        worker.shutdown();
+    }
     if let Some(mut supervisor) = record.supervisor.take() {
         supervisor.stop();
     }
@@ -1317,6 +1537,9 @@ fn validate_size(width: u32, height: u32) -> Result<(), RdpError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod presentation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1399,6 +1622,7 @@ mod tests {
         manager.sessions.lock().unwrap().insert(
             "s".to_string(),
             SessionRecord {
+                presentation_worker: None,
                 _component: None,
                 state: Arc::new(Mutex::new(RdpSessionState::Connected)),
                 capabilities: Arc::new(Mutex::new(None)),
@@ -1419,6 +1643,7 @@ mod tests {
         manager.sessions.lock().unwrap().insert(
             "s".to_string(),
             SessionRecord {
+                presentation_worker: None,
                 _component: None,
                 state: Arc::new(Mutex::new(RdpSessionState::Connected)),
                 capabilities: Arc::new(Mutex::new(None)),
@@ -1455,6 +1680,7 @@ mod tests {
         let advertised = RdpServerCapabilities {
             committed_unicode_text: true,
             secure_attention: true,
+            frame_update_complete: false,
         };
         let mut hello_received = false;
 
@@ -1529,6 +1755,7 @@ mod tests {
             "s",
             RdpControlMessage::ClientHello {
                 version: PROTOCOL_VERSION,
+                frame_update_complete: false,
             },
             &queue,
             &state,
@@ -1564,6 +1791,7 @@ mod tests {
         let capabilities = Arc::new(Mutex::new(Some(RdpServerCapabilities {
             committed_unicode_text: true,
             secure_attention: true,
+            frame_update_complete: false,
         })));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let mut hello_received = true;
@@ -1587,6 +1815,7 @@ mod tests {
             Some(RdpServerCapabilities {
                 committed_unicode_text: true,
                 secure_attention: true,
+                frame_update_complete: false,
             })
         );
         assert!(matches!(

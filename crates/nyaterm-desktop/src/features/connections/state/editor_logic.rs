@@ -916,6 +916,9 @@ pub(super) fn toggle_connection_editor_flag(
         ConnectionEditorToggle::RdpReconnect => {
             editor.rdp_reconnect.enabled = !editor.rdp_reconnect.enabled;
         }
+        ConnectionEditorToggle::RdpGraphicsPipeline => {
+            editor.rdp_display.graphics_pipeline = !editor.rdp_display.graphics_pipeline;
+        }
         ConnectionEditorToggle::RdpDisplayWallpaper => {
             editor.rdp_display.display_wallpaper = !editor.rdp_display.display_wallpaper;
         }

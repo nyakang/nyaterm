@@ -511,12 +511,21 @@ fn rdp_display(
                     ))),
             )
         })
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(palette.text_muted))
-                .child(t!("dialog.rdpGraphicsPipelineUnavailable")),
-        )
+        .when(!editor.uses_mstsc_rdp(), |this| {
+            this.child(rdp_switch_row(
+                palette,
+                "connection-rdp-graphics-pipeline",
+                t!("dialog.rdpGraphicsPipeline"),
+                Some(t!("dialog.rdpGraphicsPipelineDesc").into()),
+                editor.rdp_display.graphics_pipeline,
+                cx.listener(|this, _, _, cx| {
+                    this.toggle_connection_editor_flag(
+                        ConnectionEditorToggle::RdpGraphicsPipeline,
+                        cx,
+                    )
+                }),
+            ))
+        })
         .child(rdp_switch_row(
             palette,
             "connection-rdp-display-wallpaper",
