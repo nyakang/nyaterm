@@ -241,7 +241,7 @@ impl NyaTermApp {
         }
         let clear_screen_session_id = session_id.clone();
         let clear_all_session_id = session_id.clone();
-        let select_all_session_id = session_id;
+        let select_all_session_id = session_id.clone();
         items.extend([
             NyaMenuItem::separator(),
             NyaMenuItem::action(t!("terminalCtx.clearScreen"))
@@ -293,6 +293,11 @@ impl NyaTermApp {
                     this.select_all_terminal(cx);
                 })),
         ]);
+        let extensions = self.extension_context_menu(&session_id, &selected, false, cx);
+        if !extensions.is_empty() {
+            items.push(NyaMenuItem::separator());
+            items.extend(extensions);
+        }
         items
     }
 

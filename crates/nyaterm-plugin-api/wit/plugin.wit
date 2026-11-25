@@ -1,4 +1,12 @@
-package nyaterm:plugin@1.0.0;
+package nyaterm:plugin@2.0.0;
+
+/// Requests and events use the versioned SDK host contract encoded as UTF-8 JSON.
+/// submit/poll/cancel never wait for network, filesystem or process completion.
+interface host {
+    submit: func(request: list<u8>) -> result<u64, string>;
+    poll: func(task: u64) -> result<list<u8>, string>;
+    cancel: func(task: u64) -> result<_, string>;
+}
 
 interface types {
     record version { major: u32, minor: u32, patch: u32 }
@@ -13,9 +21,11 @@ interface types {
 }
 
 world plugin {
+    import host;
     use types.{version, identity, action-input, action-result, plugin-error};
     export api-version: func() -> version;
     export initialize: func(plugin: identity) -> result<_, plugin-error>;
     export invoke: func(input: action-input) -> result<action-result, plugin-error>;
+    export task-ready: func(task: u64);
     export shutdown: func();
 }

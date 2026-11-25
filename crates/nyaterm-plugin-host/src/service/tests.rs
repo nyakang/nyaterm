@@ -33,7 +33,7 @@ fn fixture(root: &TestTempDir, id: &str) -> std::path::PathBuf {
     fs::write(
         source.join("plugin.toml"),
         format!(
-            "schema_version = 1\nid = \"{id}\"\nname = \"Service fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"SDK guest\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"1.0.0\"\ncomponent = \"plugin.wasm\"\n\n[[actions]]\nid = \"count\"\nname = \"Count\"\ndescription = \"Count calls\"\nresult = \"text\"\n\n[[actions]]\nid = \"loop\"\nname = \"Loop\"\ndescription = \"Infinite loop\"\nresult = \"text\"\n"
+            "schema_version = 2\nid = \"{id}\"\nname = \"Service fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"SDK guest\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"2.0.0\"\ncomponent = \"plugin.wasm\"\n\n[[actions]]\nid = \"count\"\nname = \"Count\"\ndescription = \"Count calls\"\nresult = \"text\"\n\n[[actions]]\nid = \"loop\"\nname = \"Loop\"\ndescription = \"Infinite loop\"\nresult = \"text\"\n"
         ),
     )
     .unwrap();
@@ -45,7 +45,7 @@ fn fixture(root: &TestTempDir, id: &str) -> std::path::PathBuf {
     source
 }
 
-fn install(service: &PluginService, root: &TestTempDir, id: &str) {
+fn install(service: &Arc<PluginService>, root: &TestTempDir, id: &str) {
     block_on(
         service
             .submit(PluginOperation::Install {
@@ -58,7 +58,7 @@ fn install(service: &PluginService, root: &TestTempDir, id: &str) {
     .unwrap();
 }
 
-fn invocation(service: &PluginService, id: &str, action: &str) -> PluginOperation {
+fn invocation(service: &Arc<PluginService>, id: &str, action: &str) -> PluginOperation {
     PluginOperation::Invoke {
         contribution_id: format!("{id}:{action}"),
         expected_revision: service
@@ -72,7 +72,7 @@ fn invocation(service: &PluginService, id: &str, action: &str) -> PluginOperatio
     }
 }
 
-fn count(service: &PluginService, id: &str) -> String {
+fn count(service: &Arc<PluginService>, id: &str) -> String {
     let reply = block_on(service.submit(invocation(service, id, "count")).unwrap())
         .unwrap()
         .unwrap();
@@ -83,6 +83,61 @@ fn count(service: &PluginService, id: &str) -> String {
         panic!("missing count");
     };
     text
+}
+
+#[test]
+fn explicit_grant_preserves_guest_state_and_stale_revision_cannot_grant() {
+    let root = TestTempDir::new("nyaterm-plugin-live-approval");
+    let source = fixture(&root, "approval");
+    let path = source.join("plugin.toml");
+    let manifest = fs::read_to_string(&path).unwrap().replace(
+        "schema_version = 2",
+        "schema_version = 2\ncapabilities = [\"sessions_read\"]",
+    );
+    fs::write(path, manifest).unwrap();
+    let (service, _events) = PluginService::start(runtime(&root)).unwrap();
+    block_on(
+        service
+            .submit(PluginOperation::Install {
+                source,
+                development: false,
+            })
+            .unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(count(&service, "approval"), "1");
+    let revision = service.snapshot().plugins[0].revision;
+    assert!(!service.snapshot().plugins[0].session_events_authorized);
+    let authorize = |expected_revision| PluginOperation::Authorize {
+        id: "approval".into(),
+        expected_revision,
+        capability: "sessions_read".into(),
+        scope: String::new(),
+    };
+    assert!(
+        block_on(service.submit(authorize(revision + 1)).unwrap())
+            .unwrap()
+            .is_err()
+    );
+    block_on(service.submit(authorize(revision)).unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(service.snapshot().plugins[0].session_events_authorized);
+    assert_eq!(service.snapshot().plugins[0].revision, revision);
+    assert_eq!(count(&service, "approval"), "2");
+    block_on(
+        service
+            .submit(PluginOperation::RevokeAuthorizations {
+                id: "approval".into(),
+            })
+            .unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(!service.snapshot().plugins[0].session_events_authorized);
+    assert!(!service.snapshot().plugins[0].enabled);
+    service.shutdown();
 }
 
 // A one-shot barrier pauses the actual actor at a known dispatch boundary.
@@ -337,7 +392,10 @@ fn shutdown_finishes_started_transaction_rejects_queue_and_joins_concurrent_call
     assert!(service.snapshot().contributions.is_empty());
     assert!(!block_on(events.collect::<Vec<_>>()).is_empty());
     service.shutdown();
-    assert!(root.join("plugins/installed/healthy/plugin.toml").exists());
+    assert!(
+        root.join("plugins/v2/installed/healthy/plugin.toml")
+            .exists()
+    );
     // Database, component and epoch resources are reclaimed before return.
     fs::remove_dir_all(root.join("plugins")).unwrap();
 }
@@ -369,7 +427,7 @@ fn shutdown_before_dispatch_never_starts_queued_management() {
         block_on(queued).unwrap().err().unwrap().code,
         ErrorCode::Shutdown
     );
-    assert!(!root.join("plugins/installed/healthy").exists());
+    assert!(!root.join("plugins/v2/installed/healthy").exists());
     assert!(service.snapshot().stopped);
     block_on(events.collect::<Vec<_>>());
     fs::remove_dir_all(root.join("plugins")).unwrap();
@@ -378,7 +436,7 @@ fn shutdown_before_dispatch_never_starts_queued_management() {
 #[test]
 fn failed_startup_closes_event_stream_and_preserves_error_and_preferences() {
     let root = TestTempDir::new("nyaterm-plugin-service-startup-failure");
-    let path = root.join("plugins/dev/preferences.redb");
+    let path = root.join("plugins/v2/dev/preferences.redb");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, b"corrupt preference fixture").unwrap();
     let before = fs::read(&path).unwrap();

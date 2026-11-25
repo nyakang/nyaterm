@@ -221,7 +221,12 @@ impl ScreenHandle {
         binding: DeviceBinding,
         settings: AndroidScreenSettings,
     ) -> AdbResult<Self> {
-        Self::start_with_helper(client, binding, settings, &resolve_helper()?)
+        let helper = client
+            .component
+            .as_ref()
+            .map(|c| Ok(c.executable.clone()))
+            .unwrap_or_else(resolve_helper)?;
+        Self::start_with_helper(client, binding, settings, &helper)
     }
 
     pub fn start_with_helper(
@@ -250,7 +255,13 @@ impl ScreenHandle {
     ) -> AdbResult<Self> {
         let result = control
             .check()
-            .and_then(|()| resolve_helper())
+            .and_then(|()| {
+                client
+                    .component
+                    .as_ref()
+                    .map(|c| Ok(c.executable.clone()))
+                    .unwrap_or_else(resolve_helper)
+            })
             .and_then(|helper| {
                 Self::start_with_helper_controlled(
                     client,

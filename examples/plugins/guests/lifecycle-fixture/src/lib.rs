@@ -3,6 +3,7 @@ use nyaterm_plugin_api::{ActionInput, ActionResult, Identity, Plugin, PluginErro
 #[derive(Default)]
 struct Fixture {
     calls: u32,
+    task: Option<u64>,
 }
 
 impl Plugin for Fixture {
@@ -20,6 +21,36 @@ impl Plugin for Fixture {
 
     fn invoke(&mut self, input: ActionInput) -> Result<ActionResult, PluginError> {
         match input.action.as_str() {
+            "host-submit" => {
+                self.task = Some(
+                    nyaterm_plugin_api::host::submit(
+                        &nyaterm_plugin_api::protocol::HostRequest::StorageWrite {
+                            key: "probe".into(),
+                            bytes: b"sdk-host-round-trip".to_vec(),
+                        },
+                    )
+                    .map_err(|_| PluginError {
+                        kind: nyaterm_plugin_api::ErrorKind::Failed,
+                        message: "submit failed".into(),
+                    })?,
+                );
+                Ok(ActionResult::Text("submitted".into()))
+            }
+            "host-poll" => {
+                let task = self.task.unwrap();
+                let result = nyaterm_plugin_api::host::poll(task).map_err(|_| PluginError {
+                    kind: nyaterm_plugin_api::ErrorKind::Failed,
+                    message: "poll failed".into(),
+                })?;
+                Ok(ActionResult::Text(
+                    match result {
+                        nyaterm_plugin_api::protocol::TaskEvent::Completed { .. } => "complete",
+                        nyaterm_plugin_api::protocol::TaskEvent::Pending => "pending",
+                        _ => "failed",
+                    }
+                    .into(),
+                ))
+            }
             "loop" => loop {
                 std::hint::black_box(&mut self.calls);
             },

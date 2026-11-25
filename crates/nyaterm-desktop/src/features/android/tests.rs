@@ -835,3 +835,26 @@ fn android_screen_session_settings_survive_stop_without_changing_device_defaults
         );
     });
 }
+
+#[test]
+fn waiting_for_android_component_keeps_one_pending_connection_request() {
+    use crate::features::session::SavedConnectionStartOptions;
+    let root = TestConfigDir::new("nyaterm-android-component-pending");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "existing");
+    app.update(&mut cx, |app, cx| {
+        let connection = missing_adb_connection();
+        let options = app.prepare_session_start_options(SavedConnectionStartOptions::default());
+        let request = app
+            .session
+            .begin_saved_start_preparation(&connection, &options);
+        app.android
+            .pending
+            .insert(connection.id.clone(), request.clone());
+        app.start_android_connection(connection, Default::default(), None, cx);
+        let pending: Vec<_> = app.session.start_pending_entries().collect();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, &request);
+    });
+}

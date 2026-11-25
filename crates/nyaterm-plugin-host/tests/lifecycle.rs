@@ -24,7 +24,7 @@ fn fixture(root: &Path, id: &str) -> std::path::PathBuf {
     let source = root.join(id);
     fs::create_dir_all(&source).unwrap();
     let mut manifest = format!(
-        "schema_version = 1\nid = \"{id}\"\nname = \"Lifecycle fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"SDK-built fixture\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"1.0.0\"\ncomponent = \"plugin.wasm\"\n"
+        "schema_version = 2\nid = \"{id}\"\nname = \"Lifecycle fixture\"\nversion = \"1.0.0\"\nauthors = []\ndescription = \"SDK-built fixture\"\nhost_version = \">=2.0.0-preview.4\"\napi_version = \"2.0.0\"\ncomponent = \"plugin.wasm\"\n"
     );
     for action in ["count", "loop", "memory", "trap", "oversize", "controls"] {
         manifest.push_str(&format!("\n[[actions]]\nid = \"{action}\"\nname = \"{action}\"\ndescription = \"fixture\"\nresult = \"text\"\n"));
@@ -97,6 +97,38 @@ fn sdk_components_keep_state_isolate_instances_and_restore_enabled_preferences()
             .all(|c| c.plugin_id != "first")
     );
     assert!(!root.join("host/installed/first").exists());
+}
+
+#[test]
+fn sdk_guest_submits_host_io_without_blocking_its_invocation() {
+    let root = root();
+    let source = fixture(&root, "host-io");
+    let manifest = source.join("plugin.toml");
+    let mut raw = fs::read_to_string(&manifest).unwrap().replace(
+        "schema_version = 2",
+        "schema_version = 2\ncapabilities = [\"storage\"]",
+    );
+    for id in ["host-submit", "host-poll"] {
+        raw.push_str(&format!("\n[[actions]]\nid = \"{id}\"\nname = \"{id}\"\ndescription = \"Host task\"\nresult = \"text\"\n"));
+    }
+    fs::write(manifest, raw).unwrap();
+    let mut host = manager(&root);
+    host.install(&source, false).unwrap();
+    assert_eq!(text(call(&host, "host-io", "host-submit")), "submitted");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = text(call(&host, "host-io", "host-poll"));
+        if result == "complete" {
+            break;
+        }
+        assert_eq!(result, "pending");
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        fs::read(root.join("host/host/data/host-io/probe")).unwrap(),
+        b"sdk-host-round-trip"
+    );
 }
 
 #[test]
@@ -442,9 +474,21 @@ fn initialization_failures_abi_forgery_and_input_limits_are_rejected() {
     )
     .unwrap();
     for id in ["init-fail", "init-loop"] {
-        assert!(host.install(&fixture(&root, id), false).is_err());
+        host.install(&fixture(&root, id), false).unwrap();
+        assert!(
+            host.snapshot()
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == id)
+                .unwrap()
+                .error
+                .is_none()
+        );
+        let invocation = host
+            .invoke(&format!("{id}:count"), ActionInput::default())
+            .unwrap();
+        assert!(block_on(invocation.result()).is_err());
     }
-    assert!(host.snapshot().plugins.is_empty());
     assert!(validate_api_marker(b"not-wasm").is_err());
     let source = fixture(&root, "forged");
     let mut bytes = FIXTURE.to_vec();

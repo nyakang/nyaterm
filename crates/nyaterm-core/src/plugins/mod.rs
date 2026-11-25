@@ -1,13 +1,16 @@
-//! UI-independent V1 plugin contracts. No terminal or secret model crosses this boundary.
+//! UI-independent extension contracts. Host services expose explicit scoped operations.
+pub mod catalog;
+pub mod extension;
 pub mod invocation;
 pub mod manifest;
+pub mod native;
 pub mod preferences;
 pub mod template;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const MANIFEST_SCHEMA: u32 = 1;
+pub const MANIFEST_SCHEMA: u32 = 2;
 pub use nyaterm_plugin_api::abi::{API_VERSION_PARTS, API_VERSION_TEXT as API_VERSION};
 pub const MAX_MANIFEST_BYTES: usize = 128 * 1024;
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
@@ -17,6 +20,7 @@ pub const MAX_ACTIONS: usize = 128;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    PermissionDenied,
     InvalidManifest,
     Incompatible,
     UnsafePath,

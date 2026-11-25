@@ -167,6 +167,13 @@ fn app_with_visible_session(
     };
     let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
     cx.update_entity(&app, |app, _| {
+        // Session lifecycle fixtures model an already acquired component. The
+        // nonexistent helper prevents network/process work if a job escapes its gate.
+        app.plugins.native_launch_fixture = Some(nyaterm_core::plugins::native::NativeLaunch {
+            executable: root.join("fixture-helper-does-not-exist"),
+            root: root.to_path_buf(),
+            lease: std::sync::Arc::new(()),
+        });
         let mut summary = app.settings.summary().clone();
         summary.cursor_blink = true;
         app.settings.replace_summary(summary);

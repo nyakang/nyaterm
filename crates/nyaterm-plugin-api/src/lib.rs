@@ -1,4 +1,24 @@
 //! Plugin ABI constants and optional guest SDK, derived from the host's WIT.
+pub mod protocol;
+
+#[cfg(feature = "guest")]
+pub mod host {
+    use crate::protocol::{HostRequest, TaskEvent};
+
+    pub fn submit(request: &HostRequest) -> Result<u64, String> {
+        let bytes = serde_json::to_vec(request).map_err(|_| "Cannot encode host request")?;
+        crate::bindings::nyaterm::plugin::host::submit(&bytes)
+    }
+
+    pub fn poll(task: u64) -> Result<TaskEvent, String> {
+        let bytes = crate::bindings::nyaterm::plugin::host::poll(task)?;
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid host response".into())
+    }
+
+    pub fn cancel(task: u64) -> Result<(), String> {
+        crate::bindings::nyaterm::plugin::host::cancel(task)
+    }
+}
 pub mod abi {
     include!(concat!(env!("OUT_DIR"), "/abi_version.rs"));
 }
@@ -27,6 +47,7 @@ pub trait Plugin: Default {
         Ok(())
     }
     fn invoke(&mut self, input: ActionInput) -> Result<ActionResult, PluginError>;
+    fn task_ready(&mut self, _task: u64) {}
     fn shutdown(&mut self) {}
 }
 
@@ -54,6 +75,7 @@ macro_rules! register_plugin {
                 NYATERM_PLUGIN.with(|p| $crate::Plugin::invoke(&mut *p.borrow_mut(), input))
             }
             fn shutdown() { NYATERM_PLUGIN.with(|p| $crate::Plugin::shutdown(&mut *p.borrow_mut())); }
+            fn task_ready(task: u64) { NYATERM_PLUGIN.with(|p| $crate::Plugin::task_ready(&mut *p.borrow_mut(), task)); }
         }
         $crate::bindings::export!(NyaTermGuest with_types_in $crate::bindings);
     };

@@ -26,7 +26,10 @@ struct ServerSlot {
     process: Mutex<Option<OwnedServer>>,
 }
 
-struct OwnedServer(Option<Child>);
+struct OwnedServer(
+    Option<Child>,
+    Option<nyaterm_core::plugins::native::NativeLaunch>,
+);
 
 impl Drop for OwnedServer {
     fn drop(&mut self) {
@@ -37,10 +40,12 @@ impl Drop for OwnedServer {
             return;
         }
         let _ = child.kill();
+        let component = self.1.take();
         // Rollback and deadline expiry must not introduce an unbounded wait.
         // Keep the process handle until the OS has reaped this exact child.
         let _ = nyaterm_core::runtime::worker::spawn("adb-server-reaper".into(), move || {
             let _ = child.wait();
+            drop(component);
         });
     }
 }
@@ -227,7 +232,7 @@ impl ServerRegistry {
             if !slot.running()?
                 && let Some(child) = spawn(client)?
             {
-                let process = OwnedServer(Some(child));
+                let process = OwnedServer(Some(child), client.component.clone());
                 let mut owned = slot.process.lock().unwrap_or_else(|p| p.into_inner());
                 control.check()?;
                 *owned = Some(process);

@@ -45,6 +45,7 @@ pub struct DeviceBinding {
 
 #[derive(Clone, Debug)]
 pub struct AdbClient {
+    pub component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     pub executable: PathBuf,
     pub server: SocketAddr,
     servers: crate::adb::server::AdbServerManager,
@@ -53,10 +54,19 @@ pub struct AdbClient {
 impl AdbClient {
     pub fn new(executable: PathBuf, server: SocketAddr) -> Self {
         Self {
+            component: None,
             executable,
             server,
             servers: crate::adb::server::default_manager().clone(),
         }
+    }
+
+    pub fn with_component(
+        mut self,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+    ) -> Self {
+        self.component = Some(component);
+        self
     }
 
     pub fn with_server_manager(mut self, servers: crate::adb::server::AdbServerManager) -> Self {

@@ -16,8 +16,6 @@ pub struct PortableLayout {
     helper_files: Vec<String>,
     support_files: Vec<String>,
     conpty_files: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    spice_files: BTreeMap<String, Vec<String>>,
 }
 
 impl PortableLayout {
@@ -32,7 +30,6 @@ impl PortableLayout {
             .chain(&self.helper_files)
             .chain(&self.support_files)
             .chain(&self.conpty_files[target])
-            .chain(self.spice_files.get(target).into_iter().flatten())
             .map(String::as_str)
             .chain(std::iter::once(self.marker.as_str()))
             .collect()

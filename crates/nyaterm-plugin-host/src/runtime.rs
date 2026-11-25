@@ -53,6 +53,15 @@ pub struct RuntimeEngine {
     clock: Arc<EpochClock>,
     on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     ticker: Mutex<Option<JoinHandle<()>>>,
+    host_factory: Mutex<Option<Arc<dyn HostFactory>>>,
+}
+
+pub trait HostFactory: Send + Sync {
+    fn create(
+        &self,
+        manifest: &PluginManifest,
+        component: &[u8],
+    ) -> PluginResult<crate::tasks::TaskBroker>;
 }
 
 #[derive(Default)]
@@ -82,6 +91,27 @@ impl Drop for ActiveCall {
 }
 
 impl RuntimeEngine {
+    /// Verify the component interface without executing candidate code.
+    pub fn validate_component(&self, bytes: &[u8]) -> PluginResult<()> {
+        validate_api_marker(bytes)?;
+        let failure = || {
+            PluginError::new(
+                ErrorCode::Incompatible,
+                "Invalid extension component interface",
+            )
+        };
+        let component = Component::new(&self.engine, bytes).map_err(|_| failure())?;
+        let mut linker = Linker::<GuestState>::new(&self.engine);
+        bindings::Plugin::add_to_linker::<_, wasmtime::component::HasSelf<GuestState>>(
+            &mut linker,
+            |state| state,
+        )
+        .map_err(|_| failure())?;
+        bindings::PluginPre::new(linker.instantiate_pre(&component).map_err(|_| failure())?)
+            .map_err(|_| failure())?;
+        Ok(())
+    }
+
     pub fn new() -> PluginResult<Arc<Self>> {
         let mut config = Config::new();
         config
@@ -138,6 +168,7 @@ impl RuntimeEngine {
             clock,
             on_change: Mutex::new(None),
             ticker: Mutex::new(Some(ticker)),
+            host_factory: Mutex::new(None),
         }))
     }
 
@@ -152,6 +183,10 @@ impl RuntimeEngine {
 
     pub(crate) fn set_change_handler(&self, handler: Arc<dyn Fn() + Send + Sync>) {
         *self.on_change.lock().unwrap() = Some(handler);
+    }
+
+    pub fn set_host_factory(&self, factory: Arc<dyn HostFactory>) {
+        *self.host_factory.lock().unwrap() = Some(factory);
     }
 
     fn changed(&self) {
@@ -172,11 +207,19 @@ impl Drop for RuntimeEngine {
 }
 
 pub struct RuntimeToken {
+    session_events: Option<crate::authority::Authority>,
     active: AtomicBool,
     fault: Mutex<Option<PluginError>>,
 }
 
 impl RuntimeToken {
+    pub fn allows_session_events(&self) -> bool {
+        self.active()
+            && self
+                .session_events
+                .as_ref()
+                .is_some_and(crate::authority::Authority::allows_session_events)
+    }
     pub fn active(&self) -> bool {
         self.active.load(Ordering::Acquire)
     }
@@ -195,6 +238,7 @@ struct Request {
 }
 
 enum RuntimeRequest {
+    TaskReady(u64),
     Invoke(Request),
     Shutdown,
 }
@@ -236,13 +280,14 @@ fn cancelled() -> PluginError {
 }
 
 pub struct RuntimeInstance {
-    sender: Mutex<Option<SyncSender<RuntimeRequest>>>,
+    sender: Mutex<Option<Arc<SyncSender<RuntimeRequest>>>>,
     token: Arc<RuntimeToken>,
     thread: Mutex<Option<JoinHandle<()>>>,
     limits: RuntimeLimits,
 }
 
 struct GuestState {
+    tasks: Option<crate::tasks::TaskBroker>,
     limits: GuestLimits,
     stop: Arc<RuntimeToken>,
     cancelled: Arc<AtomicBool>,
@@ -250,6 +295,39 @@ struct GuestState {
     #[cfg(test)]
     on_call_epoch: Option<(String, CallEpochHook)>,
 }
+
+impl bindings::nyaterm::plugin::host::Host for GuestState {
+    fn submit(&mut self, request: Vec<u8>) -> Result<u64, String> {
+        if request.len() > crate::tasks::MAX_TASK_BYTES * 8 || !self.stop.active() {
+            return Err("Extension request is unavailable or exceeds its limit".into());
+        }
+        let request =
+            serde_json::from_slice(&request).map_err(|_| "Invalid host request".to_string())?;
+        self.tasks
+            .as_mut()
+            .ok_or("Host capabilities are not configured")?
+            .submit(request)
+            .map_err(|e| e.message)
+    }
+    fn poll(&mut self, task: u64) -> Result<Vec<u8>, String> {
+        let event = self
+            .tasks
+            .as_mut()
+            .ok_or("Host capabilities are not configured")?
+            .poll(task)
+            .map_err(|e| e.message)?;
+        serde_json::to_vec(&event).map_err(|_| "Cannot encode task result".into())
+    }
+    fn cancel(&mut self, task: u64) -> Result<(), String> {
+        self.tasks
+            .as_ref()
+            .ok_or("Host capabilities are not configured")?
+            .cancel(task)
+            .map_err(|e| e.message)
+    }
+}
+
+impl bindings::nyaterm::plugin::types::Host for GuestState {}
 
 struct GuestLimits {
     limits: StoreLimits,
@@ -377,17 +455,45 @@ impl RuntimeInstance {
         limits: RuntimeLimits,
     ) -> PluginResult<Arc<Self>> {
         validate_api_marker(bytes)?;
+        let tasks = engine
+            .host_factory
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|factory| factory.create(manifest, bytes))
+            .transpose()?;
         let component = Component::new(&engine.engine, bytes).map_err(|_| {
             PluginError::new(
                 ErrorCode::Incompatible,
                 "Cannot compile plugin component; verify its component interface",
             )
         })?;
+        let mut preflight = Linker::new(&engine.engine);
+        bindings::Plugin::add_to_linker::<_, wasmtime::component::HasSelf<GuestState>>(
+            &mut preflight,
+            |state: &mut GuestState| state,
+        )
+        .map_err(|_| PluginError::new(ErrorCode::Incompatible, "Cannot link extension host"))?;
+        bindings::PluginPre::new(preflight.instantiate_pre(&component).map_err(|_| {
+            PluginError::new(ErrorCode::Incompatible, "Invalid extension interface")
+        })?)
+        .map_err(|_| PluginError::new(ErrorCode::Incompatible, "Invalid extension exports"))?;
         let token = Arc::new(RuntimeToken {
+            session_events: tasks.as_ref().map(crate::tasks::TaskBroker::authority),
             active: AtomicBool::new(true),
             fault: Mutex::new(None),
         });
         let (sender, receiver) = mpsc::sync_channel::<RuntimeRequest>(limits.queue_capacity);
+        let sender = Arc::new(sender);
+        if let Some(tasks) = &tasks {
+            // A host callback must not keep its own runtime mailbox alive after stop.
+            let sender = Arc::downgrade(&sender);
+            tasks.set_wake(Arc::new(move |id| {
+                if let Some(sender) = sender.upgrade() {
+                    let _ = sender.send(RuntimeRequest::TaskReady(id));
+                }
+            }));
+        }
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let identity = wit::Identity {
             id: manifest.id.clone(),
@@ -399,8 +505,31 @@ impl RuntimeInstance {
             .name(format!("plugin-{}", manifest.id))
             .spawn(move || {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Installation validates and compiles, but guest code starts only
+                    // after an actual command/menu/session-event invocation.
+                    let _ = ready_tx.send(Ok(()));
+                    let first = loop {
+                        if !token_for_worker.active() {
+                            return Ok(());
+                        }
+                        match receiver.recv() {
+                            Ok(RuntimeRequest::Invoke(request)) => {
+                                if !token_for_worker.active()
+                                    || request.cancelled.load(Ordering::Acquire)
+                                    || Instant::now() >= request.deadline
+                                {
+                                    let _ = request.reply.send(Err(cancelled()));
+                                    continue;
+                                }
+                                break request;
+                            }
+                            Ok(RuntimeRequest::TaskReady(_)) => continue,
+                            Ok(RuntimeRequest::Shutdown) | Err(_) => return Ok(()),
+                        }
+                    };
                     let limits = limits_for_worker;
                     let state = GuestState {
+                        tasks,
                         limits: GuestLimits {
                             exceeded: false,
                             limits: StoreLimitsBuilder::new()
@@ -438,14 +567,18 @@ impl RuntimeInstance {
                     });
                     let initialization = (|| {
                         let _active = engine.active_call();
-                        reset_budget(
-                            &mut store,
-                            &limits,
-                            Arc::new(AtomicBool::new(false)),
-                            Instant::now() + limits.timeout,
-                        )?;
-                        // Empty linker deliberately supplies no WASI or host capabilities.
-                        let linker = Linker::new(&engine.engine);
+                        reset_budget(&mut store, &limits, first.cancelled.clone(), first.deadline)?;
+                        let mut linker = Linker::new(&engine.engine);
+                        bindings::Plugin::add_to_linker::<
+                            _,
+                            wasmtime::component::HasSelf<GuestState>,
+                        >(&mut linker, |state: &mut GuestState| state)
+                        .map_err(|_| {
+                            PluginError::new(
+                                ErrorCode::Initialization,
+                                "Cannot link extension host",
+                            )
+                        })?;
                         let plugin = bindings::Plugin::instantiate(&mut store, &component, &linker)
                             .map_err(|error| execution_error(&store, &error))?;
                         let version = plugin
@@ -469,17 +602,33 @@ impl RuntimeInstance {
                         Ok(plugin)
                     })();
                     let plugin = match initialization {
-                        Ok(plugin) => {
-                            let _ = ready_tx.send(Ok(()));
-                            plugin
-                        }
+                        Ok(plugin) => plugin,
                         Err(error) => {
-                            let _ = ready_tx.send(Err(error.clone()));
+                            let _ = first.reply.send(Err(error.clone()));
                             return Err(error);
                         }
                     };
+                    let mut first = Some(first);
                     while token_for_worker.active() {
-                        let request = match receiver.recv() {
+                        let incoming = first
+                            .take()
+                            .map(RuntimeRequest::Invoke)
+                            .map(Ok)
+                            .unwrap_or_else(|| receiver.recv());
+                        let request = match incoming {
+                            Ok(RuntimeRequest::TaskReady(id)) => {
+                                let _active = engine.active_call();
+                                reset_budget(
+                                    &mut store,
+                                    &limits,
+                                    Arc::new(AtomicBool::new(false)),
+                                    Instant::now() + limits.timeout,
+                                )?;
+                                plugin
+                                    .call_task_ready(&mut store, id)
+                                    .map_err(|error| execution_error(&store, &error))?;
+                                continue;
+                            }
                             Ok(RuntimeRequest::Invoke(request)) => request,
                             Ok(RuntimeRequest::Shutdown) | Err(_) => break,
                         };
@@ -556,6 +705,7 @@ impl RuntimeInstance {
                     // Cooperative lifecycle export gets a fresh bounded budget. It is not
                     // trusted to finish, and the ticker can terminate it like any action.
                     store.data_mut().stop = Arc::new(RuntimeToken {
+                        session_events: None,
                         active: AtomicBool::new(true),
                         fault: Mutex::new(None),
                     });

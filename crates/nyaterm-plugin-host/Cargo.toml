@@ -13,10 +13,20 @@ wasmparser.workspace = true
 uuid.workspace = true
 zip.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
+minisign-verify = "=0.2.5"
 wit-component = "=0.243.0"
 
 [dev-dependencies]
 nyaterm-core = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [[bin]]
 name = "nyaterm-plugin-tool"

@@ -8441,8 +8441,10 @@ version = "0.1.0"
 
 [[package]]
 name = "nyaterm-plugin-api"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "wit-bindgen 0.49.0",
 ]
 
@@ -8451,12 +8453,18 @@ name = "nyaterm-plugin-host"
 version = "2.0.8"
 dependencies = [
  "futures",
+ "hex",
+ "libc",
+ "minisign-verify",
  "nyaterm-core",
  "nyaterm-store",
+ "reqwest 0.13.5",
  "serde_json",
+ "sha2 0.11.0",
  "uuid",
  "wasmparser 0.240.0",
  "wasmtime",
+ "windows-sys 0.61.2",
  "wit-component",
  "zip",
 ]
@@ -11253,6 +11261,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

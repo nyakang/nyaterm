@@ -289,18 +289,56 @@ impl FileManagerWorkspace {
                 .icon("icons/copy.svg")
                 .disabled(!has_selection),
         );
+        let properties_selection = selection.clone();
         items.push(
             NyaMenuItem::action(t!("fileExplorer.properties"))
                 .icon("icons/menu/info.svg")
                 .disabled(!available || selection.entries.len() != 1)
                 .on_click(self.menu_listener(pane, cx, move |this, _, window, cx| {
                     let id = this.id.clone();
-                    let selection = selection.clone();
+                    let selection = properties_selection.clone();
                     this.dispatch_app(window, cx, move |app, window, cx| {
                         app.open_file_manager_properties(id, pane, selection, window, cx);
                     });
                 })),
         );
+        let snapshot = self.read_app(cx, |app| app.plugins.panel.read(cx).catalog(cx));
+        for contribution in &snapshot.contributions {
+            let declared = snapshot
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == contribution.plugin_id)
+                .and_then(|plugin| plugin.manifest.as_ref())
+                .is_some_and(|manifest| {
+                    manifest
+                        .contributions
+                        .file_menu
+                        .contains(&contribution.action.id)
+                });
+            if !declared {
+                continue;
+            }
+            let contribution = contribution.clone();
+            let endpoint = state.endpoint.clone();
+            let paths: Vec<_> = selection
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+            items.push(NyaMenuItem::action(contribution.action.name.clone()).disabled(!available)
+                .on_click(self.menu_listener(pane, cx, move |this, _, window, cx| {
+                    let contribution = contribution.clone();
+                    let endpoint = endpoint.clone();
+                    let paths = paths.clone();
+                    this.dispatch_app(window, cx, move |app, _, cx| {
+                        let session = endpoint.session_id().map(|id| serde_json::json!({ "id": id, "generation": 0,
+                            "connection_id": app.session.metadata(id).and_then(|metadata| metadata.source_connection_id.clone()) }));
+                        let text = serde_json::json!({ "session": session, "paths": paths }).to_string();
+                        app.open_panel(crate::models::NavItem::Plugins, cx);
+                        app.plugins.panel.update(cx, |panel, cx| panel.run_contribution(contribution, Some(text), cx));
+                    });
+                })));
+        }
         items
     }
 

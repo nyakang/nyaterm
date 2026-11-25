@@ -8,26 +8,10 @@
     "VERSION"
   ],
   "helper_files": [
-    "nyaterm-rdp-helper.exe",
-    "nyaterm-vnc-helper.exe",
-    "nyaterm-mcp.exe",
-    "nyaterm-android-helper.exe",
-    "nyaterm-spice-helper.exe"
+    "nyaterm-mcp.exe"
   ],
   "support_files": [
-    "conpty/LICENSE.txt",
-    "adb/adb.exe",
-    "adb/AdbWinApi.dll",
-    "adb/AdbWinUsbApi.dll",
-    "adb/NOTICE.txt",
-    "adb/SOURCE.json",
-    "android-libs/SOURCE.json",
-    "android-libs/LICENSE.txt",
-    "android-resources.json",
-    "avcodec-62.dll",
-    "avformat-62.dll",
-    "avutil-60.dll",
-    "swscale-9.dll"
+    "conpty/LICENSE.txt"
   ],
   "conpty_files": {
     "x86_64-pc-windows-msvc": [
@@ -355,5 +339,25 @@
       "spice/sasl2/libscram-3.dll",
       "spice/zlib1.dll"
     ]
-  }
+  },
+  "native_helper_files": [
+    "nyaterm-rdp-helper.exe",
+    "nyaterm-vnc-helper.exe",
+    "nyaterm-android-helper.exe",
+    "nyaterm-spice-helper.exe"
+  ],
+  "native_support_files": [
+    "adb/adb.exe",
+    "adb/AdbWinApi.dll",
+    "adb/AdbWinUsbApi.dll",
+    "adb/NOTICE.txt",
+    "adb/SOURCE.json",
+    "android-libs/SOURCE.json",
+    "android-libs/LICENSE.txt",
+    "android-resources.json",
+    "avcodec-62.dll",
+    "avformat-62.dll",
+    "avutil-60.dll",
+    "swscale-9.dll"
+  ]
 }

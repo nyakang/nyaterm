@@ -372,6 +372,7 @@ impl NyaTermApp {
                         }
                     }
                     SessionEvent::Exited { session_id, reason } => {
+                        self.extension_session_event(&session_id, false, cx);
                         self.flush_pending_session_frame_outputs(
                             &mut pending_frame_outputs,
                             &mut drain_timings,

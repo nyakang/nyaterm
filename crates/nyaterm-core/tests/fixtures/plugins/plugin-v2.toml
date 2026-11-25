@@ -1,0 +1,22 @@
+schema_version = 2
+id = "diagnostics"
+name = "Diagnostics templates"
+version = "1.0.0"
+authors = ["NyaTerm"]
+description = "Draft-only diagnostic templates"
+host_version = ">=2.0.0-preview.4"
+api_version = "2.0.0"
+
+[[actions]]
+id = "inspect"
+name = "Inspect a host"
+description = "Prepare a ping command without executing it"
+result = "command"
+template = "templates/inspect.txt"
+quoting = "posix"
+
+[[actions.parameters]]
+id = "host"
+name = "Host"
+kind = "string"
+required = true

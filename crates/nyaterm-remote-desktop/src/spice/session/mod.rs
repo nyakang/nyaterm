@@ -34,6 +34,7 @@ pub enum SpiceEvent {
 }
 
 struct Record {
+    _component: Option<nyaterm_core::plugins::native::NativeLaunch>,
     queue: Arc<EventQueue>,
     writer: Arc<IpcWriter>,
     child: Arc<Mutex<Option<Child>>>,
@@ -154,6 +155,22 @@ impl SpiceSessionManager {
         config: SpiceSessionConfig,
         path: &Path,
     ) -> Result<String, SpiceErrorKind> {
+        self.create_session_with_component(config, path, None)
+    }
+    pub fn create_session_with_launch(
+        &self,
+        config: SpiceSessionConfig,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+    ) -> Result<String, SpiceErrorKind> {
+        let path = component.executable.clone();
+        self.create_session_with_component(config, &path, Some(component))
+    }
+    fn create_session_with_component(
+        &self,
+        config: SpiceSessionConfig,
+        path: &Path,
+        component: Option<nyaterm_core::plugins::native::NativeLaunch>,
+    ) -> Result<String, SpiceErrorKind> {
         config
             .validate()
             .map_err(|_| SpiceErrorKind::Configuration)?;
@@ -187,6 +204,7 @@ impl SpiceSessionManager {
             self.waker.lock().ok().and_then(|w| w.clone()),
         ));
         let mut record = Record {
+            _component: component,
             queue: queue.clone(),
             writer: writer.clone(),
             child: Arc::new(Mutex::new(Some(child))),

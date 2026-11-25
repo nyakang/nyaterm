@@ -80,6 +80,63 @@ impl NyaTermApp {
         kind: Option<AndroidViewKind>,
         cx: &mut Context<Self>,
     ) {
+        if !self.session.start_request_can_start(&options) {
+            return;
+        }
+        if let Some(request_id) = self.android.pending.get(&connection.id)
+            && self
+                .session
+                .start_pending_entries()
+                .any(|(id, _)| id == request_id)
+        {
+            return;
+        }
+        let mut options = self.prepare_session_start_options(options);
+        options.android_view = kind;
+        options.request_id = Some(
+            self.session
+                .begin_saved_start_preparation(&connection, &options),
+        );
+        let pending_key = connection.id.clone();
+        self.android
+            .pending
+            .insert(pending_key.clone(), options.request_id.clone().unwrap());
+        self.shell.show_workspace();
+        self.ensure_pending_session_status_clock(cx);
+        cx.notify();
+        let request_options = options.clone();
+        self.ensure_native_component(
+            nyaterm_core::plugins::native::NativeComponentId::Android,
+            move |app| app.session.start_request_can_start(&request_options),
+            move |app, result, cx| {
+                if app.android.pending.get(&pending_key) == options.request_id.as_ref() {
+                    app.android.pending.remove(&pending_key);
+                }
+                if !app.session.start_request_can_start(&options) {
+                    return;
+                }
+                match result {
+                    Ok(component) => app.start_android_connection_with_component(
+                        connection, options, kind, component, cx,
+                    ),
+                    Err(error) => {
+                        app.fail_start_preparation(&options, error.message, cx);
+                        cx.notify();
+                    }
+                }
+            },
+            cx,
+        );
+    }
+
+    fn start_android_connection_with_component(
+        &mut self,
+        connection: SavedConnection,
+        options: SavedConnectionStartOptions,
+        kind: Option<AndroidViewKind>,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+        cx: &mut Context<Self>,
+    ) {
         let kind = kind.unwrap_or(AndroidViewKind::Shell);
         if !self.session.start_request_can_start(&options) {
             return;
@@ -116,10 +173,12 @@ impl NyaTermApp {
         }
         let mut options = self.prepare_session_start_options(options);
         options.android_view = Some(kind);
-        options.request_id = Some(
-            self.session
-                .begin_saved_start_preparation(&connection, &options),
-        );
+        if options.request_id.is_none() {
+            options.request_id = Some(
+                self.session
+                    .begin_saved_start_preparation(&connection, &options),
+            );
+        }
         let attempt = self
             .session
             .start_attempt(options.request_id.as_ref().unwrap());
@@ -143,9 +202,19 @@ impl NyaTermApp {
                 }
             };
             check_cancelled()?;
-            let client =
-                AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?
-                    .with_server_manager(tracker.server_manager());
+            let client = AdbClient::local(Some(
+                if custom.is_empty() {
+                    component
+                        .root
+                        .join("adb")
+                        .join(if cfg!(windows) { "adb.exe" } else { "adb" })
+                } else {
+                    std::path::PathBuf::from(&custom)
+                }
+                .as_path(),
+            ))?
+            .with_component(component)
+            .with_server_manager(tracker.server_manager());
             tracker.ensure(&client)?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let snapshot = loop {
@@ -586,15 +655,44 @@ impl NyaTermApp {
         window.focus(&screen.focus, cx);
     }
     pub(in crate::features) fn prepare_android_tracker(&mut self, cx: &mut Context<Self>) {
+        self.ensure_native_component(
+            nyaterm_core::plugins::native::NativeComponentId::Android,
+            |_| true,
+            |app, result, cx| match result {
+                Ok(component) => app.prepare_android_tracker_with_component(component, cx),
+                Err(error) => {
+                    app.shell.set_status(error.message);
+                    cx.notify();
+                }
+            },
+            cx,
+        );
+    }
+    fn prepare_android_tracker_with_component(
+        &mut self,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+        cx: &mut Context<Self>,
+    ) {
         self.ensure_android_clock(cx);
         let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
         let task = self
             .blocking_jobs
             .submit_task("android-discovery", move |_| {
-                let client =
-                    AdbClient::local((!custom.is_empty()).then(|| std::path::Path::new(&custom)))?
-                        .with_server_manager(tracker.server_manager());
+                let client = AdbClient::local(Some(
+                    if custom.is_empty() {
+                        component.root.join("adb").join(if cfg!(windows) {
+                            "adb.exe"
+                        } else {
+                            "adb"
+                        })
+                    } else {
+                        std::path::PathBuf::from(&custom)
+                    }
+                    .as_path(),
+                ))?
+                .with_component(component)
+                .with_server_manager(tracker.server_manager());
                 tracker.ensure(&client)
             });
         cx.spawn(async move |this, cx| {

@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "host_version": ">=2.0.8",
+  "api_version": "2.0.0",
+  "capabilities": [
+    "network"
+  ],
+  "artifact": {
+    "url": "https://example.com/1.0.0.zip",
+    "sha256": "954e89d2beef139d2dd09a9c68f97bb3f183f92f987960edb7763013b8af9c2f",
+    "size": 421,
+    "signature": "untrusted comment: test-only fixture\nRUR0ZXN0b25seXX/ov/CbsEkFZSqc57voKUvHJvyRu8U3aHPU9B9xlcWkVylCtwppq/HAy4G1wuCp9441Rh5xbQW3IiTudeaqQ8=\ntrusted comment: fixture\ngeTSSStAW72x0c+bpFKJ+Xy6Xq0JPnHaw12U+5Y1ulLCdTWF+THMIFt/4vJ/FPCQhFj7PA/t/IfEAacgXdNkBA==\n"
+  }
+}
