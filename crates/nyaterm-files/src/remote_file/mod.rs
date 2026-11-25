@@ -917,6 +917,32 @@ impl RemoteFileService {
         self.read_file_bytes_path(&RemoteFilePath::new(path.as_ref()), max_bytes)
     }
 
+    pub fn read_chunk(
+        &self,
+        path: &str,
+        offset: u64,
+        length: u32,
+        cancelled: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> anyhow::Result<Vec<u8>> {
+        if self.backend()? != RemoteFileBackendKind::Sftp {
+            anyhow::bail!("Binary chunk access requires SFTP");
+        }
+        self.sftp()?.read_chunk(path, offset, length, cancelled)
+    }
+
+    pub fn write_chunk(
+        &self,
+        path: &str,
+        offset: u64,
+        bytes: Vec<u8>,
+        cancelled: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        if self.backend()? != RemoteFileBackendKind::Sftp {
+            anyhow::bail!("Binary chunk access requires SFTP");
+        }
+        self.sftp()?.write_chunk(path, offset, bytes, cancelled)
+    }
+
     pub fn read_file_bytes_path(
         &self,
         path: &RemoteFilePath,

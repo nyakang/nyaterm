@@ -94,7 +94,7 @@ impl russh_sftp::server::Handler for Peer {
     ) -> Result<Handle, Self::Error> {
         let filename = std::str::from_utf8(filename.as_bytes()).unwrap().to_owned();
         let mut files = self.files.lock().unwrap();
-        if flags.contains(OpenFlags::CREATE) {
+        if flags.contains(OpenFlags::CREATE) && !files.files.contains_key(&filename) {
             files.files.insert(filename.clone(), Vec::new());
             let (uid, gid) = files.temporary_owner.unwrap_or((1000, 1000));
             files.attributes.insert(
@@ -108,6 +108,9 @@ impl russh_sftp::server::Handler for Peer {
             );
         } else if !files.files.contains_key(&filename) {
             return Err(StatusCode::NoSuchFile);
+        }
+        if flags.contains(OpenFlags::TRUNCATE) {
+            files.files.get_mut(&filename).unwrap().clear();
         }
         Ok(Handle {
             id,

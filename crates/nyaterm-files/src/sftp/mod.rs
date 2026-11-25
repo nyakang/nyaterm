@@ -4,6 +4,7 @@
 //! targets; downloads validate remote names, local path boundaries, and symbolic
 //! links to prevent server-controlled names from redirecting local writes.
 
+mod chunks;
 mod lightweight;
 
 use crate::remote_file::copy_progress::CopyProgress;
