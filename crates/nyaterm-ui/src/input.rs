@@ -1347,6 +1347,10 @@ impl RenderOnce for NyaInputShell {
                     .when(framed, |this| this.bg(input_surface));
                 if multi_line || state_multi_line {
                     input = input.h(px(88.));
+                } else if let Some(height) = height {
+                    // Input::h only sizes multiline inputs. Override the single-line
+                    // frame through Styled and let flex centering position the text.
+                    input = gpui::Styled::h(input, height).py_0();
                 }
                 if search {
                     input = input.prefix(
@@ -2523,6 +2527,55 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(position.get(), 1);
+    }
+
+    #[gpui::test]
+    fn single_line_explicit_height_stays_stable_when_focused(cx: &mut TestAppContext) {
+        struct Fixture {
+            field: gpui::Entity<NyaInputState>,
+            height: f32,
+        }
+        impl Render for Fixture {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                div().w(px(300.)).child(
+                    NyaInputShell::new("compact-path-input", &self.field)
+                        .compact()
+                        .bare()
+                        .height(px(self.height)),
+                )
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (fixture, cx) = cx.add_window_view(|_, cx| Fixture {
+            field: cx.new(|cx| NyaInputState::new(cx, "/root")),
+            height: 20.,
+        });
+        for height in [20., 24., 32.] {
+            fixture.update(cx, |fixture, cx| {
+                fixture.height = height;
+                cx.notify();
+            });
+            let field = fixture.read_with(cx, |fixture, _| fixture.field.clone());
+            for focused in [false, true] {
+                cx.update(|window, cx| {
+                    _ = window.draw(cx);
+                    if focused {
+                        field.update(cx, |field, cx| field.focus_with_cursor_at_end(window, cx));
+                    } else {
+                        window.blur(cx);
+                    }
+                    _ = window.draw(cx);
+                });
+                assert_eq!(
+                    cx.debug_bounds("compact-path-input").unwrap().size.height,
+                    px(height),
+                );
+            }
+        }
     }
 
     #[gpui::test]

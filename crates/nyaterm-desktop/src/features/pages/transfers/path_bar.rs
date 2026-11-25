@@ -63,6 +63,8 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                 .flex()
                 .items_center()
                 .rounded_sm()
+                .border_1()
+                .border_color(rgb(palette.primary))
                 .bg(rgb(palette.input_surface()))
                 .cursor_text()
                 .on_click(move |_, window, cx| {
@@ -79,8 +81,9 @@ pub(in crate::features::pages::transfers) fn transfer_browser_path_row(
                             let tab = cx.entity();
                             let escape = cx.entity();
                             NyaInputShell::new("transfer-path-completion-input", &field)
+                                .compact()
                                 .bare()
-                                .height(px(metrics.control_height))
+                                .height(px(metrics.control_height - 2.))
                                 .on_plain_enter(move |window, cx| {
                                     enter.update(cx, |panel, cx| {
                                         panel.with_app(cx, |app, cx| {
