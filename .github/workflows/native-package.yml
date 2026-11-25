@@ -18,6 +18,28 @@ on:
       artifact_prefix:
         required: true
         type: string
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Frozen source SHA to package
+        required: true
+        type: string
+      version:
+        description: Workspace version
+        required: true
+        type: string
+      artifact_version:
+        description: Artifact version
+        required: true
+        type: string
+      release_type:
+        description: release or snapshot
+        required: true
+        type: string
+      artifact_prefix:
+        description: Artifact prefix
+        required: true
+        type: string
 
 permissions:
   contents: read
