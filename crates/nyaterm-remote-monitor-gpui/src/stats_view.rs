@@ -12,7 +12,7 @@ use gpui::{
 use nyaterm_core::truncate_preview;
 use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview, RemoteNpuProcess};
 use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview, RemoteGpuProcess};
-use nyaterm_remote_ops::stats::CpuCoreUsage;
+use nyaterm_remote_ops::stats::{CpuCoreUsage, MemoryInfo};
 use nyaterm_ui::plot::NyaRingGauge;
 use nyaterm_ui::presentation::gpui_code_font_family;
 use nyaterm_ui::presentation::progress_bar as stats_progress_bar;
@@ -194,11 +194,22 @@ pub(crate) fn stats_panel(
                                 .text_right(),
                             ),
                     ))
-                    .child(resource_section_card(
+                    .child(resource_section_card_with_action(
                         palette,
                         "icons/resources.svg",
                         cpu_label.clone(),
+                        (!stats.cpu.per_core.is_empty()).then(|| {
+                            resource_details_toggle(
+                                palette,
+                                "stats-cpu-cores-toggle",
+                                format!("{} {cpu_label}", stats.cpu.per_core.len()),
+                                stats_state.cpu_expanded,
+                                || RemoteMonitorAction::ToggleCpu,
+                                cx,
+                            ).into_any_element()
+                        }),
                         div()
+                            .debug_selector(|| "stats-cpu-body".to_string())
                             .flex()
                             .flex_col()
                             .gap_2()
@@ -283,21 +294,24 @@ pub(crate) fn stats_panel(
                                         stats.load.load15,
                                     )),
                             )
-                            .when(!stats.cpu.per_core.is_empty(), |this| {
-                                this.child(cpu_core_summary(
-                                    palette,
-                                    &stats.cpu.per_core,
-                                    stats_state.cpu_expanded,
-                                    cpu_label,
-                                    cx,
-                                ))
+                            .when(stats_state.cpu_expanded && !stats.cpu.per_core.is_empty(), |this| {
+                                this.child(cpu_core_details(palette, &stats.cpu.per_core))
                             }),
                     ))
-                    .child(resource_section_card(
+                    .child(resource_section_card_with_action(
                         palette,
                         "icons/processes.svg",
                         memory_label,
+                        Some(resource_details_toggle(
+                            palette,
+                            "stats-memory-toggle",
+                            t!("resourceMonitor.memoryDetails").to_string(),
+                            stats_state.memory_expanded,
+                            || RemoteMonitorAction::ToggleMemory,
+                            cx,
+                        ).into_any_element()),
                         div()
+                            .debug_selector(|| "stats-memory-body".to_string())
                             .flex()
                             .flex_col()
                             .gap_2()
@@ -380,7 +394,10 @@ pub(crate) fn stats_panel(
                                         cached_label,
                                         format_resource_bytes(stats.memory.cached),
                                     )),
-                            ),
+                            )
+                            .when(stats_state.memory_expanded, |this| {
+                                this.child(memory_details(palette, &stats.memory))
+                            }),
                     ))
                 .child(resource_network_card(palette, &stats_state, &network_select, &network_presentation, cx))
                 .child(resource_section_card(palette, "icons/file/storage.svg", disk_label, disk_rows))
@@ -2057,52 +2074,117 @@ fn resource_progress_bar(palette: nyaterm_ui::ThemePalette, ratio: f64) -> impl 
     stats_progress_bar(palette, ratio)
 }
 
-fn cpu_core_summary(
+fn resource_details_toggle(
     palette: nyaterm_ui::ThemePalette,
-    per_core: &[CpuCoreUsage],
+    id: &'static str,
+    label: String,
     expanded: bool,
-    cpu_label: String,
+    action: fn() -> RemoteMonitorAction,
     cx: &mut Context<RemoteMonitorPanel>,
 ) -> gpui::Div {
-    let summary = format!("{} {cpu_label}", per_core.len());
+    let button = NyaButton::new(id, label)
+        .variant(NyaButtonVariant::Ghost)
+        .small()
+        .compact()
+        .height(px(24.))
+        .text_size(px(11.))
+        .text_color(rgb(palette.text_muted))
+        .icon(if expanded {
+            "icons/chevron-down.svg"
+        } else {
+            "icons/menu/chevron-right.svg"
+        })
+        .on_click(cx.listener(move |panel, _, _, cx| {
+            panel.dispatch(action(), cx);
+        }));
+    div()
+        .debug_selector(move || format!("{id}-trigger"))
+        .flex()
+        .flex_none()
+        .child(button)
+}
 
-    let mut rows = div().flex().flex_col().gap_1().child(
-        div()
-            .id(SharedString::from("stats-cpu-cores-toggle"))
-            .flex()
-            .items_center()
-            .gap_1()
-            .text_size(px(11.))
-            .text_color(rgb(palette.text_muted))
-            .cursor_pointer()
-            .hover(|this| this.bg(rgb(palette.input)))
-            // The panel hops to the app on the event, never during render, and
-            // `with_app` flushes the snapshot the mutation invalidated.
-            .on_click(cx.listener(|panel, _, _, cx| {
-                panel.dispatch(RemoteMonitorAction::ToggleCpu, cx);
-            }))
-            .child(
-                svg()
-                    .size(px(13.))
-                    .path(if expanded {
-                        "icons/chevron-up.svg"
-                    } else {
-                        "icons/chevron-down.svg"
-                    })
-                    .text_color(rgb(palette.text_muted)),
-            )
-            .child(summary),
-    );
+fn cpu_core_details(palette: nyaterm_ui::ThemePalette, per_core: &[CpuCoreUsage]) -> gpui::Div {
+    div()
+        .debug_selector(|| "stats-cpu-details".to_string())
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pt_1()
+        .children(
+            per_core
+                .iter()
+                .map(|core| cpu_core_row(palette, core.id, core.usage)),
+        )
+}
 
-    if expanded {
-        let mut core_rows = div().flex().flex_col().gap_1().pt_1();
-        for core in per_core {
-            core_rows = core_rows.child(cpu_core_row(palette, core.id, core.usage));
-        }
-        rows = rows.child(core_rows);
+fn optional_resource_bytes(value: Option<u64>) -> String {
+    value
+        .map(format_resource_bytes)
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn memory_swap_value(memory: &MemoryInfo) -> String {
+    if memory.swap_total == Some(0) {
+        t!("resourceMonitor.swapDisabled").to_string()
+    } else {
+        format!(
+            "{} / {}",
+            optional_resource_bytes(memory.swap_used),
+            optional_resource_bytes(memory.swap_total)
+        )
     }
+}
 
-    rows
+fn memory_details(palette: nyaterm_ui::ThemePalette, memory: &MemoryInfo) -> gpui::Div {
+    let rows = [
+        (
+            t!("resourceMonitor.memoryFree").to_string(),
+            optional_resource_bytes(memory.free),
+        ),
+        (
+            t!("resourceMonitor.memoryBuffers").to_string(),
+            optional_resource_bytes(memory.buffers),
+        ),
+        (
+            t!("resourceMonitor.memoryShared").to_string(),
+            optional_resource_bytes(memory.shared),
+        ),
+        (
+            t!("resourceMonitor.memorySwap").to_string(),
+            memory_swap_value(memory),
+        ),
+    ];
+    div()
+        .debug_selector(|| "stats-memory-details".to_string())
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pt_1()
+        .children(rows.into_iter().map(|(label, value)| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .text_size(px(11.))
+                .text_color(rgb(palette.text_muted))
+                .child(label)
+                .child(
+                    div()
+                        .font_family(gpui_code_font_family())
+                        .text_right()
+                        .child(value),
+                )
+        }))
+        .when(memory.buffers.is_some(), |this| {
+            this.child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(palette.text_dimmed))
+                    .child(t!("resourceMonitor.memoryBuffersNote").to_string()),
+            )
+        })
 }
 
 fn cpu_core_row(palette: nyaterm_ui::ThemePalette, index: u32, usage: f64) -> gpui::Div {
@@ -2145,9 +2227,40 @@ mod tests {
     use super::{
         build_gpu_summary, build_npu_summary, format_memory_mb, format_resource_bytes,
         format_resource_percent, format_resource_rate, format_resource_uptime, format_temperature,
+        memory_swap_value, optional_resource_bytes,
     };
     use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview};
     use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview};
+
+    #[test]
+    fn memory_details_format_unknown_zero_and_swap_separately() {
+        use nyaterm_remote_ops::stats::MemoryInfo;
+
+        nyaterm_i18n::preload().unwrap();
+        assert_eq!(optional_resource_bytes(None), "—");
+        assert_eq!(optional_resource_bytes(Some(0)), format_resource_bytes(0));
+        assert_eq!(memory_swap_value(&MemoryInfo::default()), "— / —");
+        assert_eq!(
+            memory_swap_value(&MemoryInfo {
+                swap_total: Some(0),
+                swap_used: Some(0),
+                ..Default::default()
+            }),
+            rust_i18n::t!("resourceMonitor.swapDisabled").to_string(),
+        );
+        assert_eq!(
+            memory_swap_value(&MemoryInfo {
+                swap_total: Some(4096),
+                swap_used: Some(1024),
+                ..Default::default()
+            }),
+            format!(
+                "{} / {}",
+                format_resource_bytes(1024),
+                format_resource_bytes(4096)
+            ),
+        );
+    }
 
     #[test]
     fn uptime_under_a_day_shows_hours_and_minutes_not_zero_days() {

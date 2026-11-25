@@ -334,6 +334,7 @@ fn network_interfaces(
                             .compact()
                             .height(px(24.))
                             .text_size(px(11.))
+                            .text_color(rgb(palette.text_muted))
                             .icon(if state.network_interfaces_expanded {
                                 "icons/chevron-down.svg"
                             } else {

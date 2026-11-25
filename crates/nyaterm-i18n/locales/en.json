@@ -2627,6 +2627,13 @@
     "transcriptSaved": "Session text saved to %{path}"
   },
   "resourceMonitor": {
+    "memoryDetails": "Details",
+    "memoryFree": "Free",
+    "memoryBuffers": "Buffers",
+    "memoryShared": "Shared",
+    "memorySwap": "Swap (used / total)",
+    "swapDisabled": "Not enabled",
+    "memoryBuffersNote": "Buffers are included in cache; do not add them again.",
     "allInterfaces": "All interfaces",
     "collectingNetworkHistory": "Collecting network history…",
     "download": "Download",

@@ -59,6 +59,12 @@ pub struct MemoryInfo {
     pub used: u64,
     pub available: u64,
     pub cached: u64,
+    /// Optional details distinguish unsupported or missing metrics from true zeroes.
+    pub free: Option<u64>,
+    pub buffers: Option<u64>,
+    pub shared: Option<u64>,
+    pub swap_total: Option<u64>,
+    pub swap_used: Option<u64>,
 }
 
 #[derive(serde::Serialize, Debug, Clone, PartialEq)]
@@ -575,8 +581,12 @@ esac;
 set -- $(awk '"'"'
 /MemTotal:/ { t=$2 }
 /MemAvailable:/ { a=$2 }
-/Buffers:/ { b=$2 }
+/Buffers:/ { b=$2; hb=1 }
 /^Cached:/ { c=$2 }
+/^MemFree:/ { f=$2; hf=1 }
+/^Shmem:/ { sh=$2; hsh=1 }
+/^SwapTotal:/ { st=$2; hst=1 }
+/^SwapFree:/ { sf=$2; hsf=1 }
 /SReclaimable:/ { s=$2 }
 END {
   if (!t) t=0;
@@ -584,13 +594,24 @@ END {
   if (!b) b=0;
   if (!c) c=0;
   if (!s) s=0;
-  printf "%.0f %.0f %.0f\n", (t-a)*1024, a*1024, (b+c+s)*1024;
+  printf "%.0f %.0f %.0f", (t-a)*1024, a*1024, (b+c+s)*1024;
+  printf " %s %s %s %s %s\n", \
+    hf ? sprintf("%.0f", f*1024) : "-", \
+    hb ? sprintf("%.0f", b*1024) : "-", \
+    hsh ? sprintf("%.0f", sh*1024) : "-", \
+    hst ? sprintf("%.0f", st*1024) : "-", \
+    hst && hsf && sf <= st ? sprintf("%.0f", (st-sf)*1024) : "-";
 }
 '"'"' /proc/meminfo 2>/dev/null);
 
 mem_used=${1:-0};
 mem_avail=${2:-0};
 mem_cache=${3:-0};
+mem_free=${4:--};
+mem_buffers=${5:--};
+mem_shared=${6:--};
+mem_swap_total=${7:--};
+mem_swap_used=${8:--};
 
 printf "SYSTEM\t%s\t%s\t%s\t%s\n" "$host" "$uptime_sec" "$os" "$arch";
 printf "LOAD\t%s\t%s\t%s\n" "$l1" "$l5" "$l15";
@@ -620,7 +641,7 @@ if [ -r /proc/stat ]; then
   done </proc/stat;
 fi;
 
-printf "MEMORY\t%s\t%s\t%s\n" "$mem_used" "$mem_avail" "$mem_cache";
+printf "MEMORY\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$mem_used" "$mem_avail" "$mem_cache" "$mem_free" "$mem_buffers" "$mem_shared" "$mem_swap_total" "$mem_swap_used";
 
 if [ "$collect_users" = 1 ]; then
   if ! command -v who >/dev/null 2>&1; then
@@ -948,6 +969,11 @@ pub fn parse_stats_output(output: &str) -> anyhow::Result<ParsedRemoteStats> {
                     used: cols[1].parse().unwrap_or(0),
                     available: cols[2].parse().unwrap_or(0),
                     cached: cols[3].parse().unwrap_or(0),
+                    free: cols.get(4).and_then(|value| value.parse().ok()),
+                    buffers: cols.get(5).and_then(|value| value.parse().ok()),
+                    shared: cols.get(6).and_then(|value| value.parse().ok()),
+                    swap_total: cols.get(7).and_then(|value| value.parse().ok()),
+                    swap_used: cols.get(8).and_then(|value| value.parse().ok()),
                 };
             }
 
@@ -1138,6 +1164,107 @@ mod tests {
         assert!(SYSINFO_SCRIPT.contains("/sys/class/net/$nic/team"));
         assert!(SYSINFO_SCRIPT.contains("/sys/class/net/$nic\"/lower_*"));
         assert!(SYSINFO_SCRIPT.contains("[ \"$carrier\" != \"1\" ]"));
+    }
+
+    #[test]
+    fn memory_probe_converts_kib_and_keeps_unavailable_details_unknown() {
+        use std::io::Write;
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+
+        let awk = if cfg!(windows) {
+            let shell = std::env::var_os("NYATERM_TEST_SH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    let output = Command::new("git").arg("--exec-path").output().unwrap();
+                    assert!(output.status.success());
+                    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+                        .ancestors()
+                        .nth(3)
+                        .unwrap()
+                        .join("usr/bin/sh.exe")
+                });
+            shell.with_file_name("awk.exe")
+        } else {
+            PathBuf::from("awk")
+        };
+        let program = SYSINFO_SCRIPT
+            .split("set -- $(awk '\"'\"'\n")
+            .nth(1)
+            .unwrap()
+            .split("'\"'\"' /proc/meminfo")
+            .next()
+            .unwrap();
+        for (fixture, expected) in [
+            (
+                "MemTotal: 100 kB\nMemAvailable: 60 kB\nMemFree: 20 kB\nBuffers: 3 kB\nCached: 10 kB\nSReclaimable: 2 kB\nShmem: 4 kB\nSwapTotal: 30 kB\nSwapFree: 10 kB\n",
+                "40960 61440 15360 20480 3072 4096 30720 20480",
+            ),
+            (
+                "MemTotal: 100 kB\nMemAvailable: 60 kB\n",
+                "40960 61440 0 - - - - -",
+            ),
+            ("SwapTotal: 0 kB\nSwapFree: 0 kB\n", "0 0 0 - - - 0 0"),
+            ("SwapTotal: 1 kB\nSwapFree: 2 kB\n", "0 0 0 - - - 1024 -"),
+        ] {
+            let mut child = Command::new(&awk)
+                .arg(program)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(fixture.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+        }
+    }
+
+    #[test]
+    fn memory_details_preserve_old_snapshots_and_distinguish_unknown_from_zero() {
+        for (line, expected) in [
+            ("MEMORY\t1000\t3000\t500", [None; 5]),
+            (
+                "MEMORY\t1000\t3000\t500\t100\t200\t300\t4000\t500",
+                [Some(100), Some(200), Some(300), Some(4000), Some(500)],
+            ),
+            ("MEMORY\t1000\t3000\t500\t0\t0\t0\t0\t0", [Some(0); 5]),
+            (
+                "MEMORY\t1000\t3000\t500\t-\tinvalid\t-1\t18446744073709551616\t-",
+                [None; 5],
+            ),
+            (
+                "MEMORY\t1000\t3000\t500\t100",
+                [Some(100), None, None, None, None],
+            ),
+        ] {
+            let output = format!("SYSTEM\tnode-1\t1\tLinux\tx86_64\n{line}\n");
+            let memory = parse_stats_output(&output).unwrap().stats.memory;
+            assert_eq!(
+                (memory.used, memory.available, memory.cached),
+                (1000, 3000, 500)
+            );
+            assert_eq!(
+                [
+                    memory.free,
+                    memory.buffers,
+                    memory.shared,
+                    memory.swap_total,
+                    memory.swap_used
+                ],
+                expected
+            );
+        }
     }
 
     #[test]

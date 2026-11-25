@@ -81,6 +81,7 @@ pub struct StatsPresentationState {
     pub last_success_at: Option<Instant>,
     pub selected_network_interface: Option<String>,
     pub cpu_expanded: bool,
+    pub memory_expanded: bool,
     pub pending: bool,
     pub error: bool,
     pub consecutive_refresh_failures: u8,

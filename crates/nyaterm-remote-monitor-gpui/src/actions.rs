@@ -22,6 +22,7 @@ pub enum RemoteMonitorAction {
     ToggleNpu(String),
     ProcessOffset(RemoteMonitorKind, usize),
     ToggleCpu,
+    ToggleMemory,
     ToggleNetworkInterfaces,
     CloseContainerMenu,
     ToggleContainerMenu(String),

@@ -2627,6 +2627,13 @@
     "transcriptSaved": "工作階段文字已儲存至 %{path}"
   },
   "resourceMonitor": {
+    "memoryDetails": "詳情",
+    "memoryFree": "空閒",
+    "memoryBuffers": "Buffers",
+    "memoryShared": "共用記憶體",
+    "memorySwap": "Swap（已用 / 總量）",
+    "swapDisabled": "未啟用",
+    "memoryBuffersNote": "快取已包含 Buffers，請勿重複相加。",
     "allInterfaces": "所有網卡",
     "collectingNetworkHistory": "正在收集網路歷史資料…",
     "download": "下載",
