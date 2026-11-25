@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs-site/static/img/nyaterm.svg" alt="NyaTerm" width="128" height="128">
+  <img src="../static/img/nyaterm.svg" alt="NyaTerm" width="128" height="128">
 </p>
 
 <h1 align="center">NyaTerm</h1>
@@ -49,16 +49,16 @@
   </a>
 </p>
 <p align="center">
-  <a href="../../README.md">English</a> · <a href="./docs-site/i18n/README.pt-BR.md">Português (Brasil)</a>
+  <a href="../../README.md">English</a> · <a href="./README.pt-BR.md">Português (Brasil)</a>
 </p>
 
 ---
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/product-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/product-light.png">
-    <img alt="NyaTerm 主工作区" src="./docs-site/static/img/home/product-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/product-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/product-light.png">
+    <img alt="NyaTerm 主工作区" src="../static/img/home/product-light.png">
   </picture>
 </p>
 
@@ -183,9 +183,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/overview-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/overview-light.png">
-    <img alt="NyaTerm 工作区概览" src="./docs-site/static/img/home/overview-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/overview-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/overview-light.png">
+    <img alt="NyaTerm 工作区概览" src="../static/img/home/overview-light.png">
   </picture>
 </p>
 
@@ -195,9 +195,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/cover-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/cover-light.png">
-    <img alt="NyaTerm 背景图自定义" src="./docs-site/static/img/home/cover-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/cover-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/cover-light.png">
+    <img alt="NyaTerm 背景图自定义" src="../static/img/home/cover-light.png">
   </picture>
 </p>
 
@@ -207,9 +207,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/terminal-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/terminal-light.png">
-    <img alt="NyaTerm 终端功能" src="./docs-site/static/img/home/terminal-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/terminal-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/terminal-light.png">
+    <img alt="NyaTerm 终端功能" src="../static/img/home/terminal-light.png">
   </picture>
 </p>
 
@@ -219,9 +219,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/files-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/files-light.png">
-    <img alt="NyaTerm SFTP 文件工作流" src="./docs-site/static/img/home/files-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/files-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/files-light.png">
+    <img alt="NyaTerm SFTP 文件工作流" src="../static/img/home/files-light.png">
   </picture>
 </p>
 
@@ -231,9 +231,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/security-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/security-light.png">
-    <img alt="NyaTerm 安全与网络工具" src="./docs-site/static/img/home/security-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/security-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/security-light.png">
+    <img alt="NyaTerm 安全与网络工具" src="../static/img/home/security-light.png">
   </picture>
 </p>
 
@@ -243,9 +243,9 @@ NyaTerm 适合每天在服务器、本地命令、设备调试和配置文件之
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/sync-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/sync-light.png">
-    <img alt="NyaTerm 同步与备份" src="./docs-site/static/img/home/sync-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/sync-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/sync-light.png">
+    <img alt="NyaTerm 同步与备份" src="../static/img/home/sync-light.png">
   </picture>
 </p>
 

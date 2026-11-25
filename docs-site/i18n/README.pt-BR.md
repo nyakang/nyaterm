@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs-site/static/img/nyaterm.svg" alt="NyaTerm" width="128" height="128">
+  <img src="../static/img/nyaterm.svg" alt="NyaTerm" width="128" height="128">
 </p>
 
 <h1 align="center">NyaTerm</h1>
@@ -37,16 +37,16 @@
 </p>
 
 <p align="center">
-  <a href="../../README.md">English</a> · <a href="./docs-site/i18n/README.zh-CN.md">简体中文</a>
+  <a href="../../README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
 ---
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/product-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/product-light.png">
-    <img alt="Workspace principal do NyaTerm" src="./docs-site/static/img/home/product-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/product-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/product-light.png">
+    <img alt="Workspace principal do NyaTerm" src="../static/img/home/product-light.png">
   </picture>
 </p>
 
@@ -176,9 +176,9 @@ Gerencie sessões SSH, shell local, Telnet e Serial em um único workspace com a
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/overview-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/overview-light.png">
-    <img alt="Visão geral do workspace do NyaTerm" src="./docs-site/static/img/home/overview-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/overview-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/overview-light.png">
+    <img alt="Visão geral do workspace do NyaTerm" src="../static/img/home/overview-light.png">
   </picture>
 </p>
 
@@ -188,9 +188,9 @@ Use um papel de parede local atrás da janela principal, ajuste `Image Sizing`, 
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/cover-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/cover-light.png">
-    <img alt="Personalização da imagem de fundo do NyaTerm" src="./docs-site/static/img/home/cover-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/cover-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/cover-light.png">
+    <img alt="Personalização da imagem de fundo do NyaTerm" src="../static/img/home/cover-light.png">
   </picture>
 </p>
 
@@ -200,9 +200,9 @@ Use histórico de comandos, busca, tradução, links de ação, carimbos de data
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/terminal-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/terminal-light.png">
-    <img alt="Recursos do terminal do NyaTerm" src="./docs-site/static/img/home/terminal-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/terminal-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/terminal-light.png">
+    <img alt="Recursos do terminal do NyaTerm" src="../static/img/home/terminal-light.png">
   </picture>
 </p>
 
@@ -212,9 +212,9 @@ Navegue arquivos SFTP ao lado do terminal, gerencie transferências e envie alte
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/files-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/files-light.png">
-    <img alt="Fluxo de arquivos SFTP do NyaTerm" src="./docs-site/static/img/home/files-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/files-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/files-light.png">
+    <img alt="Fluxo de arquivos SFTP do NyaTerm" src="../static/img/home/files-light.png">
   </picture>
 </p>
 
@@ -224,9 +224,9 @@ Gerencie credenciais, OTP, hosts conhecidos, proxies, hosts de salto e túneis S
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/security-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/security-light.png">
-    <img alt="Ferramentas de segurança e rede do NyaTerm" src="./docs-site/static/img/home/security-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/security-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/security-light.png">
+    <img alt="Ferramentas de segurança e rede do NyaTerm" src="../static/img/home/security-light.png">
   </picture>
 </p>
 
@@ -236,9 +236,9 @@ Sincronize snapshots de configuração portáteis criptografados e restaure back
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs-site/static/img/home/sync-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./docs-site/static/img/home/sync-light.png">
-    <img alt="Sincronização e backup do NyaTerm" src="./docs-site/static/img/home/sync-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="../static/img/home/sync-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="../static/img/home/sync-light.png">
+    <img alt="Sincronização e backup do NyaTerm" src="../static/img/home/sync-light.png">
   </picture>
 </p>
 
