@@ -3610,6 +3610,42 @@ fn save_general_and_diagnostics_settings_roundtrip() {
 }
 
 #[test]
+fn save_general_settings_preserves_every_shipped_ui_language() {
+    let dir = unique_temp_dir("settings-ui-language-roundtrip");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let mut summary = store.load_app_settings_summary().expect("load");
+
+    for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
+        summary.language = language.to_string();
+        let saved = store.save_general_settings(&summary).expect("save general");
+        assert_eq!(saved.language, language, "saved summary for {language}");
+        let raw = store.load_settings_value().expect("raw");
+        assert_eq!(
+            raw["ui"]["language"],
+            serde_json::Value::String(language.into()),
+            "persisted ui.language for {language}"
+        );
+    }
+
+    // Legacy aliases stay untouched in storage; the UI resolves them on read.
+    summary.language = "pt_BR".to_string();
+    let saved = store.save_general_settings(&summary).expect("save alias");
+    assert_eq!(saved.language, "pt_BR");
+    assert_eq!(
+        store.load_settings_value().expect("raw")["ui"]["language"],
+        serde_json::Value::String("pt_BR".into())
+    );
+
+    summary.language = "  ".to_string();
+    let saved = store
+        .save_general_settings(&summary)
+        .expect("save blank language");
+    assert_eq!(saved.language, "en");
+    drop(store);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn save_ui_layout_bottom_panel_state_roundtrip_and_clamp() {
     let dir = unique_temp_dir("settings-bottom-panel-heights");
     let store = ConnectionStore::open(&dir).expect("store");

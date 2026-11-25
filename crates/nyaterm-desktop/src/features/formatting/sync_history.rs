@@ -34,9 +34,9 @@ pub(in crate::features) fn cloud_sync_history_summary(entry: &CloudSyncHistoryEn
             "settings.syncPullSuccess",
             "settings.syncRecoverCurrentSuccess",
         ] {
-            if ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
+            if crate::i18n::available_locales()
                 .iter()
-                .any(|locale| entry.message.trim() == t!(key, locale = *locale).as_ref())
+                .any(|locale| entry.message.trim() == t!(key, locale = locale.as_ref()).as_ref())
             {
                 return t!(key).to_string();
             }

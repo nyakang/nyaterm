@@ -342,7 +342,7 @@ artifacts therefore do not establish the Ubuntu 22.04 release floor.
   checks passed. These were packaging tests, not complete application releases.
 - Windows native ABI/TLS tests: five passed. Both platforms created all ten
   video elements and retained an unchanged runtime inventory.
-- All six locales now include SPICE labels, explanations and errors; all 15
+- All seven locales now include SPICE labels, explanations and errors; all 15
   catalog tests passed, including key parity and interpolation placeholders.
 - Windows full-workspace tests passed: 7,588 tests, 74 ignored, across 102 test
   binaries/doc-test groups. The subsequent file-association change passed both

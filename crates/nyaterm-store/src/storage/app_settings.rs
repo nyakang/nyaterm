@@ -1806,12 +1806,12 @@ impl ConnectionStore {
             serde_json::to_value(&settings.connection_type_layout)?,
         );
         // UI language lives under ui.language (Tauri UiConfig.language).
-        let language = match settings.language.as_str() {
-            "zh-CN" | "zh" => "zh-CN",
-            "zh-TW" => "zh-TW",
-            "ja" => "ja",
-            _ => "en",
-        };
+        // Persist the caller's id verbatim instead of whitelisting a few locales:
+        // that whitelist silently rewrote every newly shipped language to `en`,
+        // so selecting pt-BR looked correct until the next startup reloaded `en`.
+        // Aliases are resolved when the setting is read and applied by the UI.
+        let language = settings.language.trim();
+        let language = if language.is_empty() { "en" } else { language };
         set_nested_json_string(&mut value, &["ui", "language"], language.to_string());
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()

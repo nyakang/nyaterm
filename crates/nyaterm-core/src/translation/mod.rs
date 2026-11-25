@@ -106,6 +106,7 @@ pub fn google_translate_lang(lang: &str) -> &str {
     match lang.trim() {
         "zh-CN" | "zh_CN" | "zh" => "zh-CN",
         "zh-TW" | "zh_TW" => "zh-TW",
+        "pt-BR" | "pt_BR" => "pt",
         "" => "zh-CN",
         value => value,
     }
@@ -115,6 +116,7 @@ pub fn microsoft_translate_lang(lang: &str) -> &str {
     match lang.trim() {
         "zh-CN" | "zh_CN" | "zh" => "zh-Hans",
         "zh-TW" | "zh_TW" => "zh-Hant",
+        "pt" | "pt-BR" | "pt_BR" => "pt-BR",
         "" => "zh-Hans",
         value => value,
     }
@@ -130,7 +132,7 @@ pub fn deepl_translate_lang(lang: &str) -> &str {
         "fr" => "FR",
         "de" => "DE",
         "es" => "ES",
-        "pt" => "PT-BR",
+        "pt" | "pt-BR" | "pt_BR" => "PT-BR",
         "ru" => "RU",
         "it" => "IT",
         "" => "ZH-HANS",
@@ -156,7 +158,7 @@ pub fn baidu_translate_lang(lang: &str) -> &str {
         "fr" => "fra",
         "de" => "de",
         "es" => "spa",
-        "pt" => "pt",
+        "pt" | "pt-BR" | "pt_BR" => "pt",
         "ru" => "ru",
         "it" => "it",
         "" => "zh",
@@ -174,7 +176,7 @@ pub fn ali_translate_lang(lang: &str) -> &str {
         "fr" => "fr",
         "de" => "de",
         "es" => "es",
-        "pt" => "pt",
+        "pt" | "pt-BR" | "pt_BR" => "pt",
         "ru" => "ru",
         "it" => "it",
         "" => "zh",
@@ -192,7 +194,7 @@ pub fn youdao_translate_lang(lang: &str) -> &str {
         "fr" => "fr",
         "de" => "de",
         "es" => "es",
-        "pt" => "pt",
+        "pt" | "pt-BR" | "pt_BR" => "pt",
         "ru" => "ru",
         "it" => "it",
         "" => "zh-CHS",

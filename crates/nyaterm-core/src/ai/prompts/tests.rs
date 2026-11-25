@@ -16,7 +16,7 @@ use crate::ai::{
     codex_thread_start_request_with_language, system_prompt,
 };
 
-const LOCALES: [&str; 6] = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"];
+const LOCALES: [&str; 7] = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"];
 
 fn model() -> ResolvedAiModel {
     ResolvedAiModel {
@@ -41,6 +41,8 @@ fn locale_aliases_and_unknown_languages_match_ui_fallbacks() {
         ("ja_JP", "ja"),
         ("ko-KR", "ko"),
         ("fr_CA", "fr"),
+        ("pt_BR", "pt-BR"),
+        ("pt-PT", "pt-BR"),
         ("en-GB", "en"),
         ("de-DE", "en"),
         ("", "en"),

@@ -404,7 +404,7 @@ mod tests {
                 file_error_message(&error),
                 rust_i18n::t!("android.errors.fileOperationFailed")
             );
-            for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "fr"] {
+            for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "fr", "pt-BR"] {
                 let message = rust_i18n::t!(key, locale = locale);
                 assert!(!message.is_empty());
                 assert_ne!(message, key);
@@ -443,7 +443,7 @@ mod tests {
                 .context(AdbFileError);
             assert_eq!(super::file_error_code(&error), policy.code());
             assert!(!file_error_message(&error).contains("private"));
-            for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "fr"] {
+            for locale in ["zh-CN", "zh-TW", "en", "ja", "ko", "fr", "pt-BR"] {
                 assert_ne!(rust_i18n::t!(key, locale = locale), key);
             }
         }

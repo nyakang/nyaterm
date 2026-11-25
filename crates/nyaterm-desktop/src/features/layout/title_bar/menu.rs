@@ -1016,7 +1016,7 @@ mod tests {
                 }),
             });
         });
-        let check_labels = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
+        let check_labels = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"]
             .map(|locale| rust_i18n::t!("menu.checkForUpdates", locale = locale).to_string());
         let (item, color) = cx.update_entity(&app, |app, cx| {
             let item = app
@@ -1043,7 +1043,7 @@ mod tests {
                 return;
             }
         };
-        let statuses = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"]
+        let statuses = ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"]
             .map(|locale| rust_i18n::t!("updater.hasNewVersion", locale = locale).to_string());
         assert!(check_labels.iter().any(|label| label == item.test_label()));
         assert_eq!(

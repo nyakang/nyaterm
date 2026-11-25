@@ -344,7 +344,7 @@ fn checks_follow_current_state_and_disabled_commands_are_revalidated() {
 
 #[test]
 fn all_supported_locales_translate_native_system_menu_labels() {
-    for locale in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+    for locale in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
         for key in [
             "menu.services",
             "menu.hide",

@@ -328,7 +328,7 @@ fn translation_target_languages() -> &'static [(&'static str, &'static str)] {
         ("fr", "Français"),
         ("de", "Deutsch"),
         ("es", "Español"),
-        ("pt", "Português"),
+        ("pt", "Português (Brasil)"),
         ("ru", "Русский"),
         ("it", "Italiano"),
         ("ar", "العربية"),

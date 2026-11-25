@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn fake_claude_cli_accepts_localized_system_arguments_on_windows() {
         let (_script_dir, script) = fake_claude_script(false);
-        for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr"] {
+        for language in ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "pt-BR"] {
             let (settings, mut request) = fixture_request(&script);
             request.options.language = language.into();
             let completion = run_claude_code(
