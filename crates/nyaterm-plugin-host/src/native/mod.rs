@@ -306,17 +306,16 @@ fn refresh(
     }
 }
 fn client() -> PluginResult<reqwest::blocking::Client> {
-    // Bound stalled reads without imposing a total deadline on large downloads.
-    // The loop checks cancellation between chunks, including during shutdown.
-    reqwest::blocking::ClientBuilder::from(
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .read_timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::none()),
-    )
-    .timeout(None)
-    .build()
-    .map_err(|_| io_error())
+    // Blocking Response::read applies this timeout to each read. The async
+    // read_timeout wrapper requires a Tokio reactor on the polling thread,
+    // whereas our component worker intentionally uses ordinary blocking I/O.
+    reqwest::blocking::Client::builder()
+        .user_agent(concat!("nyaterm-app/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| io_error())
 }
 fn change(
     registry: &mut Registry,
@@ -504,6 +503,45 @@ fn change(
 #[cfg(test)]
 mod tests {
     use nyaterm_core::plugins::native::NativeComponentId;
+
+    #[test]
+    fn component_http_body_reads_without_a_caller_tokio_runtime() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 8192);
+            }
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .contains("user-agent: nyaterm-app/")
+            );
+            stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\ntest\r\n0\r\n\r\n").unwrap();
+        });
+        let mut response = super::client()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .unwrap();
+        let mut body = Vec::new();
+        response.read_to_end(&mut body).unwrap();
+        assert_eq!(body, b"test");
+        server.join().unwrap();
+    }
 
     fn queued_service() -> (
         super::NativeService,
