@@ -348,3 +348,102 @@ fn an_early_foreground_exit_does_not_create_an_owned_daemon_record() {
         ServerShutdownReport::default()
     );
 }
+
+#[test]
+fn release_stops_owned_servers_and_keeps_the_manager_usable() {
+    let registry = ServerRegistry::default();
+    let client = client();
+    ensure(
+        &registry,
+        &client,
+        &AdbOperationControl::default(),
+        |client| Ok(spawn_fixture(client, "server")),
+    )
+    .unwrap();
+    assert_eq!(client.version().unwrap(), 41);
+
+    assert_eq!(
+        registry.release().finish(Duration::from_secs(1)),
+        ServerShutdownReport {
+            terminated: 1,
+            ..ServerShutdownReport::default()
+        }
+    );
+    wait_closed(client.server);
+
+    // Release is not terminal: work coming back starts a fresh server.
+    ensure(
+        &registry,
+        &client,
+        &AdbOperationControl::default(),
+        |client| Ok(spawn_fixture(client, "server")),
+    )
+    .unwrap();
+    assert_eq!(client.version().unwrap(), 41);
+    assert_eq!(
+        registry.begin_shutdown().finish(Duration::from_secs(1)),
+        ServerShutdownReport {
+            terminated: 1,
+            ..ServerShutdownReport::default()
+        }
+    );
+}
+
+#[test]
+fn release_never_touches_foreign_servers() {
+    let registry = ServerRegistry::default();
+    let client = client();
+    let mut foreign = OwnedServer(Some(spawn_fixture(&client, "server")), None);
+    wait_ready(&client);
+    ensure(&registry, &client, &AdbOperationControl::default(), |_| {
+        panic!("foreign server was replaced")
+    })
+    .unwrap();
+
+    assert_eq!(
+        registry.release().finish(Duration::from_secs(1)),
+        ServerShutdownReport::default()
+    );
+    assert_eq!(client.version().unwrap(), 41);
+    assert!(foreign.0.as_mut().unwrap().try_wait().unwrap().is_none());
+}
+
+#[test]
+fn a_pending_release_never_stops_a_server_started_after_it() {
+    let registry = ServerRegistry::default();
+    let client = client();
+    ensure(
+        &registry,
+        &client,
+        &AdbOperationControl::default(),
+        |client| Ok(spawn_fixture(client, "server")),
+    )
+    .unwrap();
+    assert_eq!(client.version().unwrap(), 41);
+
+    // The last lease schedules this cleanup on a worker; the stop happens later.
+    let pending = registry.release();
+    // The user comes back before that worker runs, and the first server is gone.
+    stop_fixture(client.server);
+    wait_closed(client.server);
+    ensure(
+        &registry,
+        &client,
+        &AdbOperationControl::default(),
+        |client| Ok(spawn_fixture(client, "server")),
+    )
+    .unwrap();
+    assert_eq!(client.version().unwrap(), 41);
+
+    // Finishing the older release must stop what it claimed, not the
+    // replacement that started in the meantime.
+    pending.finish(Duration::from_secs(1));
+    assert_eq!(client.version().unwrap(), 41);
+    assert_eq!(
+        registry.begin_shutdown().finish(Duration::from_secs(1)),
+        ServerShutdownReport {
+            terminated: 1,
+            ..ServerShutdownReport::default()
+        }
+    );
+}

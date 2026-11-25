@@ -16,6 +16,16 @@ use nyaterm_files::sftp::RemoteFilePath;
 use rust_i18n::t;
 use std::sync::Arc;
 
+/// Sessions that need a live adb server, not just a device listing.
+fn android_session(kind: nyaterm_transport::SessionKind) -> bool {
+    matches!(
+        kind,
+        nyaterm_transport::SessionKind::AdbShell
+            | nyaterm_transport::SessionKind::AdbFiles
+            | nyaterm_transport::SessionKind::AdbScreen
+    )
+}
+
 impl NyaTermApp {
     pub(in crate::features) fn android_screen_button_available(&self, id: &str) -> bool {
         matches!(
@@ -141,7 +151,11 @@ impl NyaTermApp {
         if !self.session.start_request_can_start(&options) {
             return;
         }
+        // A session needs the server before any tab or view exists; the
+        // session itself then keeps the lease.
+        self.android.sync_discovery(true);
         self.ensure_android_clock(cx);
+        self.android_ensure_tracker(cx);
         let ConnectionType::Adb {
             device,
             directory,
@@ -654,12 +668,51 @@ impl NyaTermApp {
         }
         window.focus(&screen.focus, cx);
     }
+    /// Whether some surface in this window needs device discovery.
+    pub(in crate::features) fn android_discovery_needed(&self) -> bool {
+        // A start that is still binding its device has no view or session yet
+        // but is talking to the server right now; counting it keeps the tick
+        // from releasing the lease in the middle of that bind.
+        !self.android.pending.is_empty()
+            || self
+                .session
+                .start_pending_entries()
+                .any(|(_, pending)| android_session(pending.kind))
+            || self
+                .connection_state
+                .active_editor_draft()
+                .is_some_and(|editor| editor.kind == crate::models::ConnectionKindTab::Adb)
+            || !self.android.views.is_empty()
+            || self
+                .session
+                .ordered_sessions()
+                .iter()
+                .any(|session| android_session(session.kind))
+    }
+
+    pub(in crate::features) fn sync_android_discovery(&mut self) {
+        let needed = self.android_discovery_needed();
+        self.android.sync_discovery(needed);
+    }
+
     pub(in crate::features) fn prepare_android_tracker(&mut self, cx: &mut Context<Self>) {
+        // Some callers arrive before the draft is visible to
+        // `active_editor_draft`, so the lease is taken here unconditionally;
+        // the editor/view/session exits give it back.
+        self.android.sync_discovery(true);
+        self.ensure_android_clock(cx);
+        if self.android.component.is_some() {
+            self.android_ensure_tracker(cx);
+            return;
+        }
         self.ensure_native_component(
             nyaterm_core::plugins::native::NativeComponentId::Android,
             |_| true,
             |app, result, cx| match result {
-                Ok(component) => app.prepare_android_tracker_with_component(component, cx),
+                Ok(component) => {
+                    app.android.component = Some(component);
+                    app.android_ensure_tracker(cx);
+                }
                 Err(error) => {
                     app.shell.set_status(error.message);
                     cx.notify();
@@ -668,12 +721,28 @@ impl NyaTermApp {
             cx,
         );
     }
-    fn prepare_android_tracker_with_component(
-        &mut self,
-        component: nyaterm_core::plugins::native::NativeLaunch,
-        cx: &mut Context<Self>,
-    ) {
-        self.ensure_android_clock(cx);
+
+    /// Whether something needs discovery but no tracker is serving it.
+    ///
+    /// Split out so tests can assert the restart decision without an `adb`.
+    pub(in crate::features) fn android_needs_tracker(&self) -> bool {
+        self.android.holds_discovery()
+            && !self.android.tracker_start_pending
+            && !self.android.tracker.is_active()
+            && self
+                .android
+                .tracker_retry_after
+                .is_none_or(|at| std::time::Instant::now() >= at)
+    }
+
+    pub(in crate::features) fn android_ensure_tracker(&mut self, cx: &mut Context<Self>) {
+        if !self.android_needs_tracker() {
+            return;
+        }
+        let Some(component) = self.android.component.clone() else {
+            return;
+        };
+        self.android.tracker_start_pending = true;
         let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
         let task = self
@@ -701,8 +770,20 @@ impl NyaTermApp {
                 .map_err(|_| AndroidError::JobFailed)
                 .and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
-                if let Err(error) = result {
-                    app.shell.set_status(error.message());
+                app.android.tracker_start_pending = false;
+                match result {
+                    Ok(()) => app.android.tracker_retry_after = None,
+                    Err(error) => {
+                        // Back off so a broken adb cannot turn the 200 ms tick
+                        // into a retry storm; report only the first failure of
+                        // a streak instead of rewriting the status every 2 s.
+                        let first = app.android.tracker_retry_after.is_none();
+                        app.android.tracker_retry_after =
+                            Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+                        if first {
+                            app.shell.set_status(error.message());
+                        }
+                    }
                 }
                 cx.notify();
             });
@@ -731,7 +812,12 @@ impl NyaTermApp {
                     .await;
                 if this
                     .update(cx, |app, cx| {
+                        app.sync_android_discovery();
                         app.collect_android_devices();
+                        // Convergent restart: a consumer that took a lease
+                        // without going through the connection editor gets
+                        // its tracker from here.
+                        app.android_ensure_tracker(cx);
                         let snapshot = app.android.tracker.snapshot();
                         if (snapshot.revision == 0
                             || snapshot.revision == app.android.tracker_revision)
@@ -745,6 +831,11 @@ impl NyaTermApp {
                         }
                         let mut changed = snapshot.revision != app.android.tracker_revision;
                         app.android.tracker_revision = snapshot.revision;
+                        if changed {
+                            // Keep the last list for the picker, which is empty
+                            // again while a released discovery cold-starts adb.
+                            app.android.remember_devices();
+                        }
                         let mut missing = Vec::new();
                         for (key, lease) in &mut app.android.devices {
                             let device = snapshot
