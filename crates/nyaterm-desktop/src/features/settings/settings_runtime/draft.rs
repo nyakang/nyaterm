@@ -1383,6 +1383,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn external_editor_auto_upload_saves_through_transfer_settings_with_and_without_a_draft() {
+        for draft_open in [false, true] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let app = app(&mut cx);
+            app.update(&mut cx, |app, cx| {
+                if draft_open {
+                    app.begin_settings_draft(cx);
+                }
+                app.toggle_transfer_external_editor_auto_upload(cx);
+            });
+            cx.run_until_parked();
+            if draft_open {
+                let saved = app.update(&mut cx, |app, _| {
+                    app.store_blocking_client()
+                        .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                            store.load_app_settings_summary()
+                        })
+                        .unwrap()
+                });
+                assert!(!saved.transfer_external_editor_auto_upload);
+                app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+                cx.run_until_parked();
+            }
+            let saved = app.update(&mut cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+            });
+            assert!(saved.transfer_external_editor_auto_upload);
+        }
+    }
+
     fn stored_header_status(
         app: &gpui::Entity<NyaTermApp>,
         cx: &mut TestAppContext,

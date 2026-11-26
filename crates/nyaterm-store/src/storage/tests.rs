@@ -4321,6 +4321,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     assert_eq!(summary.host_key_policy, "strict");
     assert_eq!(summary.transfer_download_path, "/tmp/downloads");
     assert!(summary.transfer_ask_save_location);
+    assert!(!summary.transfer_external_editor_auto_upload);
     assert_eq!(summary.transfer_duplicate_strategy, "rename");
     assert_eq!(summary.transfer_editor_type, "internal");
     assert_eq!(summary.transfer_internal_editor_font_size, 17);
@@ -4415,6 +4416,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
     let mut transfer_update = summary.clone();
     transfer_update.transfer_download_path = "/var/tmp/downloads".to_string();
     transfer_update.transfer_ask_save_location = false;
+    transfer_update.transfer_external_editor_auto_upload = true;
     transfer_update.transfer_duplicate_strategy = "overwrite".to_string();
     transfer_update.transfer_editor_type = "external".to_string();
     transfer_update.transfer_internal_editor_font_size = 19;
@@ -4431,6 +4433,7 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         .expect("save transfer settings");
     assert_eq!(updated.transfer_download_path, "/var/tmp/downloads");
     assert!(!updated.transfer_ask_save_location);
+    assert!(updated.transfer_external_editor_auto_upload);
     assert_eq!(updated.transfer_duplicate_strategy, "overwrite");
     assert_eq!(updated.transfer_editor_type, "external");
     assert_eq!(updated.transfer_internal_editor_font_size, 19);
@@ -10119,4 +10122,41 @@ fn settings_alternate_screen_policy_is_independent_and_preserves_legacy_document
     }
     drop(store);
     std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn external_editor_auto_upload_defaults_off_and_survives_reopening() {
+    let dir = unique_temp_dir("external-editor-auto-upload");
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        store
+            .save_settings_value(&serde_json::json!({
+                "transfer": {"default_editor": "code --wait", "future_option": [1, 2]},
+                "future_root": {"preserved": true}
+            }))
+            .unwrap();
+        let mut summary = store.load_app_settings_summary().unwrap();
+        assert!(!summary.transfer_external_editor_auto_upload);
+        summary.transfer_external_editor_auto_upload = true;
+        store.save_transfer_settings(&summary).unwrap();
+    }
+    {
+        let store = ConnectionStore::open(&dir).unwrap();
+        let mut summary = store.load_app_settings_summary().unwrap();
+        assert!(summary.transfer_external_editor_auto_upload);
+        assert_eq!(summary.transfer_default_editor, "code --wait");
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["transfer"]["external_editor_auto_upload"], true);
+        assert_eq!(raw["transfer"]["future_option"], serde_json::json!([1, 2]));
+        assert_eq!(raw["future_root"]["preserved"], true);
+        summary.transfer_external_editor_auto_upload = false;
+        store.save_transfer_settings(&summary).unwrap();
+    }
+    let store = ConnectionStore::open(&dir).unwrap();
+    assert!(
+        !store
+            .load_app_settings_summary()
+            .unwrap()
+            .transfer_external_editor_auto_upload
+    );
 }

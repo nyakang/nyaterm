@@ -3175,6 +3175,8 @@
     "draftChanged": "Brouillon des paramètres modifié ; appliquer pour enregistrer.",
     "ascendNpuMonitorInterval": "Intervalle NPU Ascend (s)",
     "ascendNpuMonitorIntervalDesc": "Par défaut : 3 s",
+    "externalEditorAutoUpload": "Téléverser automatiquement les fichiers modifiés dans un éditeur externe",
+    "externalEditorAutoUploadDesc": "Téléverser automatiquement, sans confirmation, les modifications de tous les fichiers distants enregistrés dans un éditeur externe.",
     "askSaveLocation": "Demander l'emplacement d'enregistrement",
     "askSaveLocationDesc": "Demander où enregistrer avant chaque téléchargement.",
     "fileManagerAutoCollapse": "Réduire la barre latérale Fichiers dans le gestionnaire",

@@ -2011,6 +2011,7 @@ forward_app_action!(
     toggle_terminal_zoom_enabled,
     toggle_file_manager_auto_collapse,
     toggle_transfer_ask_save_location,
+    toggle_transfer_external_editor_auto_upload,
     toggle_transfer_preserve_timestamps,
     toggle_transfer_resume_broken,
 );

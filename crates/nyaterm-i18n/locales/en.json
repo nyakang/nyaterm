@@ -3175,6 +3175,8 @@
     "draftChanged": "Settings draft changed; apply to persist.",
     "ascendNpuMonitorInterval": "Ascend NPU Interval (s)",
     "ascendNpuMonitorIntervalDesc": "Default: 3 s",
+    "externalEditorAutoUpload": "Automatically upload externally edited files",
+    "externalEditorAutoUploadDesc": "Automatically upload changes to all remote files saved in an external editor without asking for confirmation.",
     "askSaveLocation": "Ask Save Location",
     "askSaveLocationDesc": "Ask where to save before each download.",
     "fileManagerAutoCollapse": "Collapse Files sidebar in File Manager",

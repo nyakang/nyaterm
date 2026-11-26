@@ -784,7 +784,8 @@ impl NyaTermApp {
             } => {
                 job.detail = format!("External edit changed {}", local_path.display());
                 let watch_key = format!("{remote_path}\n{}", local_path.display());
-                if self.transfer.external_sync_always_uploads(&watch_key)
+                if (self.settings.summary().transfer_external_editor_auto_upload
+                    || self.transfer.external_sync_always_uploads(&watch_key))
                     && !job_session_id
                         .as_deref()
                         .is_some_and(|id| self.file_sudo_status(id).is_busy())

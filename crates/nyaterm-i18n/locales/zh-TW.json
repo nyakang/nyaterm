@@ -3175,6 +3175,8 @@
     "draftChanged": "設定草稿已修改；套用後才會儲存。",
     "ascendNpuMonitorInterval": "Ascend NPU 採集間隔（秒）",
     "ascendNpuMonitorIntervalDesc": "預設 3 秒",
+    "externalEditorAutoUpload": "自動上傳外部編輯的檔案",
+    "externalEditorAutoUploadDesc": "外部編輯器儲存遠端檔案後，自動上傳修改，無需再次確認。適用於所有檔案。",
     "askSaveLocation": "下載前詢問儲存位置",
     "askSaveLocationDesc": "每次下載檔案前彈出對話方塊選擇儲存位置。",
     "fileManagerAutoCollapse": "在檔案管理器中收合檔案側欄",

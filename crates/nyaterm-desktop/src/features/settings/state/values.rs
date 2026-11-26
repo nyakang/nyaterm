@@ -385,6 +385,11 @@ impl SettingsFeatureState {
     ) {
         self.summary.transfer_internal_editor_display = display;
     }
+    pub(in crate::features) fn toggle_transfer_external_editor_auto_upload(&mut self) {
+        self.summary.transfer_external_editor_auto_upload =
+            !self.summary.transfer_external_editor_auto_upload;
+    }
+
     pub(in crate::features) fn toggle_transfer_ask_save_location(&mut self) {
         self.summary.transfer_ask_save_location = !self.summary.transfer_ask_save_location;
     }

@@ -3175,6 +3175,8 @@
     "draftChanged": "설정 초안이 변경되었습니다. 적용해야 저장됩니다.",
     "ascendNpuMonitorInterval": "Ascend NPU 간격(초)",
     "ascendNpuMonitorIntervalDesc": "기본값: 3초",
+    "externalEditorAutoUpload": "외부에서 편집한 파일 자동 업로드",
+    "externalEditorAutoUploadDesc": "외부 편집기에서 저장한 모든 원격 파일의 변경 사항을 확인 없이 자동으로 업로드합니다.",
     "askSaveLocation": "저장 위치 확인",
     "askSaveLocationDesc": "각 다운로드 전에 저장 위치를 물어봅니다.",
     "fileManagerAutoCollapse": "파일 관리자에서 파일 사이드바 접기",

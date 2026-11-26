@@ -3175,6 +3175,8 @@
     "draftChanged": "Rascunho de configurações alterado; aplicar para persistir.",
     "ascendNpuMonitorInterval": "Intervalo(s) de NPU ascendente(s)",
     "ascendNpuMonitorIntervalDesc": "Padrão: 3s",
+    "externalEditorAutoUpload": "Enviar automaticamente arquivos editados externamente",
+    "externalEditorAutoUploadDesc": "Enviar automaticamente, sem confirmação, as alterações de todos os arquivos remotos salvos em um editor externo.",
     "askSaveLocation": "Pergunte para salvar local",
     "askSaveLocationDesc": "Pergunte onde salvar antes de cada download.",
     "fileManagerAutoCollapse": "Recolher a barra lateral de Arquivos no Gerenciador de Arquivos",

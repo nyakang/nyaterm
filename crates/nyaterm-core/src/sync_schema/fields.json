@@ -457,6 +457,7 @@
       "connection_type_layout": "local",
       "transfer_download_path": "local",
       "transfer_ask_save_location": "local",
+      "transfer_external_editor_auto_upload": "local",
       "transfer_duplicate_strategy": "local",
       "transfer_editor_type": "local",
       "transfer_internal_editor_display": "local",

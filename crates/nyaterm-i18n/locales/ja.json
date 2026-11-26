@@ -3175,6 +3175,8 @@
     "draftChanged": "設定ドラフトが変更されました。適用すると保存されます。",
     "ascendNpuMonitorInterval": "Ascend NPU 間隔 (秒)",
     "ascendNpuMonitorIntervalDesc": "既定：3 秒",
+    "externalEditorAutoUpload": "外部編集したファイルを自動アップロード",
+    "externalEditorAutoUploadDesc": "外部エディターで保存したすべてのリモートファイルの変更を、確認なしで自動アップロードします。",
     "askSaveLocation": "保存先を確認",
     "askSaveLocationDesc": "ダウンロードのたびに保存先を確認します。",
     "fileManagerAutoCollapse": "ファイルマネージャーでサイドバーをたたむ",

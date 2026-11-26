@@ -658,6 +658,8 @@ pub struct AppSettingsSummary {
     pub host_key_policy: String,
     pub transfer_download_path: String,
     pub transfer_ask_save_location: bool,
+    #[serde(default)]
+    pub transfer_external_editor_auto_upload: bool,
     pub transfer_duplicate_strategy: String,
     pub transfer_editor_type: String,
     #[serde(default)]
@@ -895,6 +897,7 @@ impl Default for AppSettingsSummary {
             host_key_policy: "prompt".to_string(),
             transfer_download_path: String::new(),
             transfer_ask_save_location: false,
+            transfer_external_editor_auto_upload: false,
             transfer_duplicate_strategy: "ask".to_string(),
             transfer_editor_type: "external".to_string(),
             transfer_internal_editor_display: InternalEditorDisplay::Window,
@@ -1331,6 +1334,7 @@ mod tests {
         assert!(!summary.terminal_serial_reconnect_send_enter);
         assert!(!summary.ui_remote_stats_show_users);
         assert_eq!(summary.transfer_internal_editor_font_size, 13);
+        assert!(!summary.transfer_external_editor_auto_upload);
         // The credential autofill switch joins the command-suggestion switch in
         // defaulting on, so legacy documents keep the panel enabled.
         assert!(summary.interaction_credential_autofill_enabled);

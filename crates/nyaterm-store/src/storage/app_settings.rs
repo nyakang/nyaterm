@@ -599,6 +599,11 @@ impl ConnectionStore {
                 &["transfer", "ask_save_location"],
                 false,
             ),
+            transfer_external_editor_auto_upload: json_bool(
+                &value,
+                &["transfer", "external_editor_auto_upload"],
+                false,
+            ),
             transfer_duplicate_strategy: normalize_transfer_duplicate_strategy(&json_string(
                 &value,
                 &["transfer", "duplicate_strategy"],
@@ -920,6 +925,11 @@ impl ConnectionStore {
             &mut value,
             &["transfer", "ask_save_location"],
             serde_json::Value::Bool(settings.transfer_ask_save_location),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["transfer", "external_editor_auto_upload"],
+            serde_json::Value::Bool(settings.transfer_external_editor_auto_upload),
         );
         set_nested_json_string(
             &mut value,

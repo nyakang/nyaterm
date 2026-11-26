@@ -3175,6 +3175,8 @@
     "draftChanged": "设置草稿已修改；应用后才会保存。",
     "ascendNpuMonitorInterval": "Ascend NPU 采集间隔（秒）",
     "ascendNpuMonitorIntervalDesc": "默认 3 秒",
+    "externalEditorAutoUpload": "自动上传外部编辑的文件",
+    "externalEditorAutoUploadDesc": "外部编辑器保存远程文件后，自动上传修改，无需再次确认。适用于所有文件。",
     "askSaveLocation": "下载前询问保存位置",
     "askSaveLocationDesc": "每次下载文件前弹出对话框选择保存位置。",
     "fileManagerAutoCollapse": "在文件管理器中收起文件侧栏",
