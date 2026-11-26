@@ -100,6 +100,14 @@ impl AdbServerManager {
     pub fn begin_shutdown(&self) -> AdbServerShutdown {
         self.registry.begin_shutdown()
     }
+
+    /// Stops only the servers this owner started, leaving the manager usable.
+    ///
+    /// Like [`Self::begin_shutdown`] without the cancel: a later `ensure`
+    /// starts a fresh server.
+    pub fn release(&self) -> AdbServerRelease {
+        self.registry.release()
+    }
 }
 
 pub(crate) fn default_manager() -> &'static AdbServerManager {
@@ -280,6 +288,29 @@ impl ServerRegistry {
             slots: slots.into_values().collect(),
         }
     }
+
+    /// Leaves the map and the control intact so ownership can be re-established.
+    fn slots_snapshot(&self) -> Vec<Arc<ServerSlot>> {
+        self.slots
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn release(&self) -> AdbServerRelease {
+        // Claim the children now, not when the cleanup worker runs: a consumer
+        // that comes back first would spawn into the same slot, and a late
+        // snapshot would then kill the new server instead of the old one.
+        AdbServerRelease {
+            owned: self
+                .slots_snapshot()
+                .iter()
+                .filter_map(|slot| slot.take_process())
+                .collect(),
+        }
+    }
 }
 
 /// Cancels startup and transfers owned process cleanup without waiting for I/O.
@@ -291,6 +322,14 @@ pub fn begin_server_shutdown() -> AdbServerShutdown {
 #[must_use = "finish ADB cleanup on a background worker"]
 pub struct AdbServerShutdown {
     slots: Vec<Arc<ServerSlot>>,
+}
+
+/// Stops the children claimed by [`AdbServerManager::release`].
+///
+/// The slots stay registered, so the next `ensure` spawns a fresh server.
+#[must_use = "finish ADB release on a background worker"]
+pub struct AdbServerRelease {
+    owned: Vec<OwnedServer>,
 }
 
 /// Counts only owned children. No subprocess output or device data is retained.
@@ -305,52 +344,68 @@ impl AdbServerShutdown {
     /// Signals all children first, then reaps them within one shared deadline.
     /// Remaining handles go to the background reaper; never wait on the UI thread.
     pub fn finish(self, timeout: Duration) -> ServerShutdownReport {
-        let deadline = Instant::now() + timeout;
-        let mut report = ServerShutdownReport::default();
-        let mut pending = Vec::new();
-        for slot in &self.slots {
-            let Some(mut process) = slot.take_process() else {
-                continue;
-            };
-            let child = process.0.as_mut().expect("owned ADB child");
-            match child.try_wait() {
-                Ok(Some(_)) => report.already_exited += 1,
-                Ok(None) if child.kill().is_ok() => pending.push(process),
-                _ => report.failed += 1,
-            }
-        }
-        while !pending.is_empty() {
-            let mut index = 0;
-            while index < pending.len() {
-                match pending[index]
-                    .0
-                    .as_mut()
-                    .expect("owned ADB child")
-                    .try_wait()
-                {
-                    Ok(Some(_)) => {
-                        report.terminated += 1;
-                        pending.swap_remove(index);
-                    }
-                    Err(_) => {
-                        report.failed += 1;
-                        pending.swap_remove(index);
-                    }
-                    Ok(None) => index += 1,
-                }
-            }
-            if Instant::now() >= deadline {
-                report.failed += pending.len();
-                break;
-            }
-            if !pending.is_empty() {
-                std::thread::sleep(
-                    POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
-                );
-            }
-        }
-        report
+        terminate_slots(&self.slots, timeout)
     }
+}
+
+impl AdbServerRelease {
+    /// Same contract as [`AdbServerShutdown::finish`]: never wait on the UI thread.
+    pub fn finish(self, timeout: Duration) -> ServerShutdownReport {
+        terminate_owned(self.owned, timeout)
+    }
+}
+
+fn terminate_slots(slots: &[Arc<ServerSlot>], timeout: Duration) -> ServerShutdownReport {
+    let owned = slots
+        .iter()
+        .filter_map(|slot| slot.take_process())
+        .collect();
+    terminate_owned(owned, timeout)
+}
+
+fn terminate_owned(owned: Vec<OwnedServer>, timeout: Duration) -> ServerShutdownReport {
+    let deadline = Instant::now() + timeout;
+    let mut report = ServerShutdownReport::default();
+    let mut pending = Vec::new();
+    for mut process in owned {
+        let child = process.0.as_mut().expect("owned ADB child");
+        match child.try_wait() {
+            Ok(Some(_)) => report.already_exited += 1,
+            Ok(None) if child.kill().is_ok() => pending.push(process),
+            _ => report.failed += 1,
+        }
+    }
+    while !pending.is_empty() {
+        let mut index = 0;
+        while index < pending.len() {
+            match pending[index]
+                .0
+                .as_mut()
+                .expect("owned ADB child")
+                .try_wait()
+            {
+                Ok(Some(_)) => {
+                    report.terminated += 1;
+                    pending.swap_remove(index);
+                }
+                Err(_) => {
+                    report.failed += 1;
+                    pending.swap_remove(index);
+                }
+                Ok(None) => index += 1,
+            }
+        }
+        if Instant::now() >= deadline {
+            report.failed += pending.len();
+            break;
+        }
+        if !pending.is_empty() {
+            std::thread::sleep(
+                POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+    report
 }
 
 #[cfg(test)]

@@ -1124,7 +1124,7 @@ impl NyaTermApp {
                 ))
             })
             .when(editor.kind == ConnectionKindTab::Adb, |this| {
-                let snapshot = self.android.tracker.snapshot();
+                let snapshot = self.android.device_snapshot();
                 this.child(android::section(self, section_context, snapshot, cx))
             })
             .when(editor.kind == ConnectionKindTab::Local, |this| {

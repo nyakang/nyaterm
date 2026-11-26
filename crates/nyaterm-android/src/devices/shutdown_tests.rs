@@ -37,6 +37,8 @@ fn shutdown_cancels_a_tracker_handshake_and_never_restarts_the_server() {
         listener.set_nonblocking(true).unwrap();
         assert!(listener.accept().is_err());
     });
+    // Discovery is admitted only for lease holders.
+    let _lease = shared.lease();
     shared.ensure(&client).unwrap();
     entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     let started = Instant::now();
@@ -62,6 +64,7 @@ fn shutdown_does_not_wait_on_the_tracker_lock_held_by_startup() {
         entered_tx.send(()).unwrap();
         assert_eq!(stream.read(&mut [0]).unwrap(), 0);
     });
+    let _lease = shared.lease();
     let startup_service = shared.clone();
     let startup = std::thread::spawn(move || startup_service.ensure(&client));
     entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -102,6 +105,72 @@ fn a_stalled_worker_cannot_extend_the_shutdown_deadline() {
 }
 
 #[test]
+fn ensure_without_a_lease_admits_no_tracker() {
+    let shared = SharedDeviceService::default();
+    let client = AdbClient::new("missing-fixture-adb".into(), "127.0.0.1:1".parse().unwrap());
+    shared.ensure(&client).unwrap();
+    assert!(!shared.is_active());
+}
+
+#[test]
+fn dropping_the_last_lease_stops_discovery_without_cancelling_the_owner() {
+    let shared = SharedDeviceService::default();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = AdbClient::new("missing-fixture-adb".into(), listener.local_addr().unwrap());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream), b"host:version");
+        stream.write_all(b"OKAY00040029").unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream), b"host:track-devices-l");
+        stream.write_all(b"OK").unwrap();
+        entered_tx.send(()).unwrap();
+        // The last lease releases the track stream instead of restarting it.
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+        closed_tx.send(()).unwrap();
+    });
+    let lease = shared.lease();
+    shared.ensure(&client).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(shared.is_active());
+    drop(lease);
+    assert!(!shared.is_active());
+    closed_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(shared.begin_shutdown().finish(Duration::from_secs(1)));
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_later_lease_admits_a_fresh_tracker() {
+    let shared = SharedDeviceService::default();
+    let short = shared.lease();
+    drop(short);
+    assert!(!shared.is_active());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = AdbClient::new("missing-fixture-adb".into(), listener.local_addr().unwrap());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream), b"host:version");
+        stream.write_all(b"OKAY00040029").unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream), b"host:track-devices-l");
+        stream.write_all(b"OK").unwrap();
+        entered_tx.send(()).unwrap();
+        assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    });
+    let lease = shared.lease();
+    shared.ensure(&client).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(shared.is_active());
+    drop(lease);
+    assert!(shared.begin_shutdown().finish(Duration::from_secs(1)));
+    worker.join().unwrap();
+}
+
+#[test]
 fn independent_application_owners_do_not_share_shutdown_cancellation() {
     let first = SharedDeviceService::default();
     let second = SharedDeviceService::default();
@@ -110,6 +179,7 @@ fn independent_application_owners_do_not_share_shutdown_cancellation() {
     assert!(matches!(first.control.check(), Err(AdbError::Cancelled)));
     assert!(second.control.check().is_ok());
     // A separate GPUI application (including a later visual test) remains usable.
+    let _lease = second.lease();
     assert!(matches!(
         second.ensure(&AdbClient::new(
             "missing-fixture-adb".into(),

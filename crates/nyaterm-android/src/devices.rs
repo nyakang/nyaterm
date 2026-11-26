@@ -7,6 +7,7 @@ use crate::operation::AdbOperationControl;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::net::{Shutdown, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, TryLockError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -33,14 +34,64 @@ pub struct SharedDeviceService {
     tracker: SharedTracker,
     control: AdbOperationControl,
     servers: AdbServerManager,
+    /// Live consumers of discovery; the last drop stops the tracker.
+    leases: Arc<AtomicUsize>,
+    /// Workers of released services, joined at shutdown or the next start.
+    retired: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 impl SharedDeviceService {
     pub fn server_manager(&self) -> AdbServerManager {
         self.servers.clone()
     }
 
+    /// Keeps discovery running while held; take it before [`Self::ensure`].
+    #[must_use = "discovery stops as soon as the lease is dropped"]
+    pub fn lease(&self) -> DeviceTrackerLease {
+        self.leases.fetch_add(1, Ordering::AcqRel);
+        DeviceTrackerLease {
+            devices: self.clone(),
+        }
+    }
+
+    fn drop_lease(&self) {
+        if self.leases.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return;
+        }
+        let service = self
+            .tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        if let Some((_, service)) = service {
+            service.stop();
+            let worker = service
+                .worker
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            if let Some(worker) = worker {
+                self.retired
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(worker);
+            }
+        }
+        // No consumer left: stop the servers this owner started, but never a
+        // foreign one. Safe here because dropping a lease happens on the UI
+        // thread, so the waiting part moves to a worker.
+        let release = self.servers.release();
+        let _ = nyaterm_core::runtime::worker::spawn("adb-server-release".into(), move || {
+            release.finish(Duration::from_secs(2));
+        });
+    }
+
     pub fn ensure(&self, client: &AdbClient) -> AdbResult<()> {
         self.control.check()?;
+        // No lease means nobody is watching devices; starting a tracker would
+        // spawn (and keep restarting) an adb server for nobody.
+        if self.leases.load(Ordering::Acquire) == 0 {
+            return Ok(());
+        }
         let mut state = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
         self.control.check()?;
         if state.as_ref().is_some_and(|(existing, _)| {
@@ -49,6 +100,11 @@ impl SharedDeviceService {
             return Ok(());
         }
         let client = client.clone().with_server_manager(self.servers.clone());
+        // Otherwise every release/ensure cycle keeps a dead handle for life.
+        self.retired
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|worker| !worker.is_finished());
         *state = Some((
             client.clone(),
             Arc::new(DeviceService::start_with_control(
@@ -88,6 +144,14 @@ impl SharedDeviceService {
         runtimes.push(Arc::downgrade(runtime));
         Ok(())
     }
+    /// Whether a tracker currently serves this owner.
+    pub fn is_active(&self) -> bool {
+        self.tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+    }
+
     pub fn snapshot(&self) -> DeviceSnapshot {
         self.tracker
             .try_lock()
@@ -104,13 +168,27 @@ impl SharedDeviceService {
         self.control.cancel();
         DeviceServiceShutdown {
             tracker: Arc::clone(&self.tracker),
+            retired: Arc::clone(&self.retired),
         }
+    }
+}
+
+/// Keeps discovery alive while held; the last drop stops the tracker without
+/// cancelling the service, so a later lease and `ensure` start a fresh one.
+pub struct DeviceTrackerLease {
+    devices: SharedDeviceService,
+}
+
+impl Drop for DeviceTrackerLease {
+    fn drop(&mut self) {
+        self.devices.drop_lease();
     }
 }
 
 #[must_use = "finish discovery shutdown on a background worker"]
 pub struct DeviceServiceShutdown {
     tracker: SharedTracker,
+    retired: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl DeviceServiceShutdown {
@@ -130,24 +208,35 @@ impl DeviceServiceShutdown {
                 }
             }
         };
-        let Some((_, service)) = service else {
-            return true;
-        };
-        service.stop();
-        let worker = service
-            .worker
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take();
-        let Some(worker) = worker else { return true };
-        while !worker.is_finished() {
-            if Instant::now() >= deadline {
-                return false;
+        let mut stopped = true;
+        if let Some((_, service)) = service {
+            service.stop();
+            let worker = service
+                .worker
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            if let Some(worker) = worker {
+                stopped = join_worker(worker, deadline);
             }
-            std::thread::sleep(Duration::from_millis(10));
         }
-        worker.join().is_ok()
+        // Services released by their last lease still have a worker to collect.
+        let retired = std::mem::take(&mut *self.retired.lock().unwrap_or_else(|p| p.into_inner()));
+        stopped
+            & retired
+                .into_iter()
+                .all(|worker| join_worker(worker, deadline))
     }
+}
+
+fn join_worker(worker: JoinHandle<()>, deadline: Instant) -> bool {
+    while !worker.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    worker.join().is_ok()
 }
 
 impl DeviceService {
