@@ -481,6 +481,11 @@ impl ConnectionStore {
                 &["interaction", "copy_on_select"],
                 false,
             ),
+            interaction_free_type_enabled: json_bool(
+                &value,
+                &["interaction", "free_type_enabled"],
+                true,
+            ),
             interaction_allow_osc52_clipboard_write: json_bool(
                 &value,
                 &["interaction", "allow_osc52_clipboard_write"],
@@ -1670,6 +1675,11 @@ impl ConnectionStore {
             &mut value,
             &["interaction", "copy_on_select"],
             serde_json::Value::Bool(settings.interaction_copy_on_select),
+        );
+        set_nested_json_value(
+            &mut value,
+            &["interaction", "free_type_enabled"],
+            serde_json::Value::Bool(settings.interaction_free_type_enabled),
         );
         set_nested_json_value(
             &mut value,

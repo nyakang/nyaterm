@@ -1982,6 +1982,7 @@ forward_app_action!(
     toggle_interaction_alternate_scroll,
     toggle_disable_alternate_screen,
     toggle_interaction_copy_on_select,
+    toggle_interaction_free_type,
     toggle_mouse_events_require_alt,
     toggle_keyword_highlights,
     toggle_line_role_highlights,

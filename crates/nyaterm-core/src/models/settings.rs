@@ -623,6 +623,8 @@ pub struct AppSettingsSummary {
     #[serde(default)]
     pub ui_panel_stack_sizes: HashMap<String, u32>,
     pub interaction_copy_on_select: bool,
+    #[serde(default = "default_true")]
+    pub interaction_free_type_enabled: bool,
     #[serde(default)]
     pub interaction_allow_osc52_clipboard_write: bool,
     pub interaction_right_click_paste: bool,
@@ -875,6 +877,7 @@ impl Default for AppSettingsSummary {
             ui_right_open_panels: Vec::new(),
             ui_panel_stack_sizes: HashMap::new(),
             interaction_copy_on_select: false,
+            interaction_free_type_enabled: true,
             interaction_allow_osc52_clipboard_write: false,
             interaction_right_click_paste: false,
             interaction_terminal_right_click_action: TerminalRightClickAction::Menu,
@@ -1247,6 +1250,23 @@ mod tests {
                     .any(|id| matches!(id.as_str(), "portsManager" | "servicesManager"))
             );
         }
+    }
+
+    #[test]
+    fn free_type_defaults_on_for_legacy_summaries_and_round_trips_false() {
+        let defaults = AppSettingsSummary::default();
+        assert!(defaults.interaction_free_type_enabled);
+        let mut legacy = serde_json::to_value(defaults).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("interaction_free_type_enabled");
+        let mut restored: AppSettingsSummary = serde_json::from_value(legacy).unwrap();
+        assert!(restored.interaction_free_type_enabled);
+        restored.interaction_free_type_enabled = false;
+        let restored: AppSettingsSummary =
+            serde_json::from_value(serde_json::to_value(restored).unwrap()).unwrap();
+        assert!(!restored.interaction_free_type_enabled);
     }
 
     #[test]

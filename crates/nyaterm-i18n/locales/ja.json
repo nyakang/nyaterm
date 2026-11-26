@@ -3240,6 +3240,8 @@
     "confirmOnCloseDesc": "アクティブなセッションがある状態で終了する前に確認します。",
     "connectionSecurity": "セキュリティ",
     "copyGithubGistUserCode": "デバイスコードをコピー",
+    "freeTypeMode": "自由入力モード（Free Type）",
+    "freeTypeModeDesc": "マウスでコマンドラインのカーソルを移動し、選択したテキストを削除または置換できます。",
     "copyOnSelect": "選択時にコピー",
     "copyOnSelectDesc": "選択したターミナルテキストをクリップボードにコピーします。",
     "credentialStorage": "認証情報",

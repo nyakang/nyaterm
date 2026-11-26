@@ -433,6 +433,7 @@
       "ui_right_open_panels": "local",
       "ui_panel_stack_sizes": "local",
       "interaction_copy_on_select": "local",
+      "interaction_free_type_enabled": "local",
       "interaction_allow_osc52_clipboard_write": "local",
       "interaction_right_click_paste": "local",
       "interaction_terminal_right_click_action": "local",

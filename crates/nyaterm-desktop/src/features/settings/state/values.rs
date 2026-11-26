@@ -136,6 +136,10 @@ impl SettingsFeatureState {
         self.summary.diagnostics_log_shard_bytes = bytes;
         true
     }
+    pub(in crate::features) fn toggle_interaction_free_type(&mut self) {
+        self.summary.interaction_free_type_enabled = !self.summary.interaction_free_type_enabled;
+    }
+
     pub(in crate::features) fn toggle_interaction_copy_on_select(&mut self) {
         self.summary.interaction_copy_on_select = !self.summary.interaction_copy_on_select;
     }

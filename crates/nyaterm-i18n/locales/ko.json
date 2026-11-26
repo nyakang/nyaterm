@@ -3240,6 +3240,8 @@
     "confirmOnCloseDesc": "활성 세션이 있을 때 닫기 전에 확인합니다.",
     "connectionSecurity": "보안",
     "copyGithubGistUserCode": "장치 코드 복사",
+    "freeTypeMode": "자유 입력 모드 (Free Type)",
+    "freeTypeModeDesc": "마우스로 명령줄 커서를 이동하고 텍스트를 선택하여 삭제하거나 바꿀 수 있습니다.",
     "copyOnSelect": "선택 시 복사",
     "copyOnSelectDesc": "선택한 터미널 텍스트를 클립보드에 복사합니다.",
     "credentialStorage": "자격 증명",

@@ -3240,6 +3240,8 @@
     "confirmOnCloseDesc": "Confirm before closing with active sessions.",
     "connectionSecurity": "Security",
     "copyGithubGistUserCode": "Copy device code",
+    "freeTypeMode": "Free Type Mode",
+    "freeTypeModeDesc": "Use the mouse to move the command-line cursor and select text to delete or replace.",
     "copyOnSelect": "Copy on Select",
     "copyOnSelectDesc": "Copy selected terminal text to clipboard.",
     "credentialStorage": "Credentials",

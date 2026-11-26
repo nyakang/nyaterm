@@ -3240,6 +3240,8 @@
     "confirmOnCloseDesc": "在有活动会话时关闭应用程序时显示确认对话框。",
     "connectionSecurity": "连接安全",
     "copyGithubGistUserCode": "复制机器码",
+    "freeTypeMode": "自由输入模式（Free Type）",
+    "freeTypeModeDesc": "允许使用鼠标移动命令行光标，以及选中后删除或替换命令行中的文本。",
     "copyOnSelect": "选中即复制",
     "copyOnSelectDesc": "在终端中选中文本时自动将其复制到剪贴板。",
     "credentialStorage": "凭据存储",

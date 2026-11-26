@@ -4112,6 +4112,36 @@ fn header_status_settings_roundtrip_and_preserve_unknown_ui_fields() {
 }
 
 #[test]
+fn free_type_legacy_default_and_round_trip_preserve_unknown_settings() {
+    let dir = unique_temp_dir("free-type-settings");
+    let store = ConnectionStore::open(&dir).unwrap();
+    store
+        .save_settings_value(&serde_json::json!({
+            "interaction": {"future_option": {"enabled": true}},
+            "future_section": {"value": 42}
+        }))
+        .unwrap();
+    let mut settings = store.load_app_settings_summary().unwrap();
+    assert!(settings.interaction_free_type_enabled);
+    for enabled in [false, true] {
+        settings.interaction_free_type_enabled = enabled;
+        let saved = store.save_interaction_settings(&settings).unwrap();
+        assert_eq!(saved.interaction_free_type_enabled, enabled);
+        assert_eq!(
+            store
+                .load_app_settings_summary()
+                .unwrap()
+                .interaction_free_type_enabled,
+            enabled
+        );
+        let raw = store.load_settings_value().unwrap();
+        assert_eq!(raw["interaction"]["free_type_enabled"], enabled);
+        assert_eq!(raw["interaction"]["future_option"]["enabled"], true);
+        assert_eq!(raw["future_section"]["value"], 42);
+    }
+}
+
+#[test]
 fn retired_ime_setting_survives_loading_and_saving_interaction_settings() {
     for legacy_enabled in [false, true] {
         let dir = unique_temp_dir("retired-ime-setting");

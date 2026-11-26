@@ -1409,6 +1409,140 @@ mod tests {
     }
 
     #[test]
+    fn free_type_draft_cancel_and_reload_retire_gestures_without_losing_input() {
+        let dir = TestConfigDir::new("nyaterm-free-type-draft");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.note_shell_editing_input(b"abcd", cx);
+            app.terminal
+                .seed_session_view("s1".into(), "$ abcd".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert!(app.can_use_smart_cursor_selection());
+            let selection = TerminalSelection::from_range(
+                TerminalBufferCellPos::new(0, 2),
+                TerminalBufferCellPos::new(0, 3),
+            );
+            app.terminal.selection.session_id = Some("s1".into());
+            app.terminal.selection.selection = Some(selection);
+            app.begin_smart_input_selection();
+            app.commit_smart_input_selection();
+            let range = app.smart_cursor_selected_input_range().unwrap();
+            app.begin_settings_draft(cx);
+            app.toggle_interaction_free_type(cx);
+            assert!(app.settings_draft_dirty());
+            assert!(!app.can_use_smart_cursor_selection());
+            assert!(app.smart_cursor_selected_input_range().is_none());
+            assert!(!app.move_smart_input_cursor(0, cx));
+            assert!(!app.delete_smart_input_selection(range, cx));
+            assert!(!app.replace_smart_input_selection(range, "x", cx));
+            assert!(!app.replace_smart_input_selection_with_paste(range, "x", cx));
+            assert_eq!(app.terminal.selection.selection, Some(selection));
+            assert_eq!(app.terminal.editing.assist_input().value, "abcd");
+            assert!(app.command_suggestions_allowed_for_session("s1"));
+            app.cancel_settings(cx);
+            assert!(app.can_use_smart_cursor_selection());
+            assert!(app.smart_cursor_selected_input_range().is_none());
+
+            let state = app.terminal.editing.state_mut();
+            let plan =
+                plan_edit(&state.model.input, state.model.version, EditIntent::Move(2)).unwrap();
+            assert!(state.model.accept_plan(plan, Instant::now()));
+            let snapshot = app.terminal_snapshot_for_session(Some("s1"), 0);
+            app.terminal.editing.state_mut().pending_evidence = Some(
+                crate::features::terminal::editing_state::SnapshotEvidence::from_snapshot(
+                    &snapshot,
+                ),
+            );
+            app.schedule_shell_edit_confirmation_timeout(cx);
+            assert!(app.move_smart_input_cursor(0, cx));
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_free_type_enabled = false;
+            app.apply_gpui_settings(settings, cx);
+            let state = app.terminal.editing.state().unwrap();
+            assert_eq!(state.model.phase, EditPhase::Pending);
+            assert_eq!(state.model.queued_cursor, None);
+            assert!(state.pending_evidence.is_some());
+            assert!(state.confirmation_task.is_some());
+            app.terminal
+                .seed_session_view("s1".into(), "$ abcd\x1b[2D".into(), "UTF-8");
+            app.reconcile_shell_editing("s1", cx);
+            assert_eq!(
+                app.terminal.editing.state().unwrap().model.phase,
+                EditPhase::Ready
+            );
+            assert_eq!(app.terminal.editing.predicted_input().cursor, 2);
+            assert!(!app.can_use_smart_cursor_selection());
+            let mut settings = app.settings.summary().clone();
+            settings.interaction_free_type_enabled = true;
+            app.apply_gpui_settings(settings, cx);
+            assert!(app.can_use_smart_cursor_selection());
+            assert!(
+                app.terminal
+                    .editing
+                    .state()
+                    .unwrap()
+                    .model
+                    .queued_cursor
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn free_type_apply_persists_and_reloads_into_another_window() {
+        let dir = TestConfigDir::new("nyaterm-free-type-save");
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, dir.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.toggle_interaction_free_type(cx);
+            app.apply_settings_draft(false, cx);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if cx.read_entity(&app, |app, _| !app.settings_draft_dirty()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "free type save did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let saved = cx.read_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .unwrap()
+        });
+        assert!(!saved.interaction_free_type_enabled);
+        let other_dir = TestConfigDir::new("nyaterm-free-type-other-window");
+        let other = app_with_visible_local_session(&mut cx, other_dir.path(), "s2");
+        cx.update_entity(&other, |app, cx| {
+            app.note_shell_editing_input(b"abcd", cx);
+            app.terminal
+                .seed_session_view("s2".into(), "$ abcd".into(), "UTF-8");
+            app.reconcile_shell_editing("s2", cx);
+            assert!(app.can_use_smart_cursor_selection());
+            app.terminal.editing.state_mut().model.queued_cursor = Some(0);
+            app.apply_gpui_settings(saved, cx);
+            assert!(!app.can_use_smart_cursor_selection());
+            assert!(
+                app.terminal
+                    .editing
+                    .state()
+                    .unwrap()
+                    .model
+                    .queued_cursor
+                    .is_none()
+            );
+            assert_eq!(app.terminal.editing.assist_input().value, "abcd");
+        });
+    }
+
+    #[test]
     fn pending_clicks_keep_latest_target_and_timeout_cancels_it() {
         let dir = TestConfigDir::new("nyaterm-shell-edit-queued");
         let mut cx = TestAppContext::single();

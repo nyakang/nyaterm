@@ -3240,6 +3240,8 @@
     "confirmOnCloseDesc": "在有活動工作階段時關閉應用程式時顯示確認對話方塊。",
     "connectionSecurity": "連線安全",
     "copyGithubGistUserCode": "複製機器碼",
+    "freeTypeMode": "自由輸入模式（Free Type）",
+    "freeTypeModeDesc": "允許使用滑鼠移動命令列游標，以及選取後刪除或取代命令列中的文字。",
     "copyOnSelect": "選取即複製",
     "copyOnSelectDesc": "在終端中選取文字時自動將其複製到剪貼簿。",
     "credentialStorage": "認證資訊儲存",

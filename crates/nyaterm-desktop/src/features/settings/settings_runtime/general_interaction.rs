@@ -299,6 +299,18 @@ impl NyaTermApp {
         self.queue_settings_save(SettingsSaveKind::General, cx);
     }
 
+    pub(in crate::features) fn toggle_interaction_free_type(&mut self, cx: &mut Context<Self>) {
+        self.settings.toggle_interaction_free_type();
+        self.sync_terminal_free_type_policy();
+        self.save_interaction_settings(cx);
+    }
+
+    pub(in crate::features) fn sync_terminal_free_type_policy(&mut self) {
+        if !self.settings.summary().interaction_free_type_enabled {
+            self.terminal.clear_free_type_interactions();
+        }
+    }
+
     pub(in crate::features) fn toggle_interaction_copy_on_select(
         &mut self,
         cx: &mut Context<Self>,
