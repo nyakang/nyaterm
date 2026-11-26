@@ -3,11 +3,31 @@ use crate::features::NyaTermApp;
 use crate::models::{TransferBrowserNavigationSnapshot, TransferBrowserSessionCacheState};
 use gpui::{Context, Window};
 use nyaterm_files::file_browser::navigation::remote_ancestor_selection;
+use nyaterm_files::file_browser::{FileBrowserBackendKind, file_browser_parent};
 use nyaterm_files::sftp::{RemoteFilePath, SftpFileEntry};
 use std::collections::VecDeque;
 
 #[cfg(test)]
 mod tests;
+
+/// Parent identity for the transfer browser, dispatched by backend kind the
+/// same way the standalone file manager's `navigate_parent` is. Remote
+/// sessions keep `RemoteFilePath::parent` (POSIX + raw path token rules);
+/// local and ADB sessions resolve through `file_browser_parent`, so
+/// Windows-shaped local paths (`C:\...`, `\\wsl.localhost\...`) never enter
+/// POSIX parsing and collapse to ".".
+fn transfer_browser_parent_identity(
+    backend: FileBrowserBackendKind,
+    current: &RemoteFilePath,
+    fallback_path: &str,
+) -> RemoteFilePath {
+    match backend {
+        FileBrowserBackendKind::Remote => current
+            .parent()
+            .unwrap_or_else(|_| RemoteFilePath::new(remote_parent_path(fallback_path))),
+        kind => RemoteFilePath::new(file_browser_parent(kind, fallback_path)),
+    }
+}
 
 impl NyaTermApp {
     pub(in crate::features::pages::transfers) fn toggle_transfer_browser_view_mode(
@@ -536,10 +556,13 @@ impl NyaTermApp {
             cx.notify();
             return;
         }
+        let backend = self
+            .session
+            .active_file_browser_backend()
+            .unwrap_or(nyaterm_files::file_browser::FileBrowserBackendKind::Remote);
         let current_identity = self.transfer.browser_remote_file_path();
-        let parent_identity = current_identity
-            .parent()
-            .unwrap_or_else(|_| RemoteFilePath::new(remote_parent_path(&current_path)));
+        let parent_identity =
+            transfer_browser_parent_identity(backend, &current_identity, &current_path);
         let parent = parent_identity.display_path.clone();
         if parent == current_path {
             self.transfer
@@ -608,5 +631,69 @@ impl NyaTermApp {
     ) {
         let remote_path = self.transfer.restore_browser_navigation(snapshot);
         self.transfer.set_remote_path(remote_path);
+    }
+}
+
+#[cfg(test)]
+mod parent_identity_tests {
+    use super::transfer_browser_parent_identity;
+    use nyaterm_files::file_browser::FileBrowserBackendKind;
+    use nyaterm_files::sftp::RemoteFilePath;
+
+    #[test]
+    fn remote_sessions_keep_posix_and_raw_path_token_parents() {
+        let current = RemoteFilePath::from_raw("/srv/unknown/child", b"/srv/\xff/child");
+        let parent = transfer_browser_parent_identity(
+            FileBrowserBackendKind::Remote,
+            &current,
+            "/srv/unknown/child",
+        );
+        assert_eq!(parent.display_path, "/srv/unknown");
+        assert_eq!(parent.raw_path().unwrap(), Some(b"/srv/\xff".to_vec()));
+    }
+
+    #[test]
+    fn adb_sessions_keep_posix_parents() {
+        let parent = transfer_browser_parent_identity(
+            FileBrowserBackendKind::Adb,
+            &RemoteFilePath::new("/sdcard/DCIM/Camera"),
+            "/sdcard/DCIM/Camera",
+        );
+        assert_eq!(parent.display_path, "/sdcard/DCIM");
+    }
+
+    #[test]
+    fn local_windows_drive_parents_use_native_rules() {
+        // `Path::parent` parses drive-letter paths identically on every host.
+        let parent = transfer_browser_parent_identity(
+            FileBrowserBackendKind::Local,
+            &RemoteFilePath::new("D:/Codes/RustProjects"),
+            "D:/Codes/RustProjects",
+        );
+        assert_eq!(parent.display_path, "D:/Codes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_wsl_unc_parents_use_native_rules() {
+        // Only the Windows `Path` implementation parses `\\wsl.localhost`
+        // UNC shapes; on other hosts this string is a single component.
+        let parent = transfer_browser_parent_identity(
+            FileBrowserBackendKind::Local,
+            &RemoteFilePath::new(r"\\wsl.localhost\Ubuntu\home\user"),
+            r"\\wsl.localhost\Ubuntu\home\user",
+        );
+        assert_eq!(parent.display_path, r"\\wsl.localhost\Ubuntu\home");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_posix_parents_treat_backslashes_as_filename_characters() {
+        let parent = transfer_browser_parent_identity(
+            FileBrowserBackendKind::Local,
+            &RemoteFilePath::new("/data/tmp\\weird/dir"),
+            "/data/tmp\\weird/dir",
+        );
+        assert_eq!(parent.display_path, "/data/tmp\\weird");
     }
 }

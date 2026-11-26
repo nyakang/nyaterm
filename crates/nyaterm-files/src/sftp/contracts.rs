@@ -307,3 +307,25 @@ mod cancellation_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod parent_tests {
+    use super::RemoteFilePath;
+
+    #[test]
+    fn posix_parents_keep_previous_behavior_even_with_windows_lookalike_names() {
+        // Backslashes and drive-letter-like prefixes are ordinary POSIX
+        // filename characters; `parent` must keep parsing by `/` only.
+        let parent = RemoteFilePath::new("/data/tmp\\weird/C:dir").parent().unwrap();
+        assert_eq!(parent.display_path, "/data/tmp\\weird");
+        assert_eq!(RemoteFilePath::new("/a").parent().unwrap().display_path, "/");
+    }
+
+    #[test]
+    fn raw_path_tokens_survive_posix_parents() {
+        let current = RemoteFilePath::from_raw("/srv/unknown/child", b"/srv/\xff/child");
+        let parent = current.parent().unwrap();
+        assert_eq!(parent.display_path, "/srv/unknown");
+        assert_eq!(parent.raw_path().unwrap(), Some(b"/srv/\xff".to_vec()));
+    }
+}
