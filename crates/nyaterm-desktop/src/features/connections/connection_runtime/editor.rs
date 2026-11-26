@@ -487,6 +487,8 @@ impl NyaTermApp {
         }
         self.connection_state.close_editor();
         self.connection_state.clear_editor_fields();
+        // The tab was what kept discovery (and our adb server) alive.
+        self.sync_android_discovery();
         self.shell
             .set_status(t!("dialog.connectionEditorClosed").to_string());
         cx.notify();
@@ -1206,6 +1208,9 @@ impl NyaTermApp {
         }
         if kind == ConnectionKindTab::Adb {
             self.prepare_android_tracker(cx);
+        } else {
+            // Leaving the Android tab releases the device list's adb server.
+            self.sync_android_discovery();
         }
         cx.notify();
     }

@@ -837,6 +837,116 @@ fn android_screen_session_settings_survive_stop_without_changing_device_defaults
 }
 
 #[test]
+fn a_starting_android_session_holds_device_discovery_before_any_view_exists() {
+    use crate::features::session::SavedConnectionStartOptions;
+    let root = TestConfigDir::new("nyaterm-android-start-discovery");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    app.update(&mut cx, |app, _cx| {
+        let options = SavedConnectionStartOptions::default();
+        // Any other connection being opened is not an Android consumer.
+        let ssh: nyaterm_core::SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"ssh-server", "name":"SSH", "type":"ssh", "host":"example.com", "username":"root"
+        }))
+        .unwrap();
+        app.session.begin_saved_start_preparation(&ssh, &options);
+        app.sync_android_discovery();
+        assert!(!app.android_discovery_needed());
+        assert!(!app.android.holds_discovery());
+
+        // A saved Android connection is registered before its device is bound,
+        // so no view or session exists yet. Releasing discovery in that window
+        // stopped the tracker and the server the bind was talking to, and the
+        // connection failed right after adb came up.
+        let android: nyaterm_core::SavedConnection = serde_json::from_value(serde_json::json!({
+            "id":"android-device", "name":"Android fixture", "type":"adb",
+            "device":{"kind":"usb","serial":"synthetic"}, "directory":"/sdcard/"
+        }))
+        .unwrap();
+        let request = app
+            .session
+            .begin_saved_start_preparation(&android, &options);
+        app.android.pending.insert(android.id.clone(), request);
+        app.sync_android_discovery();
+        assert!(app.android_discovery_needed());
+        assert!(app.android.holds_discovery());
+    });
+}
+
+#[test]
+fn the_device_picker_keeps_the_last_list_while_released_discovery_restarts() {
+    use nyaterm_android::adb::client::{AdbDevice, DeviceStatus};
+    let root = TestConfigDir::new("nyaterm-android-device-cache");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    app.update(&mut cx, |app, _cx| {
+        assert!(app.android.device_snapshot().devices.is_empty());
+        assert!(!app.android.devices_are_starting());
+
+        let published = nyaterm_android::devices::DeviceSnapshot {
+            revision: 4,
+            devices: vec![AdbDevice {
+                serial: "emulator-5554".into(),
+                transport_id: Some(1),
+                model: Some("Pixel".into()),
+                status: DeviceStatus::Online,
+            }],
+            ..Default::default()
+        };
+        app.android.remember_devices();
+        // No tracker has published in this process, so nothing is remembered
+        // yet; the fallback must not invent a list.
+        assert!(app.android.device_snapshot().devices.is_empty());
+
+        app.android.cached_devices = published;
+        app.android.remember_devices();
+
+        // Nothing is serving discovery, so the live snapshot is still at
+        // revision 0: the remembered list is what the picker paints while a
+        // fresh tracker cold-starts adb.
+        let snapshot = app.android.device_snapshot();
+        assert_eq!(snapshot.devices.len(), 1);
+        assert_eq!(snapshot.devices[0].serial, "emulator-5554");
+
+        // Held discovery with nothing published is "still discovering", which
+        // is what turns the empty picker into a progress hint.
+        app.android.sync_discovery(true);
+        assert!(app.android.devices_are_starting());
+        app.android.sync_discovery(false);
+        assert!(!app.android.devices_are_starting());
+    });
+}
+
+#[test]
+fn attaching_a_moved_android_tab_holds_discovery_before_the_next_tick() {
+    let root = TestConfigDir::new("nyaterm-android-tab-move");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "fixture");
+    app.update(&mut cx, |app, cx| {
+        assert!(!app.android.holds_discovery());
+        let bundle = crate::features::android::AndroidTabTransfer {
+            views: vec![crate::features::android::AndroidTransferredView {
+                id: "android-shell".into(),
+                view: AndroidView {
+                    device_key: "android-device".into(),
+                    kind: AndroidViewKind::Shell,
+                },
+                screen: None,
+                workspace: None,
+            }],
+            devices: Vec::new(),
+        };
+        app.android
+            .attach_tab(bundle, &mut app.file_manager, cx.entity(), cx);
+        // The source window releases as soon as its tab is gone, so the
+        // arriving window has to hold discovery itself, not wait for a tick.
+        assert!(app.android.holds_discovery());
+    });
+}
+#[test]
 fn waiting_for_android_component_keeps_one_pending_connection_request() {
     use crate::features::session::SavedConnectionStartOptions;
     let root = TestConfigDir::new("nyaterm-android-component-pending");

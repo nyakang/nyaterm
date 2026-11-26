@@ -989,3 +989,75 @@ fn open_new_connection_after_save_applies_only_to_new_connections() {
         assert!(!app.connection_editor_connect_after_save(Some("saved"), false));
     });
 }
+
+#[test]
+fn the_android_editor_tab_is_what_holds_device_discovery() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::ConnectionKindTab;
+    use crate::test_support::TestAppCleanup;
+    use gpui::TestAppContext;
+
+    let root = TestTempDir::new("nyaterm-android-discovery-lease");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        // Nothing consumes discovery before an Android tab or view exists.
+        assert!(!app.android_discovery_needed());
+        assert!(!app.android.holds_discovery());
+
+        let draft = app.new_preferred_connection_editor_state(None, false, cx);
+        app.connection_state.begin_editor(draft);
+        app.connection_state.set_editor_kind(ConnectionKindTab::Ssh);
+        app.sync_android_discovery();
+        assert!(!app.android.holds_discovery());
+
+        // Showing the Android tab is the consumer that starts adb.
+        app.connection_state.set_editor_kind(ConnectionKindTab::Adb);
+        app.sync_android_discovery();
+        assert!(app.android.holds_discovery());
+
+        // Switching the tab away releases it, so adb does not outlive the tab.
+        app.connection_state.set_editor_kind(ConnectionKindTab::Ssh);
+        app.sync_android_discovery();
+        assert!(!app.android.holds_discovery());
+
+        // Closing the editor is the other exit.
+        app.connection_state.set_editor_kind(ConnectionKindTab::Adb);
+        app.sync_android_discovery();
+        assert!(app.android.holds_discovery());
+        app.close_connection_editor(cx);
+        assert!(!app.android_discovery_needed());
+        assert!(!app.android.holds_discovery());
+    });
+}
+
+#[test]
+fn discovery_without_a_tracker_is_restarted_after_a_release() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestAppCleanup;
+    use gpui::TestAppContext;
+
+    let root = TestTempDir::new("nyaterm-android-tracker-restart");
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, _cx| {
+        // Nothing consumes discovery, so nothing may start a tracker.
+        assert!(!app.android.holds_discovery());
+        assert!(!app.android_needs_tracker());
+
+        // A consumer without an editor tab (a saved connection opening a view)
+        // still needs a tracker of its own.
+        app.android.sync_discovery(true);
+        assert!(app.android.holds_discovery());
+        assert!(!app.android.tracker.is_active());
+        assert!(app.android_needs_tracker());
+
+        // Releasing stops it; a later consumer must be able to start it again.
+        app.android.sync_discovery(false);
+        assert!(!app.android_needs_tracker());
+        app.android.sync_discovery(true);
+        assert!(app.android_needs_tracker());
+    });
+}
