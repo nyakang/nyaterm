@@ -26,7 +26,7 @@ use regex::Regex;
 use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -1122,4 +1122,152 @@ pub(crate) fn parse_stop_bits(value: &str) -> StopBits {
         "2" => StopBits::Two,
         _ => StopBits::One,
     }
+}
+
+/// Result of a Telnet connection probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelnetProbeOutcome {
+    /// TCP connected, but no auto-login credentials were configured.
+    Reachable,
+    /// TCP connected and the configured auto-login completed.
+    Authenticated,
+}
+
+/// Connect to a Telnet server and run the configured auto-login flow.
+///
+/// This is intentionally synchronous: the connection editor runs it on a
+/// blocking worker. Without configured auto-login it degenerates to a TCP
+/// reachability check.
+pub fn probe_telnet_connection(
+    config: &TelnetSessionConfig,
+    attempt: &connection_attempt::ConnectionAttempt,
+) -> Result<TelnetProbeOutcome, String> {
+    attempt.check()?;
+    let (mut stream, _route) = if config.proxy.is_some() || config.proxy_jump.is_some() {
+        let (stream, route) = crate::network_route::NetworkRoute::connect_with_attempt(
+            crate::network_route::NetworkRouteConfig {
+                host: config.host.clone(),
+                port: config.port,
+                proxy: config.proxy.clone(),
+                jump: config.proxy_jump.as_deref().cloned(),
+            },
+            attempt.clone(),
+        )
+        .map_err(|error| error.to_string())?;
+        (stream, Some(route))
+    } else {
+        let addresses = (config.host.as_str(), config.port)
+            .to_socket_addrs()
+            .map_err(|error| error.to_string())?
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err(format!("could not resolve {}:{}", config.host, config.port));
+        }
+        let mut last_error = None;
+        let mut connected = None;
+        for address in addresses {
+            attempt.check()?;
+            match TcpStream::connect_timeout(&address, Duration::from_secs(10)) {
+                Ok(stream) => {
+                    connected = Some(stream);
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        let stream = connected.ok_or_else(|| {
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| format!("could not connect to {}:{}", config.host, config.port))
+        })?;
+        (stream, None)
+    };
+
+    stream.set_nodelay(true).ok();
+    stream
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+
+    let Some(mut auto_login) = TelnetAutoLoginState::new(config) else {
+        return Ok(TelnetProbeOutcome::Reachable);
+    };
+    let mut naws = crate::telnet_codec::TelnetNawsState::new(config.cols, config.rows);
+    if !config.raw_tcp && config.send_naws {
+        write_probe_payload(&mut stream, &naws.offer())?;
+    }
+    let mut decoder = TelnetCommandDecoder::default();
+    let deadline =
+        Instant::now() + Duration::from_millis(config.auto_login.timeout_ms.clamp(1_000, 15_000));
+    let mut buffer = [0_u8; 8192];
+    loop {
+        attempt.check()?;
+        if Instant::now() >= deadline {
+            return Err("Telnet auto-login timed out".to_string());
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => {
+                return Err("Telnet server closed the connection during auto-login".to_string());
+            }
+            Ok(read) => {
+                let mut responses: Vec<Vec<u8>> = Vec::new();
+                let visible = if config.raw_tcp {
+                    unescape_iac_iac(&buffer[..read])
+                } else {
+                    decoder.decode(&buffer[..read], &mut |command, option| {
+                        let payload = if !config.raw_tcp && config.send_naws {
+                            match (command, option) {
+                                (DO, OPT_NAWS) => naws.accept(),
+                                (DONT, OPT_NAWS) => naws.reject(),
+                                _ => negotiate_response(command, option, config.send_sga),
+                            }
+                        } else {
+                            negotiate_response(command, option, config.send_sga)
+                        };
+                        if !payload.is_empty() {
+                            responses.push(payload);
+                        }
+                    })
+                };
+                for response in responses {
+                    write_probe_payload(&mut stream, &response)?;
+                }
+                if visible.is_empty() {
+                    continue;
+                }
+                for action in auto_login.handle_visible_output(&visible, config) {
+                    match action {
+                        TelnetAutoLoginAction::Send(payload) => {
+                            write_probe_payload(&mut stream, &payload)?;
+                        }
+                        TelnetAutoLoginAction::Complete => {
+                            return Ok(TelnetProbeOutcome::Authenticated);
+                        }
+                        TelnetAutoLoginAction::Disable => {
+                            return Err("Telnet auto-login did not complete".to_string());
+                        }
+                    }
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+fn write_probe_payload(stream: &mut TcpStream, payload: &[u8]) -> Result<(), String> {
+    if payload.is_empty() {
+        return Ok(());
+    }
+    stream
+        .write_all(payload)
+        .map_err(|error| error.to_string())?;
+    stream.flush().ok();
+    Ok(())
 }

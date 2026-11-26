@@ -29,7 +29,9 @@ const CONTROL_QUEUE_BYTE_LIMIT: usize = 4 * 1024 * 1024;
 const HELPER_PACKAGE: &str = "nyaterm-vnc-helper";
 const HELPER_ENV_VAR: &str = "NYATERM_VNC_HELPER";
 
-fn resolve_helper_path() -> Result<PathBuf, VncError> {
+/// Locate the VNC helper beside the executable (or via `NYATERM_VNC_HELPER`).
+/// Packaged builds install it as a native component instead.
+pub fn resolve_vnc_helper_path() -> Result<PathBuf, VncError> {
     helper_process::resolve_helper(HELPER_PACKAGE, HELPER_ENV_VAR)
         .map_err(|message| VncError::new(VncErrorKind::HelperMissing, message))
 }
@@ -472,7 +474,7 @@ impl VncSessionManager {
         self.ensure_reaper()?;
         let helper = match &component {
             Some(component) => component.executable.clone(),
-            None => resolve_helper_path()?,
+            None => resolve_vnc_helper_path()?,
         };
         let helper_process::HelperProcess {
             mut child,

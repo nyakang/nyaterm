@@ -284,6 +284,7 @@ impl NyaTermApp {
                 store: self.store_blocking_client(),
                 policy: self.settings.summary().host_key_policy.clone(),
                 prompt_broker: self.session.prompts.host_key_broker(),
+                persist_known_hosts: true,
             })),
             credential_provider: Some(self.session.prompts.credential_broker()),
             agent_prompt_provider: Some(self.session.prompts.agent_broker()),

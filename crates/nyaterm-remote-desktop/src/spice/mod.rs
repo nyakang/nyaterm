@@ -5,5 +5,6 @@ pub mod display;
 pub mod ipc;
 pub mod keyboard;
 pub mod presentation;
+pub mod probe;
 pub mod protocol;
 pub mod session;

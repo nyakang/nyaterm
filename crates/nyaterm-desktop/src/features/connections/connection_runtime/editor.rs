@@ -99,7 +99,7 @@ impl NyaTermApp {
             .map(|error| self.connection_editor_validation_message(&error))
     }
 
-    fn connection_editor_validation_message(
+    pub(super) fn connection_editor_validation_message(
         &self,
         error: &ConnectionEditorValidationError,
     ) -> String {
@@ -410,7 +410,7 @@ impl NyaTermApp {
             || (connection_id.is_none() && self.settings.summary().open_new_connection_after_save)
     }
 
-    fn new_preferred_connection_editor_state(
+    pub(super) fn new_preferred_connection_editor_state(
         &mut self,
         parent_group_id: Option<String>,
         connect_after_save: bool,

@@ -11,6 +11,7 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
+des.workspace = true
 nyaterm-core = { path = "../nyaterm-core" }
 serde.workspace = true
 serde_json.workspace = true

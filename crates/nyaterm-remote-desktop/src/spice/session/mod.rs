@@ -141,11 +141,18 @@ impl SpiceSessionManager {
         *self.waker.lock().unwrap_or_else(|p| p.into_inner()) = Some(waker);
     }
 
+    /// Locate the SPICE helper beside the executable (or via
+    /// `NYATERM_SPICE_HELPER`). Packaged builds install it as a native
+    /// component instead.
+    pub fn resolve_spice_helper_path() -> Result<std::path::PathBuf, SpiceErrorKind> {
+        helper_process::resolve_helper("nyaterm-spice-helper", "NYATERM_SPICE_HELPER")
+            .map_err(|_| SpiceErrorKind::RuntimeMissing)
+    }
+
     /// Call on a background worker: process creation and rollback may block.
     /// Each call creates a new generation; reconnect policy belongs to desktop.
     pub fn create_session(&self, config: SpiceSessionConfig) -> Result<String, SpiceErrorKind> {
-        let path = helper_process::resolve_helper("nyaterm-spice-helper", "NYATERM_SPICE_HELPER")
-            .map_err(|_| SpiceErrorKind::RuntimeMissing)?;
+        let path = Self::resolve_spice_helper_path()?;
         self.create_session_with_helper(config, &path)
     }
 

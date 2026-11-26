@@ -989,3 +989,35 @@ fn open_new_connection_after_save_applies_only_to_new_connections() {
         assert!(!app.connection_editor_connect_after_save(Some("saved"), false));
     });
 }
+
+#[test]
+fn connection_test_slot_is_generation_scoped_and_cancelled_on_close() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::test_support::TestAppCleanup;
+
+    let root = TestTempDir::new("nyaterm-connection-test-slot");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        let draft = app.new_preferred_connection_editor_state(None, false, cx);
+        app.connection_state.begin_editor(draft);
+        let (generation, attempt) = app
+            .connection_state
+            .begin_editor_test()
+            .expect("an open draft can be tested");
+        assert!(app.connection_state.editor_test_in_flight());
+        assert!(
+            app.connection_state.begin_editor_test().is_none(),
+            "only one test may run at a time"
+        );
+
+        app.connection_state.cancel_editor_test();
+        assert!(attempt.is_cancelled());
+        assert!(!app.connection_state.editor_test_in_flight());
+        assert!(
+            !app.connection_state.finish_editor_test(generation),
+            "a cancelled generation cannot publish a late result"
+        );
+    });
+}

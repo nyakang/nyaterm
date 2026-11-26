@@ -29,6 +29,9 @@ pub(in crate::features) struct NativeHostKeyVerifier {
     pub(in crate::features) store: StoreBlockingClient,
     pub(in crate::features) policy: String,
     pub(in crate::features) prompt_broker: Arc<HostKeyPromptBroker>,
+    /// False for a connection test: accept the key for this attempt only and
+    /// never write or replace a known-hosts record.
+    pub(in crate::features) persist_known_hosts: bool,
 }
 
 impl SshHostKeyVerifier for NativeHostKeyVerifier {
@@ -40,6 +43,7 @@ impl SshHostKeyVerifier for NativeHostKeyVerifier {
             store: self.store.clone(),
             policy: self.policy.clone(),
             prompt_broker: Arc::new(self.prompt_broker.for_attempt(attempt)),
+            persist_known_hosts: self.persist_known_hosts,
         }))
     }
 
@@ -71,11 +75,13 @@ impl SshHostKeyVerifier for NativeHostKeyVerifier {
                     .request_decision(host_key.clone(), HostKeyPromptIssue::Unknown)
                 {
                     Ok(HostKeyPromptChoice::Accept) => {
-                        self.store
-                            .request_mutation_fn(StoreDomain::Security, move |store| {
-                                store.upsert_known_host(&line)
-                            })
-                            .map_err(|error| error.to_string())?;
+                        if self.persist_known_hosts {
+                            self.store
+                                .request_mutation_fn(StoreDomain::Security, move |store| {
+                                    store.upsert_known_host(&line)
+                                })
+                                .map_err(|error| error.to_string())?;
+                        }
                         Ok(SshHostKeyDecision::Accept)
                     }
                     Ok(HostKeyPromptChoice::Reject) => Ok(SshHostKeyDecision::Reject(format!(
@@ -86,20 +92,24 @@ impl SshHostKeyVerifier for NativeHostKeyVerifier {
                 }
             }
             KnownHostCheck::UnknownHost => {
-                self.store
-                    .request_mutation_fn(StoreDomain::Security, move |store| {
-                        store.upsert_known_host(&line)
-                    })
-                    .map_err(|error| error.to_string())?;
+                if self.persist_known_hosts {
+                    self.store
+                        .request_mutation_fn(StoreDomain::Security, move |store| {
+                            store.upsert_known_host(&line)
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
                 Ok(SshHostKeyDecision::Accept)
             }
             KnownHostCheck::HostSeen if self.policy == "accept" => {
-                let host_identifier = host_key.host_identifier.clone();
-                self.store
-                    .request_mutation_fn(StoreDomain::Security, move |store| {
-                        store.replace_known_host_for_host(&host_identifier, &line)
-                    })
-                    .map_err(|error| error.to_string())?;
+                if self.persist_known_hosts {
+                    let host_identifier = host_key.host_identifier.clone();
+                    self.store
+                        .request_mutation_fn(StoreDomain::Security, move |store| {
+                            store.replace_known_host_for_host(&host_identifier, &line)
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
                 Ok(SshHostKeyDecision::Accept)
             }
             KnownHostCheck::HostSeen if self.policy == "prompt" => {
@@ -108,12 +118,14 @@ impl SshHostKeyVerifier for NativeHostKeyVerifier {
                     .request_decision(host_key.clone(), HostKeyPromptIssue::Changed)
                 {
                     Ok(HostKeyPromptChoice::Accept) => {
-                        let host_identifier = host_key.host_identifier.clone();
-                        self.store
-                            .request_mutation_fn(StoreDomain::Security, move |store| {
-                                store.replace_known_host_for_host(&host_identifier, &line)
-                            })
-                            .map_err(|error| error.to_string())?;
+                        if self.persist_known_hosts {
+                            let host_identifier = host_key.host_identifier.clone();
+                            self.store
+                                .request_mutation_fn(StoreDomain::Security, move |store| {
+                                    store.replace_known_host_for_host(&host_identifier, &line)
+                                })
+                                .map_err(|error| error.to_string())?;
+                        }
                         Ok(SshHostKeyDecision::Accept)
                     }
                     Ok(HostKeyPromptChoice::Reject) => Ok(SshHostKeyDecision::Reject(format!(

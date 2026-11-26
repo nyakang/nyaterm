@@ -161,6 +161,33 @@ impl SshSessionConfigBuildContext {
         };
         self.attempt.check()
     }
+
+    /// Resolve the same proxy/jump route the real session would use.
+    ///
+    /// Connection tests call this for non-SSH protocols so a configured route
+    /// is exercised instead of silently testing a direct connection.
+    pub(in crate::features) fn network_route_config(
+        &self,
+        connection: &SavedConnection,
+        host: String,
+        port: u16,
+    ) -> Result<nyaterm_transport::network_route::NetworkRouteConfig, String> {
+        self.attempt.check()?;
+        let jump = load_proxy_jump_config_with_context(self, connection, &mut Vec::new())?
+            .map(|jump| *jump);
+        let proxy = if jump.is_none() {
+            load_proxy_config_with_context(self, connection)?
+        } else {
+            None
+        };
+        self.attempt.check()?;
+        Ok(nyaterm_transport::network_route::NetworkRouteConfig {
+            host,
+            port,
+            proxy,
+            jump,
+        })
+    }
 }
 
 /// Loads stored SSH keys only when the transport broker needs identities.
@@ -1516,6 +1543,7 @@ pub(in crate::features) fn build_ssh_session_config_with_context(
             store: context.store.clone(),
             policy: context.host_key_policy.clone(),
             prompt_broker: context.host_key_prompts.clone(),
+            persist_known_hosts: true,
         })),
         credential_provider: Some(Arc::new(
             context

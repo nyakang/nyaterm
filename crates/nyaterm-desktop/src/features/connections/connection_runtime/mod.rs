@@ -9,3 +9,5 @@ mod catalog_sync;
 mod editor;
 mod groups;
 mod password;
+mod test_connection;
+pub(in crate::features) use test_connection::connection_kind_supports_test;

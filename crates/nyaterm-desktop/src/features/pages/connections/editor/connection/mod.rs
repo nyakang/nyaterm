@@ -733,6 +733,12 @@ impl NyaTermApp {
         let baud_popover_open = self.connection_state.editor_baud_popover_is_open();
         let validation_error = self.connection_editor_validation_error(&editor);
         let save_enabled = !self.connection_state.editor_save_in_flight();
+        let test_running = self.connection_state.editor_test_in_flight();
+        let test_supported = !editor.defaults_mode
+            && crate::features::connections::connection_kind_supports_test(editor.kind);
+        let test_enabled = test_supported && save_enabled && !test_running;
+        let test_disabled_reason =
+            (!test_supported).then(|| t!("dialog.testConnectionUnavailable").to_string());
         let width = if native_window {
             viewport.0
         } else {
@@ -1168,6 +1174,8 @@ impl NyaTermApp {
                     section: editor.section,
                     defaults_mode: editor.defaults_mode,
                     save_enabled,
+                    test_enabled,
+                    test_running,
                 },
                 title,
                 content: content.into_any_element(),
@@ -1185,6 +1193,7 @@ impl NyaTermApp {
                     .as_ref()
                     .map(ToString::to_string)
                     .or(validation_error),
+                test_disabled_reason,
             },
             cx,
         );
@@ -1368,6 +1377,14 @@ impl layout::EditorFrameHost for NyaTermApp {
 
     fn editor_frame_save(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {
         self.save_connection_editor(window, cx);
+    }
+
+    fn editor_frame_test_connection(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.test_connection_editor(window, cx);
     }
 
     fn editor_frame_cancel(&mut self, _window: &mut gpui::Window, cx: &mut gpui::Context<Self>) {

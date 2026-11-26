@@ -9,9 +9,12 @@ mod ipc;
 pub mod pixel_memory;
 pub mod presentation;
 mod protocol;
+mod rdp_probe;
 mod session;
 pub mod spice;
 mod vnc;
+mod vnc_helper_probe;
+mod vnc_probe;
 pub mod vnc_trust;
 
 pub use certificate::{
@@ -53,5 +56,9 @@ pub use protocol::{
     parse_vnc_scale_mode, parse_vnc_security_mode, toggle_rdp_drive_letter,
     validate_committed_text,
 };
+pub use rdp_probe::{probe_rdp_connection, probe_rdp_connection_with_launch};
 pub use session::{RdpSessionManager, resolve_helper_path};
-pub use vnc::{VncSessionManager, validate_vnc_config};
+pub use spice::probe::probe_spice_connection;
+pub use vnc::{VncSessionManager, resolve_vnc_helper_path, validate_vnc_config};
+pub use vnc_helper_probe::probe_vnc_connection_with_launch;
+pub use vnc_probe::{VncProbeOutcome, probe_vnc_connection};

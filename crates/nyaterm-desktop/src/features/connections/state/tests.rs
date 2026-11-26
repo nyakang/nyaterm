@@ -922,6 +922,9 @@ fn connection_editor_owner(cx: &TestAppContext) -> ConnectionEditorFeatureState 
         group_select_trigger_bounds: None,
         save_generation: 0,
         save_in_flight: None,
+        test_generation: 0,
+        test_in_flight: None,
+        test_attempt: None,
     };
     owner.begin_edit(connection_editor_state_with_secret_draft());
     owner

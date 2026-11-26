@@ -30,9 +30,11 @@ pub use transport_io::SerialTransport;
 pub use transport_io::SshChannelTransport;
 #[cfg(test)]
 use transport_io::TelnetAutoLoginAction;
+pub use transport_io::TelnetProbeOutcome;
 pub use transport_io::TelnetTransport;
 pub use transport_io::TmuxPaneTransport;
 use transport_io::TransportWriterCommand;
+pub use transport_io::probe_telnet_connection;
 #[cfg(test)]
 use transport_io::spawn_reader_thread;
 mod proxy_command;
@@ -137,6 +139,16 @@ pub use session_config::{
     SshSessionConfig, SshSessionProfile, TelnetAutoLoginConfig, TelnetEnterMode,
     TelnetSessionConfig,
 };
+
+/// Open a serial port with the saved framing and close it immediately.
+///
+/// The connection editor uses this to verify a draft without creating a
+/// session. It never registers a reader or writer.
+pub fn probe_serial_connection(config: &SerialSessionConfig) -> Result<(), String> {
+    transport_io::open_serial_port(config)
+        .map(drop)
+        .map_err(|error| error.to_string())
+}
 use session_event_queue::SessionEventQueue;
 #[cfg(test)]
 use session_event_queue::{

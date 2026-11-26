@@ -5,7 +5,9 @@ mod custom_icons;
 mod interaction;
 pub(in crate::features) mod state;
 
-pub(in crate::features) use connection_runtime::ConnectionEditorToggle;
+pub(in crate::features) use connection_runtime::{
+    ConnectionEditorToggle, connection_kind_supports_test,
+};
 pub(in crate::features) use interaction::{
     ConnectionDragKind, ConnectionDragPayload, ConnectionDragPreview, ConnectionDropPosition,
     ConnectionDropTarget,

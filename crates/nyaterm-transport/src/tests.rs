@@ -725,6 +725,73 @@ fn telnet_local_line_edit_buffers_until_enter_and_echoes_locally() {
     );
 }
 
+#[test]
+fn telnet_probe_reports_reachable_without_auto_login() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (_peer, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+    });
+    let config = TelnetSessionConfig {
+        host: "127.0.0.1".into(),
+        port,
+        send_naws: false,
+        send_sga: false,
+        ..Default::default()
+    };
+
+    let attempt = crate::connection_attempt::ConnectionAttempt::default();
+    let outcome = crate::probe_telnet_connection(&config, &attempt).unwrap();
+    assert_eq!(outcome, crate::TelnetProbeOutcome::Reachable);
+    server.join().unwrap();
+}
+
+#[test]
+fn telnet_probe_completes_configured_auto_login() {
+    fn read_cr_line(peer: &mut std::net::TcpStream) -> Vec<u8> {
+        let mut line = Vec::new();
+        let mut byte = [0_u8; 1];
+        loop {
+            peer.read_exact(&mut byte).unwrap();
+            if byte[0] == b'\r' || byte[0] == b'\n' {
+                return line;
+            }
+            line.push(byte[0]);
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        peer.write_all(b"login: ").unwrap();
+        assert_eq!(read_cr_line(&mut peer), b"probe-user");
+        peer.write_all(b"Password: ").unwrap();
+        assert_eq!(read_cr_line(&mut peer), b"probe-secret");
+        peer.write_all(b"$ ").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+    });
+    let mut config = TelnetSessionConfig {
+        host: "127.0.0.1".into(),
+        port,
+        username: "probe-user".into(),
+        password: Some("probe-secret".into()),
+        send_naws: false,
+        send_sga: false,
+        ..Default::default()
+    };
+    config.auto_login.enabled = true;
+    config.auto_login.send_wake_enter = false;
+    config.auto_login.timeout_ms = 5_000;
+
+    let attempt = crate::connection_attempt::ConnectionAttempt::default();
+    let outcome = crate::probe_telnet_connection(&config, &attempt).unwrap();
+    assert_eq!(outcome, crate::TelnetProbeOutcome::Authenticated);
+    server.join().unwrap();
+}
+
 fn telnet_input_loopback(
     mut config: TelnetSessionConfig,
 ) -> (SessionManager, super::SessionInfo, std::net::TcpStream) {

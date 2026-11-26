@@ -1911,7 +1911,11 @@ fn connection_editor_categories_fit_wide_and_compact_viewports() {
                     assert!(navigation.right() <= scroll.left());
                     assert_eq!(navigation.top(), scroll.top());
                     assert_eq!(navigation.size.height, scroll.size.height);
-                    for selector in ["connection-editor-save", "connection-editor-close"] {
+                    for selector in [
+                        "connection-editor-test",
+                        "connection-editor-save",
+                        "connection-editor-close",
+                    ] {
                         let button = vcx.debug_bounds(selector).unwrap();
                         assert!(button.left() >= panel.left() && button.right() <= panel.right());
                         assert!(button.top() >= panel.top() && button.bottom() <= panel.bottom());
@@ -1921,6 +1925,58 @@ fn connection_editor_categories_fit_wide_and_compact_viewports() {
         }
     }
 }
+#[gpui::test]
+fn connection_editor_test_button_probes_a_telnet_draft_without_saving(cx: &mut TestAppContext) {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("listener");
+    let port = listener.local_addr().expect("listener address").port();
+    let test_dir = TestConfigDir::new("nyaterm-connection-editor-test-button");
+    let (app, vcx) = hosted_editor(cx, test_dir.path(), 900., 680., 12.);
+    let _ = &listener;
+
+    vcx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_connection_editor_kind(ConnectionKindTab::Telnet, cx);
+            let mut draft = app
+                .connection_state
+                .active_editor_draft()
+                .expect("editor draft");
+            draft.host = "127.0.0.1".into();
+            draft.port = port.to_string();
+            draft.auth_mode = "none".into();
+            app.connection_state.begin_editor(draft);
+        });
+    });
+    draw_editor(&app, vcx);
+    let test_button = vcx
+        .debug_bounds("connection-editor-test")
+        .expect("test button renders");
+    vcx.simulate_click(test_button.center(), Modifiers::default());
+
+    let expected = rust_i18n::t!("dialog.testConnectionTcpOk").to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        vcx.run_until_parked();
+        let status = vcx.update(|_, cx| app.read(cx).shell.status().to_string());
+        if status == expected {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "connection test did not finish: {status}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    vcx.update(|_, cx| {
+        assert!(
+            app.read(cx)
+                .connection_state
+                .active_editor_draft()
+                .is_some(),
+            "a test must not close or save the draft"
+        );
+    });
+}
+
 #[gpui::test]
 fn category_navigation_preserves_input_entities_and_keyboard_focus(cx: &mut TestAppContext) {
     use crate::models::ConnectionEditorSection;

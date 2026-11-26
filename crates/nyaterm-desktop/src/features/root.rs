@@ -1103,15 +1103,21 @@ impl NyaTermApp {
             })
             // Background SSH operations can request credentials while another
             // overlay is open, so authentication must be the topmost overlay.
-            .when(overlay.ssh_auth_open, |this| {
-                this.child(
-                    deferred(full_window_overlay_layer(
-                        "ssh-auth-prompt-input-layer",
-                        self.ssh_auth_prompt_overlay(cx),
-                    ))
-                    .with_priority(SSH_AUTH_PROMPT_PRIORITY),
-                )
-            })
+            // A native connection editor is a separate OS window and paints the
+            // same prompt itself; keeping the main-window copy would show two
+            // cards when the editor does not fully cover this window.
+            .when(
+                overlay.ssh_auth_open && !self.connection_state.editor_window_is_open_or_pending(),
+                |this| {
+                    this.child(
+                        deferred(full_window_overlay_layer(
+                            "ssh-auth-prompt-input-layer",
+                            self.ssh_auth_prompt_overlay(cx),
+                        ))
+                        .with_priority(SSH_AUTH_PROMPT_PRIORITY),
+                    )
+                },
+            )
     }
 
     fn ai_full_access_confirmation_overlay(

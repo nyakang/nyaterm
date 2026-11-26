@@ -227,6 +227,11 @@ struct ConnectionEditorFeatureState {
     /// Generation of the in-flight save; cleared when the draft is replaced or
     /// closed, so a late store reply cannot finish or fail a different draft.
     save_in_flight: Option<u64>,
+    test_generation: u64,
+    /// Generation of the in-flight connection test, if any.
+    test_in_flight: Option<u64>,
+    /// Cancellation handle for the worker running the current test.
+    test_attempt: Option<nyaterm_transport::connection_attempt::ConnectionAttempt>,
 }
 
 struct ConnectionGroupEditorFeatureState {
@@ -325,6 +330,9 @@ impl ConnectionFeatureState {
                 group_select_trigger_bounds: None,
                 save_generation: 0,
                 save_in_flight: None,
+                test_generation: 0,
+                test_in_flight: None,
+                test_attempt: None,
             },
             group_editor: ConnectionGroupEditorFeatureState {
                 draft: None,
@@ -1577,11 +1585,13 @@ impl ConnectionFeatureState {
     }
 
     pub fn replace_editor_kind(&mut self, draft: ConnectionEditorState) {
+        self.cancel_editor_test();
         self.invalidate_editor_password_request();
         self.editor.draft = Some(draft);
     }
 
     pub fn set_editor_kind(&mut self, kind: ConnectionKindTab) -> bool {
+        self.cancel_editor_test();
         self.invalidate_editor_password_request();
         self.editor.set_kind(kind)
     }
@@ -1880,6 +1890,29 @@ impl ConnectionFeatureState {
         self.editor.forwarding_endpoint_field_subscriptions.clear();
     }
 
+    /// Claim the editor's single test slot; `None` while a test is already running.
+    pub fn begin_editor_test(
+        &mut self,
+    ) -> Option<(
+        u64,
+        nyaterm_transport::connection_attempt::ConnectionAttempt,
+    )> {
+        self.editor.begin_test()
+    }
+
+    /// Release the test slot; false when the reply belongs to a superseded draft.
+    pub fn finish_editor_test(&mut self, generation: u64) -> bool {
+        self.editor.finish_test(generation)
+    }
+
+    pub fn editor_test_in_flight(&self) -> bool {
+        self.editor.test_in_flight()
+    }
+
+    pub fn cancel_editor_test(&mut self) {
+        self.editor.cancel_test_request();
+    }
+
     /// Claim the editor's single save slot; `None` while a save is already running.
     pub fn begin_editor_save(&mut self) -> Option<u64> {
         if self.editor.draft.is_none() || self.editor.save_in_flight.is_some() {
@@ -1904,6 +1937,7 @@ impl ConnectionFeatureState {
     }
 
     pub fn finish_editor_save(&mut self, connection_id: String, group_id: Option<String>) {
+        self.editor.cancel_test_request();
         self.editor.save_in_flight = None;
         self.editor.agent_identity_picker_open = false;
         clear_connection_editor_runtime_state(
@@ -2244,6 +2278,7 @@ fn duration_ms(duration: Duration) -> f64 {
 
 impl ConnectionEditorFeatureState {
     pub fn begin_edit(&mut self, mut draft: ConnectionEditorState) {
+        self.cancel_test();
         self.kind_drafts.clear();
         self.kind_baselines.clear();
         self.password = EditorPasswordState::new(
@@ -2269,6 +2304,48 @@ impl ConnectionEditorFeatureState {
                 .insert(draft.kind, draft.default_settings_snapshot());
         }
         self.draft = Some(draft);
+    }
+
+    fn cancel_test(&mut self) {
+        if let Some(attempt) = self.test_attempt.take() {
+            attempt.cancel();
+        }
+        self.test_in_flight = None;
+    }
+
+    pub fn begin_test(
+        &mut self,
+    ) -> Option<(
+        u64,
+        nyaterm_transport::connection_attempt::ConnectionAttempt,
+    )> {
+        if self.draft.is_none() || self.test_in_flight.is_some() {
+            return None;
+        }
+        self.test_generation = self.test_generation.wrapping_add(1);
+        let generation = self.test_generation;
+        let attempt = nyaterm_transport::connection_attempt::ConnectionAttempt::default();
+        self.test_in_flight = Some(generation);
+        self.test_attempt = Some(attempt.clone());
+        Some((generation, attempt))
+    }
+
+    /// Release the test slot; false when the reply belongs to a superseded draft.
+    pub fn finish_test(&mut self, generation: u64) -> bool {
+        if self.test_in_flight != Some(generation) {
+            return false;
+        }
+        self.test_in_flight = None;
+        self.test_attempt = None;
+        true
+    }
+
+    pub fn test_in_flight(&self) -> bool {
+        self.test_in_flight.is_some()
+    }
+
+    pub fn cancel_test_request(&mut self) {
+        self.cancel_test();
     }
 
     pub fn active_draft(&self) -> Option<ConnectionEditorState> {
@@ -2538,6 +2615,7 @@ impl ConnectionEditorFeatureState {
     }
 
     pub fn close(&mut self) {
+        self.cancel_test();
         self.kind_drafts.clear();
         self.kind_baselines.clear();
         self.password = EditorPasswordState::default();

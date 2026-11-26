@@ -21,6 +21,8 @@ pub struct EditorChrome {
     pub section: ConnectionEditorSection,
     pub defaults_mode: bool,
     pub save_enabled: bool,
+    pub test_enabled: bool,
+    pub test_running: bool,
 }
 
 /// Event routing for the shared editor frame.
@@ -61,6 +63,12 @@ pub trait EditorFrameHost: 'static + Sized {
 
     fn editor_frame_save(&mut self, window: &mut Window, cx: &mut Context<Self>);
 
+    /// Probe the current draft without saving it.
+    ///
+    /// The default keeps the shared frame usable by editors that have no
+    /// connection test (for example the asset batch editor).
+    fn editor_frame_test_connection(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
     fn editor_frame_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>);
 }
 
@@ -79,6 +87,7 @@ pub struct ConnectionEditorFrame {
     pub protocol_select: Entity<NyaSelectState>,
     pub protocol_kinds: Vec<ConnectionKindTab>,
     pub validation_error: Option<String>,
+    pub test_disabled_reason: Option<String>,
 }
 
 pub fn connection_editor_frame<H: EditorFrameHost>(
@@ -100,10 +109,16 @@ pub fn connection_editor_frame<H: EditorFrameHost>(
         protocol_select,
         protocol_kinds,
         validation_error,
+        test_disabled_reason,
     } = frame;
     let sections = ConnectionEditorSection::for_kind(chrome.kind, chrome.defaults_mode);
     let cancel_label = t!("common.cancel");
     let save_label = t!("common.save");
+    let test_label = if chrome.test_running {
+        t!("dialog.testingConnection")
+    } else {
+        t!("dialog.testConnection")
+    };
     let navigation = div()
         .id("connection-editor-navigation")
         .track_focus(&navigation_focus)
@@ -259,11 +274,26 @@ pub fn connection_editor_frame<H: EditorFrameHost>(
                         .gap_2()
                         .child(connection_editor_footer_button(
                             palette,
+                            "connection-editor-test",
+                            test_label,
+                            FooterButtonOptions {
+                                primary: false,
+                                enabled: chrome.test_enabled,
+                                disabled_tooltip: test_disabled_reason,
+                                loading: chrome.test_running,
+                            },
+                            cx.listener(|this, _, window, cx| {
+                                this.editor_frame_test_connection(window, cx);
+                            }),
+                        ))
+                        .child(connection_editor_footer_button(
+                            palette,
                             "connection-editor-close",
                             cancel_label,
-                            false,
-                            true,
-                            None,
+                            FooterButtonOptions {
+                                enabled: true,
+                                ..FooterButtonOptions::default()
+                            },
                             cx.listener(|this, _, window, cx| {
                                 this.editor_frame_cancel(window, cx);
                             }),
@@ -272,9 +302,12 @@ pub fn connection_editor_frame<H: EditorFrameHost>(
                             palette,
                             "connection-editor-save",
                             save_label,
-                            true,
-                            chrome.save_enabled,
-                            validation_error.clone(),
+                            FooterButtonOptions {
+                                primary: true,
+                                enabled: chrome.save_enabled,
+                                disabled_tooltip: validation_error.clone(),
+                                ..FooterButtonOptions::default()
+                            },
                             cx.listener(|this, _, window, cx| {
                                 this.editor_frame_save(window, cx);
                             }),
@@ -284,15 +317,27 @@ pub fn connection_editor_frame<H: EditorFrameHost>(
     card.into_any_element()
 }
 
-pub fn connection_editor_footer_button(
-    _palette: nyaterm_ui::ThemePalette,
-    id: &'static str,
-    label: impl Into<SharedString>,
+#[derive(Clone, Default)]
+struct FooterButtonOptions {
     primary: bool,
     enabled: bool,
     disabled_tooltip: Option<String>,
+    loading: bool,
+}
+
+fn connection_editor_footer_button(
+    _palette: nyaterm_ui::ThemePalette,
+    id: &'static str,
+    label: impl Into<SharedString>,
+    options: FooterButtonOptions,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
+    let FooterButtonOptions {
+        primary,
+        enabled,
+        disabled_tooltip,
+        loading,
+    } = options;
     let mut button = nyaterm_ui::NyaButton::new(id, label)
         .height(px(36.))
         .variant(if primary {
@@ -300,9 +345,13 @@ pub fn connection_editor_footer_button(
         } else {
             nyaterm_ui::NyaButtonVariant::Secondary
         })
-        .disabled(!enabled)
+        .disabled(!enabled || loading)
+        .loading(loading)
         .on_click(on_click);
-    if !enabled && let Some(tooltip) = disabled_tooltip {
+    if !enabled
+        && !loading
+        && let Some(tooltip) = disabled_tooltip
+    {
         button = button.tooltip(tooltip);
     }
     div().debug_selector(move || id.to_string()).child(button)

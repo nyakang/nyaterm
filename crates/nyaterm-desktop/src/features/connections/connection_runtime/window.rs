@@ -15,6 +15,7 @@ use crate::features::{
     view_widgets::{
         ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, child_window_header,
         child_window_options, child_window_root, focus_child_window_shell_if_idle,
+        full_window_overlay_layer,
     },
 };
 use crate::models::ConnectionEditorField;
@@ -105,7 +106,28 @@ impl Render for ConnectionEditorWindow {
         let header_close = on_close.clone();
         focus_child_window_shell_if_idle(&self.shell_focus, window, cx);
 
-        child_window_root(&self.shell_focus, true, on_close)
+        // SSH authentication is app-wide, but this modal editor is a separate
+        // native window. The main window's overlay therefore paints behind it.
+        // Render the same prompt layer in this window so a first-connect
+        // fingerprint (or a credential prompt) is reachable while the editor
+        // is open.
+        let ssh_auth_overlay = self
+            .app
+            .read(cx)
+            .session
+            .prompt_has_active_ssh_auth()
+            .then(|| {
+                self.app.update(cx, |app, cx| {
+                    full_window_overlay_layer(
+                        "connection-editor-ssh-auth-input-layer",
+                        app.ssh_auth_prompt_overlay(cx),
+                    )
+                    .into_any_element()
+                })
+            });
+
+        let root = child_window_root(&self.shell_focus, true, on_close)
+            .relative()
             .bg(rgb(palette.bg))
             .text_color(rgb(palette.text))
             .font(font)
@@ -120,7 +142,8 @@ impl Render for ConnectionEditorWindow {
                 move |_, window, cx| header_close(window, cx),
             ))
             .child(div().flex_1().min_h_0().overflow_hidden().child(content))
-            .into_any_element()
+            .children(ssh_auth_overlay);
+        root.into_any_element()
     }
 }
 

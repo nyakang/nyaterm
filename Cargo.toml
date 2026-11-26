@@ -98,6 +98,7 @@ async-http-proxy = { version = "1.2.5", features = ["runtime-tokio", "basic-auth
 base64 = "0.22"
 bytes = "1.7"
 crypto_secretbox = "0.1"
+des = "0.9"
 digest = "0.11.0-rc.5"
 dirs = "6"
 encoding_rs = "0.8"

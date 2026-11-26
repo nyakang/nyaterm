@@ -50,6 +50,21 @@ impl NetworkRoute {
         Self::spawn(config, ConnectionAttempt::default(), None)
     }
 
+    /// Open one authenticated route and its remote stream, then discard both.
+    ///
+    /// Connection tests need to prove the route works without keeping a relay
+    /// or stream alive. The returned error is intentionally the same one the
+    /// real session start would surface.
+    pub fn probe(
+        config: NetworkRouteConfig,
+        attempt: ConnectionAttempt,
+    ) -> Result<(), RouteConnectError> {
+        let (stream, route) = Self::connect_with_attempt(config, attempt)?;
+        drop(stream);
+        drop(route);
+        Ok(())
+    }
+
     /// Establish one authenticated relay AND its remote stream before handing
     /// the socket to the synchronous Telnet workers. The readiness result stays
     /// in process, so the existing RDP/VNC relay wire contract is unchanged.

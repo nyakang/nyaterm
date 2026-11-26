@@ -8530,6 +8530,7 @@ name = "nyaterm-remote-desktop"
 version = "2.0.8"
 dependencies = [
  "anyhow",
+ "des",
  "nyaterm-core",
  "serde",
  "serde_json",
