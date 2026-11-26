@@ -1311,7 +1311,26 @@ fn command_send_all_and_group_targets_include_serial_without_active_protocol_fil
                 .apply_control_input(SendCommandControlFocus::Interval, "0".into());
             app.send_bottom_command(false, cx);
         });
-        fixture.cx.run_until_parked();
+        // A broadcast can exhaust the UI time slice between targets and yield
+        // to a timer. Drive that timer before enqueueing the wire end markers.
+        for _ in 0..100 {
+            fixture.cx.run_until_parked();
+            if !fixture
+                .app
+                .read_with(&fixture.cx, |app, _| app.send_command.is_sending())
+            {
+                break;
+            }
+            fixture
+                .cx
+                .executor()
+                .advance_clock(Duration::from_millis(5));
+        }
+        assert!(
+            !fixture
+                .app
+                .read_with(&fixture.cx, |app, _| app.send_command.is_sending())
+        );
         fixture.assert_wire(0, b"AT\r");
         fixture.assert_wire(1, b"AT\r\n");
         fixture.assert_wire(2, if grouped { b"" } else { b"AT\r" });

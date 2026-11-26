@@ -5,7 +5,7 @@ use gpui::{
 use nyaterm_core::truncate_preview;
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaContextMenu, NyaDialogWindowExt as _, NyaDropdownMenu,
-    NyaMenuItem, NyaTooltip,
+    NyaMenuItem, NyaScrollable as _, NyaTooltip,
 };
 use rust_i18n::t;
 
@@ -410,8 +410,7 @@ impl NyaTermApp {
                     .items_center()
                     .gap(px(3.))
                     .min_w_0()
-                    // Keep overflow scrollable via wheel and the all-tabs menu
-                    // without painting a scrollbar thumb over 24px capsules.
+                    // The parent owns the scrollbar so it stays fixed while tabs scroll.
                     .overflow_x_scroll()
                     .overflow_y_hidden()
                     .track_scroll(&scroll)
@@ -433,7 +432,8 @@ impl NyaTermApp {
                         }
                     }))
                     .children(rows),
-            );
+            )
+            .horizontal_scrollbar(&scroll);
         div()
             .id("send-command.tabs")
             .debug_selector(|| "send-command.tabs".into())

@@ -148,8 +148,8 @@ jobs:
           shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_terminal
           --locked -- --ignored --test-threads=1
 
-      # This stress test repeatedly creates SSH runtimes and echoes large
-      # payloads. Run it on every OS without competing transport tests.
+      # This stress test repeatedly creates SSH runtimes and receives large
+      # server payloads. Run it on every OS without competing transport tests.
       - name: Test SSH detached close lifecycle
         run: >-
           cargo test -p nyaterm-transport --lib

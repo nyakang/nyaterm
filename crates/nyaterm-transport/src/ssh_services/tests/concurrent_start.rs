@@ -32,7 +32,12 @@ impl Drop for ReleaseGate {
 
 struct Peer {
     gate: Arc<Gate>,
-    channels: Vec<Channel<server::Msg>>,
+}
+
+const LIFECYCLE_OUTPUT_REQUEST: &[u8] = b"lifecycle-output";
+
+fn lifecycle_output() -> Vec<u8> {
+    b"synthetic SSH output 0123456789 abcdefghijklmnopqrstuvwxyz\r\n".repeat(16384)
 }
 
 impl server::Handler for Peer {
@@ -52,7 +57,9 @@ impl server::Handler for Peer {
             self.gate.entered.notify_one();
             self.gate.release.notified().await;
         }
-        self.channels.push(channel);
+        // Handler callbacks consume the messages. Retaining an unread Channel
+        // would fill its bounded duplicate queue and stall the whole connection.
+        drop(channel);
         reply.accept().await;
         Ok(())
     }
@@ -88,6 +95,9 @@ impl server::Handler for Peer {
         if data == b"existing-session-input" {
             self.gate.received.notify_one();
         }
+        if data == LIFECYCLE_OUTPUT_REQUEST {
+            return session.data(channel, lifecycle_output());
+        }
         session.data(channel, data.to_vec())
     }
 }
@@ -105,6 +115,9 @@ async fn server(gate: Arc<Gate>) -> (SshSessionConfig, tokio::task::JoinHandle<(
         let config = Arc::new(server::Config {
             keys: vec![key],
             auth_rejection_time: Duration::ZERO,
+            // Exercise callback-only handling even when one unread message
+            // would backpressure the session before its next request.
+            channel_buffer_size: 1,
             ..Default::default()
         });
         loop {
@@ -112,16 +125,9 @@ async fn server(gate: Arc<Gate>) -> (SshSessionConfig, tokio::task::JoinHandle<(
             let config = config.clone();
             let gate = gate.clone();
             peers.spawn(async move {
-                let peer = server::run_stream(
-                    config,
-                    socket,
-                    Peer {
-                        gate,
-                        channels: Vec::new(),
-                    },
-                )
-                .await
-                .unwrap();
+                let peer = server::run_stream(config, socket, Peer { gate })
+                    .await
+                    .unwrap();
                 let _ = peer.await;
             });
         }
@@ -344,8 +350,7 @@ async fn repeated_detached_close_releases_shared_and_independent_ssh_owners() {
     let (config, server_task) = server(Arc::new(Gate::default())).await;
     tokio::task::spawn_blocking(move || {
         let manager = SessionManager::new();
-        let payload =
-            b"synthetic SSH output 0123456789 abcdefghijklmnopqrstuvwxyz\r\n".repeat(16384);
+        let payload = lifecycle_output();
         for shared in [false, true] {
             for round in 0..20 {
                 let first = open_ssh_multiplex_handle(config.clone()).unwrap();
@@ -374,7 +379,12 @@ async fn repeated_detached_close_releases_shared_and_independent_ssh_owners() {
                     })
                     .collect();
                 for session in &sessions {
-                    manager.write_raw(&session.id, &payload).unwrap();
+                    // Request server output with a small input. Echoing a MiB
+                    // in both directions can wedge the fixture's SSH flushes
+                    // against smaller OS socket buffers before either side reads.
+                    manager
+                        .write_raw(&session.id, LIFECYCLE_OUTPUT_REQUEST)
+                        .unwrap();
                 }
                 let deadline = Instant::now() + Duration::from_secs(10);
                 let mut received: HashMap<_, Vec<u8>> = sessions
