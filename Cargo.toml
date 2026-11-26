@@ -145,7 +145,7 @@ nyaterm-transport = { path = "crates/nyaterm-transport" }
 nyaterm-ui = { path = "crates/nyaterm-ui" }
 nyaterm-updater = { path = "crates/nyaterm-updater" }
 percent-encoding = "=2.3.2"
-portable-pty = { git = "https://github.com/nyakang/portable-pty", rev = "52aa7aaac048f88f07341b5a89ed859f932d1f79" }
+portable-pty = { git = "https://github.com/nyakang/portable-pty", rev = "b7b3b462a798e5045674d8225cb37ba85d040d92" }
 quick-xml = "0.40"
 rand = { version = "0.10", features = ["thread_rng"] }
 redb = "4.1.0"

@@ -9160,7 +9160,7 @@ dependencies = [
 [[package]]
 name = "portable-pty"
 version = "0.9.0"
-source = "git+https://github.com/nyakang/portable-pty?rev=52aa7aaac048f88f07341b5a89ed859f932d1f79#52aa7aaac048f88f07341b5a89ed859f932d1f79"
+source = "git+https://github.com/nyakang/portable-pty?rev=b7b3b462a798e5045674d8225cb37ba85d040d92#b7b3b462a798e5045674d8225cb37ba85d040d92"
 dependencies = [
  "anyhow",
  "bitflags 1.3.2",
