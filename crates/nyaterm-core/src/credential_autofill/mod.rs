@@ -33,7 +33,7 @@ fn username_prompt_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(user\s*name|username|login|login\s+as|account|user)\b|(?:用户名|用户|账号|账户|登录名)",
+            r"(?i)\b(user\s*name|username|login|login\s+as|account|user|nom\s+d['’]utilisateur|utilisateur|benutzername|benutzer|nombre\s+de\s+usuario|usuario|nome\s+de\s+usu[áa]rio|usu[áa]rio|nome\s+utente|utente|gebruikersnaam|nazwa\s+u[żz]ytkownika|имя\s+пользователя|пользователь|kullan[ıi]c[ıi]\s+ad[ıi])\b|(?:用户名|用户|账号|账户|登录名|ユーザー名|ユーザ名|사용자\s*이름|사용자명)",
         )
         .expect("username prompt regex")
     })
@@ -43,7 +43,7 @@ fn password_prompt_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(pass(word|phrase|code)?|pin|otp|verification\s*code|auth(entication)?\s*code|2fa|mfa)\b|(?:密码|口令|验证码|动态码|动态口令)",
+            r"(?i)\b(pass(word|phrase|code)?|pin|otp|verification\s*code|auth(entication)?\s*code|2fa|mfa|mot\s+de\s+passe|phrase\s+de\s+passe|phrase\s+secr[èe]te|code\s+secret|passwort|kennwort|contrase[nñ]a|frase\s+de\s+paso|senha|frase[- ]passe|frase\s+secreta|parola\s+d['’]ordine|parola|wachtwoord|has[łl]o|пароль|кодовая\s+фраза|парольная\s+фраза|[şs]ifre|heslo|l[öo]senord|passord|adgangskode|salasana|jelsz[óo]|parol[ăa])\b|(?:密码|口令|验证码|动态码|动态口令|パスワード|パスフレーズ|비밀번호|암호)",
         )
         .expect("password prompt regex")
     })
