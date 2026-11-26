@@ -316,9 +316,14 @@ mod parent_tests {
     fn posix_parents_keep_previous_behavior_even_with_windows_lookalike_names() {
         // Backslashes and drive-letter-like prefixes are ordinary POSIX
         // filename characters; `parent` must keep parsing by `/` only.
-        let parent = RemoteFilePath::new("/data/tmp\\weird/C:dir").parent().unwrap();
+        let parent = RemoteFilePath::new("/data/tmp\\weird/C:dir")
+            .parent()
+            .unwrap();
         assert_eq!(parent.display_path, "/data/tmp\\weird");
-        assert_eq!(RemoteFilePath::new("/a").parent().unwrap().display_path, "/");
+        assert_eq!(
+            RemoteFilePath::new("/a").parent().unwrap().display_path,
+            "/"
+        );
     }
 
     #[test]
