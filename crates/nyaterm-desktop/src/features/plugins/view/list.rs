@@ -358,7 +358,9 @@ impl PluginPanel {
                             .variant(NyaButtonVariant::Ghost)
                             .tooltip(t!("common.refresh"))
                             .loading(
-                                self.busy() && self.status_kind == Some(PendingKind::Management),
+                                self.pending
+                                    .as_ref()
+                                    .is_some_and(|pending| pending.kind == PendingKind::Management),
                             )
                             .disabled(self.busy())
                             .on_click(cx.listener(|this, _, _, cx| {
