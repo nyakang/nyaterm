@@ -1124,7 +1124,14 @@ fn keystroke_matches(event: &Keystroke, binding: &Keystroke) -> bool {
 }
 
 fn gpui_bindings(resolved: &ResolvedKeymap, cx: &App) -> Vec<KeyBinding> {
-    let mut bindings = Vec::new();
+    // Suppress inherited UI Copy without synthesizing a key event. User bindings
+    // are registered after this guard, so a declined Ctrl+C Copy action falls
+    // through to the original terminal KeyDown (including repeat/IME metadata).
+    let mut bindings = vec![KeyBinding::new(
+        "ctrl-c",
+        gpui::NoAction,
+        ShortcutScope::Terminal.context(),
+    )];
     for shortcut in &resolved.shortcuts {
         let definition = SHORTCUT_REGISTRY
             .iter()
@@ -1189,6 +1196,16 @@ fn binding_for_action(
         };
     }
     match id {
+        ShortcutId::TerminalCopy
+            if chord.keystroke().key == "c"
+                && chord.keystroke().modifiers
+                    == (Modifiers {
+                        control: true,
+                        ..Modifiers::default()
+                    }) =>
+        {
+            binding!(TerminalCopyOrInterrupt)
+        }
         ShortcutId::TerminalCopy => binding!(TerminalCopy),
         ShortcutId::TerminalPaste => binding!(TerminalPaste),
         ShortcutId::TerminalPasteSelected => binding!(TerminalPasteSelected),
@@ -2131,6 +2148,64 @@ mod tests {
                     .is_empty()
             );
             assert_eq!(resolve_invocation(&resolved, &chord, &contexts), None);
+        }
+    }
+
+    #[gpui::test]
+    fn ctrl_c_copy_fallback_is_exact_and_preserves_nested_input_bindings(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::TerminalCopyOrInterrupt;
+        let terminal_contexts = [
+            KeyContext::parse("Root").unwrap(),
+            KeyContext::parse("Terminal").unwrap(),
+        ];
+        for source in [
+            "ctrl+c",
+            "ctrl+shift+c",
+            "ctrl+alt+c",
+            "meta+c",
+            "fn+ctrl+c",
+        ] {
+            let resolved =
+                ResolvedKeymap::resolve(&HashMap::from([("terminal.copy".into(), source.into())]));
+            let chord = ShortcutBinding::parse(source).unwrap().chords()[0]
+                .keystroke()
+                .clone();
+            let mut bindings = vec![
+                KeyBinding::new("ctrl-c", nyaterm_ui::NyaCopy, Some("Root")),
+                KeyBinding::new("ctrl-c", nyaterm_ui::NyaCopy, Some("Input")),
+            ];
+            bindings.extend(cx.update(|cx| gpui_bindings(&resolved, cx)));
+            let keymap = Keymap::new(bindings);
+            let (actions, pending) =
+                keymap.bindings_for_input(std::slice::from_ref(&chord), &terminal_contexts);
+            assert!(!pending);
+            assert_eq!(actions.len(), 1);
+            if source == "ctrl+c" {
+                assert!(actions[0].action().partial_eq(&TerminalCopyOrInterrupt));
+            } else {
+                assert!(actions[0].action().partial_eq(&TerminalCopy));
+                assert!(
+                    keymap
+                        .bindings_for_input(
+                            &[gpui::Keystroke::parse("ctrl-c").unwrap()],
+                            &terminal_contexts
+                        )
+                        .0
+                        .is_empty()
+                );
+            }
+            let mut contexts = terminal_contexts.to_vec();
+            contexts.push(KeyContext::parse("Input").unwrap());
+            let (actions, _) =
+                keymap.bindings_for_input(&[gpui::Keystroke::parse("ctrl-c").unwrap()], &contexts);
+            assert!(actions[0].action().partial_eq(&nyaterm_ui::NyaCopy));
+            assert!(
+                actions
+                    .iter()
+                    .all(|binding| !binding.action().partial_eq(&TerminalCopyOrInterrupt))
+            );
         }
     }
 

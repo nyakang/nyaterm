@@ -6,6 +6,7 @@ actions!(
     nyaterm_shortcuts,
     [
         TerminalCopy,
+        TerminalCopyOrInterrupt,
         TerminalPaste,
         TerminalPasteSelected,
         TerminalFind,

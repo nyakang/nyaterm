@@ -19,9 +19,7 @@ use crate::features::terminal::terminal_runtime::TerminalMouseReportRequest;
 use crate::features::terminal::terminal_selection_runtime::{
     terminal_bounds_tracker, terminal_gutter_metrics,
 };
-use crate::features::terminal::{
-    TERMINAL_KEY_CONTEXT, TerminalControlC, TerminalShiftTab, TerminalTab,
-};
+use crate::features::terminal::{TERMINAL_KEY_CONTEXT, TerminalShiftTab, TerminalTab};
 use crate::models::{
     SessionLaunchConfig, TerminalPerformanceMode, TerminalPerformanceOverlay,
     terminal_action_link_matcher_key, terminal_expensive_interactions_enabled,
@@ -66,21 +64,6 @@ impl NyaTermApp {
                 key_char: None,
             },
             is_held,
-            prefer_character_input: false,
-        }
-    }
-
-    fn terminal_control_c_key_event() -> KeyDownEvent {
-        KeyDownEvent {
-            keystroke: gpui::Keystroke {
-                modifiers: gpui::Modifiers {
-                    control: true,
-                    ..gpui::Modifiers::default()
-                },
-                key: "c".to_string(),
-                key_char: Some("c".to_string()),
-            },
-            is_held: false,
             prefer_character_input: false,
         }
     }
@@ -754,10 +737,6 @@ impl NyaTermApp {
                     }))
                     .on_action(cx.listener(|this, _: &TerminalShiftTab, window, cx| {
                         let event = this.terminal_tab_key_event(true);
-                        this.handle_terminal_surface_key_down(&event, window, cx);
-                    }))
-                    .on_action(cx.listener(|this, _: &TerminalControlC, window, cx| {
-                        let event = NyaTermApp::terminal_control_c_key_event();
                         this.handle_terminal_surface_key_down(&event, window, cx);
                     }))
                     .on_action(cx.listener(|this, _: &NyaCopy, window, cx| {
@@ -1560,8 +1539,200 @@ mod tests {
         assert_terminal_shortcut_dispatch(&HashMap::new(), chord, TestShortcutEffect::Navigation);
     }
 
+    #[derive(Clone, Copy, Default)]
+    struct ClipboardDispatchCase {
+        selection: Option<crate::models::TerminalSelection>,
+        foreign_selection: bool,
+        pending_selection: bool,
+        ime: bool,
+        protocol: &'static str,
+        clipboard: Option<&'static str>,
+        copied: Option<&'static str>,
+        expected: &'static [u8],
+        repeat: bool,
+        reset: bool,
+        review: bool,
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_defaults_and_reset_preserve_native_bytes() {
+        for (chord, expected) in [
+            ("ctrl-c", b"\x03".as_slice()),
+            ("ctrl-v", b"\x16".as_slice()),
+        ] {
+            for reset in [false, true] {
+                let overrides = if reset {
+                    clipboard_overrides()
+                } else {
+                    HashMap::new()
+                };
+                assert_terminal_shortcut_dispatch(
+                    &overrides,
+                    chord,
+                    TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                        expected,
+                        reset,
+                        ..Default::default()
+                    }),
+                );
+            }
+        }
+    }
+
+    fn clipboard_overrides() -> HashMap<String, String> {
+        HashMap::from([
+            ("terminal.copy".into(), "ctrl+c".into()),
+            ("terminal.paste".into(), "ctrl+v".into()),
+        ])
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_c_copies_linear_multiline_and_block_selections() {
+        use crate::models::{TerminalBufferCellPos, TerminalSelection};
+        use nyaterm_terminal::selection::TerminalSelectionMode;
+        let linear = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(0, 8),
+        );
+        let multiline = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 3),
+        );
+        let block = TerminalSelection {
+            mode: TerminalSelectionMode::Block,
+            ..multiline
+        };
+        for (selection, copied) in [
+            (linear, "root@host"),
+            (multiline, "root@host:~# ls\nnext"),
+            (block, "root\nnext"),
+        ] {
+            for protocol in ["", "\x1b[?1049h", "\x1b[>3u"] {
+                assert_terminal_shortcut_dispatch(
+                    &clipboard_overrides(),
+                    "ctrl-c",
+                    TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                        selection: Some(selection),
+                        copied: Some(copied),
+                        protocol,
+                        ..Default::default()
+                    }),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_c_empty_or_other_session_selection_falls_back() {
+        use crate::models::{TerminalBufferCellPos, TerminalSelection};
+        use nyaterm_terminal::selection::TerminalSelectionMode;
+        let anchor = TerminalSelection::with_anchor(TerminalBufferCellPos::new(0, 0));
+        let mut block = TerminalSelection {
+            mode: TerminalSelectionMode::Block,
+            ..anchor
+        };
+        block.head.position.line = 1;
+        let selected = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(0, 8),
+        );
+        for (selection, foreign_selection) in [
+            (None, false),
+            (Some(anchor), false),
+            (Some(block), false),
+            (Some(selected), true),
+        ] {
+            assert_terminal_shortcut_dispatch(
+                &clipboard_overrides(),
+                "ctrl-c",
+                TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                    selection,
+                    foreign_selection,
+                    expected: b"\x03",
+                    ..Default::default()
+                }),
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_c_pending_selection_is_consumed_without_native_input() {
+        use crate::models::{TerminalBufferCellPos, TerminalSelection};
+        assert_terminal_shortcut_dispatch(
+            &clipboard_overrides(),
+            "ctrl-c",
+            TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                selection: Some(TerminalSelection::from_range(
+                    TerminalBufferCellPos::new(0, 0),
+                    TerminalBufferCellPos::new(0, 8),
+                )),
+                pending_selection: true,
+                protocol: "\x1b[>3u",
+                ..Default::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_c_fallback_preserves_ime_composition() {
+        assert_terminal_shortcut_dispatch(
+            &clipboard_overrides(),
+            "ctrl-c",
+            TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                ime: true,
+                expected: b"\x03",
+                ..Default::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_c_fallback_preserves_kitty_repeat_and_release() {
+        for overrides in [HashMap::new(), clipboard_overrides()] {
+            assert_terminal_shortcut_dispatch(
+                &overrides,
+                "ctrl-c",
+                TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                    protocol: "\x1b[>3u",
+                    repeat: true,
+                    expected: b"\x1b[99;5:1u\x1b[99;5:2u\x1b[99;5:3u",
+                    ..Default::default()
+                }),
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_clipboard_ctrl_v_consumes_empty_clipboard_and_preserves_paste_pipeline() {
+        for (clipboard, protocol, expected, review) in [
+            (None, "", b"".as_slice(), false),
+            (Some(""), "\x1b[>3u", b"", false),
+            (Some("payload"), "", b"payload", false),
+            (
+                Some("payload"),
+                "\x1b[?2004h\x1b[>3u",
+                b"\x1b[200~payload\x1b[201~",
+                false,
+            ),
+            (Some("one\ntwo"), "", b"", true),
+        ] {
+            assert_terminal_shortcut_dispatch(
+                &clipboard_overrides(),
+                "ctrl-v",
+                TestShortcutEffect::Clipboard(ClipboardDispatchCase {
+                    clipboard,
+                    protocol,
+                    expected,
+                    review,
+                    ..Default::default()
+                }),
+            );
+        }
+    }
+
     #[derive(Clone, Copy)]
     enum TestShortcutEffect {
+        Clipboard(ClipboardDispatchCase),
         Navigation,
         Copy,
         Paste,
@@ -1618,6 +1789,13 @@ mod tests {
                                 app.handle_terminal_surface_key_down(event, window, cx);
                             },
                         ))
+                        .on_key_up(cx.listener(
+                            |app: &mut NyaTermApp, event: &gpui::KeyUpEvent, window, cx| {
+                                if app.terminal.input.focus.is_focused(window) {
+                                    app.send_terminal_key_release_event(event, cx);
+                                }
+                            },
+                        ))
                         .when_some(input, |terminal, input| {
                             terminal.child(
                                 gpui::div()
@@ -1668,7 +1846,9 @@ mod tests {
                     height: px(600.0),
                 },
             });
-            let text = if matches!(effect, TestShortcutEffect::Navigation) {
+            let text = if let TestShortcutEffect::Clipboard(case) = effect {
+                format!("{}root@host:~# ls\r\nnext line", case.protocol)
+            } else if matches!(effect, TestShortcutEffect::Navigation) {
                 "\x1b]133;A\x07$ \x1b]133;B\x07echo same\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07"
                     .repeat(5)
             } else {
@@ -1693,7 +1873,38 @@ mod tests {
                 app.drain_terminal_frame_events(cx);
             }
         });
+        if let TestShortcutEffect::Clipboard(case) = effect {
+            cx.update_entity(&app, |app, _| {
+                app.terminal.selection.selection = case.selection;
+                app.terminal.selection.session_id = Some(if case.foreign_selection {
+                    "s1".into()
+                } else {
+                    info.id.clone()
+                });
+                let mut settings = app.settings.summary().clone();
+                if case.pending_selection {
+                    app.terminal.selection.text.key =
+                        Some((info.id.clone(), case.selection.unwrap()));
+                    app.terminal.selection.text.status =
+                        crate::features::terminal::state::TerminalSelectionTextStatus::Pending;
+                }
+                if case.ime {
+                    app.terminal
+                        .input
+                        .ime
+                        .replace(&info.id, None, "composing", None);
+                }
+                settings.terminal_show_multi_line_paste_dialog = true;
+                app.settings.replace_summary(settings);
+            });
+        }
         cx.update(|cx| rebuild_keymap(overrides, cx));
+        if matches!(
+            effect,
+            TestShortcutEffect::Clipboard(ClipboardDispatchCase { reset: true, .. })
+        ) {
+            cx.update(|cx| rebuild_keymap(&HashMap::new(), cx));
+        }
         #[cfg(not(target_os = "macos"))]
         let input = matches!(effect, TestShortcutEffect::InputCopy)
             .then(|| cx.new(|cx| NyaInputState::new(cx, "search input text")));
@@ -1722,11 +1933,41 @@ mod tests {
                     input.select_all_with_cursor_at_end(window, cx)
                 });
             }
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string("paste payload".into()));
+            if let TestShortcutEffect::Clipboard(case) = effect {
+                if let Some(text) = case.clipboard {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.into()));
+                }
+            } else {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string("paste payload".into()));
+            }
         });
         vcx.run_until_parked();
         let selection_before = vcx.update(|_, cx| app.read(cx).terminal.selection.selection);
-        vcx.simulate_keystrokes(chord);
+        if matches!(
+            effect,
+            TestShortcutEffect::Clipboard(ClipboardDispatchCase { repeat: true, .. })
+        ) {
+            vcx.update(|window, cx| {
+                for is_held in [false, true] {
+                    window.dispatch_event(
+                        gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                            keystroke: gpui::Keystroke::parse(chord).unwrap(),
+                            is_held,
+                            prefer_character_input: false,
+                        }),
+                        cx,
+                    );
+                }
+                window.dispatch_event(
+                    gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                        keystroke: gpui::Keystroke::parse(chord).unwrap(),
+                    }),
+                    cx,
+                );
+            });
+        } else {
+            vcx.simulate_keystrokes(chord);
+        }
         vcx.run_until_parked();
 
         #[cfg(not(target_os = "macos"))]
@@ -1744,6 +1985,35 @@ mod tests {
 
         let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
         match effect {
+            TestShortcutEffect::Clipboard(case) => {
+                assert_eq!(
+                    copied.as_deref(),
+                    case.copied
+                        .or(case.clipboard)
+                        .filter(|text| !text.is_empty())
+                );
+                assert_eq!(
+                    vcx.update(|_, cx| app.read(cx).terminal.paste.editor.is_some()),
+                    case.review
+                );
+                if case.pending_selection {
+                    assert!(vcx.update(|_, cx| {
+                        app.read(cx).terminal.selection.text.pending_copy.is_some()
+                    }));
+                }
+                if case.ime {
+                    assert_eq!(
+                        vcx.update(|_, cx| app.read(cx).terminal.input.ime.text().to_string()),
+                        "composing"
+                    );
+                }
+                if case.copied.is_some() {
+                    assert_eq!(
+                        vcx.update(|_, cx| app.read(cx).terminal.selection.selection),
+                        selection_before
+                    );
+                }
+            }
             TestShortcutEffect::Navigation => {
                 let target = |app: &mut NyaTermApp, cx: &mut gpui::Context<NyaTermApp>| {
                     app.terminal.view.frame_pipeline.flush_for_test();
@@ -1835,11 +2105,12 @@ mod tests {
             app.write_session_protocol_response(&info.id, b"CLICK")
                 .unwrap();
         });
-        let expected = if matches!(effect, TestShortcutEffect::Paste) {
-            b"paste payloadCLICK".as_slice()
-        } else {
-            b"CLICK".as_slice()
+        let mut expected = match effect {
+            TestShortcutEffect::Clipboard(case) => case.expected.to_vec(),
+            TestShortcutEffect::Paste => b"paste payload".to_vec(),
+            _ => Vec::new(),
         };
+        expected.extend_from_slice(b"CLICK");
         let mut received = vec![0u8; expected.len()];
         peer.read_exact(&mut received)
             .unwrap_or_else(|error| panic!("session received no sentinel bytes: {error}"));
