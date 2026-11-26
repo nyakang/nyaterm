@@ -248,3 +248,9 @@ The workflow is: commit to the fork branch, push, then bump the pinned revision 
 The GPUI cutover candidate is submitted from `cutover/gpui` to `main`. Keep `migration/gpui` during the transition and archive the former Tauri main branch at `archive/tauri-v1`. Subsequent development and stable publishing move to `main` only after the cutover PR merges.
 
 The candidate version `2.0.0` does not mean it has been published. Maintainers run Release with `verify_release=true`, `upload_release=false`, and a fixed `source_ref` for a signed rehearsal. See `scripts/release/GPUI_CUTOVER.md` in the repository for gates, evidence, and recovery steps, and the [migration guide](../getting-started/migration-v2) for user upgrades.
+
+## Native component development and releases
+
+Release packages use a slim layout. The Plugins panel installs helpers and private runtime libraries for SPICE, RDP Builtin, VNC, and Android on demand. Debug builds also support helpers beside the application executable and explicit paths through `NYATERM_SPICE_HELPER`, `NYATERM_RDP_HELPER`, `NYATERM_VNC_HELPER`, and `NYATERM_ANDROID_HELPER`. Build each helper together with its adjacent runtime libraries.
+
+Components must support the application's version and target platform. Android, RDP, VNC, and SPICE helpers are built, tested, and released in the independent `nyakang/nyaterm-plugins` repository. This repository shares the IPC contract through `nyaterm-native-protocol`, pinned to an exact revision in the root `Cargo.toml`. Component releases use that repository's protected signing pipeline and signed `native/v1/index.json`. Component updates are manual, and compatible installed versions survive application upgrades.

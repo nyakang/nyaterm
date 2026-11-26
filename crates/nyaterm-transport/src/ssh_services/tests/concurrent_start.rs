@@ -336,6 +336,7 @@ async fn ssh_worker_can_release_the_last_multiplex_owner_without_panicking() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "real SSH lifecycle stress runs separately in CI on every OS"]
 async fn repeated_detached_close_releases_shared_and_independent_ssh_owners() {
     use crate::SessionEvent;
     use std::collections::HashMap;
@@ -393,7 +394,12 @@ async fn repeated_detached_close_releases_shared_and_independent_ssh_owners() {
                     }
                 }
                 for bytes in received.values() {
-                    assert!(bytes == &payload, "incorrect SSH output in round {round}");
+                    assert!(
+                        bytes == &payload,
+                        "incorrect SSH output in round {round}, shared={shared}: received {} of {} bytes",
+                        bytes.len(),
+                        payload.len()
+                    );
                 }
                 for session in &sessions {
                     manager.close_detached(&session.id).unwrap();

@@ -1,3 +1,6 @@
 # `scripts/*.sh` would not match nested paths: in a pattern containing a slash, `*`
 # does not cross a `/`, so the CI scripts under scripts/ci/ need the `**` form.
 scripts/**/*.sh text eol=lf
+
+# Signatures and inventory hashes cover the fixture bytes exactly on every OS.
+crates/nyaterm-plugin-host/tests/fixtures/native/** -text

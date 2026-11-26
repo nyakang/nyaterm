@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/release"))
 import prepare_android
 import verify_native_package
-from scripts.tests.test_verify_native_package import stage_android_fixture, stage_spice_fixture
+from scripts.tests.test_verify_native_package import stage_android_fixture
 from scripts.tests.test_package_native import staged_package
 import package_native
 
@@ -85,7 +85,7 @@ class AndroidReleaseTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix" and platform.machine() == "x86_64" and all(shutil.which(tool) for tool in
                          ("rpmbuild", "rpm2cpio", "cc")), "native RPM and C tools required")
-    def test_real_rpm_preserves_android_resource_bytes(self):
+    def test_real_rpm_preserves_application_bytes_and_excludes_native_components(self):
         target = "x86_64-unknown-linux-gnu"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -101,26 +101,22 @@ class AndroidReleaseTests(unittest.TestCase):
                 helpers.append(helper)
             dist = root / "dist"
             dist.mkdir()
-            def resources(destination, _):
-                stage_android_fixture(destination, target)
-                for path in [destination / "adb/adb", *[destination / "android-libs" / name for name in focal.ANDROID_LIBRARIES]]:
-                    path.write_bytes(original)
-                return prepare_android.write_resource_manifest(destination, target)
             with mock.patch.object(package_native, "WORK_DIR", root / "work"), \
                     mock.patch.object(package_native, "DIST_DIR", dist), \
                     mock.patch.object(package_native, "helper_binary_paths", return_value=helpers), \
-                    mock.patch.object(package_native, "copy_spice_resources", side_effect=stage_spice_fixture), \
-                    mock.patch.object(package_native, "spice_glibc_requirement", return_value="2.35"), \
-                    mock.patch.object(package_native, "copy_android_resources", side_effect=resources):
+                    mock.patch.object(package_native, "copy_spice_resources") as spice_resources, \
+                    mock.patch.object(package_native, "copy_android_resources") as android_resources:
                 package_native.create_linux_rpm(binary, package_native.target_info(target), "2.0.0", "2.0.0")
+            spice_resources.assert_not_called()
+            android_resources.assert_not_called()
             artifact = next(dist.glob("*.rpm"))
-            def read(name):
-                return verify_native_package.read_rpm_member(artifact, "/opt/nyaterm/" + name)
-            self.assertEqual(read("adb/adb"), original)
-            verify_native_package.verify_android_resources(read, target)
-            with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
-                verify_native_package.verify_android_resources(
-                    lambda name: read(name) + (b"tampered" if name == "adb/adb" else b""), target)
+            payload = verify_native_package.read_rpm_payload(artifact)
+            self.assertEqual(payload["opt/nyaterm/nyaterm"], original)
+            self.assertEqual(payload["opt/nyaterm/nyaterm-mcp"], original)
+            for component in ("rdp", "vnc", "spice", "android"):
+                self.assertNotIn(f"opt/nyaterm/nyaterm-{component}-helper", payload)
+            self.assertFalse(any(name.startswith(("opt/nyaterm/adb/", "opt/nyaterm/android-libs/",
+                                                  "opt/nyaterm/spice/")) for name in payload))
 
     def test_old_protoc_gets_optional_flag_without_replacing_system_libraries(self):
         with tempfile.TemporaryDirectory() as directory:

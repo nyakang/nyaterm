@@ -162,6 +162,9 @@ def dependency_errors() -> list[str]:
                 crate in {"nyaterm-completion-runtime", "nyaterm-android", "nyaterm-agent-client", "nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"}
                 and package.startswith("nyaterm-")
                 and package != "nyaterm-core"
+                # The shared Android wire contract lives in the independent
+                # helper repository, not in this application's workspace.
+                and not (crate == "nyaterm-android" and package == "nyaterm-native-protocol")
             )
             wrong_mcp_direction = (
                 crate == "nyaterm-mcp-host"

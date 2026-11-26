@@ -148,6 +148,14 @@ jobs:
           shared_entry_routes_native_codex_claude_and_external_calls_on_a_hidden_terminal
           --locked -- --ignored --test-threads=1
 
+      # This stress test repeatedly creates SSH runtimes and echoes large
+      # payloads. Run it on every OS without competing transport tests.
+      - name: Test SSH detached close lifecycle
+        run: >-
+          cargo test -p nyaterm-transport --lib
+          repeated_detached_close_releases_shared_and_independent_ssh_owners
+          --locked -- --ignored --test-threads=1
+
       # --no-fail-fast so one crate's failure stops masking every crate after it.
       - name: Test workspace
         # Unoptimized GPUI element trees and connection serde fixtures exceed

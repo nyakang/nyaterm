@@ -136,6 +136,24 @@ class PluginDependencyTests(unittest.TestCase):
                 self.assertEqual(self.check_dependencies("", "", {crate:
                     '[dependencies]\nnyaterm-core = "1"\nreqwest = "0.13"\ntokio = "1"\n'}), [])
 
+    def test_android_accepts_external_wire_contract_but_rejects_application_dependencies(self):
+        allowed = {"nyaterm-core", "nyaterm-native-protocol"}
+        for target in sorted(allowed | {"nyaterm-desktop", "nyaterm-transport", "nyaterm-files",
+                                       "nyaterm-store", "nyaterm-ui", "gpui-platform"}):
+            for section in ["dependencies", "dev-dependencies", "build-dependencies",
+                            "target.'cfg(windows)'.dependencies",
+                            "target.'cfg(windows)'.dev-dependencies",
+                            "target.'cfg(windows)'.build-dependencies"]:
+                with self.subTest(target=target, section=section):
+                    errors = self.check_dependencies("", "", {"nyaterm-android":
+                        f'[{section}]\nhidden = {{ package = "{target}", version = "1" }}\n'})
+                    self.assertEqual(errors, [] if target in allowed else [
+                        f"crate_boundary: nyaterm-android must not depend on {target}"])
+
+        self.assertEqual(self.check_dependencies("", "", {"nyaterm-ai-client":
+            '[dependencies]\nhidden = { package = "nyaterm-native-protocol", version = "1" }\n'}),
+            ["crate_boundary: nyaterm-ai-client must not depend on nyaterm-native-protocol"])
+
     def test_native_adapters_reject_all_other_project_crates_in_every_dependency_category(self):
         for source in ["nyaterm-ai-client", "nyaterm-cloud-storage", "nyaterm-updater", "nyaterm-preview", "nyaterm-translation-client"]:
             for target in ["nyaterm-desktop", "nyaterm-store", "nyaterm-ui",

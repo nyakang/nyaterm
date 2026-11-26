@@ -600,7 +600,7 @@ END {
     hb ? sprintf("%.0f", b*1024) : "-", \
     hsh ? sprintf("%.0f", sh*1024) : "-", \
     hst ? sprintf("%.0f", st*1024) : "-", \
-    hst && hsf && sf <= st ? sprintf("%.0f", (st-sf)*1024) : "-";
+    (hst && hsf && sf <= st) ? sprintf("%.0f", (st-sf)*1024) : "-";
 }
 '"'"' /proc/meminfo 2>/dev/null);
 
