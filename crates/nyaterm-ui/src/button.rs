@@ -278,6 +278,9 @@ pub struct NyaIconButton {
     tooltip: Option<SharedString>,
     tab_stop: bool,
     on_click: Option<NyaButtonClickHandler>,
+    content: Option<AnyElement>,
+    radius: Option<Pixels>,
+    toggled: Option<bool>,
 }
 
 impl NyaIconButton {
@@ -292,11 +295,31 @@ impl NyaIconButton {
             tooltip: None,
             tab_stop: true,
             on_click: None,
+            content: None,
+            radius: None,
+            toggled: None,
         }
     }
 
     pub fn icon_size(mut self, size: Pixels) -> Self {
         self.icon_size = Some(size);
+        self
+    }
+
+    /// A composed icon, for example a glyph with independent status marks.
+    pub fn content(mut self, content: impl IntoElement) -> Self {
+        self.content = Some(content.into_any_element());
+        self
+    }
+
+    pub fn radius(mut self, radius: Pixels) -> Self {
+        self.radius = Some(radius);
+        self
+    }
+
+    /// Expose a toggle's state to assistive technology without a selected fill.
+    pub fn toggled(mut self, toggled: bool) -> Self {
+        self.toggled = Some(toggled);
         self
     }
 
@@ -346,7 +369,18 @@ impl RenderOnce for NyaIconButton {
         let icon = Icon::default()
             .path(self.icon_path)
             .when_some(self.icon_size, |icon, size| icon.with_size(size));
-        let mut button = Button::new(self.id).icon(icon).ghost().small();
+        let mut button = Button::new(self.id).ghost().small();
+        button = if let Some(content) = self.content {
+            button.p_0().child(content)
+        } else {
+            button.icon(icon)
+        };
+        if let Some(radius) = self.radius {
+            button = button.rounded(radius);
+        }
+        if let Some(toggled) = self.toggled {
+            button = button.toggled(toggled);
+        }
         if let Some(size) = self.size {
             button = button.size(size).flex_none();
         }
@@ -354,7 +388,7 @@ impl RenderOnce for NyaIconButton {
             button = button.text_color(color);
         }
         if let Some(tooltip) = self.tooltip {
-            button = button.tooltip(tooltip);
+            button = button.accessibility_label(tooltip.clone()).tooltip(tooltip);
         }
         if let Some(on_click) = self.on_click {
             button = button.on_click(on_click);
