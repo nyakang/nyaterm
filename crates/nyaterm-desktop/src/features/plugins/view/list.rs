@@ -387,9 +387,9 @@ impl PluginPanel {
             .child(
                 div()
                     .w_full()
-                    .h(px(30.))
+                    .h(px(32.))
                     .flex_none()
-                    .child(NyaSearchInput::new("extensions-search", &self.search).compact()),
+                    .child(NyaSearchInput::new("extensions-search", &self.search)),
             )
     }
 

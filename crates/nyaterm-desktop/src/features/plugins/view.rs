@@ -2199,6 +2199,10 @@ mod tests {
                     });
                     vcx.run_until_parked();
                 }
+                let search_bounds = vcx.debug_bounds("extensions-search").unwrap();
+                assert_eq!(search_bounds.size.height, gpui::px(32.));
+                assert!(search_bounds.left() >= gpui::px(0.));
+                assert!(search_bounds.right() <= gpui::px(width));
                 for selector in ["native-row-spice", "native-row-spice-actions"] {
                     let bounds = vcx.debug_bounds(selector).unwrap();
                     assert!(bounds.left() >= gpui::px(0.));
