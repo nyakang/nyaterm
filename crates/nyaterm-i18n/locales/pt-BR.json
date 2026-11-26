@@ -3043,6 +3043,8 @@
   "settings": {
     "connectionTypes": "Visibilidade e ordem do tipo de conexão",
     "connectionTypesDescription": "Escolha os tipos mostrados ao criar ou editar conexões. O primeiro tipo visível é o padrão para novas conexões. Mantenha pelo menos um visível. As conexões existentes permanecem disponíveis.",
+    "connectionTypesDefaultBadge": "Padrão",
+    "connectionTypesKeepOneHint": "Mantenha pelo menos um tipo visível",
     "connectionTypesReset": "Restaurar padrões",
     "themeMode": "Modo tema",
     "themeModeManual": "Manual",

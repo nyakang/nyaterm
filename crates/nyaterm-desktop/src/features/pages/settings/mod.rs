@@ -43,13 +43,24 @@ pub(super) fn settings_form_section(
     desc: Option<Cow<'static, str>>,
     content: impl IntoElement,
 ) -> impl IntoElement {
+    settings_form_section_with_action(palette, title, desc, None, content)
+}
+
+pub(super) fn settings_form_section_with_action(
+    palette: ThemePalette,
+    title: Option<Cow<'static, str>>,
+    desc: Option<Cow<'static, str>>,
+    header_action: Option<gpui::AnyElement>,
+    content: impl IntoElement,
+) -> impl IntoElement {
+    let has_header = title.is_some() || desc.is_some() || header_action.is_some();
     div()
         .rounded_lg()
         .border_1()
         .border_color(rgba((palette.border << 8) | 0xb3))
         .bg(rgba((palette.surface << 8) | 0x99))
         .overflow_hidden()
-        .when(title.is_some() || desc.is_some(), |this| {
+        .when(has_header, |this| {
             this.child(
                 div()
                     .px_4()
@@ -57,24 +68,36 @@ pub(super) fn settings_form_section(
                     .border_b_1()
                     .border_color(rgba((palette.surface_elevated << 8) | 0x99))
                     .flex()
-                    .flex_col()
-                    .gap_1()
-                    .when_some(title, |this, title| {
-                        this.child(
-                            div()
-                                .text_size(px(14.))
-                                .font_weight(FontWeight(600.))
-                                .text_color(rgb(palette.text))
-                                .child(title),
-                        )
-                    })
-                    .when_some(desc, |this, desc| {
-                        this.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.text_dimmed))
-                                .child(desc),
-                        )
+                    .items_start()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .when_some(title, |this, title| {
+                                this.child(
+                                    div()
+                                        .text_size(px(14.))
+                                        .font_weight(FontWeight(600.))
+                                        .text_color(rgb(palette.text))
+                                        .child(title),
+                                )
+                            })
+                            .when_some(desc, |this, desc| {
+                                this.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(palette.text_dimmed))
+                                        .child(desc),
+                                )
+                            }),
+                    )
+                    .when_some(header_action, |this, action| {
+                        this.child(div().flex_none().flex().items_center().child(action))
                     }),
             )
         })

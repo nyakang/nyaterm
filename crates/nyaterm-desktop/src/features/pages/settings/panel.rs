@@ -534,6 +534,9 @@ pub(in crate::features) struct SettingsPanel {
     slider_subscriptions: Vec<Subscription>,
     pub(in crate::features::pages::settings) theme_picker_controls:
         super::workspace::theme_designer::ThemePickerControls,
+    pub(in crate::features::pages::settings) connection_type_drop_target:
+        Option<super::workspace::connection_types::ConnectionTypeDropTarget>,
+    pub(in crate::features::pages::settings) connection_type_drop_clock_armed: bool,
     selects: SelectRegistry,
     select_subscriptions: Vec<Subscription>,
     ui_font_select_options: FontSelectOptionCache,
@@ -616,6 +619,8 @@ impl SettingsPanel {
                 window_subscription,
             ],
             theme_picker_controls: Default::default(),
+            connection_type_drop_target: None,
+            connection_type_drop_clock_armed: false,
             selects: SelectRegistry::default(),
             select_subscriptions: Vec::new(),
             ui_font_select_options: FontSelectOptionCache::empty(),

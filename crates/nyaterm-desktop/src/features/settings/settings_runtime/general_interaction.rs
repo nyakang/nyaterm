@@ -98,6 +98,17 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn move_connection_type_to(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        target_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.move_connection_type_to(kind, target_index) {
+            self.save_general_settings(cx);
+        }
+    }
+
     pub(in crate::features) fn reset_connection_type_layout(&mut self, cx: &mut Context<Self>) {
         self.settings.reset_connection_type_layout();
         self.save_general_settings(cx);

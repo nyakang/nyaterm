@@ -65,6 +65,63 @@ impl ConnectionTypeLayout {
         true
     }
 
+    pub fn is_default_for(&self, catalog: &[&str]) -> bool {
+        self.ordered(catalog) == catalog
+            && !catalog
+                .iter()
+                .any(|id| self.hidden.iter().any(|hidden| hidden == id))
+    }
+
+    pub fn move_to(&mut self, catalog: &[&str], id: &str, target_index: usize) -> bool {
+        let mut ordered = self.ordered(catalog);
+        let Some(from_index) = ordered.iter().position(|known| *known == id) else {
+            return false;
+        };
+        if ordered.is_empty() {
+            return false;
+        }
+        let to_index = target_index.min(ordered.len() - 1);
+        if from_index == to_index {
+            return false;
+        }
+        let moved = ordered.remove(from_index);
+        ordered.insert(to_index, moved);
+
+        for known in catalog {
+            if !self.order.iter().any(|item| item == known) {
+                self.order.push((*known).into());
+            }
+        }
+        let mut seen_known = Vec::with_capacity(catalog.len());
+        self.order.retain(|item| {
+            if catalog.contains(&item.as_str()) {
+                if seen_known.contains(&item.as_str()) {
+                    false
+                } else if let Some(canonical) = catalog
+                    .iter()
+                    .copied()
+                    .find(|known| *known == item.as_str())
+                {
+                    seen_known.push(canonical);
+                    true
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        });
+        let mut ordered_iter = ordered.into_iter();
+        for item in &mut self.order {
+            if catalog.contains(&item.as_str())
+                && let Some(next_known) = ordered_iter.next()
+            {
+                *item = next_known.into();
+            }
+        }
+        true
+    }
+
     pub fn move_relative(&mut self, catalog: &[&str], id: &str, down: bool) -> bool {
         let ordered = self.ordered(catalog);
         let Some(index) = ordered.iter().position(|known| *known == id) else {
@@ -153,5 +210,40 @@ mod tests {
         assert_eq!(layout.order, ["spice"]);
         assert_eq!(layout.hidden, ["spice"]);
         assert_eq!(layout.extensions["future"], true);
+    }
+
+    #[test]
+    fn move_to_reorders_across_multiple_slots_and_preserves_unknown_ids() {
+        let catalog = ["ssh", "local", "telnet", "ftp"];
+        let mut layout: ConnectionTypeLayout = serde_json::from_value(json!({
+            "order": ["ssh", "future_proto", "local", "ssh"],
+            "hidden": []
+        }))
+        .unwrap();
+        assert!(layout.is_default_for(&catalog));
+
+        // Move "ftp" from index 3 directly to index 1.
+        assert!(layout.move_to(&catalog, "ftp", 1));
+        assert_eq!(layout.ordered(&catalog), ["ssh", "ftp", "local", "telnet"]);
+        assert!(!layout.is_default_for(&catalog));
+        // Same-index move is a no-op.
+        assert!(!layout.move_to(&catalog, "ftp", 1));
+
+        // Move "ftp" back to the end restores the default effective order.
+        assert!(layout.move_to(&catalog, "ftp", 99));
+        assert_eq!(layout.ordered(&catalog), catalog);
+        assert!(layout.is_default_for(&catalog));
+
+        // Hiding a known type marks layout non-default; unknown hidden types do not.
+        layout.hidden.push("future_proto".into());
+        assert!(layout.is_default_for(&catalog));
+        assert!(layout.set_visible(&catalog, "telnet", false));
+        assert!(!layout.is_default_for(&catalog));
+
+        // Unknown entries remain intact after reset.
+        layout.reset_known(&catalog);
+        assert_eq!(layout.order, ["future_proto"]);
+        assert_eq!(layout.hidden, ["future_proto"]);
+        assert!(layout.is_default_for(&catalog));
     }
 }

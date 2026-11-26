@@ -3043,6 +3043,8 @@
   "settings": {
     "connectionTypes": "Connection type visibility and order",
     "connectionTypesDescription": "Choose the types shown when creating or editing connections. The first visible type is the default for new connections. Keep at least one visible. Existing connections remain available.",
+    "connectionTypesDefaultBadge": "Default",
+    "connectionTypesKeepOneHint": "Keep at least one type visible",
     "connectionTypesReset": "Restore defaults",
     "themeMode": "Theme mode",
     "themeModeManual": "Manual",

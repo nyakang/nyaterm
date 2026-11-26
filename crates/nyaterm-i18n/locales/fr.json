@@ -3043,6 +3043,8 @@
   "settings": {
     "connectionTypes": "Affichage et ordre des types de connexion",
     "connectionTypesDescription": "Choisissez les types affichés lors de la création ou de la modification des connexions. Le premier type visible est celui par défaut pour les nouvelles connexions. Gardez au moins un type visible. Les connexions existantes restent disponibles.",
+    "connectionTypesDefaultBadge": "Par défaut",
+    "connectionTypesKeepOneHint": "Gardez au moins un type visible",
     "connectionTypesReset": "Rétablir les valeurs par défaut",
     "themeMode": "Mode du thème",
     "themeModeManual": "Choix manuel",

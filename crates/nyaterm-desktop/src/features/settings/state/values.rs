@@ -37,6 +37,18 @@ impl SettingsFeatureState {
         )
     }
 
+    pub(in crate::features) fn move_connection_type_to(
+        &mut self,
+        kind: crate::models::ConnectionKindTab,
+        target_index: usize,
+    ) -> bool {
+        self.summary.connection_type_layout.move_to(
+            &crate::models::ConnectionKindTab::catalog_ids(),
+            kind.persistence_id(),
+            target_index,
+        )
+    }
+
     pub(in crate::features) fn reset_connection_type_layout(&mut self) {
         self.summary
             .connection_type_layout
