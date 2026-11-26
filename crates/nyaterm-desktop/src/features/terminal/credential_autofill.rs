@@ -1721,6 +1721,109 @@ mod tests {
     }
 
     #[test]
+    fn localized_prompts_protect_input_and_recording_then_release_the_shell() {
+        let root = TestConfigDir::new("nyaterm-localized-prompt");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+        cx.update_entity(&app, |app, cx| {
+            for (prompt, sensitive) in [
+                ("[sudo] Mot\u{a0}de\u{202f}passe de alice :", true),
+                ("$ ", false),
+                ("Parola da cercare:", false),
+                ("Utilisateur connecté:", false),
+                ("Benutzer online:", false),
+                ("Usuario actual:", false),
+                ("Utente corrente:", false),
+                ("Sifre:", true),
+                ("$ ", false),
+            ] {
+                let view = app.terminal.view.views.get_mut("s1").unwrap();
+                view.screen
+                    .advance(format!("\x1b[2J\x1b[H{prompt}").as_bytes());
+                view.frame_snapshot = Some(std::sync::Arc::new(view.screen.viewport_snapshot(0)));
+                // Before output observation, recording falls back to the frame.
+                if !app.recording.has_observed_prompt("s1") {
+                    assert_eq!(app.recording_input_is_sensitive("s1"), sensitive);
+                }
+                app.sync_credential_autofill_from_active_snapshot(cx);
+                assert_eq!(app.is_credential_prompt_input_mode(), sensitive, "{prompt}");
+                app.observe_recording_prompt_output("s1", &format!("\r\n{prompt}"));
+                assert_eq!(
+                    app.recording_input_is_sensitive("s1"),
+                    sensitive,
+                    "{prompt}"
+                );
+                assert!(!app.recording_input_is_sensitive("other"));
+            }
+        });
+    }
+
+    #[test]
+    fn localized_prompt_pending_fill_requires_the_selected_pattern_and_session() {
+        use nyaterm_core::credential_autofill::matching::{
+            CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey,
+            CredentialAutofillMatcher, PendingCredentialAutofill,
+        };
+        let root = TestConfigDir::new("nyaterm-localized-pending");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_with_visible_local_session(&mut cx, root.path(), "s1");
+        cx.update_entity(&app, |app, _| {
+            let CredentialAutofillTarget::Vault(mut credential) =
+                test_credential_target("selected")
+            else {
+                unreachable!();
+            };
+            credential.password_prompt_regex = Some("Mot".into());
+            app.security
+                .replace_catalog(vec![], vec![], vec![], vec![credential]);
+            let mut matcher = CredentialAutofillMatcher::default();
+            for (prompt, session, sends) in [
+                ("[sudo] Mot de passe de alice\u{202f}:", "s1", true),
+                ("[sudo] Mot de passe de alice\u{202f}:", "other", false),
+                ("Password:", "s1", false),
+            ] {
+                let kind = app.detect_configured_credential_prompt(prompt).unwrap();
+                let outcome = matcher.evaluate(CredentialAutofillMatchRequest {
+                    key: CredentialAutofillMatchRequestKey {
+                        request_id: 1,
+                        session_id: "s1".into(),
+                        prompt_text: prompt.into(),
+                    },
+                    current_line: prompt.into(),
+                    prompt_kind: kind,
+                    credentials: app.credential_prompt_targets(),
+                    pending: Some(PendingCredentialAutofill {
+                        session_id: session.into(),
+                        credential_id: "selected".into(),
+                        expires_at_ms: u64::MAX,
+                    }),
+                });
+                assert_eq!(
+                    matches!(
+                        crate::models::credential_autofill_action(&outcome),
+                        crate::models::CredentialAutofillAction::Send { .. }
+                    ),
+                    sends
+                );
+            }
+            // An explicit username pattern still takes priority over the built-in password rule.
+            let CredentialAutofillTarget::Vault(mut credential) = test_credential_target("custom")
+            else {
+                unreachable!();
+            };
+            credential.username_prompt_regex = Some("^Mot de passe:$".into());
+            app.security
+                .replace_catalog(vec![], vec![], vec![], vec![credential]);
+            assert_eq!(
+                app.detect_configured_credential_prompt("Mot de passe:"),
+                Some(CredentialPromptKind::Username)
+            );
+        });
+    }
+
+    #[test]
     fn gateshell_label_above_input_is_detected_and_stale_fills_are_revoked() {
         let root = TestConfigDir::new("nyaterm-gateshell-prompt");
         let mut cx = TestAppContext::single();

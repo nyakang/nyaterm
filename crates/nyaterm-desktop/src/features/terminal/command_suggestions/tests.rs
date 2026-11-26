@@ -356,6 +356,15 @@ fn su_round_trip_keeps_suggestions_available_across_prompts() {
 /// visible, otherwise every later keystroke is discarded as password input.
 #[test]
 fn su_password_prompt_input_window_ends_at_the_child_prompt() {
+    assert_password_prompt_input_window_recovers("Password: ");
+}
+
+#[test]
+fn localized_password_prompt_input_window_restores_command_suggestions() {
+    assert_password_prompt_input_window_recovers("[sudo] Mot\u{a0}de\u{202f}passe de alice : ");
+}
+
+fn assert_password_prompt_input_window_recovers(password_prompt: &str) {
     use nyaterm_core::completion::types::CompletionMode;
 
     let dir = TestConfigDir::new("nyaterm-suggestions-su-credential-window");
@@ -370,7 +379,7 @@ fn su_password_prompt_input_window_ends_at_the_child_prompt() {
         // armed the no-echo input window, remembering that prompt instance.
         app.terminal.seed_session_view(
             "s1".into(),
-            "user@host:~$ su - root\r\nPassword: ".into(),
+            format!("user@host:~$ su - root\r\n{password_prompt}"),
             "UTF-8",
         );
         if let Some(view) = app.terminal.view.views.get_mut("s1") {
@@ -385,7 +394,7 @@ fn su_password_prompt_input_window_ends_at_the_child_prompt() {
         // the buffer during this tick.
         app.terminal.seed_session_view(
             "s1".into(),
-            "user@host:~$ su - root\r\nPassword: \r\nroot@host:~# ".into(),
+            format!("user@host:~$ su - root\r\n{password_prompt}\r\nroot@host:~# "),
             "UTF-8",
         );
         if let Some(view) = app.terminal.view.views.get_mut("s1") {

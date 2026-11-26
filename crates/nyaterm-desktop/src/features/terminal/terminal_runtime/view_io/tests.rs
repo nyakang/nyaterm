@@ -1885,6 +1885,18 @@ fn sync_paste_encodes_each_live_target_and_stops_when_primary_cannot_encode() {
 
 #[test]
 fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw_input() {
+    assert_recording_prompt_isolation("Password: ", "$ ");
+}
+
+#[test]
+fn localized_prompts_filter_recording_without_hiding_ordinary_multilingual_input() {
+    assert_recording_prompt_isolation(
+        "[sudo] Mot\u{a0}de\u{202f}passe de alice : ",
+        "Parola da cercare: ",
+    );
+}
+
+fn assert_recording_prompt_isolation(sensitive_prompt: &str, ordinary_prompt: &str) {
     use crate::models::SessionLaunchConfig;
     use nyaterm_recording::recording::{
         ExistingFileBehavior, RecordingContext, RecordingMode, RecordingProfile,
@@ -1967,8 +1979,8 @@ fn recording_sensitive_prompts_are_session_local_for_sync_keyboard_paste_and_raw
             .unwrap();
     }
     cx.update_entity(&app, |app, cx| {
-        app.observe_recording_prompt_output(&ids[0], "Password: ");
-        app.observe_recording_prompt_output(&ids[1], "$ ");
+        app.observe_recording_prompt_output(&ids[0], sensitive_prompt);
+        app.observe_recording_prompt_output(&ids[1], ordinary_prompt);
         assert!(app.send_terminal_input_without_suggestion_track(b"a".to_vec(), cx));
         app.send_terminal_paste_input("测试", cx);
         app.write_session_raw_input_recorded(&ids[0], b"r").unwrap();

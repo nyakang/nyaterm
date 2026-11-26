@@ -33,17 +33,19 @@ fn username_prompt_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(user\s*name|username|login|login\s+as|account|user|nom\s+d['’]utilisateur|utilisateur|benutzername|benutzer|nombre\s+de\s+usuario|usuario|nome\s+de\s+usu[áa]rio|usu[áa]rio|nome\s+utente|utente|gebruikersnaam|nazwa\s+u[żz]ytkownika|имя\s+пользователя|пользователь|kullan[ıi]c[ıi]\s+ad[ıi])\b|(?:用户名|用户|账号|账户|登录名|ユーザー名|ユーザ名|사용자\s*이름|사용자명)",
+            r"(?i)\b(user\s*name|username|login|login\s+as|account|user|nom\s+d['’]utilisateur|benutzername|nombre\s+de\s+usuario|nome\s+de\s+usu[áa]rio|nome\s+utente|gebruikersnaam|nazwa\s+u[żz]ytkownika|имя\s+пользователя|kullan[ıi]c[ıi]\s+ad[ıi])\b|(?:用户名|用户|账号|账户|登录名|ユーザー名|ユーザ名|사용자\s*이름|사용자명)",
         )
         .expect("username prompt regex")
     })
 }
 
+// Keep Romanian parolă accented: the ASCII fallback is the ordinary Italian
+// word "parola". Italian credentials use the explicit phrase "parola d’ordine".
 fn password_prompt_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(pass(word|phrase|code)?|pin|otp|verification\s*code|auth(entication)?\s*code|2fa|mfa|mot\s+de\s+passe|phrase\s+de\s+passe|phrase\s+secr[èe]te|code\s+secret|passwort|kennwort|contrase[nñ]a|frase\s+de\s+paso|senha|frase[- ]passe|frase\s+secreta|parola\s+d['’]ordine|parola|wachtwoord|has[łl]o|пароль|кодовая\s+фраза|парольная\s+фраза|[şs]ifre|heslo|l[öo]senord|passord|adgangskode|salasana|jelsz[óo]|parol[ăa])\b|(?:密码|口令|验证码|动态码|动态口令|パスワード|パスフレーズ|비밀번호|암호)",
+            r"(?i)\b(pass(word|phrase|code)?|pin|otp|verification\s*code|auth(entication)?\s*code|2fa|mfa|mot\s+de\s+passe|phrase\s+de\s+passe|phrase\s+secr[èe]te|code\s+secret|passwort|kennwort|contrase[nñ]a|frase\s+de\s+paso|senha|frase(?:-|\s+)passe|frase\s+secreta|parola\s+d['’]ordine|wachtwoord|has[łl]o|пароль|кодовая\s+фраза|парольная\s+фраза|[şs]ifre|heslo|l[öo]senord|passord|adgangskode|salasana|jelsz[óo]|parolă)\b|(?:密码|口令|验证码|动态码|动态口令|パスワード|パスフレーズ|비밀번호|암호)",
         )
         .expect("password prompt regex")
     })
@@ -109,23 +111,27 @@ pub fn extract_credential_prompt_text(output: &str) -> String {
 
 pub fn detect_credential_prompt_kind(output: &str) -> Option<CredentialPromptKind> {
     let prompt = extract_credential_prompt_text(output);
-    if prompt.is_empty() || !prompt_terminator_pattern().is_match(&prompt) {
+    classify_builtin_prompt(&prompt)
+}
+
+// Both output extraction and live snapshot detection use these cached Unicode
+// patterns. Word boundaries avoid matching credential words inside ordinary
+// words; CJK phrases intentionally retain their substring semantics.
+fn classify_builtin_prompt(prompt: &str) -> Option<CredentialPromptKind> {
+    if prompt.is_empty() || !prompt_terminator_pattern().is_match(prompt) {
         return None;
     }
-    if password_prompt_pattern().is_match(&prompt) {
+    if password_prompt_pattern().is_match(prompt) {
         return Some(CredentialPromptKind::Password);
     }
-    if username_prompt_pattern().is_match(&prompt) {
+    if username_prompt_pattern().is_match(prompt) {
         return Some(CredentialPromptKind::Username);
     }
     None
 }
 
 pub fn is_default_password_prompt(output: &str) -> bool {
-    let prompt = extract_credential_prompt_text(output);
-    !prompt.is_empty()
-        && prompt_terminator_pattern().is_match(&prompt)
-        && password_prompt_pattern().is_match(&prompt)
+    detect_credential_prompt_kind(output) == Some(CredentialPromptKind::Password)
 }
 
 pub fn compile_prompt_regex(pattern: &str) -> Option<Regex> {
