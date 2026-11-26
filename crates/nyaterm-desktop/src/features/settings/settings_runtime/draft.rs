@@ -381,15 +381,28 @@ impl NyaTermApp {
                         persisted_settings.ui_right_panel_collapsed;
                     let mut persisted = persisted_settings;
                     crate::models::ActivityBarLayoutState::complete_settings_layout(&mut persisted);
-                    // These fields are workspace-local projections, not shared settings.
-                    persisted.ui_left_panel_width = base_settings.ui_left_panel_width;
-                    persisted.ui_right_panel_width = base_settings.ui_right_panel_width;
-                    persisted.ui_quick_cmd_height = base_settings.ui_quick_cmd_height;
-                    persisted.ui_active_left_panel = base_settings.ui_active_left_panel.clone();
-                    persisted.ui_active_right_panel = base_settings.ui_active_right_panel.clone();
-                    persisted.ui_left_panel_collapsed = base_settings.ui_left_panel_collapsed;
-                    persisted.ui_right_panel_collapsed = base_settings.ui_right_panel_collapsed;
-                    if persisted != base_settings {
+                    // The draft is opened while the app is live, so its shell/layout
+                    // projection can legitimately advance before Apply. Compare the
+                    // same neutralized view that dirty tracking uses; otherwise a
+                    // panel, width or host-tool slot change becomes a false
+                    // "changed in another window" conflict that blocks every
+                    // unrelated setting.
+                    let mut comparable_base = base_settings.clone();
+                    copy_settings_shell_state(&mut comparable_base, &persisted);
+                    // File Explorer preferences are editable while a settings draft
+                    // is open, so keep a concurrent edit to them visible to the
+                    // conflict check instead of hiding it with the layout fields.
+                    comparable_base.ui_file_explorer_show_hidden_files =
+                        base_settings.ui_file_explorer_show_hidden_files;
+                    comparable_base.ui_file_explorer_view_mode =
+                        base_settings.ui_file_explorer_view_mode;
+                    comparable_base.ui_file_explorer_auto_sync_cwd_connection_ids = base_settings
+                        .ui_file_explorer_auto_sync_cwd_connection_ids
+                        .clone();
+                    comparable_base.ui_file_explorer_favorite_dirs_by_connection_id = base_settings
+                        .ui_file_explorer_favorite_dirs_by_connection_id
+                        .clone();
+                    if comparable_base != persisted {
                         return Err(conflict());
                     }
                 }
@@ -1630,6 +1643,83 @@ mod tests {
         assert_eq!(stored(&mut cx), saved);
     }
 
+    /// The draft is opened while the live shell keeps persisting layout state.
+    /// Those workspace-local writes must not turn Apply into a false
+    /// "changed in another window" conflict.
+    #[test]
+    fn applying_a_draft_tolerates_shell_layout_progress_after_it_opened() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.begin_settings_draft(cx);
+            assert!(app.settings.set_terminal_font_family("Consolas".into()));
+            app.save_appearance_settings(cx);
+
+            // A panel resize or visibility toggle can persist UI layout after the
+            // settings snapshot was captured. It is not a settings edit.
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    let mut persisted = store.load_app_settings_summary()?;
+                    persisted.ui_transfer_height =
+                        (persisted.ui_transfer_height + 37).clamp(60, 600);
+                    persisted.ui_quick_cmd_visible = !persisted.ui_quick_cmd_visible;
+                    store.save_ui_layout_settings(&persisted)
+                })
+                .expect("persist layout drift");
+            app.apply_settings_draft(false, cx);
+        });
+        cx.run_until_parked();
+        let stored = cx.update_entity(&app, |app, _| {
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .expect("load stored settings")
+        });
+        assert_eq!(stored.terminal_font_family, "Consolas");
+    }
+
+    #[test]
+    fn concurrent_file_explorer_preferences_still_reject_the_stale_draft() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        let original_font = cx.update_entity(&app, |app, cx| {
+            app.sync_component_theme(cx);
+            app.begin_settings_draft(cx);
+            let original = app.settings.summary().terminal_font_family.clone();
+            assert!(app.settings.set_terminal_font_family("Consolas".into()));
+            app.save_appearance_settings(cx);
+            let mut external = app.settings.summary().clone();
+            external.ui_file_explorer_show_hidden_files =
+                !external.ui_file_explorer_show_hidden_files;
+            app.store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, move |store| {
+                    store.save_file_explorer_favorite_dirs(&external)
+                })
+                .expect("external File Explorer save");
+            app.apply_settings_draft(false, cx);
+            original
+        });
+        cx.run_until_parked();
+        let (stored, draft_font) = cx.update_entity(&app, |app, _| {
+            let stored = app
+                .store_blocking_client()
+                .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                    store.load_app_settings_summary()
+                })
+                .expect("load stored settings");
+            (stored, app.settings.summary().terminal_font_family.clone())
+        });
+        assert_eq!(stored.terminal_font_family, original_font);
+        assert_eq!(draft_font, "Consolas");
+        cx.update_entity(&app, |app, _| {
+            assert!(app.shell.has_settings_draft());
+        });
+    }
+
     /// Editing only the word separators must still be written when the draft is applied.
     ///
     /// The box used to update memory and nothing else, so no persistence domain was
@@ -1910,7 +2000,13 @@ mod tests {
                     store.load_app_settings_summary()
                 })
                 .unwrap();
-            assert_eq!(saved.interaction_word_separators, original_separators);
+            assert_ne!(saved.interaction_word_separators, original_separators);
+            assert_eq!(
+                saved.interaction_word_separators,
+                "fixture changed separators"
+            );
+            // The concurrent layout edit is preserved instead of blocking the
+            // unrelated Interaction save.
             assert_eq!(
                 saved.ui_activity_bar_left_top,
                 expected.ui_activity_bar_left_top
