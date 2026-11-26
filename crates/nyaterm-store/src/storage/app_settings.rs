@@ -1069,6 +1069,22 @@ impl ConnectionStore {
         &self,
         settings: &AppSettingsSummary,
     ) -> Result<AppSettingsSummary, StorageError> {
+        self.save_layout_settings(settings, true)
+    }
+
+    /// Workspace debounce writes must not commit a Settings header-status preview.
+    pub fn save_workspace_layout_settings(
+        &self,
+        settings: &AppSettingsSummary,
+    ) -> Result<AppSettingsSummary, StorageError> {
+        self.save_layout_settings(settings, false)
+    }
+
+    fn save_layout_settings(
+        &self,
+        settings: &AppSettingsSummary,
+        include_header_status: bool,
+    ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
         set_nested_json_value(
             &mut value,
@@ -1235,16 +1251,20 @@ impl ConnectionStore {
                 serde_json::Value::Null,
             ),
         }
-        set_nested_json_string(
-            &mut value,
-            &["ui", "header_status_mode"],
-            normalize_header_status_mode(&settings.ui_header_status_mode),
-        );
-        set_nested_json_bool(
-            &mut value,
-            &["ui", "header_status_visible"],
-            settings.ui_header_status_visible,
-        );
+        if include_header_status {
+            write_header_status_settings(&mut value, settings);
+        }
+        self.save_settings_value(&value)?;
+        self.load_app_settings_summary()
+    }
+
+    /// Header preferences share the legacy UI document, but own no workspace layout.
+    pub fn save_header_status_settings(
+        &self,
+        settings: &AppSettingsSummary,
+    ) -> Result<AppSettingsSummary, StorageError> {
+        let mut value = self.load_settings_value()?;
+        write_header_status_settings(&mut value, settings);
         self.save_settings_value(&value)?;
         self.load_app_settings_summary()
     }
@@ -2754,6 +2774,19 @@ fn remove_nested_json_value(value: &mut serde_json::Value, path: &[&str]) {
     if let Some(object) = current.as_object_mut() {
         object.remove(*last);
     }
+}
+
+fn write_header_status_settings(value: &mut serde_json::Value, settings: &AppSettingsSummary) {
+    set_nested_json_string(
+        value,
+        &["ui", "header_status_mode"],
+        normalize_header_status_mode(&settings.ui_header_status_mode),
+    );
+    set_nested_json_bool(
+        value,
+        &["ui", "header_status_visible"],
+        settings.ui_header_status_visible,
+    );
 }
 
 /// The title bar's centre reading, defaulting to the session it always showed.

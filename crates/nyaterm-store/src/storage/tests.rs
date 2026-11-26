@@ -3646,6 +3646,47 @@ fn save_general_settings_preserves_every_shipped_ui_language() {
 }
 
 #[test]
+fn header_and_workspace_layout_writes_preserve_each_others_fields_and_legacy_extensions() {
+    let dir = unique_temp_dir("settings-header-layout-ownership");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let legacy = serde_json::json!({
+        "ui": {"left_width": 381, "header_status_mode": "host", "header_status_visible": false,
+            "activity_bar_layout": {"left_top": ["connections"], "future": 42},
+            "future_layout": {"enabled": true}},
+        "appearance": {"panel_multi_open": true, "future": "retained"},
+        "future": [1, 2, 3]
+    });
+    store.save_settings_value(&legacy).unwrap();
+    let mut draft = store.load_app_settings_summary().unwrap();
+    draft.ui_left_panel_width = 444;
+    draft.ui_header_status_mode = "datetime".into();
+    draft.ui_header_status_visible = true;
+    store.save_header_status_settings(&draft).unwrap();
+    let mut expected = legacy;
+    expected["ui"]["header_status_mode"] = serde_json::json!("datetime");
+    expected["ui"]["header_status_visible"] = serde_json::json!(true);
+    assert_eq!(store.load_settings_value().unwrap(), expected);
+
+    // A queued layout snapshot can outlive Apply/Cancel. Its header is never written.
+    draft.ui_header_status_mode = "host".into();
+    draft.ui_header_status_visible = false;
+    let saved = store.save_workspace_layout_settings(&draft).unwrap();
+    assert_eq!(saved.ui_left_panel_width, 444);
+    assert_eq!(saved.ui_header_status_mode, "datetime");
+    assert!(saved.ui_header_status_visible);
+    let raw = store.load_settings_value().unwrap();
+    assert_eq!(raw["ui"]["activity_bar_layout"]["future"], 42);
+    assert_eq!(raw["ui"]["future_layout"], expected["ui"]["future_layout"]);
+    assert_eq!(raw["appearance"]["future"], "retained");
+    assert_eq!(raw["future"], expected["future"]);
+    drop(store);
+    let reopened = ConnectionStore::open(&dir).unwrap();
+    assert_eq!(reopened.load_app_settings_summary().unwrap(), saved);
+    drop(reopened);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
 fn save_ui_layout_bottom_panel_state_roundtrip_and_clamp() {
     let dir = unique_temp_dir("settings-bottom-panel-heights");
     let store = ConnectionStore::open(&dir).expect("store");

@@ -4,7 +4,7 @@ use crate::features::NyaTermApp;
 
 mod helpers;
 
-mod draft;
+pub(super) mod draft;
 mod general_interaction;
 mod quit;
 mod recording_transfer;

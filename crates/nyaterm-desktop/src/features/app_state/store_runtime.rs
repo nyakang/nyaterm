@@ -397,7 +397,10 @@ impl NyaTermApp {
                             store.save_appearance_settings(&snapshot.settings)?;
                         }
                         SettingsPersistenceDomain::UiLayout => {
-                            store.save_ui_layout_settings(&snapshot.settings)?;
+                            store.save_workspace_layout_settings(&snapshot.settings)?;
+                        }
+                        SettingsPersistenceDomain::HeaderStatus => {
+                            store.save_header_status_settings(&snapshot.settings)?;
                         }
                         SettingsPersistenceDomain::Keybindings => {
                             store.save_keybindings(&snapshot.settings.keybindings)?;
