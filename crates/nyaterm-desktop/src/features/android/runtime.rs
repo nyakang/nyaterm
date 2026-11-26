@@ -207,6 +207,11 @@ impl NyaTermApp {
         let tracker = self.android.tracker.clone();
         let name = connection.name.clone();
         let task_key = key.clone();
+        let binding_lease = tracker.lease();
+        let cancellation = attempt.clone();
+        let ticket = tracker
+            .discovery_control()
+            .with_cancellation(move || cancellation.is_cancelled());
         let task = self.blocking_jobs.submit_task("android-bind", move |_| {
             let check_cancelled = || {
                 if attempt.is_cancelled() {
@@ -229,7 +234,7 @@ impl NyaTermApp {
             ))?
             .with_component(component)
             .with_server_manager(tracker.server_manager());
-            tracker.ensure(&client)?;
+            tracker.ensure_with_control(&client, &ticket)?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let snapshot = loop {
                 check_cancelled()?;
@@ -242,7 +247,7 @@ impl NyaTermApp {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(25));
             };
-            let binding = client.bind(&device, generation)?;
+            let binding = client.bind_with_control(&device, generation, &ticket)?;
             check_cancelled()?;
             let snapshot = if snapshot.devices.iter().any(|entry| {
                 entry.serial == binding.serial
@@ -257,7 +262,9 @@ impl NyaTermApp {
                 loop {
                     check_cancelled()?;
                     let current = tracker.snapshot();
-                    if current.server_generation != snapshot.server_generation {
+                    if current.tracker_generation != snapshot.tracker_generation
+                        || current.server_generation != snapshot.server_generation
+                    {
                         return Err(nyaterm_android::error::AdbError::Offline);
                     }
                     if current.devices.iter().any(|entry| {
@@ -273,7 +280,8 @@ impl NyaTermApp {
                     std::thread::sleep(std::time::Duration::from_millis(25));
                 }
             };
-            let files = Arc::new(AdbFileService::new(binding.clone()));
+            let files =
+                Arc::new(AdbFileService::new(binding.clone()).with_discovery_lease(binding_lease));
             tracker.register_runtime_since(&files.runtime, &snapshot)?;
             Ok::<_, nyaterm_android::error::AdbError>((
                 AndroidSessionConfig {
@@ -321,7 +329,10 @@ impl NyaTermApp {
                             if let Some(metadata) = app.session.metadata_mut(&id) {
                                 metadata.disconnected = true;
                                 match &mut metadata.launch_config {
-                                    SessionLaunchConfig::AdbShell(current) | SessionLaunchConfig::AdbFiles(current) | SessionLaunchConfig::AdbScreen(current) => *current = config.clone(),
+                                    SessionLaunchConfig::AdbShell(current) | SessionLaunchConfig::AdbFiles(current) | SessionLaunchConfig::AdbScreen(current) => {
+                                        *current = config.clone();
+                                        current.client.component = None;
+                                    },
                                     _ => {},
                                 }
                             }
@@ -345,9 +356,12 @@ impl NyaTermApp {
                         // Old cleanup belongs to this device only; retry against its new transport.
                         let tickets = app.android.cleanup.clone();
                         let binding = config.binding.clone();
+                        let cleanup_client = config.client.clone();
+                        let cleanup_lease = app.android.tracker.lease();
                         let _ = app.blocking_jobs.submit_detached(
                             "android-deferred-cleanup",
                             move |_| {
+                                let _cleanup_lease = cleanup_lease;
                                 for ticket in tickets {
                                     let mut pending = ticket.lock().unwrap_or_else(|p| p.into_inner());
                                     let cleanup = pending.take();
@@ -357,7 +371,9 @@ impl NyaTermApp {
                                             continue;
                                         }
                                         cleanup.binding = binding.clone();
+                                        cleanup.client = cleanup_client.clone();
                                         if cleanup.retry().is_err() {
+                                            cleanup.client.component = None;
                                             *pending = Some(cleanup);
                                         }
                                     }
@@ -379,6 +395,61 @@ impl NyaTermApp {
         })
         .detach();
     }
+    /// New views requested from an existing session still go through registry
+    /// authorization; the source session's retained launch is not permission
+    /// to launch a disabled or uninstalled component again.
+    pub(in crate::features) fn request_android_view(
+        &mut self,
+        mut config: AndroidSessionConfig,
+        kind: AndroidViewKind,
+        options: SavedConnectionStartOptions,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = config.binding.generation;
+        let key = config.device_key.clone();
+        let discovery = self.android.tracker.lease();
+        self.ensure_native_component(
+            nyaterm_core::plugins::native::NativeComponentId::Android,
+            move |app| {
+                app.android.devices.get(&key).is_some_and(|device| {
+                    device.config.binding.generation == generation
+                        && device.files.runtime.is_valid()
+                })
+            },
+            move |app, result, cx| {
+                let _discovery = discovery;
+                if !app
+                    .android
+                    .devices
+                    .get(&config.device_key)
+                    .is_some_and(|device| {
+                        device.config.binding.generation == generation
+                            && device.files.runtime.is_valid()
+                    })
+                {
+                    return;
+                }
+                match result {
+                    Ok(component) => {
+                        if app.settings.summary().android_adb_path.is_empty() {
+                            config.client.executable = component
+                                .root
+                                .join("adb")
+                                .join(if cfg!(windows) { "adb.exe" } else { "adb" });
+                        }
+                        config.client.component = Some(component);
+                        app.open_android_view(config, kind, options, cx);
+                    }
+                    Err(error) => {
+                        app.shell.set_status(error.message);
+                        cx.notify();
+                    }
+                }
+            },
+            cx,
+        );
+    }
+
     pub(in crate::features) fn open_android_view(
         &mut self,
         config: AndroidSessionConfig,
@@ -536,6 +607,7 @@ impl NyaTermApp {
             screen.settings = config.screen;
         }
         let generation = config.binding.generation;
+        let discovery = self.android.tracker.lease();
         let task = self
             .blocking_jobs
             .submit_task("android-screen-start", move |_| {
@@ -546,6 +618,7 @@ impl NyaTermApp {
                     start_control,
                     ticket,
                     runtime,
+                    discovery,
                 )
             });
         cx.spawn(async move |this, cx| {
@@ -606,7 +679,7 @@ impl NyaTermApp {
                 .file_service(&config.device_key)
                 .is_ok_and(|files| files.control.check_cancelled().is_ok())
             {
-                self.open_android_view(config, kind, SavedConnectionStartOptions::default(), cx);
+                self.request_android_view(config, kind, SavedConnectionStartOptions::default(), cx);
             } else if let Some(connection) = self
                 .connection_state
                 .connections()
@@ -682,15 +755,26 @@ impl NyaTermApp {
                 .connection_state
                 .active_editor_draft()
                 .is_some_and(|editor| editor.kind == crate::models::ConnectionKindTab::Adb)
-            || !self.android.views.is_empty()
-            || self
-                .session
-                .ordered_sessions()
-                .iter()
-                .any(|session| android_session(session.kind))
+            || self.android.views.keys().any(|id| {
+                self.session
+                    .metadata(id)
+                    .is_some_and(|metadata| !metadata.disconnected)
+            })
+            || self.android.devices.values().any(|lease| {
+                lease.files.runtime.is_valid()
+                    && Arc::strong_count(&lease.files) > Arc::strong_count(&lease.owners)
+            })
+            || self.session.ordered_sessions().iter().any(|session| {
+                android_session(session.kind)
+                    && self
+                        .session
+                        .metadata(&session.id)
+                        .is_none_or(|metadata| !metadata.disconnected)
+            })
     }
 
     pub(in crate::features) fn sync_android_discovery(&mut self) {
+        self.collect_android_devices();
         let needed = self.android_discovery_needed();
         self.android.sync_discovery(needed);
     }
@@ -701,25 +785,7 @@ impl NyaTermApp {
         // the editor/view/session exits give it back.
         self.android.sync_discovery(true);
         self.ensure_android_clock(cx);
-        if self.android.component.is_some() {
-            self.android_ensure_tracker(cx);
-            return;
-        }
-        self.ensure_native_component(
-            nyaterm_core::plugins::native::NativeComponentId::Android,
-            |_| true,
-            |app, result, cx| match result {
-                Ok(component) => {
-                    app.android.component = Some(component);
-                    app.android_ensure_tracker(cx);
-                }
-                Err(error) => {
-                    app.shell.set_status(error.message);
-                    cx.notify();
-                }
-            },
-            cx,
-        );
+        self.android_ensure_tracker(cx);
     }
 
     /// Whether something needs discovery but no tracker is serving it.
@@ -727,8 +793,9 @@ impl NyaTermApp {
     /// Split out so tests can assert the restart decision without an `adb`.
     pub(in crate::features) fn android_needs_tracker(&self) -> bool {
         self.android.holds_discovery()
-            && !self.android.tracker_start_pending
+            && self.android.tracker_start_pending.is_none()
             && !self.android.tracker.is_active()
+            && (self.android.tracker_error.is_none() || self.android.tracker_retry_after.is_some())
             && self
                 .android
                 .tracker_retry_after
@@ -739,15 +806,55 @@ impl NyaTermApp {
         if !self.android_needs_tracker() {
             return;
         }
-        let Some(component) = self.android.component.clone() else {
-            return;
-        };
-        self.android.tracker_start_pending = true;
+        let attempt = super::next_generation();
+        let ticket = self.android.tracker.discovery_control();
+        self.android.tracker_start_pending = Some((attempt, ticket.clone()));
+        let valid_ticket = ticket.clone();
+        self.ensure_native_component(
+            nyaterm_core::plugins::native::NativeComponentId::Android,
+            move |_| !valid_ticket.is_cancelled(),
+            move |app, result, cx| {
+                if app
+                    .android
+                    .tracker_start_pending
+                    .as_ref()
+                    .is_none_or(|(current, _)| *current != attempt)
+                {
+                    return;
+                }
+                if ticket.is_cancelled() {
+                    app.android.tracker_start_pending = None;
+                    return;
+                }
+                match result {
+                    Ok(component) => app.start_android_tracker(component, ticket, attempt, cx),
+                    Err(error) => {
+                        app.android.tracker_start_pending = None;
+                        app.android.tracker_retry_after = None;
+                        app.android.tracker_error = Some(error.message.clone());
+                        app.shell.set_status(error.message);
+                        cx.notify();
+                    }
+                }
+            },
+            cx,
+        );
+    }
+
+    fn start_android_tracker(
+        &mut self,
+        component: nyaterm_core::plugins::native::NativeLaunch,
+        ticket: nyaterm_android::operation::AdbOperationControl,
+        attempt: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let job_ticket = ticket.clone();
         let custom = self.settings.summary().android_adb_path.clone();
         let tracker = self.android.tracker.clone();
         let task = self
             .blocking_jobs
             .submit_task("android-discovery", move |_| {
+                job_ticket.check()?;
                 let client = AdbClient::local(Some(
                     if custom.is_empty() {
                         component.root.join("adb").join(if cfg!(windows) {
@@ -762,7 +869,7 @@ impl NyaTermApp {
                 ))?
                 .with_component(component)
                 .with_server_manager(tracker.server_manager());
-                tracker.ensure(&client)
+                tracker.ensure_with_control(&client, &job_ticket)
             });
         cx.spawn(async move |this, cx| {
             let result = await_blocking_job(task)
@@ -770,13 +877,28 @@ impl NyaTermApp {
                 .map_err(|_| AndroidError::JobFailed)
                 .and_then(|v| v.map_err(AndroidError::Backend));
             let _ = this.update(cx, |app, cx| {
-                app.android.tracker_start_pending = false;
+                if app
+                    .android
+                    .tracker_start_pending
+                    .as_ref()
+                    .is_none_or(|(current, _)| *current != attempt)
+                {
+                    return;
+                }
+                app.android.tracker_start_pending = None;
+                if ticket.is_cancelled() {
+                    return;
+                }
                 match result {
-                    Ok(()) => app.android.tracker_retry_after = None,
+                    Ok(()) => {
+                        app.android.tracker_retry_after = None;
+                        app.android.tracker_error = None;
+                    }
                     Err(error) => {
                         // Back off so a broken adb cannot turn the 200 ms tick
                         // into a retry storm; report only the first failure of
                         // a streak instead of rewriting the status every 2 s.
+                        app.android.tracker_error = Some(error.message());
                         let first = app.android.tracker_retry_after.is_none();
                         app.android.tracker_retry_after =
                             Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
@@ -791,7 +913,7 @@ impl NyaTermApp {
         .detach();
     }
     pub(super) fn collect_android_devices(&mut self) {
-        let pending = self
+        let mut pending: std::collections::HashSet<String> = self
             .session
             .start_pending_entries()
             .filter_map(|(_, p)| match &p.launch_config {
@@ -799,6 +921,17 @@ impl NyaTermApp {
                 _ => None,
             })
             .collect();
+        pending.extend(
+            self.android
+                .views
+                .iter()
+                .filter(|(id, _)| {
+                    self.session
+                        .metadata(id)
+                        .is_some_and(|metadata| !metadata.disconnected)
+                })
+                .map(|(_, view)| view.device_key.clone()),
+        );
         self.android.collect_unused_devices(&pending);
     }
     pub(in crate::features) fn ensure_android_clock(&mut self, cx: &mut Context<Self>) {
@@ -810,32 +943,39 @@ impl NyaTermApp {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(200))
                     .await;
-                if this
+                if !this
                     .update(cx, |app, cx| {
                         app.sync_android_discovery();
-                        app.collect_android_devices();
+                        if !app.android.holds_discovery()
+                            && app.android.tracker_start_pending.is_none()
+                        {
+                            app.android.clock = None;
+                            return false;
+                        }
                         // Convergent restart: a consumer that took a lease
                         // without going through the connection editor gets
                         // its tracker from here.
                         app.android_ensure_tracker(cx);
-                        let snapshot = app.android.tracker.snapshot();
-                        if (snapshot.revision == 0
-                            || snapshot.revision == app.android.tracker_revision)
-                            && app
+                        let snapshot = match app
+                            .android
+                            .tracker
+                            .snapshot_if_changed(app.android.tracker_revision)
+                        {
+                            Some(snapshot) => snapshot,
+                            None if app
                                 .android
                                 .devices
                                 .values()
-                                .all(|lease| lease.files.runtime.is_valid())
-                        {
-                            return;
-                        }
-                        let mut changed = snapshot.revision != app.android.tracker_revision;
-                        app.android.tracker_revision = snapshot.revision;
-                        if changed {
-                            // Keep the last list for the picker, which is empty
-                            // again while a released discovery cold-starts adb.
-                            app.android.remember_devices();
-                        }
+                                .all(|lease| lease.files.runtime.is_valid()) =>
+                            {
+                                return true;
+                            }
+                            None => app.android.tracker.snapshot(),
+                        };
+                        let mut changed = (snapshot.tracker_generation, snapshot.revision)
+                            != app.android.tracker_revision;
+                        app.android.tracker_revision =
+                            (snapshot.tracker_generation, snapshot.revision);
                         let mut missing = Vec::new();
                         for (key, lease) in &mut app.android.devices {
                             let device = snapshot
@@ -880,8 +1020,9 @@ impl NyaTermApp {
                         if changed {
                             cx.notify();
                         }
+                        true
                     })
-                    .is_err()
+                    .is_ok_and(|running| running)
                 {
                     break;
                 }

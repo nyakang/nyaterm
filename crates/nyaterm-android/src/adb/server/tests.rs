@@ -447,3 +447,16 @@ fn a_pending_release_never_stops_a_server_started_after_it() {
         }
     );
 }
+
+pub(crate) fn start_owned_fixture(
+    manager: &crate::adb::server::AdbServerManager,
+    client: &AdbClient,
+) {
+    ensure(
+        &manager.registry,
+        client,
+        &AdbOperationControl::default(),
+        |client| Ok(spawn_fixture(client, "server")),
+    )
+    .unwrap();
+}

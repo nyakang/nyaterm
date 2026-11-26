@@ -416,6 +416,33 @@ mod tests {
     }
 
     #[test]
+    fn disabled_android_rejects_acquisition_while_a_running_version_is_leased() {
+        let root = TestTempDir::new("nyaterm-native-android-disabled");
+        let mut registry = Registry::open(root.path().into()).unwrap();
+        let id = NativeComponentId::Android;
+        let version = installed("1.0.0");
+        fs::create_dir_all(registry.version_directory(id, &version)).unwrap();
+        registry.activate(id, version.clone()).unwrap();
+        let running = registry.lock_version(id, &version, true).unwrap();
+        let mut preferences = registry.preferences.clone();
+        preferences.components.insert(
+            id,
+            NativePreference {
+                disabled: true,
+                uninstall_pending: false,
+            },
+        );
+        registry.save(preferences).unwrap();
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
+        assert_eq!(
+            registry.acquire(id, sender).unwrap_err().code,
+            nyaterm_core::plugins::ErrorCode::Disabled
+        );
+        assert!(registry.version_directory(id, &version).exists());
+        drop(running);
+    }
+
+    #[test]
     fn interrupted_repair_restores_old_directory_before_reaping() {
         let root = TestTempDir::new("nyaterm-native-repair-recovery");
         let registry = Registry::open(root.path().into()).unwrap();

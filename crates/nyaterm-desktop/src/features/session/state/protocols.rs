@@ -328,6 +328,16 @@ impl SessionFeatureState {
         let metadata = self.metadata.get_mut(session_id)?;
         let already_disconnected = metadata.disconnected;
         metadata.disconnected = true;
+        match &mut metadata.launch_config {
+            crate::models::SessionLaunchConfig::AdbShell(config)
+            | crate::models::SessionLaunchConfig::AdbFiles(config)
+            | crate::models::SessionLaunchConfig::AdbScreen(config) => {
+                // Reconnect reacquires through the registry. A retained tab is
+                // not an active user of the old native component version.
+                config.client.component = None;
+            }
+            _ => {}
+        }
         self.clear_pending_command_submissions(session_id);
         self.protocols.remote_files.remove(session_id);
         self.protocols.ssh_connections.remove(session_id);

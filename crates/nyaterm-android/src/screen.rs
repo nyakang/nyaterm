@@ -118,10 +118,18 @@ impl CleanupStatus {
 }
 pub type CleanupTicket = Arc<CleanupStatus>;
 
+struct ScreenLifetime {
+    control: AdbOperationControl,
+    ticket: CleanupTicket,
+    runtime: Arc<DeviceRuntime>,
+    discovery: Option<crate::devices::DeviceTrackerLease>,
+}
+
 struct Resources {
     cleanup: CleanupSpec,
     helper: Option<ScreenChild>,
     ticket: CleanupTicket,
+    _discovery: Option<crate::devices::DeviceTrackerLease>,
 }
 
 impl Drop for Resources {
@@ -135,6 +143,7 @@ impl Drop for Resources {
         if let Err(error) = self.cleanup.retry() {
             let mut pending = self.cleanup.clone();
             pending.last_error = Some(error.to_string());
+            pending.client.component = None;
             *self.ticket.lock().unwrap_or_else(|p| p.into_inner()) = Some(pending);
         }
         self.ticket.finished.store(true, Ordering::Release);
@@ -243,6 +252,7 @@ impl ScreenHandle {
         control: AdbOperationControl,
         ticket: CleanupTicket,
         runtime: Arc<DeviceRuntime>,
+        discovery: crate::devices::DeviceTrackerLease,
     ) -> AdbResult<Self> {
         let result = control
             .check()
@@ -254,14 +264,17 @@ impl ScreenHandle {
                     .unwrap_or_else(resolve_helper)
             })
             .and_then(|helper| {
-                Self::start_with_helper_controlled(
+                Self::start_with_lifetime(
                     client,
                     binding,
                     settings,
                     &helper,
-                    control,
-                    ticket.clone(),
-                    runtime,
+                    ScreenLifetime {
+                        control,
+                        ticket: ticket.clone(),
+                        runtime,
+                        discovery: Some(discovery),
+                    },
                 )
             });
         if result.is_err() && !ticket.started.load(Ordering::Acquire) {
@@ -278,6 +291,33 @@ impl ScreenHandle {
         ticket: CleanupTicket,
         runtime: Arc<DeviceRuntime>,
     ) -> AdbResult<Self> {
+        Self::start_with_lifetime(
+            client,
+            binding,
+            settings,
+            helper,
+            ScreenLifetime {
+                control: lifetime,
+                ticket,
+                runtime,
+                discovery: None,
+            },
+        )
+    }
+
+    fn start_with_lifetime(
+        client: AdbClient,
+        binding: DeviceBinding,
+        settings: AndroidScreenSettings,
+        helper: &Path,
+        lifetime: ScreenLifetime,
+    ) -> AdbResult<Self> {
+        let ScreenLifetime {
+            control: lifetime,
+            ticket,
+            runtime,
+            discovery,
+        } = lifetime;
         struct EarlyTicket(CleanupTicket);
         impl Drop for EarlyTicket {
             fn drop(&mut self) {
@@ -314,6 +354,7 @@ impl ScreenHandle {
             },
             helper: None,
             ticket: Arc::clone(&ticket),
+            _discovery: discovery,
         };
         let mut command = std::process::Command::new(helper);
         command
@@ -1087,5 +1128,58 @@ mod tests {
         assert!(!ticket.is_complete());
         drop(pending);
         assert!(ticket.is_complete());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use crate::adb::client::{AdbClient, DeviceBinding};
+    use crate::devices::SharedDeviceService;
+    use crate::screen::{CleanupSpec, CleanupStatus, Resources};
+    use nyaterm_core::plugins::native::NativeLaunch;
+    use std::sync::Arc;
+
+    #[test]
+    fn failed_screen_cleanup_releases_discovery_and_does_not_pin_the_old_plugin() {
+        let tracker = SharedDeviceService::default();
+        let discovery = tracker.lease();
+        let control = tracker.discovery_control();
+        let proof = Arc::new(());
+        let released = Arc::downgrade(&proof);
+        let ticket = Arc::new(CleanupStatus::default());
+        let resources = Resources {
+            cleanup: CleanupSpec {
+                client: AdbClient::new(
+                    "missing-cleanup-fixture".into(),
+                    "127.0.0.1:1".parse().unwrap(),
+                )
+                .with_component(NativeLaunch {
+                    executable: "fixture".into(),
+                    root: "fixture".into(),
+                    lease: proof,
+                }),
+                binding: DeviceBinding {
+                    server: "127.0.0.1:1".parse().unwrap(),
+                    serial: "fixture".into(),
+                    transport_id: None,
+                    generation: 1,
+                },
+                remote_path: "/data/local/tmp/fixture.jar".into(),
+                port: 0,
+                pid: None,
+                scid: "00000001".into(),
+                last_error: None,
+            },
+            helper: None,
+            ticket: ticket.clone(),
+            _discovery: Some(discovery),
+        };
+        assert!(!control.is_cancelled());
+        drop(resources);
+        assert!(control.is_cancelled());
+        assert!(ticket.is_finished());
+        let pending = ticket.lock().unwrap();
+        assert!(pending.as_ref().unwrap().client.component.is_none());
+        assert!(released.upgrade().is_none());
     }
 }

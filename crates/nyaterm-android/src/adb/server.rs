@@ -31,6 +31,18 @@ struct OwnedServer(
     Option<nyaterm_core::plugins::native::NativeLaunch>,
 );
 
+impl OwnedServer {
+    // Background only. Retain the component lease until the exact child exits.
+    fn finish(mut self) -> io::Result<()> {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            child.wait()?;
+            self.0.take();
+        }
+        Ok(())
+    }
+}
+
 impl Drop for OwnedServer {
     fn drop(&mut self) {
         let Some(mut child) = self.0.take() else {
@@ -242,8 +254,19 @@ impl ServerRegistry {
             {
                 let process = OwnedServer(Some(child), client.component.clone());
                 let mut owned = slot.process.lock().unwrap_or_else(|p| p.into_inner());
-                control.check()?;
                 *owned = Some(process);
+                drop(owned);
+                if let Err(error) = control.check() {
+                    if let Some(process) = slot.take_process()
+                        && let Err(reap_error) = process.finish()
+                    {
+                        // An unconfirmed exit must not be followed by a fresh
+                        // probe that could attach to the retiring process.
+                        self.control.cancel();
+                        return Err(reap_error.into());
+                    }
+                    return Err(error);
+                }
             }
             let started = (|| {
                 while slot.running()? {
@@ -265,7 +288,14 @@ impl ServerRegistry {
                 Ok(true) => return Ok(()),
                 Ok(false) => {}
                 Err(error) => {
-                    drop(slot.take_process());
+                    if let Some(process) = slot.take_process()
+                        && let Err(reap_error) = process.finish()
+                    {
+                        // An unconfirmed exit must not be followed by a fresh
+                        // probe that could attach to the retiring process.
+                        self.control.cancel();
+                        return Err(reap_error.into());
+                    }
                     return Err(error);
                 }
             }
@@ -349,6 +379,15 @@ impl AdbServerShutdown {
 }
 
 impl AdbServerRelease {
+    /// Discovery serializes this with startup. Keep ownership until each exact
+    /// child has exited, so the next probe cannot attach to a retiring daemon.
+    pub(crate) fn finish_before_restart(self) -> io::Result<()> {
+        for process in self.owned {
+            process.finish()?;
+        }
+        Ok(())
+    }
+
     /// Same contract as [`AdbServerShutdown::finish`]: never wait on the UI thread.
     pub fn finish(self, timeout: Duration) -> ServerShutdownReport {
         terminate_owned(self.owned, timeout)
@@ -409,4 +448,4 @@ fn terminate_owned(owned: Vec<OwnedServer>, timeout: Duration) -> ServerShutdown
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

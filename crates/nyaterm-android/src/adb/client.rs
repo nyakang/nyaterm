@@ -158,17 +158,26 @@ impl AdbClient {
     }
 
     pub fn bind(&self, selector: &AdbDeviceSelector, generation: u64) -> AdbResult<DeviceBinding> {
+        self.bind_with_control(selector, generation, &AdbOperationControl::default())
+    }
+
+    pub fn bind_with_control(
+        &self,
+        selector: &AdbDeviceSelector,
+        generation: u64,
+        control: &AdbOperationControl,
+    ) -> AdbResult<DeviceBinding> {
         selector.validate().map_err(AdbError::Protocol)?;
-        self.ensure_server()?;
+        self.ensure_server_with_control(control)?;
         let serial = selector.serial();
         if matches!(selector, AdbDeviceSelector::Tcp { .. }) {
-            self.command(&["connect", &serial])?;
+            self.command_with_control(&["connect", &serial], control)?;
         }
-        let device = self
-            .devices()?
-            .into_iter()
-            .find(|device| device.serial == serial)
-            .ok_or(AdbError::Offline)?;
+        let device =
+            controlled::devices(crate::adb::server::connect(self.server, control)?, control)?
+                .into_iter()
+                .find(|device| device.serial == serial)
+                .ok_or(AdbError::Offline)?;
         match device.status {
             DeviceStatus::Unauthorized => return Err(AdbError::Unauthorized),
             DeviceStatus::Online => {}

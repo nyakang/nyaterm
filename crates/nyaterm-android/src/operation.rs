@@ -12,13 +12,17 @@ pub struct AdbOperationControl {
     parent: Option<Arc<Self>>,
     linked: Option<Arc<Self>>,
     deadline: Option<Instant>,
+    external_cancelled: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl AdbOperationControl {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.external_cancelled
+            .as_ref()
+            .is_some_and(|check| check())
+            || self.cancelled.load(Ordering::Acquire)
             || self
                 .parent
                 .as_ref()
@@ -45,6 +49,14 @@ impl AdbOperationControl {
             linked.check()?;
         }
         Ok(())
+    }
+    /// Inject an owner's cancellation without depending on its runtime types.
+    pub fn with_cancellation(&self, cancelled: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            parent: Some(Arc::new(self.clone())),
+            external_cancelled: Some(Arc::new(cancelled)),
+            ..Self::default()
+        }
     }
     pub fn child(&self) -> Self {
         Self {

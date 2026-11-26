@@ -136,6 +136,18 @@ pub(super) fn host_request(
     })?;
     Ok(stream)
 }
+pub(super) fn devices(
+    mut stream: TcpStream,
+    control: &AdbOperationControl,
+) -> AdbResult<Vec<crate::adb::client::AdbDevice>> {
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(100)))?;
+    checked(&mut stream, &mut || control.check(), |socket| {
+        request(socket, b"host:devices-l")?;
+        parse_devices(&read_host_payload(socket)?)
+    })
+}
+
 pub(super) fn features(
     binding: &DeviceBinding,
     mut check: impl FnMut() -> AdbResult<()>,

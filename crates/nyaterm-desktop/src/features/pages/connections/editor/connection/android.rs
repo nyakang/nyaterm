@@ -80,7 +80,8 @@ pub(super) fn section(
     }
     let editor_usb = editor.android_usb;
     // An empty list while adb is still starting is not "no devices".
-    let discovering = snapshot.devices.is_empty() && app.android.devices_are_starting();
+    let discovering = app.android.devices_are_starting();
+    let discovery_error = snapshot.error.clone();
     let mut content =
         div()
             .flex()
@@ -169,6 +170,14 @@ pub(super) fn section(
                 cx.notify();
             }),
         ));
+    }
+    if let Some(error) = discovery_error {
+        content = content.child(
+            div()
+                .text_xs()
+                .text_color(rgb(palette.text_muted))
+                .child(error),
+        );
     }
     if discovering {
         content = content.child(

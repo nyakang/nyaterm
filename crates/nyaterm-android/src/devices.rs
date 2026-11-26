@@ -7,8 +7,8 @@ use crate::operation::AdbOperationControl;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::net::{Shutdown, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, TryLockError, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,7 @@ pub struct DeviceSnapshot {
     pub devices: Vec<AdbDevice>,
     pub error: Option<String>,
     pub revision: u64,
+    pub tracker_generation: u64,
     pub server_generation: u64,
     pub device_generations: HashMap<String, u64>,
 }
@@ -29,91 +30,218 @@ pub struct DeviceService {
     runtimes: Arc<Mutex<Vec<Weak<DeviceRuntime>>>>,
 }
 type SharedTracker = Arc<Mutex<Option<(AdbClient, Arc<DeviceService>)>>>;
+#[derive(Default)]
+struct DiscoveryDemand {
+    leases: usize,
+    control: AdbOperationControl,
+}
 #[derive(Clone, Default)]
 pub struct SharedDeviceService {
     tracker: SharedTracker,
     control: AdbOperationControl,
     servers: AdbServerManager,
-    /// Live consumers of discovery; the last drop stops the tracker.
-    leases: Arc<AtomicUsize>,
-    /// Workers of released services, joined at shutdown or the next start.
-    retired: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    demand: Arc<Mutex<DiscoveryDemand>>,
+    // Only background callers take this lock. Startup, retirement and server
+    // reaping form one transaction, including cancellation rollback.
+    lifecycle: Arc<Mutex<()>>,
+    retired: Arc<Mutex<Vec<Arc<DeviceService>>>>,
+    cleanup: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    cleanup_running: Arc<AtomicBool>,
 }
 impl SharedDeviceService {
     pub fn server_manager(&self) -> AdbServerManager {
         self.servers.clone()
     }
 
-    /// Keeps discovery running while held; take it before [`Self::ensure`].
     #[must_use = "discovery stops as soon as the lease is dropped"]
     pub fn lease(&self) -> DeviceTrackerLease {
-        self.leases.fetch_add(1, Ordering::AcqRel);
+        let mut demand = self.demand.lock().unwrap_or_else(|p| p.into_inner());
+        if demand.leases == 0 {
+            demand.control = self.control.child();
+        }
+        demand.leases += 1;
         DeviceTrackerLease {
             devices: self.clone(),
         }
     }
 
-    fn drop_lease(&self) {
-        if self.leases.fetch_sub(1, Ordering::AcqRel) != 1 {
-            return;
+    /// Capture before queuing a job. A release/reacquire cannot revive this ticket.
+    pub fn discovery_control(&self) -> AdbOperationControl {
+        let demand = self.demand.lock().unwrap_or_else(|p| p.into_inner());
+        let control = demand.control.child();
+        if demand.leases == 0 {
+            control.cancel();
         }
-        let service = self
+        control
+    }
+
+    fn retire_tracker(&self) {
+        if let Some((_, service)) = self
             .tracker
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .take();
-        if let Some((_, service)) = service {
+            .take()
+        {
+            // Only atomic cancellation on the UI thread; socket closure,
+            // runtime invalidation and joining belong to cleanup below.
+            service.control.cancel();
+            self.retired
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(service);
+        }
+    }
+
+    fn drop_lease(&self) {
+        let mut demand = self.demand.lock().unwrap_or_else(|p| p.into_inner());
+        demand.leases -= 1;
+        if demand.leases != 0 {
+            return;
+        }
+        demand.control.cancel();
+        self.retire_tracker();
+        self.schedule_cleanup();
+    }
+
+    fn schedule_cleanup(&self) {
+        if self
+            .retired
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty()
+            && self.lifecycle.try_lock().is_ok()
+        {
+            return;
+        }
+        if self.cleanup_running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let owner = self.clone();
+        let mut workers = self.cleanup.lock().unwrap_or_else(|p| p.into_inner());
+        workers.retain(|worker| !worker.is_finished());
+        match nyaterm_core::runtime::worker::spawn("android-discovery-cleanup".into(), move || {
+            let _gate = owner.lifecycle.lock().unwrap_or_else(|p| p.into_inner());
+            loop {
+                owner.clean_retired();
+                let _demand = owner.demand.lock().unwrap_or_else(|p| p.into_inner());
+                if owner
+                    .retired
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_empty()
+                {
+                    owner.cleanup_running.store(false, Ordering::Release);
+                    break;
+                }
+            }
+        }) {
+            Ok(worker) => workers.push(worker),
+            // State still owns all resources. A later ensure/shutdown retries
+            // cleanup before admitting another lifecycle.
+            Err(error) => {
+                self.cleanup_running.store(false, Ordering::Release);
+                tracing::error!(%error, "Cannot schedule Android cleanup");
+            }
+        }
+    }
+
+    // Requires lifecycle, never a UI-accessible mutex across blocking work.
+    fn clean_retired(&self) {
+        let retired = std::mem::take(&mut *self.retired.lock().unwrap_or_else(|p| p.into_inner()));
+        for service in retired {
             service.stop();
             let worker = service
                 .worker
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .take();
-            if let Some(worker) = worker {
-                self.retired
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .push(worker);
+            if let Some(worker) = worker
+                && worker.join().is_err()
+            {
+                tracing::error!("Android device tracker panicked during retirement");
             }
         }
-        // No consumer left: stop the servers this owner started, but never a
-        // foreign one. Safe here because dropping a lease happens on the UI
-        // thread, so the waiting part moves to a worker.
-        let release = self.servers.release();
-        let _ = nyaterm_core::runtime::worker::spawn("adb-server-release".into(), move || {
-            release.finish(Duration::from_secs(2));
-        });
+        if !self.is_active()
+            && let Err(error) = self.servers.release().finish_before_restart()
+        {
+            self.control.cancel();
+            tracing::error!(%error, "Cannot confirm owned ADB server exit; discovery stopped");
+        }
     }
 
+    /// Background-only; the UI captures a discovery ticket before submission.
     pub fn ensure(&self, client: &AdbClient) -> AdbResult<()> {
         self.control.check()?;
-        // No lease means nobody is watching devices; starting a tracker would
-        // spawn (and keep restarting) an adb server for nobody.
-        if self.leases.load(Ordering::Acquire) == 0 {
+        let control = self.discovery_control();
+        if control.is_cancelled() {
             return Ok(());
         }
-        let mut state = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        self.ensure_with_control(client, &control)
+    }
+
+    pub fn ensure_with_control(
+        &self,
+        client: &AdbClient,
+        control: &AdbOperationControl,
+    ) -> AdbResult<()> {
+        control.check()?;
+        let _gate = self.lock_lifecycle(control)?;
+        self.clean_retired();
         self.control.check()?;
-        if state.as_ref().is_some_and(|(existing, _)| {
-            existing.executable == client.executable && existing.server == client.server
-        }) {
+        control.check()?;
+        if self.is_active() {
             return Ok(());
         }
         let client = client.clone().with_server_manager(self.servers.clone());
-        // Otherwise every release/ensure cycle keeps a dead handle for life.
-        self.retired
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .retain(|worker| !worker.is_finished());
-        *state = Some((
+        let lifecycle_control = self.discovery_control();
+        let result = DeviceService::start_with_controls(
             client.clone(),
-            Arc::new(DeviceService::start_with_control(
-                client,
-                self.control.child(),
-            )?),
-        ));
-        Ok(())
+            control.linked_to(&lifecycle_control),
+            lifecycle_control.clone(),
+        );
+        let demand = self.demand.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(error) = control
+            .check()
+            .and_then(|_| self.control.check())
+            .and_then(|_| lifecycle_control.check())
+        {
+            if let Ok(service) = result {
+                self.retired
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(Arc::new(service));
+            }
+            drop(demand);
+            self.clean_retired();
+            return Err(error);
+        }
+        match result {
+            Ok(service) => {
+                *self.tracker.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some((client, Arc::new(service)));
+                Ok(())
+            }
+            Err(error) => {
+                drop(demand);
+                self.clean_retired();
+                Err(error)
+            }
+        }
     }
+    fn lock_lifecycle(&self, control: &AdbOperationControl) -> AdbResult<MutexGuard<'_, ()>> {
+        loop {
+            self.control.check()?;
+            control.check()?;
+            match self.lifecycle.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(error)) => return Ok(error.into_inner()),
+                // Poll only cancellation while waiting for the serialization
+                // gate. Time never authorizes startup or completes retirement.
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+
     pub fn register_runtime_since(
         &self,
         runtime: &Arc<DeviceRuntime>,
@@ -127,7 +255,8 @@ impl SharedDeviceService {
         };
         // Tracker publishes generations and invalidation under this same lock order.
         let snapshot = tracker.state.lock().unwrap_or_else(|p| p.into_inner());
-        if snapshot.server_generation != expected.server_generation
+        if snapshot.tracker_generation != expected.tracker_generation
+            || snapshot.server_generation != expected.server_generation
             || snapshot.device_generations.get(&runtime.binding.serial)
                 != expected.device_generations.get(&runtime.binding.serial)
             || !snapshot.devices.iter().any(|device| {
@@ -154,31 +283,40 @@ impl SharedDeviceService {
 
     pub fn snapshot(&self) -> DeviceSnapshot {
         self.tracker
-            .try_lock()
-            .ok()
-            .as_deref()
-            .and_then(|state| state.as_ref())
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
             .map(|(_, service)| service.snapshot())
             .unwrap_or_default()
     }
 
-    /// Stop admitting discovery work immediately; transfer all waiting to a
-    /// background owner, including startup that currently holds the tracker lock.
+    pub fn snapshot_if_changed(&self, previous: (u64, u64)) -> Option<DeviceSnapshot> {
+        let tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+        let (_, service) = tracker.as_ref()?;
+        let state = service.state.lock().unwrap_or_else(|p| p.into_inner());
+        ((state.tracker_generation, state.revision) != previous).then(|| state.clone())
+    }
+
+    /// Cancellation and ownership transfer only; finish on a background worker.
     pub fn begin_shutdown(&self) -> DeviceServiceShutdown {
         self.control.cancel();
+        let _demand = self.demand.lock().unwrap_or_else(|p| p.into_inner());
+        self.retire_tracker();
+        self.schedule_cleanup();
         DeviceServiceShutdown {
-            tracker: Arc::clone(&self.tracker),
-            retired: Arc::clone(&self.retired),
+            owner: self.clone(),
         }
     }
 }
 
-/// Keeps discovery alive while held; the last drop stops the tracker without
-/// cancelling the service, so a later lease and `ensure` start a fresh one.
 pub struct DeviceTrackerLease {
     devices: SharedDeviceService,
 }
-
+impl std::fmt::Debug for DeviceTrackerLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceTrackerLease").finish_non_exhaustive()
+    }
+}
 impl Drop for DeviceTrackerLease {
     fn drop(&mut self) {
         self.devices.drop_lease();
@@ -187,56 +325,49 @@ impl Drop for DeviceTrackerLease {
 
 #[must_use = "finish discovery shutdown on a background worker"]
 pub struct DeviceServiceShutdown {
-    tracker: SharedTracker,
-    retired: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    owner: SharedDeviceService,
 }
-
 impl DeviceServiceShutdown {
-    /// Returns false if the worker could not be collected before the deadline.
-    /// Cancellation remains active even if an OS operation outlives this wait.
     pub fn finish(self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        let service = loop {
-            match self.tracker.try_lock() {
-                Ok(mut tracker) => break tracker.take(),
-                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner().take(),
-                Err(TryLockError::WouldBlock) => {
-                    if Instant::now() >= deadline {
-                        return false;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
-        };
+        let workers =
+            std::mem::take(&mut *self.owner.cleanup.lock().unwrap_or_else(|p| p.into_inner()));
         let mut stopped = true;
-        if let Some((_, service)) = service {
-            service.stop();
-            let worker = service
-                .worker
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .take();
-            if let Some(worker) = worker {
-                stopped = join_worker(worker, deadline);
+        for worker in workers {
+            if wait_worker(&worker, deadline) {
+                stopped &= worker.join().is_ok();
+            } else {
+                // Keep the handle for the next shutdown wait. The worker also
+                // retains all resources until cancellation cleanup completes.
+                self.owner
+                    .cleanup
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(worker);
+                stopped = false;
             }
         }
-        // Services released by their last lease still have a worker to collect.
-        let retired = std::mem::take(&mut *self.retired.lock().unwrap_or_else(|p| p.into_inner()));
         stopped
-            & retired
-                .into_iter()
-                .all(|worker| join_worker(worker, deadline))
+            && !self.owner.cleanup_running.load(Ordering::Acquire)
+            && self
+                .owner
+                .retired
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty()
     }
 }
 
-fn join_worker(worker: JoinHandle<()>, deadline: Instant) -> bool {
+fn wait_worker(worker: &JoinHandle<()>, deadline: Instant) -> bool {
     while !worker.is_finished() {
         if Instant::now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(
+            Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())),
+        );
     }
-    worker.join().is_ok()
+    true
 }
 
 impl DeviceService {
@@ -246,9 +377,22 @@ impl DeviceService {
     }
 
     fn start_with_control(client: AdbClient, control: AdbOperationControl) -> AdbResult<Self> {
-        client.ensure_server_with_control(&control)?;
+        Self::start_with_controls(client, control.clone(), control)
+    }
+
+    fn start_with_controls(
+        client: AdbClient,
+        startup: AdbOperationControl,
+        control: AdbOperationControl,
+    ) -> AdbResult<Self> {
+        client.ensure_server_with_control(&startup)?;
+        startup.check()?;
         control.check()?;
-        let state = Arc::new(Mutex::new(DeviceSnapshot::default()));
+        static NEXT_TRACKER: AtomicU64 = AtomicU64::new(1);
+        let state = Arc::new(Mutex::new(DeviceSnapshot {
+            tracker_generation: NEXT_TRACKER.fetch_add(1, Ordering::Relaxed),
+            ..DeviceSnapshot::default()
+        }));
         let channel = Arc::new(Mutex::new(None));
         let worker_control = control.clone();
         let worker_state = state.clone();
