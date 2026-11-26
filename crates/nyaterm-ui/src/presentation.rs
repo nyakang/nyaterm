@@ -134,7 +134,33 @@ pub fn action_button_enabled(
         .when(enabled, |this| this.on_click(on_click))
 }
 
+/// Linear completion progress bar (`0.0..=1.0`) for downloads and tasks.
 pub fn progress_bar(palette: ThemePalette, ratio: f64) -> impl IntoElement {
+    let clamped = ratio.clamp(0., 1.) as f32;
+    styled_progress_bar(palette, ratio, completion_progress_color(palette, clamped))
+}
+
+/// Resource utilization meter (`0.0..=1.0`) with warning and critical load thresholds.
+pub fn resource_progress_bar(palette: ThemePalette, ratio: f64) -> impl IntoElement {
+    let clamped = ratio.clamp(0., 1.) as f32;
+    styled_progress_bar(palette, ratio, resource_progress_color(palette, clamped))
+}
+
+fn completion_progress_color(palette: ThemePalette, _ratio: f32) -> u32 {
+    palette.primary
+}
+
+fn resource_progress_color(palette: ThemePalette, ratio: f32) -> u32 {
+    if ratio >= 0.9_f32 {
+        0xfb7185
+    } else if ratio >= 0.7_f32 {
+        palette.warning
+    } else {
+        palette.primary
+    }
+}
+
+fn styled_progress_bar(palette: ThemePalette, ratio: f64, fill: u32) -> gpui::Div {
     let ratio = ratio.clamp(0., 1.) as f32;
     div()
         .h(px(5.))
@@ -147,13 +173,7 @@ pub fn progress_bar(palette: ThemePalette, ratio: f64) -> impl IntoElement {
                 .h(px(5.))
                 .w(gpui::relative(ratio))
                 .rounded_sm()
-                .bg(if ratio >= 0.9_f32 {
-                    rgb(0xfb7185)
-                } else if ratio >= 0.7_f32 {
-                    rgb(palette.warning)
-                } else {
-                    rgb(palette.primary)
-                }),
+                .bg(rgb(fill)),
         )
 }
 
@@ -406,10 +426,27 @@ use gpui::Entity;
 
 #[cfg(test)]
 mod tests {
-    use super::{menu_item, menu_item_with_shortcut, menu_separator};
+    use super::{
+        completion_progress_color, menu_item, menu_item_with_shortcut, menu_separator,
+        progress_bar, resource_progress_bar, resource_progress_color,
+    };
     use crate::theme::theme_palette;
     use gpui::{Context, IntoElement, Render, TestAppContext, Window, div, prelude::*, px};
     use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn completion_and_resource_progress_colors_follow_distinct_semantics() {
+        let palette = theme_palette("github-dark");
+        for ratio in [0.0, 0.69, 0.70, 0.89, 0.90, 1.0] {
+            assert_eq!(completion_progress_color(palette, ratio), palette.primary);
+        }
+        assert_eq!(resource_progress_color(palette, 0.0), palette.primary);
+        assert_eq!(resource_progress_color(palette, 0.69), palette.primary);
+        assert_eq!(resource_progress_color(palette, 0.70), palette.warning);
+        assert_eq!(resource_progress_color(palette, 0.89), palette.warning);
+        assert_eq!(resource_progress_color(palette, 0.90), 0xfb7185);
+        assert_eq!(resource_progress_color(palette, 1.0), 0xfb7185);
+    }
 
     struct MenuFixture(Rc<Cell<usize>>);
     impl Render for MenuFixture {
@@ -436,6 +473,8 @@ mod tests {
                 move |_, _, _| shortcut_clicks.set(shortcut_clicks.get() + 1),
             ))
             .child(menu_separator(palette))
+            .child(progress_bar(palette, 0.95))
+            .child(resource_progress_bar(palette, 0.95))
         }
     }
 

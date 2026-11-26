@@ -14,8 +14,7 @@ use nyaterm_remote_ops::ascend_npu::{RemoteNpu, RemoteNpuOverview, RemoteNpuProc
 use nyaterm_remote_ops::gpu::{RemoteGpu, RemoteGpuOverview, RemoteGpuProcess};
 use nyaterm_remote_ops::stats::{CpuCoreUsage, MemoryInfo};
 use nyaterm_ui::plot::NyaRingGauge;
-use nyaterm_ui::presentation::gpui_code_font_family;
-use nyaterm_ui::presentation::progress_bar as stats_progress_bar;
+use nyaterm_ui::presentation::{gpui_code_font_family, resource_progress_bar};
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaInputState, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement,
     NyaScrollable, NyaSearchInput, NyaSelectState, NyaTooltip,
@@ -2068,10 +2067,6 @@ fn resource_empty_value(palette: nyaterm_ui::ThemePalette) -> gpui::Div {
         .text_size(px(12.))
         .text_color(rgb(palette.text_dimmed))
         .child("-")
-}
-
-fn resource_progress_bar(palette: nyaterm_ui::ThemePalette, ratio: f64) -> impl IntoElement {
-    stats_progress_bar(palette, ratio)
 }
 
 fn resource_details_toggle(
