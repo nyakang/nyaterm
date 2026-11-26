@@ -391,6 +391,26 @@ impl SftpPathTransferOptions {
         &self.upload_runtime
     }
 
+    /// A stopped upload needs explicit authorization to abandon uncertain ownership.
+    pub fn upload_restart_required(&self) -> bool {
+        !self.upload_runtime.retry_ready()
+    }
+
+    /// Call only after the user confirms restarting a stopped upload. Re-resolve
+    /// every destination and ask again before replacing existing files. Old
+    /// workers and retained options keep their original, blocked runtime.
+    pub fn restart_upload(
+        &self,
+        resolver: Arc<dyn SftpDuplicateResolver>,
+        transfer: SftpTransferOptions,
+    ) -> Self {
+        let mut options = self.clone();
+        options.duplicate_policy = SftpDuplicatePolicy::Ask;
+        options.duplicate_resolver = Some(resolver);
+        options.transfer = transfer.with_resume_broken_transfer(false);
+        options
+    }
+
     /// Create a sibling download with its own prompt decisions and reservation identity,
     /// sharing only this batch's final-target reservations.
     pub fn clone_for_download_batch(&self) -> Self {

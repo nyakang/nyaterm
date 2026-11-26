@@ -677,6 +677,35 @@ impl TransferFeatureState {
             .is_some_and(|context| context.options.is_promised_download())
     }
 
+    pub(in crate::features) fn upload_restart_required(&self, job_id: &str) -> bool {
+        self.queue.job(job_id).is_some_and(|job| {
+            matches!(job.kind, crate::models::TransferJobKind::Upload { .. })
+                && matches!(
+                    job.status,
+                    TransferJobStatus::Failed | TransferJobStatus::Cancelled
+                )
+        }) && self
+            .path_options_by_job
+            .get(job_id)
+            .is_some_and(|context| context.options.upload_restart_required())
+    }
+
+    pub(in crate::features) fn restart_upload_path_options(
+        &mut self,
+        job_id: &str,
+        resolver: Arc<dyn nyaterm_files::sftp_transfer_types::SftpDuplicateResolver>,
+        transfer: nyaterm_files::sftp_transfer_types::SftpTransferOptions,
+    ) -> SftpPathTransferOptions {
+        let context = self
+            .path_options_by_job
+            .get_mut(job_id)
+            .expect("restart requires retained upload options");
+        context.options = context.options.restart_upload(resolver, transfer);
+        context
+            .options
+            .with_transfer_options(context.options.transfer_options().clone())
+    }
+
     /// 已有任务沿用原策略和 Ask 决定，只接受当前的执行参数；旧任务才使用回退值。
     pub(in crate::features) fn transfer_job_retry_path_options(
         &mut self,

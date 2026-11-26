@@ -110,7 +110,7 @@ impl UploadRuntime {
         self.state.lock().expect("upload state lock").blocked = true;
     }
 
-    pub(super) fn retry_ready(&self) -> bool {
+    pub(crate) fn retry_ready(&self) -> bool {
         let state = self.state.lock().expect("upload state lock");
         !state.blocked
             && state
