@@ -17,9 +17,9 @@ impl NyaTermApp {
                 let input = self.text_input(
                     self.send_command.input_id("draft"),
                     &send.draft,
-                    crate::features::text_inputs::TextInputSetup::multi_line(rust_i18n::t!(
-                        "serialSend.textPlaceholder"
-                    )),
+                    crate::features::text_inputs::TextInputSetup::multi_line(
+                        super::state::send_text_placeholder(),
+                    ),
                     cx,
                 );
                 window.focus(&input.read(cx).focus_handle(), cx);

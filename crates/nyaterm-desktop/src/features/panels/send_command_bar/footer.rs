@@ -4,6 +4,7 @@ use nyaterm_ui::{
 };
 use rust_i18n::t;
 
+use super::super::send_command_compact_tip;
 use super::state::{SendCommandBarViewState, SendCommandDensity};
 use crate::features::NyaTermApp;
 use crate::send_command::SendCommandDataType;
@@ -171,19 +172,22 @@ impl NyaTermApp {
                     )
                 },
             )
-            .child(
+            .child(send_command_compact_tip(
+                tab_id.input_id("tools-tip"),
+                t!("serialSend.payloadActions"),
                 NyaDropdownMenu::new(tab_id.input_id("tools"))
                     .icon("icons/session/more.svg")
-                    .tooltip(t!("serialSend.payloadActions"))
                     .items(menu),
-            )
+            ))
             .child(
                 div()
                     .id("send-command.clear-after-send-help")
                     .flex_none()
                     .when(compact, |el| {
                         el.tooltip(|window, cx| {
-                            NyaTooltip::new(t!("serialSend.clearAfterSend")).build(window, cx)
+                            NyaTooltip::new(t!("serialSend.clearAfterSend"))
+                                .compact()
+                                .build(window, cx)
                         })
                     })
                     .child(
@@ -204,47 +208,50 @@ impl NyaTermApp {
                     ),
             )
             .child(
-                div()
-                    .debug_selector(|| "bottom-command-send".into())
-                    .flex_none()
-                    .child(
-                        NyaButton::new(
-                            "bottom-command-send",
-                            match (compact, active_sending) {
-                                (true, _) => String::new(),
-                                (false, true) => t!("serialSend.stop").to_string(),
-                                (false, false) => t!("serialSend.send").to_string(),
-                            },
-                        )
-                        .icon(if active_sending {
-                            "icons/session/stop.svg"
-                        } else {
-                            "icons/send.svg"
-                        })
-                        .variant(if active_sending {
-                            NyaButtonVariant::Danger
-                        } else {
-                            NyaButtonVariant::Primary
-                        })
-                        .small()
-                        .height(px(26.))
-                        .disabled(state.send_disabled)
-                        .tooltip(state.action_hint.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.send_command.active_id() != tab_id {
-                                return;
+                send_command_compact_tip(
+                    "bottom-command-send-tip",
+                    state.action_hint.clone(),
+                    NyaButton::new(
+                        "bottom-command-send",
+                        match (compact, active_sending) {
+                            (true, _) => String::new(),
+                            (false, true) => t!("serialSend.stop").to_string(),
+                            (false, false) if state.is_broadcast && state.target_count > 1 => {
+                                format!("{} ({})", t!("serialSend.send"), state.target_count)
                             }
-                            // A queued click on a Send button must not turn into
-                            // a Stop action after a run starts on another event.
-                            if let Some(run_id) = displayed_run {
-                                if this.send_command.run_id() == Some(run_id) {
-                                    this.stop_send_command(cx);
-                                }
-                            } else if !this.send_command.active_is_sending() {
-                                this.send_bottom_command(false, cx);
+                            (false, false) => t!("serialSend.send").to_string(),
+                        },
+                    )
+                    .icon(if active_sending {
+                        "icons/session/stop.svg"
+                    } else {
+                        "icons/send.svg"
+                    })
+                    .variant(if active_sending {
+                        NyaButtonVariant::Danger
+                    } else {
+                        NyaButtonVariant::Primary
+                    })
+                    .small()
+                    .height(px(26.))
+                    .disabled(state.send_disabled)
+                    .accessibility_label(state.action_hint.clone())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.send_command.active_id() != tab_id {
+                            return;
+                        }
+                        // A queued click on a Send button must not turn into
+                        // a Stop action after a run starts on another event.
+                        if let Some(run_id) = displayed_run {
+                            if this.send_command.run_id() == Some(run_id) {
+                                this.stop_send_command(cx);
                             }
-                        })),
-                    ),
+                        } else if !this.send_command.active_is_sending() {
+                            this.send_bottom_command(false, cx);
+                        }
+                    })),
+                )
+                .debug_selector(|| "bottom-command-send".into()),
             )
             .into_any_element()
     }

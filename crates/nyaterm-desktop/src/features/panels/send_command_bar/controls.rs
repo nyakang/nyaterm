@@ -7,7 +7,7 @@ use nyaterm_ui::{
     NyaPopoverPlacement, NyaScrollable, NyaSelectOption, NyaTabItem, NyaTabs,
 };
 
-use super::super::send_command_control_group;
+use super::super::{send_command_compact_tip, send_command_control_group};
 use crate::features::NyaTermApp;
 use crate::send_command::{SendCommandDataType, SendCommandLineEnding, SendCommandMode};
 
@@ -88,17 +88,17 @@ impl NyaTermApp {
                     state.send.interval_input,
                     t!("serialSend.seconds")
                 );
+                let repeat_tip =
+                    format!("{} · {}", t!("serialSend.count"), t!("serialSend.interval"));
                 NyaPopover::new(
                     tab_id.input_id("repeat-popover"),
-                    div().flex_none().child(
+                    send_command_compact_tip(
+                        "bottom-command-repeat-tip",
+                        repeat_tip.clone(),
                         NyaButton::new("bottom-command-repeat", summary)
                             .height(px(32.))
                             .disabled(is_sending)
-                            .tooltip(format!(
-                                "{} · {}",
-                                t!("serialSend.count"),
-                                t!("serialSend.interval")
-                            )),
+                            .accessibility_label(repeat_tip),
                     ),
                     div()
                         .flex()
@@ -256,9 +256,9 @@ impl ToolbarLayout {
     fn for_width(width: f32, line_ending: bool) -> Self {
         // The line-ending select only appears for serial text and needs ~110px.
         let extra = if line_ending { 110. } else { 0. };
-        if width <= 0. || width >= 840. + extra {
+        if width <= 0. || width >= 804. + extra {
             Self::Full
-        } else if width >= 720. + extra {
+        } else if width >= 684. + extra {
             Self::Unlabeled
         } else {
             Self::Folded

@@ -39,6 +39,7 @@ pub struct NyaButton {
     loading: bool,
     autofocus: bool,
     focus_handle: Option<FocusHandle>,
+    accessibility_label: Option<SharedString>,
     tooltip: Option<SharedString>,
     on_click: Option<NyaButtonClickHandler>,
 }
@@ -66,6 +67,7 @@ impl NyaButton {
             loading: false,
             autofocus: false,
             focus_handle: None,
+            accessibility_label: None,
             tooltip: None,
             on_click: None,
         }
@@ -166,6 +168,11 @@ impl NyaButton {
         self
     }
 
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
@@ -202,8 +209,8 @@ impl RenderOnce for NyaButton {
         }
         if icon_only {
             // An empty label would create a second content slot and offset the icon.
-            if let Some(tooltip) = &self.tooltip {
-                button = button.accessibility_label(tooltip.clone());
+            if let Some(label) = self.accessibility_label.as_ref().or(self.tooltip.as_ref()) {
+                button = button.accessibility_label(label.clone());
             }
         } else if self.text_color.is_some()
             || self.text_size.is_some()
@@ -212,18 +219,26 @@ impl RenderOnce for NyaButton {
         {
             // Kit's label container sets its own size. Style the label itself,
             // retaining one visible label and its accessible name.
-            button = button.accessibility_label(self.label.clone()).child(
-                div()
-                    .min_w_0()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .when(self.label_left, |this| this.flex_1().text_left())
-                    .when_some(self.text_color, |this, color| this.text_color(color))
-                    .when_some(self.text_size, |this, size| this.text_size(size))
-                    .when_some(self.font_weight, |this, weight| this.font_weight(weight))
-                    .child(self.label),
-            );
+            button = button
+                .accessibility_label(
+                    self.accessibility_label
+                        .unwrap_or_else(|| self.label.clone()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .when(self.label_left, |this| this.flex_1().text_left())
+                        .when_some(self.text_color, |this, color| this.text_color(color))
+                        .when_some(self.text_size, |this, size| this.text_size(size))
+                        .when_some(self.font_weight, |this, weight| this.font_weight(weight))
+                        .child(self.label),
+                );
         } else {
+            if let Some(label) = self.accessibility_label {
+                button = button.accessibility_label(label);
+            }
             button = button.label(self.label);
         }
         if let Some(icon_path) = self.icon_path {

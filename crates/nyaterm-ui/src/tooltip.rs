@@ -1,4 +1,4 @@
-use gpui::{AnyView, App, IntoElement, SharedString, Styled as _, Window};
+use gpui::{AnyView, App, IntoElement, SharedString, Styled as _, Window, px};
 use gpui_kit::component::tooltip::Tooltip;
 
 use crate::theme_bridge::component_typography;
@@ -19,6 +19,18 @@ impl NyaTooltip {
         Self {
             inner: Tooltip::element(builder),
         }
+    }
+
+    /// Tightens outer margin and uses caption-sized text for dense edge bars
+    /// where the default 12px margin pushes tooltips into adjacent surfaces.
+    pub fn compact(mut self) -> Self {
+        self.inner = self
+            .inner
+            .m(px(4.))
+            .px(px(6.))
+            .py(px(2.))
+            .text_size(px(11.));
+        self
     }
 
     pub fn build(self, window: &mut Window, cx: &mut App) -> AnyView {
@@ -98,6 +110,23 @@ mod tests {
                     assert_eq!(style.font_fallbacks, changed_font.fallbacks);
                 });
             }
+        });
+    }
+
+    #[gpui::test]
+    fn compact_tooltip_tightens_margin_and_text_size(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| EmptyView);
+        cx.update(|window, cx| {
+            let tooltip = NyaTooltip::new("关闭发送标签页")
+                .compact()
+                .build(window, cx)
+                .downcast::<Tooltip>()
+                .expect("NyaTooltip should build a gpui-kit tooltip");
+            tooltip.update(cx, |tooltip, _| {
+                assert_eq!(tooltip.style().margin.bottom, Some(px(4.).into()));
+                assert_eq!(tooltip.style().margin.top, Some(px(4.).into()));
+                assert!(tooltip.style().text.font_size.is_some());
+            });
         });
     }
 }

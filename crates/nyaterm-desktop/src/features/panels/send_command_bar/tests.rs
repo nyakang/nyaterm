@@ -811,3 +811,56 @@ fn command_send_controls_and_stop_button_follow_active_tab_with_multiple_runs() 
         });
     }
 }
+
+#[test]
+fn command_send_bar_exposes_shortcut_hints_broadcast_state_and_wheel_tab_scroll() {
+    use super::state::send_shortcut;
+    use super::tabs::{display_send_tab_name, send_tab_scroll_x};
+    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+
+    crate::preload_i18n().unwrap();
+    assert_eq!(display_send_tab_name("1"), "#1");
+    assert_eq!(display_send_tab_name("42"), "#42");
+    assert_eq!(display_send_tab_name("custom"), "custom");
+    assert_eq!(send_tab_scroll_x(-20., 120., 0., -32.), -52.);
+    assert_eq!(send_tab_scroll_x(-100., 120., 0., -40.), -120.);
+    assert_eq!(send_tab_scroll_x(-10., 120., 0., 40.), 0.);
+
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let root = TestTempDir::new("nyaterm-send-bar-hints-and-broadcast");
+    let app = crate::features::test_support::app_with_visible_local_session(
+        &mut cx,
+        root.path(),
+        "first",
+    );
+    app.update(&mut cx, |app, cx| {
+        app.sync_component_theme(cx);
+        app.set_bottom_panel_mode(BottomPanelMode::CommandSend);
+        let metadata = app.session.metadata("first").unwrap().clone();
+        app.session.register_session_metadata("second", metadata);
+
+        let empty_state = app.send_command_bar_view_state(cx);
+        assert!(!empty_state.is_broadcast);
+        assert_eq!(empty_state.target_count, 1);
+        assert!(empty_state.input_hint.contains(send_shortcut()));
+        assert!(empty_state.action_hint.contains(send_shortcut()));
+
+        app.set_send_command_data_type(SendCommandDataType::Hex, cx);
+        let hex_state = app.send_command_bar_view_state(cx);
+        assert!(hex_state.input_hint.contains(send_shortcut()));
+
+        app.set_send_command_data_type(SendCommandDataType::Text, cx);
+        app.apply_send_command_draft("uptime".into(), cx);
+        let mut selected = SendCommandSelection::default();
+        selected.toggle("first".into(), nyaterm_transport::SessionKind::LocalPty);
+        selected.toggle("second".into(), nyaterm_transport::SessionKind::LocalPty);
+        app.set_send_command_target(SendCommandTarget::Sessions(selected), cx);
+
+        let broadcast_state = app.send_command_bar_view_state(cx);
+        assert!(broadcast_state.is_broadcast);
+        assert_eq!(broadcast_state.target_count, 2);
+        assert!(broadcast_state.action_hint.contains("(2)"));
+        assert!(broadcast_state.action_hint.contains(send_shortcut()));
+    });
+}

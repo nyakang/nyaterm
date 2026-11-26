@@ -42,7 +42,7 @@ pub(in crate::features::panels) use helpers::{
 };
 
 mod send_command_helpers;
-use send_command_helpers::send_command_control_group;
+use send_command_helpers::{send_command_compact_tip, send_command_control_group};
 
 mod send_command_bar;
 mod send_command_state;

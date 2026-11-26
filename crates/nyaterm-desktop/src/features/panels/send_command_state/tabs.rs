@@ -84,6 +84,12 @@ impl SendCommandFeatureState {
             .find(|tab| tab.id == id)
             .map(|tab| tab.name.as_str())
     }
+    pub(in crate::features) fn tab_text_draft(&self, id: SendCommandTabId) -> Option<&str> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id == id)
+            .map(|tab| tab.composer.text_draft.as_str())
+    }
     pub(in crate::features) fn switch_tab(&mut self, id: SendCommandTabId) -> bool {
         if self.tab_name(id).is_none() {
             return false;

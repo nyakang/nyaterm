@@ -1,8 +1,8 @@
-use gpui::{Context, FontWeight, IntoElement, KeyDownEvent, div, prelude::*, px, rgb};
+use gpui::{Context, FontWeight, IntoElement, KeyDownEvent, div, prelude::*, px, rgb, rgba};
 use nyaterm_transport::SessionKind;
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaCheckbox, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement,
-    NyaScrollable,
+    NyaScrollable, NyaTooltip,
 };
 use rust_i18n::t;
 
@@ -405,17 +405,59 @@ impl NyaTermApp {
             content = content.child(list.overflow_y_scrollbar());
         }
 
+        let is_broadcast = state.is_broadcast;
+        let broadcast_active = is_broadcast && state.target_count > 0;
+        let trailing = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .when(broadcast_active, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .px_1p5()
+                        .rounded(px(99.))
+                        .bg(rgba((palette.warning << 8) | 0x24))
+                        .text_size(px(10.))
+                        .line_height(px(14.))
+                        .font_weight(FontWeight(600.))
+                        .text_color(rgb(palette.warning))
+                        .child(format!("×{}", state.target_count)),
+                )
+            })
+            .child(nyaterm_ui::icons::mono_icon(
+                "icons/chevron-down.svg",
+                rgb(if broadcast_active {
+                    palette.warning
+                } else {
+                    palette.text_muted
+                })
+                .into(),
+                12.,
+            ));
+        let slot_width = if state.send.viewport_width > 0. && state.send.viewport_width < 520. {
+            140.
+        } else {
+            match &state.send.target {
+                SendCommandTarget::Current => 148.,
+                SendCommandTarget::AllSessions => 168.,
+                _ => 188.,
+            }
+        };
+        let accessible_label = label.clone();
         let mut trigger_button = NyaButton::new("send-command.target-trigger", label)
+            .icon(if is_broadcast {
+                "icons/session/sync-input.svg"
+            } else {
+                "icons/settings/terminal.svg"
+            })
             .input_surface()
             .full_width()
             .label_left()
-            .content(nyaterm_ui::icons::mono_icon(
-                "icons/chevron-down.svg",
-                rgb(palette.text_muted).into(),
-                12.,
-            ))
+            .content(trailing)
             .height(px(32.))
-            .tooltip(tooltip)
+            .accessibility_label(accessible_label)
             .disabled(state.is_sending)
             .track_focus(self.send_command.target_trigger_focus())
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -436,15 +478,29 @@ impl NyaTermApp {
             }));
         if empty_manual_selection {
             trigger_button = trigger_button.text_color(rgb(palette.text_muted));
+        } else if broadcast_active {
+            trigger_button = trigger_button.text_color(rgb(palette.warning));
         }
 
+        let trigger_tip: gpui::SharedString = tooltip.into();
         NyaPopover::new(
             tab_id.input_id("target-popover"),
             div()
+                .id("send-command.target-trigger-slot")
                 .debug_selector(|| "send-command.target-trigger-slot".into())
-                .w(px(184.))
+                .w(px(slot_width))
                 .h(px(32.))
                 .flex_none()
+                .rounded(px(6.))
+                .when(broadcast_active, |slot| {
+                    slot.border_1()
+                        .border_color(rgba((palette.warning << 8) | 0x80))
+                })
+                .tooltip(move |window, cx| {
+                    NyaTooltip::new(trigger_tip.clone())
+                        .compact()
+                        .build(window, cx)
+                })
                 .child(trigger_button),
             content,
         )

@@ -1,12 +1,34 @@
-use gpui::{Context, IntoElement, SharedString, Window, div, prelude::*, px, rgb};
+use gpui::{
+    Context, IntoElement, MouseButton, ScrollDelta, ScrollEvent, SharedString, Window, div, point,
+    prelude::*, px, rgb, svg,
+};
+use nyaterm_core::truncate_preview;
 use nyaterm_ui::{
     NyaButton, NyaButtonVariant, NyaContextMenu, NyaDialogWindowExt as _, NyaDropdownMenu,
-    NyaMenuItem, NyaScrollable,
+    NyaMenuItem, NyaTooltip,
 };
 use rust_i18n::t;
 
+use super::super::send_command_compact_tip;
 use super::state::{SendCommandBarViewState, SendCommandDensity};
 use crate::features::{NyaTermApp, panels::SendCommandTabId, text_inputs::TextInputSetup};
+
+pub(super) fn display_send_tab_name(name: &str) -> String {
+    if !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()) {
+        format!("#{name}")
+    } else {
+        name.to_owned()
+    }
+}
+
+pub(super) fn send_tab_scroll_x(current_x: f32, max_x: f32, delta_x: f32, delta_y: f32) -> f32 {
+    let dominant = if delta_x.abs() > delta_y.abs() {
+        delta_x
+    } else {
+        delta_y
+    };
+    (current_x + dominant).clamp(-max_x.max(0.), 0.)
+}
 
 impl NyaTermApp {
     pub(in crate::features) fn select_send_tab(
@@ -174,21 +196,41 @@ impl NyaTermApp {
         let overflow = self.send_command.tabs_overflow;
         let scroll = self.send_command.tab_scroll.clone();
         let palette = state.palette;
+        let hover_bg = self.shell_surface_color(palette.hover);
         let mut items = Vec::new();
         let mut rows = Vec::new();
         for (id, name) in &labels {
             let id = *id;
+            let display_name = display_send_tab_name(name);
+            let is_tab_sending = self.send_command.tab_is_sending(id);
             items.push(
-                NyaMenuItem::action(name.clone())
-                    .checked(id == active)
-                    .on_click(
-                        cx.listener(move |app, _, window, cx| app.select_send_tab(id, window, cx)),
-                    ),
+                NyaMenuItem::action(if is_tab_sending {
+                    format!("● {display_name}")
+                } else {
+                    display_name.clone()
+                })
+                .checked(id == active)
+                .on_click(
+                    cx.listener(move |app, _, window, cx| app.select_send_tab(id, window, cx)),
+                ),
             );
             if !multiple || (collapsed && id != active) {
                 continue;
             }
+            let tab_tip: SharedString = self
+                .send_command
+                .tab_text_draft(id)
+                .and_then(|draft| draft.lines().map(str::trim).find(|line| !line.is_empty()))
+                .map(|first_line| format!("{display_name} · {}", truncate_preview(first_line, 36)))
+                .unwrap_or_else(|| display_name.clone())
+                .into();
+            let close_tip: SharedString = if is_tab_sending {
+                t!("serialSend.tabs.cannotClose").into()
+            } else {
+                t!("serialSend.tabs.close").into()
+            };
             let group: SharedString = id.input_id("tab").into();
+            let close_group: SharedString = id.input_id("close-hover").into();
             let row = div()
                 .id(group.clone())
                 .debug_selector(move || {
@@ -199,73 +241,108 @@ impl NyaTermApp {
                     }
                 })
                 .group(group.clone())
-                .h(px(26.))
+                .h(px(24.))
+                .pl(px(6.))
+                .pr(px(3.))
+                .gap(px(2.))
                 .flex_none()
                 .flex()
                 .items_center()
-                .rounded(px(3.))
-                .when(id == active, |row| row.bg(rgb(palette.surface_elevated)))
+                .rounded(px(5.))
+                .border_1()
+                .cursor_pointer()
+                .when(id == active, |row| {
+                    row.bg(rgb(palette.surface_elevated))
+                        .border_color(rgb(palette.border))
+                })
+                .when(id != active, |row| {
+                    row.border_color(gpui::transparent_black())
+                        .hover(move |style| style.bg(hover_bg))
+                })
+                .tooltip(move |window, cx| {
+                    NyaTooltip::new(tab_tip.clone()).compact().build(window, cx)
+                })
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |app, _, window, cx| {
+                        cx.stop_propagation();
+                        app.request_close_send_tabs(vec![id], window, cx);
+                    }),
+                )
+                .on_click(
+                    cx.listener(move |app, event: &gpui::ClickEvent, window, cx| {
+                        if event.click_count() >= 2 {
+                            app.rename_send_tab(id, window, cx);
+                        } else {
+                            app.select_send_tab(id, window, cx);
+                        }
+                    }),
+                )
+                .when(is_tab_sending, |row| {
+                    row.child(
+                        div()
+                            .size(px(6.))
+                            .mr(px(1.))
+                            .rounded_full()
+                            .flex_none()
+                            .bg(rgb(palette.accent)),
+                    )
+                })
                 .child(
                     div()
-                        .max_w(px(if collapsed { 80. } else { 128. }))
+                        .max_w(px(if collapsed { 72. } else { 116. }))
                         .min_w_0()
-                        .overflow_hidden()
-                        .child(
-                            NyaButton::new(
-                                id.input_id("label"),
-                                if self.send_command.tab_is_sending(id) {
-                                    format!("● {name}")
-                                } else {
-                                    name.clone()
-                                },
-                            )
-                            .variant(NyaButtonVariant::Ghost)
-                            .small()
-                            .compact()
-                            .height(px(26.))
-                            .text_color(rgb(if id == active {
-                                palette.text
-                            } else {
-                                palette.text_muted
-                            }))
-                            .tooltip(name.clone())
-                            .on_click(cx.listener(
-                                move |app, event: &gpui::ClickEvent, window, cx| {
-                                    if event.click_count() >= 2 {
-                                        app.rename_send_tab(id, window, cx);
-                                    } else {
-                                        app.select_send_tab(id, window, cx);
-                                    }
-                                },
-                            )),
-                        ),
+                        .truncate()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(rgb(if id == active {
+                            palette.text
+                        } else {
+                            palette.text_muted
+                        }))
+                        .child(display_name),
                 )
                 .child(
                     div()
-                        .w(px(22.))
-                        .h(px(26.))
+                        .id(SharedString::from(id.input_id("close")))
+                        .group(close_group.clone())
+                        .size(px(16.))
                         .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(3.))
                         .when(id != active, |close| {
                             close
                                 .opacity(0.)
                                 .group_hover(group, |style| style.opacity(1.))
                         })
+                        .when(is_tab_sending, |close| close.opacity(0.4).cursor_default())
+                        .when(!is_tab_sending, |close| {
+                            close.hover(move |style| style.bg(hover_bg))
+                        })
+                        .tooltip(move |window, cx| {
+                            NyaTooltip::new(close_tip.clone())
+                                .compact()
+                                .build(window, cx)
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |app, _, window, cx| {
+                            cx.stop_propagation();
+                            if !app.send_command.tab_is_sending(id) {
+                                app.request_close_send_tabs(vec![id], window, cx);
+                            }
+                        }))
                         .child(
-                            NyaButton::new(id.input_id("close"), "")
-                                .icon("icons/close.svg")
-                                .variant(NyaButtonVariant::Ghost)
-                                .small()
-                                .height(px(26.))
-                                .disabled(self.send_command.tab_is_sending(id))
-                                .tooltip(if self.send_command.tab_is_sending(id) {
-                                    t!("serialSend.tabs.cannotClose")
-                                } else {
-                                    t!("serialSend.tabs.close")
-                                })
-                                .on_click(cx.listener(move |app, _, window, cx| {
-                                    cx.stop_propagation();
-                                    app.request_close_send_tabs(vec![id], window, cx);
-                                })),
+                            svg()
+                                .size(px(11.))
+                                .path("icons/window/close.svg")
+                                .text_color(rgb(palette.text_muted))
+                                .when(!is_tab_sending, |icon| {
+                                    icon.group_hover(close_group, |style| {
+                                        style.text_color(rgb(palette.danger))
+                                    })
+                                }),
                         ),
                 );
             let app = cx.weak_entity();
@@ -279,6 +356,7 @@ impl NyaTermApp {
         }
         let weak = cx.weak_entity();
         let measure_scroll = scroll.clone();
+        let scroll_for_wheel = scroll.clone();
         let active_index = labels.iter().position(|(id, _)| *id == active).unwrap_or(0);
         let strip = div()
             .relative()
@@ -330,12 +408,32 @@ impl NyaTermApp {
                     .w_full()
                     .flex()
                     .items_center()
+                    .gap(px(3.))
                     .min_w_0()
+                    // Keep overflow scrollable via wheel and the all-tabs menu
+                    // without painting a scrollbar thumb over 24px capsules.
                     .overflow_x_scroll()
+                    .overflow_y_hidden()
                     .track_scroll(&scroll)
+                    .on_scroll(cx.listener(move |_, event: &ScrollEvent, _, cx| {
+                        let (delta_x, delta_y) = match event.delta {
+                            ScrollDelta::Lines(delta) => (delta.x * 32., delta.y * 32.),
+                            ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y)),
+                        };
+                        let max_x = f32::from(scroll_for_wheel.max_offset().x).max(0.);
+                        if max_x <= 0. || (delta_x == 0. && delta_y == 0.) {
+                            return;
+                        }
+                        let current = scroll_for_wheel.offset();
+                        let next_x =
+                            send_tab_scroll_x(f32::from(current.x), max_x, delta_x, delta_y);
+                        if next_x != f32::from(current.x) {
+                            scroll_for_wheel.set_offset(point(px(next_x), px(0.)));
+                            cx.stop_propagation();
+                        }
+                    }))
                     .children(rows),
-            )
-            .horizontal_scrollbar(&scroll);
+            );
         div()
             .id("send-command.tabs")
             .debug_selector(|| "send-command.tabs".into())
@@ -355,38 +453,37 @@ impl NyaTermApp {
             .when(multiple, |row| row.child(strip))
             .when(multiple && (overflow || collapsed), |row| {
                 row.child(
-                    div()
-                        .debug_selector(|| "send-command.all-tabs".into())
-                        .w(px(28.))
-                        .flex_none()
-                        .child(
-                            NyaDropdownMenu::new("send-command.all-tabs")
-                                .icon("icons/chevron-down.svg")
-                                .tooltip(t!("serialSend.tabs.all"))
-                                .max_height(px(320.))
-                                .scrollable(true)
-                                .items(items),
-                        ),
+                    send_command_compact_tip(
+                        "send-command.all-tabs-tip",
+                        t!("serialSend.tabs.all"),
+                        NyaDropdownMenu::new("send-command.all-tabs")
+                            .icon("icons/chevron-down.svg")
+                            .max_height(px(320.))
+                            .scrollable(true)
+                            .items(items),
+                    )
+                    .debug_selector(|| "send-command.all-tabs".into())
+                    .w(px(28.)),
                 )
             })
             .child(
-                div()
-                    .debug_selector(|| "send-command.add-tab".into())
-                    .flex_none()
-                    .child(
-                        NyaButton::new("send-command.add-tab", "")
-                            .icon("icons/conn/add.svg")
-                            .variant(NyaButtonVariant::Ghost)
-                            .small()
-                            .height(px(26.))
-                            .tooltip(t!("serialSend.tabs.add"))
-                            .on_click(cx.listener(|app, _, window, cx| {
-                                let prefix = app.send_command.input_id("");
-                                app.dismiss_send_command_selects(&prefix, cx);
-                                let id = app.send_command.add_tab(cx);
-                                app.select_send_tab(id, window, cx);
-                            })),
-                    ),
+                send_command_compact_tip(
+                    "send-command.add-tab-tip",
+                    t!("serialSend.tabs.add"),
+                    NyaButton::new("send-command.add-tab", "")
+                        .icon("icons/conn/add.svg")
+                        .variant(NyaButtonVariant::Ghost)
+                        .small()
+                        .height(px(26.))
+                        .accessibility_label(t!("serialSend.tabs.add"))
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let prefix = app.send_command.input_id("");
+                            app.dismiss_send_command_selects(&prefix, cx);
+                            let id = app.send_command.add_tab(cx);
+                            app.select_send_tab(id, window, cx);
+                        })),
+                )
+                .debug_selector(|| "send-command.add-tab".into()),
             )
             .into_any_element()
     }
