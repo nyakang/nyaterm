@@ -10,6 +10,42 @@ pub struct CredentialAutofillMatcher {
     regex_cache: HashMap<String, regex::Regex>,
 }
 impl CredentialAutofillMatcher {
+    /// Explicit patterns classify prompts independently of built-in punctuation
+    /// and vocabulary. Patterns matching both kinds do not classify the prompt.
+    pub fn detect_custom_prompt_kind(
+        &mut self,
+        prompt: &str,
+        credentials: &[CredentialAutofillTarget],
+    ) -> Option<CredentialPromptKind> {
+        if prompt.trim().is_empty() {
+            return None;
+        }
+        let mut detected = None;
+        for kind in [
+            CredentialPromptKind::Username,
+            CredentialPromptKind::Password,
+        ] {
+            let matches = credentials.iter().any(|target| match target {
+                CredentialAutofillTarget::Vault(credential) => credential_matches_prompt_cached(
+                    credential,
+                    kind,
+                    prompt,
+                    &mut self.regex_cache,
+                ),
+                CredentialAutofillTarget::Otp(otp) => {
+                    otp_matches_prompt_cached(otp, kind, prompt, &mut self.regex_cache)
+                }
+            });
+            if matches {
+                if detected.is_some() {
+                    return None;
+                }
+                detected = Some(kind);
+            }
+        }
+        detected
+    }
+
     pub fn evaluate(
         &mut self,
         request: CredentialAutofillMatchRequest,
@@ -193,6 +229,7 @@ fn credential_autofill_match_outcome(
             _ => None,
         });
         if let Some(credential) = pending_credential
+            && request.prompt_kind == CredentialPromptKind::Password
             && (credential_matches_prompt_cached(
                 credential,
                 CredentialPromptKind::Password,
@@ -210,7 +247,7 @@ fn credential_autofill_match_outcome(
                 kind: CredentialPromptKind::Password,
             };
         }
-        if detect_live_prompt_kind(&request.current_line) != Some(CredentialPromptKind::Password) {
+        if request.prompt_kind != CredentialPromptKind::Password {
             return CredentialAutofillMatchOutcome::NoMatch {
                 clear_pending: false,
             };
@@ -556,6 +593,114 @@ mod tests {
             username: "octocat".to_string(),
             prompt_regex: prompt_regex.to_string(),
         })
+    }
+
+    #[test]
+    fn gateshell_custom_patterns_classify_without_colons_or_builtin_words() {
+        let targets = vault_credentials(vec![credential(
+            "gate",
+            "user",
+            Some(r"<<\s*USERNAME\s*>>"),
+            Some(r"<<\s*PASSWORD\s*>>"),
+            true,
+        )]);
+        let mut matcher = super::CredentialAutofillMatcher::default();
+        for (text, kind) in [
+            ("----<< USERNAME >>----", CredentialPromptKind::Username),
+            ("----<< PASSWORD >>----", CredentialPromptKind::Password),
+        ] {
+            assert_eq!(
+                matcher.detect_custom_prompt_kind(text, &targets),
+                Some(kind)
+            );
+            assert!(
+                matches!(matcher.evaluate(request(text, kind, targets.clone(), None)),
+                CredentialAutofillMatchOutcome::Suggest { matches, .. } if matches.len() == 1)
+            );
+        }
+        assert_eq!(
+            matcher.detect_custom_prompt_kind("unrelated", &targets),
+            None
+        );
+        assert_eq!(matcher.detect_custom_prompt_kind("", &targets), None);
+        let otp = vec![otp_target("otp", "^令牌输入$")];
+        assert_eq!(
+            matcher.detect_custom_prompt_kind("令牌输入", &otp),
+            Some(CredentialPromptKind::Password)
+        );
+    }
+
+    #[test]
+    fn custom_classifier_rejects_disabled_invalid_and_ambiguous_patterns() {
+        let mut matcher = super::CredentialAutofillMatcher::default();
+        let mut disabled = credential("disabled", "user", Some("gate"), None, true);
+        disabled.enabled = false;
+        for target in [
+            disabled,
+            credential("invalid", "user", Some("["), None, true),
+            credential("ambiguous", "user", Some("gate"), Some("gate"), true),
+        ] {
+            assert_eq!(
+                matcher.detect_custom_prompt_kind("gate", &vault_credentials(vec![target])),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn gateshell_password_autofill_requires_pending_selection_in_same_session() {
+        let targets = vault_credentials(vec![credential(
+            "gate",
+            "user",
+            Some(r"<<\s*USERNAME\s*>>"),
+            Some(r"<<\s*PASSWORD\s*>>"),
+            true,
+        )]);
+        let mut matcher = super::CredentialAutofillMatcher::default();
+        for session in ["s1", "other"] {
+            let outcome = matcher.evaluate(request(
+                "----<< PASSWORD >>----",
+                CredentialPromptKind::Password,
+                targets.clone(),
+                Some(PendingCredentialAutofill {
+                    session_id: session.into(),
+                    credential_id: "gate".into(),
+                    expires_at_ms: u64::MAX,
+                }),
+            ));
+            assert_eq!(
+                matches!(outcome, CredentialAutofillMatchOutcome::AutoFill { .. }),
+                session == "s1"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_selection_does_not_authorize_a_different_custom_password_prompt() {
+        let targets = vault_credentials(vec![
+            credential(
+                "selected",
+                "user",
+                Some("login"),
+                Some("^first secret$"),
+                true,
+            ),
+            credential("other", "user", None, Some("^second secret$"), true),
+        ]);
+        let mut matcher = super::CredentialAutofillMatcher::default();
+        let outcome = matcher.evaluate(request(
+            "second secret",
+            CredentialPromptKind::Password,
+            targets,
+            Some(PendingCredentialAutofill {
+                session_id: "s1".into(),
+                credential_id: "selected".into(),
+                expires_at_ms: u64::MAX,
+            }),
+        ));
+        assert!(matches!(outcome, CredentialAutofillMatchOutcome::Suggest {
+            matches, clear_pending: true, ..
+        } if matches.len() == 1 && matches[0].id() == "other"));
     }
 
     #[test]
