@@ -2984,6 +2984,17 @@
     "title": "Porta serial"
   },
   "serialSend": {
+    "tabs": {
+      "add": "Adicionar aba de envio",
+      "close": "Fechar aba de envio",
+      "rename": "Renomear",
+      "duplicate": "Duplicar aba",
+      "closeOthers": "Fechar outras abas",
+      "all": "Todas as abas de envio",
+      "discard": "Fechar estas abas e descartar seus rascunhos não enviados?",
+      "cannotClose": "Pare o envio e aguarde a conclusão da limpeza antes de fechar esta aba.",
+      "stop": "Parar envio: %{name}"
+    },
     "chooseSessions": "Selecionar sessões",
     "selectedTargets": "%{count} sessões selecionadas",
     "selectAllTargets": "Selecionar tudo",

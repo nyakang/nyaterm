@@ -2984,6 +2984,17 @@
     "title": "Port série"
   },
   "serialSend": {
+    "tabs": {
+      "add": "Ajouter un onglet d’envoi",
+      "close": "Fermer l’onglet d’envoi",
+      "rename": "Renommer",
+      "duplicate": "Dupliquer l’onglet",
+      "closeOthers": "Fermer les autres onglets",
+      "all": "Tous les onglets d’envoi",
+      "discard": "Fermer ces onglets et supprimer leurs brouillons non envoyés ?",
+      "cannotClose": "Arrêtez l’envoi et attendez la fin du nettoyage avant de fermer cet onglet.",
+      "stop": "Arrêter l’envoi : %{name}"
+    },
     "chooseSessions": "Choisir les sessions",
     "selectedTargets": "%{count} sessions sélectionnées",
     "selectAllTargets": "Tout sélectionner",

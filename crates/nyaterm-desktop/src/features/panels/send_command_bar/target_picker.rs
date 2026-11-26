@@ -16,6 +16,7 @@ impl NyaTermApp {
         state: &SendCommandBarViewState,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let tab_id = state.send.tab_id;
         let palette = state.palette;
         let selection = match &state.send.target {
             SendCommandTarget::Sessions(selection) => Some(selection),
@@ -146,7 +147,10 @@ impl NyaTermApp {
             .flex_col()
             .gap(px(2.))
             .track_focus(self.send_command.target_picker_focus())
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if this.send_command.active_id() != tab_id {
+                    return;
+                }
                 if event.keystroke.key == "escape" {
                     this.send_command.set_target_picker_open(false);
                     window.focus(this.send_command.target_trigger_focus(), cx);
@@ -166,6 +170,9 @@ impl NyaTermApp {
                 .selected(is_active)
                 .disabled(state.is_sending)
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.send_command.active_id() != tab_id {
+                        return;
+                    }
                     this.set_send_command_target(target.clone(), cx);
                     this.send_command.set_target_picker_open(false);
                     window.focus(this.send_command.target_trigger_focus(), cx);
@@ -254,7 +261,10 @@ impl NyaTermApp {
                                     .height(px(22.))
                                     .disabled(state.is_sending || !any_available)
                                     .on_click(cx.listener(
-                                        |this, _, _, cx| {
+                                        move |this, _, _, cx| {
+                                            if this.send_command.active_id() != tab_id {
+                                                return;
+                                            }
                                             let mut selected = SendCommandSelection::default();
                                             for session in this.session.ordered_sessions() {
                                                 if this.send_command_session_available(&session.id)
@@ -284,7 +294,10 @@ impl NyaTermApp {
                                     .height(px(22.))
                                     .disabled(state.is_sending || selection_value.ids().is_empty())
                                     .on_click(cx.listener(
-                                        |this, _, _, cx| {
+                                        move |this, _, _, cx| {
+                                            if this.send_command.active_id() != tab_id {
+                                                return;
+                                            }
                                             this.set_send_command_target(
                                                 SendCommandTarget::Sessions(
                                                     SendCommandSelection::default(),
@@ -346,6 +359,9 @@ impl NyaTermApp {
                     .checked(checked)
                     .disabled(state.is_sending || (!checked && disconnected))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.send_command.active_id() != tab_id {
+                            return;
+                        }
                         // Revalidate after rendering: a session may have closed or moved.
                         let selected = matches!(
                             this.send_command.target(),
@@ -376,6 +392,9 @@ impl NyaTermApp {
                             .checked(true)
                             .disabled(state.is_sending)
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.send_command.active_id() != tab_id {
+                                    return;
+                                }
                                 this.send_command
                                     .toggle_target_session(id.clone(), SessionKind::Ssh);
                                 cx.notify();
@@ -399,7 +418,10 @@ impl NyaTermApp {
             .tooltip(tooltip)
             .disabled(state.is_sending)
             .track_focus(self.send_command.target_trigger_focus())
-            .on_click(cx.listener(|this, _, window, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if this.send_command.active_id() != tab_id {
+                    return;
+                }
                 let open = !this.send_command.target_picker_open();
                 this.send_command.set_target_picker_open(open);
                 window.focus(
@@ -417,7 +439,7 @@ impl NyaTermApp {
         }
 
         NyaPopover::new(
-            "send-command.target-popover",
+            tab_id.input_id("target-popover"),
             div()
                 .debug_selector(|| "send-command.target-trigger-slot".into())
                 .w(px(184.))
@@ -432,7 +454,10 @@ impl NyaTermApp {
         .offset(px(4.))
         .trigger_click(false)
         .open(self.send_command.target_picker_open())
-        .on_open_change(cx.listener(|this, open, window, cx| {
+        .on_open_change(cx.listener(move |this, open, window, cx| {
+            if this.send_command.active_id() != tab_id {
+                return;
+            }
             this.send_command.set_target_picker_open(*open);
             if !open {
                 window.focus(this.send_command.target_trigger_focus(), cx);

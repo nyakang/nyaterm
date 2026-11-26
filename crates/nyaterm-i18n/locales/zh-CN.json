@@ -2984,6 +2984,17 @@
     "title": "选择串口"
   },
   "serialSend": {
+    "tabs": {
+      "add": "添加发送标签页",
+      "close": "关闭发送标签页",
+      "rename": "重命名",
+      "duplicate": "复制标签页",
+      "closeOthers": "关闭其他标签页",
+      "all": "全部发送标签页",
+      "discard": "关闭这些标签页并丢弃其中未发送的草稿？",
+      "cannotClose": "请先停止发送并等待清理完成，再关闭此标签页。",
+      "stop": "停止发送：%{name}"
+    },
     "chooseSessions": "选择会话",
     "selectedTargets": "已选 %{count} 个会话",
     "selectAllTargets": "全选",

@@ -2984,6 +2984,17 @@
     "title": "시리얼 포트"
   },
   "serialSend": {
+    "tabs": {
+      "add": "전송 탭 추가",
+      "close": "전송 탭 닫기",
+      "rename": "이름 변경",
+      "duplicate": "탭 복제",
+      "closeOthers": "다른 탭 닫기",
+      "all": "모든 전송 탭",
+      "discard": "이 탭들을 닫고 전송하지 않은 초안을 삭제할까요?",
+      "cannotClose": "전송을 중지하고 정리가 끝난 후 이 탭을 닫으세요.",
+      "stop": "전송 중지: %{name}"
+    },
     "chooseSessions": "세션 선택",
     "selectedTargets": "세션 %{count}개 선택됨",
     "selectAllTargets": "모두 선택",

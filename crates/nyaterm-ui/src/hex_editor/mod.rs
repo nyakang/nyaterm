@@ -73,6 +73,18 @@ impl NyaHexEditorState {
         cx.notify();
     }
 
+    /// Seed an independent editor without inheriting another editor's undo history.
+    pub fn replace_document(&mut self, document: HexDocument, cx: &mut Context<Self>) {
+        self.document = document;
+        self.undo.clear();
+        self.redo.clear();
+        self.error = None;
+        self.dragging = None;
+        self.reveal_cursor();
+        cx.emit(NyaHexEditorEvent::Changed);
+        cx.notify();
+    }
+
     pub fn set_bytes(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         self.edit(|doc| doc.set_bytes(bytes), cx);
     }
@@ -293,6 +305,32 @@ mod tests {
                     crate::theme_palette("github-dark"),
                 ))
         }
+    }
+
+    #[gpui::test]
+    fn copied_document_keeps_pending_nibble_and_has_independent_empty_history(
+        cx: &mut TestAppContext,
+    ) {
+        let source = cx.new(NyaHexEditorState::new);
+        let copy = cx.new(NyaHexEditorState::new);
+        source.update(cx, |state, cx| {
+            state.edit(
+                |doc| {
+                    doc.set_bytes(vec![1]);
+                    doc.type_nibble(10);
+                },
+                cx,
+            );
+        });
+        let document = source.read_with(cx, |state, _| state.document().clone());
+        copy.update(cx, |state, cx| {
+            state.replace_document(document.clone(), cx);
+            assert!(state.document() == &document);
+            assert!(state.undo.is_empty());
+            assert!(state.redo.is_empty());
+            state.clear(cx);
+        });
+        source.read_with(cx, |state, _| assert!(state.document() == &document));
     }
 
     #[gpui::test]

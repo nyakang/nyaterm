@@ -9,9 +9,10 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let app = cx.entity().downgrade();
+        let tab_id = state.send.tab_id;
         let input = self
             .text_input_box(
-                "send-command.draft",
+                self.send_command.input_id("draft"),
                 &state.send.draft,
                 TextInputSetup::multi_line(state.input_hint.clone()),
                 cx,
@@ -19,7 +20,11 @@ impl NyaTermApp {
             .fill_height()
             .bare()
             .on_secondary_enter(move |_, cx| {
-                let _ = app.update(cx, |app, cx| app.send_bottom_command(false, cx));
+                let _ = app.update(cx, |app, cx| {
+                    if app.send_command.active_id() == tab_id {
+                        app.send_bottom_command(false, cx);
+                    }
+                });
             });
         div()
             .flex_1()

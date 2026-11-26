@@ -2984,6 +2984,17 @@
     "title": "選擇序列埠"
   },
   "serialSend": {
+    "tabs": {
+      "add": "新增傳送分頁",
+      "close": "關閉傳送分頁",
+      "rename": "重新命名",
+      "duplicate": "複製分頁",
+      "closeOthers": "關閉其他分頁",
+      "all": "所有傳送分頁",
+      "discard": "關閉這些分頁並捨棄其中未傳送的草稿？",
+      "cannotClose": "請先停止傳送並等待清理完成，再關閉此分頁。",
+      "stop": "停止傳送：%{name}"
+    },
     "chooseSessions": "選擇工作階段",
     "selectedTargets": "已選 %{count} 個工作階段",
     "selectAllTargets": "全選",

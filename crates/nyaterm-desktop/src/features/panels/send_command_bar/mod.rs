@@ -7,6 +7,7 @@ mod controls;
 mod footer;
 mod hex_composer;
 mod state;
+mod tabs;
 mod target_picker;
 #[cfg(test)]
 mod tests;

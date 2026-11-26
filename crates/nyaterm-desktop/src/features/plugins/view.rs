@@ -477,7 +477,7 @@ impl PluginPanel {
             revision: preview.revision,
         };
         match self.app.update(cx, |app, cx| {
-            app.fill_plugin_draft(&output, replace, origin, cx)
+            app.fill_plugin_draft(app.send_command.active_id(), &output, replace, origin, cx)
         }) {
             Ok(Ok(())) => {}
             Ok(Err(error)) => self.notify_error(error.message, cx),

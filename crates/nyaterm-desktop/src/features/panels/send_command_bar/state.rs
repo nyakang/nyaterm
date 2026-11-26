@@ -25,6 +25,7 @@ pub(super) struct SendCommandBarViewState {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SendCommandDensity {
+    Minimal,
     Compact,
     Normal,
     Expanded,
@@ -32,7 +33,9 @@ pub(super) enum SendCommandDensity {
 
 impl SendCommandDensity {
     fn for_size(width: f32, height: f32) -> Self {
-        if height < 160. || (width > 0. && width < 500.) {
+        if width > 0. && width < 360. {
+            Self::Minimal
+        } else if height < 160. || (width > 0. && width < 500.) {
             Self::Compact
         } else if height >= 300. && width >= 700. {
             Self::Expanded
@@ -71,7 +74,11 @@ impl NyaTermApp {
         let send_disabled =
             !send.sending && (validation_error || !has_payload || !target_available);
         let action_hint = if send.sending {
-            t!("serialSend.stop").to_string()
+            t!(
+                "serialSend.tabs.stop",
+                name = self.send_command.tab_name(send.tab_id).unwrap_or("")
+            )
+            .to_string()
         } else if interval_error {
             t!("quickCommands.errorSegmentedIntervalInvalid").to_string()
         } else if validation_error {

@@ -1030,7 +1030,7 @@ impl NyaTermApp {
         self.write_session_raw_input_recorded(session_id, &encoded)
     }
 
-    /// Only the current script owner may bypass cancellation by competing input.
+    /// Registered scripts and shared send runs bypass cancellation by competing input.
     pub(in crate::features) fn try_write_staged_quick_command_input(
         &mut self,
         session_id: &str,

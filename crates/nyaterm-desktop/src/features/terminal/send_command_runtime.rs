@@ -33,6 +33,11 @@ impl NyaTermApp {
         text: String,
         cx: &mut Context<Self>,
     ) {
+        let Some((tab_id, control_id)) =
+            crate::features::panels::SendCommandTabId::parse_input(control_id)
+        else {
+            return;
+        };
         let Some(control) = (match control_id {
             "count" => Some(SendCommandControlFocus::Count),
             "interval" => Some(SendCommandControlFocus::Interval),
@@ -41,16 +46,14 @@ impl NyaTermApp {
             return;
         };
         let filtered = normalize_send_command_control_input(control, &text);
-        if !self
+        let Some(value) = self
             .send_command
-            .apply_control_input(control, filtered.clone())
-        {
-            let value = self.send_command.synced_control_input(control);
-            self.reset_text_input(&format!("send-command.{control_id}"), &value, cx);
+            .apply_tab_control(tab_id, control, filtered)
+        else {
             return;
-        }
-        if filtered != text {
-            self.reset_text_input(&format!("send-command.{control_id}"), &filtered, cx);
+        };
+        if value != text {
+            self.reset_text_input(&tab_id.input_id(control_id), &value, cx);
         }
         cx.notify();
     }
@@ -74,7 +77,7 @@ impl NyaTermApp {
             "l" if accel => {
                 self.send_command.clear_draft(cx);
                 if self.send_command.presentation(cx).data_type == SendCommandDataType::Text {
-                    self.reset_text_input("send-command.draft", "", cx);
+                    self.reset_text_input(&self.send_command.input_id("draft"), "", cx);
                 }
                 cx.notify();
             }
@@ -84,6 +87,7 @@ impl NyaTermApp {
     }
 
     /// Textarea edits belong only to the text draft; Hex edits its own bytes.
+    #[cfg(test)]
     pub(in crate::features) fn apply_send_command_draft(
         &mut self,
         text: String,
@@ -98,10 +102,11 @@ impl NyaTermApp {
         append_enter: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.send_command.is_sending() {
+        if self.send_command.active_is_sending() {
             self.stop_send_command(cx);
             return;
         }
+        let tab_id = self.send_command.active_id();
 
         let draft = self.send_command.draft_for_send(append_enter, cx);
         let ids = self.send_command_target_session_ids();
@@ -134,7 +139,7 @@ impl NyaTermApp {
         let run = self
             .send_command
             .begin_send(units_per_round.min(u32::MAX as u64) as u32);
-        let run_id = self.commands.staged.begin(&ids);
+        let run_id = self.commands.staged.begin_shared(&ids);
         self.commands.staged.hide_run(run_id);
         self.send_command.set_run_id(run_id);
         let mut wake = self.commands.staged.take_wake_receiver(run_id);
@@ -191,7 +196,8 @@ impl NyaTermApp {
                     })
                     .collect::<Vec<_>>();
                 let _ = this.update(cx, |this, cx| {
-                    this.send_command.set_progress_round(round);
+                    if !this.send_command.matches_run(tab_id, run_id) { return; }
+                    this.send_command.set_progress_round(tab_id, run_id, round);
                     cx.notify();
                 });
                 loop {
@@ -200,9 +206,12 @@ impl NyaTermApp {
                         break 'rounds;
                     }
                     let Ok((done, interrupted, wait, progress)) = this.update(cx, |this, cx| {
+                        if !this.send_command.matches_run(tab_id, run_id) {
+                            return (true, true, Duration::ZERO, 0);
+                        }
                         let result =
                             this.poll_quick_command_targets(&mut targets, run_id, input, false, cx);
-                        this.send_command.complete_progress_units(result.3);
+                        this.send_command.complete_progress_units(tab_id, run_id, result.3);
                         if result.3 > 0 {
                             cx.notify();
                         }
@@ -255,8 +264,10 @@ impl NyaTermApp {
                 }
                 this.commands.staged.end_run(run_id);
                 aborted |= interrupted_any;
-                let progress = this.send_command.finish_send();
-                if this.send_command.clear_sent_draft(
+                if !this.send_command.matches_run(tab_id, run_id) { return; }
+                let Some(progress) = this.send_command.progress_result(tab_id, run_id) else { return; };
+                if this.send_command.clear_sent_tab(
+                    tab_id, run_id,
                     clear_after_send,
                     !aborted
                         && failed == 0
@@ -266,10 +277,10 @@ impl NyaTermApp {
                         && progress.completed == progress.total,
                     &sent_draft,
                     cx,
-                ) && this.send_command.presentation(cx).data_type == SendCommandDataType::Text
-                {
-                    this.reset_text_input("send-command.draft", "", cx);
+                ) && !run.raw_units {
+                    this.reset_text_input(&tab_id.input_id("draft"), "", cx);
                 }
+                this.send_command.finish_send(tab_id, run_id);
                 this.shell
                     .set_status(if run.cancel.load(Ordering::Acquire) {
                         format!("command send stopped at {} unit(s)", progress.completed)
@@ -466,7 +477,7 @@ impl NyaTermApp {
         let Some(interval) = self.send_command.set_data_type(data_type) else {
             return;
         };
-        self.reset_text_input("send-command.interval", &interval, cx);
+        self.reset_text_input(&self.send_command.input_id("interval"), &interval, cx);
         self.shell.set_status(format!(
             "command send data: {}",
             match data_type {
@@ -485,7 +496,7 @@ impl NyaTermApp {
         let Some(interval) = self.send_command.set_mode(mode) else {
             return;
         };
-        self.reset_text_input("send-command.interval", &interval, cx);
+        self.reset_text_input(&self.send_command.input_id("interval"), &interval, cx);
         cx.notify();
     }
 

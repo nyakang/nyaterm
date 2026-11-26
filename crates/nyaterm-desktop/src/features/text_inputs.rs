@@ -573,10 +573,18 @@ impl NyaTermApp {
             self.apply_quick_command_category_rename(text, cx);
         } else if id.as_ref() == "quick-command.category-create" {
             self.apply_quick_command_category_create(text, cx);
-        } else if id.as_ref() == "send-command.draft" {
-            self.apply_send_command_draft(text, cx);
-        } else if let Some(control) = id.strip_prefix("send-command.") {
-            self.apply_send_command_control_input(control, text, cx);
+        } else if let Some((tab_id, control)) =
+            crate::features::panels::SendCommandTabId::parse_input(&id)
+        {
+            if control == "draft" {
+                if self.send_command.apply_tab_draft(tab_id, text)
+                    && self.send_command.active_id() == tab_id
+                {
+                    cx.notify();
+                }
+            } else {
+                self.apply_send_command_control_input(&id, text, cx);
+            }
         } else if let Some(field) = id.strip_prefix("security.editor.") {
             self.apply_security_editor_input(field, text, cx);
         } else if id.starts_with("ai.agent-answer.") {

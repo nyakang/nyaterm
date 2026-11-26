@@ -2984,6 +2984,17 @@
     "title": "シリアルポート"
   },
   "serialSend": {
+    "tabs": {
+      "add": "送信タブを追加",
+      "close": "送信タブを閉じる",
+      "rename": "名前を変更",
+      "duplicate": "タブを複製",
+      "closeOthers": "他のタブを閉じる",
+      "all": "すべての送信タブ",
+      "discard": "これらのタブを閉じて、未送信の下書きを破棄しますか？",
+      "cannotClose": "送信を停止し、後処理が完了してからこのタブを閉じてください。",
+      "stop": "送信を停止：%{name}"
+    },
     "chooseSessions": "セッションを選択",
     "selectedTargets": "%{count} セッションを選択中",
     "selectAllTargets": "すべて選択",

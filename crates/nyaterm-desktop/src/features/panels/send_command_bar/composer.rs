@@ -15,7 +15,7 @@ impl NyaTermApp {
             SendCommandDataType::Hex => window.focus(&send.hex.read(cx).focus_handle(cx), cx),
             SendCommandDataType::Text => {
                 let input = self.text_input(
-                    "send-command.draft",
+                    self.send_command.input_id("draft"),
                     &send.draft,
                     crate::features::text_inputs::TextInputSetup::multi_line(rust_i18n::t!(
                         "serialSend.textPlaceholder"

@@ -2984,6 +2984,17 @@
     "title": "Serial port"
   },
   "serialSend": {
+    "tabs": {
+      "add": "Add send tab",
+      "close": "Close send tab",
+      "rename": "Rename",
+      "duplicate": "Duplicate tab",
+      "closeOthers": "Close other tabs",
+      "all": "All send tabs",
+      "discard": "Close these tabs and discard their unsent drafts?",
+      "cannotClose": "Stop sending and wait for cleanup before closing this tab.",
+      "stop": "Stop sending: %{name}"
+    },
     "chooseSessions": "Select sessions",
     "selectedTargets": "%{count} sessions selected",
     "selectAllTargets": "Select all",

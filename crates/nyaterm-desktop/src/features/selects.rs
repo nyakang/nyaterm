@@ -8,7 +8,7 @@ use super::NyaTermApp;
 use super::ai::AiFullAccessSetting;
 use crate::features::shell::TabMouseActionTarget;
 use crate::models::{ConnectionEditorSelect, HeaderStatusMode};
-use crate::send_command::{SendCommandDataType, SendCommandLineEnding, SendCommandMode};
+use crate::send_command::{SendCommandLineEnding, SendCommandMode};
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -60,6 +60,24 @@ impl SelectRegistry {
 }
 
 impl NyaTermApp {
+    pub(in crate::features) fn dismiss_send_command_selects(
+        &mut self,
+        prefix: &str,
+        cx: &mut Context<Self>,
+    ) {
+        for (id, field) in &self.selects.fields {
+            if id.starts_with(prefix) {
+                field.update(cx, |field, cx| field.dismiss_menu(cx));
+            }
+        }
+    }
+    pub(in crate::features) fn forget_send_command_selects(&mut self, prefix: &str) {
+        self.selects.fields.retain(|id, _| !id.starts_with(prefix));
+        self.selects
+            .subscriptions
+            .retain(|id, _| !id.starts_with(prefix));
+    }
+
     pub(in crate::features) fn dismiss_connection_editor_menus(&mut self, cx: &mut Context<Self>) {
         let fields = self
             .selects
@@ -298,6 +316,34 @@ impl NyaTermApp {
             self.set_ai_provider_protocol(credential_id.to_string(), value.to_string(), cx);
             return;
         }
+        if let Some((tab_id, control)) = crate::features::panels::SendCommandTabId::parse_input(id)
+        {
+            if self.send_command.active_id() != tab_id {
+                return;
+            }
+            match control {
+                "mode-select" => self.set_send_command_mode(
+                    match value {
+                        "byte" => SendCommandMode::Byte,
+                        "packet" => SendCommandMode::Packet,
+                        "character" => SendCommandMode::Character,
+                        _ => SendCommandMode::Line,
+                    },
+                    cx,
+                ),
+                "eol-select" => self.set_send_command_line_ending(
+                    match value {
+                        "none" => SendCommandLineEnding::None,
+                        "cr" => SendCommandLineEnding::Cr,
+                        "lf" => SendCommandLineEnding::Lf,
+                        _ => SendCommandLineEnding::Crlf,
+                    },
+                    cx,
+                ),
+                _ => {}
+            }
+            return;
+        }
         match id {
             "remote.stats.network" => self.select_stats_network_interface(value, cx),
             "appearance-ui-theme" => self.update_appearance_theme(value, cx),
@@ -457,31 +503,6 @@ impl NyaTermApp {
                 (value != NO_SELECTION_VALUE).then(|| value.to_string()),
                 cx,
             ),
-            "bottom-command-data-select" => {
-                let data_type = match value {
-                    "hex" => SendCommandDataType::Hex,
-                    _ => SendCommandDataType::Text,
-                };
-                self.set_send_command_data_type(data_type, cx);
-            }
-            "bottom-command-mode-select" => {
-                let mode = match value {
-                    "byte" => SendCommandMode::Byte,
-                    "packet" => SendCommandMode::Packet,
-                    "character" => SendCommandMode::Character,
-                    _ => SendCommandMode::Line,
-                };
-                self.set_send_command_mode(mode, cx);
-            }
-            "bottom-command-eol-select" => {
-                let line_ending = match value {
-                    "none" => SendCommandLineEnding::None,
-                    "cr" => SendCommandLineEnding::Cr,
-                    "lf" => SendCommandLineEnding::Lf,
-                    _ => SendCommandLineEnding::Crlf,
-                };
-                self.set_send_command_line_ending(line_ending, cx);
-            }
             "temporary-link-protocol" => {
                 let protocol = match value {
                     "telnet" => TemporaryLinkProtocol::Telnet,

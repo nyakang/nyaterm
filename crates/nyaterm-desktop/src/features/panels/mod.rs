@@ -47,5 +47,5 @@ use send_command_helpers::send_command_control_group;
 mod send_command_bar;
 mod send_command_state;
 pub(in crate::features) use send_command_state::{
-    SendCommandFeatureState, SendCommandPresentationState,
+    SendCommandFeatureState, SendCommandPresentationState, SendCommandTabId,
 };

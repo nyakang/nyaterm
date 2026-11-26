@@ -17,6 +17,7 @@ impl NyaTermApp {
         state: &SendCommandBarViewState,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let tab_id = state.send.tab_id;
         let palette = state.palette;
         let is_sending = state.is_sending;
         let (mode_options, selected_mode) = if state.send.data_type == SendCommandDataType::Hex {
@@ -57,7 +58,7 @@ impl NyaTermApp {
         .to_string();
         let layout = ToolbarLayout::for_width(state.send.viewport_width, state.show_line_ending);
         let count = self.number_input(
-            "send-command.count",
+            self.send_command.input_id("count"),
             &state.send.count_input,
             NyaNumberInputOptions::default()
                 .range(1.0, 9_999.0)
@@ -67,7 +68,7 @@ impl NyaTermApp {
             cx,
         );
         let interval = self.number_input(
-            "send-command.interval",
+            self.send_command.input_id("interval"),
             &state.send.interval_input,
             NyaNumberInputOptions::default()
                 .range(0.0, 60.0)
@@ -88,7 +89,7 @@ impl NyaTermApp {
                     t!("serialSend.seconds")
                 );
                 NyaPopover::new(
-                    "bottom-command-repeat-popover",
+                    tab_id.input_id("repeat-popover"),
                     div().flex_none().child(
                         NyaButton::new("bottom-command-repeat", summary)
                             .height(px(32.))
@@ -193,7 +194,10 @@ impl NyaTermApp {
                         .selected_index(usize::from(
                             state.send.data_type == SendCommandDataType::Hex,
                         ))
-                        .on_select(cx.listener(|this, index: &usize, window, cx| {
+                        .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                            if this.send_command.active_id() != tab_id {
+                                return;
+                            }
                             this.set_send_command_data_type(
                                 if *index == 0 {
                                     SendCommandDataType::Text
@@ -210,7 +214,7 @@ impl NyaTermApp {
                 palette,
                 t!("serialSend.sendMode"),
                 self.form_select_control(
-                    "bottom-command-mode-select",
+                    self.send_command.input_id("mode-select"),
                     mode_options,
                     Some(selected_mode.to_string()),
                     is_sending,
@@ -222,7 +226,7 @@ impl NyaTermApp {
                     palette,
                     t!("serialSend.lineEnding"),
                     self.form_select_control(
-                        "bottom-command-eol-select",
+                        self.send_command.input_id("eol-select"),
                         line_ending_options,
                         Some(selected_line_ending),
                         is_sending,
