@@ -99,7 +99,10 @@ impl RenderOnce for NyaSwitch {
 pub struct NyaCheckbox {
     id: SharedString,
     label: Option<SharedString>,
+    detail: Option<SharedString>,
     checked: bool,
+    truncate_label: bool,
+    menu_row: bool,
     indeterminate: bool,
     disabled: bool,
     on_click: Option<NyaToggleHandler>,
@@ -110,7 +113,10 @@ impl NyaCheckbox {
         Self {
             id: id.into(),
             label: None,
+            detail: None,
             checked: false,
+            truncate_label: false,
+            menu_row: false,
             indeterminate: false,
             disabled: false,
             on_click: None,
@@ -119,6 +125,25 @@ impl NyaCheckbox {
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// Secondary metadata rendered at the trailing edge of a menu-row checkbox.
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// Fit a single-line label to the available width, keeping its full accessible name.
+    pub fn truncate_label(mut self) -> Self {
+        self.truncate_label = true;
+        self
+    }
+
+    /// Present the checkbox as a compact 28px menu row with full-row hover and hit target.
+    pub fn menu_row(mut self) -> Self {
+        self.menu_row = true;
+        self.truncate_label = true;
         self
     }
 
@@ -221,15 +246,57 @@ impl RenderOnce for NyaCheckbox {
             .when(focused, |this| this.focus_ring_style(window, cx))
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .flex()
-            .items_start()
+            .when(self.truncate_label, |this| this.w_full().min_w_0())
+            .when(!self.menu_row, |this| {
+                this.items_start()
+                    .rounded(cx.theme().radius * 0.5)
+                    .text_sm()
+            })
+            .when(self.menu_row, |this| {
+                this.h(px(28.))
+                    .px_2()
+                    .items_center()
+                    .rounded(px(4.))
+                    .text_xs()
+                    .when(!self.disabled, |this| {
+                        this.cursor_pointer()
+                            .hover(|style| style.bg(cx.theme().list_hover))
+                    })
+            })
             .gap_2()
-            .rounded(cx.theme().radius * 0.5)
-            .text_sm()
             .line_height(gpui::relative(1.))
             .text_color(text)
             .child(indicator);
         if let Some(label) = self.label {
-            checkbox = checkbox.accessibility_label(label.clone()).child(label);
+            let accessible = match &self.detail {
+                Some(detail) if !detail.is_empty() => {
+                    SharedString::from(format!("{label} · {detail}"))
+                }
+                _ => label.clone(),
+            };
+            checkbox = checkbox.accessibility_label(accessible);
+            checkbox = if self.truncate_label {
+                checkbox.child(
+                    gpui::div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(label),
+                )
+            } else {
+                checkbox.child(label)
+            };
+        }
+        if let Some(detail) = self.detail.filter(|detail| !detail.is_empty()) {
+            checkbox = checkbox.child(
+                gpui::div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(detail),
+            );
         }
         if let Some(on_click) = self.on_click {
             checkbox = checkbox.on_change(move |state, _, window, cx| {

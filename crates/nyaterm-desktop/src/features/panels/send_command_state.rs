@@ -395,7 +395,7 @@ impl SendCommandFeatureState {
     }
 
     pub(in crate::features) fn begin_send(&mut self, units_per_round: u32) -> SendCommandRunState {
-        self.target_picker_open = false;
+        self.set_target_picker_open(false);
         let infinite = self.options.count.is_none();
         let rounds = self.options.count.unwrap_or(1).max(1);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -492,6 +492,12 @@ impl SendCommandFeatureState {
     pub(in crate::features) fn toggle_target_session(&mut self, id: String, kind: SessionKind) {
         if self.is_sending() {
             return;
+        }
+        if !crate::send_command::is_send_command_session_kind(kind) {
+            return;
+        }
+        if !matches!(self.options.target, SendCommandTarget::Sessions(_)) {
+            self.options.target = SendCommandTarget::Sessions(Default::default());
         }
         if let SendCommandTarget::Sessions(selection) = &mut self.options.target {
             selection.toggle(id, kind);
@@ -809,7 +815,7 @@ mod tests {
         assert!(!run.infinite);
         assert_eq!(run.rounds, 1);
         assert!(state.is_sending());
-        assert!(!state.set_target(crate::send_command::SendCommandTarget::AllCompatible));
+        assert!(!state.set_target(crate::send_command::SendCommandTarget::AllSessions));
         assert_eq!(state.set_data_type(SendCommandDataType::Hex), None);
         state.set_progress_round(1);
         state.complete_progress_unit();

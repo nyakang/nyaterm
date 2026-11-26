@@ -1,4 +1,16 @@
 //! Shared NyaTerm catalogs. No UI or application state is owned here.
+// The procedural macro reads these files outside rustc's dependency tracking.
+// Track the catalog bytes in production too, so incremental consumers cannot
+// retain an older generated catalog when only translations change.
+const _: &[&str] = &[
+    include_str!("../locales/en.json"),
+    include_str!("../locales/zh-CN.json"),
+    include_str!("../locales/zh-TW.json"),
+    include_str!("../locales/ja.json"),
+    include_str!("../locales/ko.json"),
+    include_str!("../locales/fr.json"),
+    include_str!("../locales/pt-BR.json"),
+];
 rust_i18n::i18n!("locales", fallback = "en");
 use std::borrow::Cow;
 

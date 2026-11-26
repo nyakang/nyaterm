@@ -127,8 +127,10 @@ impl NyaTermApp {
                 div()
                     .id("send-command.clear-after-send-help")
                     .flex_none()
-                    .tooltip(|window, cx| {
-                        NyaTooltip::new(t!("serialSend.clearAfterSend")).build(window, cx)
+                    .when(compact, |el| {
+                        el.tooltip(|window, cx| {
+                            NyaTooltip::new(t!("serialSend.clearAfterSend")).build(window, cx)
+                        })
                     })
                     .child(
                         NyaCheckbox::new("send-command.clear-after-send")

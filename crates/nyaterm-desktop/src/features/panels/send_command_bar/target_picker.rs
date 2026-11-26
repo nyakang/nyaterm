@@ -1,13 +1,14 @@
-use gpui::{Context, IntoElement, KeyDownEvent, div, prelude::*, px};
+use gpui::{Context, FontWeight, IntoElement, KeyDownEvent, div, prelude::*, px, rgb};
 use nyaterm_transport::SessionKind;
 use nyaterm_ui::{
-    NyaButton, NyaCheckbox, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement, NyaScrollable,
+    NyaButton, NyaButtonVariant, NyaCheckbox, NyaPopover, NyaPopoverAlign, NyaPopoverPlacement,
+    NyaScrollable,
 };
 use rust_i18n::t;
 
 use super::state::SendCommandBarViewState;
 use crate::features::NyaTermApp;
-use crate::send_command::{SendCommandSelection, SendCommandSessionClass, SendCommandTarget};
+use crate::send_command::{SendCommandSelection, SendCommandTarget};
 
 impl NyaTermApp {
     pub(super) fn send_command_target_picker(
@@ -15,6 +16,7 @@ impl NyaTermApp {
         state: &SendCommandBarViewState,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let palette = state.palette;
         let selection = match &state.send.target {
             SendCommandTarget::Sessions(selection) => Some(selection),
             _ => None,
@@ -23,75 +25,126 @@ impl NyaTermApp {
             .session
             .ordered_sessions()
             .into_iter()
-            .filter(|session| self.send_command_session_class(&session.id).is_some())
+            .filter(|session| self.send_command_session_supported(&session.id))
             .collect::<Vec<_>>();
-        let labels = sessions
+        let raw_names = sessions
             .iter()
             .map(|session| self.session.display_name_by_info(session))
             .collect::<Vec<_>>();
-        let labels = sessions
+        let disambiguated_names = sessions
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let name = &raw_names[index];
+                let duplicate = raw_names.iter().filter(|label| *label == name).count() > 1;
+                if duplicate {
+                    format!("{name} · #{}", index + 1)
+                } else {
+                    name.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let full_labels = sessions
             .iter()
             .enumerate()
             .map(|(index, session)| {
-                let name = &labels[index];
-                let duplicate = labels.iter().filter(|label| *label == name).count() > 1;
-                format!(
-                    "{name} · {}{}",
-                    protocol_label(session.kind),
-                    if duplicate {
-                        format!(" · #{}", index + 1)
-                    } else {
-                        String::new()
-                    }
-                )
+                let protocol = protocol_label(session.kind);
+                if protocol.is_empty() {
+                    disambiguated_names[index].clone()
+                } else {
+                    format!("{} · {protocol}", disambiguated_names[index])
+                }
             })
             .collect::<Vec<_>>();
-        let label = match &state.send.target {
-            SendCommandTarget::Current => t!("serialSend.currentSession").to_string(),
-            SendCommandTarget::AllCompatible => t!("serialSend.allSessions").to_string(),
-            SendCommandTarget::Group(id) => state
-                .group_targets
-                .iter()
-                .find(|(group_id, _, _)| group_id == id)
-                .map(|(_, name, count)| {
-                    t!("serialSend.groupSession", name = name, count = count).to_string()
-                })
-                .unwrap_or_else(|| t!("network.group").to_string()),
-            SendCommandTarget::Sessions(selected) if selected.ids().len() == 1 => sessions
-                .iter()
-                .position(|session| selected.contains(&session.id))
-                .map(|index| labels[index].clone())
-                .unwrap_or_else(|| t!("serialSend.unavailableTargets", count = 1).to_string()),
-            SendCommandTarget::Sessions(selected) if selected.ids().is_empty() => {
-                t!("serialSend.chooseSessions").to_string()
+
+        let empty_manual_selection = selection.is_some_and(|selected| selected.ids().is_empty());
+        let (label, tooltip) = match &state.send.target {
+            SendCommandTarget::Current => (
+                t!("serialSend.currentSession").to_string(),
+                t!("serialSend.target").to_string(),
+            ),
+            SendCommandTarget::AllSessions => (
+                t!("serialSend.allSessions").to_string(),
+                t!("serialSend.target").to_string(),
+            ),
+            SendCommandTarget::Group(id) => {
+                let text = state
+                    .group_targets
+                    .iter()
+                    .find(|(group_id, _, _)| group_id == id)
+                    .map(|(_, name, count)| {
+                        t!("serialSend.groupSession", name = name, count = count).to_string()
+                    })
+                    .unwrap_or_else(|| t!("network.group").to_string());
+                let tip = format!("{} · {text}", t!("serialSend.target"));
+                (text, tip)
+            }
+            SendCommandTarget::Sessions(selected) if selected.ids().is_empty() => (
+                t!("serialSend.chooseSessions").to_string(),
+                format!(
+                    "{} · {}",
+                    t!("serialSend.target"),
+                    t!("serialSend.noTarget")
+                ),
+            ),
+            SendCommandTarget::Sessions(selected) if selected.ids().len() == 1 => {
+                let text = sessions
+                    .iter()
+                    .position(|session| selected.contains(&session.id))
+                    .map(|index| full_labels[index].clone())
+                    .unwrap_or_else(|| t!("serialSend.unavailableTargets", count = 1).to_string());
+                let tip = format!("{} · {text}", t!("serialSend.target"));
+                (text, tip)
             }
             SendCommandTarget::Sessions(selected) => {
-                t!("serialSend.selectedTargets", count = selected.ids().len()).to_string()
+                let text =
+                    t!("serialSend.selectedTargets", count = selected.ids().len()).to_string();
+                let picked = sessions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, session)| selected.contains(&session.id))
+                    .map(|(index, _)| full_labels[index].as_str())
+                    .collect::<Vec<_>>();
+                let tip = if picked.is_empty() {
+                    format!("{} · {text}", t!("serialSend.target"))
+                } else {
+                    format!("{text}：{}", picked.join("、"))
+                };
+                (text, tip)
             }
         };
-        let mut modes = vec![(
-            SendCommandTarget::Current,
-            t!("serialSend.currentSession").to_string(),
-        )];
-        if self.active_session_kind() != Some(SessionKind::Serial) {
-            modes.push((
-                SendCommandTarget::AllCompatible,
+
+        let mut modes = vec![
+            (
+                SendCommandTarget::Current,
+                t!("serialSend.currentSession").to_string(),
+            ),
+            (
+                SendCommandTarget::AllSessions,
                 t!("serialSend.allSessions").to_string(),
-            ));
-        }
+            ),
+        ];
         modes.extend(state.group_targets.iter().map(|(id, name, count)| {
             (
                 SendCommandTarget::Group(id.clone()),
                 t!("serialSend.groupSession", name = name, count = count).to_string(),
             )
         }));
+
         let mut content = div()
             .id("send-command.target-content")
             .debug_selector(|| "send-command.target-content".into())
-            .w(px(300.))
+            .w(px(268.))
+            .p(px(6.))
+            .bg(rgb(palette.surface_elevated))
+            .border_1()
+            .border_color(rgb(palette.border))
+            .rounded_md()
+            .shadow_md()
+            .text_color(rgb(palette.text))
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(px(2.))
             .track_focus(self.send_command.target_picker_focus())
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" {
@@ -101,112 +154,211 @@ impl NyaTermApp {
                     cx.notify();
                 }
             }));
+
         for (index, (target, name)) in modes.into_iter().enumerate() {
-            content = content.child(
-                NyaButton::new(format!("send-command.target-mode-{index}"), name)
-                    .full_width()
-                    .label_left()
-                    .selected(state.send.target == target)
-                    .disabled(state.is_sending)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_send_command_target(target.clone(), cx);
-                        this.send_command.set_target_picker_open(false);
-                        window.focus(this.send_command.target_trigger_focus(), cx);
-                    })),
-            );
-        }
-        content = content.child(
-            NyaButton::new(
-                "send-command.target-manual",
-                t!("serialSend.chooseSessions"),
-            )
-            .full_width()
-            .label_left()
-            .selected(selection.is_some())
-            .disabled(state.is_sending)
-            .on_click(cx.listener(|this, _, _, cx| {
-                if !matches!(this.send_command.target(), SendCommandTarget::Sessions(_)) {
-                    this.set_send_command_target(
-                        SendCommandTarget::Sessions(SendCommandSelection::default()),
-                        cx,
-                    );
-                }
-            })),
-        );
-        if let Some(selection) = selection {
-            let class = selection.class();
+            let is_active = state.send.target == target;
+            let mut button = NyaButton::new(format!("send-command.target-mode-{index}"), name)
+                .variant(NyaButtonVariant::Ghost)
+                .height(px(28.))
+                .text_size(px(12.))
+                .full_width()
+                .label_left()
+                .selected(is_active)
+                .disabled(state.is_sending)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_send_command_target(target.clone(), cx);
+                    this.send_command.set_target_picker_open(false);
+                    window.focus(this.send_command.target_trigger_focus(), cx);
+                }));
+            if is_active {
+                button = button.content(nyaterm_ui::icons::mono_icon(
+                    "icons/check.svg",
+                    rgb(palette.primary).into(),
+                    14.,
+                ));
+            }
             content = content.child(
                 div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        NyaButton::new(
-                            "send-command.target-all",
-                            t!("serialSend.selectCompatible"),
-                        )
-                        .disabled(state.is_sending || class.is_none())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let SendCommandTarget::Sessions(selected) = this.send_command.target()
-                            else {
-                                return;
-                            };
-                            let Some(class) = selected.class() else {
-                                return;
-                            };
-                            let mut selected = SendCommandSelection::default();
-                            for session in this.session.ordered_sessions() {
-                                if this.send_command_session_available(&session.id)
-                                    && SendCommandSessionClass::for_kind(session.kind)
-                                        == Some(class)
-                                {
-                                    selected.toggle(session.id, session.kind);
-                                }
-                            }
-                            this.set_send_command_target(SendCommandTarget::Sessions(selected), cx);
-                        })),
-                    )
-                    .child(
-                        NyaButton::new("send-command.target-clear", t!("serialSend.clearTargets"))
-                            .disabled(state.is_sending)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_send_command_target(
-                                    SendCommandTarget::Sessions(SendCommandSelection::default()),
-                                    cx,
-                                )
-                            })),
-                    ),
+                    .id(format!("send-command.target-mode-row-{index}"))
+                    .child(button),
             );
-            content = content.child(div().text_xs().child(t!("serialSend.targetClassHint")));
+        }
+
+        content = content.child(div().h(px(1.)).mx_1().my(px(4.)).bg(rgb(palette.border)));
+
+        let empty_selection = SendCommandSelection::default();
+        let selection_value = selection.unwrap_or(&empty_selection);
+        let selected_count = selection_value.ids().len();
+        let any_available = sessions
+            .iter()
+            .any(|session| self.send_command_session_available(&session.id));
+
+        content = content.child(
+            div()
+                .id("send-command.target-actions")
+                .debug_selector(|| "send-command.target-actions".into())
+                .h(px(24.))
+                .w_full()
+                .min_w_0()
+                .px_2()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight(600.))
+                                .text_color(rgb(palette.text_muted))
+                                .child(t!("serialSend.chooseSessions")),
+                        )
+                        .when(selected_count > 0, |row| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .px_1p5()
+                                    .rounded(px(99.))
+                                    .bg(rgb(palette.surface))
+                                    .text_size(px(10.))
+                                    .font_weight(FontWeight(600.))
+                                    .text_color(rgb(palette.primary))
+                                    .child(selected_count.to_string()),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .debug_selector(|| "send-command.target-all-action".into())
+                                .child(
+                                    NyaButton::new(
+                                        "send-command.target-all",
+                                        t!("serialSend.selectAllTargets"),
+                                    )
+                                    .variant(NyaButtonVariant::Ghost)
+                                    .small()
+                                    .compact()
+                                    .height(px(22.))
+                                    .disabled(state.is_sending || !any_available)
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            let mut selected = SendCommandSelection::default();
+                                            for session in this.session.ordered_sessions() {
+                                                if this.send_command_session_available(&session.id)
+                                                {
+                                                    selected.toggle(session.id, session.kind);
+                                                }
+                                            }
+                                            this.set_send_command_target(
+                                                SendCommandTarget::Sessions(selected),
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "send-command.target-clear-action".into())
+                                .child(
+                                    NyaButton::new(
+                                        "send-command.target-clear",
+                                        t!("serialSend.clearTargets"),
+                                    )
+                                    .variant(NyaButtonVariant::Ghost)
+                                    .small()
+                                    .compact()
+                                    .height(px(22.))
+                                    .disabled(state.is_sending || selection_value.ids().is_empty())
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.set_send_command_target(
+                                                SendCommandTarget::Sessions(
+                                                    SendCommandSelection::default(),
+                                                ),
+                                                cx,
+                                            )
+                                        },
+                                    )),
+                                ),
+                        ),
+                ),
+        );
+
+        let missing_ids = selection_value
+            .ids()
+            .iter()
+            .filter(|id| !sessions.iter().any(|session| &session.id == *id))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if sessions.is_empty() && missing_ids.is_empty() {
+            content = content.child(
+                div()
+                    .id("send-command.target-list")
+                    .debug_selector(|| "send-command.target-list".into())
+                    .h(px(32.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("serialSend.noTarget")),
+            );
+        } else {
             let mut list = div()
                 .id("send-command.target-list")
-                .max_h(px(240.))
+                .debug_selector(|| "send-command.target-list".into())
+                .max_h(px(216.))
                 .flex()
                 .flex_col()
-                .gap_2()
-                .py_1();
+                .gap(px(2.))
+                .pt(px(2.));
             for (index, session) in sessions.iter().enumerate() {
-                let checked = selection.contains(&session.id);
+                let checked = selection_value.contains(&session.id);
                 let disconnected = !self.send_command_session_available(&session.id);
-                let name = if disconnected {
-                    format!("{} · {}", labels[index], t!("serialSend.targetUnavailable"))
-                } else {
-                    labels[index].clone()
+                let protocol = protocol_label(session.kind);
+                let detail = match (protocol.is_empty(), disconnected) {
+                    (true, false) => String::new(),
+                    (false, false) => protocol.to_string(),
+                    (true, true) => t!("serialSend.targetUnavailable").to_string(),
+                    (false, true) => format!("{protocol} · {}", t!("serialSend.targetUnavailable")),
                 };
                 let id = session.id.clone();
                 let kind = session.kind;
                 let row_id = format!("send-command.target-row-{id}");
-                let checkbox = NyaCheckbox::new(format!("send-command.target-{id}"))
-                    .label(name)
+                let mut checkbox = NyaCheckbox::new(format!("send-command.target-{id}"))
+                    .menu_row()
+                    .label(disambiguated_names[index].clone())
                     .checked(checked)
-                    .disabled(state.is_sending || (!checked && (disconnected || !selection.accepts(kind))))
+                    .disabled(state.is_sending || (!checked && disconnected))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // Revalidate after rendering: a session may have closed or moved.
-                        let selected = matches!(this.send_command.target(), SendCommandTarget::Sessions(s) if s.contains(&id));
+                        let selected = matches!(
+                            this.send_command.target(),
+                            SendCommandTarget::Sessions(s) if s.contains(&id)
+                        );
                         if selected || this.send_command_session_available(&id) {
                             this.send_command.toggle_target_session(id.clone(), kind);
                             cx.notify();
                         }
                     }));
+                if !detail.is_empty() {
+                    checkbox = checkbox.detail(detail);
+                }
                 list = list.child(
                     div()
                         .min_w_0()
@@ -215,54 +367,66 @@ impl NyaTermApp {
                         .child(checkbox),
                 );
             }
-            for (index, id) in selection
-                .ids()
-                .iter()
-                .filter(|id| !sessions.iter().any(|session| &session.id == *id))
-                .enumerate()
-            {
-                let id = id.clone();
+            for (index, id) in missing_ids.into_iter().enumerate() {
                 list = list.child(
-                    NyaCheckbox::new(format!("send-command.missing-target-{index}"))
-                        .label(t!("serialSend.targetUnavailable"))
-                        .checked(true)
-                        .disabled(state.is_sending)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.send_command
-                                .toggle_target_session(id.clone(), SessionKind::Ssh);
-                            cx.notify();
-                        })),
+                    div().min_w_0().flex_none().child(
+                        NyaCheckbox::new(format!("send-command.missing-target-{index}"))
+                            .menu_row()
+                            .label(t!("serialSend.targetUnavailable"))
+                            .checked(true)
+                            .disabled(state.is_sending)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.send_command
+                                    .toggle_target_session(id.clone(), SessionKind::Ssh);
+                                cx.notify();
+                            })),
+                    ),
                 );
             }
             content = content.child(list.overflow_y_scrollbar());
         }
+
+        let mut trigger_button = NyaButton::new("send-command.target-trigger", label)
+            .input_surface()
+            .full_width()
+            .label_left()
+            .content(nyaterm_ui::icons::mono_icon(
+                "icons/chevron-down.svg",
+                rgb(palette.text_muted).into(),
+                12.,
+            ))
+            .height(px(32.))
+            .tooltip(tooltip)
+            .disabled(state.is_sending)
+            .track_focus(self.send_command.target_trigger_focus())
+            .on_click(cx.listener(|this, _, window, cx| {
+                let open = !this.send_command.target_picker_open();
+                this.send_command.set_target_picker_open(open);
+                window.focus(
+                    if open {
+                        this.send_command.target_picker_focus()
+                    } else {
+                        this.send_command.target_trigger_focus()
+                    },
+                    cx,
+                );
+                cx.notify();
+            }));
+        if empty_manual_selection {
+            trigger_button = trigger_button.text_color(rgb(palette.text_muted));
+        }
+
         NyaPopover::new(
             "send-command.target-popover",
-            div().w(px(190.)).h(px(32.)).child(
-                NyaButton::new("send-command.target-trigger", label.clone())
-                    .full_width()
-                    .label_left()
-                    .icon("icons/chevron-down.svg")
-                    .height(px(32.))
-                    .tooltip(label)
-                    .disabled(state.is_sending)
-                    .track_focus(self.send_command.target_trigger_focus())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let open = !this.send_command.target_picker_open();
-                        this.send_command.set_target_picker_open(open);
-                        window.focus(
-                            if open {
-                                this.send_command.target_picker_focus()
-                            } else {
-                                this.send_command.target_trigger_focus()
-                            },
-                            cx,
-                        );
-                        cx.notify();
-                    })),
-            ),
+            div()
+                .debug_selector(|| "send-command.target-trigger-slot".into())
+                .w(px(184.))
+                .h(px(32.))
+                .flex_none()
+                .child(trigger_button),
             content,
         )
+        .appearance(false)
         .placement(NyaPopoverPlacement::Top)
         .align(NyaPopoverAlign::Start)
         .offset(px(4.))

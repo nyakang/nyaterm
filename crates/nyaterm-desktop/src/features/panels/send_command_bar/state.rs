@@ -3,7 +3,6 @@ use rust_i18n::t;
 use std::borrow::Cow;
 
 use nyaterm_core::command_draft::DraftOrigin;
-use nyaterm_transport::SessionKind;
 
 use crate::features::{NyaTermApp, panels::SendCommandPresentationState};
 use crate::send_command::{SendCommandDataType, SendCommandMode};
@@ -12,7 +11,7 @@ pub(super) struct SendCommandBarViewState {
     pub(super) send: SendCommandPresentationState,
     pub(super) palette: crate::theme::ThemePalette,
     pub(super) group_targets: Vec<(String, String, usize)>,
-    pub(super) is_serial_text_line: bool,
+    pub(super) show_line_ending: bool,
     pub(super) validation_error: bool,
     pub(super) status: String,
     pub(super) send_disabled: bool,
@@ -47,12 +46,11 @@ impl NyaTermApp {
     pub(super) fn send_command_bar_view_state(&self, cx: &gpui::App) -> SendCommandBarViewState {
         let send = self.send_command.view_presentation(cx);
         let palette = self.theme_palette();
-        let active_kind = self.send_command_presentation_kind();
         let group_targets = self.send_command_group_target_options();
-        let is_serial_text_line = matches!(active_kind, Some(SessionKind::Serial))
+        let show_line_ending = self.send_command_has_configurable_line_ending()
             && send.data_type == SendCommandDataType::Text
             && send.mode == SendCommandMode::Line;
-        let unit_result = self.send_command.payload_statistics(active_kind, cx);
+        let unit_result = self.send_command_target_statistics(cx);
         let (validation_error, unit_count, byte_count) = match &unit_result {
             Ok(stats) => (false, stats.units, stats.bytes),
             Err(_) => (true, 0usize, 0usize),
@@ -119,6 +117,21 @@ impl NyaTermApp {
             }
             .to_string()
         };
+        let target_count = self.send_command_target_session_ids().len();
+        if target_count > 1 && !validation_error && !interval_error {
+            let summary = t!(
+                "serialSend.targetPayloadStats",
+                count = target_count,
+                units = unit_count,
+                bytes = byte_count
+            );
+            if send.data_type == SendCommandDataType::Hex {
+                status.push_str(" · ");
+                status.push_str(&summary);
+            } else {
+                status = summary.to_string();
+            }
+        }
         if let crate::send_command::SendCommandTarget::Sessions(selection) = &send.target {
             let unavailable = selection
                 .ids()
@@ -202,7 +215,7 @@ impl NyaTermApp {
             send,
             palette,
             group_targets,
-            is_serial_text_line,
+            show_line_ending,
             validation_error,
             status,
             density,

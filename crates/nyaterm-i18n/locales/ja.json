@@ -2984,11 +2984,11 @@
     "title": "シリアルポート"
   },
   "serialSend": {
-    "chooseSessions": "セッションを選択…",
+    "chooseSessions": "セッションを選択",
     "selectedTargets": "%{count} セッションを選択中",
-    "selectCompatible": "互換セッションをすべて選択",
+    "selectAllTargets": "すべて選択",
+    "targetPayloadStats": "1回あたり：%{count} 対象 · %{units} 単位 · %{bytes} バイト",
     "clearTargets": "クリア",
-    "targetClassHint": "最初にセッションを選択してください。シリアルと他の端末は混在できません。",
     "targetUnavailable": "利用不可",
     "unavailableTargets": "利用できない %{count} 件の対象をスキップします",
     "payloadEmpty": "ペイロードが空です",

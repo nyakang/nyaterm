@@ -447,3 +447,29 @@ fn connection_editor_algorithm_and_telnet_labels_are_localized() {
         "future-kex is not supported in key exchanges."
     );
 }
+
+#[test]
+fn command_target_picker_labels_resolve_from_shared_backend_in_every_locale() {
+    use rust_i18n::Backend;
+    crate::preload().unwrap();
+    let backend = crate::SharedCatalogBackend;
+    for (locale, json) in CATALOGS {
+        let catalog = flatten(json);
+        for key in [
+            "chooseSessions",
+            "selectedTargets",
+            "selectAllTargets",
+            "clearTargets",
+            "targetPayloadStats",
+            "targetUnavailable",
+            "unavailableTargets",
+        ] {
+            let key = format!("serialSend.{key}");
+            assert_eq!(
+                backend.translate(locale, &key).as_deref(),
+                Some(catalog[key.as_str()].as_str()),
+                "{locale}: {key}"
+            );
+        }
+    }
+}

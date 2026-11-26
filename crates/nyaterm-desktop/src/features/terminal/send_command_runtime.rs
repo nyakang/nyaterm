@@ -10,7 +10,7 @@ use nyaterm_transport::SessionKind;
 use crate::features::NyaTermApp;
 use crate::send_command::{
     SendCommandControlFocus, SendCommandDataType, SendCommandLineEnding, SendCommandMode,
-    SendCommandSessionClass, SendCommandTarget,
+    SendCommandTarget, is_send_command_session_kind,
 };
 
 impl NyaTermApp {
@@ -296,21 +296,18 @@ impl NyaTermApp {
         }
     }
 
-    pub(in crate::features) fn send_command_session_class(
-        &self,
-        id: &str,
-    ) -> Option<SendCommandSessionClass> {
-        let metadata = self.session.metadata(id)?;
-        if metadata.ssh_runtime_mode()
-            == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
-        {
-            return None;
-        }
-        SendCommandSessionClass::for_kind(self.session.session_info(id)?.kind)
+    pub(in crate::features) fn send_command_session_supported(&self, id: &str) -> bool {
+        self.session.metadata(id).is_some_and(|metadata| {
+            metadata.ssh_runtime_mode()
+                != Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+        }) && self
+            .session
+            .session_info(id)
+            .is_some_and(|session| is_send_command_session_kind(session.kind))
     }
 
     pub(in crate::features) fn send_command_session_available(&self, id: &str) -> bool {
-        self.send_command_session_class(id).is_some()
+        self.send_command_session_supported(id)
             && !self.session.is_disconnected(id)
             && !self.session.start_reconnect_is_pending(id)
     }
@@ -327,15 +324,6 @@ impl NyaTermApp {
             .iter()
             .map(|session| session.id.as_str())
             .collect::<std::collections::HashSet<_>>();
-        let active_kind = self.active_session_kind();
-        let is_compatible = |kind: SessionKind| -> bool {
-            match active_kind {
-                Some(SessionKind::Serial) => matches!(kind, SessionKind::Serial),
-                Some(SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice) => false,
-                Some(_) => !matches!(kind, SessionKind::Serial),
-                None => true,
-            }
-        };
         match self.send_command.target() {
             SendCommandTarget::Current => self
                 .session
@@ -344,21 +332,12 @@ impl NyaTermApp {
                 .map(ToOwned::to_owned)
                 .into_iter()
                 .collect(),
-            SendCommandTarget::AllCompatible => {
-                if active_kind.is_none() {
-                    return Vec::new();
-                }
-                sessions
-                    .into_iter()
-                    .filter(|session| is_compatible(session.kind))
-                    .map(|session| session.id)
-                    .collect()
+            SendCommandTarget::AllSessions => {
+                sessions.into_iter().map(|session| session.id).collect()
             }
             SendCommandTarget::Sessions(selection) => sessions
                 .into_iter()
-                .filter(|session| {
-                    selection.contains(&session.id) && selection.accepts(session.kind)
-                })
+                .filter(|session| selection.contains(&session.id))
                 .map(|session| session.id)
                 .collect(),
             SendCommandTarget::Group(group_id) => {
@@ -378,20 +357,11 @@ impl NyaTermApp {
                     .iter()
                     .map(String::as_str)
                     .collect();
-                let session_kind_by_id: std::collections::HashMap<&str, SessionKind> = sessions
-                    .iter()
-                    .map(|session| (session.id.as_str(), session.kind))
-                    .collect();
                 group
                     .session_ids
                     .iter()
                     .filter(|session_id| !paused.contains(session_id.as_str()))
-                    .filter(|session_id| {
-                        session_kind_by_id
-                            .get(session_id.as_str())
-                            .copied()
-                            .is_some_and(is_compatible)
-                    })
+                    .filter(|session_id| live_session_ids.contains(session_id.as_str()))
                     .cloned()
                     .collect()
             }
@@ -407,19 +377,8 @@ impl NyaTermApp {
             .into_iter()
             .filter(|session| self.send_command_session_available(&session.id))
             .collect::<Vec<_>>();
-        let active_kind = self.active_session_kind();
-        let is_compatible = |kind: SessionKind| -> bool {
-            match active_kind {
-                Some(SessionKind::Serial) => matches!(kind, SessionKind::Serial),
-                Some(SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice) => false,
-                Some(_) => !matches!(kind, SessionKind::Serial),
-                None => true,
-            }
-        };
-        let session_kind_by_id: std::collections::HashMap<&str, SessionKind> = sessions
-            .iter()
-            .map(|session| (session.id.as_str(), session.kind))
-            .collect();
+        let live_session_ids: std::collections::HashSet<&str> =
+            sessions.iter().map(|session| session.id.as_str()).collect();
         self.sync_input
             .groups()
             .iter()
@@ -434,12 +393,7 @@ impl NyaTermApp {
                     .session_ids
                     .iter()
                     .filter(|session_id| !paused.contains(session_id.as_str()))
-                    .filter(|session_id| {
-                        session_kind_by_id
-                            .get(session_id.as_str())
-                            .copied()
-                            .is_some_and(is_compatible)
-                    })
+                    .filter(|session_id| live_session_ids.contains(session_id.as_str()))
                     .count();
                 if count == 0 {
                     None
@@ -460,7 +414,7 @@ impl NyaTermApp {
         }
         let label = match self.send_command.target() {
             SendCommandTarget::Current => "Current".to_string(),
-            SendCommandTarget::AllCompatible => "All compatible".to_string(),
+            SendCommandTarget::AllSessions => "All sessions".to_string(),
             SendCommandTarget::Sessions(selection) => format!("{} selected", selection.ids().len()),
             SendCommandTarget::Group(id) => self
                 .sync_input
@@ -475,31 +429,33 @@ impl NyaTermApp {
         cx.notify();
     }
 
-    /// Presentation follows explicit targets, not the focused tab.
-    pub(in crate::features) fn send_command_presentation_kind(&self) -> Option<SessionKind> {
-        match self.send_command.target() {
-            SendCommandTarget::Sessions(selection) => match selection.class() {
-                Some(SendCommandSessionClass::Serial) => Some(SessionKind::Serial),
-                Some(SendCommandSessionClass::Terminal) => self
-                    .send_command_target_session_ids()
-                    .first()
-                    .and_then(|id| self.session.session_info(id))
-                    .map(|session| session.kind)
-                    .or(Some(SessionKind::Ssh)),
-                None => None,
-            },
-            _ => self.active_session_kind(),
-        }
+    pub(in crate::features) fn send_command_has_configurable_line_ending(&self) -> bool {
+        self.send_command_target_session_ids().iter().any(|id| {
+            self.session.session_info(id).is_some_and(|session| {
+                matches!(
+                    session.kind,
+                    SessionKind::Serial | SessionKind::RawTcp | SessionKind::AdbShell
+                )
+            })
+        })
     }
 
-    pub(in crate::features) fn active_session_kind(&self) -> Option<SessionKind> {
-        let active_id = self.session.active_id()?;
-        if self.session.is_disconnected(active_id) {
-            return None;
+    pub(in crate::features) fn send_command_target_statistics(
+        &self,
+        cx: &gpui::App,
+    ) -> Result<nyaterm_core::send_command::SendCommandStatistics, String> {
+        let ids = self.send_command_target_session_ids();
+        if ids.is_empty() {
+            return self.send_command.payload_statistics(None, cx);
         }
-        self.session
-            .session_info(active_id)
-            .map(|session| session.kind)
+        let mut total = nyaterm_core::send_command::SendCommandStatistics { units: 0, bytes: 0 };
+        for id in ids {
+            let kind = self.session.session_info(&id).map(|session| session.kind);
+            let stats = self.send_command.payload_statistics(kind, cx)?;
+            total.units = total.units.saturating_add(stats.units);
+            total.bytes = total.bytes.saturating_add(stats.bytes);
+        }
+        Ok(total)
     }
 
     pub(in crate::features) fn set_send_command_data_type(

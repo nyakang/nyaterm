@@ -2984,11 +2984,11 @@
     "title": "Port série"
   },
   "serialSend": {
-    "chooseSessions": "Choisir des sessions…",
+    "chooseSessions": "Choisir les sessions",
     "selectedTargets": "%{count} sessions sélectionnées",
-    "selectCompatible": "Tout sélectionner (compatible)",
+    "selectAllTargets": "Tout sélectionner",
+    "targetPayloadStats": "Par cycle : %{count} cibles · %{units} unités · %{bytes} octets",
     "clearTargets": "Effacer",
-    "targetClassHint": "Sélectionnez d’abord une session. Les ports série et les autres terminaux ne peuvent pas être mélangés.",
     "targetUnavailable": "Indisponible",
     "unavailableTargets": "%{count} cible(s) indisponible(s) seront ignorées",
     "payloadEmpty": "Le contenu est vide",

@@ -2984,11 +2984,11 @@
     "title": "Serial port"
   },
   "serialSend": {
-    "chooseSessions": "Choose sessions…",
+    "chooseSessions": "Select sessions",
     "selectedTargets": "%{count} sessions selected",
-    "selectCompatible": "Select compatible",
+    "selectAllTargets": "Select all",
+    "targetPayloadStats": "Per round: %{count} targets · %{units} units · %{bytes} bytes",
     "clearTargets": "Clear",
-    "targetClassHint": "Select a session first. Serial and other terminals cannot be mixed.",
     "targetUnavailable": "Unavailable",
     "unavailableTargets": "%{count} unavailable target(s) will be skipped",
     "payloadEmpty": "Payload is empty",

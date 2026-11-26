@@ -31,6 +31,7 @@ pub struct NyaButton {
     small: bool,
     compact: bool,
     form_control: bool,
+    input_surface: bool,
     full_width: bool,
     label_left: bool,
     selected: bool,
@@ -57,6 +58,7 @@ impl NyaButton {
             small: false,
             compact: false,
             form_control: false,
+            input_surface: false,
             full_width: false,
             label_left: false,
             selected: false,
@@ -117,6 +119,12 @@ impl NyaButton {
     /// Matches ordinary single-line inputs, with room for a readable action label.
     pub fn form_control(mut self) -> Self {
         self.form_control = true;
+        self
+    }
+
+    /// Paint the button on the input/select surface so custom triggers match `NyaSelect`.
+    pub fn input_surface(mut self) -> Self {
+        self.input_surface = true;
         self
     }
 
@@ -259,6 +267,9 @@ impl RenderOnce for NyaButton {
         }
         if let Some(height) = self.height {
             button = button.h(height);
+        }
+        if self.input_surface {
+            button = button.bg(crate::theme_bridge::input_surface_color(cx));
         }
         if let Some(color) = self.text_color {
             button = button.text_color(color);

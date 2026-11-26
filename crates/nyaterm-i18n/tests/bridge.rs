@@ -33,3 +33,24 @@ fn shared_backend_preserves_caller_macros_fallback_interpolation_and_global_loca
     );
     rust_i18n::set_locale(&previous);
 }
+
+#[test]
+fn command_target_picker_uses_shared_catalog_through_caller_macros() {
+    preload().unwrap();
+    assert_eq!(
+        rust_i18n::t!("serialSend.chooseSessions", locale = "zh-CN"),
+        "选择会话"
+    );
+    assert_eq!(
+        rust_i18n::t!("serialSend.selectAllTargets", locale = "zh-CN"),
+        "全选"
+    );
+    assert_eq!(
+        rust_i18n::t!("serialSend.clearTargets", locale = "zh-CN"),
+        "清空"
+    );
+    assert_eq!(
+        rust_i18n::t!("serialSend.selectedTargets", locale = "zh-CN", count = 2),
+        "已选 2 个会话"
+    );
+}

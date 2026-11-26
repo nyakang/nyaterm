@@ -55,7 +55,7 @@ impl NyaTermApp {
             SendCommandLineEnding::Crlf => "crlf",
         }
         .to_string();
-        let layout = ToolbarLayout::for_width(state.send.viewport_width, state.is_serial_text_line);
+        let layout = ToolbarLayout::for_width(state.send.viewport_width, state.show_line_ending);
         let count = self.number_input(
             "send-command.count",
             &state.send.count_input,
@@ -123,30 +123,50 @@ impl NyaTermApp {
             }
             ToolbarLayout::Full | ToolbarLayout::Unlabeled => {
                 let labels = layout == ToolbarLayout::Full;
+                let count_field = labeled_number(
+                    palette,
+                    labels.then(|| count_label.into()),
+                    108.,
+                    NyaNumberInput::new(&count),
+                );
+                let interval_field = labeled_number(
+                    palette,
+                    labels.then(|| interval_label.into()),
+                    144.,
+                    NyaNumberInput::new(&interval),
+                );
                 div()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(send_command_control_group(
-                        palette,
-                        t!("serialSend.count"),
-                        labeled_number(
+                    .child(if labels {
+                        div()
+                            .h(px(32.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .child(count_field)
+                            .into_any_element()
+                    } else {
+                        send_command_control_group(palette, t!("serialSend.count"), count_field)
+                            .into_any_element()
+                    })
+                    .child(if labels {
+                        div()
+                            .h(px(32.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .child(interval_field)
+                            .into_any_element()
+                    } else {
+                        send_command_control_group(
                             palette,
-                            labels.then(|| count_label.into()),
-                            108.,
-                            NyaNumberInput::new(&count),
-                        ),
-                    ))
-                    .child(send_command_control_group(
-                        palette,
-                        t!("serialSend.interval"),
-                        labeled_number(
-                            palette,
-                            labels.then(|| interval_label.into()),
-                            144.,
-                            NyaNumberInput::new(&interval),
-                        ),
-                    ))
+                            t!("serialSend.interval"),
+                            interval_field,
+                        )
+                        .into_any_element()
+                    })
                     .into_any_element()
             }
         };
@@ -154,7 +174,9 @@ impl NyaTermApp {
         div()
             .id("bottom-command-controls")
             .debug_selector(|| "bottom-command-controls".into())
-            .h(px(32.))
+            .h(px(36.))
+            .px(px(2.))
+            .py(px(2.))
             .min_w_0()
             .flex_none()
             .flex()
@@ -195,7 +217,7 @@ impl NyaTermApp {
                     cx,
                 ),
             ))
-            .when(state.is_serial_text_line, |this| {
+            .when(state.show_line_ending, |this| {
                 this.child(send_command_control_group(
                     palette,
                     t!("serialSend.lineEnding"),
@@ -209,11 +231,7 @@ impl NyaTermApp {
                 ))
             })
             .child(toolbar_divider(palette))
-            .child(send_command_control_group(
-                palette,
-                t!("serialSend.target"),
-                self.send_command_target_picker(state, cx),
-            ))
+            .child(self.send_command_target_picker(state, cx))
             .child(toolbar_divider(palette))
             .child(repeat)
             .into_any_element()

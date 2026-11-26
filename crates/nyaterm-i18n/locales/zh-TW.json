@@ -2984,11 +2984,11 @@
     "title": "選擇序列埠"
   },
   "serialSend": {
-    "chooseSessions": "選擇工作階段…",
+    "chooseSessions": "選擇工作階段",
     "selectedTargets": "已選 %{count} 個工作階段",
-    "selectCompatible": "全選相容工作階段",
+    "selectAllTargets": "全選",
+    "targetPayloadStats": "每輪：%{count} 個目標 · %{units} 個單元 · %{bytes} 位元組",
     "clearTargets": "清空",
-    "targetClassHint": "先勾選一個工作階段；序列埠與其他終端不能混選。",
     "targetUnavailable": "無法使用",
     "unavailableTargets": "將略過 %{count} 個無法使用的目標",
     "payloadEmpty": "內容為空",

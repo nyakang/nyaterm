@@ -1119,10 +1119,7 @@ fn command_send_serial_selection_keeps_serial_presentation_after_focus_changes()
         selection.toggle(ids[1].clone(), nyaterm_transport::SessionKind::Serial);
         app.set_send_command_target(SendCommandTarget::Sessions(selection), cx);
         app.session.select_active_session(&ids[0]);
-        assert_eq!(
-            app.send_command_presentation_kind(),
-            Some(nyaterm_transport::SessionKind::Serial)
-        );
+        assert!(app.send_command_has_configurable_line_ending());
         assert_eq!(app.send_command_target_session_ids(), [ids[1].clone()]);
         app.send_command.apply_draft("AT".into());
         app.send_bottom_command(false, cx);
@@ -1208,4 +1205,98 @@ fn segmented_literal_line_feed_bypasses_real_telnet_enter_rewriting() {
     });
     fixture.cx.run_until_parked();
     fixture.assert_wire(0, b"a\nb");
+}
+
+#[test]
+fn command_send_mixed_targets_keep_per_target_encoding_line_endings_and_hex() {
+    use crate::send_command::{
+        SendCommandControlFocus, SendCommandDataType, SendCommandSelection, SendCommandTarget,
+    };
+    use nyaterm_transport::SessionKind;
+    let mut fixture = WireFixture::with_carrier(2, true, true);
+    let ids = fixture.ids.clone();
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        let mut serial = app.session.metadata(&ids[1]).unwrap().clone();
+        let SessionLaunchConfig::Serial(config) = &mut serial.launch_config else {
+            panic!("serial fixture");
+        };
+        config.encoding = "GBK".into();
+        app.session.register_session_metadata(&ids[1], serial);
+        app.terminal
+            .seed_session_view(ids[1].clone(), String::new(), "GBK");
+        let mut selected = SendCommandSelection::default();
+        selected.toggle(ids[0].clone(), SessionKind::Telnet);
+        selected.toggle(ids[1].clone(), SessionKind::Serial);
+        app.set_send_command_target(SendCommandTarget::Sessions(selected), cx);
+        app.send_command.apply_draft("中".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Count, "2".into());
+        assert_eq!(app.send_command_target_session_ids(), ids);
+        assert!(app.send_command_has_configurable_line_ending());
+        let stats = app.send_command_target_statistics(cx).unwrap();
+        assert_eq!((stats.units, stats.bytes), (2, 9));
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    fixture.advance();
+    fixture.assert_wire(0, "中\r中\r".as_bytes());
+    fixture.assert_wire(1, &[0xd6, 0xd0, 13, 10, 0xd6, 0xd0, 13, 10]);
+    fixture.cx.update_entity(&fixture.app, |app, cx| {
+        assert!(!app.send_command.is_sending());
+        app.send_command.set_data_type(SendCommandDataType::Hex);
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+        app.send_command
+            .apply_control_input(SendCommandControlFocus::Count, "1".into());
+        app.send_command
+            .presentation(cx)
+            .hex
+            .update(cx, |hex, cx| hex.set_bytes(vec![0xff, 0x00, 0x0a], cx));
+        app.send_bottom_command(false, cx);
+    });
+    fixture.cx.run_until_parked();
+    for index in 0..2 {
+        fixture.assert_wire(index, &[0xff, 0x00, 0x0a]);
+    }
+}
+
+#[test]
+fn command_send_all_and_group_targets_include_serial_without_active_protocol_filter() {
+    use crate::send_command::{SendCommandControlFocus, SendCommandTarget};
+    for grouped in [false, true] {
+        let mut fixture = WireFixture::with_carrier(3, true, true);
+        let ids = fixture.ids.clone();
+        fixture.cx.update_entity(&fixture.app, |app, cx| {
+            let target = if grouped {
+                app.sync_input.create_group();
+                for id in &ids {
+                    app.sync_input.toggle_selected_session(id.clone());
+                }
+                app.sync_input
+                    .toggle_selected_session_paused(ids[2].clone());
+                let group = app.sync_input.groups()[0].id.clone();
+                let options = app.send_command_group_target_options();
+                assert_eq!(options[0].2, 2);
+                SendCommandTarget::Group(group)
+            } else {
+                SendCommandTarget::AllSessions
+            };
+            app.set_send_command_target(target, cx);
+            let expected = if grouped { &ids[..2] } else { &ids[..] };
+            for active in [ids[0].as_str(), ids[1].as_str(), "fixture"] {
+                app.session.select_active_session(active);
+                assert_eq!(app.send_command_target_session_ids(), expected);
+            }
+            app.send_command.apply_draft("AT".into());
+            app.send_command
+                .apply_control_input(SendCommandControlFocus::Interval, "0".into());
+            app.send_bottom_command(false, cx);
+        });
+        fixture.cx.run_until_parked();
+        fixture.assert_wire(0, b"AT\r");
+        fixture.assert_wire(1, b"AT\r\n");
+        fixture.assert_wire(2, if grouped { b"" } else { b"AT\r" });
+    }
 }

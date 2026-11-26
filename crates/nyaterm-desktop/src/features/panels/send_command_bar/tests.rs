@@ -84,6 +84,7 @@ fn command_panel_keeps_editor_and_action_inside_empty_workspace_at_all_sizes() {
                     _ = window.draw(cx);
                 });
                 let controls = cx.debug_bounds("bottom-command-controls").unwrap();
+                let trigger_slot = cx.debug_bounds("send-command.target-trigger-slot").unwrap();
                 let editor = cx
                     .debug_bounds(if data_type == SendCommandDataType::Text {
                         "send-command.draft"
@@ -93,7 +94,9 @@ fn command_panel_keeps_editor_and_action_inside_empty_workspace_at_all_sizes() {
                     .unwrap();
                 let footer = cx.debug_bounds("send-command.footer").unwrap();
                 let action = cx.debug_bounds("bottom-command-send").unwrap();
-                assert_eq!(controls.size.height, px(32.));
+                assert_eq!(controls.size.height, px(36.));
+                assert!(trigger_slot.top() - controls.top() >= px(2.));
+                assert!(controls.bottom() - trigger_slot.bottom() >= px(2.));
                 assert!(editor.origin.y >= controls.bottom());
                 assert!(editor.size.height >= px(32.));
                 assert!(editor.bottom() <= px(760.));
@@ -150,10 +153,19 @@ fn command_panel_keeps_editor_and_action_inside_empty_workspace_at_all_sizes() {
 #[test]
 fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus() {
     use crate::features::test_support::app_with_visible_local_session;
-    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+    use crate::send_command::SendCommandTarget;
     use crate::test_support::TestConfigDir;
     use gpui::{KeyDownEvent, KeyUpEvent, Keystroke, Modifiers};
 
+    crate::preload_i18n().unwrap();
+    assert_eq!(
+        rust_i18n::t!("serialSend.chooseSessions", locale = "zh-CN"),
+        "选择会话"
+    );
+    assert_eq!(
+        rust_i18n::t!("serialSend.selectedTargets", locale = "zh-CN", count = 2),
+        "已选 2 个会话"
+    );
     let root = TestConfigDir::new("nyaterm-send-target-picker");
     let mut cx = TestAppContext::single();
     let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -161,12 +173,10 @@ fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus
     app.update(&mut cx, |app, cx| {
         app.sync_component_theme(cx);
         app.set_bottom_panel_mode(BottomPanelMode::CommandSend);
-        let metadata = app.session.metadata("first").unwrap().clone();
+        let mut metadata = app.session.metadata("first").unwrap().clone();
+        metadata.launch_config = crate::models::SessionLaunchConfig::Serial(Default::default());
         app.session.register_session_metadata("second", metadata);
-        app.set_send_command_target(
-            SendCommandTarget::Sessions(SendCommandSelection::default()),
-            cx,
-        );
+        app.set_send_command_target(SendCommandTarget::Current, cx);
     });
     let fixture_app = app.clone();
     let (fixture, cx) = cx.add_window_view(move |_, cx| {
@@ -197,13 +207,22 @@ fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus
         });
         cx.simulate_event(KeyUpEvent { keystroke });
         cx.run_until_parked();
-        for _ in 0..2 {
+        for _ in 0..3 {
             cx.update(|window, cx| {
                 _ = window.draw(cx);
             });
         }
+        app.read_with(cx, |app, _| {
+            assert_eq!(*app.send_command.target(), SendCommandTarget::Current)
+        });
         let content = cx.debug_bounds("send-command.target-content").unwrap();
-        assert!(content.size.width <= px(320.));
+        assert!(content.size.width <= px(280.));
+        let actions = cx.debug_bounds("send-command.target-actions").unwrap();
+        let list = cx.debug_bounds("send-command.target-list").unwrap();
+        assert!(actions.left() >= content.left());
+        assert!(actions.right() <= content.right());
+        assert!(actions.size.height <= px(28.));
+        assert!(list.top() >= actions.bottom());
         assert!(content.top() >= px(0.));
         assert!(content.bottom() <= px(760.));
         for selector in [
@@ -211,7 +230,7 @@ fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus
             "send-command.target-row-second",
         ] {
             let row = cx.debug_bounds(selector).unwrap();
-            cx.simulate_click(row.origin + point(px(7.), px(7.)), Modifiers::default());
+            cx.simulate_click(row.center(), Modifiers::default());
             cx.run_until_parked();
             app.read_with(cx, |app, _| assert!(app.send_command.target_picker_open()));
         }
@@ -220,6 +239,27 @@ fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus
                 panic!("manual mode lost");
             };
             assert_eq!(selection.ids().len(), 2);
+        });
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let clear = cx.debug_bounds("send-command.target-clear-action").unwrap();
+        cx.simulate_click(clear.center(), Modifiers::default());
+        cx.run_until_parked();
+        app.read_with(cx, |app, _| {
+            assert!(app.send_command_target_session_ids().is_empty())
+        });
+        for _ in 0..3 {
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        }
+        let all = cx.debug_bounds("send-command.target-all-action").unwrap();
+        cx.simulate_click(all.center(), Modifiers::default());
+        cx.run_until_parked();
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.send_command_target_session_ids().len(), 2);
+            assert!(app.send_command.target_picker_open());
         });
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
@@ -230,10 +270,160 @@ fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus
             });
         });
         app.update(cx, |app, cx| {
-            app.set_send_command_target(
-                SendCommandTarget::Sessions(SendCommandSelection::default()),
-                cx,
-            )
+            app.set_send_command_target(SendCommandTarget::Current, cx)
         });
     }
+}
+
+/// Uses synthetic metadata only; never opens a shell or connects to a host.
+#[test]
+#[ignore = "native target picker visual acceptance; run alone with --nocapture"]
+fn command_send_target_picker_native_preview() {
+    use crate::models::{SessionLaunchConfig, SessionRuntimeMetadata};
+    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+    use gpui::{Bounds, WindowBounds, WindowOptions, size};
+    use nyaterm_core::AiExecutionProfile;
+    use nyaterm_transport::LocalSessionConfig;
+    use std::time::Duration;
+
+    struct PickerPreview(Entity<NyaTermApp>);
+    impl Render for PickerPreview {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.0.update(cx, |app, cx| {
+                let state = app.send_command_bar_view_state(cx);
+                div()
+                    .size_full()
+                    .bg(gpui::rgb(state.palette.surface))
+                    .flex()
+                    .items_end()
+                    .p_4()
+                    .child(app.send_command_target_picker(&state, cx))
+            })
+        }
+    }
+    crate::preload_i18n().unwrap();
+    rust_i18n::set_locale("zh-CN");
+    let output = std::env::var("NYATERM_TARGET_PREVIEW_OUTPUT").expect("PNG output path");
+    let width = std::env::var("NYATERM_TARGET_PREVIEW_WIDTH")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(640.);
+    let root = TestTempDir::new("nyaterm-target-preview");
+    struct PreviewAssets;
+    impl gpui::AssetSource for PreviewAssets {
+        fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+            let bytes: Option<&'static [u8]> = match path {
+                "icons/check.svg" => Some(include_bytes!(
+                    "../../../../../nyaterm-app/assets/icons/check.svg"
+                )),
+                "icons/menu/chevron-right.svg" => Some(include_bytes!(
+                    "../../../../../nyaterm-app/assets/icons/menu/chevron-right.svg"
+                )),
+                "icons/chevron-down.svg" => Some(include_bytes!(
+                    "../../../../../nyaterm-app/assets/icons/chevron-down.svg"
+                )),
+                _ => None,
+            };
+            Ok(bytes.map(std::borrow::Cow::Borrowed))
+        }
+        fn list(&self, _: &str) -> gpui::Result<Vec<gpui::SharedString>> {
+            Ok(Vec::new())
+        }
+    }
+    gpui_platform::application()
+        .with_assets(PreviewAssets)
+        .run(move |cx| {
+            let runtime = AppRuntime::from_parts_for_test(
+                RuntimeMode::Portable,
+                root.path().into(),
+                root.path().join("config"),
+                root.path().join("logs"),
+                root.path().join("cache"),
+                None,
+            );
+            let stores = UiStoreHandles {
+                startup_restore: cx.new(|_| StartupRestoreStore::default()),
+                overlays: cx.new(|_| OverlayStore::default()),
+            };
+            let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+            app.update(cx, |app, cx| {
+                app.sync_component_theme(cx);
+                rust_i18n::set_locale("zh-CN");
+                for (id, name) in [
+                    ("first", "开发环境"),
+                    ("second", "串口设备 COM3"),
+                    ("third", "本地终端 — 一个用于检查省略显示的很长的会话名称"),
+                ] {
+                    app.session.register_session_metadata(
+                        id,
+                        SessionRuntimeMetadata {
+                            confirmed_ssh_runtime_mode: None,
+                            pending_ssh_startup_command: None,
+                            ssh_config: None,
+                            ssh_multiplex_key: None,
+                            source_connection_id: None,
+                            ai_execution_profile: AiExecutionProfile::Posix,
+                            launch_config: if id == "second" {
+                                SessionLaunchConfig::Serial(
+                                    nyaterm_transport::SerialSessionConfig {
+                                        name: name.into(),
+                                        ..Default::default()
+                                    },
+                                )
+                            } else {
+                                SessionLaunchConfig::Local(LocalSessionConfig {
+                                    name: name.into(),
+                                    ..Default::default()
+                                })
+                            },
+                            disconnected: false,
+                        },
+                    );
+                }
+                app.session.select_active_session("first");
+                let mut selected = SendCommandSelection::default();
+                selected.toggle("first".into(), nyaterm_transport::SessionKind::LocalPty);
+                selected.toggle("second".into(), nyaterm_transport::SessionKind::Serial);
+                app.set_send_command_target(SendCommandTarget::Sessions(selected), cx);
+                app.send_command.set_target_picker_open(true);
+            });
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                            None,
+                            size(px(width), px(400.)),
+                            cx,
+                        ))),
+                        show: true,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    move |_, cx| cx.new(|_| PickerPreview(app)),
+                )
+                .unwrap();
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(800))
+                    .await;
+                let image = window
+                    .update(cx, |_, window, _| window.render_to_image().unwrap())
+                    .unwrap();
+                cx.background_executor()
+                    .spawn(async move {
+                        image.save(output).unwrap();
+                    })
+                    .await;
+                let shutdown = window
+                    .update(cx, |preview, _, cx| {
+                        preview
+                            .0
+                            .update(cx, |app, cx| app.shutdown_blocking_jobs(cx))
+                    })
+                    .unwrap();
+                shutdown.await;
+                cx.update(|cx| cx.quit());
+            })
+            .detach();
+        });
 }

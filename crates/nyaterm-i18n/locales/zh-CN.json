@@ -2984,11 +2984,11 @@
     "title": "选择串口"
   },
   "serialSend": {
-    "chooseSessions": "选择会话…",
+    "chooseSessions": "选择会话",
     "selectedTargets": "已选 %{count} 个会话",
-    "selectCompatible": "全选兼容会话",
+    "selectAllTargets": "全选",
+    "targetPayloadStats": "每轮：%{count} 个目标 · %{units} 个单元 · %{bytes} 字节",
     "clearTargets": "清空",
-    "targetClassHint": "先勾选一个会话；串口与其他终端不能混选。",
     "targetUnavailable": "不可用",
     "unavailableTargets": "将跳过 %{count} 个不可用目标",
     "payloadEmpty": "内容为空",

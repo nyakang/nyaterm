@@ -3,60 +3,40 @@ use nyaterm_transport::SessionKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SendCommandTarget {
     Current,
-    AllCompatible,
+    AllSessions,
     Group(String),
     Sessions(SendCommandSelection),
 }
 
-/// Explicit selections keep their protocol class when the active tab changes.
+/// Explicit targets stay fixed when the active tab changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SendCommandSelection {
     ids: Vec<String>,
-    class: Option<SendCommandSessionClass>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SendCommandSessionClass {
-    Terminal,
-    Serial,
-}
-
-impl SendCommandSessionClass {
-    pub(crate) fn for_kind(kind: SessionKind) -> Option<Self> {
-        match kind {
-            SessionKind::Serial => Some(Self::Serial),
-            SessionKind::LocalPty
+pub(crate) fn is_send_command_session_kind(kind: SessionKind) -> bool {
+    matches!(
+        kind,
+        SessionKind::Serial
+            | SessionKind::LocalPty
             | SessionKind::Ssh
             | SessionKind::Telnet
             | SessionKind::RawTcp
-            | SessionKind::AdbShell => Some(Self::Terminal),
-            _ => None,
-        }
-    }
+            | SessionKind::AdbShell
+    )
 }
 
 impl SendCommandSelection {
     pub(crate) fn ids(&self) -> &[String] {
         &self.ids
     }
-    pub(crate) fn class(&self) -> Option<SendCommandSessionClass> {
-        self.class
-    }
     pub(crate) fn contains(&self, id: &str) -> bool {
         self.ids.iter().any(|selected| selected == id)
-    }
-    pub(crate) fn accepts(&self, kind: SessionKind) -> bool {
-        SendCommandSessionClass::for_kind(kind)
-            .is_some_and(|class| self.class.is_none_or(|selected| selected == class))
     }
     pub(crate) fn toggle(&mut self, id: String, kind: SessionKind) {
         if self.contains(&id) {
             self.ids.retain(|selected| selected != &id);
-            if self.ids.is_empty() {
-                self.class = None;
-            }
-        } else if self.accepts(kind) {
-            self.class = SendCommandSessionClass::for_kind(kind);
+        } else if is_send_command_session_kind(kind) {
             self.ids.push(id);
         }
     }
@@ -117,23 +97,15 @@ mod tests {
     };
 
     #[test]
-    fn explicit_selection_locks_class_until_the_last_target_is_removed() {
-        use super::{SendCommandSelection, SendCommandSessionClass};
+    fn explicit_selection_allows_mixed_protocols_and_removes_targets_independently() {
+        use super::SendCommandSelection;
         let mut selection = SendCommandSelection::default();
         selection.toggle("ssh".into(), SessionKind::Ssh);
-        selection.toggle("local".into(), SessionKind::LocalPty);
         selection.toggle("serial".into(), SessionKind::Serial);
-        selection.toggle("rdp".into(), SessionKind::Rdp);
+        selection.toggle("local".into(), SessionKind::LocalPty);
+        assert_eq!(selection.ids(), ["ssh", "serial", "local"]);
+        selection.toggle("serial".into(), SessionKind::Serial);
         assert_eq!(selection.ids(), ["ssh", "local"]);
-        selection.toggle("ssh".into(), SessionKind::Ssh);
-        assert_eq!(selection.ids(), ["local"]);
-        selection.toggle("local".into(), SessionKind::LocalPty);
-        assert_eq!(selection.class(), None);
-        selection.toggle("serial".into(), SessionKind::Serial);
-        assert_eq!(selection.class(), Some(SendCommandSessionClass::Serial));
-        assert_eq!(selection.ids(), ["serial"]);
-        selection.toggle("serial".into(), SessionKind::Serial);
-        assert!(selection.ids().is_empty());
     }
 
     #[test]
@@ -151,7 +123,6 @@ mod tests {
             selection.toggle("not-a-terminal".into(), kind);
         }
         assert!(selection.ids().is_empty());
-        assert_eq!(selection.class(), None);
     }
 
     #[test]
