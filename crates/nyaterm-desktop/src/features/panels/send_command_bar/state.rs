@@ -47,7 +47,7 @@ impl NyaTermApp {
     pub(super) fn send_command_bar_view_state(&self, cx: &gpui::App) -> SendCommandBarViewState {
         let send = self.send_command.view_presentation(cx);
         let palette = self.theme_palette();
-        let active_kind = self.active_session_kind();
+        let active_kind = self.send_command_presentation_kind();
         let group_targets = self.send_command_group_target_options();
         let is_serial_text_line = matches!(active_kind, Some(SessionKind::Serial))
             && send.data_type == SendCommandDataType::Text
@@ -119,6 +119,16 @@ impl NyaTermApp {
             }
             .to_string()
         };
+        if let crate::send_command::SendCommandTarget::Sessions(selection) = &send.target {
+            let unavailable = selection
+                .ids()
+                .len()
+                .saturating_sub(self.send_command_target_session_ids().len());
+            if unavailable > 0 {
+                status.push_str(" · ");
+                status.push_str(&t!("serialSend.unavailableTargets", count = unavailable));
+            }
+        }
         let sources = send
             .provenance
             .origins

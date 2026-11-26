@@ -10,7 +10,7 @@ use nyaterm_transport::SessionKind;
 use crate::features::NyaTermApp;
 use crate::send_command::{
     SendCommandControlFocus, SendCommandDataType, SendCommandLineEnding, SendCommandMode,
-    SendCommandTarget,
+    SendCommandSessionClass, SendCommandTarget,
 };
 
 impl NyaTermApp {
@@ -143,10 +143,20 @@ impl NyaTermApp {
         } else {
             StagedCommandInput::Text
         };
-        let current = matches!(self.send_command.target(), SendCommandTarget::Current);
+        let current = matches!(
+            self.send_command.target(),
+            SendCommandTarget::Current | SendCommandTarget::Sessions(_)
+        );
+        let skipped = match self.send_command.target() {
+            SendCommandTarget::Sessions(selection) => {
+                selection.ids().len().saturating_sub(ids.len())
+            }
+            _ => 0,
+        };
         let interval = Duration::from_secs_f64(run.interval_seconds);
-        self.shell
-            .set_status(format!("sending {units_per_round} unit(s)"));
+        self.shell.set_status(format!(
+            "sending {units_per_round} unit(s), {skipped} unavailable target(s) skipped"
+        ));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let mut plans = plans;
@@ -250,6 +260,7 @@ impl NyaTermApp {
                     clear_after_send,
                     !aborted
                         && failed == 0
+                        && skipped == 0
                         && !run.infinite
                         && !run.cancel.load(Ordering::Acquire)
                         && progress.completed == progress.total,
@@ -260,12 +271,14 @@ impl NyaTermApp {
                     this.reset_text_input("send-command.draft", "", cx);
                 }
                 this.shell
-                    .set_status(if aborted || run.cancel.load(Ordering::Acquire) {
+                    .set_status(if run.cancel.load(Ordering::Acquire) {
                         format!("command send stopped at {} unit(s)", progress.completed)
                     } else if failed > 0 {
-                        format!("command send failed on {failed} target(s)")
+                        format!("command send failed on {failed} target(s), {skipped} unavailable target(s) skipped")
+                    } else if aborted {
+                        format!("command send stopped at {} unit(s)", progress.completed)
                     } else {
-                        format!("command send completed: {round} round(s)")
+                        format!("command send completed: {round} round(s), {skipped} unavailable target(s) skipped")
                     });
                 cx.notify();
             });
@@ -283,19 +296,32 @@ impl NyaTermApp {
         }
     }
 
+    pub(in crate::features) fn send_command_session_class(
+        &self,
+        id: &str,
+    ) -> Option<SendCommandSessionClass> {
+        let metadata = self.session.metadata(id)?;
+        if metadata.ssh_runtime_mode()
+            == Some(nyaterm_core::models::ssh_runtime::SshRuntimeMode::Sftp)
+        {
+            return None;
+        }
+        SendCommandSessionClass::for_kind(self.session.session_info(id)?.kind)
+    }
+
+    pub(in crate::features) fn send_command_session_available(&self, id: &str) -> bool {
+        self.send_command_session_class(id).is_some()
+            && !self.session.is_disconnected(id)
+            && !self.session.start_reconnect_is_pending(id)
+    }
+
     pub(in crate::features) fn send_command_target_session_ids(&self) -> Vec<String> {
         // Live sessions only from local metadata (skip disconnected tabs).
         let sessions = self
             .session
             .ordered_sessions()
             .into_iter()
-            .filter(|session| {
-                !self.session.is_disconnected(&session.id)
-                    && !matches!(
-                        session.kind,
-                        SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice
-                    )
-            })
+            .filter(|session| self.send_command_session_available(&session.id))
             .collect::<Vec<_>>();
         let live_session_ids = sessions
             .iter()
@@ -328,6 +354,13 @@ impl NyaTermApp {
                     .map(|session| session.id)
                     .collect()
             }
+            SendCommandTarget::Sessions(selection) => sessions
+                .into_iter()
+                .filter(|session| {
+                    selection.contains(&session.id) && selection.accepts(session.kind)
+                })
+                .map(|session| session.id)
+                .collect(),
             SendCommandTarget::Group(group_id) => {
                 let Some(group) = self
                     .sync_input
@@ -372,13 +405,7 @@ impl NyaTermApp {
             .session
             .ordered_sessions()
             .into_iter()
-            .filter(|session| {
-                !self.session.is_disconnected(&session.id)
-                    && !matches!(
-                        session.kind,
-                        SessionKind::Rdp | SessionKind::Vnc | SessionKind::Spice
-                    )
-            })
+            .filter(|session| self.send_command_session_available(&session.id))
             .collect::<Vec<_>>();
         let active_kind = self.active_session_kind();
         let is_compatible = |kind: SessionKind| -> bool {
@@ -434,6 +461,7 @@ impl NyaTermApp {
         let label = match self.send_command.target() {
             SendCommandTarget::Current => "Current".to_string(),
             SendCommandTarget::AllCompatible => "All compatible".to_string(),
+            SendCommandTarget::Sessions(selection) => format!("{} selected", selection.ids().len()),
             SendCommandTarget::Group(id) => self
                 .sync_input
                 .groups()
@@ -445,6 +473,23 @@ impl NyaTermApp {
         self.shell
             .set_status(format!("command send target: {label}"));
         cx.notify();
+    }
+
+    /// Presentation follows explicit targets, not the focused tab.
+    pub(in crate::features) fn send_command_presentation_kind(&self) -> Option<SessionKind> {
+        match self.send_command.target() {
+            SendCommandTarget::Sessions(selection) => match selection.class() {
+                Some(SendCommandSessionClass::Serial) => Some(SessionKind::Serial),
+                Some(SendCommandSessionClass::Terminal) => self
+                    .send_command_target_session_ids()
+                    .first()
+                    .and_then(|id| self.session.session_info(id))
+                    .map(|session| session.kind)
+                    .or(Some(SessionKind::Ssh)),
+                None => None,
+            },
+            _ => self.active_session_kind(),
+        }
     }
 
     pub(in crate::features) fn active_session_kind(&self) -> Option<SessionKind> {

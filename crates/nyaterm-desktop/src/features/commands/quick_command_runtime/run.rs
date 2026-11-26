@@ -663,7 +663,10 @@ impl NyaTermApp {
         for target in targets.iter_mut().filter(|target| !target.finished) {
             let session_id = &target.session_id;
             let allowed = match target.source_session_id.as_deref() {
-                Some(source) if source == session_id => self.terminal_sync_session(session_id),
+                Some(source) if source == session_id => {
+                    self.terminal_sync_session(session_id)
+                        && !self.session.is_disconnected(session_id)
+                }
                 Some(source) => self.sync_peer_session_ids(source).contains(session_id),
                 None => self.sync_target_allowed(session_id),
             };

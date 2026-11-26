@@ -2,7 +2,6 @@ use rust_i18n::t;
 
 use super::state::SendCommandBarViewState;
 use gpui::{Context, IntoElement, div, prelude::*, px, rgb};
-use nyaterm_transport::SessionKind;
 use nyaterm_ui::{
     NyaButton, NyaNumberInput, NyaNumberInputOptions, NyaPopover, NyaPopoverAlign,
     NyaPopoverPlacement, NyaScrollable, NyaSelectOption, NyaTabItem, NyaTabs,
@@ -10,9 +9,7 @@ use nyaterm_ui::{
 
 use super::super::send_command_control_group;
 use crate::features::NyaTermApp;
-use crate::send_command::{
-    SendCommandDataType, SendCommandLineEnding, SendCommandMode, SendCommandTarget,
-};
+use crate::send_command::{SendCommandDataType, SendCommandLineEnding, SendCommandMode};
 
 impl NyaTermApp {
     pub(super) fn send_command_bar_controls(
@@ -22,7 +19,6 @@ impl NyaTermApp {
     ) -> gpui::AnyElement {
         let palette = state.palette;
         let is_sending = state.is_sending;
-        let is_serial = matches!(self.active_session_kind(), Some(SessionKind::Serial));
         let (mode_options, selected_mode) = if state.send.data_type == SendCommandDataType::Hex {
             (
                 vec![
@@ -46,34 +42,6 @@ impl NyaTermApp {
                 },
             )
         };
-        let mut target_options = vec![NyaSelectOption::new(
-            "current",
-            t!("serialSend.currentSession"),
-        )];
-        if !is_serial {
-            target_options.push(NyaSelectOption::new("all", t!("serialSend.allSessions")));
-        }
-        target_options.extend(state.group_targets.iter().map(|(group_id, name, count)| {
-            NyaSelectOption::new(
-                format!("group:{group_id}"),
-                t!("serialSend.groupSession", name = name, count = count),
-            )
-        }));
-        let selected_target = match &state.send.target {
-            SendCommandTarget::Current => "current".to_string(),
-            SendCommandTarget::AllCompatible if !is_serial => "all".to_string(),
-            SendCommandTarget::AllCompatible => "current".to_string(),
-            SendCommandTarget::Group(group_id) => format!("group:{group_id}"),
-        };
-        if !target_options
-            .iter()
-            .any(|option| option.value() == selected_target)
-        {
-            target_options.push(NyaSelectOption::new(
-                selected_target.clone(),
-                t!("network.group"),
-            ));
-        }
         let line_ending_options = vec![
             NyaSelectOption::new("none", t!("serialSend.noLineEnding")),
             NyaSelectOption::new("cr", "CR"),
@@ -244,13 +212,7 @@ impl NyaTermApp {
             .child(send_command_control_group(
                 palette,
                 t!("serialSend.target"),
-                self.form_select_control(
-                    "bottom-command-target-select",
-                    target_options,
-                    Some(selected_target),
-                    is_sending,
-                    cx,
-                ),
+                self.send_command_target_picker(state, cx),
             ))
             .child(toolbar_divider(palette))
             .child(repeat)

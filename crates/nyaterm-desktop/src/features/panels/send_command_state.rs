@@ -20,6 +20,9 @@ use crate::send_command::{
 };
 
 pub(in crate::features) struct SendCommandFeatureState {
+    target_picker_open: bool,
+    target_picker_focus: gpui::FocusHandle,
+    target_trigger_focus: gpui::FocusHandle,
     composer: SendCommandComposerState,
     options: SendCommandOptionsState,
     progress: SendCommandProgressState,
@@ -95,6 +98,9 @@ pub(in crate::features) struct SendCommandProgressResult {
 impl SendCommandFeatureState {
     pub(in crate::features) fn new(cx: &mut App) -> Self {
         Self {
+            target_picker_open: false,
+            target_picker_focus: cx.focus_handle(),
+            target_trigger_focus: cx.focus_handle(),
             composer: SendCommandComposerState {
                 text_draft: String::new(),
                 text_statistics: TextSendStatistics::default(),
@@ -389,6 +395,7 @@ impl SendCommandFeatureState {
     }
 
     pub(in crate::features) fn begin_send(&mut self, units_per_round: u32) -> SendCommandRunState {
+        self.target_picker_open = false;
         let infinite = self.options.count.is_none();
         let rounds = self.options.count.unwrap_or(1).max(1);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -465,6 +472,30 @@ impl SendCommandFeatureState {
         }
         self.options.target = target;
         true
+    }
+
+    pub(in crate::features) fn target_picker_focus(&self) -> &gpui::FocusHandle {
+        &self.target_picker_focus
+    }
+    pub(in crate::features) fn target_trigger_focus(&self) -> &gpui::FocusHandle {
+        &self.target_trigger_focus
+    }
+
+    pub(in crate::features) fn target_picker_open(&self) -> bool {
+        self.target_picker_open && !self.is_sending()
+    }
+
+    pub(in crate::features) fn set_target_picker_open(&mut self, open: bool) {
+        self.target_picker_open = open && !self.is_sending();
+    }
+
+    pub(in crate::features) fn toggle_target_session(&mut self, id: String, kind: SessionKind) {
+        if self.is_sending() {
+            return;
+        }
+        if let SendCommandTarget::Sessions(selection) = &mut self.options.target {
+            selection.toggle(id, kind);
+        }
     }
 
     pub(in crate::features) fn reset_default_interval(&mut self) -> String {
@@ -590,6 +621,31 @@ mod tests {
 
     fn send_command_state(cx: &TestAppContext) -> SendCommandFeatureState {
         cx.update(SendCommandFeatureState::new)
+    }
+
+    #[test]
+    fn explicit_targets_have_one_owner_and_cannot_change_during_send() {
+        use crate::send_command::{SendCommandSelection, SendCommandTarget};
+        use nyaterm_transport::SessionKind;
+        let cx = TestAppContext::single();
+        let mut state = send_command_state(&cx);
+        state.set_target(SendCommandTarget::Sessions(SendCommandSelection::default()));
+        state.toggle_target_session("one".into(), SessionKind::Ssh);
+        state.toggle_target_session("two".into(), SessionKind::Telnet);
+        let target = state.target().clone();
+        state.set_target_picker_open(true);
+        state.begin_send(2);
+        assert!(!state.target_picker_open());
+        state.toggle_target_session("one".into(), SessionKind::Ssh);
+        assert!(!state.set_target(SendCommandTarget::Current));
+        assert_eq!(state.target(), &target);
+        state.finish_send();
+        assert!(state.set_target(SendCommandTarget::Current));
+        state.set_target(SendCommandTarget::Sessions(SendCommandSelection::default()));
+        assert_eq!(
+            state.target(),
+            &SendCommandTarget::Sessions(SendCommandSelection::default())
+        );
     }
 
     #[test]

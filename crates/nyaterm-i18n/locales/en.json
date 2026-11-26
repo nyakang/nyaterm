@@ -2984,6 +2984,13 @@
     "title": "Serial port"
   },
   "serialSend": {
+    "chooseSessions": "Choose sessions…",
+    "selectedTargets": "%{count} sessions selected",
+    "selectCompatible": "Select compatible",
+    "clearTargets": "Clear",
+    "targetClassHint": "Select a session first. Serial and other terminals cannot be mixed.",
+    "targetUnavailable": "Unavailable",
+    "unavailableTargets": "%{count} unavailable target(s) will be skipped",
     "payloadEmpty": "Payload is empty",
     "noTarget": "No available target session",
     "invalidPaste": "Invalid paste: expected hexadecimal bytes",

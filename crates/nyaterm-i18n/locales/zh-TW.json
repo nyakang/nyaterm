@@ -2984,6 +2984,13 @@
     "title": "選擇序列埠"
   },
   "serialSend": {
+    "chooseSessions": "選擇工作階段…",
+    "selectedTargets": "已選 %{count} 個工作階段",
+    "selectCompatible": "全選相容工作階段",
+    "clearTargets": "清空",
+    "targetClassHint": "先勾選一個工作階段；序列埠與其他終端不能混選。",
+    "targetUnavailable": "無法使用",
+    "unavailableTargets": "將略過 %{count} 個無法使用的目標",
     "payloadEmpty": "內容為空",
     "noTarget": "沒有可傳送的目標工作階段",
     "invalidPaste": "貼上無效：需要十六進位位元組",

@@ -2984,6 +2984,13 @@
     "title": "시리얼 포트"
   },
   "serialSend": {
+    "chooseSessions": "세션 선택…",
+    "selectedTargets": "세션 %{count}개 선택됨",
+    "selectCompatible": "호환 세션 모두 선택",
+    "clearTargets": "지우기",
+    "targetClassHint": "먼저 세션을 선택하세요. 시리얼과 다른 터미널은 함께 선택할 수 없습니다.",
+    "targetUnavailable": "사용 불가",
+    "unavailableTargets": "사용할 수 없는 대상 %{count}개를 건너뜁니다",
     "payloadEmpty": "페이로드가 비어 있습니다",
     "noTarget": "전송 가능한 세션이 없습니다",
     "invalidPaste": "잘못된 붙여넣기: 16진수 바이트가 필요합니다",

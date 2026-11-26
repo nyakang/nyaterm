@@ -8,9 +8,7 @@ use super::NyaTermApp;
 use super::ai::AiFullAccessSetting;
 use crate::features::shell::TabMouseActionTarget;
 use crate::models::{ConnectionEditorSelect, HeaderStatusMode};
-use crate::send_command::{
-    SendCommandDataType, SendCommandLineEnding, SendCommandMode, SendCommandTarget,
-};
+use crate::send_command::{SendCommandDataType, SendCommandLineEnding, SendCommandMode};
 use crate::temporary_ssh_link::TemporaryLinkProtocol;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -474,16 +472,6 @@ impl NyaTermApp {
                     _ => SendCommandMode::Line,
                 };
                 self.set_send_command_mode(mode, cx);
-            }
-            "bottom-command-target-select" => {
-                let target = match value {
-                    "all" => SendCommandTarget::AllCompatible,
-                    value if value.starts_with("group:") => {
-                        SendCommandTarget::Group(value[6..].to_string())
-                    }
-                    _ => SendCommandTarget::Current,
-                };
-                self.set_send_command_target(target, cx);
             }
             "bottom-command-eol-select" => {
                 let line_ending = match value {

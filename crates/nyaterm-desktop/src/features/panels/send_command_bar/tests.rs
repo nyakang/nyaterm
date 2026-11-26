@@ -146,3 +146,94 @@ fn command_panel_keeps_editor_and_action_inside_empty_workspace_at_all_sizes() {
         }
     }
 }
+
+#[test]
+fn command_send_target_picker_keeps_multiselect_open_and_restores_keyboard_focus() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::send_command::{SendCommandSelection, SendCommandTarget};
+    use crate::test_support::TestConfigDir;
+    use gpui::{KeyDownEvent, KeyUpEvent, Keystroke, Modifiers};
+
+    let root = TestConfigDir::new("nyaterm-send-target-picker");
+    let mut cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "first");
+    app.update(&mut cx, |app, cx| {
+        app.sync_component_theme(cx);
+        app.set_bottom_panel_mode(BottomPanelMode::CommandSend);
+        let metadata = app.session.metadata("first").unwrap().clone();
+        app.session.register_session_metadata("second", metadata);
+        app.set_send_command_target(
+            SendCommandTarget::Sessions(SendCommandSelection::default()),
+            cx,
+        );
+    });
+    let fixture_app = app.clone();
+    let (fixture, cx) = cx.add_window_view(move |_, cx| {
+        cx.observe(&fixture_app, |_, _, cx| cx.notify()).detach();
+        CommandPanelFixture {
+            app: fixture_app,
+            width: 1200.,
+        }
+    });
+    for width in [1200., 420.] {
+        fixture.update(cx, |fixture, cx| {
+            fixture.width = width;
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                window.focus(app.send_command.target_trigger_focus(), cx)
+            });
+        });
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let keystroke = Keystroke::parse("enter").unwrap();
+        cx.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(KeyUpEvent { keystroke });
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.update(|window, cx| {
+                _ = window.draw(cx);
+            });
+        }
+        let content = cx.debug_bounds("send-command.target-content").unwrap();
+        assert!(content.size.width <= px(320.));
+        assert!(content.top() >= px(0.));
+        assert!(content.bottom() <= px(760.));
+        for selector in [
+            "send-command.target-row-first",
+            "send-command.target-row-second",
+        ] {
+            let row = cx.debug_bounds(selector).unwrap();
+            cx.simulate_click(row.origin + point(px(7.), px(7.)), Modifiers::default());
+            cx.run_until_parked();
+            app.read_with(cx, |app, _| assert!(app.send_command.target_picker_open()));
+        }
+        app.read_with(cx, |app, _| {
+            let SendCommandTarget::Sessions(selection) = app.send_command.target() else {
+                panic!("manual mode lost");
+            };
+            assert_eq!(selection.ids().len(), 2);
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            app.read_with(cx, |app, _| {
+                assert!(!app.send_command.target_picker_open());
+                assert!(app.send_command.target_trigger_focus().is_focused(window));
+            });
+        });
+        app.update(cx, |app, cx| {
+            app.set_send_command_target(
+                SendCommandTarget::Sessions(SendCommandSelection::default()),
+                cx,
+            )
+        });
+    }
+}
