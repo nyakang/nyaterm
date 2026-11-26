@@ -1960,7 +1960,7 @@ forward_app_action!(
     prompt_diagnostics_export,
     prompt_keyword_highlight_import,
     reset_all_keybindings,
-    reset_remote_monitoring_intervals,
+    reset_remote_monitoring,
     reveal_log_dir,
     run_provider_cloud_sync_test,
     start_github_gist_auth,

@@ -3142,8 +3142,7 @@
       "settings_ui": "界面"
     },
     "remoteMonitoring": "远程监控",
-    "remoteMonitoringDesc": "仅在面板或顶部信息栏使用 SSH 监控数据时自动采集。",
-    "remoteMonitoringIconDesc": "连接图标自动识别可能触发一次性资源信息采集。",
+    "remoteMonitoringDesc": "仅在面板或顶部信息栏使用 SSH 监控数据时自动采集。连接图标自动识别可能触发一次性资源信息采集。",
     "remoteMonitoringReset": "恢复默认",
     "internalEditorFontSize": "内置编辑器字号 (px)",
     "internalEditorFontSizeDesc": "适用于所有内置文件编辑器。",

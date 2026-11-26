@@ -953,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_monitoring_inputs_reset_only_the_five_intervals_and_cancel_restores_them() {
+    fn remote_monitoring_reset_restores_defaults_and_cancel_reverts_draft() {
         let test_dir = TestConfigDir::new("nyaterm-monitor-settings");
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
@@ -964,6 +964,8 @@ mod tests {
             app.settings.set_ascend_npu_monitor_interval(19);
             app.settings.set_process_manager_interval(20);
             app.settings.set_docker_manager_interval(21);
+            app.settings.toggle_remote_stats_show_users();
+            assert!(app.settings.summary().ui_remote_stats_show_users);
             let original = app.settings.summary().clone();
             app.begin_settings_draft(cx);
             app.ensure_settings_tab_inputs(SettingsTab::TerminalGeneral, cx);
@@ -984,7 +986,7 @@ mod tests {
                 assert_eq!(inputs[id].read(cx).value(cx), original_value);
                 assert_ne!(original_value, default_value);
             }
-            app.reset_remote_monitoring_intervals(cx);
+            app.reset_remote_monitoring(cx);
             assert!(app.settings_draft_dirty());
             let mut expected = original.clone();
             expected.ui_remote_stats_interval = 3;
@@ -992,6 +994,7 @@ mod tests {
             expected.ui_ascend_npu_monitor_interval = 3;
             expected.ui_process_manager_interval = 5;
             expected.ui_docker_manager_interval = 10;
+            expected.ui_remote_stats_show_users = false;
             assert_eq!(*app.settings.summary(), expected);
             for (id, value) in [
                 ("remote-stats", "3"),

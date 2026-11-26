@@ -3142,8 +3142,7 @@
       "settings_ui": "Interface"
     },
     "remoteMonitoring": "Remote monitoring",
-    "remoteMonitoringDesc": "SSH monitoring data is collected automatically only while a panel or the header uses it.",
-    "remoteMonitoringIconDesc": "Connection icon auto-detection may request a one-time resource snapshot.",
+    "remoteMonitoringDesc": "SSH monitoring data is collected automatically only while a panel or the header uses it. Connection icon auto-detection may request a one-time resource snapshot.",
     "remoteMonitoringReset": "Restore defaults",
     "internalEditorFontSize": "Built-in editor font size (px)",
     "internalEditorFontSizeDesc": "Applies to all built-in file editors.",

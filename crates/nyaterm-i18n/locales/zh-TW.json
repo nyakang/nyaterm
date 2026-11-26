@@ -3142,8 +3142,7 @@
       "settings_ui": "介面"
     },
     "remoteMonitoring": "遠端監控",
-    "remoteMonitoringDesc": "僅在面板或頂部資訊列使用 SSH 監控資料時自動採集。",
-    "remoteMonitoringIconDesc": "連線圖示自動辨識可能觸發一次性的資源資訊採集。",
+    "remoteMonitoringDesc": "僅在面板或頂部資訊列使用 SSH 監控資料時自動採集。連線圖示自動辨識可能觸發一次性的資源資訊採集。",
     "remoteMonitoringReset": "還原預設值",
     "internalEditorFontSize": "內建編輯器字級 (px)",
     "internalEditorFontSizeDesc": "適用於所有內建檔案編輯器。",

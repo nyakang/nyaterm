@@ -304,6 +304,18 @@ impl SettingsFeatureState {
     pub(in crate::features) fn set_docker_manager_interval(&mut self, value: u32) {
         self.summary.ui_docker_manager_interval = value.clamp(3, 120);
     }
+    pub(in crate::features) fn reset_remote_monitoring(&mut self) -> bool {
+        let defaults = nyaterm_core::AppSettingsSummary::default();
+        self.set_remote_stats_interval(defaults.ui_remote_stats_interval);
+        self.set_gpu_monitor_interval(defaults.ui_gpu_monitor_interval);
+        self.set_ascend_npu_monitor_interval(defaults.ui_ascend_npu_monitor_interval);
+        self.set_process_manager_interval(defaults.ui_process_manager_interval);
+        self.set_docker_manager_interval(defaults.ui_docker_manager_interval);
+        let users_changed =
+            self.summary.ui_remote_stats_show_users != defaults.ui_remote_stats_show_users;
+        self.summary.ui_remote_stats_show_users = defaults.ui_remote_stats_show_users;
+        users_changed
+    }
     pub(in crate::features) fn toggle_terminal_action_links(&mut self) {
         self.summary.terminal_action_links_enabled = !self.summary.terminal_action_links_enabled;
     }

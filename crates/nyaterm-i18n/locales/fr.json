@@ -3142,8 +3142,7 @@
       "settings_ui": "Interface"
     },
     "remoteMonitoring": "Surveillance distante",
-    "remoteMonitoringDesc": "Les données de surveillance SSH sont collectées automatiquement uniquement lorsqu’un panneau ou la barre d’informations les utilise.",
-    "remoteMonitoringIconDesc": "La détection automatique de l’icône peut demander un relevé ponctuel des ressources.",
+    "remoteMonitoringDesc": "Les données de surveillance SSH sont collectées automatiquement uniquement lorsqu’un panneau ou la barre d’informations les utilise. La détection automatique de l’icône peut demander un relevé ponctuel des ressources.",
     "remoteMonitoringReset": "Rétablir les valeurs par défaut",
     "internalEditorFontSize": "Taille de police de l’éditeur intégré (px)",
     "internalEditorFontSizeDesc": "S’applique à tous les éditeurs de fichiers intégrés.",

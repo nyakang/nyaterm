@@ -3142,8 +3142,7 @@
       "settings_ui": "Interface"
     },
     "remoteMonitoring": "Monitoramento remoto",
-    "remoteMonitoringDesc": "Os dados de monitoramento SSH são coletados automaticamente apenas enquanto um painel ou cabeçalho os utiliza.",
-    "remoteMonitoringIconDesc": "A detecção automática do ícone de conexão pode solicitar um instantâneo de recurso único.",
+    "remoteMonitoringDesc": "Os dados de monitoramento SSH são coletados automaticamente apenas enquanto um painel ou cabeçalho os utiliza. A detecção automática do ícone de conexão pode solicitar um instantâneo de recurso único.",
     "remoteMonitoringReset": "Restaurar padrões",
     "internalEditorFontSize": "Tamanho da fonte do editor integrado (px)",
     "internalEditorFontSizeDesc": "Aplica-se a todos os editores de arquivos integrados.",

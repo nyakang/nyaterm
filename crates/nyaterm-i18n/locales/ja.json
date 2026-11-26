@@ -3142,8 +3142,7 @@
       "settings_ui": "インターフェース"
     },
     "remoteMonitoring": "リモート監視",
-    "remoteMonitoringDesc": "パネルまたは上部の情報バーで SSH 監視データを使用している間だけ自動収集します。",
-    "remoteMonitoringIconDesc": "接続アイコンの自動検出時に、リソース情報を一度収集することがあります。",
+    "remoteMonitoringDesc": "パネルまたは上部の情報バーで SSH 監視データを使用している間だけ自動収集します。接続アイコンの自動検出時に、リソース情報を一度収集することがあります。",
     "remoteMonitoringReset": "既定値に戻す",
     "internalEditorFontSize": "内蔵エディターの文字サイズ (px)",
     "internalEditorFontSizeDesc": "すべての内蔵ファイルエディターに適用されます。",
