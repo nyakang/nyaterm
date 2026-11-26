@@ -49,6 +49,32 @@ fn detects_username_and_chinese_password_prompts() {
 }
 
 #[test]
+fn detects_localized_sudo_and_unicode_password_prompts() {
+    let french_nbsp = "[sudo] Mot de passe de xxxx\u{00a0}:";
+    assert_eq!(
+        detect_credential_prompt_kind(french_nbsp),
+        Some(CredentialPromptKind::Password)
+    );
+    assert_eq!(
+        detect_credential_prompt_kind("[sudo] Mot\u{00a0}de\u{00a0}passe de user\u{202f}: "),
+        Some(CredentialPromptKind::Password)
+    );
+    assert_eq!(
+        detect_credential_prompt_kind("[sudo] CONTRASEÑA para alice:"),
+        Some(CredentialPromptKind::Password)
+    );
+    assert_eq!(
+        detect_credential_prompt_kind("[sudo] ПАРОЛЬ для alice:"),
+        Some(CredentialPromptKind::Password)
+    );
+    assert_eq!(
+        detect_credential_prompt_kind("Nom d'utilisateur\u{00a0}: "),
+        Some(CredentialPromptKind::Username)
+    );
+    assert!(super::is_default_password_prompt(french_nbsp));
+}
+
+#[test]
 fn matches_custom_regex_only() {
     let credentials = vec![
         cred("a", "alice", Some("login as"), Some("Password"), true, true),

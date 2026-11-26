@@ -345,6 +345,108 @@ fn credential_matches_prompt_cached(
         .is_some_and(|regex| regex.is_match(output))
 }
 
+const PASSWORD_PROMPT_KEYWORDS: &[&str] = &[
+    "password",
+    "passphrase",
+    "passcode",
+    "pin",
+    "otp",
+    "verification code",
+    "authentication code",
+    "auth code",
+    "2fa",
+    "mfa",
+    "密码",
+    "口令",
+    "验证码",
+    "动态码",
+    "动态口令",
+    "mot de passe",
+    "phrase de passe",
+    "phrase secrète",
+    "phrase secrete",
+    "code secret",
+    "passwort",
+    "kennwort",
+    "contraseña",
+    "contrasena",
+    "frase de paso",
+    "senha",
+    "frase-passe",
+    "frase passe",
+    "frase secreta",
+    "parola d'ordine",
+    "parola d’ordine",
+    "parola",
+    "wachtwoord",
+    "hasło",
+    "haslo",
+    "пароль",
+    "кодовая фраза",
+    "парольная фраза",
+    "şifre",
+    "heslo",
+    "lösenord",
+    "passord",
+    "adgangskode",
+    "salasana",
+    "jelszó",
+    "parolă",
+    "パスワード",
+    "パスフレーズ",
+    "비밀번호",
+    "암호",
+];
+
+const USERNAME_PROMPT_KEYWORDS: &[&str] = &[
+    "username",
+    "user name",
+    "login as",
+    "login",
+    "account",
+    "user",
+    "用户名",
+    "用户",
+    "账号",
+    "账户",
+    "登录名",
+    "nom d'utilisateur",
+    "nom d’utilisateur",
+    "utilisateur",
+    "benutzername",
+    "benutzer",
+    "nombre de usuario",
+    "usuario",
+    "nome de usuário",
+    "nome de usuario",
+    "usuário",
+    "nome utente",
+    "utente",
+    "gebruikersnaam",
+    "nazwa użytkownika",
+    "имя пользователя",
+    "пользователь",
+    "kullanıcı adı",
+    "kullanıcı",
+    "ユーザー名",
+    "ユーザ名",
+    "사용자 이름",
+    "사용자명",
+];
+
+fn normalize_prompt_for_keyword_lookup(trimmed: &str) -> String {
+    // Collapse Unicode whitespace (including NBSP/NNBSP) and fold Unicode case
+    // so multi-word localized prompts match regardless of spacing or casing.
+    let mut normalized = String::with_capacity(trimmed.len());
+    for token in trimmed.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(&token.to_lowercase());
+    }
+    normalized
+}
+
 pub fn detect_live_prompt_kind(prompt: &str) -> Option<CredentialPromptKind> {
     let trimmed = prompt.trim();
     if trimmed.is_empty()
@@ -355,36 +457,16 @@ pub fn detect_live_prompt_kind(prompt: &str) -> Option<CredentialPromptKind> {
     {
         return None;
     }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("password")
-        || lower.contains("passphrase")
-        || lower.contains("passcode")
-        || lower.contains("pin")
-        || lower.contains("otp")
-        || lower.contains("verification code")
-        || lower.contains("authentication code")
-        || lower.contains("auth code")
-        || lower.contains("2fa")
-        || lower.contains("mfa")
-        || trimmed.contains("密码")
-        || trimmed.contains("口令")
-        || trimmed.contains("验证码")
-        || trimmed.contains("动态码")
-        || trimmed.contains("动态口令")
+    let normalized = normalize_prompt_for_keyword_lookup(trimmed);
+    if PASSWORD_PROMPT_KEYWORDS
+        .iter()
+        .any(|keyword| normalized.contains(keyword))
     {
         return Some(CredentialPromptKind::Password);
     }
-    if lower.contains("username")
-        || lower.contains("user name")
-        || lower.contains("login as")
-        || lower.contains("login")
-        || lower.contains("account")
-        || lower.contains("user")
-        || trimmed.contains("用户名")
-        || trimmed.contains("用户")
-        || trimmed.contains("账号")
-        || trimmed.contains("账户")
-        || trimmed.contains("登录名")
+    if USERNAME_PROMPT_KEYWORDS
+        .iter()
+        .any(|keyword| normalized.contains(keyword))
     {
         return Some(CredentialPromptKind::Username);
     }
@@ -716,5 +798,58 @@ mod tests {
                 clear_pending: true
             }
         );
+    }
+
+    #[test]
+    fn live_prompt_detection_handles_french_sudo_with_nbsp_and_unicode() {
+        let french_nbsp = "[sudo] Mot de passe de xxxx\u{00a0}:";
+        assert_eq!(
+            super::detect_live_prompt_kind(french_nbsp),
+            Some(CredentialPromptKind::Password)
+        );
+        assert_eq!(
+            super::detect_live_prompt_kind("[sudo] Mot\u{00a0}de\u{00a0}passe de user\u{202f}:"),
+            Some(CredentialPromptKind::Password)
+        );
+        assert_eq!(
+            super::detect_live_prompt_kind("[sudo] CONTRASEÑA para xxxx:"),
+            Some(CredentialPromptKind::Password)
+        );
+        assert_eq!(
+            super::detect_live_prompt_kind("[sudo] Hasło użytkownika xxxx:"),
+            Some(CredentialPromptKind::Password)
+        );
+        assert_eq!(
+            super::detect_live_prompt_kind("[sudo] Пароль для xxxx:"),
+            Some(CredentialPromptKind::Password)
+        );
+        assert_eq!(
+            super::detect_live_prompt_kind("Nom d'utilisateur\u{00a0}:"),
+            Some(CredentialPromptKind::Username)
+        );
+
+        let mut regex_cache = HashMap::new();
+        for pattern in [r"\[sudo\] (Mot de passe de|password for) xxxx\s*:", "Mot"] {
+            let output = credential_autofill_match_outcome(
+                request(
+                    french_nbsp,
+                    super::detect_live_prompt_kind(french_nbsp).expect("detected password prompt"),
+                    vault_credentials(vec![credential("c1", "xxxx", None, Some(pattern), true)]),
+                    None,
+                ),
+                &mut regex_cache,
+            );
+            assert!(
+                matches!(
+                    output,
+                    CredentialAutofillMatchOutcome::Suggest {
+                        kind: CredentialPromptKind::Password,
+                        ref matches,
+                        ..
+                    } if matches.len() == 1 && matches[0].id() == "c1"
+                ),
+                "pattern {pattern} failed to match French sudo prompt"
+            );
+        }
     }
 }
