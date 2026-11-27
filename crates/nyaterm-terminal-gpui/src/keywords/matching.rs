@@ -25,7 +25,7 @@ pub fn keyword_pattern_source(
         regex::escape(pattern)
     };
     if whole_word {
-        source = format!(r"\b{source}\b");
+        source = format!(r"\b(?:{source})\b");
     }
     if case_sensitive || keyword_pattern_has_inline_case_flag(&source) {
         source
@@ -37,4 +37,42 @@ pub fn keyword_pattern_source(
 /// Whether the pattern already states its own case behaviour.
 pub fn keyword_pattern_has_inline_case_flag(pattern: &str) -> bool {
     pattern.contains("(?i)") || pattern.contains("(?-i)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keyword_pattern_source;
+
+    #[test]
+    fn whole_word_applies_to_every_alternative() {
+        let re =
+            regex::Regex::new(&keyword_pattern_source("error|warning", false, true, true)).unwrap();
+        for text in ["error", "WARNING", "an error!"] {
+            assert!(re.is_match(text), "{text}");
+        }
+        for text in ["errors", "prewarning", "error_", "错误error"] {
+            assert!(!re.is_match(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn whole_word_preserves_literal_unicode_and_inline_flags() {
+        for (pattern, text, case_sensitive, use_regex, expected) in [
+            ("c++", "c++", false, false, false),
+            ("error|warning", "error|warning", false, false, true),
+            ("错误", " 错误!", false, false, true),
+            ("错误", "错误码", false, false, false),
+            ("(?-i)ERROR|WARN", "error", false, true, false),
+            ("(?i)error|warn", "WARN", true, true, true),
+        ] {
+            let re = regex::Regex::new(&keyword_pattern_source(
+                pattern,
+                case_sensitive,
+                true,
+                use_regex,
+            ))
+            .unwrap();
+            assert_eq!(re.is_match(text), expected, "{pattern} / {text}");
+        }
+    }
 }

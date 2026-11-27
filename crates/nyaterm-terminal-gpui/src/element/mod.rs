@@ -30,8 +30,8 @@ use crate::glyphs::{
 };
 use crate::keywords::{
     TerminalKeywordHighlightLookup, TerminalKeywordHighlightSnapshot, TerminalKeywordRowReuseKey,
-    terminal_keyword_row_reuse_key,
-    terminal_keyword_row_reuse_keys_for_rows, terminal_keyword_rules_key,
+    terminal_keyword_row_reuse_key, terminal_keyword_row_reuse_keys_for_rows,
+    terminal_keyword_rules_key,
 };
 use crate::paint::{
     apply_search_ranges, line_strike_color, push_col_range_bg, terminal_cell_text_at_col,
@@ -1272,18 +1272,26 @@ pub(super) fn terminal_background_ranges_for_cells(
 /// that declares a background paints a block; a rule without one stays
 /// transparent, so clearing a background really clears it.
 fn terminal_keyword_background_ranges(
-    ranges: &[crate::types::TerminalKeywordRange],
+    spans: &[TerminalHighlightSpan],
 ) -> Vec<TerminalRowBackgroundRange> {
-    ranges
-        .iter()
-        .filter_map(|range| {
-            range.background.map(|bg| TerminalRowBackgroundRange {
+    let mut col = 0;
+    let mut backgrounds = Vec::new();
+    for span in spans {
+        let end = col + terminal_cell_count(&span.text).max(1);
+        // The span builder has already excluded concealed, inverse and
+        // explicitly coloured ANSI text. Never paint raw matcher ranges here.
+        if span.keyword
+            && let Some(bg) = span.bg
+        {
+            backgrounds.push(TerminalRowBackgroundRange {
                 bg,
-                start: range.start_col,
-                end: range.end_col,
-            })
-        })
-        .collect()
+                start: col,
+                end,
+            });
+        }
+        col = end;
+    }
+    backgrounds
 }
 
 #[cfg(test)]
@@ -2212,9 +2220,7 @@ impl Element for NyaTerminalElement {
                 // backgrounds must be overlaid explicitly. A rule only paints a
                 // background when it carries one, so a cleared background stays
                 // transparent. It paints below the shaped text.
-                if let Some(ranges) = keyword_ranges {
-                    background_ranges.extend(terminal_keyword_background_ranges(ranges));
-                }
+                background_ranges.extend(terminal_keyword_background_ranges(&background_spans));
                 let text_decorations = terminal_text_decorations_for_row(
                     glyph_spans,
                     snapshot_row.map(|row| row.cells.as_ref()),

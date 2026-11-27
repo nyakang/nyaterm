@@ -1207,7 +1207,14 @@ fn only_an_explicit_keyword_background_paints_a_block() {
         },
     ];
 
-    let backgrounds = terminal_keyword_background_ranges(&ranges);
+    let spans = terminal_highlight_spans_with_keyword_ranges(
+        "test test xx",
+        None,
+        Some(&ranges),
+        &[],
+        nyaterm_ui::theme_palette("github-dark"),
+    );
+    let backgrounds = terminal_keyword_background_ranges(&spans);
     assert_eq!(backgrounds.len(), 1);
     assert_eq!(
         (backgrounds[0].bg, backgrounds[0].start, backgrounds[0].end),
@@ -3055,4 +3062,47 @@ fn navigation_background_moves_without_selection_or_zebra_stripes() {
         );
     }
     assert!(quads.is_empty());
+}
+
+#[test]
+fn keyword_background_respects_concealed_inverse_and_explicit_ansi_foregrounds() {
+    use crate::types::TerminalKeywordRange;
+    use nyaterm_terminal::{CellStyle, StyledSpan};
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    for style in [
+        CellStyle {
+            hidden: true,
+            ..Default::default()
+        },
+        CellStyle {
+            reverse: true,
+            ..Default::default()
+        },
+        CellStyle {
+            fg_rgb: Some(0x123456),
+            ..Default::default()
+        },
+    ] {
+        let ansi = [StyledSpan {
+            text: "ERROR".into(),
+            style,
+        }];
+        let ranges = [TerminalKeywordRange {
+            start_col: 0,
+            end_col: 5,
+            color: 0xffffff,
+            background: Some(0xff0000),
+        }];
+        let spans = terminal_highlight_spans_with_keyword_ranges(
+            "ERROR",
+            Some(&ansi),
+            Some(&ranges),
+            &[],
+            palette,
+        );
+        assert!(terminal_keyword_background_ranges(&spans).is_empty());
+        if style.hidden {
+            assert_eq!(spans[0].color, Some(palette.terminal_bg));
+        }
+    }
 }

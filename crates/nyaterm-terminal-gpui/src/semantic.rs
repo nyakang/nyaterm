@@ -226,6 +226,7 @@ impl SemanticHighlighter {
         self.whole_matches(line, context, &[])
     }
 
+    #[cfg(test)]
     pub fn ranges(
         &self,
         line: &str,
@@ -332,16 +333,16 @@ impl SemanticHighlighter {
         // Each source advances in text order. Keep one pending match per source,
         // choose the leftmost/longest whole token, then skip its interior.
         let mut sources: Vec<Box<dyn Iterator<Item = SemanticMatch> + '_>> = Vec::new();
-        sources.push(Box::new(user_matches.iter().map(|&(start, end, color, background)| {
-            SemanticMatch {
+        sources.push(Box::new(user_matches.iter().map(
+            |&(start, end, color, background)| SemanticMatch {
                 start,
                 end,
                 color,
                 priority: 0,
                 background,
                 permissions: false,
-            }
-        })));
+            },
+        )));
         // Recognised command output is parsed field by field before the generic
         // rules run, so an `ip addr` address is an address rather than whatever
         // the number rule happens to grab first (issue: highlight precision).

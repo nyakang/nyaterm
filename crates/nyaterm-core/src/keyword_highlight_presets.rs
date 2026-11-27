@@ -330,8 +330,10 @@ pub fn overlay_resolved_keyword_highlight_rules(
     // global rule drops out instead of showing up twice.
     // The set owns its ids: borrowing them from `resolved_session` would keep
     // that vector borrowed while it is moved into `out`.
-    let session_ids: std::collections::HashSet<String> =
-        resolved_session.iter().map(|rule| rule.id.clone()).collect();
+    let session_ids: std::collections::HashSet<String> = resolved_session
+        .iter()
+        .map(|rule| rule.id.clone())
+        .collect();
     let mut out = resolved_session;
     for rule in global {
         if !session_ids.contains(rule.id.as_str()) {
