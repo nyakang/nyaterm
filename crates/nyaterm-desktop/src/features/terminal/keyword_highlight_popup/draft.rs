@@ -33,19 +33,6 @@ impl RuleDraftIndex {
         }
     }
 
-    pub(super) fn update(
-        &mut self,
-        base: &[KeywordHighlightRule],
-        rules: &[KeywordHighlightRule],
-        id: &str,
-    ) {
-        if self.get(rules, id) == self.base_positions.get(id).map(|&i| &base[i]) {
-            self.changed.remove(id);
-        } else {
-            self.changed.insert(id.to_string());
-        }
-    }
-
     pub(super) fn get<'a>(
         &self,
         rules: &'a [KeywordHighlightRule],
@@ -54,35 +41,12 @@ impl RuleDraftIndex {
         self.positions.get(id).map(|&i| &rules[i])
     }
 
-    pub(super) fn position(&self, id: &str) -> Option<usize> {
-        self.positions.get(id).copied()
-    }
-    pub(super) fn contains(&self, id: &str) -> bool {
-        self.positions.contains_key(id)
+    /// The ids whose content differs from the baseline.
+    pub(super) fn changed_ids(&self) -> &HashSet<String> {
+        &self.changed
     }
     pub(super) fn dirty(&self) -> bool {
         !self.changed.is_empty()
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct RuleSummary {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) enabled: bool,
-    pub(super) source: &'static str,
-    pub(super) search: String,
-}
-
-impl RuleSummary {
-    pub(super) fn new(rule: &KeywordHighlightRule, source: &'static str) -> Self {
-        Self {
-            id: rule.id.clone(),
-            name: rule.name.clone(),
-            enabled: rule.enabled,
-            source,
-            search: rule.name.to_lowercase(),
-        }
     }
 }
 
@@ -103,14 +67,37 @@ mod tests {
         index.rebuild(&base, &rules);
         assert!(!index.dirty());
         rules[0].name = "edited".into();
-        index.update(&base, &rules, "a");
+        index.rebuild(&base, &rules);
         assert!(index.dirty());
+        assert!(index.changed_ids().contains("a"));
         rules[0].name = "original".into();
-        index.update(&base, &rules, "a");
+        index.rebuild(&base, &rules);
         assert!(!index.dirty());
         index.rebuild(&base, &[]);
         assert!(index.dirty());
         index.rebuild(&base, &base);
         assert!(!index.dirty());
+    }
+
+    /// A rule that only exists in the draft is a change on its own, even
+    /// though the rules that both sides share stayed identical.
+    #[test]
+    fn a_new_rule_marks_the_draft_dirty() {
+        let base = vec![KeywordHighlightRule {
+            id: "a".into(),
+            name: "original".into(),
+            ..Default::default()
+        }];
+        let mut rules = base.clone();
+        rules.push(KeywordHighlightRule {
+            id: "b".into(),
+            name: "new".into(),
+            ..Default::default()
+        });
+        let mut index = RuleDraftIndex::default();
+        index.rebuild(&base, &rules);
+        assert!(index.dirty());
+        assert!(index.changed_ids().contains("b"));
+        assert!(!index.changed_ids().contains("a"));
     }
 }

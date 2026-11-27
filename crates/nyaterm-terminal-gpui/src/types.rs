@@ -28,4 +28,6 @@ pub(super) struct TerminalKeywordRange {
     pub(super) start_col: usize,
     pub(super) end_col: usize,
     pub(super) color: u32,
+    /// Explicit highlight background from the rule, if any.
+    pub(super) background: Option<u32>,
 }

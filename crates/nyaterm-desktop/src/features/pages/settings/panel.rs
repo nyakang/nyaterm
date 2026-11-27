@@ -11,8 +11,8 @@ use crate::features::{
 };
 use crate::models::{
     AiActionEditorField, AiActionListKind, CloudSyncConflictState, CloudSyncSecretDraft,
-    GithubGistAuthState, KeywordHighlightEditorField, SettingsTab, SnapshotPasswordPromptState,
-    TranslationSecretDraft,
+    GithubGistAuthState, KeywordHighlightEditorField, KeywordMatchOption, SettingsTab,
+    SnapshotPasswordPromptState, TranslationSecretDraft,
 };
 use crate::theme::ThemePalette;
 use gpui::{
@@ -534,6 +534,8 @@ pub(in crate::features) struct SettingsPanel {
     slider_subscriptions: Vec<Subscription>,
     pub(in crate::features::pages::settings) theme_picker_controls:
         super::workspace::theme_designer::ThemePickerControls,
+    pub(in crate::features::pages::settings) keyword_color_pickers:
+        super::terminal::keywords::KeywordColorPickerControls,
     pub(in crate::features::pages::settings) connection_type_drop_target:
         Option<super::workspace::connection_types::ConnectionTypeDropTarget>,
     pub(in crate::features::pages::settings) connection_type_drop_clock_armed: bool,
@@ -619,6 +621,7 @@ impl SettingsPanel {
                 window_subscription,
             ],
             theme_picker_controls: Default::default(),
+            keyword_color_pickers: Default::default(),
             connection_type_drop_target: None,
             connection_type_drop_clock_armed: false,
             selects: SelectRegistry::default(),
@@ -717,7 +720,9 @@ impl SettingsPanel {
         self.snapshot = Some(snapshot);
         cx.spawn(async move |this, cx| {
             let _ = this.update_in(cx, |panel, window, cx| {
-                panel.sync_theme_picker_controls(window, cx)
+                panel.sync_theme_picker_controls(window, cx);
+                let rules = panel.settings.keyword_config().rules.clone();
+                panel.keyword_color_pickers.sync(&rules, window, cx);
             });
         })
         .detach();
@@ -960,6 +965,30 @@ impl SettingsPanel {
         match self.existing_text_input(&id) {
             Some(field) => {
                 let shell = NyaInputShell::new(id, &field);
+                if multi_line {
+                    shell.multi_line().into_any_element()
+                } else {
+                    shell.into_any_element()
+                }
+            }
+            None => {
+                debug_assert!(false, "settings text input {id} was never built");
+                div().into_any_element()
+            }
+        }
+    }
+
+    /// The text input for `id`, with the shell configured by the caller.
+    pub(in crate::features) fn existing_text_input_box_with(
+        &self,
+        id: impl Into<SharedString>,
+        multi_line: bool,
+        configure: impl FnOnce(NyaInputShell) -> NyaInputShell,
+    ) -> AnyElement {
+        let id = id.into();
+        match self.existing_text_input(&id) {
+            Some(field) => {
+                let shell = configure(NyaInputShell::new(id, &field));
                 if multi_line {
                     shell.multi_line().into_any_element()
                 } else {
@@ -1621,6 +1650,20 @@ impl SettingsPanel {
         self.with_app(cx, |app, cx| app.toggle_keyword_highlight_rule(rule_id, cx));
     }
 
+    /// Toggle one of the matching options of a rule.
+    pub(in crate::features) fn toggle_keyword_highlight_rule_match_option(
+        &mut self,
+        rule_id: String,
+        option: KeywordMatchOption,
+        cx: &mut Context<Self>,
+    ) {
+        self.with_app(cx, |app, _cx| {
+            let _ = app
+                .settings
+                .toggle_keyword_highlight_rule_match_option(&rule_id, option);
+        });
+    }
+
     pub(in crate::features) fn add_keyword_highlight_rule(
         &mut self,
         window: &mut Window,
@@ -1658,18 +1701,6 @@ impl SettingsPanel {
         self.with_app(cx, |app, cx| {
             app.handle_keyword_highlight_key_down(event, window, cx)
         })
-    }
-
-    pub(in crate::features) fn set_keyword_highlight_rule_color(
-        &mut self,
-        rule_id: String,
-        dark: bool,
-        color: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.with_app(cx, |app, cx| {
-            app.set_keyword_highlight_rule_color(rule_id, dark, color, cx);
-        });
     }
 
     pub(in crate::features) fn expand_keyword_highlight_rule(
@@ -2598,6 +2629,94 @@ mod tests {
         }
     }
 
+    /// The pattern box of the settings page carries the same three matching
+    /// options as the session editor, and clicking one changes the rule.
+    #[test]
+    fn keyword_pattern_box_exposes_the_three_matching_options() {
+        struct KeywordRuleHost {
+            panel: Entity<SettingsPanel>,
+        }
+
+        impl Render for KeywordRuleHost {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                self.panel.update(cx, |panel, cx| {
+                    panel
+                        .keyword_highlights_settings_section(cx)
+                        .into_any_element()
+                })
+            }
+        }
+
+        let dir = TestConfigDir::new("nyaterm-settings-keyword-match-options");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx, dir.path());
+        let panel = cx.update_entity(&app, |app, cx| {
+            app.open_page(NavItem::Settings, cx);
+            app.focus_settings_tab(SettingsTab::TerminalGeneral, cx);
+            app.update_appearance_theme("github-dark", cx);
+            app.sync_component_theme(cx);
+            let mut config = app.settings.keyword_config().clone();
+            config.enabled = true;
+            config.rules = vec![nyaterm_core::KeywordHighlightRule {
+                id: "rule-1".into(),
+                name: "Errors".into(),
+                patterns: vec!["ERROR".into()],
+                ..Default::default()
+            }];
+            app.settings.replace_keyword_config(config);
+            app.request_settings_panel_refresh(cx);
+            app.flush_settings_panel_snapshots(cx);
+            app.settings_panel.clone()
+        });
+        let (_, vcx) = cx.add_window_view(|_, _| KeywordRuleHost { panel });
+        vcx.simulate_resize(gpui::size(px(720.), px(1800.)));
+        draw(&app, vcx);
+
+        // The options only show up once the rule is expanded.
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.expand_keyword_highlight_rule("rule-1".into(), cx);
+                app.flush_settings_panel_snapshots(cx);
+            })
+        });
+        draw(&app, vcx);
+
+        let field = vcx
+            .debug_bounds("keyword.highlight.rule-1.patterns")
+            .expect("the pattern box is drawn");
+        for (option, selector) in [
+            ("case-sensitive", "keyword-match-option-case-sensitive"),
+            ("whole-word", "keyword-match-option-whole-word"),
+            ("regex", "keyword-match-option-regex"),
+        ] {
+            let bounds = vcx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("the {option} option is drawn"));
+            assert!(
+                bounds.right() <= field.right() && bounds.bottom() <= field.bottom(),
+                "the {option} option must sit inside the pattern box"
+            );
+        }
+
+        let toggle = vcx
+            .debug_bounds("keyword-match-option-case-sensitive")
+            .unwrap();
+        vcx.simulate_click(toggle.center(), Modifiers::default());
+        draw(&app, vcx);
+        vcx.update(|_, cx| {
+            let app = app.read(cx);
+            let rule = &app.settings.keyword_config().rules[0];
+            assert!(rule.case_sensitive);
+            assert!(!rule.whole_word);
+            assert!(rule.use_regex);
+        });
+    }
+
     #[test]
     fn row_stripes_subswitch_follows_main_switch_and_keeps_its_preference() {
         let dir = TestConfigDir::new("nyaterm-settings-row-stripes");
@@ -3233,5 +3352,151 @@ mod tests {
                 ],
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod native_probe {
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
+    use crate::features::pages::settings::panel::SettingsPanel;
+    use crate::models::{NavItem, SettingsTab};
+    use crate::test_support::TestConfigDir;
+    use gpui::{
+        App, AppContext as _, Bounds, Entity, InteractiveElement as _, IntoElement,
+        ParentElement as _, Render, Styled as _, WindowBounds, WindowOptions, div, px, size,
+    };
+    use nyaterm_core::{AppRuntime, RuntimeMode};
+    use std::time::Duration;
+
+    /// Show only the keyword highlight section of the settings page.
+    struct KeywordSectionHost {
+        panel: Entity<SettingsPanel>,
+    }
+
+    impl Render for KeywordSectionHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let section = self.panel.update(cx, |panel, cx| {
+                panel
+                    .keyword_highlights_settings_section(cx)
+                    .into_any_element()
+            });
+            // The built-in rules fill the page, so the viewport is anchored to
+            // the bottom of the section where the custom rules live.
+            div()
+                .id("keyword-section-viewport")
+                .relative()
+                .h(px(1000.))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .child(section),
+                )
+        }
+    }
+
+    /// Render the keyword highlight section of the settings page into a PNG so
+    /// the matching options of the pattern box can be inspected.
+    #[test]
+    #[ignore = "native settings visual fixture; run alone with NYATERM_SETTINGS_PROBE_OUTPUT"]
+    fn keyword_highlight_settings_native_probe() {
+        crate::preload_i18n().unwrap();
+        let output = std::env::var("NYATERM_SETTINGS_PROBE_OUTPUT").unwrap();
+        let locale =
+            std::env::var("NYATERM_SETTINGS_PROBE_LOCALE").unwrap_or_else(|_| "en".to_string());
+        let root = TestConfigDir::new("nyaterm-settings-keyword-probe");
+        let path = root.path().to_path_buf();
+        gpui_platform::application()
+            // The probe renders with the very asset source the application
+            // uses, so an icon the shell cannot resolve shows up as the blank
+            // button it really is.
+            .with_assets(crate::test_support::ProbeAssets::new())
+            .run(move |cx: &mut App| {
+                let runtime = AppRuntime::from_parts_for_test(
+                    RuntimeMode::Portable,
+                    path.clone(),
+                    path.join("config"),
+                    path.join("logs"),
+                    path.join("cache"),
+                    None,
+                );
+                let stores = UiStoreHandles {
+                    startup_restore: cx.new(|_| StartupRestoreStore::default()),
+                    overlays: cx.new(|_| OverlayStore::default()),
+                };
+                let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+                app.update(cx, |app, cx| {
+                    app.open_page(NavItem::Settings, cx);
+                    app.focus_settings_tab(SettingsTab::TerminalGeneral, cx);
+                    let mut config = app.settings.keyword_config().clone();
+                    config.enabled = true;
+                    config.rules = vec![nyaterm_core::KeywordHighlightRule {
+                        id: "rule-1".into(),
+                        name: "Errors".into(),
+                        patterns: vec!["ERROR".into(), "WARN".into()],
+                        ..Default::default()
+                    }];
+                    app.settings.replace_keyword_config(config);
+                    app.expand_keyword_highlight_rule("rule-1".into(), cx);
+                    app.request_settings_panel_refresh(cx);
+                    app.flush_settings_panel_snapshots(cx);
+                    app.sync_component_theme(cx);
+                    // The app applies the language of its settings, so the probe
+                    // switches the catalog afterwards.
+                    nyaterm_i18n::apply_locale(&locale);
+                });
+
+                cx.spawn(async move |cx| {
+                    let app = app.clone();
+                    let window = cx.update(|cx| {
+                        cx.open_window(
+                            WindowOptions {
+                                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                                    None,
+                                    size(px(900.), px(1200.)),
+                                    cx,
+                                ))),
+                                show: true,
+                                focus: false,
+                                ..Default::default()
+                            },
+                            move |window, cx| {
+                                let panel = app.read(cx).settings_panel.clone();
+                                let host = cx.new(|_| KeywordSectionHost { panel });
+                                cx.new(|cx| nyaterm_ui::nya_root(host, window, cx))
+                            },
+                        )
+                        .unwrap()
+                    });
+                    cx.background_executor()
+                        .timer(Duration::from_millis(600))
+                        .await;
+
+                    let image = cx
+                        .update_window(window.into(), |_, window, _| {
+                            window.render_to_image().unwrap()
+                        })
+                        .unwrap();
+                    let file =
+                        std::path::Path::new(&output).join("settings-keyword-match-options.png");
+                    cx.background_executor()
+                        .spawn(async move {
+                            image.save(file).unwrap();
+                        })
+                        .await;
+
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            });
+        drop(root);
     }
 }

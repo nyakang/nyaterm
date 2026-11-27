@@ -18,9 +18,10 @@ use super::{
     hash_styled_spans, pad_wide_cells, push_dynamic_decoration_backgrounds,
     push_dynamic_link_underlines, push_dynamic_selection_background, push_terminal_zebra_stripes,
     terminal_background_ranges_for_cells, terminal_background_ranges_for_spans,
-    terminal_cursor_cell_hidden, terminal_glyph_decorations_needed, terminal_layout_height_px,
-    terminal_layout_prefetch_row, terminal_link_underline_color, terminal_plain_row_fast_path,
-    terminal_row_layout_key, terminal_selection_cols_for_snapshot_row, terminal_text_run_for_span,
+    terminal_cursor_cell_hidden, terminal_glyph_decorations_needed,
+    terminal_keyword_background_ranges, terminal_layout_height_px, terminal_layout_prefetch_row,
+    terminal_link_underline_color, terminal_plain_row_fast_path, terminal_row_layout_key,
+    terminal_selection_cols_for_snapshot_row, terminal_text_run_for_span,
     terminal_underline_bounds, terminal_underline_ranges_for_spans,
     terminal_visible_rows_for_bounds, terminal_visible_rows_for_clipped_bounds,
 };
@@ -385,14 +386,22 @@ fn keyword_rules_key_reuses_equal_rule_sets() {
         name: "Error".to_string(),
         patterns: vec!["error".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
     let second = Arc::new(vec![ResolvedKeywordHighlightRule {
         id: "error".to_string(),
         name: "Error".to_string(),
         patterns: vec!["error".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }]);
 
     let key = cache.keyword_rules_key(&first);
@@ -1166,6 +1175,54 @@ fn explicit_background_ranges_survive_keyword_foreground() {
 }
 
 #[test]
+fn only_an_explicit_keyword_background_paints_a_block() {
+    use crate::types::TerminalKeywordRange;
+
+    let (quick_text, _, _) = nyaterm_core::KEYWORD_HIGHLIGHT_QUICK_COLORS[0];
+    let parse = |value: &str| u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap();
+    let quick_text = parse(quick_text);
+    let custom = 0x123456;
+    let ranges = [
+        // An explicit rule background paints a block, in either theme.
+        TerminalKeywordRange {
+            start_col: 0,
+            end_col: 4,
+            color: quick_text,
+            background: Some(custom),
+        },
+        // No explicit background stays transparent, also for a quick swatch
+        // colour: clearing the background of a rule has to clear it.
+        TerminalKeywordRange {
+            start_col: 5,
+            end_col: 9,
+            color: quick_text,
+            background: None,
+        },
+        // Neither source: no background block at all.
+        TerminalKeywordRange {
+            start_col: 10,
+            end_col: 12,
+            color: 0xabcdef,
+            background: None,
+        },
+    ];
+
+    let spans = terminal_highlight_spans_with_keyword_ranges(
+        "test test xx",
+        None,
+        Some(&ranges),
+        &[],
+        nyaterm_ui::theme_palette("github-dark"),
+    );
+    let backgrounds = terminal_keyword_background_ranges(&spans);
+    assert_eq!(backgrounds.len(), 1);
+    assert_eq!(
+        (backgrounds[0].bg, backgrounds[0].start, backgrounds[0].end),
+        (custom, 0, 4)
+    );
+}
+
+#[test]
 fn cached_keyword_rows_reuse_without_surface_background() {
     let mut cache = NyaTerminalLayoutCache::default();
     let span = highlight_span("ERROR", Some(0xff2244), None, true);
@@ -1444,7 +1501,11 @@ fn row_layout_key_ignores_link_ranges_when_keyword_rules_can_paint() {
         name: "URL".to_string(),
         patterns: vec![r"https://[^\s]+".to_string()],
         color: "#8be9fd".to_string(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     };
     let keyword_rules = Arc::new(vec![keyword_rule]);
     let make_element = |decorations: Vec<TerminalLineDecorations>| {
@@ -1495,7 +1556,11 @@ fn row_layout_key_tracks_precomputed_keyword_presence() {
         name: "Errors".to_string(),
         patterns: vec!["ERROR".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     };
     let element = NyaTerminalElement::new(
         Arc::new(snapshot),
@@ -1555,7 +1620,11 @@ fn precomputed_keyword_match_does_not_reuse_plain_pending_row() {
         name: "Errors".to_string(),
         patterns: vec!["ERROR".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }];
     let highlighter = compile_terminal_keyword_highlighter(
         &rules,
@@ -1610,7 +1679,11 @@ fn stale_keyword_prefix_is_painted_and_not_reused_as_the_final_parse() {
         name: "Options".into(),
         patterns: vec!["-[a-z]+".into()],
         color: "#ff2244".into(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }];
     let highlighter = compile_terminal_keyword_highlighter(
         &rules,
@@ -1864,7 +1937,11 @@ fn no_wrap_does_not_reuse_output_colors_after_its_wrapped_context_changes() {
         name: "Whole error".into(),
         patterns: vec!["^ERROR\\s*$".into()],
         color: "#ff2244".into(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     }];
     let highlighter = compile_terminal_keyword_highlighter(
         &rules,
@@ -1915,11 +1992,13 @@ fn stale_keyword_cache_key_tracks_the_retained_ranges() {
             start_col: 5,
             end_col: 8,
             color: 0xff2244,
+            background: None,
         },
         crate::types::TerminalKeywordRange {
             start_col: 9,
             end_col: 13,
             color: 0xff2244,
+            background: None,
         },
     ];
     let first = TerminalKeywordHighlightLookup::Stale(&ranges[..1]);
@@ -2085,7 +2164,11 @@ fn plain_row_fast_path_rejects_enhanced_rows() {
         name: "Errors".to_string(),
         patterns: vec!["error".to_string()],
         color: "#ff0000".to_string(),
+        background: None,
         enabled: true,
+        case_sensitive: false,
+        whole_word: false,
+        use_regex: true,
     };
     let active_search = TerminalLineDecorations {
         active_search_ranges: vec![(0, 2)],
@@ -2979,4 +3062,47 @@ fn navigation_background_moves_without_selection_or_zebra_stripes() {
         );
     }
     assert!(quads.is_empty());
+}
+
+#[test]
+fn keyword_background_respects_concealed_inverse_and_explicit_ansi_foregrounds() {
+    use crate::types::TerminalKeywordRange;
+    use nyaterm_terminal::{CellStyle, StyledSpan};
+    let palette = nyaterm_ui::theme_palette("github-dark");
+    for style in [
+        CellStyle {
+            hidden: true,
+            ..Default::default()
+        },
+        CellStyle {
+            reverse: true,
+            ..Default::default()
+        },
+        CellStyle {
+            fg_rgb: Some(0x123456),
+            ..Default::default()
+        },
+    ] {
+        let ansi = [StyledSpan {
+            text: "ERROR".into(),
+            style,
+        }];
+        let ranges = [TerminalKeywordRange {
+            start_col: 0,
+            end_col: 5,
+            color: 0xffffff,
+            background: Some(0xff0000),
+        }];
+        let spans = terminal_highlight_spans_with_keyword_ranges(
+            "ERROR",
+            Some(&ansi),
+            Some(&ranges),
+            &[],
+            palette,
+        );
+        assert!(terminal_keyword_background_ranges(&spans).is_empty());
+        if style.hidden {
+            assert_eq!(spans[0].color, Some(palette.terminal_bg));
+        }
+    }
 }

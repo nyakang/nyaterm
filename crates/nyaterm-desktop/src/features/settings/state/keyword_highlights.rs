@@ -2,6 +2,7 @@
 
 use super::SettingsFeatureState;
 use crate::models::KeywordHighlightEditorField;
+use crate::models::KeywordMatchOption;
 use gpui::FocusHandle;
 use nyaterm_core::{KeywordHighlightConfig, KeywordHighlightRule};
 
@@ -51,10 +52,11 @@ impl SettingsFeatureState {
         rule.enabled = !rule.enabled;
         true
     }
-    pub(in crate::features) fn set_keyword_highlight_rule_color(
+    /// Write a colour field (text or background, dark or light) of a rule.
+    pub(in crate::features) fn set_keyword_highlight_rule_color_field(
         &mut self,
         rule_id: &str,
-        dark: bool,
+        field: KeywordHighlightEditorField,
         color: String,
     ) -> bool {
         let Some(rule) = self
@@ -65,10 +67,12 @@ impl SettingsFeatureState {
         else {
             return false;
         };
-        if dark {
-            rule.color_dark = color;
-        } else {
-            rule.color_light = color;
+        match field {
+            KeywordHighlightEditorField::ColorDark => rule.color_dark = color,
+            KeywordHighlightEditorField::ColorLight => rule.color_light = color,
+            KeywordHighlightEditorField::BgDark => rule.bg_color_dark = color,
+            KeywordHighlightEditorField::BgLight => rule.bg_color_light = color,
+            _ => return false,
         }
         true
     }
@@ -93,9 +97,28 @@ impl SettingsFeatureState {
             }
             KeywordHighlightEditorField::ColorDark => rule.color_dark = text,
             KeywordHighlightEditorField::ColorLight => rule.color_light = text,
+            KeywordHighlightEditorField::BgDark => rule.bg_color_dark = text,
+            KeywordHighlightEditorField::BgLight => rule.bg_color_light = text,
         }
         self.begin_keyword_highlight_edit(rule_id.to_string(), field);
         true
+    }
+    /// Toggle one of the matching options of a rule and report the new state.
+    ///
+    /// `None` means the rule does not exist.
+    pub(in crate::features) fn toggle_keyword_highlight_rule_match_option(
+        &mut self,
+        rule_id: &str,
+        option: KeywordMatchOption,
+    ) -> Option<bool> {
+        let rule = self
+            .keyword_config
+            .rules
+            .iter_mut()
+            .find(|rule| rule.id == rule_id)?;
+        let enabled = !option.is_enabled(rule);
+        option.apply(rule, enabled);
+        Some(enabled)
     }
     /// Toggle field-level highlighting for recognised command output.
     pub(in crate::features) fn toggle_line_role_highlights(&mut self) -> Option<bool> {

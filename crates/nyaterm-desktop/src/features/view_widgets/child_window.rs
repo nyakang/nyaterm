@@ -4,6 +4,7 @@ use nyaterm_ui::NyaWindowHandle;
 pub(in crate::features) use nyaterm_ui::child_window::shell::{
     ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, child_window_root,
     focus_child_window_shell_if_idle, init_key_bindings, modal_scrim_is_drawn,
+    modal_scrim_owns_input,
 };
 pub(in crate::features) fn child_window_options(
     spec: &ChildWindowSpec,

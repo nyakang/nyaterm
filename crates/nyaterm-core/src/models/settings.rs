@@ -741,8 +741,37 @@ pub struct KeywordHighlightRule {
     pub color_dark: String,
     #[serde(default = "default_highlight_color_light")]
     pub color_light: String,
+    /// Optional dark-theme highlight background. Empty string means "no
+    /// explicit background" (terminal background or quick-highlight fallback).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bg_color_dark: String,
+    /// Optional light-theme highlight background. Empty string means "no
+    /// explicit background".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bg_color_light: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Match the pattern case sensitively. The default is a case insensitive
+    /// match.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub case_sensitive: bool,
+    /// Only match when the pattern is surrounded by word boundaries.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub whole_word: bool,
+    /// Interpret the pattern as a regular expression. The default keeps the
+    /// historic behaviour where every pattern is a regular expression.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub use_regex: bool,
+}
+
+/// Skip a boolean that still holds its default so configurations written
+/// before an option existed keep their original shape on disk.
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Default for KeywordHighlightRule {
@@ -753,7 +782,12 @@ impl Default for KeywordHighlightRule {
             patterns: Vec::new(),
             color_dark: default_highlight_color_dark(),
             color_light: default_highlight_color_light(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }
     }
 }

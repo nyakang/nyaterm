@@ -844,6 +844,49 @@ pub(crate) enum KeywordHighlightEditorField {
     Patterns,
     ColorDark,
     ColorLight,
+    BgDark,
+    BgLight,
+}
+
+/// One of the matching options of a keyword highlight pattern.
+///
+/// The options narrow a pattern down: a case sensitive match ignores the
+/// other case, a whole word match requires word boundaries and a literal
+/// pattern treats its metacharacters as text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeywordMatchOption {
+    CaseSensitive,
+    WholeWord,
+    Regex,
+}
+
+impl KeywordMatchOption {
+    /// The state of this option in a rule.
+    pub(crate) fn is_enabled(self, rule: &nyaterm_core::KeywordHighlightRule) -> bool {
+        match self {
+            Self::CaseSensitive => rule.case_sensitive,
+            Self::WholeWord => rule.whole_word,
+            Self::Regex => rule.use_regex,
+        }
+    }
+
+    /// Write the state of this option into a rule.
+    pub(crate) fn apply(self, rule: &mut nyaterm_core::KeywordHighlightRule, enabled: bool) {
+        match self {
+            Self::CaseSensitive => rule.case_sensitive = enabled,
+            Self::WholeWord => rule.whole_word = enabled,
+            Self::Regex => rule.use_regex = enabled,
+        }
+    }
+
+    /// A stable name for the control of this option.
+    pub(crate) fn control_id(self) -> &'static str {
+        match self {
+            Self::CaseSensitive => "case-sensitive",
+            Self::WholeWord => "whole-word",
+            Self::Regex => "regex",
+        }
+    }
 }
 
 impl KeywordHighlightEditorField {
@@ -851,8 +894,10 @@ impl KeywordHighlightEditorField {
         match self {
             Self::Name => Self::Patterns,
             Self::Patterns => Self::ColorDark,
-            Self::ColorDark => Self::ColorLight,
-            Self::ColorLight => Self::Name,
+            Self::ColorDark => Self::BgDark,
+            Self::BgDark => Self::ColorLight,
+            Self::ColorLight => Self::BgLight,
+            Self::BgLight => Self::Name,
         }
     }
 
@@ -862,6 +907,8 @@ impl KeywordHighlightEditorField {
             Self::Patterns => "patterns",
             Self::ColorDark => "color-dark",
             Self::ColorLight => "color-light",
+            Self::BgDark => "bg-dark",
+            Self::BgLight => "bg-light",
         }
     }
 
@@ -871,6 +918,8 @@ impl KeywordHighlightEditorField {
             "patterns" => Some(Self::Patterns),
             "color-dark" => Some(Self::ColorDark),
             "color-light" => Some(Self::ColorLight),
+            "bg-dark" => Some(Self::BgDark),
+            "bg-light" => Some(Self::BgLight),
             _ => None,
         }
     }

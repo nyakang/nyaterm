@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -183,6 +184,85 @@ pub(crate) fn spawn_webdav_healthy_server() -> (String, JoinHandle<()>) {
         );
     });
     (endpoint, server)
+}
+
+/// An asset source that resolves icons exactly like the application does.
+///
+/// The shell serves NyaTerm's own icon bundle first and falls back to
+/// gpui-kit's *default* icon pack, which only holds a small subset of the
+/// Lucide catalog. A probe that served the complete catalog would paint icons
+/// the real application cannot resolve, so a broken icon would look fine in
+/// the probe and stay blank in the shell.
+///
+/// This source reads the icons the application actually ships from disk and
+/// resolves everything else through the same fallback the shell uses.
+pub(crate) struct ProbeAssets {
+    root: PathBuf,
+}
+
+impl ProbeAssets {
+    pub(crate) fn new() -> Self {
+        Self {
+            root: Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("nyaterm-app")
+                .join("assets"),
+        }
+    }
+}
+
+impl gpui::AssetSource for ProbeAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        let relative = path.trim_start_matches('/');
+        if relative.is_empty() {
+            return Ok(None);
+        }
+        if let Ok(bytes) = std::fs::read(self.root.join(relative)) {
+            return Ok(Some(Cow::Owned(bytes)));
+        }
+        // The shell reports an icon it cannot resolve as "no asset" rather
+        // than as an error, so a missing icon paints nothing instead of
+        // failing the whole render.
+        match gpui_kit_assets::Assets.load(path) {
+            Ok(asset) => Ok(asset),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<gpui::SharedString>> {
+        let prefix = path.trim_start_matches('/').trim_end_matches('/');
+        let mut entries = Vec::new();
+        collect_asset_files(&self.root, &self.root, prefix, &mut entries);
+        if let Ok(pack) = gpui_kit_assets::Assets.list(prefix) {
+            for entry in pack {
+                if !entries.contains(&entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+        Ok(entries)
+    }
+}
+
+/// Collect the shipped asset files below `prefix` as paths relative to `root`.
+fn collect_asset_files(root: &Path, dir: &Path, prefix: &str, out: &mut Vec<gpui::SharedString>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_asset_files(root, &path, prefix, out);
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.starts_with(prefix) {
+            out.push(gpui::SharedString::from(relative));
+        }
+    }
 }
 
 #[test]

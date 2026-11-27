@@ -16,6 +16,7 @@ pub(in crate::features) use child_window::{
     ChildWindowChrome, ChildWindowCloseHandler, ChildWindowSpec, child_window_options,
     child_window_root, focus_child_window_shell_if_idle,
     init_key_bindings as init_child_window_key_bindings, modal_scrim_is_drawn,
+    modal_scrim_owns_input,
 };
 
 mod inspector_widgets;
@@ -23,6 +24,9 @@ pub(in crate::features) use inspector_widgets::{
     empty_workspace_action, tab_action_button, tab_menu_item, tab_menu_item_enabled,
     tab_menu_item_with_icon, tab_menu_item_with_shortcut, tab_menu_separator,
 };
+
+mod keyword_match_options;
+pub(in crate::features) use keyword_match_options::keyword_match_option_toggles;
 
 mod rows;
 pub(in crate::features) use rows::cloud_sync_history_row;

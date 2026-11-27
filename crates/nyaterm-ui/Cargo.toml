@@ -11,6 +11,7 @@ nyaterm-core.workspace = true
 gpui.workspace = true
 ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf"] }
 gpui-base.workspace = true
+gpui-kit-assets.workspace = true
 gpui-kit = { workspace = true, features = [
     "tree-sitter-astro",
     "tree-sitter-bash",

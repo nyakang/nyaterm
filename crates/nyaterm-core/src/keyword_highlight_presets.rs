@@ -11,7 +11,46 @@ pub struct ResolvedKeywordHighlightRule {
     pub name: String,
     pub patterns: Vec<String>,
     pub color: String,
+    /// Optional theme-selected highlight background. `None` keeps the legacy
+    /// behaviour (terminal background, or quick-highlight reverse lookup).
+    pub background: Option<String>,
     pub enabled: bool,
+    /// Match the pattern case sensitively.
+    pub case_sensitive: bool,
+    /// Only match when the pattern is surrounded by word boundaries.
+    pub whole_word: bool,
+    /// Interpret the pattern as a regular expression.
+    pub use_regex: bool,
+}
+
+impl Default for ResolvedKeywordHighlightRule {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            patterns: Vec::new(),
+            color: String::new(),
+            background: None,
+            enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
+        }
+    }
+}
+
+/// Pick the theme-selected background of a rule, treating blank values as unset.
+pub fn keyword_highlight_rule_background(
+    rule: &KeywordHighlightRule,
+    is_dark: bool,
+) -> Option<String> {
+    let value = if is_dark {
+        &rule.bg_color_dark
+    } else {
+        &rule.bg_color_light
+    };
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Built-ins declare their matcher instead of guessing from regex punctuation.
@@ -211,7 +250,11 @@ pub fn get_builtin_keyword_rules_with_ansi(
             name: builtin_keyword_rule_label(id).to_string(),
             patterns: builtin_patterns(id),
             color: builtin_keyword_rule_swatch_ansi(id, ansi, is_dark),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         })
         .collect()
 }
@@ -234,7 +277,11 @@ pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
             } else {
                 rule.color_light.clone()
             },
+            background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
+            case_sensitive: rule.case_sensitive,
+            whole_word: rule.whole_word,
+            use_regex: rule.use_regex,
         });
     }
     for builtin in get_builtin_keyword_rules_with_ansi(ansi, is_dark) {
@@ -247,10 +294,11 @@ pub fn merge_keyword_highlight_rules_for_paint_with_ansi(
 /// Resolve a set of session-scoped user rules to paint rules using the active
 /// theme, then overlay them on top of the resolved global rules by id.
 ///
-/// A session rule with an id equal to a global rule replaces that rule in
-/// place (so per-session tweaks win without affecting other sessions). New
-/// session-only ids are appended. The input order of `global` and `session`
-/// is otherwise preserved.
+/// A session rule with an id equal to a global rule replaces that rule, so
+/// per-session tweaks win without affecting other sessions. Session rules come
+/// first in the result: the list order is the match priority, and a rule the
+/// user scoped to this session has to outrank the global rules it shadows.
+/// The global rules keep their relative order and follow the session rules.
 pub fn overlay_resolved_keyword_highlight_rules(
     global: &[ResolvedKeywordHighlightRule],
     session_rules: &[KeywordHighlightRule],
@@ -270,22 +318,26 @@ pub fn overlay_resolved_keyword_highlight_rules(
             } else {
                 rule.color_light.clone()
             },
+            background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
+            case_sensitive: rule.case_sensitive,
+            whole_word: rule.whole_word,
+            use_regex: rule.use_regex,
         })
         .collect();
 
-    let mut out = global.to_vec();
-    let mut positions: std::collections::HashMap<String, usize> = out
+    // A session rule replaces the global rule that shares its id, so that
+    // global rule drops out instead of showing up twice.
+    // The set owns its ids: borrowing them from `resolved_session` would keep
+    // that vector borrowed while it is moved into `out`.
+    let session_ids: std::collections::HashSet<String> = resolved_session
         .iter()
-        .enumerate()
-        .map(|(index, rule)| (rule.id.clone(), index))
+        .map(|rule| rule.id.clone())
         .collect();
-    for session_rule in resolved_session {
-        if let Some(&index) = positions.get(&session_rule.id) {
-            out[index] = session_rule;
-        } else {
-            positions.insert(session_rule.id.clone(), out.len());
-            out.push(session_rule);
+    let mut out = resolved_session;
+    for rule in global {
+        if !session_ids.contains(rule.id.as_str()) {
+            out.push(rule.clone());
         }
     }
     out
@@ -764,7 +816,11 @@ pub fn get_builtin_keyword_rules(is_dark: bool) -> Vec<ResolvedKeywordHighlightR
             name: builtin_keyword_rule_label(id).to_string(),
             patterns: builtin_patterns(id),
             color: builtin_keyword_rule_swatch(id, is_dark).to_string(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         })
         .collect()
 }
@@ -786,7 +842,11 @@ pub fn merge_keyword_highlight_rules_for_paint(
             } else {
                 rule.color_light.clone()
             },
+            background: keyword_highlight_rule_background(rule, is_dark),
             enabled: rule.enabled,
+            case_sensitive: rule.case_sensitive,
+            whole_word: rule.whole_word,
+            use_regex: rule.use_regex,
         });
     }
     for builtin in get_builtin_keyword_rules(is_dark) {
@@ -795,6 +855,58 @@ pub fn merge_keyword_highlight_rules_for_paint(
     }
     out
 }
+
+/// Canonical identity of highlight keywords derived from selected text: each
+/// trimmed, non-empty line is regex-escaped (matching the editor prefill) and
+/// then sorted, so selections carrying the same keywords in a different order
+/// or with blank-line/whitespace noise map to the same key.
+pub fn keyword_highlight_content_key(selected: &str) -> Option<Vec<String>> {
+    let mut patterns = selected
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(regex::escape)
+        .collect::<Vec<_>>();
+    if patterns.is_empty() {
+        return None;
+    }
+    patterns.sort_unstable();
+    Some(patterns)
+}
+
+/// The same canonical identity computed from a rule's stored patterns.
+pub fn keyword_highlight_rule_content_key(rule: &KeywordHighlightRule) -> Vec<String> {
+    let mut patterns = rule.patterns.clone();
+    patterns.sort_unstable();
+    patterns
+}
+
+/// Curated colors for one-click terminal selection highlighting.
+///
+/// Each entry is `(dark_theme_text, light_theme_text, dark_background)`.
+/// The first nine are the visible quick picks. The tenth (`#4c5560`) is kept
+/// for backward compatibility with persisted rules and is reused by the UI as
+/// the checked indicator for a rule with a custom color; it is never offered
+/// as a paintable swatch.
+///
+/// Quick highlights paint a saturated dark marker block with near-white text.
+/// The block is drawn explicitly, so it stays legible in both theme families:
+/// it contrasts against light terminal backgrounds and still separates from
+/// dark ones. Text/background contrast is >= 5.7 for every pair. The background
+/// value doubles as the menu swatch fill. Index order is stable and part of the
+/// UI contract; never reorder without migrating persisted selections.
+pub const KEYWORD_HIGHLIGHT_QUICK_COLORS: [(&str, &str, &str); 10] = [
+    ("#fff0ee", "#fff0ee", "#b3261e"), // red
+    ("#fff0d6", "#fff0d6", "#9e4000"), // orange
+    ("#fffbe0", "#fffbe0", "#7a6000"), // yellow
+    ("#dffee4", "#dffee4", "#196b33"), // green
+    ("#d4fff8", "#d4fff8", "#0b6e60"), // teal
+    ("#dcf0ff", "#dcf0ff", "#0f5f8a"), // cyan
+    ("#e2e8ff", "#e2e8ff", "#3352b5"), // blue
+    ("#f0e2ff", "#f0e2ff", "#6a2fbf"), // purple
+    ("#ffe6f5", "#ffe6f5", "#a32274"), // magenta
+    ("#f5f7fa", "#f5f7fa", "#4c5560"), // gray
+];
 
 /// Curated swatches for rule color pickers (Tauri DARK_PALETTE / LIGHT_PALETTE subset).
 pub fn keyword_highlight_color_palette(is_dark: bool) -> &'static [&'static str] {
@@ -827,26 +939,39 @@ mod tests {
             patterns: vec![id.into()],
             color_dark: dark.into(),
             color_light: light.into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }
     }
 
     #[test]
-    fn session_overlay_replaces_same_id_and_appends_new() {
+    fn session_overlay_replaces_same_id_and_outranks_the_global_rules() {
         let global = vec![
             ResolvedKeywordHighlightRule {
                 id: "g1".into(),
                 name: "G1".into(),
                 patterns: vec!["g1".into()],
                 color: "#111111".into(),
+                background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
             ResolvedKeywordHighlightRule {
                 id: "g2".into(),
                 name: "G2".into(),
                 patterns: vec!["g2".into()],
                 color: "#222222".into(),
+                background: None,
                 enabled: true,
+                case_sensitive: false,
+                whole_word: false,
+                use_regex: true,
             },
         ];
         let session = vec![
@@ -856,16 +981,41 @@ mod tests {
 
         let dark = overlay_resolved_keyword_highlight_rules(&global, &session, true);
         assert_eq!(dark.len(), 3);
+        // The list order is the match priority, so the session rules come
+        // first and the global rules they do not shadow follow them.
         assert_eq!(dark[0].id, "g1");
         assert_eq!(dark[0].color, "#ff0000", "session rule wins on same id");
-        assert_eq!(dark[1].id, "g2");
-        assert_eq!(dark[1].color, "#222222");
-        assert_eq!(dark[2].id, "s1");
-        assert_eq!(dark[2].color, "#00ff00");
+        assert_eq!(dark[1].id, "s1");
+        assert_eq!(dark[1].color, "#00ff00");
+        assert_eq!(dark[2].id, "g2");
+        assert_eq!(dark[2].color, "#222222");
 
         let light = overlay_resolved_keyword_highlight_rules(&global, &session, false);
         assert_eq!(light[0].color, "#aa0000", "light theme uses light colour");
-        assert_eq!(light[2].color, "#00aa00");
+        assert_eq!(light[1].color, "#00aa00");
+    }
+
+    /// A session rule that does not shadow any global rule still has to sit
+    /// in front of every global rule, so it wins a tie on the same span.
+    #[test]
+    fn session_only_rules_lead_the_priority_order() {
+        let global = vec![ResolvedKeywordHighlightRule {
+            id: "g1".into(),
+            name: "G1".into(),
+            patterns: vec!["g1".into()],
+            color: "#111111".into(),
+            background: None,
+            enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
+        }];
+        let session = vec![rule("s1", "#00ff00", "#00aa00")];
+
+        let out = overlay_resolved_keyword_highlight_rules(&global, &session, true);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, "s1");
+        assert_eq!(out[1].id, "g1");
     }
 
     #[test]
@@ -875,7 +1025,11 @@ mod tests {
             name: "G1".into(),
             patterns: vec!["g1".into()],
             color: "#111111".into(),
+            background: None,
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let out = overlay_resolved_keyword_highlight_rules(&global, &[], true);
         assert_eq!(out, global);
@@ -970,7 +1124,12 @@ mod tests {
             patterns: vec!["panic".into()],
             color_dark: "#ff0000".into(),
             color_light: "#aa0000".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         }];
         let mut settings = HashMap::new();
         settings.insert("builtin-error".into(), false);
@@ -1095,7 +1254,12 @@ mod palette_tests {
             patterns: vec!["hello".into()],
             color_dark: "#123456".into(),
             color_light: "#654321".into(),
+            bg_color_dark: String::new(),
+            bg_color_light: String::new(),
             enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
         };
         let disabled = HashMap::from([
             ("builtin-info".to_string(), false),
@@ -1113,5 +1277,63 @@ mod palette_tests {
                 assert!(!rules.iter().find(|rule| &rule.id == id).unwrap().enabled);
             }
         }
+    }
+
+    #[test]
+    fn rule_background_is_selected_per_theme() {
+        use super::keyword_highlight_rule_background;
+
+        let custom = KeywordHighlightRule {
+            id: "custom".into(),
+            name: "Custom".into(),
+            patterns: vec!["error".into()],
+            color_dark: "#ff0000".into(),
+            color_light: "#00ff00".into(),
+            bg_color_dark: " #1a1a1a ".into(),
+            bg_color_light: "#fefefe".into(),
+            enabled: true,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: true,
+        };
+
+        assert_eq!(
+            keyword_highlight_rule_background(&custom, true).as_deref(),
+            Some("#1a1a1a")
+        );
+        assert_eq!(
+            keyword_highlight_rule_background(&custom, false).as_deref(),
+            Some("#fefefe")
+        );
+
+        let dark = merge_keyword_highlight_rules_for_paint_with_ansi(
+            std::slice::from_ref(&custom),
+            &HashMap::new(),
+            true,
+            [0; 16],
+        );
+        let light = merge_keyword_highlight_rules_for_paint_with_ansi(
+            std::slice::from_ref(&custom),
+            &HashMap::new(),
+            false,
+            [0; 16],
+        );
+        assert_eq!(dark[0].background.as_deref(), Some("#1a1a1a"));
+        assert_eq!(light[0].background.as_deref(), Some("#fefefe"));
+    }
+
+    #[test]
+    fn legacy_rule_json_without_background_stays_unset() {
+        let json = r##"{"id":"old","name":"Old","patterns":["x"],"color_dark":"#111111","color_light":"#222222","enabled":true}"##;
+        let rule: KeywordHighlightRule = serde_json::from_str(json).expect("legacy rule");
+        assert_eq!(rule.bg_color_dark, "");
+        assert_eq!(rule.bg_color_light, "");
+        assert!(
+            serde_json::to_value(&rule)
+                .unwrap()
+                .get("bg_color_dark")
+                .is_none(),
+            "unset background must not change legacy JSON shape"
+        );
     }
 }

@@ -52,16 +52,20 @@ pub use dialog::{
     NyaConfirmDialog, NyaDialog, NyaDialogFooter, NyaDialogHandle, NyaDialogWindowExt,
 };
 pub use document_editor::{NyaDocumentEditor, NyaDocumentEditorEvent, NyaDocumentEditorState};
+pub use gpui_kit::component::Icon as NyaIcon;
 pub use gpui_kit::component::collapsible::Collapsible as NyaCollapsible;
 pub use gpui_kit::component::color_picker::{
     ColorPicker as NyaColorPicker, ColorPickerEvent as NyaColorPickerEvent,
-    ColorPickerState as NyaColorPickerState,
+    ColorPickerState as NyaColorPickerState, ColorSelect,
 };
 pub use gpui_kit::component::input::{
     Copy as NyaCopy, Cut as NyaCut, Paste as NyaPaste, Redo as NyaRedo, SelectAll as NyaSelectAll,
     Undo as NyaUndo,
 };
 pub use gpui_kit::component::kbd::Kbd as NyaKbd;
+pub use gpui_kit::component::list::{
+    List as NyaList, ListDelegate as NyaListDelegate, ListState as NyaListState,
+};
 pub use gpui_kit::component::scroll::ScrollableElement as NyaScrollable;
 pub use gpui_kit::component::scroll::ScrollbarAxis as NyaScrollbarAxis;
 pub use gpui_kit::component::slider::{
@@ -69,6 +73,8 @@ pub use gpui_kit::component::slider::{
     SliderValue as NyaSliderValue,
 };
 pub use gpui_kit::component::tag::Tag as NyaTag;
+pub use gpui_kit::component::{IndexPath as NyaIndexPath, Selectable as NyaSelectable};
+pub use gpui_kit_assets::IconName;
 pub use hover_card::NyaHoverCard;
 pub use input::{
     NyaInput, NyaInputEvent, NyaInputKind, NyaInputLabels, NyaInputPositionChanged, NyaInputShell,
