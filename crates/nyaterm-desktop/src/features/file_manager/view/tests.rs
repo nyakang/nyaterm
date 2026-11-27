@@ -1,3 +1,5 @@
+mod focus;
+
 use crate::features::NyaTermApp;
 use crate::features::file_manager::pane::{PaneEndpoint, PaneId};
 use crate::features::file_manager::workspace::{FileManagerSeed, FileManagerWorkspace};

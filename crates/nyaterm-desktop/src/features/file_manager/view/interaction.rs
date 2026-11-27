@@ -77,19 +77,9 @@ impl FileManagerWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for pane in [PaneId::Left, PaneId::Right] {
-            if [&self.inputs(pane).path, &self.inputs(pane).search]
-                .into_iter()
-                .any(|input| {
-                    input
-                        .read(cx)
-                        .component_focus_handle(cx)
-                        .contains_focused(window, cx)
-                })
-            {
-                self.active = pane;
-                break;
-            }
+        let focused_input = self.focused_input_pane(window, cx);
+        if let Some(pane) = focused_input {
+            self.active = pane;
         }
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
@@ -108,16 +98,7 @@ impl FileManagerWorkspace {
             cx.stop_propagation();
             return;
         }
-        let input_focused = [PaneId::Left, PaneId::Right].into_iter().any(|pane| {
-            let inputs = self.inputs(pane);
-            [&inputs.path, &inputs.search].into_iter().any(|input| {
-                input
-                    .read(cx)
-                    .component_focus_handle(cx)
-                    .contains_focused(window, cx)
-            })
-        });
-        if input_focused {
+        if focused_input.is_some() {
             if key == "escape" && self.active_pane().path_editing {
                 self.escape_path_completion(self.active, window, cx);
                 cx.stop_propagation();

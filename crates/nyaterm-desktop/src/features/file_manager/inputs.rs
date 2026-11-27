@@ -1,6 +1,6 @@
 use super::pane::PaneId;
 use super::workspace::FileManagerWorkspace;
-use gpui::{AppContext as _, Context, Entity, Window};
+use gpui::{App, AppContext as _, Context, Entity, Window};
 use nyaterm_ui::{NyaInputEvent, NyaInputState};
 
 pub(super) struct FileManagerPaneInputs {
@@ -76,6 +76,43 @@ impl FileManagerWorkspace {
 
     pub(super) fn inputs(&self, pane: PaneId) -> &FileManagerPaneInputs {
         &self.pane_inputs[if pane == PaneId::Left { 0 } else { 1 }]
+    }
+
+    pub(super) fn focused_input_pane(&self, window: &Window, cx: &App) -> Option<PaneId> {
+        [PaneId::Left, PaneId::Right].into_iter().find(|&pane| {
+            let state = self.pane(pane);
+            let inputs = self.inputs(pane);
+            [
+                (state.path_editing, &inputs.path),
+                (state.search_expanded, &inputs.search),
+            ]
+            .into_iter()
+            .any(|(visible, input)| {
+                visible
+                    && input
+                        .read(cx)
+                        .component_focus_handle(cx)
+                        .contains_focused(window, cx)
+            })
+        })
+    }
+
+    pub(super) fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A tab activation can arrive after a pointer has focused an input.
+        // Preserve that field and its selection instead of routing typing to the list.
+        if let Some(pane) = self.focused_input_pane(window, cx) {
+            self.active = pane;
+            return;
+        }
+        let focus = if self.active_pane().path_editing {
+            self.inputs(self.active)
+                .path
+                .read(cx)
+                .component_focus_handle(cx)
+        } else {
+            self.active_pane().focus.clone()
+        };
+        window.focus(&focus, cx);
     }
 
     pub(super) fn begin_path_edit(

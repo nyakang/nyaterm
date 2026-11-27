@@ -233,7 +233,7 @@ impl Render for FileManagerWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.focus_pending {
             self.focus_pending = false;
-            self.focus_pane(self.active, window, cx);
+            self.restore_focus(window, cx);
         }
         let Some(app) = self.app.upgrade() else {
             return div().into_any_element();
