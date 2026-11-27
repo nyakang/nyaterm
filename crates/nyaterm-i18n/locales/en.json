@@ -4128,6 +4128,11 @@
     "keywordHighlightMatchOptions": "Match options"
   },
   "sshAuth": {
+    "authenticationMethod": "Authentication method",
+    "catalogLoadFailed": "Could not load saved credentials. Refresh to retry.",
+    "editKey": "Edit key",
+    "keySelectionHint": "Select the SSH private key to use for this connection.",
+    "selectSavedPassword": "Select a saved password",
     "additionalPasswordRequired": "The server requires an additional account password. This password is used for this connection only.",
     "keyPassphraseRejected": "The previous passphrase could not unlock this key. Please try again.",
     "saveFailed": "Connected, but credentials could not be saved.",

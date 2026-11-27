@@ -130,23 +130,26 @@ impl NyaTermApp {
                                     .child(t!("securityAuth.privateKey")),
                             )
                             .child(
-                                div().w(px(160.)).child(
-                                    NyaTabs::new("security-key-material-mode")
-                                        .items([
-                                            NyaTabItem::new(t!("settings.keyInputContentMode"))
-                                                .disabled(self.security.editor_busy()),
-                                            NyaTabItem::new(t!("settings.keyInputFileMode"))
-                                                .disabled(self.security.editor_busy()),
-                                        ])
-                                        .selected_index(usize::from(!editor.key_content_mode))
-                                        .on_select(cx.listener(|this, index, _, cx| {
-                                            this.toggle_security_key_content_mode(
-                                                false,
-                                                *index == 0,
-                                                cx,
-                                            )
-                                        })),
-                                ),
+                                div()
+                                    .w(px(160.))
+                                    .debug_selector(|| "security-key-material-mode".to_string())
+                                    .child(
+                                        NyaTabs::new("security-key-material-mode")
+                                            .items([
+                                                NyaTabItem::new(t!("settings.keyInputContentMode"))
+                                                    .disabled(self.security.editor_busy()),
+                                                NyaTabItem::new(t!("settings.keyInputFileMode"))
+                                                    .disabled(self.security.editor_busy()),
+                                            ])
+                                            .selected_index(usize::from(!editor.key_content_mode))
+                                            .on_select(cx.listener(|this, index, _, cx| {
+                                                this.toggle_security_key_content_mode(
+                                                    false,
+                                                    *index == 0,
+                                                    cx,
+                                                )
+                                            })),
+                                    ),
                             ),
                     )
                     .when(editor.key_content_mode, |this| {

@@ -4128,6 +4128,11 @@
     "keywordHighlightMatchOptions": "Options de correspondance"
   },
   "sshAuth": {
+    "authenticationMethod": "Méthode d’authentification",
+    "catalogLoadFailed": "Impossible de charger les identifiants enregistrés. Actualisez pour réessayer.",
+    "editKey": "Modifier la clé",
+    "keySelectionHint": "Sélectionnez la clé privée SSH à utiliser pour cette connexion.",
+    "selectSavedPassword": "Sélectionner un mot de passe enregistré",
     "additionalPasswordRequired": "Le serveur demande un mot de passe de compte supplémentaire. Il sera utilisé uniquement pour cette connexion.",
     "keyPassphraseRejected": "La phrase secrète précédente n’a pas permis de déverrouiller cette clé. Réessayez.",
     "saveFailed": "Connexion établie, mais les identifiants n’ont pas pu être enregistrés.",

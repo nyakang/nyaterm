@@ -39,7 +39,11 @@ impl Render for PromptHost {
         let overlay = self.app.update(cx, |app, cx| {
             app.shell
                 .set_viewport_size_for_test((viewport.width.into(), viewport.height.into()));
-            app.ssh_auth_prompt_overlay(cx).into_any_element()
+            if app.session.prompt_has_active_ssh_auth() {
+                app.ssh_auth_prompt_layer(cx).into_any_element()
+            } else {
+                div().into_any_element()
+            }
         });
         div().relative().size_full().child(overlay)
     }
@@ -102,6 +106,7 @@ fn hosted<'a>(
     state: CredentialPromptState,
     dimensions: (f32, f32),
 ) -> (Entity<NyaTermApp>, &'a mut VisualTestContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
     let app = app_with_visible_local_session(cx, root, "terminal");
     app.update(cx, |app, cx| {
         app.sync_component_theme(cx);
@@ -415,3 +420,5 @@ fn legacy_password_and_keyboard_interactive_prompts_keep_their_content_height() 
         });
     });
 }
+
+mod interactions;

@@ -341,6 +341,8 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn refresh_security_catalog(&mut self, cx: &mut Context<Self>) {
+        let generation = self.security.begin_catalog_refresh();
+        cx.notify();
         let location = SecurityStoreLocation::new(self.store_blocking_client());
         let scheduler = self.blocking_jobs.clone();
         cx.spawn(async move |this, cx| {
@@ -350,11 +352,9 @@ impl NyaTermApp {
             });
             let result = await_blocking_job(task).await.and_then(|result| result);
             let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(catalog) => this.security.replace_catalog_state(catalog),
-                    Err(error) => this.security.set_status(error),
+                if this.security.finish_catalog_refresh(generation, result) {
+                    cx.notify();
                 }
-                cx.notify();
             });
         })
         .detach();

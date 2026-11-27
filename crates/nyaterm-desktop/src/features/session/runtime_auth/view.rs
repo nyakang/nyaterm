@@ -2,7 +2,7 @@ use gpui::{AnyElement, Context, FontWeight, KeyDownEvent, SharedString, div, pre
 use nyaterm_transport::SshCredentialPromptReason;
 use nyaterm_transport::ssh_authentication::SshAuthenticationMethod;
 use nyaterm_ui::{
-    NYA_FORM_CONTROL_HEIGHT_PX, NyaButton, NyaButtonVariant, NyaCheckbox, NyaScrollArea,
+    NYA_FORM_CONTROL_HEIGHT_PX, NyaButton, NyaButtonVariant, NyaCheckbox, NyaScrollArea, NyaSelect,
     NyaSelectOption, NyaTabItem, NyaTabs,
 };
 use rust_i18n::t;
@@ -37,17 +37,7 @@ impl NyaTermApp {
             + ACTION_HEIGHT_PX;
         let body_height =
             (self.shell.viewport_size().1 - reserved_height).clamp(0., MAX_BODY_HEIGHT_PX);
-        let reason = match state.prompt.reason {
-            SshCredentialPromptReason::AdditionalPasswordRequired => {
-                t!("sshAuth.additionalPasswordRequired")
-            }
-            SshCredentialPromptReason::PasswordRejected => t!("sshAuth.passwordRejected"),
-            SshCredentialPromptReason::PublickeyRequired => t!("sshAuth.publickeyRequired"),
-            SshCredentialPromptReason::PublickeyRejected => t!("sshAuth.publickeyRejected"),
-            SshCredentialPromptReason::KeyPassphraseRequired => t!("sshAuth.keyPassphraseRequired"),
-            SshCredentialPromptReason::KeyPassphraseRejected => t!("sshAuth.keyPassphraseRejected"),
-            _ => t!("sshAuth.missingPassword"),
-        };
+        let reason = authentication_notice(state.prompt.reason).map(|key| t!(key));
         let mut content = div()
             .debug_selector(|| "ssh-auth-content".to_string())
             .w_full()
@@ -67,31 +57,34 @@ impl NyaTermApp {
             )
             .child(
                 div()
-                    .text_xs()
-                    .text_color(rgb(palette.text_muted))
-                    .child(t!(
-                        "sshAuth.description",
-                        name = state.prompt.connection_name
-                    )),
-            )
-            .child(
-                div()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(palette.border))
-                    .p_3()
-                    .child(div().text_sm().child(format!(
-                        "{}@{}:{}",
-                        state.prompt.username, state.prompt.host, state.prompt.port
-                    )))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .child(
                         div()
-                            .mt_1()
+                            .text_sm()
+                            .font_weight(FontWeight(600.))
+                            .child(state.prompt.connection_name.clone()),
+                    )
+                    .child(
+                        div()
                             .text_xs()
                             .text_color(rgb(palette.text_muted))
-                            .child(reason),
+                            .child(format!(
+                                "{}@{}:{}",
+                                state.prompt.username, state.prompt.host, state.prompt.port
+                            )),
                     ),
-            );
+            )
+            .when_some(reason, |this, reason| {
+                this.child(
+                    div()
+                        .debug_selector(|| "ssh-auth-notice".to_string())
+                        .text_xs()
+                        .text_color(rgb(palette.text_muted))
+                        .child(reason),
+                )
+            });
         if !form.is_passphrase() {
             let password_available = form.request.available_methods.iter().any(|method| {
                 matches!(
@@ -107,15 +100,23 @@ impl NyaTermApp {
                     .contains(&SshAuthenticationMethod::Publickey)
             {
                 content = content.child(
-                    NyaTabs::new("ssh-auth-method")
-                        .items([
-                            NyaTabItem::new(t!("sshAuth.passwordMethod")).disabled(form.busy),
-                            NyaTabItem::new(t!("sshAuth.keyMethod")).disabled(form.busy),
-                        ])
-                        .selected_index(usize::from(form.method == AuthMethod::Key))
-                        .on_select(cx.listener(|this, index, window, cx| {
-                            this.change_runtime_auth_source(true, *index, window, cx)
-                        })),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(div().text_xs().child(t!("sshAuth.authenticationMethod")))
+                        .child(
+                            NyaTabs::new("ssh-auth-method")
+                                .items([
+                                    NyaTabItem::new(t!("sshAuth.passwordMethod"))
+                                        .disabled(form.busy),
+                                    NyaTabItem::new(t!("sshAuth.keyMethod")).disabled(form.busy),
+                                ])
+                                .selected_index(usize::from(form.method == AuthMethod::Key))
+                                .on_select(cx.listener(|this, index, window, cx| {
+                                    this.change_runtime_auth_source(true, *index, window, cx)
+                                })),
+                        ),
                 );
             }
             if form.method == AuthMethod::Password {
@@ -134,26 +135,38 @@ impl NyaTermApp {
         }
         if form.uses_secret_input() {
             let id = super::super::credential_text_input_id(&state.id);
-            let setup = if form.is_passphrase() {
-                TextInputSetup::secret()
-            } else {
-                TextInputSetup::masked()
+            let setup = TextInputSetup {
+                placeholder: if form.is_passphrase() {
+                    t!("sshAuth.keyPassphraseRequired").into()
+                } else {
+                    t!("sshAuth.missingPassword").into()
+                },
+                ..if form.is_passphrase() {
+                    TextInputSetup::secret()
+                } else {
+                    TextInputSetup::masked()
+                }
             };
             self.text_input(id.clone(), &state.value, setup.clone(), cx)
                 .update(cx, |input, cx| input.set_disabled(form.busy, cx));
-            content = content
-                .child(div().text_xs().child(if form.is_passphrase() {
-                    t!("sshAuth.passphrase")
-                } else {
-                    t!("dialog.password")
-                }))
-                .child(
-                    div()
-                        .w_full()
-                        .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
-                        .debug_selector(|| "ssh-auth-secret-field".to_string())
-                        .child(self.text_input_box(id, &state.value, setup, cx)),
-                );
+            content = content.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_xs().child(if form.is_passphrase() {
+                        t!("sshAuth.passphrase")
+                    } else {
+                        t!("dialog.password")
+                    }))
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+                            .debug_selector(|| "ssh-auth-secret-field".to_string())
+                            .child(self.text_input_box(id, &state.value, setup, cx)),
+                    ),
+            );
         } else {
             let key = form.method == AuthMethod::Key;
             let options: Vec<NyaSelectOption> = if key {
@@ -179,35 +192,118 @@ impl NyaTermApp {
             } else {
                 form.password_id.clone()
             };
-            content = content.child(self.form_select_control(
+            let empty = options.is_empty();
+            let loading = self.security.catalog_loading();
+            let failed = self.security.catalog_load_failed();
+            let placeholder = if key {
+                t!("sshAuth.selectKey")
+            } else {
+                t!("sshAuth.selectSavedPassword")
+            };
+            let select = self.select_entity(
                 if key {
                     "ssh-auth-key"
                 } else {
                     "ssh-auth-password"
                 },
                 options,
-                selected,
-                form.busy,
+                selected.clone(),
+                form.busy || empty,
                 cx,
-            ));
-            let mut actions = div().flex().gap_2().child(
-                NyaButton::new("ssh-auth-refresh", t!("common.refresh"))
-                    .small()
-                    .disabled(form.busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh_security_catalog(cx))),
             );
+            select.update(cx, |select, cx| select.set_placeholder(placeholder, cx));
+            let mut label =
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(div().text_xs().child(if key {
+                        t!("sshAuth.savedKey")
+                    } else {
+                        t!("dialog.savedPassword")
+                    }));
             if key {
-                let selected = form.key_id.clone();
-                actions = actions.child(
-                    NyaButton::new("ssh-auth-manage", t!("sshAuth.manageKeys"))
-                        .small()
-                        .disabled(form.busy)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_security_key_editor(selected.clone(), window, cx)
-                        })),
+                label = label.child(
+                    div()
+                        .flex_none()
+                        .debug_selector(|| "ssh-auth-manage-action".to_string())
+                        .child(
+                            NyaButton::new(
+                                "ssh-auth-manage",
+                                if selected.is_some() {
+                                    t!("sshAuth.editKey")
+                                } else {
+                                    t!("sshAuth.addKey")
+                                },
+                            )
+                            .small()
+                            .variant(NyaButtonVariant::Ghost)
+                            .disabled(form.busy)
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.dismiss_send_command_selects("ssh-auth-", cx);
+                                    this.open_security_key_editor(selected.clone(), window, cx)
+                                },
+                            )),
+                        ),
                 );
             }
-            content = content.child(actions);
+            let hint = if loading {
+                t!("common.loading")
+            } else if failed {
+                t!("sshAuth.catalogLoadFailed")
+            } else if empty {
+                if key {
+                    t!("sshAuth.noKeys")
+                } else {
+                    t!("dialog.noPasswords")
+                }
+            } else if key {
+                t!("sshAuth.keySelectionHint")
+            } else {
+                t!("sshAuth.selectSavedPassword")
+            };
+            content = content.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(label)
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(NYA_FORM_CONTROL_HEIGHT_PX))
+                            .debug_selector(|| "ssh-auth-credential-select".to_string())
+                            .child(NyaSelect::new(&select)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(rgb(palette.text_muted))
+                                    .debug_selector(|| "ssh-auth-selection-hint".to_string())
+                                    .child(hint),
+                            )
+                            .child(
+                                NyaButton::new("ssh-auth-refresh", t!("common.refresh"))
+                                    .small()
+                                    .variant(NyaButtonVariant::Ghost)
+                                    .disabled(form.busy || loading)
+                                    .loading(loading)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.refresh_security_catalog(cx)
+                                    })),
+                            ),
+                    ),
+            );
         }
         if form.can_remember() {
             let mut remember = div()
@@ -215,10 +311,6 @@ impl NyaTermApp {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(palette.border))
-                .p_3()
                 .child(
                     NyaCheckbox::new("ssh-auth-remember")
                         .label(t!("sshAuth.rememberCredential"))
@@ -349,6 +441,27 @@ impl NyaTermApp {
             )
             .child(buttons)
             .into_any_element()
+    }
+}
+
+// Server outcomes remain visible independently of the currently selected input.
+// Missing credentials are explained by that input's label and placeholder.
+fn authentication_notice(reason: SshCredentialPromptReason) -> Option<&'static str> {
+    match reason {
+        SshCredentialPromptReason::AdditionalPasswordRequired => {
+            Some("sshAuth.additionalPasswordRequired")
+        }
+        SshCredentialPromptReason::PasswordRejected => Some("sshAuth.passwordRejected"),
+        SshCredentialPromptReason::PublickeyRequired => Some("sshAuth.publickeyRequired"),
+        SshCredentialPromptReason::PublickeyRejected
+        | SshCredentialPromptReason::KeyRejectedPasswordFallback => {
+            Some("sshAuth.publickeyRejected")
+        }
+        SshCredentialPromptReason::DockerElevation => Some("sshAuth.dockerElevation"),
+        SshCredentialPromptReason::KeyPassphraseRequired => Some("sshAuth.keyPassphraseRequired"),
+        SshCredentialPromptReason::KeyPassphraseRejected => Some("sshAuth.keyPassphraseRejected"),
+        SshCredentialPromptReason::MissingPassword
+        | SshCredentialPromptReason::KeyboardInteractive => None,
     }
 }
 

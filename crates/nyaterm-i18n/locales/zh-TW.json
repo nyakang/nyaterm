@@ -4128,6 +4128,11 @@
     "keywordHighlightMatchOptions": "匹配選項"
   },
   "sshAuth": {
+    "authenticationMethod": "驗證方式",
+    "catalogLoadFailed": "無法載入已儲存的憑證，請重新整理後再試。",
+    "editKey": "編輯金鑰",
+    "keySelectionHint": "選擇用於此連線的 SSH 私密金鑰。",
+    "selectSavedPassword": "選擇已儲存的密碼",
     "additionalPasswordRequired": "伺服器要求額外驗證帳戶密碼。此密碼僅用於本次連線。",
     "keyPassphraseRejected": "上一次口令無法解鎖此金鑰，請重新輸入。",
     "saveFailed": "已連線，但憑證未儲存。",

@@ -283,6 +283,7 @@ impl NyaTermApp {
                         this.security
                             .finish_key_editor(format!("SSH key saved ({})", compact_id(&id)));
                         this.shell.set_status("SSH key saved".to_string());
+                        this.session.prompt_restore_credential_focus();
                         close = true;
                     }
                     Err(error) => {

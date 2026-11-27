@@ -4128,6 +4128,11 @@
     "keywordHighlightMatchOptions": "Opções de correspondência"
   },
   "sshAuth": {
+    "authenticationMethod": "Método de autenticação",
+    "catalogLoadFailed": "Não foi possível carregar as credenciais salvas. Atualize para tentar novamente.",
+    "editKey": "Editar chave",
+    "keySelectionHint": "Selecione a chave privada SSH para esta conexão.",
+    "selectSavedPassword": "Selecionar uma senha salva",
     "additionalPasswordRequired": "O servidor requer uma senha de conta adicional. Esta senha é usada apenas para esta conexão.",
     "keyPassphraseRejected": "A senha anterior não conseguiu desbloquear esta chave. Por favor, tente novamente.",
     "saveFailed": "Conectado, mas não foi possível salvar as credenciais.",

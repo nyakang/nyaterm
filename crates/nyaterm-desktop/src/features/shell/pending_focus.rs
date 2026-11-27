@@ -14,6 +14,7 @@
 use std::time::Duration;
 
 use gpui::{Context, Window};
+use nyaterm_ui::NyaDialogWindowExt as _;
 
 use crate::features::NyaTermApp;
 
@@ -85,7 +86,9 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.security.screen_locked() {
+        // A component dialog owns focus until it closes. Keep pending requests
+        // intact so the underlying form can resume without stealing its input.
+        if self.security.screen_locked() || window.has_active_nya_dialog(cx) {
             return false;
         }
         if !self.has_pending_focus_request() {

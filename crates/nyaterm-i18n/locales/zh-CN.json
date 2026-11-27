@@ -4128,6 +4128,11 @@
     "keywordHighlightMatchOptions": "匹配选项"
   },
   "sshAuth": {
+    "authenticationMethod": "认证方式",
+    "catalogLoadFailed": "无法加载已保存的凭据，请刷新重试。",
+    "editKey": "编辑密钥",
+    "keySelectionHint": "选择用于此连接的 SSH 私钥。",
+    "selectSavedPassword": "选择已保存密码",
     "additionalPasswordRequired": "服务器要求额外验证账户密码。此密码仅用于本次连接。",
     "keyPassphraseRejected": "上一次口令无法解锁此密钥，请重新输入。",
     "saveFailed": "已连接，但凭据未保存。",

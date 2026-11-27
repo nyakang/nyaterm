@@ -22,7 +22,6 @@ use crate::theme::ThemePalette;
 
 const WALLPAPER_TILE_ELEMENT_LIMIT: usize = 8192;
 const WALLPAPER_TILE_MIN_SIZE: f32 = 8.;
-const SSH_AUTH_PROMPT_PRIORITY: usize = usize::MAX;
 pub(in crate::features) const SSH_AUTH_OVERLAY_PADDING_PX: f32 = 12.;
 
 /// Which overlays the root chrome should render this frame.
@@ -1117,16 +1116,10 @@ impl NyaTermApp {
                 // presses can reach the native window procedure and start a drag.
                 this.child(modal_overlay_layer(self.lock_screen_overlay(window, cx)))
             })
-            // Background SSH operations can request credentials while another
-            // overlay is open, so authentication must be the topmost overlay.
+            // Authentication follows app overlays, but component dialogs opened
+            // from it (key editing and unlocking) must retain pointer ownership.
             .when(overlay.ssh_auth_open, |this| {
-                this.child(
-                    deferred(full_window_overlay_layer(
-                        "ssh-auth-prompt-input-layer",
-                        self.ssh_auth_prompt_overlay(cx),
-                    ))
-                    .with_priority(SSH_AUTH_PROMPT_PRIORITY),
-                )
+                this.child(self.ssh_auth_prompt_layer(cx))
             })
     }
 
@@ -1286,6 +1279,16 @@ impl NyaTermApp {
             .absolute()
             .inset_0()
             .bg(rgba(0x00000066))
+    }
+
+    pub(in crate::features) fn ssh_auth_prompt_layer(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        full_window_overlay_layer(
+            "ssh-auth-prompt-input-layer",
+            self.ssh_auth_prompt_overlay(cx),
+        )
     }
 
     pub(in crate::features) fn ssh_auth_prompt_overlay(

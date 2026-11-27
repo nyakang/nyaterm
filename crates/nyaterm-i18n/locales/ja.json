@@ -4128,6 +4128,11 @@
     "keywordHighlightMatchOptions": "匹配オプション"
   },
   "sshAuth": {
+    "authenticationMethod": "認証方法",
+    "catalogLoadFailed": "保存済みの認証情報を読み込めませんでした。更新して再試行してください。",
+    "editKey": "鍵を編集",
+    "keySelectionHint": "この接続に使用する SSH 秘密鍵を選択してください。",
+    "selectSavedPassword": "保存済みパスワードを選択",
     "additionalPasswordRequired": "サーバーで追加のアカウントパスワード認証が必要です。このパスワードは今回の接続にのみ使用されます。",
     "keyPassphraseRejected": "前のパスフレーズではこの鍵を解除できませんでした。再入力してください。",
     "saveFailed": "接続しましたが、認証情報を保存できませんでした。",

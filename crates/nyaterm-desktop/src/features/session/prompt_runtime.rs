@@ -13,6 +13,7 @@ use nyaterm_files::sftp_transfer_types::{SftpDuplicateDecision, SftpDuplicateReq
 use nyaterm_transport::{
     SshAgentPromptAction, SshCredentialPrompt, SshHostKey, SshKeyboardInteractiveRequest,
 };
+use nyaterm_ui::NyaDialogWindowExt as _;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -329,7 +330,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         self.mark_user_activity();
-        if !self.session.prompts.has_active_credential() {
+        if window.has_active_nya_dialog(cx) || !self.session.prompts.has_active_credential() {
             return false;
         }
         let keystroke = &event.keystroke;
@@ -362,7 +363,9 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) -> bool {
         self.mark_user_activity();
-        if !self.session.prompts.has_active_keyboard_interactive() {
+        if window.has_active_nya_dialog(cx)
+            || !self.session.prompts.has_active_keyboard_interactive()
+        {
             return false;
         }
         let keystroke = &event.keystroke;
@@ -429,6 +432,9 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if window.has_active_nya_dialog(cx) {
+            return false;
+        }
         let Some(target) = self.session.prompts.active_input_target() else {
             let Some(form) = self
                 .session

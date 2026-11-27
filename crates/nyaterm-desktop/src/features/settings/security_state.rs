@@ -20,6 +20,7 @@ use crate::models::{
 
 pub(in crate::features) struct SecurityFeatureState {
     catalog: SecurityCatalogState,
+    catalog_refresh: SecurityCatalogRefresh,
     auth_tab: SecurityAuthTab,
     editors: SecurityEditorState,
     revealed: SecurityRevealedState,
@@ -31,6 +32,13 @@ pub(in crate::features) struct SecurityFeatureState {
     known_hosts_generation: u64,
     known_hosts_loading: bool,
     known_hosts_pending: Option<(u64, Option<String>)>,
+}
+
+#[derive(Default)]
+struct SecurityCatalogRefresh {
+    generation: u64,
+    loading: bool,
+    failed: bool,
 }
 
 /// Persisted secret-adjacent catalogs loaded through `ConnectionStore`.
@@ -165,6 +173,7 @@ impl SecurityFeatureState {
     ) -> Self {
         Self {
             catalog,
+            catalog_refresh: SecurityCatalogRefresh::default(),
             auth_tab: SecurityAuthTab::Keys,
             editors: SecurityEditorState {
                 key: None,
@@ -290,11 +299,54 @@ impl SecurityFeatureState {
         passwords: Vec<SavedPassword>,
         credentials: Vec<SavedCredential>,
     ) {
-        self.catalog = SecurityCatalogState::new(ssh_keys, otp_entries, passwords, credentials);
+        self.replace_catalog_state(SecurityCatalogState::new(
+            ssh_keys,
+            otp_entries,
+            passwords,
+            credentials,
+        ));
     }
 
     pub(in crate::features) fn replace_catalog_state(&mut self, catalog: SecurityCatalogState) {
         self.catalog = catalog;
+        // A save or shared-state update supersedes snapshots still being loaded.
+        self.catalog_refresh.generation = self.catalog_refresh.generation.wrapping_add(1);
+        self.catalog_refresh.loading = false;
+        self.catalog_refresh.failed = false;
+    }
+
+    pub(in crate::features) fn begin_catalog_refresh(&mut self) -> u64 {
+        self.catalog_refresh.generation = self.catalog_refresh.generation.wrapping_add(1);
+        self.catalog_refresh.loading = true;
+        self.catalog_refresh.failed = false;
+        self.catalog_refresh.generation
+    }
+
+    pub(in crate::features) fn finish_catalog_refresh(
+        &mut self,
+        generation: u64,
+        result: Result<SecurityCatalogState, String>,
+    ) -> bool {
+        if generation != self.catalog_refresh.generation || !self.catalog_refresh.loading {
+            return false;
+        }
+        self.catalog_refresh.loading = false;
+        match result {
+            Ok(catalog) => self.replace_catalog_state(catalog),
+            Err(error) => {
+                self.catalog_refresh.failed = true;
+                self.set_status(error);
+            }
+        }
+        true
+    }
+
+    pub(in crate::features) fn catalog_loading(&self) -> bool {
+        self.catalog_refresh.loading
+    }
+
+    pub(in crate::features) fn catalog_load_failed(&self) -> bool {
+        self.catalog_refresh.failed
     }
 
     pub(in crate::features) fn auth_tab(&self) -> SecurityAuthTab {
@@ -1330,6 +1382,64 @@ mod tests {
         security.begin_editor_request().unwrap();
         security.set_otp_algorithm("SHA256");
         assert_eq!(security.otp_editor().unwrap().algorithm, "SHA512");
+    }
+
+    #[test]
+    fn catalog_refresh_rejects_stale_results_and_recovers_from_failure() {
+        let mut security = security_state();
+        let first = security.begin_catalog_refresh();
+        let second = security.begin_catalog_refresh();
+        assert!(!security.finish_catalog_refresh(first, Err("stale failure".into())));
+        assert!(security.catalog_loading());
+        assert!(!security.catalog_load_failed());
+        assert!(security.finish_catalog_refresh(second, Err("unavailable".into())));
+        assert!(!security.catalog_loading());
+        assert!(security.catalog_load_failed());
+
+        let retry = security.begin_catalog_refresh();
+        assert!(!security.catalog_load_failed());
+        assert!(security.finish_catalog_refresh(
+            retry,
+            Ok(SecurityCatalogState::new(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        ));
+        assert!(!security.catalog_loading());
+        assert!(!security.catalog_load_failed());
+    }
+
+    #[test]
+    fn catalog_save_supersedes_in_flight_refresh() {
+        let mut security = security_state();
+        let generation = security.begin_catalog_refresh();
+        security.replace_catalog(
+            Vec::new(),
+            Vec::new(),
+            vec![SavedPassword {
+                id: "new-password".into(),
+                name: "New password".into(),
+                username: String::new(),
+                password: None,
+                has_password: true,
+                sort_order: 0,
+            }],
+            Vec::new(),
+        );
+        assert!(!security.finish_catalog_refresh(
+            generation,
+            Ok(SecurityCatalogState::new(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        ));
+        assert_eq!(security.passwords()[0].id, "new-password");
+        assert!(!security.catalog_loading());
+        assert!(!security.catalog_load_failed());
     }
 
     #[test]
