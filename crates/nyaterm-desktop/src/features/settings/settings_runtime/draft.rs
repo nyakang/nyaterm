@@ -192,6 +192,9 @@ impl NyaTermApp {
         if let Some(error) = self.ai_provider_validation_error() {
             return Some(error);
         }
+        if let Some(error) = self.ai.agent_settings_validation_error() {
+            return Some(error);
+        }
         let master_password = self.settings.master_password();
         if master_password.enabled
             && !self.settings.summary().has_master_password

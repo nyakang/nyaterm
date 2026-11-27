@@ -69,6 +69,7 @@ pub(in crate::features) struct AiFeatureInit {
 
 /// Provider settings, model catalog editing and credential drafts.
 struct AiSettingsState {
+    agent_editor: super::agent_settings::AgentSettingsEditor,
     providers: ProviderSettingsView,
     config: AiSettings,
     model_draft: String,
@@ -370,6 +371,7 @@ impl AiFeatureState {
         let last_agent_kind_seed = default_agent_kind.clone();
         Self {
             settings: AiSettingsState {
+                agent_editor: Default::default(),
                 providers: ProviderSettingsView::default(),
                 config: settings,
                 model_draft,

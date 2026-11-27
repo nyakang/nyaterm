@@ -1,3 +1,5 @@
+mod profiles;
+
 use super::super::{settings_form_row, settings_switch};
 use super::{ai_card, ai_field};
 use crate::features::mcp::McpHostStatus;
@@ -35,240 +37,7 @@ impl SettingsPanel {
         let settings = self.ai.settings_config().clone();
         let status = self.ai.agent_management.clone();
         let columns = if self.content_width >= 1024. { 2 } else { 1 };
-        let mut local = div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(div().text_size(px(12.)).child(t!("ai.acp.installHint")));
-        for profile in nyaterm_core::ai::external_agents::profiles(&settings) {
-            let id = profile.id.clone();
-            let mut card = div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .p_3()
-                .border_1()
-                .border_color(rgb(palette.border))
-                .rounded_md()
-                .child(div().text_size(px(14.)).child(profile.name.clone()));
-            let mut fields = div().grid().grid_cols(columns).gap_3();
-            for (field, label) in [
-                ("name", t!("ai.acp.name")),
-                ("strategy", t!("ai.acp.strategy")),
-                ("executable", t!("ai.acp.executable")),
-                ("args", t!("ai.acp.args")),
-                ("cwd", t!("ai.acp.cwd")),
-                ("config", t!("ai.acp.config")),
-                ("model", t!("ai.acp.model")),
-            ] {
-                let selector = format!("acp-profile-field-{id}-{field}");
-                fields = fields.child(
-                    div()
-                        .min_w_0()
-                        .debug_selector(move || selector.clone())
-                        .child(ai_field(
-                            palette,
-                            label,
-                            None,
-                            self.existing_text_input_box(format!("ai.agent.{id}.{field}"), false),
-                        )),
-                );
-            }
-            card = card.child(fields);
-            for variable in &profile.environment {
-                let row_id = variable.id.clone();
-                let delete_id = id.clone();
-                card = card.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(div().flex_1().min_w_0().child(self.existing_text_input_box(
-                            format!("ai.agent.{id}.env.{row_id}.name"),
-                            false,
-                        )))
-                        .child(div().flex_1().min_w_0().child(self.existing_text_input_box(
-                            format!("ai.agent.{id}.env.{row_id}.value"),
-                            false,
-                        )))
-                        .child(
-                            NyaButton::new(format!("acp-env-remove-{row_id}"), "−")
-                                .small()
-                                .on_click(cx.listener(move |panel, _, _, cx| {
-                                    panel.with_app(cx, |app, cx| {
-                                        app.edit_acp_profile(
-                                            &delete_id,
-                                            &format!("env.{row_id}.delete"),
-                                            String::new(),
-                                            cx,
-                                        )
-                                    });
-                                })),
-                        ),
-                );
-            }
-            let mut actions = div().flex().flex_wrap().gap_2();
-            for (action, label) in [
-                (
-                    "enabled",
-                    if profile.enabled {
-                        t!("ai.acp.disable")
-                    } else {
-                        t!("ai.acp.enable")
-                    },
-                ),
-                (
-                    "persistent",
-                    if profile.persistent {
-                        t!("ai.acp.persistentOn")
-                    } else {
-                        t!("ai.acp.persistentOff")
-                    },
-                ),
-                ("add-env", t!("ai.acp.addEnv")),
-                ("copy", t!("ai.acp.copy")),
-                ("delete", t!("ai.acp.delete")),
-            ] {
-                let id = id.clone();
-                actions = actions.child(
-                    NyaButton::new(format!("acp-{id}-{action}"), label)
-                        .small()
-                        .disabled(
-                            action == "enabled"
-                                && !profile.enabled
-                                && nyaterm_agent_client::acp::policy::admit_execution(profile)
-                                    .is_err(),
-                        )
-                        .on_click(cx.listener(move |panel, _, _, cx| {
-                            panel.with_app(cx, |app, cx| {
-                                app.edit_acp_profile(&id, action, String::new(), cx)
-                            })
-                        })),
-                );
-            }
-            let inspect_id = id.clone();
-            actions = actions.child(
-                NyaButton::new(format!("acp-inspect-{id}"), t!("ai.acp.check"))
-                    .small()
-                    .disabled(status.pending)
-                    .on_click(cx.listener(move |panel, _, _, cx| {
-                        panel.with_app(cx, |app, cx| app.inspect_acp_profile(&inspect_id, cx))
-                    })),
-            );
-            card = card.child(actions);
-            if nyaterm_agent_client::acp::policy::admit_execution(profile).is_err() {
-                card = card.child(div().text_size(px(12.)).child(t!("ai.acp.blocked")));
-            }
-            if let Some(state) = status.profiles.get(&id) {
-                let mut account = div().flex().flex_wrap().gap_2();
-                for (method, label) in &state.auth_methods {
-                    let (id, method) = (id.clone(), method.clone());
-                    account = account.child(
-                        NyaButton::new(format!("acp-login-{id}-{method}"), label.clone())
-                            .small()
-                            .disabled(status.pending)
-                            .on_click(cx.listener(move |panel, _, _, cx| {
-                                panel.with_app(cx, |app, cx| {
-                                    app.acp_account_action(&id, Some(method.clone()), cx)
-                                })
-                            })),
-                    );
-                }
-                if state.logout {
-                    let logout_id = id.clone();
-                    account = account.child(
-                        NyaButton::new(format!("acp-logout-{id}"), t!("ai.acp.logout"))
-                            .small()
-                            .disabled(status.pending)
-                            .on_click(cx.listener(move |panel, _, _, cx| {
-                                panel.with_app(cx, |app, cx| {
-                                    app.acp_account_action(&logout_id, None, cx)
-                                })
-                            })),
-                    );
-                }
-                card = card.child(account);
-
-                card =
-                    card.child(
-                        div()
-                            .text_size(px(12.))
-                            .child(state.error.clone().unwrap_or_else(
-                                || match state.authenticated {
-                                    Some(true) => t!("ai.acp.connected").into(),
-                                    Some(false) => t!("ai.acp.loginRequired").into(),
-                                    None => t!("ai.acp.authUnknown").into(),
-                                },
-                            )),
-                    );
-            }
-            local = local.child(card);
-        }
-        if let Some(error) = status.error.clone() {
-            local = local.child(div().text_color(rgb(palette.warning)).child(error));
-        }
-        let mut detect = div()
-            .flex()
-            .flex_wrap()
-            .gap_2()
-            .child(
-                NyaButton::new("acp-refresh", t!("ai.acp.refresh"))
-                    .small()
-                    .disabled(status.pending)
-                    .on_click(cx.listener(|panel, _, _, cx| panel.refresh_ai_agents(cx))),
-            )
-            .when(status.pending, |actions| {
-                actions.child(
-                    NyaButton::new("acp-cancel-inspect", t!("ai.acp.cancel"))
-                        .small()
-                        .on_click(cx.listener(|panel, _, _, cx| {
-                            panel.with_app(cx, |app, cx| {
-                                app.ai.cancel_agent_management();
-                                app.request_settings_panel_refresh(cx);
-                            })
-                        })),
-                )
-            });
-
-        for (strategy, label) in [
-            ("codex", std::borrow::Cow::Borrowed("+ Codex")),
-            ("claude", std::borrow::Cow::Borrowed("+ Claude")),
-            ("custom", t!("ai.acp.addCustom")),
-        ] {
-            detect = detect.child(
-                NyaButton::new(format!("acp-add-{strategy}"), label)
-                    .small()
-                    .on_click(cx.listener(move |panel, _, _, cx| {
-                        panel.with_app(cx, |app, cx| {
-                            app.edit_acp_profile("", "add", strategy.into(), cx)
-                        })
-                    })),
-            );
-        }
-        let default_agent = self.form_select_control(
-            "ai-default-agent",
-            std::iter::once(NyaSelectOption::new("nyaterm", "NyaTerm"))
-                .chain(
-                    nyaterm_core::ai::external_agents::profiles(&settings)
-                        .iter()
-                        .map(|profile| {
-                            NyaSelectOption::new(profile.id.clone(), profile.name.clone())
-                        }),
-                )
-                .collect(),
-            Some(
-                nyaterm_core::ai::external_agents::profile_id(&settings.default_agent_kind)
-                    .unwrap_or("nyaterm")
-                    .into(),
-            ),
-            false,
-            cx,
-        );
-        local = local.child(ai_field(
-            palette,
-            t!("ai.defaultAgent"),
-            None,
-            default_agent,
-        ));
+        let local = self.ai_agent_profiles_content(&settings, &status, cx);
         let mcp_permission = self.form_select_control(
             "ai-mcp-permission",
             permissions(),
@@ -337,7 +106,16 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap_4()
-            .when(!helper_ready, |this| {
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.text_muted))
+                    .child(t!("ai.acp.mcpDirection")),
+            )
+            .when(!status.helper_checked, |this| {
+                this.child(div().text_size(px(12.)).child(t!("ai.acp.helperChecking")))
+            })
+            .when(status.helper_checked && !helper_ready, |this| {
                 this.child(
                     div()
                         .text_size(px(12.))
@@ -424,6 +202,7 @@ impl SettingsPanel {
                                 )
                                 .small()
                                 .full_width()
+                                .disabled(!helper_ready)
                                 .on_click(cx.listener(
                                     move |panel, _, _, cx| {
                                         panel.copy_external_mcp_config(client, cx)
@@ -433,21 +212,11 @@ impl SettingsPanel {
                     }),
                 ),
             );
-        div()
-            .flex()
-            .flex_col()
-            .gap_5()
-            .child(ai_card(
-                palette,
-                div().child(t!("ai.localAgents")),
-                detect,
-                local,
-            ))
-            .child(ai_card(
-                palette,
-                div().child(t!("ai.externalMcp")),
-                div(),
-                mcp,
-            ))
+        div().flex().flex_col().gap_5().child(local).child(ai_card(
+            palette,
+            div().child(t!("ai.externalMcp")),
+            div(),
+            mcp,
+        ))
     }
 }

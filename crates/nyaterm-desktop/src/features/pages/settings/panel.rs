@@ -319,6 +319,7 @@ pub(in crate::features) struct AiSettingsPresentation {
     pub(in crate::features) header_errors:
         Arc<HashMap<(String, String), nyaterm_core::ai::provider_settings::CustomHeaderError>>,
     pub(in crate::features) agent_management: AgentManagementView,
+    pub(in crate::features) agent_editor: crate::features::ai::agent_settings::AgentEditorView,
     pub(in crate::features) background_tasks: crate::features::mcp::tasks::BackgroundTasksView,
 }
 
@@ -331,6 +332,7 @@ impl AiSettingsPresentation {
             credential_draft_key_ids: Arc::new(HashSet::new()),
             header_errors: Arc::new(HashMap::new()),
             agent_management: AgentManagementView::default(),
+            agent_editor: Default::default(),
             background_tasks: Default::default(),
         }
     }
@@ -2210,7 +2212,7 @@ mod tests {
             (
                 SettingsTab::AiAgents,
                 "acp-profile-field-builtin-codex-name",
-                "acp-profile-field-builtin-codex-strategy",
+                "acp-profile-field-builtin-codex-executable",
             ),
         ] {
             vcx.update(|_, cx| {

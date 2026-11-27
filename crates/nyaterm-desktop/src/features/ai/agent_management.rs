@@ -24,6 +24,8 @@ pub(in crate::features) struct AgentManagementView {
     pub profiles: BTreeMap<String, AcpProfileStatus>,
     pub mcp_helper_path: Option<PathBuf>,
     pub pending: bool,
+    pub active_profile: Option<String>,
+    pub helper_checked: bool,
     pub error: Option<String>,
 }
 pub(in crate::features) enum AgentCommand {
@@ -37,6 +39,8 @@ pub(in crate::features) struct AgentJobEvent {
     generation: u64,
     profiles: BTreeMap<String, AcpProfileStatus>,
     helper: Option<PathBuf>,
+    complete: bool,
+    active_profile: Option<String>,
 }
 type CommandEnvelope = (u64, AgentCommand, Arc<AtomicBool>);
 pub(in crate::features) struct AgentManagementState {
@@ -99,6 +103,10 @@ impl AgentManagementState {
             }
         }
         self.view.error = None;
+        self.view.active_profile = match &command {
+            AgentCommand::Acp { profile, .. } => Some(profile.id.clone()),
+            AgentCommand::Refresh(_) => None,
+        };
         self.view.pending = self.commands.as_ref().is_some_and(|tx| {
             tx.try_send((self.generation, command, self.active_request.clone()))
                 .is_ok()
@@ -111,18 +119,28 @@ impl AgentManagementState {
     pub fn take_events(&mut self) -> Option<UnboundedReceiver<AgentJobEvent>> {
         self.events.take()
     }
-    pub fn invalidate(&mut self) {
+    pub fn cancel_pending(&mut self) {
         self.active_request.store(true, Ordering::Release);
         self.generation = self.generation.wrapping_add(1);
         self.view.pending = false;
-        self.view.profiles.clear();
+        self.view.active_profile = None;
         self.view.error = None;
+    }
+    pub fn invalidate(&mut self) {
+        self.cancel_pending();
+        self.view.profiles.clear();
+    }
+    pub fn invalidate_profile(&mut self, id: &str) {
+        self.cancel_pending();
+        self.view.profiles.remove(id);
     }
     pub fn apply_job(&mut self, event: AgentJobEvent) -> Option<String> {
         if event.generation == self.generation {
-            self.view.pending = false;
+            self.view.pending = !event.complete;
+            self.view.active_profile = event.active_profile;
             self.view.profiles.extend(event.profiles);
             self.view.mcp_helper_path = event.helper;
+            self.view.helper_checked = true;
         }
         None
     }
@@ -210,27 +228,51 @@ fn run_worker(
         if cancel.load(Ordering::Acquire) {
             continue;
         }
-        let profiles = match command {
-            AgentCommand::Acp { profile, operation } => BTreeMap::from([(
-                profile.id.clone(),
-                inspect(&store, &profile, operation, &cancel),
-            )]),
+        let helper = resolve_mcp_helper().ok();
+        let operations = match command {
+            AgentCommand::Acp { profile, operation } => vec![(*profile, operation)],
             AgentCommand::Refresh(profiles) => profiles
                 .into_iter()
-                .take_while(|_| !cancel.load(Ordering::Acquire))
-                .map(|profile| {
-                    (
-                        profile.id.clone(),
-                        inspect(&store, &profile, AgentOperation::Inspect, &cancel),
-                    )
-                })
+                .map(|profile| (profile, AgentOperation::Inspect))
                 .collect(),
         };
+        for (profile, operation) in operations {
+            if cancel.load(Ordering::Acquire) {
+                break;
+            }
+            if events
+                .unbounded_send(AgentJobEvent {
+                    generation,
+                    profiles: BTreeMap::new(),
+                    helper: helper.clone(),
+                    complete: false,
+                    active_profile: Some(profile.id.clone()),
+                })
+                .is_err()
+            {
+                return;
+            }
+            let status = inspect(&store, &profile, operation, &cancel);
+            if events
+                .unbounded_send(AgentJobEvent {
+                    generation,
+                    profiles: BTreeMap::from([(profile.id, status)]),
+                    helper: helper.clone(),
+                    complete: false,
+                    active_profile: None,
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
         if events
             .unbounded_send(AgentJobEvent {
                 generation,
-                profiles,
-                helper: resolve_mcp_helper().ok(),
+                profiles: BTreeMap::new(),
+                helper,
+                complete: true,
+                active_profile: None,
             })
             .is_err()
         {
@@ -241,6 +283,59 @@ fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::{AcpProfileStatus, AgentJobEvent, AgentManagementState};
+    #[test]
+    fn progressive_inspections_keep_completed_profiles_and_reject_cancelled_results() {
+        let mut state = AgentManagementState::new();
+        state.view.pending = true;
+        let generation = state.generation;
+        state.apply_job(AgentJobEvent {
+            generation,
+            profiles: std::collections::BTreeMap::from([(
+                "first".into(),
+                AcpProfileStatus {
+                    authenticated: Some(true),
+                    ..Default::default()
+                },
+            )]),
+            helper: Some("fixture-helper".into()),
+            complete: false,
+            active_profile: Some("second".into()),
+        });
+        assert!(state.view.pending);
+        assert!(state.view.helper_checked);
+        assert_eq!(state.view.active_profile.as_deref(), Some("second"));
+        state.invalidate_profile("second");
+        assert_eq!(state.view.profiles["first"].authenticated, Some(true));
+        state.apply_job(AgentJobEvent {
+            generation,
+            profiles: std::collections::BTreeMap::from([(
+                "second".into(),
+                AcpProfileStatus::default(),
+            )]),
+            helper: None,
+            complete: true,
+            active_profile: None,
+        });
+        assert!(!state.view.pending);
+        assert!(!state.view.profiles.contains_key("second"));
+        assert!(state.view.mcp_helper_path.is_some());
+    }
+
+    #[test]
+    fn helper_is_not_reported_missing_before_the_first_completed_probe() {
+        let mut state = AgentManagementState::new();
+        assert!(!state.view.helper_checked);
+        state.apply_job(AgentJobEvent {
+            generation: state.generation,
+            profiles: Default::default(),
+            helper: None,
+            complete: true,
+            active_profile: None,
+        });
+        assert!(state.view.helper_checked);
+        assert!(state.view.mcp_helper_path.is_none());
+    }
+
     #[test]
     fn editing_or_deleting_a_profile_cancels_inspection_and_rejects_stale_account_state() {
         let mut state = AgentManagementState::new();
@@ -257,6 +352,8 @@ mod tests {
                 },
             )]),
             helper: None,
+            complete: true,
+            active_profile: None,
         });
         assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
         assert!(state.view().profiles.is_empty());

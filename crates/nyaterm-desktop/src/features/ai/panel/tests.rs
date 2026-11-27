@@ -751,6 +751,8 @@ fn ask_then_agent_restores_the_previous_agent_runtime() {
             app.ai
                 .edit_external_profile("builtin-codex", "enabled", String::new())
                 .unwrap();
+            let settings = app.ai.pending_settings();
+            app.ai.replace_settings_config(settings, true);
             app.set_ai_run_mode(AiMode::Agent, AiAgentKind::Codex, cx);
         });
     });

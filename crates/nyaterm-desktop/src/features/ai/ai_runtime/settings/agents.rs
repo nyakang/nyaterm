@@ -12,11 +12,13 @@ impl NyaTermApp {
         value: String,
         cx: &mut Context<Self>,
     ) {
+        if matches!(action, "advanced" | "request-delete" | "cancel-delete") {
+            self.ai.agent_editor_action(id, action);
+            self.request_settings_panel_refresh(cx);
+            return;
+        }
         match self.ai.edit_external_profile(id, action, value) {
             Ok(true) => {
-                if !matches!(action, "name" | "add" | "copy") {
-                    self.ai.cancel_external_profile_runs(id);
-                }
                 self.ensure_ai_agent_inputs(cx);
                 self.defer_settings_persistence(cx);
                 self.defer_ai_panel_snapshot_flush(cx);
@@ -39,8 +41,11 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn inspect_acp_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.ai.agent_editor_view().errors.contains_key(id) {
+            return;
+        }
         if let Some(profile) =
-            nyaterm_core::ai::external_agents::profiles(self.ai.settings_config())
+            nyaterm_core::ai::external_agents::profiles(&self.ai.pending_settings())
                 .iter()
                 .find(|p| p.id == id)
                 .cloned()
@@ -58,7 +63,11 @@ impl NyaTermApp {
     pub(in crate::features) fn refresh_ai_agents(&mut self, cx: &mut Context<Self>) {
         self.submit_ai_agent_command(
             AgentCommand::Refresh(
-                nyaterm_core::ai::external_agents::profiles(self.ai.settings_config()).to_vec(),
+                nyaterm_core::ai::external_agents::profiles(&self.ai.pending_settings())
+                    .iter()
+                    .filter(|profile| !self.ai.agent_editor_view().errors.contains_key(&profile.id))
+                    .cloned()
+                    .collect(),
             ),
             cx,
         );
@@ -71,7 +80,7 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(profile) =
-            nyaterm_core::ai::external_agents::profiles(self.ai.settings_config())
+            nyaterm_core::ai::external_agents::profiles(&self.ai.pending_settings())
                 .iter()
                 .find(|p| p.id == id)
                 .cloned()

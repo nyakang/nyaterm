@@ -181,7 +181,7 @@ impl NyaTermApp {
 
     /// The AI Agents tab owns the external-agent registry inputs.
     pub(in crate::features) fn ensure_ai_agent_inputs(&mut self, cx: &mut Context<Self>) {
-        let values = acp_input_values(self.ai.settings_config());
+        let values = acp_input_values(&self.ai.pending_settings());
         self.retain_acp_inputs(&values.iter().map(|(id, _, _)| id.clone()).collect());
         for (id, value, secret) in values {
             self.ensure_text_input(id, &value, secret_input_setup(secret), cx);
@@ -1061,6 +1061,15 @@ mod tests {
                 cx,
             );
             app.apply_acp_profile_input("builtin-codex.executable", "edited-codex".into(), cx);
+            assert_eq!(
+                app.ai.settings_config().external_agents,
+                baseline.external_agents
+            );
+            assert_eq!(
+                app.ai.pending_settings().external_agents.as_ref().unwrap()[0].executable,
+                "edited-codex"
+            );
+            assert!(app.settings_draft_dirty());
             app.set_ai_timeout_ms(9000, cx);
             app.cancel_settings(cx);
             assert_eq!(app.ai.settings_config(), &baseline);

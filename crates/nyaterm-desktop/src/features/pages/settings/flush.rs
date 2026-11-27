@@ -104,6 +104,7 @@ impl NyaTermApp {
                         .collect(),
                 ),
                 agent_management: self.ai.agent_management_view().clone(),
+                agent_editor: self.ai.agent_editor_view().clone(),
                 background_tasks: self.background_tasks_view(),
             },
             cloud_sync: CloudSyncPresentation {

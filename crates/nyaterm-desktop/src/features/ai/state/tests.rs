@@ -776,17 +776,19 @@ fn external_profiles_keep_unknown_strategies_disabled_and_preserve_instance_iden
         .edit_external_profile("builtin-claude", "enabled", String::new())
         .unwrap();
     assert!(nyaterm_core::ai::external_agents::is_enabled(
-        state.settings_config(),
+        &state.pending_settings(),
         &AiAgentKind::ClaudeCode
     ));
-    let revision = state.settings_config().external_agents.as_ref().unwrap()[1].revision;
+    let revision = state.pending_settings().external_agents.as_ref().unwrap()[1].revision;
     state
         .edit_external_profile("builtin-claude", "model", "fixture-model".into())
         .unwrap();
     assert_eq!(
-        state.settings_config().external_agents.as_ref().unwrap()[1].revision,
+        state.pending_settings().external_agents.as_ref().unwrap()[1].revision,
         revision
     );
+    let pending = state.pending_settings();
+    state.replace_settings_config(pending, true);
     state.settings.config.external_agents.as_mut().unwrap()[1]
         .environment
         .push(
@@ -799,13 +801,8 @@ fn external_profiles_keep_unknown_strategies_disabled_and_preserve_instance_iden
     state
         .edit_external_profile("builtin-claude", "copy", String::new())
         .unwrap();
-    let copy = state
-        .settings_config()
-        .external_agents
-        .as_ref()
-        .unwrap()
-        .last()
-        .unwrap();
+    let pending = state.pending_settings();
+    let copy = pending.external_agents.as_ref().unwrap().last().unwrap();
     assert_ne!(copy.id, "builtin-claude");
     assert!(!copy.enabled);
     assert!(copy.environment[0].value.is_empty());
@@ -816,11 +813,11 @@ fn external_profiles_keep_unknown_strategies_disabled_and_preserve_instance_iden
         .edit_external_profile("builtin-claude", "enabled", String::new())
         .unwrap();
     assert!(!nyaterm_core::ai::external_agents::is_enabled(
-        state.settings_config(),
+        &state.pending_settings(),
         &AiAgentKind::ClaudeCode
     ));
     assert_eq!(
-        state.settings_config().external_agents.as_ref().unwrap()[1]
+        state.pending_settings().external_agents.as_ref().unwrap()[1]
             .strategy
             .0,
         "unknown"
@@ -830,7 +827,7 @@ fn external_profiles_keep_unknown_strategies_disabled_and_preserve_instance_iden
         .unwrap();
     assert!(
         nyaterm_core::ai::external_agents::resolve_profile(
-            state.settings_config(),
+            &state.pending_settings(),
             &AiAgentKind::ClaudeCode
         )
         .is_none()
@@ -2138,6 +2135,8 @@ fn disabling_an_external_agent_falls_back_to_ask_for_its_existing_terminal_draft
     state
         .edit_external_profile("builtin-codex", "enabled", String::new())
         .unwrap();
+    let pending = state.pending_settings();
+    state.replace_settings_config(pending, true);
     assert_eq!(state.chat_run_mode(), AiMode::Ask);
     assert_eq!(state.chat_agent_kind(), AiAgentKind::Nyaterm);
 }
@@ -2696,4 +2695,63 @@ fn provider_edits_keep_running_snapshot_and_deletion_cancels_inactive_run() {
     state.switch_visible_scope("unbound:");
     assert!(!state.chat.pending);
     assert!(state.chat.provider_session.is_none());
+}
+
+#[test]
+fn agent_configuration_typing_keeps_current_tasks_running_until_apply() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let baseline = state.settings_draft_snapshot();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.chat.pending = true;
+    state.chat.agent_kind = AiAgentKind::ClaudeCode;
+    state.chat.cancel = Some(cancel.clone());
+    state
+        .edit_external_profile("builtin-claude", "executable", "changed-adapter".into())
+        .unwrap();
+    assert!(!cancel.load(Ordering::Acquire));
+    assert_eq!(
+        state.settings_config().external_agents,
+        baseline.0.external_agents
+    );
+    assert!(!state.settings_draft_matches(&baseline.0, &baseline.1, &baseline.2, &baseline.3));
+    let next = state.pending_settings();
+    assert_eq!(next.external_agents.as_ref().unwrap()[1].revision, 1);
+    state.replace_settings_config(next, true);
+    assert!(cancel.load(Ordering::Acquire));
+    assert_eq!(
+        state.settings_config().external_agents.as_ref().unwrap()[1].executable,
+        "changed-adapter"
+    );
+    assert!(state.agent_editor_view().dirty.is_empty());
+}
+
+#[test]
+fn cancelling_agent_configuration_restores_drafts_without_stopping_tasks() {
+    let cx = TestAppContext::single();
+    let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut state = state(&cx);
+    let baseline = state.settings_draft_snapshot();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.chat.pending = true;
+    state.chat.agent_kind = AiAgentKind::ClaudeCode;
+    state.chat.cancel = Some(cancel.clone());
+    state
+        .edit_external_profile("builtin-claude", "args", "[".into())
+        .unwrap();
+    assert!(state.agent_settings_validation_error().is_some());
+    assert!(!state.settings_draft_matches(&baseline.0, &baseline.1, &baseline.2, &baseline.3));
+    state.restore_settings_draft(
+        baseline.0.clone(),
+        baseline.1.clone(),
+        baseline.2.clone(),
+        baseline.3.clone(),
+    );
+    assert!(!cancel.load(Ordering::Acquire));
+    assert!(state.agent_settings_validation_error().is_none());
+    assert!(state.settings_draft_matches(&baseline.0, &baseline.1, &baseline.2, &baseline.3));
+    // Release the test fixture's pending operation before teardown.
+    state.chat.pending = false;
+    state.chat.cancel = None;
 }

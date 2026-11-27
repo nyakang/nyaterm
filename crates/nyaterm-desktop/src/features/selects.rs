@@ -288,6 +288,10 @@ impl NyaTermApp {
             return;
         }
 
+        if let Some(profile_id) = id.strip_prefix("ai-agent-strategy-") {
+            self.edit_acp_profile(profile_id, "strategy", value.to_owned(), cx);
+            return;
+        }
         if let Some(index) = id.strip_prefix("settings.startup.target.") {
             if let Ok(index) = index.parse::<usize>() {
                 self.set_startup_target(index, value, cx);

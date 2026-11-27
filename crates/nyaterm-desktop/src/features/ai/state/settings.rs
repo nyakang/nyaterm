@@ -121,111 +121,38 @@ impl AiFeatureState {
         action: &str,
         value: String,
     ) -> Result<bool, &'static str> {
-        use nyaterm_core::ai::external_agents::{
-            AgentEnvironmentVariable, ExternalAgentProfile, migrate_profiles,
-        };
-        migrate_profiles(&mut self.settings.config);
-        let profiles = self
+        let changed = self
             .settings
-            .config
-            .external_agents
-            .as_mut()
-            .expect("normalized profiles");
-        if action == "add" {
-            profiles.push(ExternalAgentProfile::new(nyaterm_core::uuid(), &value));
-        } else {
-            let Some(index) = profiles.iter().position(|p| p.id == id) else {
-                return Ok(false);
-            };
-            if action == "delete" {
-                profiles.remove(index);
-            } else if action == "copy" {
-                let mut profile = profiles[index].clone();
-                profile.id = nyaterm_core::uuid();
-                profile.name.push_str(" (copy)");
-                profile.enabled = false;
-                // A duplicate has a new identity and must not carry saved secret masks.
-                for variable in &mut profile.environment {
-                    variable.value = Default::default();
-                }
-                profiles.push(profile);
-            } else {
-                let mut profile = profiles[index].clone();
-                let optional = || (!value.trim().is_empty()).then(|| value.clone());
-                match action {
-                    "name" => profile.name = value,
-                    "executable" => profile.executable = value,
-                    "strategy" => {
-                        profile.strategy.0 = value;
-                        profile.enabled = false;
-                    }
-                    "args" => {
-                        profile.args = serde_json::from_str(&value)
-                            .map_err(|_| "Arguments must be a JSON array of strings")?
-                    }
-                    "cwd" => profile.working_directory = optional(),
-                    "config" => profile.config_directory = optional(),
-                    "model" => profile.default_model = optional(),
-                    "enabled" => profile.enabled = !profile.enabled && profile.strategy.supported(),
-                    "persistent" => profile.persistent = !profile.persistent,
-                    "add-env" => {
-                        let name = (1..)
-                            .map(|i| format!("VARIABLE_{i}"))
-                            .find(|name| {
-                                !profile
-                                    .environment
-                                    .iter()
-                                    .any(|e| e.name.eq_ignore_ascii_case(name))
-                            })
-                            .unwrap();
-                        profile.environment.push(AgentEnvironmentVariable {
-                            id: nyaterm_core::uuid(),
-                            name,
-                            value: Default::default(),
-                        });
-                    }
-                    field => {
-                        let Some((row, field)) =
-                            field.strip_prefix("env.").and_then(|s| s.rsplit_once('.'))
-                        else {
-                            return Ok(false);
-                        };
-                        if field == "delete" {
-                            profile.environment.retain(|e| e.id != row);
-                        } else if let Some(env) =
-                            profile.environment.iter_mut().find(|e| e.id == row)
-                        {
-                            match field {
-                                "name" => env.name = value,
-                                "value" => env.value = value.into(),
-                                _ => return Ok(false),
-                            }
-                        }
-                    }
-                }
-                profile.validate()?;
-                if !matches!(action, "name" | "enabled" | "model") && profile != profiles[index] {
-                    profile.revision = profile
-                        .revision
-                        .checked_add(1)
-                        .ok_or("Agent revision exhausted")?;
-                }
-                profiles[index] = profile;
-            }
+            .agent_editor
+            .edit(&self.settings.config, id, action, value)?;
+        if changed {
+            self.agent_management.invalidate_profile(id);
         }
-        if action == "delete"
-            && nyaterm_core::ai::external_agents::profile_id(
-                &self.settings.config.default_agent_kind,
-            ) == Some(id)
-        {
-            self.settings.config.default_agent_kind = AiAgentKind::Nyaterm;
-        }
-        self.agent_management.invalidate();
-        Ok(true)
+        Ok(changed)
+    }
+
+    pub(in crate::features) fn agent_editor_view(
+        &self,
+    ) -> &crate::features::ai::agent_settings::AgentEditorView {
+        self.settings.agent_editor.view()
+    }
+
+    pub(in crate::features) fn agent_editor_action(&mut self, id: &str, action: &str) {
+        self.settings.agent_editor.present(id, action);
+    }
+
+    pub(in crate::features) fn agent_settings_validation_error(&self) -> Option<String> {
+        self.settings
+            .agent_editor
+            .view()
+            .errors
+            .values()
+            .next()
+            .map(|key| rust_i18n::t!(*key).to_string())
     }
 
     pub(in crate::features) fn cancel_agent_management(&mut self) {
-        self.agent_management.invalidate();
+        self.agent_management.cancel_pending();
     }
 
     pub(in crate::features) fn settings_config(&self) -> &AiSettings {
@@ -339,6 +266,7 @@ impl AiFeatureState {
 
     pub(in crate::features) fn pending_settings(&self) -> AiSettings {
         let mut next = self.settings.config.clone();
+        self.settings.agent_editor.project(&mut next);
         for credential in &mut next.provider_credentials {
             if let Some(secret) = self
                 .settings
@@ -494,7 +422,8 @@ impl AiFeatureState {
         base_url: &str,
         secret: &nyaterm_core::SecretString,
     ) -> bool {
-        &self.pending_settings() == config
+        self.settings.agent_editor.view().errors.is_empty()
+            && &self.pending_settings() == config
             && self.settings.model_draft == model
             && self.settings.base_url_draft == base_url
             && self.settings.secret_draft == *secret
@@ -508,6 +437,28 @@ impl AiFeatureState {
         self.invalidate_provider_jobs();
         self.agent_management.invalidate();
         self.cancel_removed_provider_runs(&config);
+        // Legacy settings can still identify active agents before their profile list is materialized.
+        let mut previous = self.settings.config.clone();
+        nyaterm_core::ai::external_agents::migrate_profiles(&mut previous);
+        // Applied profile changes invalidate live sessions only after a successful save.
+        let changed_profiles = nyaterm_core::ai::external_agents::profiles(&previous)
+            .iter()
+            .filter(|old| {
+                let next = nyaterm_core::ai::external_agents::profiles(&config)
+                    .iter()
+                    .find(|next| next.id == old.id);
+                next.is_none_or(|next| {
+                    let mut old = (**old).clone();
+                    old.name.clone_from(&next.name);
+                    old != *next
+                })
+            })
+            .map(|profile| profile.id.clone())
+            .collect::<Vec<_>>();
+        for id in changed_profiles {
+            self.cancel_external_profile_runs(&id);
+        }
+        self.settings.agent_editor.clear();
         self.settings.config = config;
         if clear_secret_draft {
             self.settings.credential_secret_drafts.clear();
@@ -528,6 +479,7 @@ impl AiFeatureState {
         self.settings.credential_secret_drafts.clear();
         self.settings.credential_header_secret_drafts.clear();
         self.cancel_removed_provider_runs(&config);
+        self.settings.agent_editor.clear();
         self.settings.config = config;
         self.settings.model_draft = model;
         self.settings.base_url_draft = base_url;
@@ -535,6 +487,7 @@ impl AiFeatureState {
     }
 
     pub(in crate::features) fn close_settings_editors(&mut self) {
+        self.settings.agent_editor.clear();
         self.invalidate_provider_jobs();
         self.agent_management.invalidate();
         self.provider_view_mut().revealed_id = None;

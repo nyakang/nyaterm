@@ -123,6 +123,14 @@ impl NyaTermApp {
         kind: AiAgentKind,
         cx: &mut Context<Self>,
     ) {
+        if kind != nyaterm_core::AiAgentKind::Nyaterm {
+            let settings = self.ai.pending_settings();
+            if !nyaterm_core::ai::external_agents::resolve_profile(&settings, &kind)
+                .is_some_and(crate::features::ai::agent_settings::default_selectable)
+            {
+                return;
+            }
+        }
         self.ai.set_settings_default_agent(kind);
         self.persist_ai_settings_now(cx);
     }

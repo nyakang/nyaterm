@@ -2,6 +2,7 @@
 
 mod acp_runtime;
 pub(in crate::features) mod agent_management;
+pub(in crate::features) mod agent_settings;
 mod ai_agent_runtime;
 mod ai_jobs;
 mod ai_runtime;
