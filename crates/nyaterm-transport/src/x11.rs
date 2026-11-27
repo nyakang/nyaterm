@@ -669,12 +669,16 @@ async fn handle_x11_channel(
         Ok::<(), std::io::Error>(())
     };
 
-    tokio::select! {
-        result = remote_to_local => result?,
-        result = local_to_remote => result?,
-    }
+    let result = tokio::select! {
+        result = remote_to_local => result,
+        result = local_to_remote => result,
+    };
 
-    Ok(())
+    // Dropping russh channel halves does not send CHANNEL_CLOSE. In particular,
+    // rejected setup authentication must not leave the remote X client waiting
+    // forever for a reply on a channel that no longer has a forwarding task.
+    let _ = remote_write.close().await;
+    result.map_err(Into::into)
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -708,6 +712,9 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod forwarding_tests;
 
 #[cfg(test)]
 mod tests {
