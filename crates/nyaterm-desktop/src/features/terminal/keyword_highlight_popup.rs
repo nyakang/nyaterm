@@ -2368,8 +2368,17 @@ mod tests {
             editor.edit_field(1, "alpha".into(), cx);
         });
         editor.update(&mut cx, |editor, cx| editor.apply(cx));
-        for _ in 0..8 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
             cx.run_until_parked();
+            if editor.read_with(&cx, |editor, _| !editor.saving) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "keyword persistence did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
         editor.read_with(&cx, |editor, cx| {
