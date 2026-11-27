@@ -1,6 +1,6 @@
 # NyaTerm Mosh client
 
-Imported from the NyaMosh working tree (MoshCatty base `554b9d3`), with the original GPL-3.0-or-later license retained. This library owns the Mosh wire protocol, remote state reconstruction and prediction. NyaTerm transport owns SSH bootstrap, worker scheduling and session lifecycle. No standalone client executable is shipped.
+Imported from the NyaMosh working tree (base `554b9d3`), with the original GPL-3.0-or-later license retained. This library owns the Mosh wire protocol, remote state reconstruction and prediction. NyaTerm transport owns SSH bootstrap, worker scheduling and session lifecycle. No standalone client executable is shipped.
 
 ## Connections
 

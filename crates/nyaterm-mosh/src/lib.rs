@@ -1,4 +1,4 @@
-//! **NyaTerm Mosh** (adapted from NyaMosh / MoshCatty) — pure Rust Mosh client, wire-compatible with stock `mosh-server`.
+//! **NyaTerm Mosh** (adapted from NyaMosh) — pure Rust Mosh client, wire-compatible with stock `mosh-server`.
 //!
 //! Protocol layers (bottom → top):
 //! - [`crypto`] — AES-128-OCB3 (RFC 7253) + mosh datagram framing
