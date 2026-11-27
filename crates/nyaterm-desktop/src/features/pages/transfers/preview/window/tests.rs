@@ -26,6 +26,7 @@ fn test_app(cx: &mut TestAppContext, root: &std::path::Path) -> Entity<NyaTermAp
 
 fn tab(id: &str, source: &str) -> TransferPreviewState {
     TransferPreviewState {
+        text_encoding: Default::default(),
         id: id.into(),
         session_id: None,
         remote_path: format!("/{id}.md"),

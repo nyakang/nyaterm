@@ -850,3 +850,62 @@ fn adb_completion_keeps_raw_names_and_discards_a_truncated_sync_channel() {
     assert_ne!(next[0].identity_key(), next[1].identity_key());
     assert!(fixture.service.runtime.is_valid());
 }
+
+#[test]
+fn encoded_adb_document_preserves_utf16_and_detects_conflicts_after_staging() {
+    use crate::file_browser::text_document::EncodedDocumentWrite;
+    use crate::remote_file::RemoteTextWriteResult;
+    use nyaterm_core::file_encoding::{FileEncoding, FileReadEncoding, FileTextFormat};
+    let fixture = AdbFixture::new();
+    let path = RemoteFilePath::new("/device/editor");
+    let format = FileTextFormat {
+        encoding: FileEncoding::Utf16Be,
+        bom: true,
+    };
+    let original = format.encode("中文\r\n", 1024).unwrap();
+    fixture.file(b"/device/editor", &original);
+    let browser = FileBrowserService::Adb(fixture.service.clone());
+    let file = browser
+        .read_encoded_document_path(&path, 1024, FileReadEncoding::Auto)
+        .unwrap();
+    let result = browser
+        .write_encoded_document_path(
+            &path,
+            EncodedDocumentWrite {
+                content: "修改\r\n",
+                format,
+                expected_revision: Some(&file.document.revision),
+                force: false,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
+    let RemoteTextWriteResult::Saved { revision } = result else {
+        panic!("expected saved document");
+    };
+    assert_eq!(
+        fixture.device.lock().unwrap().nodes[b"/device/editor".as_slice()].data,
+        format.encode("修改\r\n", 1024).unwrap()
+    );
+    fixture.device.lock().unwrap().change_on_send =
+        Some((b"/device/editor".to_vec(), original.clone()));
+    assert_eq!(
+        browser
+            .write_encoded_document_path(
+                &path,
+                EncodedDocumentWrite {
+                    content: "本地修改",
+                    format,
+                    expected_revision: Some(&revision),
+                    force: false,
+                    max_bytes: 1024
+                }
+            )
+            .unwrap(),
+        RemoteTextWriteResult::Conflict
+    );
+    assert_eq!(
+        fixture.device.lock().unwrap().nodes[b"/device/editor".as_slice()].data,
+        original
+    );
+}

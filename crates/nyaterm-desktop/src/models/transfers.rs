@@ -1,7 +1,7 @@
 use gpui::{Pixels, ScrollHandle, UniformListScrollHandle, px};
 use nyaterm_core::transfer_speed::TransferSpeed;
 use nyaterm_files::file_browser::listing::FileBrowserSortColumn;
-use nyaterm_files::remote_file::{RemoteTextDocument, RemoteTextGeneration, RemoteTextWriteResult};
+use nyaterm_files::remote_file::{RemoteTextGeneration, RemoteTextWriteResult};
 use nyaterm_files::sftp::{
     SftpFileEntry, SftpFileProperties, SftpRemoteTextFile, SftpTransferControl,
 };
@@ -627,13 +627,14 @@ pub(crate) enum TransferJobOutput {
         tab_id: String,
         remote_path: String,
         generation: RemoteTextGeneration,
-        file: RemoteTextDocument,
+        file: nyaterm_files::text_document::EncodedTextDocument,
     },
     PreviewLoaded {
         tab_id: String,
         remote_path: String,
         generation: RemoteTextGeneration,
         content: crate::models::PreviewContent,
+        format: Option<nyaterm_core::file_encoding::FileTextFormat>,
     },
     /// A single lazily-rasterized PDF page finished rendering.
     PdfPageRendered {

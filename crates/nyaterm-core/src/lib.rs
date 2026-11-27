@@ -21,6 +21,7 @@ pub mod data_directory;
 pub mod diagnostics;
 pub mod document_edit;
 pub mod document_language;
+pub mod file_encoding;
 pub mod hex_document;
 pub mod keyword_highlight_presets;
 pub mod mac_address;

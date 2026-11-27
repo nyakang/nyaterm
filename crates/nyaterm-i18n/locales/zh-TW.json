@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "編碼",
+    "auto": "自動識別（BOM / UTF-8）",
+    "reopen": "以編碼重新開啟",
+    "convert": "轉換編碼（儲存時生效）",
+    "pending": "%{encoding} · 待儲存",
+    "selectionRequired": "此檔案不是有效的 UTF-8 文字，請選擇檔案編碼。",
+    "invalidSequence": "檔案包含所選編碼的無效位元組序列。",
+    "bomConflict": "所選編碼與檔案 BOM 衝突。",
+    "unsupportedUtf32": "暫不支援 UTF-32 檔案。",
+    "invalidBom": "此編碼不支援 BOM。",
+    "binary": "無法將二進位檔案作為文字開啟。",
+    "unrepresentable": "目前編碼無法表示部分字元，請選擇 UTF-8。",
+    "tooLarge": "編碼後的檔案超過大小限制。",
+    "nonRoundTrip": "此檔案無法按原編碼無損回存，請明確轉換為 UTF-8 後儲存。"
+  },
   "syncTab": {
     "enabled": "已啟用",
     "disabled": "已停用",

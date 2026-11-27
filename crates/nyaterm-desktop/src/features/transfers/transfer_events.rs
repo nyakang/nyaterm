@@ -1336,7 +1336,7 @@ impl NyaTermApp {
                 job.progress = None;
                 job.control = None;
                 self.transfer
-                    .complete_editor_load_tab(&tab_id, generation, file);
+                    .complete_encoded_editor_load_tab(&tab_id, generation, file);
                 self.transfer.browser.status = format!("opened text file {remote_path}");
                 self.shell
                     .set_status(format!("remote text file opened: {remote_path}"));
@@ -1346,6 +1346,7 @@ impl NyaTermApp {
                 remote_path,
                 generation,
                 content,
+                format,
             })) => {
                 job.status = TransferJobStatus::Completed;
                 job.detail = format!("Previewed {remote_path}");
@@ -1355,7 +1356,7 @@ impl NyaTermApp {
                 // Generation guard inside: a result for a superseded generation
                 // (the user refreshed or closed the tab) is dropped.
                 self.transfer
-                    .complete_preview_tab(&tab_id, generation, content);
+                    .complete_encoded_preview_tab(&tab_id, generation, content, format);
                 self.transfer.browser.status = format!("previewed {remote_path}");
                 self.shell
                     .set_status(format!("remote file preview ready: {remote_path}"));

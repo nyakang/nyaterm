@@ -209,6 +209,7 @@ pub(crate) fn editor_document(
     display: nyaterm_core::InternalEditorDisplay,
 ) -> crate::models::TransferEditorState {
     crate::models::TransferEditorState {
+        encoding: Default::default(),
         display,
         id: crate::models::TransferEditorState::tab_id(Some(session), path),
         session_id: Some(session.to_string()),
@@ -218,7 +219,13 @@ pub(crate) fn editor_document(
         content: "original".into(),
         search_query: String::new(),
         active_match: 0,
-        revision: None,
+        revision: Some(nyaterm_files::remote_file::RemoteTextRevision::from_bytes(
+            b"original",
+            nyaterm_files::remote_file::RemoteTextMetadata {
+                size: 8,
+                modified_at: Some(1),
+            },
+        )),
         generation: nyaterm_files::remote_file::RemoteTextGeneration::next(),
         loading: false,
         saving: false,

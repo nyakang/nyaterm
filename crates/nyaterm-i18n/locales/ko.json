@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "인코딩",
+    "auto": "자동 (BOM / UTF-8)",
+    "reopen": "인코딩을 지정하여 다시 열기",
+    "convert": "인코딩 변환 (저장 시 적용)",
+    "pending": "%{encoding} · 저장 대기",
+    "selectionRequired": "유효한 UTF-8 텍스트가 아닙니다. 파일 인코딩을 선택하세요.",
+    "invalidSequence": "선택한 인코딩에 유효하지 않은 바이트 시퀀스입니다.",
+    "bomConflict": "선택한 인코딩이 파일 BOM과 일치하지 않습니다.",
+    "unsupportedUtf32": "UTF-32 파일은 지원하지 않습니다.",
+    "invalidBom": "이 인코딩은 BOM을 지원하지 않습니다.",
+    "binary": "바이너리 파일을 텍스트로 열 수 없습니다.",
+    "unrepresentable": "이 인코딩으로 표현할 수 없는 문자가 있습니다. UTF-8을 선택하세요.",
+    "tooLarge": "인코딩된 파일이 크기 제한을 초과합니다.",
+    "nonRoundTrip": "원래 인코딩으로 손실 없이 저장할 수 없습니다. UTF-8로 변환한 후 저장하세요."
+  },
   "syncTab": {
     "enabled": "활성화됨",
     "disabled": "비활성화됨",

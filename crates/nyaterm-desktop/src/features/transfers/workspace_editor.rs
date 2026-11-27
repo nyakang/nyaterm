@@ -119,6 +119,7 @@ impl Render for WorkspaceEditorView {
             .settings
             .summary()
             .transfer_internal_editor_font_size;
+        let encoding_menu = super::file_encoding::editor_encoding_menu(app.clone(), &document);
         let font_app = app.clone();
         let (line, column) = editor.read(cx).cursor_position(cx);
         let save_id = self.id.clone();
@@ -197,7 +198,12 @@ impl Render for WorkspaceEditorView {
                     .child(
                         NyaButton::new("workspace-editor-save", t!("common.save").to_string())
                             .small()
-                            .disabled(document.loading || document.saving)
+                            .disabled(
+                                document.loading
+                                    || document.saving
+                                    || document.revision.is_none()
+                                    || !document.encoding.can_save(),
+                            )
                             .on_click(move |_, window, cx| {
                                 app.update(cx, |app, cx| {
                                     app.save_transfer_editor_tab(&save_id, false, window, cx)
@@ -205,6 +211,16 @@ impl Render for WorkspaceEditorView {
                             }),
                     ),
             )
+            .when(document.encoding.non_round_trip, |this| {
+                this.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .text_xs()
+                        .text_color(rgb(palette.danger))
+                        .child(t!("fileEncoding.nonRoundTrip").to_string()),
+                )
+            })
             .when_some(document.error.clone(), |this, error| {
                 this.child(
                     div()
@@ -267,6 +283,11 @@ impl Render for WorkspaceEditorView {
                     .border_t_1()
                     .border_color(rgb(palette.border))
                     .child(t!("fileEditor.lineColumn", line = line, column = column).to_string())
+                    .child(
+                        div()
+                            .debug_selector(|| "editor-encoding-control".to_string())
+                            .child(encoding_menu),
+                    )
                     .child(
                         div().flex().items_center().gap_1().children(
                             [
@@ -826,5 +847,121 @@ mod tests {
             );
             assert!(!app.session.has_session("local"));
         });
+    }
+    #[test]
+    fn encoded_editor_surfaces_keep_undo_and_preserve_file_on_failed_conversion() {
+        use nyaterm_core::file_encoding::{FileEncoding, FileReadEncoding, FileTextFormat};
+        use nyaterm_files::file_browser::FileBrowserService;
+        use nyaterm_files::sftp::RemoteFilePath;
+        for display in [
+            InternalEditorDisplay::Workspace,
+            InternalEditorDisplay::Window,
+        ] {
+            let mut cx = TestAppContext::single();
+            let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+            let root = TestTempDir::new("nyaterm-encoded-editor-surface");
+            std::fs::create_dir_all(root.path()).unwrap();
+            let path = root.path().join("document.txt");
+            let original_format = FileTextFormat {
+                encoding: FileEncoding::Utf16Le,
+                bom: true,
+            };
+            let original = original_format.encode("line\r\n", 1024).unwrap();
+            std::fs::write(&path, &original).unwrap();
+            let file = FileBrowserService::local()
+                .read_encoded_document_path(
+                    &RemoteFilePath::new(path.to_str().unwrap()),
+                    1024,
+                    FileReadEncoding::Auto,
+                )
+                .unwrap();
+            let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+            let (id, mut receiver) = app.update(&mut cx, |app, cx| {
+                app.sync_component_theme(cx);
+                let doc = editor_document("local", path.to_str().unwrap(), display);
+                let id = doc.id.clone();
+                let generation = doc.generation;
+                app.transfer.open_editor_tab(doc);
+                app.transfer
+                    .complete_encoded_editor_load_tab(&id, generation, file);
+                if display == InternalEditorDisplay::Workspace {
+                    app.open_workspace_editor_tab(&id, cx);
+                }
+                (id, app.transfer.take_transfer_event_receiver().unwrap())
+            });
+            let host_app = app.clone();
+            let host_id = id.clone();
+            let (_, cx) = cx.add_window_view(move |window, cx| {
+                let host = cx.new(|_| EditorHost {
+                    app: host_app,
+                    id: host_id,
+                });
+                nyaterm_ui::nya_root(host, window, cx)
+            });
+            draw(cx);
+            let view = app.read_with(cx, |app, _| {
+                app.transfer.workspace_editor_view(&id).unwrap()
+            });
+            let editor = view.read_with(cx, |view, _| view.editor.clone().unwrap());
+            let state = editor.read_with(cx, |editor, _| editor.document_for_test());
+            cx.update(|window, cx| {
+                state.update(cx, |doc, cx| {
+                    doc.apply_edit("😀".into(), 10..10, window, cx)
+                })
+            });
+            draw(cx);
+            let edited = state.read_with(cx, |doc, cx| doc.value(cx));
+            assert_eq!(edited, "line\r\n😀");
+            let bounds = cx.debug_bounds("editor-encoding-control").unwrap();
+            cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+            draw(cx);
+            cx.update(|window, cx| assert!(nyaterm_ui::nya_popup_is_active(window, cx)));
+            cx.simulate_keystrokes("escape");
+            draw(cx);
+            cx.update(|window, cx| {
+                assert!(!nyaterm_ui::nya_popup_is_active(window, cx));
+                assert!(editor.read(cx).focus_handle(cx).is_focused(window));
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.transfer.set_editor_save_format(
+                        &id,
+                        FileTextFormat {
+                            encoding: FileEncoding::Gbk,
+                            bom: false,
+                        },
+                    );
+                    app.save_transfer_editor_tab(&id, false, window, cx);
+                })
+            });
+            let event = futures::executor::block_on(receiver.next()).unwrap();
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| app.apply_transfer_event(event, window, cx))
+            });
+            draw(cx);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            app.read_with(cx, |app, _| {
+                let doc = app.transfer.editor_tab_snapshot(&id).unwrap();
+                assert!(doc.dirty);
+                assert!(doc.error.is_some());
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    app.transfer
+                        .set_editor_save_format(&id, FileTextFormat::default());
+                    app.save_all_transfer_editor_tabs(window, cx);
+                })
+            });
+            let event = futures::executor::block_on(receiver.next()).unwrap();
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| app.apply_transfer_event(event, window, cx))
+            });
+            draw(cx);
+            assert_eq!(std::fs::read(&path).unwrap(), edited.as_bytes());
+            assert_eq!(state.read_with(cx, |doc, cx| doc.value(cx)), edited);
+            cx.update(|window, cx| state.update(cx, |doc, cx| doc.undo(window, cx)));
+            draw(cx);
+            assert_eq!(state.read_with(cx, |doc, cx| doc.value(cx)), "line\r\n");
+        }
     }
 }

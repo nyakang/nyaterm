@@ -373,6 +373,41 @@ mod tests {
 
     use crate::content::DecodedContent;
 
+    #[test]
+    fn unicode_bom_is_removed_before_json_markdown_and_table_parsing() {
+        use nyaterm_core::file_encoding::{
+            FileEncoding, FileReadEncoding, FileTextFormat, decode_file_text,
+        };
+        for encoding in [
+            FileEncoding::Utf8,
+            FileEncoding::Utf16Le,
+            FileEncoding::Utf16Be,
+        ] {
+            let format = FileTextFormat {
+                encoding,
+                bom: true,
+            };
+            for (category, text) in [
+                (PreviewCategory::Json, "{\"title\":\"中文\"}"),
+                (PreviewCategory::Markdown, "# 中文\r\n"),
+                (
+                    PreviewCategory::Delimited { tab: false },
+                    "name,value\r\n中文,1",
+                ),
+            ] {
+                let decoded =
+                    decode_file_text(&format.encode(text, 1024).unwrap(), FileReadEncoding::Auto)
+                        .unwrap();
+                match decode_text_content(category, decoded.text) {
+                    DecodedContent::Json { parse_error, .. } => assert!(parse_error.is_none()),
+                    DecodedContent::Markdown(text) => assert!(text.starts_with('#')),
+                    DecodedContent::Delimited(table) => assert_eq!(table.records[0][0], "name"),
+                    _ => panic!("expected text preview"),
+                }
+            }
+        }
+    }
+
     use super::{
         IMAGE_MAX_DIMENSION, IMAGE_MAX_PIXELS, check_pixel_budget, decode_text_content,
         parse_delimited, pretty_print_json,

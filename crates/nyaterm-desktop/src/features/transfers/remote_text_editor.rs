@@ -59,7 +59,7 @@ impl RemoteTextEditor {
             tab_id: tab.id.clone(),
             document,
             synced_content: tab.content.clone(),
-            read_only: tab.loading || tab.saving,
+            read_only: tab.loading || tab.saving || tab.revision.is_none(),
             _subscription: subscription,
         }
     }
@@ -118,7 +118,7 @@ impl RemoteTextEditor {
             }
             self.synced_content = tab.content.clone();
         }
-        let read_only = tab.loading || tab.saving;
+        let read_only = tab.loading || tab.saving || tab.revision.is_none();
         if self.read_only != read_only {
             self.read_only = read_only;
             cx.notify();

@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "Encoding",
+    "auto": "Auto (BOM / UTF-8)",
+    "reopen": "Reopen with Encoding",
+    "convert": "Convert Encoding (on Save)",
+    "pending": "%{encoding} · pending save",
+    "selectionRequired": "Choose the file encoding to open this non-UTF-8 text.",
+    "invalidSequence": "Invalid byte sequence for the selected encoding.",
+    "bomConflict": "The selected encoding conflicts with the file BOM.",
+    "unsupportedUtf32": "UTF-32 files are not supported.",
+    "invalidBom": "This encoding does not support a BOM.",
+    "binary": "Binary files cannot be opened as text.",
+    "unrepresentable": "Text cannot be represented in this encoding. Choose UTF-8.",
+    "tooLarge": "The encoded file exceeds the size limit.",
+    "nonRoundTrip": "This file cannot be saved losslessly in its original encoding. Explicitly convert to UTF-8 before saving."
+  },
   "syncTab": {
     "enabled": "Enabled",
     "disabled": "Disabled",

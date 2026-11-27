@@ -106,6 +106,7 @@ impl NyaTermApp {
             PreviewContent::Unsupported
         };
         let tab = TransferPreviewState {
+            text_encoding: Default::default(),
             id: tab_id.clone(),
             session_id: session_id.clone(),
             remote_path: entry.path.clone(),
@@ -270,6 +271,11 @@ impl NyaTermApp {
                 return;
             }
         };
+        let selection = self
+            .transfer
+            .preview_tab_snapshot(&tab_id)
+            .map(|tab| tab.text_encoding.read)
+            .unwrap_or_default();
         let max_bytes = category.max_bytes();
         let id = self.transfer.next_transfer_job_id("sftp-preview");
         self.transfer.enqueue_transfer_job(TransferJobState {
@@ -297,8 +303,13 @@ impl NyaTermApp {
             id.clone(),
             transfer_tx.clone(),
             move || {
-                let content =
-                    load_preview_content(&service, &remote_file_path, category, max_bytes);
+                let (content, format) = load_preview_content(
+                    &service,
+                    &remote_file_path,
+                    category,
+                    max_bytes,
+                    selection,
+                );
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(Ok(TransferJobOutput::PreviewLoaded {
@@ -306,6 +317,7 @@ impl NyaTermApp {
                         remote_path,
                         generation,
                         content,
+                        format,
                     })),
                 });
             },
@@ -398,28 +410,47 @@ fn load_preview_content(
     remote_file_path: &RemoteFilePath,
     category: PreviewCategory,
     max_bytes: u64,
-) -> PreviewContent {
-    if category.is_binary() {
-        match service.read_file_bytes_path(remote_file_path, max_bytes) {
-            Ok(file) => {
+    selection: nyaterm_core::file_encoding::FileReadEncoding,
+) -> (
+    PreviewContent,
+    Option<nyaterm_core::file_encoding::FileTextFormat>,
+) {
+    let result = if category.is_binary() {
+        service
+            .read_file_bytes_path(remote_file_path, max_bytes)
+            .map(|file| {
                 if !preview_within_limit(category, file.size) {
-                    return PreviewContent::Error(preview_too_large_message(category));
+                    return (
+                        PreviewContent::Error(preview_too_large_message(category)),
+                        None,
+                    );
                 }
-                decode_binary_content(category, file.content_bytes)
-            }
-            Err(error) => PreviewContent::Error(error.to_string()),
-        }
+                (decode_binary_content(category, file.content_bytes), None)
+            })
     } else {
-        match service.read_text_file_path(remote_file_path, max_bytes) {
-            Ok(file) => {
-                if !preview_within_limit(category, file.size) {
-                    return PreviewContent::Error(preview_too_large_message(category));
+        service
+            .read_encoded_document_path(remote_file_path, max_bytes, selection)
+            .map(|file| {
+                if !preview_within_limit(category, file.document.revision.metadata.size) {
+                    return (
+                        PreviewContent::Error(preview_too_large_message(category)),
+                        None,
+                    );
                 }
-                decode_text_content(category, file.content)
-            }
-            Err(error) => PreviewContent::Error(error.to_string()),
-        }
-    }
+                (
+                    decode_text_content(category, file.document.content),
+                    Some(file.format),
+                )
+            })
+    };
+    result.unwrap_or_else(|error| {
+        (
+            PreviewContent::Error(
+                crate::features::transfers::file_encoding::encoding_error_message(&error),
+            ),
+            None,
+        )
+    })
 }
 
 fn preview_too_large_message(category: PreviewCategory) -> String {

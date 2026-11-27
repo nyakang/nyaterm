@@ -377,6 +377,15 @@ impl FtpFileService {
         expected: Option<&RemoteTextRevision>,
         force: bool,
     ) -> Result<RemoteTextWriteResult, FtpError> {
+        self.write_document_bytes(path, content.as_bytes(), expected, force)
+    }
+    pub(crate) fn write_document_bytes(
+        &self,
+        path: &str,
+        content: &[u8],
+        expected: Option<&RemoteTextRevision>,
+        force: bool,
+    ) -> Result<RemoteTextWriteResult, FtpError> {
         let control = SftpTransferControl::new();
         let _mutation = self.lock_mutations(&control)?;
         validate_path(path)?;
@@ -415,18 +424,13 @@ impl FtpFileService {
         }
         let temporary = temporary_path(path);
         let result = (|| {
-            self.store(
-                &temporary,
-                &mut Cursor::new(content.as_bytes()),
-                &control,
-                |_| Ok(()),
-            )?;
+            self.store(&temporary, &mut Cursor::new(content), &control, |_| Ok(()))?;
             if !force && !matches()? {
                 return Ok(RemoteTextWriteResult::Conflict);
             }
             let backup_path = replace::commit(&RemoteReplacement(self), &temporary, path, true)?;
             let revision = RemoteTextRevision::from_bytes(
-                content.as_bytes(),
+                content,
                 RemoteTextMetadata {
                     size: content.len() as u64,
                     modified_at: self

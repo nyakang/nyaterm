@@ -34,6 +34,44 @@ pub(in crate::features) enum TransferPreviewCloseOutcome {
 }
 
 impl TransferFeatureState {
+    pub(in crate::features) fn set_preview_read_encoding(
+        &mut self,
+        selection: nyaterm_core::file_encoding::FileReadEncoding,
+    ) {
+        let Some(workspace) = self.preview.workspace.as_mut() else {
+            return;
+        };
+        if let Some(tab) = workspace
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == workspace.active_tab_id)
+        {
+            tab.text_encoding.read = selection;
+            tab.text_encoding.format = None;
+        }
+    }
+
+    pub(in crate::features) fn complete_encoded_preview_tab(
+        &mut self,
+        id: &str,
+        generation: RemoteTextGeneration,
+        content: PreviewContent,
+        format: Option<nyaterm_core::file_encoding::FileTextFormat>,
+    ) -> bool {
+        if !self.complete_preview_tab(id, generation, content) {
+            return false;
+        }
+        if let Some(tab) = self
+            .preview
+            .workspace
+            .as_mut()
+            .and_then(|workspace| workspace.tabs.iter_mut().find(|tab| tab.id == id))
+        {
+            tab.text_encoding.format = format;
+        }
+        true
+    }
+
     pub(in crate::features) fn preview_focus(&self) -> &FocusHandle {
         &self.preview.focus
     }

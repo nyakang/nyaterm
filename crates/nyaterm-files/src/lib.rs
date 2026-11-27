@@ -11,3 +11,4 @@ pub mod remote_file;
 pub mod session_probe;
 pub mod sftp;
 pub mod sftp_transfer_types;
+pub mod text_document;

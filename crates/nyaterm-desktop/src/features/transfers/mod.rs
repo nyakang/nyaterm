@@ -9,6 +9,7 @@ pub(in crate::features) mod drag_export;
 mod editor_window;
 pub(in crate::features) mod external_sync_runtime;
 mod external_sync_window;
+pub(in crate::features) mod file_encoding;
 pub(in crate::features) mod file_open;
 pub(in crate::features) mod file_operations;
 pub(in crate::features) mod preview;

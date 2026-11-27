@@ -4,6 +4,7 @@
 mod chrome;
 pub(crate) mod connections;
 pub(crate) mod event_wake;
+pub(crate) mod file_encoding;
 mod layout_state;
 mod navigation;
 mod network;

@@ -54,11 +54,12 @@ impl NyaTermApp {
         cx: &mut Context<Self>,
     ) {
         let remote_path = remote_file_path.display_path.clone();
-        let Some(generation) = self
-            .transfer
-            .editor_tab_snapshot(&tab_id)
-            .map(|tab| tab.generation)
-        else {
+        let Some((generation, selection)) = self.transfer.editor_tab_snapshot(&tab_id).map(|tab| {
+            (
+                tab.generation,
+                tab.encoding.pending_read.unwrap_or(tab.encoding.read),
+            )
+        }) else {
             return;
         };
         let service = match self.transfer_file_browser_service(session_id.as_deref()) {
@@ -99,14 +100,20 @@ impl NyaTermApp {
             transfer_tx.clone(),
             move || {
                 let result = service
-                    .read_text_document_path(&remote_file_path, NATIVE_EDITOR_MAX_BYTES)
+                    .read_encoded_document_path(
+                        &remote_file_path,
+                        NATIVE_EDITOR_MAX_BYTES,
+                        selection,
+                    )
                     .map(|file| TransferJobOutput::EditorLoaded {
                         tab_id,
                         remote_path,
                         generation,
                         file,
                     })
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| {
+                        crate::features::transfers::file_encoding::encoding_error_message(&error)
+                    });
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),
@@ -137,7 +144,18 @@ impl NyaTermApp {
         let Some(snapshot) = self.transfer.editor_tab_snapshot(tab_id) else {
             return;
         };
-        if snapshot.loading || snapshot.saving {
+        if snapshot.loading || snapshot.saving || snapshot.revision.is_none() {
+            return;
+        }
+        if !snapshot.encoding.can_save() {
+            self.transfer.fail_editor_operation_tab(
+                tab_id,
+                snapshot.generation,
+                crate::features::transfers::file_encoding::encoding_error_message(
+                    &nyaterm_core::file_encoding::FileEncodingError::NonRoundTrip.into(),
+                ),
+            );
+            cx.notify();
             return;
         }
         if !self.transfer.begin_editor_tab_save(tab_id) {
@@ -149,6 +167,7 @@ impl NyaTermApp {
             snapshot.id,
             remote_file_path,
             snapshot.content.to_string(),
+            snapshot.encoding.target,
             snapshot.revision,
             snapshot.generation,
             force,
@@ -164,6 +183,7 @@ impl NyaTermApp {
         tab_id: String,
         remote_file_path: RemoteFilePath,
         content: String,
+        format: nyaterm_core::file_encoding::FileTextFormat,
         expected_revision: Option<RemoteTextRevision>,
         generation: RemoteTextGeneration,
         force: bool,
@@ -208,11 +228,15 @@ impl NyaTermApp {
             transfer_tx.clone(),
             move || {
                 let result = service
-                    .write_text_document_path(
+                    .write_encoded_document_path(
                         &remote_file_path,
-                        &content,
-                        expected_revision.as_ref(),
-                        force,
+                        nyaterm_files::file_browser::text_document::EncodedDocumentWrite {
+                            content: &content,
+                            format,
+                            expected_revision: expected_revision.as_ref(),
+                            force,
+                            max_bytes: NATIVE_EDITOR_MAX_BYTES,
+                        },
                     )
                     .map(|result| TransferJobOutput::EditorSaved {
                         tab_id,
@@ -220,7 +244,9 @@ impl NyaTermApp {
                         generation,
                         result,
                     })
-                    .map_err(|error| error.to_string());
+                    .map_err(|error| {
+                        crate::features::transfers::file_encoding::encoding_error_message(&error)
+                    });
                 let _ = transfer_tx.unbounded_send(TransferJobResult {
                     id,
                     event: TransferJobEvent::Finished(result),

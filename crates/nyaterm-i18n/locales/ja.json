@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "文字コード",
+    "auto": "自動（BOM / UTF-8）",
+    "reopen": "文字コードを指定して開き直す",
+    "convert": "文字コードを変換（保存時に適用）",
+    "pending": "%{encoding} · 未保存",
+    "selectionRequired": "UTF-8 テキストではありません。文字コードを選択してください。",
+    "invalidSequence": "選択した文字コードでは無効なバイト列です。",
+    "bomConflict": "選択した文字コードがファイルの BOM と一致しません。",
+    "unsupportedUtf32": "UTF-32 ファイルには対応していません。",
+    "invalidBom": "この文字コードは BOM に対応していません。",
+    "binary": "バイナリファイルをテキストとして開けません。",
+    "unrepresentable": "この文字コードで表現できない文字があります。UTF-8 を選択してください。",
+    "tooLarge": "変換後のファイルがサイズ制限を超えています。",
+    "nonRoundTrip": "元の文字コードでは損失なく保存できません。UTF-8 に変換してから保存してください。"
+  },
   "syncTab": {
     "enabled": "有効",
     "disabled": "無効",

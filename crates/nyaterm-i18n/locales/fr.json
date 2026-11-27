@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "Encodage",
+    "auto": "Automatique (BOM / UTF-8)",
+    "reopen": "Rouvrir avec l’encodage",
+    "convert": "Convertir l’encodage à l’enregistrement",
+    "pending": "%{encoding} · à enregistrer",
+    "selectionRequired": "Ce texte n’est pas en UTF-8 valide. Choisissez son encodage.",
+    "invalidSequence": "Séquence d’octets invalide pour cet encodage.",
+    "bomConflict": "L’encodage choisi ne correspond pas au BOM du fichier.",
+    "unsupportedUtf32": "Les fichiers UTF-32 ne sont pas pris en charge.",
+    "invalidBom": "Cet encodage ne prend pas en charge le BOM.",
+    "binary": "Impossible d’ouvrir un fichier binaire comme texte.",
+    "unrepresentable": "Cet encodage ne peut pas représenter certains caractères. Choisissez UTF-8.",
+    "tooLarge": "Le fichier encodé dépasse la limite de taille.",
+    "nonRoundTrip": "Ce fichier ne peut pas être enregistré sans perte dans son encodage original. Convertissez-le explicitement en UTF-8."
+  },
   "syncTab": {
     "enabled": "Activée",
     "disabled": "Désactivée",

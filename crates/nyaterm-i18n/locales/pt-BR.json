@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "Codificação",
+    "auto": "Automático (BOM / UTF-8)",
+    "reopen": "Reabrir com codificação",
+    "convert": "Converter codificação ao salvar",
+    "pending": "%{encoding} · aguardando salvamento",
+    "selectionRequired": "Este texto não é UTF-8 válido. Selecione a codificação.",
+    "invalidSequence": "Sequência de bytes inválida para a codificação selecionada.",
+    "bomConflict": "A codificação selecionada conflita com o BOM do arquivo.",
+    "unsupportedUtf32": "Arquivos UTF-32 não são compatíveis.",
+    "invalidBom": "Esta codificação não suporta BOM.",
+    "binary": "Não é possível abrir arquivos binários como texto.",
+    "unrepresentable": "Esta codificação não pode representar alguns caracteres. Selecione UTF-8.",
+    "tooLarge": "O arquivo codificado excede o limite de tamanho.",
+    "nonRoundTrip": "Este arquivo não pode ser salvo sem perdas na codificação original. Converta explicitamente para UTF-8 antes de salvar."
+  },
   "syncTab": {
     "enabled": "Ativada",
     "disabled": "Desativada",

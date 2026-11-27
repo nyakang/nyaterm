@@ -277,6 +277,11 @@ impl RemoteFilePreviewWindow {
                         app.close_transfer_preview_tab(&id, cx);
                         false
                     }
+                    PreviewAction::Encoding(selection) => {
+                        app.transfer.set_preview_read_encoding(selection);
+                        app.refresh_active_transfer_preview(window, cx);
+                        false
+                    }
                     PreviewAction::Refresh => {
                         app.refresh_active_transfer_preview(window, cx);
                         false
@@ -336,7 +341,15 @@ impl RemoteFilePreviewWindow {
             },
             _ => PreviewToolbar::Other,
         };
-        self.preview_controls().toolbar(palette, view)
+        let encoding = (!active_tab.category.is_binary() && active_tab.category.is_fetchable())
+            .then_some(
+                nyaterm_file_browser_gpui::preview_controls::PreviewTextEncoding {
+                    selection: active_tab.text_encoding.read,
+                    format: active_tab.text_encoding.format,
+                    loading: matches!(active_tab.content, PreviewContent::Loading),
+                },
+            );
+        self.preview_controls().toolbar(palette, view, encoding)
     }
 
     fn preview_content(

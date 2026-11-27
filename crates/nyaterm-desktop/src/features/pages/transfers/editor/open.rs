@@ -304,6 +304,7 @@ impl NyaTermApp {
             return;
         }
         let tab = TransferEditorState {
+            encoding: Default::default(),
             display: self.settings.summary().transfer_internal_editor_display,
             id: tab_id.clone(),
             session_id: session_id.clone(),

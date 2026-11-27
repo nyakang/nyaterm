@@ -1402,6 +1402,22 @@ impl SftpService {
         remote_path: &RemoteFilePath,
         max_bytes: u64,
     ) -> anyhow::Result<SftpRemoteTextFile> {
+        let file = self.read_document_bytes(remote_path, max_bytes)?;
+        ensure_remote_text_bytes(&file.bytes, max_bytes)?;
+        Ok(SftpRemoteTextFile {
+            path: file.path,
+            content: String::from_utf8(file.bytes)
+                .map_err(|_| anyhow::anyhow!("Only UTF-8 text files are supported"))?,
+            size: file.revision.metadata.size,
+            modified_at: file.revision.metadata.modified_at.unwrap_or(0),
+        })
+    }
+
+    pub(crate) fn read_document_bytes(
+        &self,
+        remote_path: &RemoteFilePath,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::text_document::ByteDocument> {
         let remote_path = remote_path.clone();
         let config = self.config.clone();
         let factory = self.session_factory();
@@ -1427,7 +1443,7 @@ impl SftpService {
                 let mut bytes = Vec::with_capacity(size as usize);
                 file.read_to_end(&mut bytes).await?;
                 file.shutdown().await?;
-                ensure_remote_text_bytes(&bytes, max_bytes)?;
+                anyhow::ensure!(bytes.len() as u64 <= max_bytes, "File is too large to open");
                 let after_attrs = session.sftp.metadata_bytes(remote_path_bytes).await?;
                 let before_metadata = RemoteTextMetadata {
                     size,
@@ -1442,13 +1458,18 @@ impl SftpService {
                 {
                     anyhow::bail!("Remote file changed while it was being read");
                 }
-                let content = String::from_utf8(bytes)
-                    .map_err(|_| anyhow::anyhow!("Only UTF-8 text files are supported"))?;
-                Ok(SftpRemoteTextFile {
+                Ok(crate::text_document::ByteDocument {
                     path: remote_path.display_path,
-                    content,
-                    size: after_metadata.size,
-                    modified_at: after_metadata.modified_at.unwrap_or(0),
+                    // The existing SFTP save contract normalizes absent mtimes
+                    // to zero, including when rechecking the original file.
+                    revision: RemoteTextRevision::from_bytes(
+                        &bytes,
+                        RemoteTextMetadata {
+                            modified_at: Some(after_metadata.modified_at.unwrap_or(0)),
+                            ..after_metadata
+                        },
+                    ),
+                    bytes,
                 })
             }
             .await;
@@ -1637,12 +1658,27 @@ impl SftpService {
         expected_revision: Option<RemoteTextRevision>,
         force: bool,
     ) -> anyhow::Result<RemoteTextWriteResult> {
+        self.write_document_bytes(
+            remote_path,
+            content.as_ref().as_bytes(),
+            expected_revision,
+            force,
+        )
+    }
+
+    pub(crate) fn write_document_bytes(
+        &self,
+        remote_path: &RemoteFilePath,
+        content: &[u8],
+        expected_revision: Option<RemoteTextRevision>,
+        force: bool,
+    ) -> anyhow::Result<RemoteTextWriteResult> {
         if !force && expected_revision.is_none() {
             anyhow::bail!("Remote text revision is required for a safe save");
         }
         let expected_revision = if force { None } else { expected_revision };
         let remote_path = remote_path.clone();
-        let content = content.as_ref().to_string();
+        let content = content.to_vec();
         let config = self.config.clone();
         let factory = self.session_factory();
         self.run_operation("write_document", async move {
@@ -1661,7 +1697,7 @@ impl SftpService {
                         .await
                         .map_err(|error| editor_save_error("create temporary file", error))?;
                     temporary
-                        .write_all(content.as_bytes())
+                        .write_all(&content)
                         .await
                         .map_err(|error| editor_save_io_error("write temporary file", error))?;
                     temporary
@@ -1837,7 +1873,7 @@ impl SftpService {
                         }
                         Err(error) => return Err(error),
                     };
-                    let revision = RemoteTextRevision::from_bytes(content.as_bytes(), metadata);
+                    let revision = RemoteTextRevision::from_bytes(&content, metadata);
                     if used_backup
                         && let Err(error) = session.sftp.remove_file_bytes(backup_path_bytes).await
                     {

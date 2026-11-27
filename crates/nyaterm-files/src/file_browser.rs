@@ -3,6 +3,7 @@ pub mod lightweight;
 pub mod listing;
 pub mod navigation;
 pub mod terminal_path;
+pub mod text_document;
 pub mod transfer_paths;
 
 use crate::ftp::{FtpEntry, FtpEntryKind, FtpFileService};

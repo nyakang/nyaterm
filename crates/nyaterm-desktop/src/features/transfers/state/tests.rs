@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 mod browser_navigation;
 mod delete_jobs;
+mod encoding;
 
 fn transfer_focus(cx: &TestAppContext) -> TransferFeatureFocus {
     cx.update(|cx| TransferFeatureFocus {
@@ -1002,6 +1003,7 @@ fn external_sync_prompt(session_id: Option<&str>, job_id: &str) -> TransferExter
 
 fn editor_tab(session_id: &str, remote_path: &str) -> TransferEditorState {
     TransferEditorState {
+        encoding: Default::default(),
         display: nyaterm_core::InternalEditorDisplay::Window,
         id: TransferEditorState::tab_id(Some(session_id), remote_path),
         session_id: Some(session_id.to_string()),
@@ -1999,6 +2001,7 @@ fn transfer_editor_keeps_warning_visible_after_successful_save() {
 
 fn preview_tab(session_id: &str, remote_path: &str) -> crate::models::TransferPreviewState {
     crate::models::TransferPreviewState {
+        text_encoding: Default::default(),
         id: crate::models::TransferPreviewState::tab_id_for_remote_path(
             Some(session_id),
             &nyaterm_files::sftp::RemoteFilePath::new(remote_path),

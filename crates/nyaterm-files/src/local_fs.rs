@@ -204,6 +204,16 @@ impl LocalFileService {
         expected_revision: Option<&RemoteTextRevision>,
         force: bool,
     ) -> anyhow::Result<RemoteTextWriteResult> {
+        self.write_document_bytes(path, content.as_ref().as_bytes(), expected_revision, force)
+    }
+
+    pub(crate) fn write_document_bytes(
+        &self,
+        path: impl AsRef<Path>,
+        content: &[u8],
+        expected_revision: Option<&RemoteTextRevision>,
+        force: bool,
+    ) -> anyhow::Result<RemoteTextWriteResult> {
         let path = path.as_ref();
         if !force && expected_revision.is_none() {
             bail!("local text revision is required for a safe save");
@@ -227,11 +237,11 @@ impl LocalFileService {
                 return Ok(RemoteTextWriteResult::Conflict);
             }
         }
-        fs::write(path, content.as_ref())
+        fs::write(path, content)
             .with_context(|| format!("failed to write local file '{}'", path.display()))?;
         let metadata = fs::metadata(path)
             .with_context(|| format!("failed to inspect local file '{}'", path.display()))?;
-        let bytes = content.as_ref().as_bytes();
+        let bytes = content;
         Ok(RemoteTextWriteResult::Saved {
             revision: RemoteTextRevision::from_bytes(
                 bytes,

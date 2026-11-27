@@ -26,6 +26,7 @@ pub(super) struct MockFiles {
     fail_cleanup: bool,
     bad_replacement_size: bool,
     atomic_replace: bool,
+    omit_mtime: bool,
 }
 
 struct Peer {
@@ -176,7 +177,7 @@ impl russh_sftp::server::Handler for Peer {
                         content.len() as u64
                     },
                 ),
-                mtime: Some(1),
+                mtime: (!files.omit_mtime).then_some(1),
                 ..files.attributes[&path].clone()
             },
         })
@@ -607,4 +608,59 @@ fn write_text_file_reports_a_conflict_when_an_expected_file_is_missing() {
         .unwrap();
     assert!(matches!(result, SftpWriteTextResult::Conflict { .. }));
     assert!(!files.lock().unwrap().files.contains_key("/new.txt"));
+}
+
+#[test]
+fn encoded_sftp_documents_keep_bom_and_raw_revision_through_replacement() {
+    use nyaterm_core::file_encoding::{FileEncoding, FileReadEncoding, FileTextFormat};
+    for (atomic, omit_mtime) in [(true, false), (false, false), (true, true)] {
+        let (service, files) = seeded_service(atomic);
+        files.lock().unwrap().omit_mtime = omit_mtime;
+        let path = RemoteFilePath::new("/file.txt");
+        let format = FileTextFormat {
+            encoding: FileEncoding::Utf16Le,
+            bom: true,
+        };
+        let original = format.encode("中文\r\n", 1024).unwrap();
+        files
+            .lock()
+            .unwrap()
+            .files
+            .insert("/file.txt".into(), original.clone());
+        let document = service
+            .read_document_bytes(&path, 1024)
+            .unwrap()
+            .decode(FileReadEncoding::Auto)
+            .unwrap();
+        assert_eq!(document.format, format);
+        assert_eq!(
+            document.document.revision.content_sha256,
+            RemoteTextRevision::from_bytes(&original, document.document.revision.metadata.clone())
+                .content_sha256
+        );
+        let edited = format.encode("修改\r\n", 1024).unwrap();
+        let result = service
+            .write_document_bytes(&path, &edited, Some(document.document.revision), false)
+            .unwrap();
+        let RemoteTextWriteResult::Saved { revision } = result else {
+            panic!("expected saved document");
+        };
+        assert_eq!(files.lock().unwrap().files["/file.txt"], edited);
+        assert_eq!(files.lock().unwrap().files.len(), 1);
+        assert_eq!(
+            service.read_document_bytes(&path, 1024).unwrap().revision,
+            revision
+        );
+        files
+            .lock()
+            .unwrap()
+            .files
+            .insert("/file.txt".into(), original);
+        assert_eq!(
+            service
+                .write_document_bytes(&path, &edited, Some(revision), false)
+                .unwrap(),
+            RemoteTextWriteResult::Conflict
+        );
+    }
 }

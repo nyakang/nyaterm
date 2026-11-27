@@ -212,6 +212,7 @@ pub(crate) struct TransferEditorState {
     pub(crate) raw_path_token: Option<String>,
     pub(crate) name: String,
     pub(crate) content: nyaterm_ui::document_snapshot::NyaDocumentSnapshot,
+    pub(crate) encoding: crate::models::file_encoding::EditorFileEncoding,
     pub(crate) search_query: String,
     pub(crate) active_match: usize,
     pub(crate) revision: Option<RemoteTextRevision>,
@@ -335,6 +336,7 @@ mod tests {
 
     fn editor_tab(session_id: &str, remote_path: &str) -> TransferEditorState {
         TransferEditorState {
+            encoding: Default::default(),
             display: nyaterm_core::InternalEditorDisplay::Window,
             id: TransferEditorState::tab_id(Some(session_id), remote_path),
             session_id: Some(session_id.to_string()),

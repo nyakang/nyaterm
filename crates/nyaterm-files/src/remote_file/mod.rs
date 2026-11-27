@@ -909,6 +909,17 @@ impl RemoteFileService {
         }
     }
 
+    pub(crate) fn read_document_bytes(
+        &self,
+        path: &RemoteFilePath,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::text_document::ByteDocument> {
+        match self.backend()? {
+            RemoteFileBackendKind::Sftp => self.sftp()?.read_document_bytes(path, max_bytes),
+            kind => read_shell_document_bytes(&self.shell(kind), path, max_bytes),
+        }
+    }
+
     pub fn read_file_bytes(
         &self,
         path: impl AsRef<str>,
@@ -1017,21 +1028,29 @@ impl RemoteFileService {
         expected_revision: Option<&RemoteTextRevision>,
         force: bool,
     ) -> anyhow::Result<RemoteTextWriteResult> {
+        self.write_document_bytes(path, content.as_ref().as_bytes(), expected_revision, force)
+    }
+
+    pub(crate) fn write_document_bytes(
+        &self,
+        path: &RemoteFilePath,
+        content: &[u8],
+        expected_revision: Option<&RemoteTextRevision>,
+        force: bool,
+    ) -> anyhow::Result<RemoteTextWriteResult> {
         if !force && expected_revision.is_none() {
             anyhow::bail!("Remote text revision is required for a safe save");
         }
         let expected_revision = if force { None } else { expected_revision };
         match self.backend()? {
-            RemoteFileBackendKind::Sftp => self.sftp()?.write_text_document_path(
-                path,
-                content,
-                expected_revision.cloned(),
-                force,
-            ),
-            kind => write_shell_text_document(
+            RemoteFileBackendKind::Sftp => {
+                self.sftp()?
+                    .write_document_bytes(path, content, expected_revision.cloned(), force)
+            }
+            kind => write_shell_document_bytes(
                 &self.shell(kind),
                 path,
-                content.as_ref(),
+                content,
                 expected_revision,
                 force,
             ),
@@ -2630,6 +2649,24 @@ fn read_shell_text_document(
     path: &RemoteFilePath,
     max_bytes: u64,
 ) -> anyhow::Result<RemoteTextDocument> {
+    let file = read_shell_document_bytes(shell, path, max_bytes)?;
+    anyhow::ensure!(
+        !file.bytes.contains(&0),
+        "Binary files are not supported by the built-in editor"
+    );
+    Ok(RemoteTextDocument {
+        path: file.path,
+        content: String::from_utf8(file.bytes)
+            .map_err(|_| anyhow::anyhow!("Only UTF-8 text files are supported"))?,
+        revision: file.revision,
+    })
+}
+
+fn read_shell_document_bytes(
+    shell: &ShellRemote,
+    path: &RemoteFilePath,
+    max_bytes: u64,
+) -> anyhow::Result<crate::text_document::ByteDocument> {
     let before = shell_properties(shell, path)?;
     if before.is_directory() {
         anyhow::bail!("Directories cannot be opened as text");
@@ -2642,9 +2679,6 @@ fn read_shell_text_document(
     if bytes.len() as u64 > max_bytes {
         anyhow::bail!("File is too large to open as text");
     }
-    if bytes.contains(&0) {
-        anyhow::bail!("Binary files are not supported by the built-in editor");
-    }
     let after = shell_properties(shell, path)?;
     let after_metadata = shell_text_metadata(&after);
     if !metadata_is_stable(&before_metadata, &after_metadata)
@@ -2652,20 +2686,18 @@ fn read_shell_text_document(
     {
         anyhow::bail!("Remote file changed while it was being read");
     }
-    let content = String::from_utf8(bytes)
-        .map_err(|_| anyhow::anyhow!("Only UTF-8 text files are supported"))?;
-    let revision = RemoteTextRevision::from_bytes(content.as_bytes(), after_metadata);
-    Ok(RemoteTextDocument {
+    let revision = RemoteTextRevision::from_bytes(&bytes, after_metadata);
+    Ok(crate::text_document::ByteDocument {
         path: path.display_path.clone(),
-        content,
+        bytes,
         revision,
     })
 }
 
-fn write_shell_text_document(
+fn write_shell_document_bytes(
     shell: &ShellRemote,
     path: &RemoteFilePath,
-    content: &str,
+    content: &[u8],
     expected_revision: Option<&RemoteTextRevision>,
     force: bool,
 ) -> anyhow::Result<RemoteTextWriteResult> {
@@ -2688,7 +2720,7 @@ fn write_shell_text_document(
         shell_quote(&temporary),
         content.len()
     );
-    if let Err(error) = shell.exec_ok(write_temporary, Some(content.as_bytes().to_vec())) {
+    if let Err(error) = shell.exec_ok(write_temporary, Some(content.to_vec())) {
         cleanup_temporary();
         return Err(error);
     }
@@ -2705,7 +2737,7 @@ fn write_shell_text_document(
             cleanup_temporary();
             return Ok(RemoteTextWriteResult::Conflict);
         }
-        let current = match read_shell_text_document(shell, path, expected.metadata.size) {
+        let current = match read_shell_document_bytes(shell, path, expected.metadata.size) {
             Ok(current) => current,
             Err(error) => {
                 cleanup_temporary();
@@ -2750,7 +2782,7 @@ fn write_shell_text_document(
         anyhow::bail!("Remote text save verification failed");
     }
     Ok(RemoteTextWriteResult::Saved {
-        revision: RemoteTextRevision::from_bytes(content.as_bytes(), metadata),
+        revision: RemoteTextRevision::from_bytes(content, metadata),
     })
 }
 

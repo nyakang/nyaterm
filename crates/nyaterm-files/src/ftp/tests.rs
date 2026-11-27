@@ -1716,3 +1716,52 @@ fn path_completion_budget_aborts_and_fences_before_the_next_listing() {
     assert!(commands.iter().any(|c| c.starts_with("ABOR")));
     assert!(commands.iter().any(|c| c.starts_with("NOOP")));
 }
+
+#[test]
+fn encoded_ftp_document_round_trips_and_refuses_unrepresentable_output() {
+    use crate::file_browser::text_document::EncodedDocumentWrite;
+    use nyaterm_core::file_encoding::{FileEncoding, FileReadEncoding, FileTextFormat};
+    let format = FileTextFormat {
+        encoding: FileEncoding::Gbk,
+        bom: false,
+    };
+    let original = format.encode("中文\r\n", 1024).unwrap();
+    let ftp = TreeServer::start(vec![("/file", FakeNode::File(original.clone()))]);
+    let browser = FileBrowserService::Ftp(Arc::new(connect_tree(&ftp)));
+    let path = RemoteFilePath::new("/file");
+    let file = browser
+        .read_encoded_document_path(&path, 1024, FileReadEncoding::Explicit(FileEncoding::Gbk))
+        .unwrap();
+    assert!(
+        browser
+            .write_encoded_document_path(
+                &path,
+                EncodedDocumentWrite {
+                    content: "😀",
+                    format,
+                    expected_revision: None,
+                    force: true,
+                    max_bytes: 1024
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(ftp.read("/file").unwrap(), original);
+    browser
+        .write_encoded_document_path(
+            &path,
+            EncodedDocumentWrite {
+                content: "修改\r\n",
+                format,
+                expected_revision: Some(&file.document.revision),
+                force: false,
+                max_bytes: 1024,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        ftp.read("/file").unwrap(),
+        format.encode("修改\r\n", 1024).unwrap()
+    );
+    assert!(ftp.temporary_paths().is_empty());
+}

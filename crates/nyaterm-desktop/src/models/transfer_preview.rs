@@ -289,6 +289,7 @@ pub(crate) struct TransferPreviewState {
     /// Last-modified time (unix seconds) when known, for the status bar.
     pub(crate) modified_at: Option<u32>,
     pub(crate) category: PreviewCategory,
+    pub(crate) text_encoding: crate::models::file_encoding::PreviewFileEncoding,
     /// Bumped on open and on refresh; a load result for an older generation is
     /// discarded. Reuses the editor's monotonic generation source.
     pub(crate) generation: RemoteTextGeneration,
@@ -417,6 +418,7 @@ mod tests {
 
     fn preview_tab(session_id: &str, remote_path: &str) -> TransferPreviewState {
         TransferPreviewState {
+            text_encoding: Default::default(),
             id: TransferPreviewState::tab_id_for_remote_path(
                 Some(session_id),
                 &RemoteFilePath::new(remote_path),

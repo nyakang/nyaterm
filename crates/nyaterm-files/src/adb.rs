@@ -534,6 +534,32 @@ impl AdbFileService {
             modified_at: file.modified_at,
         })
     }
+    pub(crate) fn read_document_bytes(
+        &self,
+        path: &RemoteFilePath,
+        limit: u64,
+    ) -> anyhow::Result<crate::text_document::ByteDocument> {
+        let file = self.read_file_bytes_path(path, limit)?;
+        let after = self.stat(path)?;
+        anyhow::ensure!(
+            after.size == file.size
+                && after.modified == file.modified_at
+                && file.content_bytes.len() as u64 == file.size,
+            "File changed while being read"
+        );
+        Ok(crate::text_document::ByteDocument {
+            path: file.path,
+            revision: RemoteTextRevision::from_bytes(
+                &file.content_bytes,
+                RemoteTextMetadata {
+                    size: file.size,
+                    modified_at: Some(file.modified_at),
+                },
+            ),
+            bytes: file.content_bytes,
+        })
+    }
+
     pub fn read_text_document_path(
         &self,
         path: &RemoteFilePath,
@@ -560,7 +586,15 @@ impl AdbFileService {
         expected: Option<&RemoteTextRevision>,
         force: bool,
     ) -> anyhow::Result<RemoteTextWriteResult> {
-        let content = content.as_ref();
+        self.write_document_bytes(path, content.as_ref().as_bytes(), expected, force)
+    }
+    pub(crate) fn write_document_bytes(
+        &self,
+        path: &RemoteFilePath,
+        content: &[u8],
+        expected: Option<&RemoteTextRevision>,
+        force: bool,
+    ) -> anyhow::Result<RemoteTextWriteResult> {
         anyhow::ensure!(
             content.len() <= 16 * 1024 * 1024,
             AdbFilePolicyError::EditLimitExceeded
@@ -572,7 +606,7 @@ impl AdbFileService {
         let original = self.replacement_metadata(path)?;
         anyhow::ensure!(original.is_some(), AdbError::FileMissing);
         let mut local = tempfile::NamedTempFile::new()?;
-        local.write_all(content.as_bytes())?;
+        local.write_all(content)?;
         let control = SftpTransferControl::new();
         let staged = self.stage_upload(
             local.path(),
@@ -582,9 +616,7 @@ impl AdbFileService {
             |_| {},
         )?;
         if !force
-            && self
-                .read_text_document_path(path, 16 * 1024 * 1024)?
-                .revision
+            && self.read_document_bytes(path, 16 * 1024 * 1024)?.revision
                 != *expected.expect("checked revision")
         {
             return Ok(RemoteTextWriteResult::Conflict);
@@ -601,7 +633,7 @@ impl AdbFileService {
         );
         Ok(RemoteTextWriteResult::Saved {
             revision: RemoteTextRevision::from_bytes(
-                content.as_bytes(),
+                content,
                 RemoteTextMetadata {
                     size: stat.size,
                     modified_at: Some(stat.modified),

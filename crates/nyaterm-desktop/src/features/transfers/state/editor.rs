@@ -20,6 +20,65 @@ use super::{
 use super::{TransferEditorFeatureState, TransferEditorSaveOutcome, TransferFeatureState};
 
 impl TransferFeatureState {
+    pub(in crate::features) fn set_editor_read_encoding(
+        &mut self,
+        id: &str,
+        selection: nyaterm_core::file_encoding::FileReadEncoding,
+    ) {
+        if let Some(tab) = self
+            .editor
+            .workspace
+            .as_mut()
+            .and_then(|workspace| workspace.tabs.iter_mut().find(|tab| tab.id == id))
+        {
+            tab.encoding.pending_read = Some(selection);
+        }
+    }
+
+    pub(in crate::features) fn set_editor_save_format(
+        &mut self,
+        id: &str,
+        format: nyaterm_core::file_encoding::FileTextFormat,
+    ) {
+        let Some(workspace) = self.editor.workspace.as_mut() else {
+            return;
+        };
+        let Some(index) = workspace.tabs.iter().position(|tab| tab.id == id) else {
+            return;
+        };
+        if workspace.tabs[index].loading
+            || workspace.tabs[index].saving
+            || workspace.tabs[index].revision.is_none()
+        {
+            return;
+        }
+        Self::clear_editor_close_state(workspace);
+        let tab = &mut workspace.tabs[index];
+        tab.encoding.target = format;
+        tab.dirty = tab.encoding.dirty();
+        tab.error = None;
+    }
+
+    pub(in crate::features) fn complete_encoded_editor_load_tab(
+        &mut self,
+        id: &str,
+        generation: RemoteTextGeneration,
+        file: nyaterm_files::text_document::EncodedTextDocument,
+    ) -> bool {
+        if !self.complete_editor_load_tab(id, generation, file.document) {
+            return false;
+        }
+        if let Some(tab) = self
+            .editor
+            .workspace
+            .as_mut()
+            .and_then(|workspace| workspace.tabs.iter_mut().find(|tab| tab.id == id))
+        {
+            tab.encoding.loaded(file.format, file.round_trips);
+        }
+        true
+    }
+
     pub(in crate::features) fn window_editor_workspace(
         &self,
     ) -> Option<TransferEditorWorkspaceState> {
@@ -354,6 +413,7 @@ impl TransferFeatureState {
             return false;
         }
         tab.loading = false;
+        tab.encoding.pending_read = None;
         tab.error = Some(error);
         true
     }
@@ -367,7 +427,7 @@ impl TransferFeatureState {
         else {
             return false;
         };
-        if tab.loading || tab.saving {
+        if tab.loading || tab.saving || tab.revision.is_none() || !tab.encoding.can_save() {
             return false;
         }
         tab.saving = true;
@@ -422,6 +482,7 @@ impl TransferFeatureState {
         if tab.generation != generation {
             return false;
         }
+        tab.encoding.content_dirty = false;
         tab.content = file.content.into();
         tab.revision = Some(file.revision);
         tab.loading = false;
@@ -482,6 +543,7 @@ impl TransferFeatureState {
                 }
                 tab.revision = Some(revision);
                 tab.saving = false;
+                tab.encoding.saved();
                 tab.dirty = false;
                 tab.conflict = false;
                 tab.close_after_save = false;
@@ -496,6 +558,7 @@ impl TransferFeatureState {
             } => {
                 tab.revision = Some(revision);
                 tab.saving = false;
+                tab.encoding.saved();
                 tab.dirty = false;
                 tab.conflict = false;
                 tab.close_after_save = false;
@@ -549,6 +612,7 @@ impl TransferFeatureState {
         if tab.generation != generation {
             return false;
         }
+        tab.encoding.pending_read = None;
         tab.loading = false;
         tab.saving = false;
         tab.close_after_save = false;
@@ -613,6 +677,7 @@ impl TransferFeatureState {
             return false;
         }
         tab.content = content;
+        tab.encoding.content_dirty = true;
         tab.dirty = true;
         tab.conflict = false;
         tab.close_after_save = false;

@@ -1,11 +1,14 @@
 //! Preview chrome consumes display metadata and sends actions to the workspace owner.
 use gpui::{App, IntoElement, SharedString, Window, div, prelude::*, px, rgb, svg};
+use nyaterm_core::file_encoding::{FileEncoding, FileReadEncoding, FileTextFormat};
+use nyaterm_ui::{NyaDropdownMenu, NyaMenuItem};
 use nyaterm_ui::{NyaScrollable as _, NyaTooltip, ThemePalette};
 use rust_i18n::t;
 use std::rc::Rc;
 
 #[derive(Clone)]
 pub enum PreviewAction {
+    Encoding(FileReadEncoding),
     Activate(String),
     Close(String),
     Refresh,
@@ -34,6 +37,11 @@ pub enum PreviewToolbar {
 }
 pub struct PreviewControls {
     handler: PreviewActionHandler,
+}
+pub struct PreviewTextEncoding {
+    pub selection: FileReadEncoding,
+    pub format: Option<FileTextFormat>,
+    pub loading: bool,
 }
 impl PreviewControls {
     pub fn new(handler: PreviewActionHandler) -> Self {
@@ -162,7 +170,12 @@ impl PreviewControls {
         menu.into_any_element()
     }
 
-    pub fn toolbar(&self, palette: ThemePalette, view: PreviewToolbar) -> gpui::AnyElement {
+    pub fn toolbar(
+        &self,
+        palette: ThemePalette,
+        view: PreviewToolbar,
+        encoding: Option<PreviewTextEncoding>,
+    ) -> gpui::AnyElement {
         let mut toolbar = div()
             .flex()
             .flex_row()
@@ -186,6 +199,42 @@ impl PreviewControls {
                 t!("filePreview.openExternal").to_string(),
                 PreviewAction::External,
             ));
+        if let Some(encoding) = encoding {
+            let handler = self.handler.clone();
+            toolbar = toolbar.child(
+                NyaDropdownMenu::new("preview-file-encoding")
+                    .label(
+                        encoding
+                            .format
+                            .map(|format| format.label())
+                            .unwrap_or_else(|| t!("fileEncoding.choose").to_string()),
+                    )
+                    .disabled(encoding.loading)
+                    .items_dynamic(move |_, _| {
+                        std::iter::once(FileReadEncoding::Auto)
+                            .chain(
+                                FileEncoding::ALL
+                                    .into_iter()
+                                    .map(FileReadEncoding::Explicit),
+                            )
+                            .map(|selection| {
+                                let label = match selection {
+                                    FileReadEncoding::Auto => t!("fileEncoding.auto").to_string(),
+                                    FileReadEncoding::Explicit(encoding) => {
+                                        encoding.label().to_string()
+                                    }
+                                };
+                                let handler = handler.clone();
+                                NyaMenuItem::action(label)
+                                    .checked(encoding.selection == selection)
+                                    .on_click(move |_, window, cx| {
+                                        handler(PreviewAction::Encoding(selection), window, cx)
+                                    })
+                            })
+                            .collect()
+                    }),
+            );
+        }
         if let PreviewToolbar::Delimited { header } = view {
             toolbar = toolbar.child(self.toolbar_button(
                 palette,

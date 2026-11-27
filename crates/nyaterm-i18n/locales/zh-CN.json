@@ -1,4 +1,20 @@
 {
+  "fileEncoding": {
+    "choose": "编码",
+    "auto": "自动识别（BOM / UTF-8）",
+    "reopen": "以编码重新打开",
+    "convert": "转换编码（保存时生效）",
+    "pending": "%{encoding} · 待保存",
+    "selectionRequired": "此文件不是有效的 UTF-8 文本，请选择文件编码。",
+    "invalidSequence": "文件包含所选编码的无效字节序列。",
+    "bomConflict": "所选编码与文件 BOM 冲突。",
+    "unsupportedUtf32": "暂不支持 UTF-32 文件。",
+    "invalidBom": "此编码不支持 BOM。",
+    "binary": "无法将二进制文件作为文本打开。",
+    "unrepresentable": "当前编码无法表示部分字符，请选择 UTF-8。",
+    "tooLarge": "编码后的文件超过大小限制。",
+    "nonRoundTrip": "此文件无法按原编码无损回存，请明确转换为 UTF-8 后保存。"
+  },
   "syncTab": {
     "enabled": "已启用",
     "disabled": "已禁用",
