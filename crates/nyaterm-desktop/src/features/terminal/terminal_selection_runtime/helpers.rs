@@ -92,7 +92,25 @@ pub(in crate::features) fn terminal_bounds_tracker_with_exclusion(
                 return;
             };
             let focus = input_entity.read(cx).terminal.input.focus.clone();
-            window.handle_input(&focus, ElementInputHandler::new(bounds, input_entity), cx);
+            window.handle_input(
+                &focus,
+                ElementInputHandler::new(bounds, input_entity.clone()),
+                cx,
+            );
+            let app = input_entity.read(cx);
+            let caret = focus.is_focused(window).then(|| {
+                ime.as_ref()
+                    .map(|layout| layout.range_bounds(app.terminal.input.ime.selection()))
+                    .unwrap_or_else(|| app.terminal_ime_anchor_bounds(bounds, cx))
+            });
+            if app.terminal.input.ime.observe_anchor(
+                app.session.active_id(),
+                caret,
+                bounds,
+                window.scale_factor(),
+            ) {
+                window.invalidate_character_coordinates();
+            }
             if let Some(ime) = ime {
                 ime.paint(window, cx);
             }

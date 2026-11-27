@@ -1,5 +1,16 @@
 pub(super) use nyaterm_terminal_gpui::ime::utf16_byte_range;
+use std::cell::RefCell;
 use std::ops::Range;
+
+use gpui::{Bounds, Pixels};
+
+#[derive(PartialEq)]
+struct TerminalImeAnchor {
+    session_id: Option<String>,
+    caret: Bounds<Pixels>,
+    viewport: Bounds<Pixels>,
+    scale_factor: f32,
+}
 
 /// The terminal retains only uncommitted IME text, never a copy of remote input.
 #[derive(Default)]
@@ -7,9 +18,41 @@ pub(super) struct TerminalImeState {
     text: String,
     selection: Range<usize>,
     session_id: Option<String>,
+    anchor: RefCell<Option<TerminalImeAnchor>>,
 }
 
 impl TerminalImeState {
+    /// Geometry is observed while the owning entity is immutably borrowed for
+    /// paint. This cache only suppresses redundant native coordinate requests.
+    pub(super) fn observe_anchor(
+        &self,
+        session_id: Option<&str>,
+        caret: Option<Bounds<Pixels>>,
+        viewport: Bounds<Pixels>,
+        scale_factor: f32,
+    ) -> bool {
+        let mut previous = self.anchor.borrow_mut();
+        let Some(caret) = caret else {
+            *previous = None;
+            return false;
+        };
+        if previous.as_ref().is_some_and(|anchor| {
+            anchor.session_id.as_deref() == session_id
+                && anchor.caret == caret
+                && anchor.viewport == viewport
+                && anchor.scale_factor == scale_factor
+        }) {
+            return false;
+        }
+        *previous = Some(TerminalImeAnchor {
+            session_id: session_id.map(str::to_owned),
+            caret,
+            viewport,
+            scale_factor,
+        });
+        true
+    }
+
     pub(super) fn text(&self) -> &str {
         &self.text
     }
@@ -27,6 +70,7 @@ impl TerminalImeState {
     }
 
     pub(super) fn clear(&mut self) -> Option<String> {
+        self.anchor.get_mut().take();
         self.text.clear();
         self.selection = 0..0;
         self.session_id.take()
@@ -76,7 +120,29 @@ impl TerminalImeState {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use super::TerminalImeState;
+    use gpui::{bounds, point, px, size};
+
+    #[test]
+    fn ime_anchor_reports_focus_session_geometry_and_scale_changes_only() {
+        let mut ime = TerminalImeState::default();
+        let viewport = bounds(point(px(0.), px(0.)), size(px(800.), px(600.)));
+        let caret = bounds(point(px(12.), px(24.)), size(px(8.), px(16.)));
+        assert!(ime.observe_anchor(Some("first"), Some(caret), viewport, 1.));
+        assert!(!ime.observe_anchor(Some("first"), Some(caret), viewport, 1.));
+        assert!(ime.observe_anchor(Some("second"), Some(caret), viewport, 1.));
+        assert!(ime.observe_anchor(Some("second"), Some(caret), viewport, 2.));
+        assert!(!ime.observe_anchor(Some("second"), None, viewport, 2.));
+        assert!(ime.observe_anchor(Some("second"), Some(caret), viewport, 2.));
+        let moved = bounds(point(px(20.), px(24.)), caret.size);
+        assert!(ime.observe_anchor(Some("second"), Some(moved), viewport, 2.));
+        let resized = bounds(viewport.origin, size(px(400.), px(300.)));
+        assert!(ime.observe_anchor(Some("second"), Some(moved), resized, 2.));
+        ime.clear();
+        assert!(ime.observe_anchor(Some("second"), Some(moved), resized, 2.));
+    }
 
     #[test]
     fn ime_defaults_to_end_and_tracks_explicit_cursor_and_partial_replacement() {
@@ -120,6 +186,4 @@ mod tests {
         assert_eq!(ime.session_id(), None);
         assert_eq!(ime.selection(), 0..0);
     }
-
-    use std::ops::Range;
 }
