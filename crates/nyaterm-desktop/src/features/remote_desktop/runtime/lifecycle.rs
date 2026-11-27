@@ -497,6 +497,25 @@ impl NyaTermApp {
             _ => return,
         };
         config.normalize_backend_settings();
+        if let Some(relay) = &config.relay
+            && !self
+                .remote_desktop
+                .routes
+                .get(session_id)
+                .is_some_and(|route| {
+                    route.endpoint.address == relay.address
+                        && route.endpoint.token.expose_secret() == relay.token.expose_secret()
+                })
+        {
+            self.remote_desktop.insert_failed_session(
+                session_id.to_string(),
+                RdpErrorKind::Transport,
+                "The original RDP route is no longer available; reconnect using the saved connection to rebuild its proxy or SSH route".to_string(),
+            );
+            self.settle_remote_desktop_restore(cx);
+            cx.notify();
+            return;
+        }
         if let Err(error) = config.backend.validate_config(&config) {
             self.remote_desktop.insert_failed_session(
                 session_id.to_string(),

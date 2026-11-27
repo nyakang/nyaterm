@@ -16,10 +16,10 @@ use crate::protocol::{MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH};
 use crate::{
     CursorPosition, CursorShape, CursorVisibility, FRAME_PAYLOAD_LIMIT, PROTOCOL_VERSION,
     PacketType, QueueWaker, RdpCertificateResponse, RdpControlMessage, RdpDisplayMetrics, RdpError,
-    RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpRuntimeEvent, RdpServerCapabilities,
-    RdpSessionConfig, RdpSessionDrain, RdpSessionState, RemoteCursorEvent, RemotePointerEvent,
-    decode_control, decode_cursor_packet_owned, decode_frame_packet_owned, encode_control,
-    validate_committed_text,
+    RdpErrorKind, RdpFrameEvent, RdpInputEvent, RdpRedirectRequest, RdpRedirectResponse,
+    RdpRuntimeEvent, RdpServerCapabilities, RdpSessionConfig, RdpSessionDrain, RdpSessionState,
+    RemoteCursorEvent, RemotePointerEvent, decode_control, decode_cursor_packet_owned,
+    decode_frame_packet_owned, encode_control, validate_committed_text,
 };
 use nyaterm_core::runtime::reaper::Reaper;
 
@@ -84,6 +84,13 @@ fn control_byte_cost(event: &RdpRuntimeEvent) -> usize {
                 + progress.id.len()
                 + progress.name.len()
                 + progress.error.as_ref().map_or(0, String::len)
+                + 128
+        }
+        RdpRuntimeEvent::RedirectRequest(request) => {
+            request.session_id.len()
+                + request.request_id.len()
+                + request.host.len()
+                + request.connect_hosts.iter().map(String::len).sum::<usize>()
                 + 128
         }
         RdpRuntimeEvent::CertificateRequest(request) => {
@@ -714,6 +721,7 @@ impl RdpSessionManager {
             &RdpControlMessage::ClientHello {
                 version: PROTOCOL_VERSION,
                 frame_update_complete: self.presentation_config.is_some(),
+                server_redirection: true,
             },
         );
         if let Err(error) = start_result {
@@ -930,6 +938,63 @@ impl RdpSessionManager {
                 transfer_id: transfer_id.to_string(),
             },
         )
+    }
+
+    /// Respond only after the helper advertised coordinated redirection.
+    pub fn respond_redirect(
+        &self,
+        request: &RdpRedirectRequest,
+        response: RdpRedirectResponse,
+    ) -> Result<(), RdpError> {
+        if !self
+            .confirmed_capabilities(&request.session_id)?
+            .server_redirection
+        {
+            return Err(RdpError::new(
+                RdpErrorKind::Unsupported,
+                "RDP helper requires an update to coordinate server redirection",
+            ));
+        }
+        self.send(
+            &request.session_id,
+            RdpControlMessage::RedirectResponse {
+                request: request.clone(),
+                response,
+            },
+        )
+    }
+
+    pub fn certificate_is_pending(&self, session_id: &str, request_id: &str) -> bool {
+        // Keep registry ownership stable, and use the same queue-before-challenge
+        // lock order as the reader. A fatal reader revokes trust before GPUI drains it.
+        let Ok(sessions) = self.sessions.lock() else {
+            return false;
+        };
+        let Some(record) = sessions.get(session_id) else {
+            return false;
+        };
+        let Ok(queue) = record.queue.state.lock() else {
+            return false;
+        };
+        if queue.closed {
+            return false;
+        }
+        let Ok(state) = record.state.lock() else {
+            return false;
+        };
+        if !matches!(
+            *state,
+            RdpSessionState::Connecting
+                | RdpSessionState::Connected
+                | RdpSessionState::Reconnecting
+        ) {
+            return false;
+        }
+        self.pending_certificates.lock().is_ok_and(|pending| {
+            pending
+                .get(request_id)
+                .is_some_and(|owner| owner == session_id)
+        })
     }
 
     pub fn respond_certificate(
@@ -1324,6 +1389,7 @@ fn handle_control(
         | RdpControlMessage::SecureAttention { .. }
         | RdpControlMessage::Resize { .. }
         | RdpControlMessage::ClipboardTransferCancel { .. }
+        | RdpControlMessage::RedirectResponse { .. }
         | RdpControlMessage::CertificateResponse { .. }
         | RdpControlMessage::RequestFullFrame { .. }
         | RdpControlMessage::Disconnect { .. } => {
@@ -1390,6 +1456,19 @@ fn handle_control(
                 progress,
             });
         }
+        RdpControlMessage::RedirectRequest(request) => {
+            let negotiated = capabilities
+                .lock()
+                .map_err(|_| RdpError::new(RdpErrorKind::Ipc, "RDP capability lock is poisoned"))?
+                .is_some_and(|capabilities| capabilities.server_redirection);
+            if !negotiated || request.session_id != session_id || request.validate().is_err() {
+                return Err(RdpError::new(
+                    RdpErrorKind::Protocol,
+                    "invalid or unnegotiated RDP redirection request",
+                ));
+            }
+            queue.push_control(RdpRuntimeEvent::RedirectRequest(request));
+        }
         RdpControlMessage::CertificateRequest(request) => {
             let request_id = request.request_id.clone();
             // Serialize registration with close's queue gate. An old reader must
@@ -1425,6 +1504,16 @@ fn handle_control(
             error,
             fatal,
         } if event_session == session_id => {
+            let mut error = error;
+            if error
+                .message
+                .contains("server redirection is not supported over a loopback relay")
+                && !capabilities
+                    .lock()
+                    .is_ok_and(|slot| slot.is_some_and(|value| value.server_redirection))
+            {
+                error.message.push_str("; update the RDP native component in Plugins to enable coordinated server redirection");
+            }
             if fatal {
                 push_reader_error(session_id, queue, state, error.kind, error.message);
                 return Ok(());
@@ -1603,6 +1692,54 @@ mod tests {
     }
 
     #[test]
+    fn failed_reader_revokes_certificate_before_desktop_drains_terminal_event() {
+        let manager = RdpSessionManager::new();
+        let queue = Arc::new(EventQueue::default());
+        let state = Arc::new(Mutex::new(RdpSessionState::Connecting));
+        manager.sessions.lock().unwrap().insert(
+            "s".into(),
+            SessionRecord {
+                presentation_worker: None,
+                _component: None,
+                state: state.clone(),
+                capabilities: Arc::new(Mutex::new(None)),
+                queue: queue.clone(),
+                writer: Arc::new(crate::helper_process::IpcWriter::test_mailbox()),
+                child: Arc::new(Mutex::new(None)),
+                supervisor: None,
+                stderr: None,
+                reader: None,
+            },
+        );
+        manager
+            .pending_certificates
+            .lock()
+            .unwrap()
+            .insert("certificate".into(), "s".into());
+        assert!(manager.certificate_is_pending("s", "certificate"));
+        super::push_reader_error(
+            "s",
+            &queue,
+            &state,
+            crate::RdpErrorKind::Transport,
+            "connection ended".into(),
+        );
+        assert!(
+            manager
+                .pending_certificates
+                .lock()
+                .unwrap()
+                .contains_key("certificate")
+        );
+        // A store job runs this predicate before writing, without waiting for the UI.
+        assert!(!manager.certificate_is_pending("s", "certificate"));
+        assert!(matches!(
+            &queue.drain().control[..],
+            [RdpRuntimeEvent::Error { fatal: true, .. }]
+        ));
+    }
+
+    #[test]
     fn detached_close_removes_resources_before_a_stalled_reader_is_reaped() {
         let manager = RdpSessionManager::new();
         let queue = Arc::new(EventQueue::default());
@@ -1672,6 +1809,94 @@ mod tests {
     }
 
     #[test]
+    fn redirection_requires_negotiation_and_matching_session() {
+        let request = crate::RdpRedirectRequest {
+            session_id: "s".into(),
+            request_id: "redirect".into(),
+            generation: 1,
+            hop: 1,
+            host: "worker.example".into(),
+            connect_hosts: Vec::new(),
+            port: 3389,
+        };
+        let queue = Arc::new(EventQueue::default());
+        let state = Arc::new(Mutex::new(RdpSessionState::Connecting));
+        let capabilities = Arc::new(Mutex::new(Some(RdpServerCapabilities::default())));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        assert!(
+            handle_control(
+                "s",
+                RdpControlMessage::RedirectRequest(request.clone()),
+                &queue,
+                &state,
+                &capabilities,
+                &pending,
+                &mut true
+            )
+            .is_err()
+        );
+        capabilities
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .server_redirection = true;
+        assert!(
+            handle_control(
+                "another-session",
+                RdpControlMessage::RedirectRequest(request.clone()),
+                &queue,
+                &state,
+                &capabilities,
+                &pending,
+                &mut true
+            )
+            .is_err()
+        );
+        handle_control(
+            "s",
+            RdpControlMessage::RedirectRequest(request.clone()),
+            &queue,
+            &state,
+            &capabilities,
+            &pending,
+            &mut true,
+        )
+        .unwrap();
+        assert!(
+            matches!(&queue.drain().control[..], [crate::RdpRuntimeEvent::RedirectRequest(received)] if received == &request)
+        );
+    }
+
+    #[test]
+    fn legacy_relay_redirection_failure_explains_manual_component_update() {
+        let queue = Arc::new(EventQueue::default());
+        let state = Arc::new(Mutex::new(RdpSessionState::Connecting));
+        let capabilities = Arc::new(Mutex::new(Some(RdpServerCapabilities::default())));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        handle_control(
+            "s",
+            RdpControlMessage::Error {
+                session_id: "s".into(),
+                error: crate::RdpError::new(
+                    crate::RdpErrorKind::Transport,
+                    "server redirection is not supported over a loopback relay",
+                ),
+                fatal: false,
+            },
+            &queue,
+            &state,
+            &capabilities,
+            &pending,
+            &mut true,
+        )
+        .unwrap();
+        assert!(
+            matches!(&queue.drain().control[..], [crate::RdpRuntimeEvent::Error { error, .. }] if error.message.contains("update the RDP native component in Plugins"))
+        );
+    }
+
+    #[test]
     fn server_hello_must_be_first_and_records_capabilities_only_once() {
         let queue = Arc::new(EventQueue::default());
         let state = Arc::new(Mutex::new(RdpSessionState::Connecting));
@@ -1681,6 +1906,7 @@ mod tests {
             committed_unicode_text: true,
             secure_attention: true,
             frame_update_complete: false,
+            server_redirection: false,
         };
         let mut hello_received = false;
 
@@ -1756,6 +1982,7 @@ mod tests {
             RdpControlMessage::ClientHello {
                 version: PROTOCOL_VERSION,
                 frame_update_complete: false,
+                server_redirection: false,
             },
             &queue,
             &state,
@@ -1792,6 +2019,7 @@ mod tests {
             committed_unicode_text: true,
             secure_attention: true,
             frame_update_complete: false,
+            server_redirection: false,
         })));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let mut hello_received = true;
@@ -1816,6 +2044,7 @@ mod tests {
                 committed_unicode_text: true,
                 secure_attention: true,
                 frame_update_complete: false,
+                server_redirection: false,
             })
         );
         assert!(matches!(

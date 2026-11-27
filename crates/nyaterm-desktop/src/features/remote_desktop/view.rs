@@ -785,6 +785,9 @@ impl NyaTermApp {
             ),
         };
         let request = prompt.request;
+        let reject_request = request.request_id.clone();
+        let once_request = request.request_id.clone();
+        let remember_request = request.request_id.clone();
         let certificate_detail = format!(
             "{}:{}\nSHA-256 {}\nSubject: {}\nIssuer: {}\nValid: {} to {}",
             request.host,
@@ -834,6 +837,7 @@ impl NyaTermApp {
                         cx.listener(move |this, _, _, cx| {
                             this.resolve_rdp_certificate(
                                 &reject_id,
+                                &reject_request,
                                 RdpCertificateResponse::Reject,
                                 cx,
                             );
@@ -848,6 +852,7 @@ impl NyaTermApp {
                             cx.listener(move |this, _, _, cx| {
                                 this.resolve_rdp_certificate(
                                     &once_id,
+                                    &once_request,
                                     RdpCertificateResponse::TrustOnce,
                                     cx,
                                 );
@@ -862,6 +867,7 @@ impl NyaTermApp {
                         cx.listener(move |this, _, _, cx| {
                             this.resolve_rdp_certificate(
                                 &remember_id,
+                                &remember_request,
                                 RdpCertificateResponse::TrustAndRemember,
                                 cx,
                             );

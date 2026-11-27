@@ -78,6 +78,12 @@ impl NyaTermApp {
         if self.remote_desktop.helper_launches.contains_key(session_id) {
             return;
         }
+        if let SessionLaunchConfig::Rdp(rdp) = &config
+            && let Some(session) = self.remote_desktop.sessions.get_mut(session_id)
+        {
+            session.redirection.target = Some((rdp.host.clone(), rdp.port));
+            session.redirection.requires_relay = rdp.relay.is_some();
+        }
         let Some(session) = self.remote_desktop.sessions.get(session_id) else {
             return;
         };

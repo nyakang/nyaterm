@@ -58,7 +58,7 @@ license = "Apache-2.0"
 repository = "https://github.com/nyakang/nyaterm"
 
 [workspace.dependencies]
-nyaterm-native-protocol = { git = "https://github.com/nyakang/nyaterm-plugins", rev = "cb91fcb46ddef66457ae8f02a6b72f2b7ec1f7ef" }
+nyaterm-native-protocol = { git = "https://github.com/nyakang/nyaterm-plugins", rev = "3416b424ee7730fb9076a37049b3ac015d542a5d" }
 agent-client-protocol = { version = "=5.5.1", features = ["unstable_auth_status"] }
 blocking = "1"
 nyaterm-remote-monitor-gpui = { path = "crates/nyaterm-remote-monitor-gpui" }

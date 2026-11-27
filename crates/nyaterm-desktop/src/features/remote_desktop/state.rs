@@ -1,4 +1,5 @@
 pub(super) mod frame_source;
+mod redirection;
 pub(super) mod resize;
 pub(super) mod spice;
 use frame_source::RemoteDesktopFrameSource;
@@ -116,6 +117,7 @@ pub(super) struct RemoteDesktopSessionState {
     pub(super) cursor_repaint_pending: bool,
     pub(super) last_cursor_repaint_at: Option<Instant>,
     pub(super) certificate_request: Option<RdpCertificatePrompt>,
+    pub(super) redirection: redirection::RdpRedirectState,
     pub(super) vnc_key_request:
         Option<(nyaterm_remote_desktop::VncServerKeyRequest, Option<String>)>,
     pub(super) vnc_trust_previous: Option<String>,
@@ -172,6 +174,7 @@ impl Default for RemoteDesktopSessionState {
             cursor_repaint_pending: false,
             last_cursor_repaint_at: None,
             certificate_request: None,
+            redirection: Default::default(),
             vnc_key_request: None,
             vnc_trust_previous: None,
             error: None,
@@ -466,6 +469,8 @@ impl RemoteDesktopFeatureState {
             session.start_attempt.cancel();
             session.start_attempt = Default::default();
             session.start_token = nyaterm_core::uuid();
+            session.redirection = Default::default();
+            session.certificate_request = None;
         }
     }
 

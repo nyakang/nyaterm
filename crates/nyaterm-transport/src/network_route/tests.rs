@@ -881,3 +881,211 @@ async fn authenticated_route_forwards_bytes_and_drop_releases_listener() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn retarget_keeps_proxy_and_remote_dns_after_original_route_closes() {
+    let (first_port, first_target) = echo_target().await;
+    let (second_port, second_target) = echo_target().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        for (host, port) in [
+            ("original.internal", first_port),
+            ("unavailable.internal", second_port),
+            ("redirect.internal", second_port),
+        ] {
+            let (mut local, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(local.read_u8().await.unwrap());
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with(&format!("CONNECT {host}:{port} HTTP/1.1\r\n")));
+            if host == "unavailable.internal" {
+                local
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                    .await
+                    .unwrap();
+                continue;
+            }
+            let mut remote = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            local
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await
+                .unwrap();
+            tokio::io::copy_bidirectional(&mut local, &mut remote)
+                .await
+                .unwrap();
+        }
+    });
+    let route = NetworkRoute::start(NetworkRouteConfig {
+        host: "original.internal".into(),
+        port: first_port,
+        proxy: Some(SshProxyConfig {
+            protocol: "http".into(),
+            host: "127.0.0.1".into(),
+            port: proxy_port,
+            command: None,
+            username: None,
+            password: None,
+        }),
+        jump: None,
+    })
+    .unwrap();
+    relay_exchange(&route).await;
+    let redirected = route
+        .retarget(
+            "certificate.example".into(),
+            second_port,
+            vec!["unavailable.internal".into(), "redirect.internal".into()],
+        )
+        .unwrap();
+    assert_ne!(route.endpoint.address, redirected.endpoint.address);
+    assert_ne!(
+        route.endpoint.token.expose_secret(),
+        redirected.endpoint.token.expose_secret()
+    );
+    drop(route);
+    relay_exchange(&redirected).await;
+    for task in [server, first_target, second_target] {
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+async fn relay_exchange(route: &NetworkRoute) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(route.endpoint.address).await.unwrap();
+        stream
+            .write_all(route.endpoint.token.expose_secret().as_bytes())
+            .await
+            .unwrap();
+        stream.write_all(b"ping").await.unwrap();
+        let mut reply = [0; 4];
+        stream.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply, b"pong");
+        stream.shutdown().await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn redirected_route_never_falls_back_to_direct_after_proxy_refuses_all_addresses() {
+    let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_port = target.local_addr().unwrap().port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut local, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(local.read_u8().await.unwrap());
+            }
+            local
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                .await
+                .unwrap();
+        }
+    });
+    let route = NetworkRoute::start(NetworkRouteConfig {
+        host: "broker.example".into(),
+        port: 3389,
+        proxy: Some(SshProxyConfig {
+            protocol: "http".into(),
+            host: "127.0.0.1".into(),
+            port: proxy_port,
+            command: None,
+            username: None,
+            password: None,
+        }),
+        jump: None,
+    })
+    .unwrap();
+    let redirected = route
+        .retarget(
+            "127.0.0.1".into(),
+            target_port,
+            vec!["worker.internal".into(), "127.0.0.1".into()],
+        )
+        .unwrap();
+    let mut stream = TcpStream::connect(redirected.endpoint.address)
+        .await
+        .unwrap();
+    stream
+        .write_all(redirected.endpoint.token.expose_secret().as_bytes())
+        .await
+        .unwrap();
+    let read = tokio::time::timeout(Duration::from_secs(5), stream.read_u8())
+        .await
+        .unwrap();
+    assert!(read.is_err());
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), target.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn redirected_ssh_route_survives_original_route_cancellation() {
+    let (port, target) = echo_target().await;
+    let (jump, server, forwards) = jump(false).await;
+    let original = NetworkRoute::start(NetworkRouteConfig {
+        host: "original.invalid".into(),
+        port: 3389,
+        proxy: None,
+        jump: Some(jump),
+    })
+    .unwrap();
+    let redirected = original
+        .retarget("certificate.example".into(), port, vec!["127.0.0.1".into()])
+        .unwrap();
+    drop(original);
+    relay_exchange(&redirected).await;
+    drop(redirected);
+    for task in [target, server] {
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(*forwards.lock().unwrap(), vec![u32::from(port)]);
+}
+
+#[test]
+fn retarget_rejects_unbounded_or_empty_dial_addresses_before_spawning() {
+    let route = NetworkRoute::start(NetworkRouteConfig {
+        host: "broker.example".into(),
+        port: 3389,
+        proxy: None,
+        jump: None,
+    })
+    .unwrap();
+    assert!(
+        route
+            .retarget(
+                "worker.example".into(),
+                3389,
+                vec!["worker.example".into(); 17]
+            )
+            .is_err()
+    );
+    assert!(
+        route
+            .retarget("worker.example".into(), 3389, vec![String::new()])
+            .is_err()
+    );
+    assert!(
+        route
+            .retarget("worker.example".into(), 3389, vec!["x".repeat(254)])
+            .is_err()
+    );
+}

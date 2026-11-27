@@ -8,6 +8,7 @@ mod framebuffer;
 mod helper_start;
 mod input;
 mod lifecycle;
+mod redirection;
 mod resize;
 mod spice;
 mod start;

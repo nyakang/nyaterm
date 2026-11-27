@@ -989,6 +989,7 @@ fn committed_text_requires_the_confirmed_protocol_capability() {
         committed_unicode_text: true,
         secure_attention: false,
         frame_update_complete: false,
+        server_redirection: false,
     };
     let vnc_supported = VncServerCapabilities {
         committed_unicode_keysyms: true,
@@ -1113,6 +1114,7 @@ fn secure_attention_requires_rdp_connected_state_and_confirmed_capability() {
         committed_unicode_text: true,
         secure_attention: true,
         frame_update_complete: false,
+        server_redirection: false,
     });
     assert!(secure_attention_available(
         true,
@@ -1780,5 +1782,48 @@ fn builtin_legacy_clipboard_modes_enable_full_clipboard_before_start_and_retry()
             assert_eq!(deferred.clipboard.mode, RdpClipboardMode::TextAndFiles);
             assert!(app.remote_desktop.manager.state("legacy-builtin").is_none());
         }
+    });
+}
+
+#[test]
+fn temporary_rdp_retry_rejects_a_stale_relay_without_falling_back_to_direct() {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::{TestAppCleanup, TestConfigDir};
+
+    let root = TestConfigDir::new("nyaterm-rdp-stale-route");
+    let mut cx = gpui::TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let app = app_with_visible_local_session(&mut cx, root.path(), "rdp");
+    app.update(&mut cx, |app, cx| {
+        let mut config = fit_window_rdp_config("Broker");
+        config.relay = Some(
+            nyaterm_core::connection_route::RelayEndpoint {
+                address: "127.0.0.1:12345".parse().unwrap(),
+                token: "0123456789abcdef0123456789abcdef".into(),
+            }
+            .into(),
+        );
+        let original_host = config.host.clone();
+        app.session.metadata_mut("rdp").unwrap().launch_config = SessionLaunchConfig::Rdp(config);
+        app.remote_desktop.insert_disconnected("rdp".into());
+        app.restart_rdp_runtime("rdp", true, cx);
+        let session = &app.remote_desktop.sessions["rdp"];
+        assert_eq!(session.state, RemoteDesktopViewState::Failed);
+        assert!(
+            session
+                .error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("original RDP route")
+        );
+        assert!(app.remote_desktop.manager.state("rdp").is_none());
+        let SessionLaunchConfig::Rdp(config) = &app.session.metadata("rdp").unwrap().launch_config
+        else {
+            panic!("RDP")
+        };
+        assert_eq!(config.host, original_host);
+        assert!(config.relay.is_some());
     });
 }

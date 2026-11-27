@@ -551,6 +551,7 @@ mod tests {
         encode_control(&RdpControlMessage::ClientHello {
             version,
             frame_update_complete: false,
+            server_redirection: false,
         })
         .expect("small control packet")
     }

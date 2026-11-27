@@ -7510,7 +7510,7 @@ dependencies = [
 [[package]]
 name = "nyaterm-native-protocol"
 version = "1.0.0"
-source = "git+https://github.com/nyakang/nyaterm-plugins?rev=cb91fcb46ddef66457ae8f02a6b72f2b7ec1f7ef#cb91fcb46ddef66457ae8f02a6b72f2b7ec1f7ef"
+source = "git+https://github.com/nyakang/nyaterm-plugins?rev=3416b424ee7730fb9076a37049b3ac015d542a5d#3416b424ee7730fb9076a37049b3ac015d542a5d"
 dependencies = [
  "serde",
  "serde_json",
