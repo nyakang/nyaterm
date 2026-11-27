@@ -167,11 +167,8 @@ impl ChildWindowSpec {
     /// `modal_scrim_owns_input`). The draft-owning window still has to be kept
     /// alive until saved or cancelled.
     ///
-    /// Not minimisable on a real modal: an owned window carries no taskbar button,
-    /// so a minimised one is hard to get back while its owner is still disabled.
-    /// A macOS window does get its own place in the Window menu, so it is safe to
-    /// make it minimisable there -- that is also what enables the yellow traffic
-    /// light.
+    /// Modal editors cannot minimise: their owner stays blocked until the
+    /// draft is saved or discarded, and restoration is not guaranteed.
     pub fn modal_editor(title: String, width: f32, height: f32) -> Self {
         Self {
             title,
@@ -179,7 +176,7 @@ impl ChildWindowSpec {
             min_size: None,
             kind: WindowKind::Dialog,
             resizable: true,
-            minimizable: cfg!(target_os = "macos"),
+            minimizable: false,
         }
     }
 
@@ -454,17 +451,7 @@ mod tests {
     fn each_child_window_gets_the_kind_its_task_needs() {
         let scoped_edit = ChildWindowSpec::modal_editor("Edit".to_string(), 520., 620.);
         assert!(matches!(scoped_edit.kind, WindowKind::Dialog));
-        if cfg!(target_os = "macos") {
-            assert!(
-                scoped_edit.minimizable,
-                "a macOS window is restorable from the Window menu, so it can minimise"
-            );
-        } else {
-            assert!(
-                !scoped_edit.minimizable,
-                "an owned window has no taskbar button, so a minimised modal is hard to get back"
-            );
-        }
+        assert!(!scoped_edit.minimizable);
 
         let document = ChildWindowSpec::document("File".to_string(), 980., 720.);
         assert!(matches!(document.kind, WindowKind::Normal));

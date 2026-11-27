@@ -258,7 +258,6 @@ pub fn child_window_titlebar(title: impl Into<SharedString>) -> Option<TitlebarO
         // title vertically. Match the main window's calibration so the lights
         // line up with the title text.
         traffic_light_position: cfg!(target_os = "macos").then(|| point(px(9.), px(11.))),
-        ..Default::default()
     })
 }
 /// Application callbacks for child-window close and native zoom handling.

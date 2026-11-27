@@ -1370,7 +1370,7 @@ mod tests {
                 .icon_color(0xf4_47_47)
                 .swatch_text_color(0xff_f0_ee),
             NyaMenuItem::action("#32cd32")
-                .icon_color(0x32_cd_32)
+                .icon_color(0x32cd32)
                 .swatch_text_color(0xdf_fe_e4)
                 .checked(true),
             NyaMenuItem::action("#6796e6")
