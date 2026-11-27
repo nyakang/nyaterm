@@ -561,6 +561,7 @@ mod tests {
             status: String::new(),
             selected_nav: crate::models::NavItem::Workspace,
             bottom_panel_mode: BottomPanelMode::Hidden,
+            command_bar_visible: false,
             quick_commands_height: 120.,
             command_send_height: 180.,
             active_left_panel: None,

@@ -52,6 +52,7 @@ impl NyaTermApp {
             transfer_panel_height: self.transfer.panel_height().round().clamp(60., 600.) as u32,
             serial_send_panel_height: self.shell.command_send_height().round() as u32,
             bottom_panel_mode: bottom_panel_mode.to_string(),
+            quick_commands_visible: Some(self.quick_commands_is_visible()),
             active_left_panel: self
                 .shell
                 .active_left_panel()

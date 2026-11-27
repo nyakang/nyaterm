@@ -29,6 +29,8 @@ pub(in crate::features) fn quick_command_view_mode_from_setting(
     match value.trim() {
         "list" => QuickCommandViewMode::List,
         "compact" => QuickCommandViewMode::Compact,
+        "commandBar" | "command_bar" => QuickCommandViewMode::CommandBar,
+        "sidebar" => QuickCommandViewMode::Sidebar,
         _ => QuickCommandViewMode::Tile,
     }
 }
@@ -44,11 +46,15 @@ pub(in crate::features) fn quick_command_sort_mode_from_setting(
     }
 }
 
-pub(super) fn quick_command_view_mode_setting(mode: QuickCommandViewMode) -> &'static str {
+pub(in crate::features) fn quick_command_view_mode_setting(
+    mode: QuickCommandViewMode,
+) -> &'static str {
     match mode {
         QuickCommandViewMode::List => "list",
         QuickCommandViewMode::Compact => "compact",
         QuickCommandViewMode::Tile => "tile",
+        QuickCommandViewMode::CommandBar => "commandBar",
+        QuickCommandViewMode::Sidebar => "sidebar",
     }
 }
 

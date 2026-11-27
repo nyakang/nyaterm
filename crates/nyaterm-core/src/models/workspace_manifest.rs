@@ -113,6 +113,8 @@ pub struct WorkspaceUiState {
     pub serial_send_panel_height: u32,
     #[serde(default = "default_bottom_panel_mode")]
     pub bottom_panel_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_commands_visible: Option<bool>,
     #[serde(default)]
     pub active_left_panel: Option<String>,
     #[serde(default)]
@@ -146,6 +148,7 @@ impl Default for WorkspaceUiState {
             transfer_panel_height: default_transfer_panel_height(),
             serial_send_panel_height: default_serial_send_panel_height(),
             bottom_panel_mode: default_bottom_panel_mode(),
+            quick_commands_visible: None,
             active_left_panel: None,
             active_right_panel: None,
             left_panel_collapsed: false,
@@ -501,6 +504,7 @@ mod tests {
             transfer_panel_height: 260,
             serial_send_panel_height: 190,
             bottom_panel_mode: "command_send".to_string(),
+            quick_commands_visible: Some(true),
             active_left_panel: Some("fileExplorer".to_string()),
             active_right_panel: Some("savedConnections".to_string()),
             left_panel_collapsed: false,

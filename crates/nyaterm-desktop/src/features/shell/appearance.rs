@@ -79,6 +79,12 @@ impl NyaTermApp {
             .ui_quick_cmd_selected_category
             .clone();
         self.commands.select_quick_category(selected);
+        let configured_view_mode = crate::features::commands::quick_command_view_mode_from_setting(
+            &self.settings.summary().ui_quick_cmd_view_mode,
+        );
+        if self.commands.quick_view_mode() != configured_view_mode {
+            self.set_quick_command_view_mode(configured_view_mode, cx);
+        }
         self.sync_quick_command_selected_category(cx);
         self.sync_component_theme(cx);
         if terminal_font_changed {

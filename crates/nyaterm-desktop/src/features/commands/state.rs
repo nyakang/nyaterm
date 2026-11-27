@@ -490,6 +490,121 @@ impl CommandFeatureState {
         &self.quick.list.row_scroll
     }
 
+    pub(in crate::features) fn quick_sidebar_scroll(&self) -> &ScrollHandle {
+        &self.quick.list.sidebar_scroll
+    }
+
+    pub(in crate::features) fn quick_sidebar_category_is_collapsed(&self, id: &str) -> bool {
+        self.quick.list.sidebar_collapsed_categories.contains(id)
+    }
+
+    pub(in crate::features) fn toggle_quick_sidebar_category(&mut self, id: String) -> bool {
+        if !self
+            .quick
+            .list
+            .sidebar_collapsed_categories
+            .insert(id.clone())
+        {
+            self.quick.list.sidebar_collapsed_categories.remove(&id);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(in crate::features) fn quick_last_bottom_view_mode(&self) -> QuickCommandViewMode {
+        self.quick.list.last_bottom_view_mode
+    }
+
+    pub(in crate::features) fn quick_command_bar_strip_width(&self) -> Option<gpui::Pixels> {
+        self.quick.list.command_bar_strip_width
+    }
+
+    pub(in crate::features) fn set_quick_command_bar_strip_width(
+        &mut self,
+        width: gpui::Pixels,
+    ) -> bool {
+        let changed = self
+            .quick
+            .list
+            .command_bar_strip_width
+            .is_none_or(|prev| (f32::from(prev) - f32::from(width)).abs() >= 1.0);
+        if changed {
+            self.quick.list.command_bar_strip_width = Some(width);
+        }
+        changed
+    }
+
+    pub(in crate::features) fn quick_command_bar_popup_is_open(&self) -> bool {
+        self.quick.list.command_bar_popup_open
+    }
+
+    pub(in crate::features) fn toggle_quick_command_bar_popup(&mut self) -> bool {
+        let next = !self.quick.list.command_bar_popup_open;
+        self.quick.list.command_bar_popup_open = next;
+        self.quick.list.command_bar_popup_highlight = 0;
+        if next {
+            self.quick.ai.popover_open = false;
+        }
+        next
+    }
+
+    pub(in crate::features) fn close_quick_command_bar_popup(&mut self) -> bool {
+        let changed = self.quick.list.command_bar_popup_open;
+        self.quick.list.command_bar_popup_open = false;
+        self.quick.list.command_bar_popup_highlight = 0;
+        changed
+    }
+
+    pub(in crate::features) fn quick_command_bar_popup_highlight(&self, len: usize) -> usize {
+        if len == 0 {
+            0
+        } else {
+            self.quick.list.command_bar_popup_highlight.min(len - 1)
+        }
+    }
+
+    pub(in crate::features) fn set_quick_command_bar_popup_highlight(
+        &mut self,
+        index: usize,
+        len: usize,
+    ) -> bool {
+        if !self.quick.list.command_bar_popup_open || len == 0 {
+            return false;
+        }
+        let clamped = index.min(len - 1);
+        if self.quick.list.command_bar_popup_highlight == clamped {
+            return false;
+        }
+        self.quick.list.command_bar_popup_highlight = clamped;
+        self.quick
+            .list
+            .command_bar_popup_scroll
+            .scroll_to_item(clamped);
+        true
+    }
+
+    pub(in crate::features) fn move_quick_command_bar_popup_highlight(
+        &mut self,
+        down: bool,
+        len: usize,
+    ) -> bool {
+        if !self.quick.list.command_bar_popup_open || len == 0 {
+            return false;
+        }
+        let current = self.quick_command_bar_popup_highlight(len);
+        let next = if down {
+            (current + 1).min(len - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+        self.set_quick_command_bar_popup_highlight(next, len)
+    }
+
+    pub(in crate::features) fn quick_command_bar_popup_scroll(&self) -> &ScrollHandle {
+        &self.quick.list.command_bar_popup_scroll
+    }
+
     pub(in crate::features) fn quick_selected_category(&self) -> &str {
         &self.quick.list.selected_category
     }
@@ -516,6 +631,7 @@ impl CommandFeatureState {
 
     pub(in crate::features) fn set_quick_search_draft(&mut self, text: String) {
         self.quick.list.search_draft = text;
+        self.quick.list.command_bar_popup_highlight = 0;
     }
 
     pub(in crate::features) fn clear_quick_filters(&mut self) {
@@ -538,6 +654,9 @@ impl CommandFeatureState {
 
     pub(in crate::features) fn set_quick_view_mode(&mut self, mode: QuickCommandViewMode) {
         self.close_quick_toolbar_popovers();
+        if mode.is_bottom_panel() {
+            self.quick.list.last_bottom_view_mode = mode;
+        }
         self.quick.list.view_mode = mode;
     }
 
@@ -566,7 +685,7 @@ impl CommandFeatureState {
     }
 
     pub(in crate::features) fn close_quick_toolbar_popovers(&mut self) -> bool {
-        let changed = self.quick.ai.popover_open;
+        let changed = self.quick.ai.popover_open || self.quick.list.command_bar_popup_open;
         self.quick.close_toolbar_popovers();
         changed
     }
@@ -1238,10 +1357,21 @@ struct QuickCommandListState {
     selected_category: String,
     sort_mode: QuickCommandSortMode,
     view_mode: QuickCommandViewMode,
+    last_bottom_view_mode: QuickCommandViewMode,
     drop_target: Option<QuickCommandDropTarget>,
     /// Owned by the panel list so the row scrollbar and the virtualized list
     /// share one scroll position across re-renders.
     row_scroll: UniformListScrollHandle,
+    /// Measured width of the horizontal chip strip in Command Bar mode.
+    command_bar_strip_width: Option<gpui::Pixels>,
+    /// Overflow / search popup state in Command Bar mode.
+    command_bar_popup_open: bool,
+    command_bar_popup_highlight: usize,
+    command_bar_popup_scroll: ScrollHandle,
+    /// Explicitly collapsed category ids in Sidebar tree mode; untouched during search.
+    sidebar_collapsed_categories: std::collections::HashSet<String>,
+    /// Owned by the sidebar tree so scroll position survives re-renders and switches.
+    sidebar_scroll: ScrollHandle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1318,8 +1448,19 @@ impl QuickCommandFeatureState {
                 selected_category,
                 sort_mode,
                 view_mode,
+                last_bottom_view_mode: if view_mode.is_bottom_panel() {
+                    view_mode
+                } else {
+                    QuickCommandViewMode::Tile
+                },
                 drop_target: None,
                 row_scroll: UniformListScrollHandle::new(),
+                command_bar_strip_width: None,
+                command_bar_popup_open: false,
+                command_bar_popup_highlight: 0,
+                command_bar_popup_scroll: ScrollHandle::new(),
+                sidebar_collapsed_categories: std::collections::HashSet::new(),
+                sidebar_scroll: ScrollHandle::new(),
             },
             editor: QuickCommandEditorFeatureState {
                 draft: None,
@@ -1354,9 +1495,11 @@ impl QuickCommandFeatureState {
 }
 
 impl QuickCommandFeatureState {
-    /// Closes the AI toolbar popover before another toolbar action takes over.
+    /// Closes the AI and command-bar toolbar popovers before another action takes over.
     pub(in crate::features) fn close_toolbar_popovers(&mut self) {
         self.ai.popover_open = false;
+        self.list.command_bar_popup_open = false;
+        self.list.command_bar_popup_highlight = 0;
     }
 }
 

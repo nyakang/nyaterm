@@ -168,15 +168,10 @@ impl NyaTermApp {
                 self.shell.panels.active_left = None;
                 self.shell.panels.left_collapsed = true;
                 self.shell.set_status("left sidebar collapsed".to_string());
-            } else if let Some(panel) = self
-                .shell
-                .chrome
-                .activity_bar_layout
-                .first_panel_on_side(PanelSide::Left)
-            {
+            } else if let Some(panel) = self.first_side_panel_on_side(PanelSide::Left) {
                 self.shell.panels.active_left = Some(panel);
                 self.shell.panels.left_open.clear();
-                if Self::is_stackable_panel_id(panel.persistence_id()) {
+                if self.is_stackable_panel_entry(panel.persistence_id()) {
                     self.shell
                         .panels
                         .left_open
@@ -186,11 +181,7 @@ impl NyaTermApp {
                 self.shell.set_status("left sidebar expanded".to_string());
             }
         } else if self.shell.panels.left_collapsed || self.shell.panels.active_left.is_none() {
-            self.shell.panels.active_left = self
-                .shell
-                .chrome
-                .activity_bar_layout
-                .first_panel_on_side(PanelSide::Left);
+            self.shell.panels.active_left = self.first_side_panel_on_side(PanelSide::Left);
             self.shell.panels.left_collapsed = false;
             self.shell.set_status("left sidebar expanded".to_string());
         } else {
@@ -213,15 +204,10 @@ impl NyaTermApp {
                 self.shell.panels.active_right = None;
                 self.shell.panels.right_collapsed = true;
                 self.shell.set_status("right sidebar collapsed".to_string());
-            } else if let Some(panel) = self
-                .shell
-                .chrome
-                .activity_bar_layout
-                .first_panel_on_side(PanelSide::Right)
-            {
+            } else if let Some(panel) = self.first_side_panel_on_side(PanelSide::Right) {
                 self.shell.panels.active_right = Some(panel);
                 self.shell.panels.right_open.clear();
-                if Self::is_stackable_panel_id(panel.persistence_id()) {
+                if self.is_stackable_panel_entry(panel.persistence_id()) {
                     self.shell
                         .panels
                         .right_open
@@ -231,11 +217,7 @@ impl NyaTermApp {
                 self.shell.set_status("right sidebar expanded".to_string());
             }
         } else if self.shell.panels.right_collapsed || self.shell.panels.active_right.is_none() {
-            self.shell.panels.active_right = self
-                .shell
-                .chrome
-                .activity_bar_layout
-                .first_panel_on_side(PanelSide::Right);
+            self.shell.panels.active_right = self.first_side_panel_on_side(PanelSide::Right);
             self.shell.panels.right_collapsed = false;
             self.shell.set_status("right sidebar expanded".to_string());
         } else {
@@ -256,11 +238,7 @@ impl NyaTermApp {
             self.shell.panels.mobile_left_open = false;
         } else {
             if self.shell.panels.active_left.is_none() {
-                self.shell.panels.active_left = self
-                    .shell
-                    .chrome
-                    .activity_bar_layout
-                    .first_panel_on_side(PanelSide::Left);
+                self.shell.panels.active_left = self.first_side_panel_on_side(PanelSide::Left);
             }
             self.shell.panels.left_collapsed = false;
             self.shell.panels.mobile_left_open = true;
@@ -277,11 +255,7 @@ impl NyaTermApp {
             self.shell.panels.mobile_right_open = false;
         } else {
             if self.shell.panels.active_right.is_none() {
-                self.shell.panels.active_right = self
-                    .shell
-                    .chrome
-                    .activity_bar_layout
-                    .first_panel_on_side(PanelSide::Right);
+                self.shell.panels.active_right = self.first_side_panel_on_side(PanelSide::Right);
             }
             self.shell.panels.right_collapsed = false;
             self.shell.panels.mobile_right_open = true;

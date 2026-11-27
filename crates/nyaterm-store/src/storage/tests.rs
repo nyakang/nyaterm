@@ -4829,6 +4829,24 @@ fn app_settings_summary_reads_and_updates_host_key_policy() {
         json_path(&stored, &["ui", "quick_cmd_selected_category"]).and_then(|value| value.as_str()),
         Some("category-1")
     );
+    for (raw_mode, normalized) in [
+        ("commandBar", "commandBar"),
+        ("command_bar", "commandBar"),
+        ("sidebar", "sidebar"),
+    ] {
+        quick_command_update.ui_quick_cmd_view_mode = raw_mode.to_string();
+        let saved_mode = store
+            .save_quick_command_ui_settings(&quick_command_update)
+            .expect("save extended quick command view mode");
+        assert_eq!(saved_mode.ui_quick_cmd_view_mode, normalized);
+        assert_eq!(
+            store
+                .load_app_settings_summary()
+                .expect("reload extended quick command view mode")
+                .ui_quick_cmd_view_mode,
+            normalized
+        );
+    }
 
     let mut ui_layout_update = saved_quick_command_ui.clone();
     ui_layout_update.ui_saved_connections_expanded_group_ids =

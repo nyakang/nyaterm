@@ -11,7 +11,8 @@ use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
 use crate::features::NyaTermApp;
 use crate::features::test_support::app_with_visible_local_session;
 use crate::models::{
-    ActivityBarEntry, BottomPanelMode, NavItem, QuickCommandSortMode, WorkspaceTabId,
+    ActivityBarEntry, ActivityBarZone, BottomPanelMode, NavItem, QuickCommandSortMode,
+    QuickCommandViewMode, WorkspaceTabId,
 };
 use crate::shortcuts::{ShortcutId, WORKSPACE_KEY_CONTEXT, rebuild_keymap};
 use crate::test_support::TestAppCleanup;
@@ -336,5 +337,127 @@ fn quick_commands_hide_restores_settings_workspace_focus_and_allows_reopening() 
             app.shell.bottom_panel_mode(),
             BottomPanelMode::QuickCommands
         );
+    });
+}
+
+#[test]
+fn command_bar_coexists_below_command_send_and_keeps_terminal_focus() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let root = TestTempDir::new("nyaterm-command-bar-coexist");
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, cx| {
+        app.shell.bottom_panel.quick_commands_height = 224.;
+        app.set_bottom_panel_mode(BottomPanelMode::CommandSend);
+        app.set_quick_command_view_mode(QuickCommandViewMode::CommandBar, cx);
+        app.shell.set_command_bar_visible(false);
+    });
+    let cx = window(&mut cx, &app, false, true, HashMap::new());
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.toggle_quick_commands_panel(window, cx);
+        });
+    });
+    draw(cx);
+
+    cx.update(|window, cx| {
+        let app_ref = app.read(cx);
+        assert_eq!(
+            app_ref.shell.bottom_panel_mode(),
+            BottomPanelMode::CommandSend
+        );
+        assert!(app_ref.shell.command_bar_visible());
+        assert!(app_ref.quick_commands_is_visible());
+        assert_eq!(app_ref.shell.quick_commands_height(), 224.);
+        assert!(app_ref.settings.summary().ui_serial_send_visible);
+        assert!(app_ref.settings.summary().ui_quick_cmd_visible);
+        // Command Bar opening preserves terminal focus rather than stealing it.
+        assert!(app_ref.terminal.input_focus().is_focused(window));
+    });
+
+    let bar_bounds = cx
+        .debug_bounds("quick-command-bar")
+        .expect("command bar rendered");
+    assert_eq!(f32::from(bar_bounds.size.height), 36.);
+
+    // Closing via the Command Bar close button leaves Command Send open above it.
+    let close_bounds = cx
+        .debug_bounds("quick-command-bar-close")
+        .expect("command bar close button");
+    cx.simulate_click(close_bounds.center(), Modifiers::default());
+    draw(cx);
+
+    app.read_with(cx, |app, _| {
+        assert!(!app.shell.command_bar_visible());
+        assert!(!app.quick_commands_is_visible());
+        assert_eq!(app.shell.bottom_panel_mode(), BottomPanelMode::CommandSend);
+        assert!(app.settings.summary().ui_serial_send_visible);
+        assert!(!app.settings.summary().ui_quick_cmd_visible);
+    });
+}
+
+#[test]
+fn switching_across_all_five_modes_preserves_state_and_prevents_duplicate_mounts() {
+    let mut cx = TestAppContext::single();
+    let _cleanup = TestAppCleanup::new(&cx);
+    let root = TestTempDir::new("nyaterm-quick-five-modes");
+    let app = app_with_visible_local_session(&mut cx, root.path(), "local");
+    app.update(&mut cx, |app, _| {
+        app.shell.bottom_panel.quick_commands_height = 212.;
+        app.commands.set_quick_search_draft("docker".into());
+        app.commands.select_quick_category("uncategorized".into());
+        app.commands.set_quick_sort_mode(QuickCommandSortMode::Name);
+        app.set_bottom_panel_mode(BottomPanelMode::QuickCommands);
+    });
+    let cx = window(&mut cx, &app, false, true, HashMap::new());
+
+    // Switch List/Tile -> CommandBar -> Sidebar -> Compact while visible.
+    for mode in [
+        QuickCommandViewMode::CommandBar,
+        QuickCommandViewMode::Sidebar,
+        QuickCommandViewMode::Compact,
+    ] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.set_quick_command_view_mode_in_window(mode, window, cx);
+            });
+        });
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.commands.quick_view_mode(), mode);
+            assert!(app.quick_commands_is_visible());
+            assert_eq!(app.commands.quick_search_draft(), "docker");
+            assert_eq!(app.commands.quick_selected_category(), "uncategorized");
+            assert_eq!(app.commands.quick_sort_mode(), QuickCommandSortMode::Name);
+            assert_eq!(app.shell.quick_commands_height(), 212.);
+
+            // Exactly one Quick Commands layout is mounted at any time.
+            let in_bottom = app.shell.bottom_panel_mode() == BottomPanelMode::QuickCommands
+                && app.commands.quick_view_mode().is_bottom_panel();
+            let in_bar =
+                app.commands.quick_view_mode().is_command_bar() && app.shell.command_bar_visible();
+            let in_sidebar = app.panel_entry_selected(NavItem::QuickCommands);
+            assert_eq!(
+                usize::from(in_bottom) + usize::from(in_bar) + usize::from(in_sidebar),
+                1
+            );
+        });
+    }
+
+    // Sidebar follows quickCmdBar between right and left rails and never closes Command Send.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.set_bottom_panel_mode(BottomPanelMode::CommandSend);
+            app.set_quick_command_view_mode_in_window(QuickCommandViewMode::Sidebar, window, cx);
+            app.open_quick_commands_panel(window, cx);
+            assert_eq!(app.current_right_panel(), Some(NavItem::QuickCommands));
+            assert_eq!(app.shell.bottom_panel_mode(), BottomPanelMode::CommandSend);
+
+            app.move_activity_entry("quickCmdBar".into(), ActivityBarZone::LeftBottom, None, cx);
+            app.open_quick_commands_panel(window, cx);
+            assert_eq!(app.current_left_panel(), Some(NavItem::QuickCommands));
+            assert_eq!(app.shell.bottom_panel_mode(), BottomPanelMode::CommandSend);
+        });
     });
 }

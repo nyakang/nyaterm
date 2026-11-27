@@ -84,6 +84,7 @@ impl NyaTermApp {
                 self.active_sessions_panel(model, cx).into_any_element()
             }
             NavItem::CommandHistory => self.command_history_panel(cx).into_any_element(),
+            NavItem::QuickCommands => self.quick_commands_sidebar_panel(cx).into_any_element(),
             NavItem::Stats => self
                 .remote_panels
                 .entity(RemoteMonitorKind::Stats)

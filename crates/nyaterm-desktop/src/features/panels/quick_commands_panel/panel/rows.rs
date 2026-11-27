@@ -26,7 +26,7 @@ pub(super) const QUICK_COMMAND_MENU_WIDTH: f32 = 148.;
 
 /// Tauri wraps every command icon in a fixed square so that a color dot and a
 /// brand glyph occupy the same slot and the label does not shift between the two.
-fn quick_command_icon_slot(slot_px: f32, icon: impl IntoElement) -> impl IntoElement {
+pub(super) fn quick_command_icon_slot(slot_px: f32, icon: impl IntoElement) -> impl IntoElement {
     div()
         .size(px(slot_px))
         .flex_none()
@@ -242,7 +242,9 @@ impl NyaTermApp {
                             .child(actions)
                     .into_any_element()
                 }
-                QuickCommandViewMode::List => {
+                QuickCommandViewMode::List
+                | QuickCommandViewMode::CommandBar
+                | QuickCommandViewMode::Sidebar => {
                     // Tauri list: badge + send + details + more.
                     let actions = quick_command_row_actions(
                         palette,
@@ -524,6 +526,130 @@ impl NyaTermApp {
                 })),
         ]);
         items
+    }
+
+    pub(super) fn quick_command_extended_context_menu_items(
+        &self,
+        command_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Vec<NyaMenuItem> {
+        match command_id {
+            Some(command_id) => self.quick_command_extended_menu_items(command_id, cx),
+            None => vec![
+                NyaMenuItem::action(t!("quickCommands.addCommand"))
+                    .icon("icons/conn/terminal.svg")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_new_quick_command_editor(window, cx);
+                    })),
+            ],
+        }
+    }
+
+    /// Context menu for Command Bar chips and Sidebar Explorer rows: adds pin
+    /// toggling and category reassignment without cluttering the compact row with
+    /// inline action buttons.
+    pub(super) fn quick_command_extended_menu_items(
+        &self,
+        command_id: String,
+        cx: &mut Context<Self>,
+    ) -> Vec<NyaMenuItem> {
+        let command = self
+            .commands
+            .quick_commands()
+            .iter()
+            .find(|item| item.id == command_id);
+        let is_pinned = command.and_then(|item| item.pinned).unwrap_or_default();
+        let current_category_id = command
+            .and_then(|item| item.category_id.as_deref())
+            .filter(|id| !id.trim().is_empty())
+            .map(ToOwned::to_owned);
+
+        let edit_command_id = command_id.clone();
+        let pin_command_id = command_id.clone();
+        let copy_command_id = command_id.clone();
+        let all_command_id = command_id.clone();
+        let delete_command_id = command_id.clone();
+        let send_to_all_disabled = self.session.live_session_count() == 0;
+
+        let mut category_items = Vec::new();
+        let uncategorized_command_id = command_id.clone();
+        category_items.push(
+            NyaMenuItem::action(t!("quickCommands.uncategorized"))
+                .checked(current_category_id.is_none())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.move_quick_command_category_from_menu(
+                        uncategorized_command_id.clone(),
+                        None,
+                        cx,
+                    );
+                })),
+        );
+        for (category, depth) in super::super::super::ordered_quick_command_categories(
+            self.commands.quick_command_categories(),
+        ) {
+            let target_category_id = category.id.clone();
+            let move_command_id = command_id.clone();
+            let checked = current_category_id.as_deref() == Some(category.id.as_str());
+            category_items.push(
+                NyaMenuItem::action(category.name.clone())
+                    .checked(checked)
+                    .label_indent(px(depth as f32 * 12.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.move_quick_command_category_from_menu(
+                            move_command_id.clone(),
+                            Some(target_category_id.clone()),
+                            cx,
+                        );
+                    })),
+            );
+        }
+
+        vec![
+            NyaMenuItem::action(t!("quickCommands.edit"))
+                .icon("icons/net/edit.svg")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_edit_quick_command_editor(edit_command_id.clone(), window, cx);
+                })),
+            NyaMenuItem::action(if is_pinned {
+                t!("quickCommands.unpin")
+            } else {
+                t!("quickCommands.pin")
+            })
+            .icon("icons/pin.svg")
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_quick_command_pinned(pin_command_id.clone(), cx);
+            })),
+            NyaMenuItem::submenu(t!("quickCommands.moveToCategory"), category_items)
+                .icon("icons/conn/folder.svg")
+                .submenu_min_width(px(168.))
+                .submenu_max_height(px(280.))
+                .submenu_scrollable(true),
+            NyaMenuItem::action(t!("quickCommands.copyCommand"))
+                .icon("icons/copy.svg")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(command) = this
+                        .commands
+                        .quick_commands()
+                        .iter()
+                        .find(|command| command.id == copy_command_id)
+                    {
+                        this.copy_quick_command_text(command.command.clone(), cx);
+                    }
+                })),
+            NyaMenuItem::action(t!("quickCommands.sendToAll"))
+                .icon("icons/menu/broadcast.svg")
+                .disabled(send_to_all_disabled)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.send_quick_command_to_all_by_id(all_command_id.clone(), cx);
+                })),
+            NyaMenuItem::separator(),
+            NyaMenuItem::action(t!("common.delete"))
+                .icon("icons/net/delete.svg")
+                .danger()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_delete_quick_command_confirm(delete_command_id.clone(), window, cx);
+                })),
+        ]
     }
 }
 

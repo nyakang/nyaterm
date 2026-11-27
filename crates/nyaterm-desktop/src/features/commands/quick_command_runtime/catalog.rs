@@ -5,9 +5,11 @@ use nyaterm_core::{QuickCommand, QuickCommandCategory, QuickCommandsConfig};
 use nyaterm_store::{StoreDomain, store_request};
 
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
-use crate::models::{NavItem, QuickCommandSortMode, QuickCommandViewMode};
+use crate::models::{BottomPanelMode, NavItem, QuickCommandSortMode, QuickCommandViewMode};
 
-use super::helpers::{quick_command_sort_mode_setting, quick_command_view_mode_setting};
+use super::helpers::{
+    quick_command_sort_mode_setting, quick_command_view_mode_setting, unix_millis_now,
+};
 use crate::features::settings::SettingsSaveKind;
 
 impl NyaTermApp {
@@ -153,10 +155,131 @@ impl NyaTermApp {
         mode: QuickCommandViewMode,
         cx: &mut Context<Self>,
     ) {
+        self.apply_quick_command_view_mode_transition(mode, None, cx);
+    }
+
+    pub(in crate::features) fn set_quick_command_view_mode_in_window(
+        &mut self,
+        mode: QuickCommandViewMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_quick_command_view_mode_transition(mode, Some(window), cx);
+    }
+
+    fn apply_quick_command_view_mode_transition(
+        &mut self,
+        mode: QuickCommandViewMode,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let old_mode = self.commands.quick_view_mode();
+        let was_visible = self.quick_commands_is_visible();
         self.commands.set_quick_view_mode(mode);
+        if old_mode != mode {
+            if old_mode.is_bottom_panel()
+                && self.shell.bottom_panel_mode() == BottomPanelMode::QuickCommands
+            {
+                self.shell
+                    .set_bottom_panel_mode_silent(BottomPanelMode::Hidden);
+            }
+            if old_mode.is_command_bar() {
+                self.shell.set_command_bar_visible(false);
+            }
+            if old_mode.is_sidebar() {
+                self.close_quick_commands_side_panel();
+            }
+
+            if was_visible {
+                match mode {
+                    QuickCommandViewMode::List
+                    | QuickCommandViewMode::Compact
+                    | QuickCommandViewMode::Tile => {
+                        self.shell
+                            .set_bottom_panel_mode_silent(BottomPanelMode::QuickCommands);
+                    }
+                    QuickCommandViewMode::CommandBar => {
+                        self.shell.set_command_bar_visible(true);
+                        if let Some(window) = window {
+                            self.focus_active_workspace_surface(window, cx);
+                        }
+                    }
+                    QuickCommandViewMode::Sidebar => {
+                        self.open_quick_commands_sidebar_surface(cx);
+                    }
+                }
+            }
+            self.persist_ui_layout();
+        }
         self.settings
             .set_quick_command_view_mode(quick_command_view_mode_setting(mode).to_string());
         self.save_quick_command_ui_settings(cx);
+        cx.notify();
+    }
+
+    pub(in crate::features) fn toggle_quick_command_pinned(
+        &mut self,
+        command_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut command) = self
+            .commands
+            .quick_commands()
+            .iter()
+            .find(|item| item.id == command_id)
+            .cloned()
+        else {
+            return;
+        };
+        let next_pinned = !command.pinned.unwrap_or_default();
+        command.pinned = next_pinned.then_some(true);
+        command.updated_at = Some(unix_millis_now());
+        self.submit_store_request(
+            0,
+            nyaterm_store::store_mutation(StoreDomain::Commands, move |store| {
+                store.upsert_quick_command(command, None)
+            }),
+            |this, event, cx| {
+                if let Ok(config) = event.outcome {
+                    this.replace_quick_command_catalog(config.commands, config.categories, cx);
+                } else {
+                    this.refresh_quick_commands(cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
+    pub(in crate::features) fn move_quick_command_category_from_menu(
+        &mut self,
+        command_id: String,
+        category_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(config) = self
+            .commands
+            .move_quick_command_to_category(&command_id, category_id)
+        else {
+            return;
+        };
+        self.submit_store_request(
+            0,
+            nyaterm_store::store_mutation(StoreDomain::Commands, move |store| {
+                store.save_quick_commands(config)
+            }),
+            |this, event, cx| {
+                if let Err(error) = event.outcome {
+                    this.settings.update_store_status(
+                        format!("quick command category update failed: {error}"),
+                        false,
+                    );
+                    this.refresh_quick_commands(cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
     }
 
     pub(in crate::features) fn set_quick_command_sort_mode(
@@ -171,6 +294,15 @@ impl NyaTermApp {
     }
 
     pub(in crate::features) fn save_quick_command_ui_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings.set_quick_command_view_mode(
+            quick_command_view_mode_setting(self.commands.quick_view_mode()).to_string(),
+        );
+        self.settings.set_quick_command_sort_mode(
+            quick_command_sort_mode_setting(self.commands.quick_sort_mode()).to_string(),
+        );
+        self.settings.set_quick_command_selected_category(
+            self.commands.quick_selected_category().to_string(),
+        );
         self.queue_settings_save(SettingsSaveKind::QuickCommands, cx);
     }
 

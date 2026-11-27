@@ -18,28 +18,30 @@ use nyaterm_ui::{
     NyaContextMenu, NyaDropdownMenu, NyaMenuItem, NyaScrollable, NyaSearchInput, NyaTooltip,
 };
 
+mod command_bar;
 mod rows;
 mod sidebar;
+mod sidebar_tree;
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QuickCommandDragKind {
+pub(super) enum QuickCommandDragKind {
     Command,
     Category,
 }
 
 #[derive(Clone, Debug)]
-struct QuickCommandDragPayload {
-    kind: QuickCommandDragKind,
-    id: String,
-    label: String,
+pub(super) struct QuickCommandDragPayload {
+    pub kind: QuickCommandDragKind,
+    pub id: String,
+    pub label: String,
 }
 
-struct QuickCommandDragPreview {
-    payload: QuickCommandDragPayload,
-    position: Point<gpui::Pixels>,
+pub(super) struct QuickCommandDragPreview {
+    pub payload: QuickCommandDragPayload,
+    pub position: Point<gpui::Pixels>,
 }
 
 impl Render for QuickCommandDragPreview {
@@ -93,12 +95,15 @@ struct QuickCommandSortMenuConfig {
 }
 
 struct QuickCommandViewMenuConfig {
+    id: &'static str,
     current: QuickCommandViewMode,
     icon_path: &'static str,
     view_label: Cow<'static, str>,
     list_label: Cow<'static, str>,
     compact_label: Cow<'static, str>,
     tile_label: Cow<'static, str>,
+    command_bar_label: Cow<'static, str>,
+    sidebar_label: Cow<'static, str>,
 }
 
 struct QuickCommandAiPopoverConfig {
@@ -184,11 +189,7 @@ impl NyaTermApp {
                 }))
                 .into_any_element()
         });
-        let view_icon = match self.commands.quick_view_mode() {
-            QuickCommandViewMode::List => "icons/view-list.svg",
-            QuickCommandViewMode::Compact => "icons/view-compact.svg",
-            QuickCommandViewMode::Tile => "icons/view-grid.svg",
-        };
+        let view_icon = self.commands.quick_view_mode().icon_path();
 
         let category_sidebar = self.quick_command_category_sidebar(categories, palette, cx);
         let view_mode = self.commands.quick_view_mode();
@@ -196,7 +197,10 @@ impl NyaTermApp {
         // Row pitch for the virtualized modes: Tauri's row height plus its gap-1.5.
         let logical_row_height = match view_mode {
             QuickCommandViewMode::Compact => 38.,
-            QuickCommandViewMode::List | QuickCommandViewMode::Tile => 50.,
+            QuickCommandViewMode::List
+            | QuickCommandViewMode::Tile
+            | QuickCommandViewMode::CommandBar
+            | QuickCommandViewMode::Sidebar => 50.,
         };
         // The pane owns one menu; capture resets its target before a row aims it.
         let context_target = Rc::new(RefCell::new(None::<String>));
@@ -400,12 +404,15 @@ impl NyaTermApp {
                     ))
                     .child(quick_command_view_menu_button(
                         QuickCommandViewMenuConfig {
+                            id: "quick-command-view",
                             current: self.commands.quick_view_mode(),
                             icon_path: view_icon,
                             view_label: t!("quickCommands.viewMode"),
                             list_label: t!("quickCommands.listMode"),
                             compact_label: t!("quickCommands.compactListMode"),
                             tile_label: t!("quickCommands.tileMode"),
+                            command_bar_label: t!("quickCommands.commandBarMode"),
+                            sidebar_label: t!("quickCommands.sidebarMode"),
                         },
                         cx,
                     ))
@@ -527,6 +534,56 @@ impl NyaTermApp {
     }
 }
 
+pub(super) fn quick_command_sort_menu_button_with_id(
+    id: &'static str,
+    current: QuickCommandSortMode,
+    cx: &mut Context<NyaTermApp>,
+) -> impl IntoElement {
+    let sort_label = t!("quickCommands.sort");
+    let created_label = t!("quickCommands.sortByCreated");
+    let name_label = t!("quickCommands.sortByName");
+    let usage_label = t!("quickCommands.sortByUseCount");
+    let custom_label = t!("quickCommands.sortCustom");
+    NyaDropdownMenu::new(id)
+        .icon("icons/conn/sort.svg")
+        .icon_size(px(14.))
+        .selected(current != QuickCommandSortMode::Created)
+        .tooltip(format!(
+            "{} · {}",
+            sort_label,
+            quick_command_sort_mode_label(
+                current,
+                created_label.clone(),
+                name_label.clone(),
+                usage_label.clone(),
+                custom_label.clone(),
+            )
+        ))
+        .min_width(px(154.))
+        .items([
+            NyaMenuItem::action(created_label)
+                .checked(current == QuickCommandSortMode::Created)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.set_quick_command_sort_mode(QuickCommandSortMode::Created, cx);
+                })),
+            NyaMenuItem::action(name_label)
+                .checked(current == QuickCommandSortMode::Name)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.set_quick_command_sort_mode(QuickCommandSortMode::Name, cx);
+                })),
+            NyaMenuItem::action(usage_label)
+                .checked(current == QuickCommandSortMode::Usage)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.set_quick_command_sort_mode(QuickCommandSortMode::Usage, cx);
+                })),
+            NyaMenuItem::action(custom_label)
+                .checked(current == QuickCommandSortMode::Custom)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.set_quick_command_sort_mode(QuickCommandSortMode::Custom, cx);
+                })),
+        ])
+}
+
 fn quick_command_sort_menu_button(
     config: QuickCommandSortMenuConfig,
     cx: &mut Context<NyaTermApp>,
@@ -579,19 +636,43 @@ fn quick_command_sort_menu_button(
         ])
 }
 
+pub(super) fn quick_command_view_menu_button_with_id(
+    id: &'static str,
+    current: QuickCommandViewMode,
+    cx: &mut Context<NyaTermApp>,
+) -> impl IntoElement {
+    quick_command_view_menu_button(
+        QuickCommandViewMenuConfig {
+            id,
+            current,
+            icon_path: current.icon_path(),
+            view_label: t!("quickCommands.viewMode"),
+            list_label: t!("quickCommands.listMode"),
+            compact_label: t!("quickCommands.compactListMode"),
+            tile_label: t!("quickCommands.tileMode"),
+            command_bar_label: t!("quickCommands.commandBarMode"),
+            sidebar_label: t!("quickCommands.sidebarMode"),
+        },
+        cx,
+    )
+}
+
 fn quick_command_view_menu_button(
     config: QuickCommandViewMenuConfig,
     cx: &mut Context<NyaTermApp>,
 ) -> impl IntoElement {
     let QuickCommandViewMenuConfig {
+        id,
         current,
         icon_path,
         view_label,
         list_label,
         compact_label,
         tile_label,
+        command_bar_label,
+        sidebar_label,
     } = config;
-    NyaDropdownMenu::new("quick-command-view")
+    NyaDropdownMenu::new(id)
         .icon(icon_path)
         .icon_size(px(14.))
         .selected(true)
@@ -602,25 +683,58 @@ fn quick_command_view_menu_button(
                 current,
                 list_label.clone(),
                 compact_label.clone(),
-                tile_label.clone()
+                tile_label.clone(),
+                command_bar_label.clone(),
+                sidebar_label.clone(),
             )
         ))
         .min_width(px(154.))
         .items([
             NyaMenuItem::action(list_label)
                 .checked(current == QuickCommandViewMode::List)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.set_quick_command_view_mode(QuickCommandViewMode::List, cx);
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_quick_command_view_mode_in_window(
+                        QuickCommandViewMode::List,
+                        window,
+                        cx,
+                    );
                 })),
             NyaMenuItem::action(compact_label)
                 .checked(current == QuickCommandViewMode::Compact)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.set_quick_command_view_mode(QuickCommandViewMode::Compact, cx);
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_quick_command_view_mode_in_window(
+                        QuickCommandViewMode::Compact,
+                        window,
+                        cx,
+                    );
                 })),
             NyaMenuItem::action(tile_label)
                 .checked(current == QuickCommandViewMode::Tile)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.set_quick_command_view_mode(QuickCommandViewMode::Tile, cx);
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_quick_command_view_mode_in_window(
+                        QuickCommandViewMode::Tile,
+                        window,
+                        cx,
+                    );
+                })),
+            NyaMenuItem::separator(),
+            NyaMenuItem::action(command_bar_label)
+                .checked(current == QuickCommandViewMode::CommandBar)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_quick_command_view_mode_in_window(
+                        QuickCommandViewMode::CommandBar,
+                        window,
+                        cx,
+                    );
+                })),
+            NyaMenuItem::action(sidebar_label)
+                .checked(current == QuickCommandViewMode::Sidebar)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.set_quick_command_view_mode_in_window(
+                        QuickCommandViewMode::Sidebar,
+                        window,
+                        cx,
+                    );
                 })),
         ])
 }
@@ -759,7 +873,7 @@ fn quick_command_ai_popover_button(
         })
 }
 
-fn quick_command_toolbar_icon_button(
+pub(super) fn quick_command_toolbar_icon_button(
     palette: crate::theme::ThemePalette,
     id: &'static str,
     icon_path: &'static str,
@@ -799,7 +913,9 @@ fn quick_command_toolbar_icon_button(
         .on_click(on_click)
 }
 
-fn quick_command_toolbar_divider(palette: crate::theme::ThemePalette) -> impl IntoElement {
+pub(super) fn quick_command_toolbar_divider(
+    palette: crate::theme::ThemePalette,
+) -> impl IntoElement {
     div()
         .mx_1()
         .h(px(16.))
@@ -813,11 +929,15 @@ fn quick_command_view_mode_label(
     list_label: Cow<'static, str>,
     compact_label: Cow<'static, str>,
     tile_label: Cow<'static, str>,
+    command_bar_label: Cow<'static, str>,
+    sidebar_label: Cow<'static, str>,
 ) -> Cow<'static, str> {
     match mode {
         QuickCommandViewMode::List => list_label,
         QuickCommandViewMode::Compact => compact_label,
         QuickCommandViewMode::Tile => tile_label,
+        QuickCommandViewMode::CommandBar => command_bar_label,
+        QuickCommandViewMode::Sidebar => sidebar_label,
     }
 }
 

@@ -2006,12 +2006,18 @@ impl ConnectionStore {
                 serial_send_panel_height: settings.ui_serial_send_height,
                 bottom_panel_mode: if settings.ui_serial_send_visible {
                     "command_send"
-                } else if settings.ui_quick_cmd_visible {
+                } else if settings.ui_quick_cmd_visible
+                    && !matches!(
+                        settings.ui_quick_cmd_view_mode.as_str(),
+                        "commandBar" | "sidebar"
+                    )
+                {
                     "quick_commands"
                 } else {
                     "hidden"
                 }
                 .to_string(),
+                quick_commands_visible: Some(settings.ui_quick_cmd_visible),
                 active_left_panel: settings.ui_active_left_panel,
                 active_right_panel: settings.ui_active_right_panel,
                 left_panel_collapsed: settings.ui_left_panel_collapsed,
@@ -2126,7 +2132,12 @@ impl ConnectionStore {
             set_nested_json_value(
                 &mut value,
                 &["ui", "show_quick_cmd_bar"],
-                serde_json::Value::Bool(workspace.ui.bottom_panel_mode == "quick_commands"),
+                serde_json::Value::Bool(
+                    workspace
+                        .ui
+                        .quick_commands_visible
+                        .unwrap_or_else(|| workspace.ui.bottom_panel_mode == "quick_commands"),
+                ),
             );
             set_nested_json_value(
                 &mut value,
@@ -2677,7 +2688,8 @@ fn normalize_quick_cmd_sort_mode(value: &str) -> String {
 
 fn normalize_quick_cmd_view_mode(value: &str) -> String {
     match value.trim() {
-        "list" | "compact" | "tile" => value.trim().to_string(),
+        "list" | "compact" | "tile" | "commandBar" | "sidebar" => value.trim().to_string(),
+        "command_bar" => "commandBar".to_string(),
         _ => "tile".to_string(),
     }
 }

@@ -174,6 +174,10 @@ impl NyaTermApp {
         settings.ui_activity_bar_hidden_items = activity_bar_layout.hidden_items.clone();
         settings.ui_activity_bar_right_top = activity_bar_layout.right_top.clone();
         settings.ui_activity_bar_left_bottom = activity_bar_layout.left_bottom.clone();
+        let quick_view_mode =
+            quick_command_view_mode_from_setting(&settings.ui_quick_cmd_view_mode);
+        let mut left_open_panels = settings.ui_left_open_panels.clone();
+        let mut right_open_panels = settings.ui_right_open_panels.clone();
         let mut active_left_panel = settings
             .ui_active_left_panel
             .as_deref()
@@ -188,21 +192,59 @@ impl NyaTermApp {
             .filter(|item| {
                 activity_bar_layout.side_for_entry(item.persistence_id()) == Some(PanelSide::Right)
             });
+        if !quick_view_mode.is_sidebar() || !settings.ui_quick_cmd_visible {
+            left_open_panels.retain(|id| id != "quickCmdBar");
+            right_open_panels.retain(|id| id != "quickCmdBar");
+            if active_left_panel == Some(NavItem::QuickCommands) {
+                active_left_panel = left_open_panels
+                    .first()
+                    .and_then(|id| NavItem::from_persistence_id(id));
+            }
+            if active_right_panel == Some(NavItem::QuickCommands) {
+                active_right_panel = right_open_panels
+                    .first()
+                    .and_then(|id| NavItem::from_persistence_id(id));
+            }
+        } else {
+            let quick_side = activity_bar_layout
+                .side_for_entry("quickCmdBar")
+                .unwrap_or(PanelSide::Right);
+            let already_present = active_left_panel == Some(NavItem::QuickCommands)
+                || active_right_panel == Some(NavItem::QuickCommands)
+                || left_open_panels.iter().any(|id| id == "quickCmdBar")
+                || right_open_panels.iter().any(|id| id == "quickCmdBar");
+            if !already_present {
+                match quick_side {
+                    PanelSide::Left => {
+                        if settings.ui_panel_multi_open {
+                            left_open_panels.push("quickCmdBar".to_string());
+                        }
+                        active_left_panel = Some(NavItem::QuickCommands);
+                        settings.ui_left_panel_collapsed = false;
+                    }
+                    PanelSide::Right => {
+                        if settings.ui_panel_multi_open {
+                            right_open_panels.push("quickCmdBar".to_string());
+                        }
+                        active_right_panel = Some(NavItem::QuickCommands);
+                        settings.ui_right_panel_collapsed = false;
+                    }
+                }
+            }
+        }
         let mut left_sidebar_collapsed = panel_collapsed_from_persistence(
             settings.ui_left_panel_collapsed,
             settings.ui_panel_multi_open,
             active_left_panel.is_some(),
-            !settings.ui_left_open_panels.is_empty(),
+            !left_open_panels.is_empty(),
         );
         let mut right_inspector_collapsed = panel_collapsed_from_persistence(
             settings.ui_right_panel_collapsed,
             settings.ui_panel_multi_open,
             active_right_panel.is_some(),
-            !settings.ui_right_open_panels.is_empty(),
+            !right_open_panels.is_empty(),
         );
         let security_secrets_unlocked = !settings.has_master_password;
-        let mut left_open_panels = settings.ui_left_open_panels.clone();
-        let mut right_open_panels = settings.ui_right_open_panels.clone();
         let panel_stack_sizes = settings
             .ui_panel_stack_sizes
             .iter()
@@ -324,7 +366,7 @@ impl NyaTermApp {
                 categories: quick_command_categories,
                 history: command_history,
                 sort_mode: quick_command_sort_mode_from_setting(&settings.ui_quick_cmd_sort_mode),
-                view_mode: quick_command_view_mode_from_setting(&settings.ui_quick_cmd_view_mode),
+                view_mode: quick_view_mode,
                 selected_category: settings.ui_quick_cmd_selected_category.clone(),
                 focus: QuickCommandFeatureFocus {
                     editor: cx.focus_handle(),
@@ -433,11 +475,13 @@ impl NyaTermApp {
                 selected_nav,
                 bottom_panel_mode: if settings.ui_serial_send_visible {
                     BottomPanelMode::CommandSend
-                } else if settings.ui_quick_cmd_visible {
+                } else if quick_view_mode.is_bottom_panel() && settings.ui_quick_cmd_visible {
                     BottomPanelMode::QuickCommands
                 } else {
                     BottomPanelMode::Hidden
                 },
+                command_bar_visible: quick_view_mode.is_command_bar()
+                    && settings.ui_quick_cmd_visible,
                 quick_commands_height: quick_cmd_height,
                 command_send_height: serial_send_height,
                 active_left_panel,
@@ -565,7 +609,9 @@ fn apply_workspace_ui_to_settings(
     settings.ui_transfer_height = ui.transfer_panel_height;
     settings.ui_quick_cmd_height = ui.bottom_panel_height;
     settings.ui_serial_send_height = ui.serial_send_panel_height;
-    settings.ui_quick_cmd_visible = ui.bottom_panel_mode == "quick_commands";
+    settings.ui_quick_cmd_visible = ui
+        .quick_commands_visible
+        .unwrap_or_else(|| ui.bottom_panel_mode == "quick_commands");
     settings.ui_serial_send_visible = ui.bottom_panel_mode == "command_send";
     settings.ui_active_left_panel = ui.active_left_panel.clone();
     settings.ui_active_right_panel = ui.active_right_panel.clone();

@@ -98,6 +98,32 @@ pub(crate) enum QuickCommandViewMode {
     List,
     Compact,
     Tile,
+    CommandBar,
+    Sidebar,
+}
+
+impl QuickCommandViewMode {
+    pub(crate) const fn is_bottom_panel(self) -> bool {
+        matches!(self, Self::List | Self::Compact | Self::Tile)
+    }
+
+    pub(crate) const fn is_command_bar(self) -> bool {
+        matches!(self, Self::CommandBar)
+    }
+
+    pub(crate) const fn is_sidebar(self) -> bool {
+        matches!(self, Self::Sidebar)
+    }
+
+    pub(crate) const fn icon_path(self) -> &'static str {
+        match self {
+            Self::List => "icons/view-list.svg",
+            Self::Compact => "icons/view-compact.svg",
+            Self::Tile => "icons/view-grid.svg",
+            Self::CommandBar => "icons/menu/horizontal.svg",
+            Self::Sidebar => "icons/menu/sidebar.svg",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

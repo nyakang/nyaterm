@@ -140,7 +140,7 @@ impl NyaTermApp {
                 .round()
                 .clamp(QUICK_CMD_HEIGHT_MIN, BOTTOM_PANEL_HEIGHT_MAX)
                 as u32,
-            quick_command_visible: self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands,
+            quick_command_visible: self.quick_commands_is_visible(),
             serial_send_height: self.shell.command_send_height().round() as u32,
             serial_send_visible: self.shell.bottom_panel.mode == BottomPanelMode::CommandSend,
             active_left_panel: self

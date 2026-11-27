@@ -77,6 +77,7 @@ pub(in crate::features) struct ShellFeatureInit {
     pub status: String,
     pub selected_nav: NavItem,
     pub bottom_panel_mode: BottomPanelMode,
+    pub command_bar_visible: bool,
     pub quick_commands_height: f32,
     pub command_send_height: f32,
     pub active_left_panel: Option<NavItem>,
@@ -95,6 +96,7 @@ pub(in crate::features) struct ShellFeatureInit {
 
 pub(super) struct ShellBottomPanelState {
     pub(super) mode: BottomPanelMode,
+    pub(super) command_bar_visible: bool,
     pub(super) quick_commands_height: f32,
     pub(super) command_send_height: f32,
     pub(super) resize: Option<BottomPanelResizeState>,
@@ -295,6 +297,7 @@ impl ShellFeatureState {
             runtime: ShellRuntimeState::default(),
             bottom_panel: ShellBottomPanelState {
                 mode: init.bottom_panel_mode,
+                command_bar_visible: init.command_bar_visible,
                 quick_commands_height: init.quick_commands_height,
                 command_send_height: ShellBottomPanelState::clamp_command_send_height(
                     init.command_send_height,
@@ -420,6 +423,20 @@ impl ShellFeatureState {
 
     pub(in crate::features) fn bottom_panel_mode(&self) -> BottomPanelMode {
         self.bottom_panel.mode
+    }
+
+    pub(in crate::features) fn set_bottom_panel_mode_silent(&mut self, mode: BottomPanelMode) {
+        self.bottom_panel.mode = mode;
+    }
+
+    pub(in crate::features) fn command_bar_visible(&self) -> bool {
+        self.bottom_panel.command_bar_visible
+    }
+
+    pub(in crate::features) fn set_command_bar_visible(&mut self, visible: bool) -> bool {
+        let changed = self.bottom_panel.command_bar_visible != visible;
+        self.bottom_panel.command_bar_visible = visible;
+        changed
     }
 
     pub(in crate::features) fn quick_commands_height(&self) -> f32 {
@@ -1436,6 +1453,7 @@ mod tests {
             status: "idle".to_string(),
             selected_nav: NavItem::Workspace,
             bottom_panel_mode: mode,
+            command_bar_visible: false,
             quick_commands_height: 120.,
             command_send_height: 180.,
             active_left_panel: None,

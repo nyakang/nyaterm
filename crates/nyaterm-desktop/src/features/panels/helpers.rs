@@ -72,7 +72,7 @@ pub(in crate::features::panels) fn quick_command_category_options(
 /// Depth-first sidebar order. Sibling order comes from
 /// `quick_command_category_sibling_order`, which the group menu's move up/down
 /// also uses, so "the row above" and "move up" cannot disagree.
-fn ordered_quick_command_categories(
+pub(in crate::features::panels) fn ordered_quick_command_categories(
     categories: &[QuickCommandCategory],
 ) -> Vec<(&QuickCommandCategory, usize)> {
     fn visit<'a>(

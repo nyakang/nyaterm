@@ -68,6 +68,7 @@ pub(crate) enum NavItem {
     AiAssistant,
     ActiveSessions,
     CommandHistory,
+    QuickCommands,
     SecurityAuth,
     SyncBackupHistory,
     Recording,
@@ -93,6 +94,7 @@ impl NavItem {
             NavItem::AiAssistant => "ai.title",
             NavItem::ActiveSessions => "panel.activeSessions",
             NavItem::CommandHistory => "panel.commandHistory",
+            NavItem::QuickCommands => "panel.quickCommands",
             NavItem::SecurityAuth => "securityAuth.title",
             NavItem::SyncBackupHistory => "panel.syncBackupHistory",
             NavItem::Recording => "recording.panelTitle",
@@ -120,6 +122,7 @@ impl NavItem {
             NavItem::AiAssistant => "AI Assistant",
             NavItem::ActiveSessions => "Active Sessions",
             NavItem::CommandHistory => "Command History",
+            NavItem::QuickCommands => "Quick Commands",
             NavItem::SecurityAuth => "Security / Auth",
             NavItem::SyncBackupHistory => "Sync / Backup",
             NavItem::Recording => "Recording",
@@ -136,6 +139,7 @@ impl NavItem {
             NavItem::AiAssistant => "AI Assistant",
             NavItem::ActiveSessions => "Sessions",
             NavItem::CommandHistory => "History",
+            NavItem::QuickCommands => "Commands",
             NavItem::Stats => "Resources",
             NavItem::GpuMonitor => "GPU",
             NavItem::AscendNpuMonitor => "NPU",
@@ -168,6 +172,7 @@ impl NavItem {
             NavItem::AiAssistant => "icons/ai.svg",
             NavItem::ActiveSessions => "icons/sessions.svg",
             NavItem::CommandHistory => "icons/history.svg",
+            NavItem::QuickCommands => "icons/commands.svg",
             NavItem::Stats => "icons/resources.svg",
             NavItem::GpuMonitor => "icons/gpu.svg",
             NavItem::AscendNpuMonitor => "icons/npu.svg",
@@ -201,6 +206,7 @@ impl NavItem {
                 | NavItem::AiAssistant
                 | NavItem::ActiveSessions
                 | NavItem::CommandHistory
+                | NavItem::QuickCommands
                 | NavItem::Stats
                 | NavItem::GpuMonitor
                 | NavItem::AscendNpuMonitor
@@ -238,6 +244,7 @@ impl NavItem {
             NavItem::AiAssistant => "aiAssistant",
             NavItem::ActiveSessions => "activeSessions",
             NavItem::CommandHistory => "commandHistory",
+            NavItem::QuickCommands => "quickCmdBar",
             NavItem::SecurityAuth => "securityAuth",
             NavItem::SyncBackupHistory => "syncBackupHistory",
             NavItem::Recording => "recording",
@@ -264,6 +271,7 @@ impl NavItem {
             "aiAssistant" | "ai" => Some(NavItem::AiAssistant),
             "activeSessions" => Some(NavItem::ActiveSessions),
             "commandHistory" => Some(NavItem::CommandHistory),
+            "quickCmdBar" => Some(NavItem::QuickCommands),
             "securityAuth" | "security" => Some(NavItem::SecurityAuth),
             "syncBackupHistory" | "syncBackup" => Some(NavItem::SyncBackupHistory),
             "recording" => Some(NavItem::Recording),
@@ -575,7 +583,16 @@ impl ActivityBarLayoutState {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn first_panel_on_side(&self, side: PanelSide) -> Option<NavItem> {
+        self.first_panel_on_side_allowing(side, false)
+    }
+
+    pub(crate) fn first_panel_on_side_allowing(
+        &self,
+        side: PanelSide,
+        include_quick_commands: bool,
+    ) -> Option<NavItem> {
         let zones = match side {
             PanelSide::Left => [ActivityBarZone::LeftTop, ActivityBarZone::LeftBottom],
             PanelSide::Right => [ActivityBarZone::RightTop, ActivityBarZone::RightBottom],
@@ -584,7 +601,12 @@ impl ActivityBarLayoutState {
             .into_iter()
             .flat_map(|zone| self.zone(zone))
             .filter(|id| !self.is_hidden(id))
-            .find_map(|id| NavItem::from_persistence_id(id).filter(|item| !item.opens_settings()))
+            .find_map(|id| {
+                NavItem::from_persistence_id(id).filter(|item| {
+                    !item.opens_settings()
+                        && (include_quick_commands || *item != NavItem::QuickCommands)
+                })
+            })
     }
 
     pub(crate) fn is_hidden(&self, entry_id: &str) -> bool {

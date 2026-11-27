@@ -328,10 +328,9 @@ impl NyaTermApp {
                                 "terminal-actions-quick-commands",
                                 t!("quickCommands.title"),
                                 t!("terminalActions.quickCommands"),
-                                cx.listener(|this, _, _, cx| {
+                                cx.listener(|this, _, window, cx| {
                                     this.terminal.close_actions();
-                                    this.set_bottom_panel_mode(BottomPanelMode::QuickCommands);
-                                    cx.notify();
+                                    this.open_quick_commands_panel(window, cx);
                                 }),
                             ))
                             .child(tab_action_button(

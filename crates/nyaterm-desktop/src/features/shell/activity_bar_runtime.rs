@@ -240,6 +240,12 @@ impl NyaTermApp {
         if let Some(side) = side {
             self.clear_activity_entry_from_side(&entry_id, side);
         }
+        if entry_id == "quickCmdBar" {
+            self.shell.set_command_bar_visible(false);
+            if self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands {
+                self.shell.bottom_panel.mode = BottomPanelMode::Hidden;
+            }
+        }
         self.shell.chrome.activity_bar_context_menu = None;
         self.shell.set_status(format!("{entry_id} hidden"));
         self.sync_host_tools(cx);
@@ -435,7 +441,11 @@ impl NyaTermApp {
         }
     }
 
-    fn clear_activity_entry_from_side(&mut self, entry_id: &str, side: PanelSide) {
+    pub(in crate::features) fn clear_activity_entry_from_side(
+        &mut self,
+        entry_id: &str,
+        side: PanelSide,
+    ) {
         if self
             .shell
             .panels
@@ -544,9 +554,7 @@ impl NyaTermApp {
         match entry {
             ActivityBarEntry::Panel(NavItem::Settings) => self.settings_tab_is_open(),
             ActivityBarEntry::Panel(item) => self.panel_entry_selected(item),
-            ActivityBarEntry::QuickCommands => {
-                self.shell.bottom_panel.mode == BottomPanelMode::QuickCommands
-            }
+            ActivityBarEntry::QuickCommands => self.quick_commands_is_visible(),
             ActivityBarEntry::CommandSend => {
                 self.shell.bottom_panel.mode == BottomPanelMode::CommandSend
             }
@@ -557,7 +565,7 @@ impl NyaTermApp {
         }
     }
 
-    fn panel_entry_selected(&self, item: NavItem) -> bool {
+    pub(in crate::features) fn panel_entry_selected(&self, item: NavItem) -> bool {
         let Some(side) = self.panel_side_for_item(item) else {
             return false;
         };

@@ -399,7 +399,7 @@ impl NyaTermApp {
 
     /// Group menu for a real category, mirroring Tauri's `QuickCommands.tsx`
     /// category `ContextMenuContent`: add, then reorder, then edit/delete.
-    fn quick_command_category_menu_items(
+    pub(super) fn quick_command_category_menu_items(
         &self,
         category_id: String,
         cx: &mut Context<Self>,
@@ -477,7 +477,10 @@ impl NyaTermApp {
     /// Group menu for the synthetic `all` / `uncategorized` rows. Neither can be
     /// renamed or deleted, but Tauri still offers both add actions from them: a root
     /// category, and a command with no category.
-    fn quick_command_pseudo_category_menu_items(&self, cx: &mut Context<Self>) -> Vec<NyaMenuItem> {
+    pub(super) fn quick_command_pseudo_category_menu_items(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<NyaMenuItem> {
         vec![
             NyaMenuItem::action(t!("quickCommands.addCategory"))
                 .icon("icons/fe/new-folder.svg")

@@ -96,6 +96,21 @@ impl NyaTermApp {
         !NON_PANEL_IDS.contains(&id) && !Self::is_exclusive_panel_id(id)
     }
 
+    pub(in crate::features) fn is_stackable_panel_entry(&self, id: &str) -> bool {
+        if id == "quickCmdBar" {
+            self.commands.quick_view_mode().is_sidebar()
+        } else {
+            Self::is_stackable_panel_id(id)
+        }
+    }
+
+    pub(in crate::features) fn first_side_panel_on_side(&self, side: PanelSide) -> Option<NavItem> {
+        self.shell
+            .chrome
+            .activity_bar_layout
+            .first_panel_on_side_allowing(side, self.commands.quick_view_mode().is_sidebar())
+    }
+
     pub(in crate::features) fn toggle_panel_multi_open(&mut self, cx: &mut Context<Self>) {
         let browser_was_visible = self.transfer_browser_is_visible();
         let next = !self.shell.panels.multi_open;
@@ -106,7 +121,7 @@ impl NyaTermApp {
                     && let Some(panel) = self.shell.panels.active_left
                 {
                     let id = panel.persistence_id().to_string();
-                    if Self::is_stackable_panel_id(&id) {
+                    if self.is_stackable_panel_entry(&id) {
                         self.shell.panels.left_open.push(id);
                     }
                 }
@@ -114,7 +129,7 @@ impl NyaTermApp {
                     && let Some(panel) = self.shell.panels.active_right
                 {
                     let id = panel.persistence_id().to_string();
-                    if Self::is_stackable_panel_id(&id) {
+                    if self.is_stackable_panel_entry(&id) {
                         self.shell.panels.right_open.push(id);
                     }
                 }
@@ -290,6 +305,7 @@ impl NyaTermApp {
             || self.transfer.browser_view().favorites_menu.is_some()
             || self.transfer.browser_view().path_menu.is_some()
             || self.transfer.browser_view().upload_menu.is_some()
+            || self.commands.quick_command_bar_popup_is_open()
     }
 
     pub(in crate::features) fn capture_floating_panel_press(
@@ -463,7 +479,7 @@ impl NyaTermApp {
         let mut ordered = Vec::new();
         for zone in zones {
             for id in self.shell.chrome.activity_bar_layout.zone(zone) {
-                if open_set.contains(id) && Self::is_stackable_panel_id(id) {
+                if open_set.contains(id) && self.is_stackable_panel_entry(id) {
                     ordered.push(id.clone());
                 }
             }
@@ -518,12 +534,7 @@ impl NyaTermApp {
                 PanelSide::Left => self.current_left_panel(),
                 PanelSide::Right => self.current_right_panel(),
             }
-            .or_else(|| {
-                self.shell
-                    .chrome
-                    .activity_bar_layout
-                    .first_panel_on_side(side)
-            });
+            .or_else(|| self.first_side_panel_on_side(side));
             return fallback == Some(item);
         }
         if !self.shell.panels.multi_open || open_ids.len() == 1 {
@@ -859,24 +870,14 @@ impl NyaTermApp {
                 PanelSide::Left => self.current_left_panel(),
                 PanelSide::Right => self.current_right_panel(),
             }
-            .or_else(|| {
-                self.shell
-                    .chrome
-                    .activity_bar_layout
-                    .first_panel_on_side(side)
-            })
+            .or_else(|| self.first_side_panel_on_side(side))
             .unwrap_or(NavItem::Workspace);
             self.single_side_panel(side, fallback, None, window, cx)
         } else if open_ids.len() == 1 || !self.shell.panels.multi_open {
             let panel = open_ids
                 .first()
                 .and_then(|id| NavItem::from_persistence_id(id))
-                .or_else(|| {
-                    self.shell
-                        .chrome
-                        .activity_bar_layout
-                        .first_panel_on_side(side)
-                })
+                .or_else(|| self.first_side_panel_on_side(side))
                 .unwrap_or(NavItem::Workspace);
             self.single_side_panel(side, panel, None, window, cx)
         } else {
@@ -1040,6 +1041,7 @@ impl NyaTermApp {
             NavItem::Connections => SharedString::from(""),
             NavItem::AiAssistant => SharedString::from(""),
             NavItem::ActiveSessions => SharedString::from(""),
+            NavItem::QuickCommands => self.quick_commands_sidebar_meta(),
             NavItem::Transfers => SharedString::from(""),
             NavItem::Processes => self
                 .session
@@ -1463,6 +1465,7 @@ impl NyaTermApp {
                         .into_any_element(),
                 )
             }
+            NavItem::QuickCommands => Some(self.quick_commands_sidebar_header_actions(cx)),
             _ => None,
         }
     }
