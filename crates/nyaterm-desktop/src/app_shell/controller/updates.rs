@@ -2,7 +2,7 @@ use super::DesktopController;
 use crate::features::update::UpdateCheckKind;
 use crate::features::update::UpdateEvent;
 use futures::StreamExt as _;
-use gpui::Context;
+use gpui::{AppContext as _, Context};
 use nyaterm_core::packaging;
 use std::time::Duration;
 
@@ -39,6 +39,21 @@ impl DesktopController {
             })
             .detach();
         }
+
+        let portable = self.runtime.mode() == nyaterm_core::RuntimeMode::Portable;
+        let update_store = self.update_store.clone();
+        cx.spawn(async move |_, cx| {
+            let installation = cx
+                .background_spawn(async move {
+                    nyaterm_updater::download::detect_installation(portable)
+                })
+                .await;
+            update_store.update(cx, |store, cx| {
+                store.apply_event(UpdateEvent::Installation(installation));
+                cx.notify();
+            });
+        })
+        .detach();
 
         if packaging::updates_managed_externally() {
             // An external package manager owns this build's update channel, so a
@@ -92,5 +107,77 @@ impl DesktopController {
                 result: Err(format!("could not start update check: {error}")),
             });
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl DesktopController {
+    pub(in crate::app_shell) fn launch_package_restart(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Task<Result<(), String>>> {
+        let executable = self.update_store.read(cx).package_restart_target()?;
+        let instance_dir = self.runtime.instance_dir();
+        Some(cx.background_spawn(async move {
+            prepare_package_restart(&executable, &instance_dir, |executable, marker| {
+                std::process::Command::new(executable)
+                    .env(nyaterm_core::RELAUNCH_HANDOFF_ENV, marker)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+        }))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_package_restart(
+    executable: &std::path::Path,
+    instance_dir: &std::path::Path,
+    launch: impl FnOnce(&std::path::Path, &std::path::Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let marker = instance_dir.join(format!("restart-{}.handoff", nyaterm_core::uuid()));
+    std::fs::write(&marker, []).map_err(|error| error.to_string())?;
+    let result = launch(executable, &marker);
+    if result.is_err() {
+        let _ = std::fs::remove_file(marker);
+    }
+    result
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::prepare_package_restart;
+    use nyaterm_core::test_support::TestTempDir;
+    use std::path::Path;
+
+    #[test]
+    fn package_restart_uses_captured_install_path_and_instance_handoff() {
+        let root = TestTempDir::new("nyaterm-package-restart-handoff");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let target = Path::new("/opt/nyaterm/nyaterm");
+        prepare_package_restart(target, root.path(), |executable, marker| {
+            assert_eq!(executable, target);
+            assert_eq!(marker.parent(), Some(root.path()));
+            assert!(marker.is_file());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_package_restart_removes_handoff_without_reinstalling() {
+        let root = TestTempDir::new("nyaterm-package-restart-failure");
+        std::fs::create_dir_all(root.path()).unwrap();
+        let error = prepare_package_restart(Path::new("/missing/nyaterm"), root.path(), |_, _| {
+            Err("spawn failed".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "spawn failed");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }

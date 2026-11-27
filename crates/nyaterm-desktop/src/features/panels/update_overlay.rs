@@ -2,7 +2,6 @@ use rust_i18n::t;
 
 use gpui::{AnyElement, Context, FontWeight, IntoElement, div, prelude::*, px, relative, rgb, svg};
 use nyaterm_core::NativeUpdateInfo;
-use nyaterm_core::RuntimeMode;
 use nyaterm_ui::{NyaButton, NyaButtonVariant, NyaMarkdown, NyaScrollable};
 
 use crate::features::NyaTermApp;
@@ -36,6 +35,16 @@ fn update_dialog_title_key(phase: &UpdatePhase) -> &'static str {
         UpdatePhase::Downloading { .. } => "updater.downloading",
         UpdatePhase::Ready => "updater.readyTitle",
         UpdatePhase::Applying => "updater.installing",
+        #[cfg(target_os = "linux")]
+        UpdatePhase::LinuxInstalling => "updater.packageAuthorizing",
+        #[cfg(target_os = "linux")]
+        UpdatePhase::LinuxPassword | UpdatePhase::LinuxAuthorizationFailed => {
+            "updater.authorizationTitle"
+        }
+        #[cfg(target_os = "linux")]
+        UpdatePhase::LinuxInstallFailed => "updater.couldNotInstall",
+        #[cfg(target_os = "linux")]
+        UpdatePhase::LinuxInstalled => "updater.packageInstalledTitle",
         UpdatePhase::Failed(failure) => failure.title_key(),
         UpdatePhase::Available => "updater.newVersionAvailable",
         UpdatePhase::Idle | UpdatePhase::UpToDate => "updater.upToDate",
@@ -97,6 +106,7 @@ fn format_release_date(raw: &str) -> String {
 impl NyaTermApp {
     pub(in crate::features) fn update_dialog_content(
         &mut self,
+        window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let palette = self.theme_palette();
@@ -113,12 +123,19 @@ impl NyaTermApp {
         let downloading = matches!(phase, UpdatePhase::Downloading { .. });
         let ready = matches!(phase, UpdatePhase::Ready);
         let applying = matches!(phase, UpdatePhase::Applying);
+        #[cfg(target_os = "linux")]
+        let package_content = self.package_update_content(window, cx);
+        #[cfg(not(target_os = "linux"))]
+        let package_content: Option<AnyElement> = {
+            let _ = window;
+            None
+        };
+        let package_state = package_content.is_some();
         let failure = match &phase {
             UpdatePhase::Failed(failure) => Some(failure.clone()),
             _ => None,
         };
-        let portable = self.runtime.mode() == RuntimeMode::Portable;
-        let can_install = crate::features::update::download::supports_native_install(portable);
+        let can_install = self.update.read(cx).installation.is_some();
         let (_, viewport_h) = self.shell.viewport_size();
         let release_url = update_info
             .as_ref()
@@ -130,7 +147,17 @@ impl NyaTermApp {
             .filter(|notes| !notes.trim().is_empty());
         let title = t!(update_dialog_title_key(&phase));
         let actions = update_action_flags(&phase, available, can_install, failure.as_ref());
-        let show_actions = !checking && !downloading && !applying;
+        #[cfg(target_os = "linux")]
+        let actions = UpdateActionFlags {
+            package_install: self
+                .update
+                .read(cx)
+                .installation
+                .as_ref()
+                .is_some_and(|target| nyaterm_updater::linux::is_system_package(target.package)),
+            ..actions
+        };
+        let show_actions = !checking && !downloading && !applying && !package_state;
         // A lone Close sits on the version row. A separate footer under two
         // lines of text leaves the wide dialog looking empty.
         let inline_close = show_actions && actions.dismiss_only() && update_info.is_some();
@@ -148,7 +175,8 @@ impl NyaTermApp {
                 inline_close
                     .then(|| dismiss_button(palette, actions.dismiss_later, cx).into_any_element()),
             ))
-            .when(ready, |this| {
+            .children(package_content)
+            .when(ready && !actions.package_install, |this| {
                 this.child(
                     div()
                         .text_xs()
@@ -455,6 +483,7 @@ struct UpdateActionFlags {
     retry_download: bool,
     offer_download: bool,
     offer_install: bool,
+    package_install: bool,
 }
 
 impl UpdateActionFlags {
@@ -492,6 +521,7 @@ fn update_action_flags(
         retry_download,
         offer_download,
         offer_install,
+        package_install: false,
     }
 }
 
@@ -567,7 +597,11 @@ fn update_actions(
             this.child(dialog_action_button(
                 palette,
                 "update-install",
-                t!("updater.installAndRestart"),
+                if actions.package_install {
+                    t!("updater.installUpdate")
+                } else {
+                    t!("updater.installAndRestart")
+                },
                 false,
                 cx.listener(|app, _, window, cx| app.request_native_update_install(window, cx)),
             ))
@@ -671,3 +705,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+mod linux;

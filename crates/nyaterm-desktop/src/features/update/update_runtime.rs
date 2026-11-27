@@ -17,8 +17,13 @@ impl NyaTermApp {
         self.open_content_dialog(
             String::new(),
             560.,
-            |app, _, cx| app.update_dialog_content(cx).into_any_element(),
-            |_, _| {},
+            |app, window, cx| app.update_dialog_content(window, cx).into_any_element(),
+            |app, cx| {
+                #[cfg(target_os = "linux")]
+                app.cancel_update_password(cx);
+                #[cfg(not(target_os = "linux"))]
+                let _ = (app, cx);
+            },
             window,
             cx,
         );
@@ -39,6 +44,8 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "linux")]
+        self.cancel_update_password(cx);
         window.close_nya_dialog(cx);
         cx.notify();
     }

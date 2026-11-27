@@ -15,14 +15,14 @@ import verify_updater_signatures
 
 class UpdaterSignatureSelectionTests(unittest.TestCase):
     def test_stable_signatures_include_msi_and_preview_signatures_do_not(self) -> None:
-        for version, count in (("2.0.0", 10), ("2.0.0-preview.1", 8)):
+        for version, count in (("2.0.0", 14), ("2.0.0-preview.1", 12)):
             with (mock.patch.object(sys, "argv", ["verify", "--dist", "dist", "--version", version,
                                                    "--public-key", "test.pub"]),
                   mock.patch.object(verify_updater_signatures, "verify_file") as verify):
                 verify_updater_signatures.main()
             names = {call.args[0].name for call in verify.call_args_list}
             self.assertEqual(len(names), count)
-            self.assertEqual(sum(name.endswith(".msi") for name in names), 2 if count == 10 else 0)
+            self.assertEqual(sum(name.endswith(".msi") for name in names), 2 if count == 14 else 0)
 
     def test_missing_or_invalid_base64_msi_signature_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

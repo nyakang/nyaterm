@@ -4743,6 +4743,18 @@
     "waitingFrame": "첫 데스크톱 프레임을 기다리는 중..."
   },
   "updater": {
+    "packageAuthorizing": "시스템 인증 대기 또는 업데이트 설치 중…",
+    "sudoPassword": "업데이트를 설치하려면 sudo 비밀번호를 입력하세요. 비밀번호는 저장되지 않습니다.",
+    "authorizationFailed": "시스템 인증에 실패했습니다. sudo로 다시 시도할 수 있습니다.",
+    "packageInstallFailed": "설치에 실패했습니다. 아래 패키지 관리자 정보를 확인하세요. 시스템 패키지 복구가 필요할 수 있습니다.",
+    "packageInstalled": "새 버전이 설치되었습니다. NyaTerm을 다시 시작하면 적용됩니다.",
+    "authorizationTitle": "설치 인증",
+    "packageInstalledTitle": "업데이트 설치 완료",
+    "authorizeInstall": "인증 및 설치",
+    "useSudo": "sudo 사용",
+    "retryInstall": "설치 다시 시도",
+    "installUpdate": "업데이트 설치",
+    "waitForInstall": "패키지 설치가 완료된 후 종료하세요.",
     "waitingForExit": "NyaTerm이 종료되기를 기다리는 중...",
     "backingUpInstall": "현재 설치를 백업하는 중...",
     "applyingInstall": "새 버전을 설치하는 중...",

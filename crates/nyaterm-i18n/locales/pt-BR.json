@@ -4743,6 +4743,18 @@
     "waitingFrame": "Esperando pelo primeiro frame da área de trabalho..."
   },
   "updater": {
+    "packageAuthorizing": "Aguardando autorização do sistema ou instalando a atualização…",
+    "sudoPassword": "Digite sua senha do sudo para instalar a atualização. Ela não será salva.",
+    "authorizationFailed": "A autorização do sistema falhou. Você pode tentar novamente com sudo.",
+    "packageInstallFailed": "A instalação falhou. Consulte os detalhes abaixo; o pacote do sistema pode precisar de reparo.",
+    "packageInstalled": "A nova versão está instalada. Reinicie o NyaTerm para usá-la.",
+    "authorizationTitle": "Autorizar instalação",
+    "packageInstalledTitle": "Atualização instalada",
+    "authorizeInstall": "Autorizar e instalar",
+    "useSudo": "Usar sudo",
+    "retryInstall": "Tentar instalar novamente",
+    "installUpdate": "Instalar atualização",
+    "waitForInstall": "Aguarde a instalação do pacote terminar antes de sair.",
     "waitingForExit": "Esperando o NyaTerm fechar...",
     "backingUpInstall": "Fazendo backup da instalação atual...",
     "applyingInstall": "Instalando a nova versão...",

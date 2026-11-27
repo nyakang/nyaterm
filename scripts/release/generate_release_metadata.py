@@ -38,6 +38,16 @@ UPDATER_ARTIFACTS = {
     "windows-aarch64-portable": "NyaTerm_{version}_windows_arm64_portable.zip",
 }
 
+LINUX_PACKAGE_UPDATES = {
+    "linux-x86_64-deb": "NyaTerm_{version}_linux_x64.deb",
+    "linux-aarch64-deb": "NyaTerm_{version}_linux_arm64.deb",
+    "linux-x86_64-rpm": "NyaTerm_{version}_linux_x64.rpm",
+    "linux-aarch64-rpm": "NyaTerm_{version}_linux_arm64.rpm",
+}
+FOCAL_PACKAGE_UPDATES = {
+    "linux-x86_64-deb-glibc231": "NyaTerm_{version}_linux_x64_glibc231.deb",
+}
+
 MSI_ARTIFACTS = {
     "windows-x86_64-msi": "NyaTerm_{version}_windows_x64.msi",
     "windows-aarch64-msi": "NyaTerm_{version}_windows_arm64.msi",
@@ -49,9 +59,10 @@ def download_artifacts(version: str) -> dict[str, str]:
     return {**DOWNLOAD_ARTIFACTS, **msi}
 
 
-def updater_artifacts(version: str) -> dict[str, str]:
+def updater_artifacts(version: str, *, include_focal: bool = False) -> dict[str, str]:
     msi = MSI_ARTIFACTS if package_native.includes_windows_msi(version) else {}
-    return {**UPDATER_ARTIFACTS, **msi}
+    return {**UPDATER_ARTIFACTS, **LINUX_PACKAGE_UPDATES, **msi,
+            **(FOCAL_PACKAGE_UPDATES if include_focal else {})}
 
 
 CHANNEL_MANIFEST_NAMES = ("latest.json", "downloads.json")
@@ -169,7 +180,7 @@ def generate(
 
     updater: dict[str, dict[str, str]] = {}
     signature_cache: dict[str, str] = {}
-    for platform, template in updater_artifacts(version).items():
+    for platform, template in updater_artifacts(version, include_focal=include_focal).items():
         filename = template.format(version=version)
         if filename not in signature_cache:
             signature_path = directory / f"{filename}.sig"

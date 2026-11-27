@@ -4743,6 +4743,18 @@
     "waitingFrame": "En attente de la première trame du bureau…"
   },
   "updater": {
+    "packageAuthorizing": "En attente de l’authentification système ou installation de la mise à jour…",
+    "sudoPassword": "Saisissez votre mot de passe sudo pour installer la mise à jour. Il ne sera pas enregistré.",
+    "authorizationFailed": "L’authentification système a échoué. Vous pouvez réessayer avec sudo.",
+    "packageInstallFailed": "L’installation a échoué. Consultez les informations ci-dessous ; le paquet système peut nécessiter une réparation.",
+    "packageInstalled": "La nouvelle version est installée. Redémarrez NyaTerm pour l’utiliser.",
+    "authorizationTitle": "Autoriser l’installation",
+    "packageInstalledTitle": "Mise à jour installée",
+    "authorizeInstall": "Autoriser et installer",
+    "useSudo": "Utiliser sudo",
+    "retryInstall": "Réessayer l’installation",
+    "installUpdate": "Installer la mise à jour",
+    "waitForInstall": "Veuillez attendre la fin de l’installation du paquet avant de quitter.",
     "waitingForExit": "Attente de la fermeture de NyaTerm...",
     "backingUpInstall": "Sauvegarde de l'installation actuelle...",
     "applyingInstall": "Installation de la nouvelle version...",

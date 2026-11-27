@@ -20,14 +20,33 @@ pub(crate) enum UpdatePhase {
     Idle,
     Checking,
     Available,
-    Downloading { received: u64, total: Option<u64> },
+    Downloading {
+        received: u64,
+        total: Option<u64>,
+    },
     Ready,
     Applying,
+    #[cfg(target_os = "linux")]
+    LinuxInstalling,
+    #[cfg(target_os = "linux")]
+    LinuxPassword,
+    #[cfg(target_os = "linux")]
+    LinuxAuthorizationFailed,
+    #[cfg(target_os = "linux")]
+    LinuxInstallFailed,
+    #[cfg(target_os = "linux")]
+    LinuxInstalled,
     UpToDate,
     Failed(UpdateFailure),
 }
 
 pub(crate) enum UpdateEvent {
+    Installation(Option<nyaterm_updater::download::InstallationTarget>),
+    #[cfg(target_os = "linux")]
+    Install {
+        generation: u64,
+        outcome: nyaterm_updater::linux::InstallOutcome,
+    },
     Check {
         generation: u64,
         kind: UpdateCheckKind,
@@ -40,6 +59,13 @@ pub(crate) enum UpdateEvent {
 }
 
 pub(crate) struct UpdateStore {
+    pub(in crate::features) installation: Option<nyaterm_updater::download::InstallationTarget>,
+    #[cfg(target_os = "linux")]
+    pub(in crate::features) install_generation: u64,
+    #[cfg(target_os = "linux")]
+    pub(in crate::features) install_detail: Option<String>,
+    #[cfg(target_os = "linux")]
+    pub(in crate::features) password_input: Option<gpui::Entity<nyaterm_ui::NyaInputState>>,
     phase: UpdatePhase,
     info: Option<NativeUpdateInfo>,
     status: String,
@@ -59,9 +85,41 @@ pub(crate) struct UpdateStore {
 }
 
 impl UpdateStore {
+    pub(crate) fn system_install_busy(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            matches!(self.phase, UpdatePhase::LinuxInstalling)
+        }
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+
+    fn has_package_install_state(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            matches!(
+                self.phase,
+                UpdatePhase::LinuxInstalling
+                    | UpdatePhase::LinuxPassword
+                    | UpdatePhase::LinuxAuthorizationFailed
+                    | UpdatePhase::LinuxInstallFailed
+                    | UpdatePhase::LinuxInstalled
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+
     pub(crate) fn new() -> Self {
         let (tx, rx) = unbounded();
         Self {
+            installation: None,
+            #[cfg(target_os = "linux")]
+            install_generation: 0,
+            #[cfg(target_os = "linux")]
+            install_detail: None,
+            #[cfg(target_os = "linux")]
+            password_input: None,
             phase: UpdatePhase::Idle,
             info: None,
             status: format!("Current version {}", env!("CARGO_PKG_VERSION")),
@@ -158,7 +216,7 @@ impl UpdateStore {
         &mut self,
         _kind: UpdateCheckKind,
     ) -> Option<(UnboundedSender<UpdateEvent>, u64)> {
-        if self.shutdown_started {
+        if self.shutdown_started || self.has_package_install_state() {
             return None;
         }
         if matches!(
@@ -187,7 +245,7 @@ impl UpdateStore {
         &mut self,
         cancel: ConnectionAttempt,
     ) -> Option<(NativeUpdateInfo, u64, UnboundedSender<UpdateEvent>)> {
-        if self.shutdown_started {
+        if self.shutdown_started || self.has_package_install_state() {
             return None;
         }
         if matches!(
@@ -212,6 +270,9 @@ impl UpdateStore {
     }
 
     pub(crate) fn cancel_download(&mut self) {
+        if self.has_package_install_state() {
+            return;
+        }
         self.download_cancel.cancel();
         self.download_generation = self.download_generation.wrapping_add(1);
         self.download = DownloadState::Idle;
@@ -230,7 +291,7 @@ impl UpdateStore {
 
     pub(crate) fn clear_install_request(&mut self) {
         self.install_requested = false;
-        if matches!(self.download, DownloadState::Ready(_)) {
+        if !self.has_package_install_state() && matches!(self.download, DownloadState::Ready(_)) {
             self.assign_phase(UpdatePhase::Ready);
             self.status = "update ready to install".to_string();
         }
@@ -239,6 +300,15 @@ impl UpdateStore {
     /// Apply one process-wide event. Stale generations cannot overwrite newer state.
     pub(crate) fn apply_event(&mut self, event: UpdateEvent) -> bool {
         match event {
+            UpdateEvent::Installation(installation) => {
+                self.installation = installation;
+                true
+            }
+            #[cfg(target_os = "linux")]
+            UpdateEvent::Install {
+                generation,
+                outcome,
+            } => self.apply_install_event(generation, outcome),
             UpdateEvent::Check {
                 generation,
                 kind,
@@ -553,3 +623,6 @@ mod tests {
         assert!(matches!(state.phase(), UpdatePhase::UpToDate));
     }
 }
+
+#[cfg(target_os = "linux")]
+mod linux;

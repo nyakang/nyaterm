@@ -289,7 +289,7 @@ Download the latest build for your platform from [nyaterm.app](https://nyaterm.a
 | macOS | `.dmg` |
 | Linux | `.deb` / `.AppImage` / `.rpm` |
 
-For the Windows portable edition, extract the ZIP and run `NyaTerm.exe`; data lives in the adjacent `data/` directory. GPUI **Help → Check Updates** uses signed manifests and supports downloading and installing updates for supported installation types. Homebrew and deb/rpm installations use their package manager.
+For the Windows portable edition, extract the ZIP and run `NyaTerm.exe`; data lives in the adjacent `data/` directory. GPUI **Help → Check Updates** uses signed manifests and supports downloading and installing updates for supported installation types. Linux deb/rpm editions install signed updates through the system package manager with Polkit or sudo authorization, then offer a restart. Dependencies must already be installed. Homebrew and externally managed builds use their package manager.
 
 **Migrating from 1.x: Windows portable and old MSI installations require manual upgrades.** Quit and back up all data and keys first. Replace the complete portable program payload while preserving `data/`; for MSI, back up, uninstall the old version, and install NSIS. Replacing only the main executable is insufficient, and automatic migration is not promised for all legacy installers. See the [2.0 migration guide](https://nyaterm.app/en/docs/getting-started/migration-v2).
 

@@ -4743,6 +4743,18 @@
     "waitingFrame": "正在等待首个桌面画面…"
   },
   "updater": {
+    "packageAuthorizing": "正在等待系统授权或安装更新…",
+    "sudoPassword": "请输入 sudo 密码以安装更新，密码不会保存。",
+    "authorizationFailed": "系统授权失败，可以改用 sudo 重试。",
+    "packageInstallFailed": "安装失败。请查看下方包管理器信息，系统软件包可能需要修复。",
+    "packageInstalled": "新版已安装，重启 NyaTerm 后生效。",
+    "authorizationTitle": "授权安装",
+    "packageInstalledTitle": "更新已安装",
+    "authorizeInstall": "授权并安装",
+    "useSudo": "使用 sudo",
+    "retryInstall": "重试安装",
+    "installUpdate": "安装更新",
+    "waitForInstall": "软件包正在安装，请等待完成后再退出。",
     "waitingForExit": "正在等待 NyaTerm 退出...",
     "backingUpInstall": "正在备份当前安装...",
     "applyingInstall": "正在安装新版本...",

@@ -378,8 +378,11 @@ impl DesktopController {
         self.process_quitting
     }
 
-    pub fn begin_process_quit(&mut self) -> bool {
-        if self.process_quitting || !self.closing_workspaces.is_empty() {
+    pub fn begin_process_quit(&mut self, cx: &gpui::App) -> bool {
+        if self.process_quitting
+            || !self.closing_workspaces.is_empty()
+            || self.update_store.read(cx).system_install_busy()
+        {
             return false;
         }
         self.process_quitting = true;

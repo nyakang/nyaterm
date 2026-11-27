@@ -53,6 +53,9 @@ def validate_candidate(directory: Path, version: str) -> None:
     actual = checksums(directory)
     if set(actual) != artifact_catalog.expected(version, include_focal=True):
         raise ValueError("candidate checksum inventory is incomplete or unexpected")
+    updater = json.loads((directory / "latest.json").read_text(encoding="utf-8"))
+    if set(updater["platforms"]) != set(generate_release_metadata.updater_artifacts(version, include_focal=True)):
+        raise ValueError("candidate updater inventory is incomplete or unexpected")
     expected = set(actual) | {"SHA256SUMS", "latest.json", "downloads.json"}
     if {path.name for path in directory.iterdir()} != expected:
         raise ValueError("candidate directory has missing or unexpected files")

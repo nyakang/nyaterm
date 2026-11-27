@@ -42,7 +42,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
             )
 
             self.assertEqual(len(downloads["platforms"]), 10)
-            self.assertEqual(len(updater["platforms"]), 12)
+            self.assertEqual(len(updater["platforms"]), 16)
             for architecture in ("x86_64", "aarch64"):
                 key = f"windows-{architecture}-msi"
                 self.assertTrue(downloads["platforms"][key]["url"].endswith(".msi"))
@@ -69,6 +69,30 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 f"{hashlib.sha256(portable.read_bytes()).hexdigest()}  {portable.name}",
                 checksum_lines,
             )
+
+    def test_system_packages_are_signed_and_compatibility_has_its_own_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            version = "2.0.9-preview.1"
+            for name in generate_release_metadata.expected_artifacts(version, include_focal=True):
+                (directory / name).write_bytes(b"package")
+            for template in generate_release_metadata.updater_artifacts(version, include_focal=True).values():
+                (directory / (template.format(version=version) + ".sig")).write_text("signature")
+            _, manifest = generate_release_metadata.generate(
+                directory, version=version, tag=f"v{version}", base_url="https://downloads.nyaterm.app",
+                notes="", pub_date="2026-11-28T00:00:00Z", include_focal=True,
+            )
+            for arch in ("x86_64", "aarch64"):
+                for kind in ("deb", "rpm"):
+                    item = manifest["platforms"][f"linux-{arch}-{kind}"]
+                    self.assertTrue(item["url"].endswith(f".{kind}"))
+                    self.assertEqual(item["signature"], "signature")
+                self.assertTrue(manifest["platforms"][f"linux-{arch}"]["url"].endswith(".AppImage"))
+            self.assertTrue(manifest["platforms"]["linux-x86_64-deb-glibc231"]["url"].endswith("_glibc231.deb"))
+            verify_release_metadata.verify(directory, version=version, tag=f"v{version}", base_url="https://downloads.nyaterm.app", check_assets=False)
+            (directory / f"NyaTerm_{version}_linux_x64.deb.sig").unlink()
+            with self.assertRaisesRegex(RuntimeError, "missing updater signature"):
+                generate_release_metadata.generate(directory, version=version, tag=f"v{version}", base_url="https://downloads.nyaterm.app", notes="", pub_date="", include_focal=True)
 
     def test_stable_and_prerelease_publish_to_separate_channel_manifests(self) -> None:
         self.assertEqual(
@@ -146,7 +170,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
                 for platform in manifest["platforms"].values():
                     self.assertIn(f"/releases/v{version}/", platform["url"])
             self.assertEqual(len(downloads["platforms"]), 8)
-            self.assertEqual(len(updater["platforms"]), 10)
+            self.assertEqual(len(updater["platforms"]), 14)
 
     def test_stable_requires_both_msi_files_and_their_signatures(self) -> None:
         for suffix, message in ((".msi", "missing release artifacts"),
@@ -164,7 +188,7 @@ class GenerateReleaseMetadataTests(unittest.TestCase):
     def test_build_metadata_hyphens_do_not_select_preview(self) -> None:
         version = "2.0.0+build-with-hyphen"
         self.assertEqual(len(generate_release_metadata.download_artifacts(version)), 10)
-        self.assertEqual(len(generate_release_metadata.updater_artifacts(version)), 12)
+        self.assertEqual(len(generate_release_metadata.updater_artifacts(version)), 16)
         self.assertEqual(generate_release_metadata.channel_manifest_destinations(version)["latest.json"], "latest.json")
 
     def test_rejects_noncanonical_release_base_urls(self) -> None:

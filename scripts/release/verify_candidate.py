@@ -24,7 +24,7 @@ def verify(directory: Path, records: Path, *, version: str, source_sha: str, run
     with tempfile.TemporaryDirectory(prefix="nyaterm-candidate-signatures-") as folder:
         public = Path(folder) / "public.key"
         public.write_bytes(PUBLIC_KEY_PATH.read_bytes())
-        for platform, template in generate_release_metadata.updater_artifacts(version).items():
+        for platform, template in generate_release_metadata.updater_artifacts(version, include_focal=True).items():
             name = template.format(version=version)
             signature = Path(folder) / "signature"
             signature.write_bytes(base64.b64decode(manifest["platforms"][platform]["signature"], validate=True))

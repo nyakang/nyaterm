@@ -2,7 +2,6 @@ use crate::features::NyaTermApp;
 use gpui::{Context, Window};
 use nyaterm_transport::connection_attempt::ConnectionAttempt;
 use nyaterm_updater::download::download_signed_update;
-pub(in crate::features) use nyaterm_updater::download::supports_native_install;
 
 #[derive(Clone, Debug)]
 pub(crate) enum DownloadState {
@@ -33,9 +32,9 @@ impl NyaTermApp {
         if !self.cloud_sync.operations.accepting() {
             return;
         }
-        if !supports_native_install(self.runtime.mode() == nyaterm_core::RuntimeMode::Portable) {
+        let Some(installation) = self.update.read(cx).installation.clone() else {
             return;
-        }
+        };
         let cancel = ConnectionAttempt::default();
         let Some((info, generation, event_tx)) = self.update.update(cx, |update, cx| {
             let request = update.begin_download(cancel.clone());
@@ -51,7 +50,6 @@ impl NyaTermApp {
             .cache_dir()
             .join("updates")
             .join(nyaterm_core::uuid());
-        let portable = self.runtime.mode() == nyaterm_core::RuntimeMode::Portable;
         let progress_tx = event_tx.clone();
         let result_tx = event_tx.clone();
         let blocking_jobs = self.update.read(cx).blocking_jobs();
@@ -59,7 +57,7 @@ impl NyaTermApp {
             let result = download_signed_update(
                 &info.latest_version,
                 &directory,
-                portable,
+                &installation,
                 || cancel.check(),
                 |received, total| {
                     let _ = progress_tx.unbounded_send(super::UpdateEvent::Download {
@@ -137,6 +135,17 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "linux")]
+        if matches!(
+            self.update.read(cx).download,
+            DownloadState::Ready(super::install::PreparedUpdate::LinuxPackage(_))
+        ) && !matches!(
+            self.update.read(cx).phase(),
+            super::UpdatePhase::LinuxInstalled
+        ) {
+            self.start_package_install(nyaterm_updater::linux::Authorization::Polkit, cx);
+            return;
+        }
         if !matches!(self.update.read(cx).download, DownloadState::Ready(_)) {
             return;
         }

@@ -282,8 +282,8 @@ fn cancelled_exit_reopens_process_admission_without_closing_the_scheduler() {
     let startup = AppShellStartup::prepare(&runtime);
     let controller = cx.new(|cx| DesktopController::new(runtime, startup, cx));
     controller.update(&mut cx, |controller, cx| {
-        assert!(controller.begin_process_quit());
-        assert!(!controller.begin_process_quit());
+        assert!(controller.begin_process_quit(cx));
+        assert!(!controller.begin_process_quit(cx));
         controller.cancel_process_quit();
         assert!(controller.sync_operations().accepting());
         assert!(
@@ -294,7 +294,7 @@ fn cancelled_exit_reopens_process_admission_without_closing_the_scheduler() {
                 .submit_detached("retry", |_| {})
                 .is_ok()
         );
-        assert!(controller.begin_process_quit());
+        assert!(controller.begin_process_quit(cx));
         controller.cancel_process_quit();
     });
 }

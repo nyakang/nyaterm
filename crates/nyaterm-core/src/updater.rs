@@ -174,6 +174,9 @@ pub enum UpdateArchitecture {
 pub enum UpdatePackageKind {
     Installed,
     WindowsPortable,
+    LinuxDeb,
+    LinuxDebGlibc231,
+    LinuxRpm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,10 +216,18 @@ impl UpdateTarget {
         };
         let suffix = match package {
             UpdatePackageKind::Installed => "",
+            UpdatePackageKind::LinuxDeb if self.platform == UpdatePlatform::Linux => "-deb",
+            UpdatePackageKind::LinuxRpm if self.platform == UpdatePlatform::Linux => "-rpm",
+            UpdatePackageKind::LinuxDebGlibc231
+                if self.platform == UpdatePlatform::Linux
+                    && self.architecture == UpdateArchitecture::X86_64 =>
+            {
+                "-deb-glibc231"
+            }
             UpdatePackageKind::WindowsPortable if self.platform == UpdatePlatform::Windows => {
                 "-portable"
             }
-            UpdatePackageKind::WindowsPortable => {
+            _ => {
                 return Err(UpdaterError::UnsupportedPackageKind);
             }
         };
@@ -233,6 +244,17 @@ impl UpdateTarget {
             UpdateArchitecture::Aarch64 => "arm64",
         };
         let suffix = match (self.platform, package) {
+            (UpdatePlatform::Linux, UpdatePackageKind::LinuxDeb) => {
+                format!("linux_{architecture}.deb")
+            }
+            (UpdatePlatform::Linux, UpdatePackageKind::LinuxRpm) => {
+                format!("linux_{architecture}.rpm")
+            }
+            (UpdatePlatform::Linux, UpdatePackageKind::LinuxDebGlibc231)
+                if self.architecture == UpdateArchitecture::X86_64 =>
+            {
+                "linux_x64_glibc231.deb".to_string()
+            }
             (UpdatePlatform::Windows, UpdatePackageKind::Installed) => {
                 format!("windows_{architecture}-setup.exe")
             }
@@ -248,6 +270,7 @@ impl UpdateTarget {
             (UpdatePlatform::Linux, UpdatePackageKind::Installed) => {
                 format!("linux_{architecture}.AppImage")
             }
+            _ => return Err(UpdaterError::UnsupportedPackageKind),
         };
         Ok(format!("NyaTerm_{version}_{suffix}"))
     }
@@ -510,6 +533,69 @@ mod tests {
         assert!(matches!(
             UpdateTarget::from_rust_target("linux", "riscv64"),
             Err(UpdaterError::UnsupportedArchitecture(_))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod package_update_tests {
+    use super::{
+        UpdateManifest, UpdatePackageKind, UpdateTarget, UpdaterError, parse_current_version,
+    };
+
+    #[test]
+    fn linux_package_formats_select_distinct_signed_artifacts_without_changing_appimage() {
+        let version = parse_current_version("2.0.9").unwrap();
+        let target = UpdateTarget::from_rust_target("linux", "x86_64").unwrap();
+        for (kind, key, filename) in [
+            (
+                UpdatePackageKind::Installed,
+                "linux-x86_64",
+                "NyaTerm_2.0.9_linux_x64.AppImage",
+            ),
+            (
+                UpdatePackageKind::LinuxDeb,
+                "linux-x86_64-deb",
+                "NyaTerm_2.0.9_linux_x64.deb",
+            ),
+            (
+                UpdatePackageKind::LinuxRpm,
+                "linux-x86_64-rpm",
+                "NyaTerm_2.0.9_linux_x64.rpm",
+            ),
+            (
+                UpdatePackageKind::LinuxDebGlibc231,
+                "linux-x86_64-deb-glibc231",
+                "NyaTerm_2.0.9_linux_x64_glibc231.deb",
+            ),
+        ] {
+            let json = serde_json::json!({ "version": "2.0.9", "platforms": { key: {
+                "url": format!("https://downloads.nyaterm.app/releases/v2.0.9/{filename}"), "signature": "signed"
+            }}});
+            let manifest = UpdateManifest::parse(&json.to_string()).unwrap();
+            assert_eq!(
+                manifest
+                    .select_artifact(&version, target, kind)
+                    .unwrap()
+                    .filename,
+                filename
+            );
+            if kind != UpdatePackageKind::Installed {
+                assert!(matches!(
+                    manifest.select_artifact(&version, target, UpdatePackageKind::Installed),
+                    Err(UpdaterError::MissingArtifact(_))
+                ));
+            }
+        }
+        let arm = UpdateTarget::from_rust_target("linux", "aarch64").unwrap();
+        assert!(matches!(
+            arm.manifest_key(UpdatePackageKind::LinuxDebGlibc231),
+            Err(UpdaterError::UnsupportedPackageKind)
+        ));
+        let windows = UpdateTarget::from_rust_target("windows", "x86_64").unwrap();
+        assert!(matches!(
+            windows.manifest_key(UpdatePackageKind::LinuxDeb),
+            Err(UpdaterError::UnsupportedPackageKind)
         ));
     }
 }

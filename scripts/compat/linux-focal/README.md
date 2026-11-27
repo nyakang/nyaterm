@@ -25,11 +25,13 @@ flags and target cache are not used. Four build jobs are the default; set
 GB of disk; at least 16 GiB RAM is recommended for the optimized desktop build.
 The default command also runs helper lifecycle tests and SPICE native/TLS tests.
 
-`build.sh` sets `NYATERM_LINUX_COMPAT=glibc231` and
-`NYATERM_PACKAGE_MANAGER="NyaTerm glibc 2.31 compatibility packages"` at compile
-time for all executables. This isolates installed data and disables standard
-release update checks/downloads, including when a binary is launched directly.
-Upgrade manually using artifacts from this compatibility build process.
+`build.sh` sets `NYATERM_LINUX_COMPAT=glibc231` at compile time for all
+executables, preserving installed-data isolation even for direct binary launches.
+The installed `nyaterm-compat` deb can download the signed
+`linux-x86_64-deb-glibc231` update and install it with Polkit or sudo authorization.
+Archive installations still require manual replacement with compatibility artifacts.
+Previously shipped builds that disabled update checks require one manual upgrade
+to enable this flow.
 
 On managed cloud builders, preserve their Docker proxy configuration. Supply a
 combined trusted CA bundle with `docker build --secret id=proxy_ca,src=<bundle>`.
@@ -232,7 +234,8 @@ audits, tests, exercises the CPU fallback without Vulkan/NVIDIA, and uploads the
 archive and deb with checksums and v2 source records after all gates pass. The
 standalone workflow does not publish a release or change the updater channel;
 Release includes its outputs in the versioned GitHub/R2 assets and global
-`SHA256SUMS`. The existing update/download manifest platform keys stay unchanged.
+`SHA256SUMS`. Release also signs the deb and adds the dedicated
+`linux-x86_64-deb-glibc231` updater manifest key.
 
 ### Target desktop acceptance (pending)
 

@@ -64,7 +64,7 @@ class DeliveryTests(unittest.TestCase):
         self.store = MemoryStore()
         for name in artifact_catalog.expected(self.version, include_focal=True):
             (self.dist / name).write_bytes(name.encode())
-        for template in generate_release_metadata.updater_artifacts(self.version).values():
+        for template in generate_release_metadata.updater_artifacts(self.version, include_focal=True).values():
             (self.dist / (template.format(version=self.version) + ".sig")).write_text("signature", encoding="utf-8")
         generate_release_metadata.generate(self.dist, version=self.version, tag="v" + self.version,
                                            base_url="https://downloads.nyaterm.app", notes="notes",
@@ -136,7 +136,7 @@ class DeliveryTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         signatures = {}
         aliases = {}
-        for platform, template in generate_release_metadata.updater_artifacts(self.version).items():
+        for platform, template in generate_release_metadata.updater_artifacts(self.version, include_focal=True).items():
             name = template.format(version=self.version)
             if name not in signatures:
                 output = self.root / "signature"

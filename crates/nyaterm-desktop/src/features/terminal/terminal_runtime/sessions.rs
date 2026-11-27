@@ -434,6 +434,17 @@ impl NyaTermApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.update.read(cx).system_install_busy() {
+            self.notify_operation(
+                "update-in-progress",
+                nyaterm_ui::notification::NyaNotificationKind::Warning,
+                rust_i18n::t!("updater.waitForInstall").to_string(),
+                cx,
+            );
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        self.cancel_update_password(cx);
         if self.settings.theme_designer().submitting {
             cx.emit(AppLifecycleEvent::ShutdownCancelled);
             return;

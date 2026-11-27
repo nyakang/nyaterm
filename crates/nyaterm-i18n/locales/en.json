@@ -4743,6 +4743,18 @@
     "waitingFrame": "Waiting for the first desktop frame..."
   },
   "updater": {
+    "packageAuthorizing": "Waiting for system authorization or installing the update…",
+    "sudoPassword": "Enter your sudo password to install the update. It will not be saved.",
+    "authorizationFailed": "System authorization failed. You can retry using sudo.",
+    "packageInstallFailed": "Installation failed. Check the package manager details below; the system package may need repair.",
+    "packageInstalled": "The new version is installed. Restart NyaTerm to use it.",
+    "authorizationTitle": "Authorize installation",
+    "packageInstalledTitle": "Update installed",
+    "authorizeInstall": "Authorize and install",
+    "useSudo": "Use sudo",
+    "retryInstall": "Retry installation",
+    "installUpdate": "Install update",
+    "waitForInstall": "Please wait for the package installation to finish before quitting.",
     "waitingForExit": "Waiting for NyaTerm to close...",
     "backingUpInstall": "Backing up the current installation...",
     "applyingInstall": "Installing the new version...",

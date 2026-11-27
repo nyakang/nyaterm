@@ -6,3 +6,6 @@ pub mod download;
 pub mod install;
 
 pub mod error;
+
+#[cfg(target_os = "linux")]
+pub mod linux;

@@ -34,6 +34,8 @@ const INSTALLED_HELPER_FLAG: &str = "--nyaterm-installed-update-helper";
 const UPDATE_CLEANUP_ENV: &str = "NYATERM_UPDATE_CLEANUP";
 #[derive(Clone, Debug)]
 pub enum PreparedUpdate {
+    #[cfg(target_os = "linux")]
+    LinuxPackage(crate::linux::PreparedPackage),
     #[cfg(not(windows))]
     Installed { artifact: PathBuf, target: PathBuf },
     #[cfg(windows)]
@@ -270,7 +272,13 @@ pub fn launch_installer(prepared: &PreparedUpdate, language: &str) -> Result<(),
     #[cfg(unix)]
     {
         let _ = language;
-        let PreparedUpdate::Installed { artifact, target } = prepared;
+        let (artifact, target) = match prepared {
+            PreparedUpdate::Installed { artifact, target } => (artifact, target),
+            #[cfg(target_os = "linux")]
+            PreparedUpdate::LinuxPackage(_) => {
+                return Err("system packages must be installed before restarting".into());
+            }
+        };
         let script = r#"parent=$1; staged=$2; target=$3; mode=$4
 while kill -0 "$parent" 2>/dev/null; do sleep 0.2; done
 backup="${target}.previous.$$"

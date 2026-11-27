@@ -44,7 +44,7 @@ def verify(
         version=version,
         tag=tag,
         base_url=base_url,
-        artifacts=generate_release_metadata.updater_artifacts(version),
+        artifacts=generate_release_metadata.updater_artifacts(version, include_focal="linux-x86_64-deb-glibc231" in updater.get("platforms", {})),
         integrity_field="signature",
     )
     urls.update(

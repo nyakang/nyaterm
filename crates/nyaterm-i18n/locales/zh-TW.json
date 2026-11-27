@@ -4743,6 +4743,18 @@
     "waitingFrame": "正在等待首個桌面畫面…"
   },
   "updater": {
+    "packageAuthorizing": "正在等待系統授權或安裝更新…",
+    "sudoPassword": "請輸入 sudo 密碼以安裝更新，密碼不會儲存。",
+    "authorizationFailed": "系統授權失敗，可以改用 sudo 重試。",
+    "packageInstallFailed": "安裝失敗。請查看下方套件管理器資訊，系統套件可能需要修復。",
+    "packageInstalled": "新版已安裝，重新啟動 NyaTerm 後生效。",
+    "authorizationTitle": "授權安裝",
+    "packageInstalledTitle": "更新已安裝",
+    "authorizeInstall": "授權並安裝",
+    "useSudo": "使用 sudo",
+    "retryInstall": "重試安裝",
+    "installUpdate": "安裝更新",
+    "waitForInstall": "套件正在安裝，請等待完成後再結束。",
     "waitingForExit": "正在等待 NyaTerm 結束...",
     "backingUpInstall": "正在備份目前的安裝...",
     "applyingInstall": "正在安裝新版本...",

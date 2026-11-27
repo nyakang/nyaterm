@@ -31,10 +31,11 @@ def main() -> None:
     parser.add_argument("--dist", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--public-key", type=Path, required=True)
+    parser.add_argument("--include-focal", action="store_true")
     args = parser.parse_args()
     for name in sorted({
         template.format(version=args.version)
-        for template in generate_release_metadata.updater_artifacts(args.version).values()
+        for template in generate_release_metadata.updater_artifacts(args.version, include_focal=args.include_focal).values()
     }):
         verify_file(args.dist / name, args.public_key)
 

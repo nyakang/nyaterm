@@ -309,6 +309,9 @@ impl DesktopController {
     }
 
     pub fn request_quit(&mut self, cx: &mut Context<Self>) {
+        if self.update_store.read(cx).system_install_busy() {
+            return;
+        }
         self.request_native_menu_refresh(cx);
         self.tab_drag.cancel();
         if self.process_quitting {
@@ -400,7 +403,10 @@ impl DesktopController {
     }
 
     pub fn request_quit_without_ready(&mut self, cx: &mut Context<Self>) {
-        if !self.begin_process_quit() {
+        if self.update_store.read(cx).system_install_busy() {
+            return;
+        }
+        if !self.begin_process_quit(cx) {
             return;
         }
         let operations = self.sync_operations();

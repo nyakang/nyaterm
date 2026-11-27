@@ -387,6 +387,11 @@ jobs:
             "dist-release/NyaTerm_${VERSION}_macos_x64.app.tar.gz"
             "dist-release/NyaTerm_${VERSION}_linux_arm64.AppImage"
             "dist-release/NyaTerm_${VERSION}_linux_x64.AppImage"
+            "dist-release/NyaTerm_${VERSION}_linux_x64.deb"
+            "dist-release/NyaTerm_${VERSION}_linux_arm64.deb"
+            "dist-release/NyaTerm_${VERSION}_linux_x64.rpm"
+            "dist-release/NyaTerm_${VERSION}_linux_arm64.rpm"
+            "dist-release/NyaTerm_${VERSION}_linux_x64_glibc231.deb"
             "dist-release/NyaTerm_${VERSION}_windows_arm64-setup.exe"
             "dist-release/NyaTerm_${VERSION}_windows_x64-setup.exe"
             "dist-release/NyaTerm_${VERSION}_windows_arm64_portable.zip"
@@ -404,7 +409,7 @@ jobs:
           unset TAURI_SIGNING_PRIVATE_KEY
           python3 scripts/release/verify_updater_signatures.py \
             --dist dist-release --version "${VERSION}" \
-            --public-key "${RUNNER_TEMP}/nyaterm-updater.pub"
+            --public-key "${RUNNER_TEMP}/nyaterm-updater.pub" --include-focal
       - name: Test signature rejection
         run: python3 -m unittest scripts.tests.test_verify_updater_signatures -v
       - name: Generate checksums and manifests

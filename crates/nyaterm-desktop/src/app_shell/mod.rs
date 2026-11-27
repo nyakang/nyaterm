@@ -386,7 +386,7 @@ impl AppShell {
                             }
                             if !this
                                 .controller
-                                .update(cx, |controller, _| controller.begin_process_quit())
+                                .update(cx, |controller, cx| controller.begin_process_quit(cx))
                             {
                                 return;
                             }
@@ -658,8 +658,17 @@ impl AppShell {
     }
 
     fn quit_after_worker_shutdown(&mut self, launch_update: bool, cx: &mut Context<Self>) {
-        let admitted = self.controller.update(cx, |controller, _| {
-            controller.is_process_quitting() || controller.begin_process_quit()
+        if self
+            .controller
+            .read(cx)
+            .update_store()
+            .read(cx)
+            .system_install_busy()
+        {
+            return;
+        }
+        let admitted = self.controller.update(cx, |controller, cx| {
+            controller.is_process_quitting() || controller.begin_process_quit(cx)
         });
         if !admitted {
             return;
@@ -696,6 +705,30 @@ impl AppShell {
                             app.update(cx, |app, cx| app.report_close_save_failed(error, cx));
                         }
                         cx.notify();
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if launch_update
+            && let Some(task) = self
+                .controller
+                .update(cx, |controller, cx| controller.launch_package_restart(cx))
+        {
+            cx.spawn(async move |this, cx| {
+                let result = task.await;
+                let _ = this.update(cx, |shell, cx| match result {
+                    Ok(()) => shell.stop_workspace_workers(false, cx),
+                    Err(error) => {
+                        shell.return_to_app_after_flush_failure(cx);
+                        shell
+                            .controller
+                            .update(cx, |controller, cx| controller.cancel_editor_quit_gates(cx));
+                        if let Some(app) = &shell.app {
+                            app.update(cx, |app, cx| app.report_close_save_failed(error, cx));
+                        }
                     }
                 });
             })
@@ -792,8 +825,8 @@ impl AppShell {
     }
 
     fn begin_shutdown(&mut self, cx: &mut Context<Self>) {
-        let admitted = self.controller.update(cx, |controller, _| {
-            controller.is_process_quitting() || controller.begin_process_quit()
+        let admitted = self.controller.update(cx, |controller, cx| {
+            controller.is_process_quitting() || controller.begin_process_quit(cx)
         });
         if !admitted {
             return;

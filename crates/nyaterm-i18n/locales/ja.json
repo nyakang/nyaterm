@@ -4743,6 +4743,18 @@
     "waitingFrame": "最初のデスクトップフレームを待機中..."
   },
   "updater": {
+    "packageAuthorizing": "システムの認証を待機中、または更新をインストール中…",
+    "sudoPassword": "更新をインストールするための sudo パスワードを入力してください。保存されません。",
+    "authorizationFailed": "システムの認証に失敗しました。sudo で再試行できます。",
+    "packageInstallFailed": "インストールに失敗しました。以下のパッケージ管理情報を確認してください。パッケージの修復が必要な場合があります。",
+    "packageInstalled": "新しいバージョンをインストールしました。NyaTerm を再起動すると有効になります。",
+    "authorizationTitle": "インストールの認証",
+    "packageInstalledTitle": "更新をインストールしました",
+    "authorizeInstall": "認証してインストール",
+    "useSudo": "sudo を使用",
+    "retryInstall": "インストールを再試行",
+    "installUpdate": "更新をインストール",
+    "waitForInstall": "パッケージのインストールが完了してから終了してください。",
     "waitingForExit": "NyaTerm の終了を待っています...",
     "backingUpInstall": "現在のインストールをバックアップしています...",
     "applyingInstall": "新しいバージョンをインストールしています...",
