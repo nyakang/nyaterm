@@ -202,23 +202,11 @@ pub fn terminal_gutter_metrics(
 }
 
 pub fn terminal_line_number_digits(snapshot: &nyaterm_terminal::TerminalSnapshot) -> usize {
-    // `total_rows - display_offset` is the standard upper bound assuming
-    // consecutive numbering from the top. However line numbers can exceed
-    // that when `LineNumbers` retains its origin across reflows, local
-    // clears, and scrollback prunes — e.g. a 2-row viewport with scrollback
-    // limited to 2 can still carry row numbers well above 4 when older
-    // wrapped lines were discarded from scrollback. Use whichever bound is
-    // larger to keep the gutter wide enough.
-    let from_rows = snapshot
-        .total_rows
-        .saturating_sub(snapshot.display_offset)
-        .max(1);
-    let from_display_line_number = snapshot.max_display_line_number().unwrap_or(1);
-    terminal_line_number_digits_for_end(from_rows.max(from_display_line_number))
+    terminal_line_number_digits_for_end(crate::gutter::terminal_gutter_max_line_number(snapshot))
 }
 
 pub fn terminal_line_number_digits_for_end(visible_end: usize) -> usize {
-    visible_end.max(1).to_string().len()
+    visible_end.max(1).ilog10() as usize + 1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

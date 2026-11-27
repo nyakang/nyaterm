@@ -3506,23 +3506,41 @@ impl Render for TerminalSurface {
 
         let mut gutter_width = 0.0;
         let gutter = if gutter_enabled {
+            let snapshot_line_number_digits = terminal_line_number_digits(snapshot.as_ref());
+            let line_number_digits = self.max_line_number_digits.max(snapshot_line_number_digits);
             let gutter_metrics = terminal_gutter_metrics(
                 cell_w,
                 self.show_timestamps,
                 terminal_timestamp_format_width_chars(&self.timestamp_format),
                 self.show_line_numbers,
-                self.max_line_number_digits
-                    .max(terminal_line_number_digits(snapshot.as_ref())),
+                line_number_digits,
                 self.show_command_blocks,
             );
             let timestamp_formatter = TerminalTimestampFormatter::new(&self.timestamp_format);
-            let line_number_digits = self
-                .max_line_number_digits
-                .max(terminal_line_number_digits(snapshot.as_ref()));
             let ts_w = gutter_metrics.timestamp_width;
             let ln_w = gutter_metrics.line_number_width;
             let gutter_viewport_width = gutter_metrics.total_width();
             gutter_width = gutter_viewport_width;
+            if terminal_geometry_diagnostics_enabled() {
+                tracing::info!(
+                    diagnostic = "terminal_gutter_geometry",
+                    session_id = %self.session_id,
+                    total_rows = snapshot.total_rows,
+                    snapshot_rows = snapshot.row_count(),
+                    viewport_rows = snapshot.viewport_rows,
+                    display_offset = snapshot.display_offset,
+                    scrollback_len = snapshot.scrollback_len,
+                    snapshot_line_number_digits,
+                    retained_line_number_digits = self.max_line_number_digits,
+                    line_number_digits,
+                    line_number_width = ln_w,
+                    timestamp_width = ts_w,
+                    gutter_width,
+                    cell_width = cell_w,
+                    cols = snapshot.cols,
+                    "terminal gutter geometry"
+                );
+            }
             let abs_start = snapshot
                 .total_rows
                 .saturating_sub(snapshot.display_offset)

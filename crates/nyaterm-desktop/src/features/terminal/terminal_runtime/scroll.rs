@@ -1767,6 +1767,7 @@ impl NyaTermApp {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use gpui::{AppContext as _, Bounds, TestAppContext, point, px, size};
@@ -2191,6 +2192,91 @@ mod tests {
             overlays: cx.new(|_| OverlayStore::default()),
         };
         cx.new(|cx| NyaTermApp::new(runtime, stores, cx))
+    }
+
+    #[test]
+    fn gutter_resizes_only_for_new_numeric_width_or_explicit_timestamp_format_changes() {
+        let mut cx = TestAppContext::single();
+        let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app_for_resize(&mut cx);
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(1200.), px(3000.)));
+
+        cx.update_entity(&app, |app, _| {
+            app.terminal.layout.cell_metrics = Some((8.0, 20.0));
+            if !app.settings.summary().terminal_show_line_numbers {
+                app.settings.toggle_terminal_line_numbers();
+            }
+            if !app.settings.summary().terminal_show_timestamps {
+                app.settings.toggle_terminal_timestamps();
+            }
+            app.settings
+                .set_terminal_timestamp_format("HH:mm:ss".into());
+            app.terminal
+                .seed_session_view("gutter".into(), String::new(), "UTF-8");
+            app.session.select_active_session("gutter");
+            app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds);
+
+            let view = app.terminal.view.views.get_mut("gutter").unwrap();
+            assert!(view.screen.rows() >= 100);
+            view.screen.advance(b"x\r\n".repeat(9).as_slice());
+            view.apply_terminal_live_snapshot_frame(Arc::new(view.screen.snapshot()), None, 1);
+            assert_eq!(view.max_line_number_digits, 2);
+            let compact =
+                app.terminal_resize_geometry_for_bounds_for_session(bounds, Some("gutter"));
+            let compact_gutter = app.terminal_gutter_width_px_for_session(Some("gutter"));
+            assert!(!app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds));
+
+            let view = app.terminal.view.views.get_mut("gutter").unwrap();
+            view.screen.advance(b"x\r\n".repeat(53).as_slice());
+            let snapshot = view.screen.snapshot();
+            assert_eq!(snapshot.row(62).unwrap().display_line_number, Some(63));
+            view.apply_terminal_live_snapshot_frame(Arc::new(snapshot), None, 2);
+            assert_eq!(view.max_line_number_digits, 2);
+            assert_eq!(
+                app.terminal_gutter_width_px_for_session(Some("gutter")),
+                compact_gutter
+            );
+            assert_eq!(
+                app.terminal_resize_geometry_for_bounds_for_session(bounds, Some("gutter")),
+                compact
+            );
+            assert!(!app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds));
+
+            let view = app.terminal.view.views.get_mut("gutter").unwrap();
+            view.screen.advance(b"x\r\n".repeat(37).as_slice());
+            view.apply_terminal_live_snapshot_frame(Arc::new(view.screen.snapshot()), None, 3);
+            assert_eq!(view.max_line_number_digits, 3);
+            let expanded =
+                app.terminal_resize_geometry_for_bounds_for_session(bounds, Some("gutter"));
+            assert!(expanded.pixel_width < compact.pixel_width);
+            assert!(app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds));
+            assert!(!app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds));
+
+            let view = app.terminal.view.views.get_mut("gutter").unwrap();
+            view.screen.clear_except_input();
+            let snapshot = view.screen.snapshot();
+            view.clear_presentation_except_input(4, &snapshot);
+            view.apply_terminal_live_snapshot_frame(Arc::new(snapshot), None, 4);
+            assert_eq!(
+                app.terminal_resize_geometry_for_bounds_for_session(bounds, Some("gutter")),
+                expanded
+            );
+            assert!(!app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds));
+
+            app.terminal
+                .seed_session_view("new".into(), String::new(), "UTF-8");
+            assert_eq!(
+                app.terminal_gutter_width_px_for_session(Some("new")),
+                compact_gutter
+            );
+
+            app.settings
+                .set_terminal_timestamp_format("HH:mm:ss.SSS".into());
+            let changed_format =
+                app.terminal_resize_geometry_for_bounds_for_session(bounds, Some("gutter"));
+            assert!(changed_format.pixel_width < expanded.pixel_width);
+            assert!(app.remember_terminal_surface_bounds_for_session(Some("gutter"), bounds));
+        });
     }
 
     #[test]

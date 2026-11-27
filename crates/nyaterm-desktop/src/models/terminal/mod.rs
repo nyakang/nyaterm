@@ -5,6 +5,7 @@ pub(crate) mod keyword_highlights;
 use crate::terminal::terminal_screen_from_output;
 use nyaterm_core::{TerminalBackendResize, terminal_backend_resize_changed};
 use nyaterm_terminal::{TerminalLineId, TerminalOutputDecoder, TerminalScreen, TerminalSnapshot};
+use nyaterm_terminal_gpui::geometry::terminal_line_number_digits;
 use nyaterm_terminal_gpui::render_cache::TerminalRenderCache;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -121,6 +122,7 @@ pub(crate) struct TerminalViewState {
     /// none of them can wait on the frame worker's grid.
     pub(crate) output: String,
     pub(crate) screen: TerminalScreen,
+    /// Session high-water width in digits, retained across clears and screen switches.
     pub(crate) max_line_number_digits: usize,
     /// Latest live viewport prepared by the background terminal frame processor.
     pub(crate) frame_snapshot: Option<Arc<TerminalSnapshot>>,
@@ -586,10 +588,8 @@ impl TerminalViewState {
         self.frame_action_links = None;
         self.clear_terminal_query_caches();
         self.render_cache.clear();
-        // A local clear restarts gutter numbering at 1 and drops scrollback, so
-        // the high-water digit count retained from before the clear no longer
-        // applies. Re-observe from the post-clear snapshot.
-        self.max_line_number_digits = 1;
+        // Clearing restarts numbering, but shrinking the gutter would resize
+        // the terminal and reflow the input we just preserved.
         self.observe_line_number_digits(snapshot);
         self.screen_revision = revision;
         self.last_screen_change_at = Instant::now();
@@ -807,7 +807,7 @@ impl TerminalViewState {
     fn observe_line_number_digits(&mut self, snapshot: &TerminalSnapshot) {
         self.max_line_number_digits = self
             .max_line_number_digits
-            .max(snapshot.total_rows.max(1).to_string().len());
+            .max(terminal_line_number_digits(snapshot));
     }
 
     pub(crate) fn prune_scrollback_snapshot_cache(&mut self, keep_offset: usize) {

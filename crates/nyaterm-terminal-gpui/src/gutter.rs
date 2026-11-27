@@ -206,6 +206,50 @@ pub fn terminal_gutter_row_count(snapshot: &nyaterm_terminal::TerminalSnapshot) 
     content_rows.max(image_rows).min(row_count)
 }
 
+enum GutterLineNumber {
+    Hidden,
+    Continuation,
+    Number(usize),
+}
+
+fn gutter_line_number(
+    row: Option<&nyaterm_terminal::TerminalSnapshotRow>,
+    absolute_line_number: usize,
+) -> GutterLineNumber {
+    if row.is_some_and(|row| row.cleared) {
+        GutterLineNumber::Hidden
+    } else if row.is_some_and(|row| row.wrapped) {
+        GutterLineNumber::Continuation
+    } else {
+        GutterLineNumber::Number(
+            row.and_then(|row| row.display_line_number)
+                .unwrap_or(absolute_line_number),
+        )
+    }
+}
+
+pub(crate) fn terminal_gutter_max_line_number(
+    snapshot: &nyaterm_terminal::TerminalSnapshot,
+) -> usize {
+    let absolute_start = snapshot
+        .total_rows
+        .saturating_sub(snapshot.display_offset)
+        .saturating_sub(snapshot.row_count());
+    // Measure the same numeric labels we paint. Physical rows include soft
+    // wraps and unused screen space, neither of which needs extra digits.
+    snapshot.rows()[..terminal_gutter_row_count(snapshot)]
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            match gutter_line_number(Some(row), absolute_start.saturating_add(index + 1)) {
+                GutterLineNumber::Number(number) => Some(number),
+                GutterLineNumber::Hidden | GutterLineNumber::Continuation => None,
+            }
+        })
+        .max()
+        .unwrap_or(1)
+}
+
 pub fn terminal_gutter_labels(
     row: Option<&nyaterm_terminal::TerminalSnapshotRow>,
     absolute_line_number: usize,
@@ -214,7 +258,6 @@ pub fn terminal_gutter_labels(
     line_number_digits: usize,
     timestamp_formatter: &TerminalTimestampFormatter,
 ) -> TerminalGutterLabels {
-    let wrapped = row.is_some_and(|row| row.wrapped);
     let timestamp = if show_timestamps {
         row.and_then(|row| row.timestamp_ms)
             .map(|timestamp| timestamp_formatter.format(timestamp))
@@ -222,15 +265,14 @@ pub fn terminal_gutter_labels(
     } else {
         String::new()
     };
-    let line_number = if !show_line_numbers || row.is_some_and(|row| row.cleared) {
-        String::new()
-    } else if wrapped {
-        format!("{:>line_number_digits$}", "-")
+    let line_number = if show_line_numbers {
+        match gutter_line_number(row, absolute_line_number) {
+            GutterLineNumber::Hidden => String::new(),
+            GutterLineNumber::Continuation => format!("{:>line_number_digits$}", "-"),
+            GutterLineNumber::Number(number) => format!("{number:>line_number_digits$}"),
+        }
     } else {
-        let absolute_line_number = row
-            .and_then(|row| row.display_line_number)
-            .unwrap_or(absolute_line_number);
-        format!("{absolute_line_number:>line_number_digits$}")
+        String::new()
     };
     TerminalGutterLabels {
         timestamp,
@@ -244,7 +286,122 @@ mod tests {
         TerminalTimestampFormatter, terminal_gutter_labels, terminal_gutter_row_count,
         terminal_timestamp_format_width_chars,
     };
+    use crate::geometry::{terminal_gutter_metrics, terminal_line_number_digits};
     use nyaterm_terminal::TerminalScreen;
+    use std::sync::Arc;
+
+    #[test]
+    fn gutter_width_at_line_63_ignores_unused_screen_rows_with_timestamps() {
+        let mut terminal = TerminalScreen::new(80, 150);
+        terminal.advance(b"x\r\n".repeat(62).as_slice());
+        let snapshot = terminal.snapshot();
+        assert_eq!(snapshot.row(62).unwrap().display_line_number, Some(63));
+        assert_eq!(snapshot.row(149).unwrap().display_line_number, Some(150));
+        assert!(snapshot.row(149).unwrap().timestamp_ms.is_some());
+        assert_eq!(terminal_gutter_row_count(&snapshot), 63);
+        assert_eq!(terminal_line_number_digits(&snapshot), 2);
+    }
+
+    #[test]
+    fn gutter_width_ignores_soft_wraps_and_cleared_numeric_metadata() {
+        let mut terminal = TerminalScreen::new(4, 8);
+        terminal.advance(b"abcdefgh\r\n".repeat(62).as_slice());
+        let mut snapshot = terminal.snapshot();
+        assert!(snapshot.total_rows >= 100);
+        assert_eq!(terminal_line_number_digits(&snapshot), 2);
+
+        // Even if these rows carry large numbers, their labels are a dash or
+        // absent. Neither should enlarge the numeric column.
+        let rows = Arc::make_mut(&mut snapshot.row_data);
+        let continuation = rows.iter_mut().find(|row| row.wrapped).unwrap();
+        Arc::make_mut(continuation).display_line_number = Some(100_000);
+        let cleared = rows.iter_mut().find(|row| !row.wrapped).unwrap();
+        let cleared = Arc::make_mut(cleared);
+        cleared.cleared = true;
+        cleared.display_line_number = Some(100_000);
+        assert_eq!(terminal_line_number_digits(&snapshot), 2);
+    }
+
+    #[test]
+    fn gutter_width_uses_painted_fallback_numbers_and_ignores_unused_fallback_rows() {
+        let mut terminal = TerminalScreen::new(80, 100);
+        terminal.advance(b"x\r\n".repeat(62).as_slice());
+        let mut snapshot = terminal.snapshot();
+        for row in Arc::make_mut(&mut snapshot.row_data) {
+            Arc::make_mut(row).display_line_number = None;
+        }
+        assert_eq!(terminal_line_number_digits(&snapshot), 2);
+
+        // Model a historical window whose first fallback number is 1000.
+        snapshot.total_rows += 999;
+        let formatter = TerminalTimestampFormatter::new("HH:mm:ss");
+        let labels = terminal_gutter_labels(snapshot.row(0), 1000, false, true, 1, &formatter);
+        assert_eq!(labels.line_number, "1000");
+        assert_eq!(terminal_line_number_digits(&snapshot), 4);
+    }
+
+    #[test]
+    fn gutter_width_keeps_large_actual_numbers_after_history_is_pruned() {
+        let mut terminal = TerminalScreen::new(4, 2);
+        terminal.set_scrollback_limit(2);
+        terminal.advance(b"abcdefgh\r\n".repeat(999).as_slice());
+        let snapshot = terminal.snapshot();
+        assert!(snapshot.total_rows < 10);
+        assert_eq!(snapshot.row(1).unwrap().display_line_number, Some(1000));
+        assert_eq!(terminal_line_number_digits(&snapshot), 4);
+    }
+
+    #[test]
+    fn gutter_width_expands_only_when_actual_digits_exceed_available_space() {
+        for (line, digits) in [
+            (9, 1),
+            (10, 2),
+            (63, 2),
+            (99, 2),
+            (100, 3),
+            (999, 3),
+            (1000, 4),
+        ] {
+            let mut terminal = TerminalScreen::new(80, 150);
+            terminal.advance(b"x\r\n".repeat(line - 1).as_slice());
+            let snapshot = terminal.snapshot();
+            assert_eq!(terminal_line_number_digits(&snapshot), digits);
+            let width = terminal_gutter_metrics(8.0, false, 8, true, digits, false).total_width();
+            assert_eq!(
+                width,
+                match digits {
+                    1 | 2 => 24.0,
+                    3 => 26.0,
+                    4 => 34.0,
+                    _ => unreachable!(),
+                }
+            );
+        }
+        // Three digits still fit the minimum column at a smaller cell width.
+        assert_eq!(
+            terminal_gutter_metrics(6.0, false, 8, true, 2, false),
+            terminal_gutter_metrics(6.0, false, 8, true, 3, false),
+        );
+    }
+
+    #[test]
+    fn gutter_width_defaults_to_one_digit_when_all_rows_are_cleared() {
+        let mut snapshot = TerminalScreen::new(80, 150).snapshot();
+        for row in Arc::make_mut(&mut snapshot.row_data) {
+            Arc::make_mut(row).cleared = true;
+        }
+        assert_eq!(terminal_line_number_digits(&snapshot), 1);
+    }
+
+    #[test]
+    fn timestamp_gutter_reserves_the_same_width_across_seconds_and_days() {
+        let formatter = TerminalTimestampFormatter::new("YYYY-M-D H:m:s");
+        let metrics = terminal_gutter_metrics(8.0, true, formatter.width_chars(), false, 1, false);
+        for timestamp in [0, 9_999, 10_000, 86_399_999, 86_400_000] {
+            assert!(formatter.format(timestamp).len() <= formatter.width_chars());
+            assert_eq!(metrics.timestamp_width, 154.0);
+        }
+    }
 
     #[test]
     fn timestamp_tokens_preserve_fixed_offset_defaults_and_width_limits() {

@@ -23,29 +23,75 @@ fn line_number_gutter_keeps_high_water_width_after_scrollback_prunes() {
     let mut view = TerminalViewState::new();
     let mut snapshot = TerminalScreen::default().viewport_snapshot(0);
     snapshot.total_rows = 1000;
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.row_data)[0]).display_line_number = Some(1000);
     view.observe_line_number_digits(&snapshot);
     assert_eq!(view.max_line_number_digits, 4);
     snapshot.total_rows = 9;
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.row_data)[0]).display_line_number = Some(9);
     view.observe_line_number_digits(&snapshot);
     assert_eq!(view.max_line_number_digits, 4);
 }
 
 #[test]
-fn clear_all_resets_line_number_gutter_high_water_width() {
+fn clear_all_preserves_line_number_gutter_high_water_width() {
     let mut view = TerminalViewState::new();
     let mut snapshot = TerminalScreen::default().viewport_snapshot(0);
     snapshot.total_rows = 100_000;
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.row_data)[0]).display_line_number =
+        Some(100_000);
     view.observe_line_number_digits(&snapshot);
     assert_eq!(view.max_line_number_digits, 6);
 
     let cleared = TerminalScreen::default().viewport_snapshot(0);
-    let expected = cleared.total_rows.max(1).to_string().len();
     view.clear_presentation_except_input(2, &cleared);
-    assert_eq!(view.max_line_number_digits, expected);
+    assert_eq!(view.max_line_number_digits, 6);
 
-    // Output after the clear keeps numbering small; the width stays restored.
+    // Small numbers after the clear must not resize the preserved input.
     view.observe_line_number_digits(&cleared);
-    assert_eq!(view.max_line_number_digits, expected);
+    assert_eq!(view.max_line_number_digits, 6);
+    assert_eq!(TerminalViewState::new().max_line_number_digits, 1);
+}
+
+#[test]
+fn line_number_gutter_observes_effective_labels_and_survives_screen_switches() {
+    let mut view = TerminalViewState::new();
+    let mut screen = TerminalScreen::new(80, 150);
+    screen.advance(b"x\r\n".repeat(62).as_slice());
+    view.apply_terminal_live_snapshot_frame(Arc::new(screen.snapshot()), None, 1);
+    assert_eq!(view.max_line_number_digits, 2);
+
+    screen.advance(b"x\r\n".repeat(37).as_slice());
+    view.apply_terminal_live_snapshot_frame(Arc::new(screen.snapshot()), None, 2);
+    assert_eq!(view.max_line_number_digits, 3);
+
+    screen.advance(b"\x1b[?1049hhello");
+    view.apply_terminal_live_snapshot_frame(Arc::new(screen.snapshot()), None, 3);
+    assert_eq!(view.max_line_number_digits, 3);
+    screen.advance(b"\x1b[?1049l");
+    view.apply_terminal_live_snapshot_frame(Arc::new(screen.snapshot()), None, 4);
+    assert_eq!(view.max_line_number_digits, 3);
+
+    screen.clear_except_input();
+    view.clear_presentation_except_input(5, &screen.snapshot());
+    assert_eq!(view.max_line_number_digits, 3);
+}
+
+#[test]
+fn line_number_gutter_at_63_does_not_expand_for_a_prefetch_total_of_100() {
+    let mut view = TerminalViewState::new();
+    let mut screen = TerminalScreen::new(80, 24);
+    screen.advance(b"x\r\n".repeat(62).as_slice());
+    view.apply_terminal_live_snapshot_frame(Arc::new(screen.snapshot()), None, 1);
+    assert_eq!(view.max_line_number_digits, 2);
+
+    // The snapshot's synthetic total includes its newer prefetch rows. They
+    // are already part of the screen, not additional numbered output.
+    let prefetched = screen.viewport_snapshot_with_window(37, 48, 48);
+    assert_eq!(prefetched.total_rows, 100);
+    assert_eq!(prefetched.max_display_line_number(), Some(63));
+    view.remember_scrollback_snapshot(37, Arc::new(prefetched));
+    assert!(view.scrollback_snapshots.contains_key(&37));
+    assert_eq!(view.max_line_number_digits, 2);
 }
 
 fn output_frame_with_sizes(

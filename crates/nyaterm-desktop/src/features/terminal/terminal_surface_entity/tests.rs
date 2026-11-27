@@ -611,6 +611,78 @@ fn painted_hit_test_grid_bounds_start_after_the_rendered_gutter() {
 }
 
 #[test]
+fn gutter_grid_origin_stays_compact_until_line_100_and_survives_clear_in_both_wrap_modes() {
+    use crate::models::terminal::TerminalViewState;
+    use nyaterm_core::models::settings::TerminalWrapMode;
+
+    for mode in [TerminalWrapMode::Character, TerminalWrapMode::None] {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let surface = cx.new(|_| TerminalSurface::new("gutter"));
+        let mut screen = TerminalScreen::new(80, 150);
+        screen.set_logical_line_snapshots(mode == TerminalWrapMode::None);
+        let mut view = TerminalViewState::new();
+        let window = cx.open_window(size(px(400.), px(240.)), {
+            let surface = surface.clone();
+            move |_, _| TerminalSurfaceLayoutTestView {
+                surface,
+                mounted: true,
+            }
+        });
+
+        for (additional_lines, clear, expected_left) in [
+            (9, false, 24.),
+            (53, false, 24.),
+            (37, false, 26.),
+            (0, true, 26.),
+        ] {
+            if clear {
+                screen.clear_except_input();
+                view.clear_presentation_except_input(1, &screen.snapshot());
+            } else {
+                screen.advance(b"x\r\n".repeat(additional_lines).as_slice());
+            }
+            let snapshot = Arc::new(screen.snapshot());
+            view.apply_terminal_live_snapshot_frame(snapshot.clone(), None, 1);
+            cx.update_entity(&surface, |surface, cx| {
+                surface.cell_width = 8.;
+                surface.show_command_blocks = false;
+                surface.show_timestamps = false;
+                surface.show_line_numbers = true;
+                surface.max_line_number_digits = view.max_line_number_digits;
+                surface.wrap_mode = mode;
+                surface.apply_frame_snapshot(TerminalSurfaceFrameSnapshot::new(
+                    snapshot.clone(),
+                    TerminalScrollVisualState {
+                        history: snapshot.history,
+                        session_id: "gutter".into(),
+                        scroll_offset: 0,
+                        scroll_residual_lines: 0.,
+                        display_offset: 0,
+                        scrollback_len: snapshot.scrollback_len,
+                        viewport_rows: snapshot.viewport_rows,
+                        has_new_while_scrolled: false,
+                        performance_overlay: None,
+                        skipped_output_chars: 0,
+                    },
+                ));
+                cx.notify();
+            });
+            cx.update_window(window.into(), |_, window, cx| {
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.read_entity(&surface, |surface, _| {
+                let geometry = surface.painted_hit_test_geometry.unwrap();
+                let grid = geometry.grid_bounds.unwrap();
+                assert_eq!(grid.left(), px(expected_left));
+            });
+        }
+    }
+}
+
+#[test]
 fn clear_all_paints_input_at_top_and_keeps_host_rows_for_hit_testing() {
     let mut screen = TerminalScreen::new(40, 12);
     screen.advance(b"\x1b[12;1Hroot# draft");
