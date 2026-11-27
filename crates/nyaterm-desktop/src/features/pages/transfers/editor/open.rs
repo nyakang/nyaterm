@@ -454,11 +454,6 @@ impl NyaTermApp {
             .detach();
             return;
         }
-        let Some(service) = service.remote_service() else {
-            self.shell
-                .set_status("file browser service is unavailable".to_string());
-            return;
-        };
         self.transfer.select_browser_path(entry.path.clone());
         self.transfer.set_remote_path(entry.path.clone());
         let remote_path = entry.path.clone();
@@ -500,6 +495,7 @@ impl NyaTermApp {
             finished_tx.clone(),
             move || {
                 let progress_id = id.clone();
+                let target = std::cell::RefCell::new(None);
                 let result = run_external_open(
                     &control,
                     || {
@@ -514,7 +510,7 @@ impl NyaTermApp {
                             },
                         });
                         service
-                            .download_remote_file_with_progress_and_control_options(
+                            .download_external_edit(
                                 &remote_file_path,
                                 local_path,
                                 control.clone(),
@@ -526,7 +522,9 @@ impl NyaTermApp {
                                     });
                                 },
                             )
-                            .map(|_| ())
+                            .map(|value| {
+                                *target.borrow_mut() = Some(value);
+                            })
                             .map_err(|error| error.to_string())
                     },
                     |local_path| {
@@ -546,6 +544,7 @@ impl NyaTermApp {
                         }
                         open_local_path_with_editor(local_path, &default_editor).map(|_| {
                             TransferJobOutput::ExternalOpened {
+                                target: target.borrow_mut().take(),
                                 baseline,
                                 remote_path: remote_path.clone(),
                                 raw_path_token: remote_file_path.raw_path_token.clone(),

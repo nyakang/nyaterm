@@ -291,6 +291,12 @@ pub(in crate::features) enum TransferEditorCloseAfterSave {
 
 /// Handing a remote file to an external editor and syncing it back.
 struct TransferExternalSyncState {
+    uploading: HashSet<String>,
+    pending: HashSet<String>,
+    targets: HashMap<
+        String,
+        std::sync::Arc<nyaterm_files::file_browser::external_edit::ExternalEditTarget>,
+    >,
     prompts: HashMap<String, TransferExternalSyncPromptState>,
     /// One slot per prompt id: several files can be modified at once, so
     /// several prompt windows can be open at once.
@@ -1343,6 +1349,17 @@ impl TransferFeatureState {
         self.external_sync
             .windows
             .retain(|prompt_id, _| prompts.contains_key(prompt_id));
+        let target_ids: Vec<_> = self
+            .transfer_jobs()
+            .iter()
+            .filter(|job| job.session_id.as_deref() == Some(session_id))
+            .map(|job| job.id.clone())
+            .collect();
+        for id in target_ids {
+            self.external_sync.targets.remove(&id);
+            self.external_sync.uploading.remove(&id);
+            self.external_sync.pending.remove(&id);
+        }
         let watcher_ids: Vec<String> = self
             .external_sync
             .watchers
@@ -1352,10 +1369,39 @@ impl TransferFeatureState {
             .collect();
         for job_id in watcher_ids {
             self.external_sync.watchers.remove(&job_id);
+            self.external_sync.targets.remove(&job_id);
+            self.external_sync.uploading.remove(&job_id);
+            self.external_sync.pending.remove(&job_id);
         }
         before.saturating_sub(self.external_sync.prompts.len())
     }
 
+    pub(in crate::features) fn begin_external_upload(&mut self, id: &str) -> bool {
+        if !self.external_sync.uploading.insert(id.to_owned()) {
+            self.external_sync.pending.insert(id.to_owned());
+            false
+        } else {
+            true
+        }
+    }
+    pub(in crate::features) fn finish_external_upload(&mut self, id: &str) -> bool {
+        self.external_sync.uploading.remove(id);
+        self.external_sync.pending.remove(id)
+    }
+    pub(in crate::features) fn external_edit_target(
+        &self,
+        id: &str,
+    ) -> Option<std::sync::Arc<nyaterm_files::file_browser::external_edit::ExternalEditTarget>>
+    {
+        self.external_sync.targets.get(id).cloned()
+    }
+    pub(in crate::features) fn register_external_edit_target(
+        &mut self,
+        id: String,
+        target: std::sync::Arc<nyaterm_files::file_browser::external_edit::ExternalEditTarget>,
+    ) {
+        self.external_sync.targets.insert(id, target);
+    }
     pub(in crate::features) fn start_external_editor_watcher(
         &mut self,
         session_id: Option<String>,
@@ -1673,6 +1719,9 @@ impl TransferFileOpsState {
 impl TransferExternalSyncState {
     fn new(focus: FocusHandle) -> Self {
         Self {
+            uploading: HashSet::new(),
+            pending: HashSet::new(),
+            targets: HashMap::new(),
             prompts: HashMap::new(),
             windows: HashMap::new(),
             always_uploads: HashSet::new(),

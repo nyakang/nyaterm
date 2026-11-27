@@ -1892,6 +1892,12 @@
     "goForward": "Avançar"
   },
   "fileTransfer": {
+    "externalConflict": "O arquivo remoto foi alterado. O envio substituirá seu conteúdo atual. Suas alterações locais foram preservadas.",
+    "ftpWaiting": "Aguardando conexão FTP…",
+    "ftpReconnecting": "Reconectando ao FTP…",
+    "ftpResuming": "Retomando transferência…",
+    "ftpRestarting": "Reiniciando a transferência do início…",
+    "ftpTlsError": "Falha na validação do certificado FTPS ou na negociação TLS.",
     "scanning": "Verificando arquivos…",
     "committing": "Salvando arquivos transferidos…",
     "cancel": "Cancelar",

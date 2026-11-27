@@ -48,27 +48,14 @@ impl NyaTermApp {
             );
             return;
         }
-        let config = session_id
-            .as_deref()
-            .and_then(|session_id| self.session.metadata(session_id))
-            .and_then(|metadata| metadata.ssh_config.clone())
-            .or_else(|| {
-                (session_id.as_deref() == self.session.active_id())
-                    .then(|| self.session.active_ssh_config_owned())
-                    .flatten()
-            });
-        let Some(config) = config else {
+        let Some(service) = self.transfer.external_edit_target(&job_id) else {
             self.shell
-                .set_status("start an SSH session before syncing external edits".to_string());
+                .set_status("external editing session is no longer available".to_string());
             return;
         };
-        let service = match self.transfer_remote_file_service(session_id.as_deref(), config) {
-            Ok(service) => service,
-            Err(error) => {
-                self.shell.set_status(error.to_string());
-                return;
-            }
-        };
+        if !self.transfer.begin_external_upload(&job_id) {
+            return;
+        }
         let transfer_tx = self.transfer.transfer_event_sender();
         let transfer_options = self.sftp_transfer_options();
         let control = self.transfer.external_editor_upload_control();
@@ -138,6 +125,9 @@ impl NyaTermApp {
             cx.notify();
             return;
         };
+        if let Some(target) = self.transfer.external_edit_target(&prompt.job_id) {
+            target.approve_conflict();
+        }
         self.upload_external_editor_sync(
             prompt.session_id,
             prompt.job_id,

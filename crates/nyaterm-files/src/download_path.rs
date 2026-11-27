@@ -81,8 +81,16 @@ pub(crate) fn open_without_following(
     write: bool,
     directory: bool,
 ) -> io::Result<fs::File> {
+    open_with_access(path, !write, write, directory)
+}
+
+pub(crate) fn open_read_write_without_following(path: &Path) -> io::Result<fs::File> {
+    open_with_access(path, true, true, false)
+}
+
+fn open_with_access(path: &Path, read: bool, write: bool, directory: bool) -> io::Result<fs::File> {
     let mut options = OpenOptions::new();
-    options.read(!write).write(write);
+    options.read(read).write(write);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;

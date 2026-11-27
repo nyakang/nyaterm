@@ -76,6 +76,9 @@ pub fn enumerate_file_browser_drag_with_root_controls(
     if let FileBrowserService::Remote(service) = service {
         return enumerate_remote_drag_with_root_controls(service, roots, control, root_controls);
     }
+    if matches!(service, FileBrowserService::Ftp(_)) {
+        return enumerate_ftp(service, roots, control, root_controls);
+    }
     let FileBrowserService::Adb(adb) = service else {
         anyhow::bail!(FileTransferEntryError::UnsupportedBackend);
     };
@@ -142,6 +145,70 @@ pub fn enumerate_file_browser_drag_with_root_controls(
                     size: if is_directory { None } else { props.size },
                     modified_at: props.modified_at.map(|time| {
                         std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(time))
+                    }),
+                },
+            });
+        }
+    }
+    anyhow::ensure!(!found.is_empty(), FileTransferEntryError::NoSelection);
+    Ok(found)
+}
+
+fn enumerate_ftp(
+    service: &FileBrowserService,
+    roots: Vec<SftpFileEntry>,
+    control: &SftpTransferControl,
+    root_controls: Vec<SftpTransferControl>,
+) -> anyhow::Result<Vec<RemoteDragEntry>> {
+    use crate::remote_file::copy_inventory::{Inventory, MAX_ENTRIES};
+    anyhow::ensure!(
+        roots.len() <= 1024 && (root_controls.is_empty() || root_controls.len() == roots.len()),
+        FileTransferEntryError::LimitExceeded
+    );
+    let mut found = Vec::new();
+    for (root_index, root) in roots.into_iter().enumerate() {
+        control.check_cancelled()?;
+        let item_control = root_controls.get(root_index).unwrap_or(control);
+        if item_control.is_cancelled() {
+            continue;
+        }
+        crate::download_path::validate_name(&root.name)?;
+        let source = service.transfer_endpoint(&root.remote_path());
+        let inventory =
+            Inventory::scan_with_wait(&source, item_control, MAX_ENTRIES - found.len(), |item| {
+                control.check_cancelled()?;
+                if let FileBrowserService::Ftp(ftp) = service {
+                    crate::ftp::resume::wait(ftp, item, std::time::Duration::ZERO)?;
+                }
+                Ok(())
+            })?;
+        anyhow::ensure!(
+            inventory.properties(&source)?.file_type == root.file_type,
+            FileTransferEntryError::SourceChanged
+        );
+        let mut pending = vec![(source, PathBuf::from(&root.name))];
+        while let Some((endpoint, relative_path)) = pending.pop() {
+            control.check_cancelled()?;
+            item_control.check_cancelled()?;
+            let properties = inventory.properties(&endpoint)?;
+            let crate::remote_file::FileTransferEndpoint::Ftp { path, .. } = &endpoint else {
+                unreachable!("FTP inventory");
+            };
+            for child in inventory.children(&endpoint)?.into_iter().rev() {
+                let properties = inventory.properties(&child)?;
+                crate::download_path::validate_name(&properties.name)?;
+                pending.push((child, relative_path.join(&properties.name)));
+            }
+            found.push(RemoteDragEntry {
+                relative_path,
+                root_index,
+                is_directory: properties.is_directory(),
+                file: RemoteDragFile {
+                    display_name: properties.name.clone().into(),
+                    remote_path: path.clone(),
+                    size: properties.size,
+                    modified_at: properties.modified_at.map(|value| {
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(value))
                     }),
                 },
             });

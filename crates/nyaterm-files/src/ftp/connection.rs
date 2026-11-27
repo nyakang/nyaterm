@@ -1,6 +1,6 @@
 use std::net::{Shutdown, SocketAddr};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use nyaterm_core::character_encoding::CharacterEncoding;
 use suppaftp::native_tls::{Protocol, TlsConnector};
@@ -15,30 +15,48 @@ use crate::ftp::config::{
 use crate::ftp::encoding::FtpEncoding;
 use crate::ftp::error::FtpError;
 use crate::ftp::io::{Operation, SessionIo, connect_host, connect_socket};
+use crate::ftp::pool::{Connection, Pool, PooledConnection};
 use crate::ftp::service::FtpFileService;
 use crate::sftp::SftpTransferControl;
 
 pub(super) struct Lease<'a> {
-    // Stop and join the watcher before releasing the stream mutex. Otherwise
+    // Stop and join the watcher before returning the connection to the pool. Otherwise
     // its teardown could clear a subsequent operation's monitored data socket.
     pub(super) watch: Operation,
-    stream: MutexGuard<'a, NativeTlsFtpStream>,
-    io: Arc<SessionIo>,
-    secure: bool,
+    connection: PooledConnection<'a>,
 }
 
-impl Lease<'_> {
+impl<'a> Lease<'a> {
+    pub(super) fn new(
+        connection: PooledConnection<'a>,
+        control: &SftpTransferControl,
+        deadline: Option<Instant>,
+    ) -> Result<Self, FtpError> {
+        let task = control.clone();
+        let paused = control.clone();
+        let watch = Operation::start(
+            connection.io.clone(),
+            move || task.is_cancelled() || deadline.is_some_and(|at| Instant::now() >= at),
+            move || paused.is_paused(),
+        )?;
+        Ok(Self { watch, connection })
+    }
+
+    pub(super) fn invalidate(&self) {
+        self.connection.io.close();
+    }
+
     pub(super) fn command<T>(
         &mut self,
         command: impl FnOnce(&mut NativeTlsFtpStream) -> suppaftp::FtpResult<T>,
     ) -> Result<T, FtpError> {
         self.watch.check()?;
-        let result = command(&mut self.stream);
+        let result = command(&mut self.connection.stream);
         self.watch.check()?;
         self.watch.progress();
         match result.map_err(FtpError::from) {
-            Err(error @ (FtpError::Connection | FtpError::Timeout)) => {
-                self.io.close();
+            Err(error @ (FtpError::Connection | FtpError::Timeout | FtpError::Tls)) => {
+                self.connection.io.close();
                 Err(error)
             }
             result => result,
@@ -58,7 +76,7 @@ impl Lease<'_> {
             Ok(value) => {
                 // The monitor owns a duplicate socket. Plain FTP needs an
                 // explicit EOF; TLS finish sends close_notify before half-close.
-                if !self.secure {
+                if !self.connection.secure {
                     let _ = data.get_ref().get_ref().shutdown(Shutdown::Write);
                 }
                 self.command(|_| data.finish())?;
@@ -69,8 +87,8 @@ impl Lease<'_> {
                 let _ = data.get_ref().get_ref().shutdown(Shutdown::Both);
                 // A completion reply can race ABOR. A NOOP fence must be the next
                 // reply before any cleanup command may mutate server paths.
-                if self.stream.abort_with_fence(data).is_err() {
-                    self.io.close();
+                if self.connection.stream.abort_with_fence(data).is_err() {
+                    self.connection.io.close();
                 }
                 Err(error)
             }
@@ -209,13 +227,17 @@ impl FtpFileService {
         watch.check()?;
         drop(watch);
         Ok(Self {
+            pool: Arc::new(Pool::new(Connection {
+                stream,
+                io,
+                secure: config.security_mode != FtpSecurityMode::None,
+                last_used: Instant::now(),
+            })),
             config,
             encoding,
             home,
             peer,
             username: login.username().to_owned(),
-            io,
-            stream: Mutex::new(stream),
             mutations: Mutex::new(()),
         })
     }
@@ -229,38 +251,18 @@ impl FtpFileService {
         control: &SftpTransferControl,
         deadline: Option<std::time::Instant>,
     ) -> Result<Lease<'_>, FtpError> {
-        loop {
-            if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
-                return Err(FtpError::Timeout);
-            }
-            self.ensure_available()?;
-            if control.is_cancelled() {
-                return Err(FtpError::Cancelled);
-            }
-            match self.stream.try_lock() {
-                Ok(stream) => {
-                    return Ok(Lease {
-                        stream,
-                        watch: if let Some(deadline) = deadline {
-                            let control = control.clone();
-                            Operation::start(
-                                Arc::clone(&self.io),
-                                move || {
-                                    control.is_cancelled() || std::time::Instant::now() >= deadline
-                                },
-                                || false,
-                            )?
-                        } else {
-                            Operation::for_transfer(Arc::clone(&self.io), control.clone())?
-                        },
-                        io: Arc::clone(&self.io),
-                        secure: self.config.security_mode != FtpSecurityMode::None,
-                    });
-                }
-                Err(TryLockError::Poisoned(_)) => return Err(FtpError::Unavailable),
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(25)),
-            }
-        }
+        Lease::new(
+            self.pool.acquire(false, control, deadline)?,
+            control,
+            deadline,
+        )
+    }
+
+    pub(super) fn lock_transfer(
+        &self,
+        control: &SftpTransferControl,
+    ) -> Result<Lease<'_>, FtpError> {
+        Lease::new(self.pool.acquire(true, control, None)?, control, None)
     }
 }
 

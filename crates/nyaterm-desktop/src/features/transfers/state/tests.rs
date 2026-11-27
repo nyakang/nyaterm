@@ -2469,3 +2469,18 @@ fn session_close_and_window_shutdown_cancel_queued_work_without_starting_it() {
     assert!(!state.manages_bulk_job("other"));
     assert!(state.admission.shutdown().is_empty());
 }
+
+#[test]
+fn external_editor_saves_coalesce_into_one_followup_per_document() {
+    let cx = TestAppContext::single();
+    let _test_app_cleanup = crate::test_support::TestAppCleanup::new(&cx);
+    let mut transfer = transfer_state(&cx);
+    assert!(transfer.begin_external_upload("document-a"));
+    assert!(!transfer.begin_external_upload("document-a"));
+    assert!(!transfer.begin_external_upload("document-a"));
+    assert!(transfer.begin_external_upload("document-b"));
+    assert!(!transfer.finish_external_upload("document-b"));
+    assert!(transfer.finish_external_upload("document-a"));
+    assert!(transfer.begin_external_upload("document-a"));
+    assert!(!transfer.finish_external_upload("document-a"));
+}

@@ -12,6 +12,10 @@ pub(crate) struct TransferDownload {
 }
 
 impl TransferDownload {
+    pub(crate) fn reopen(&self) -> anyhow::Result<std::fs::File> {
+        Ok(super::open_read_write_without_following(&self.path)?)
+    }
+
     pub(crate) async fn prepare_with_access(
         root: &Path,
         target: &Path,

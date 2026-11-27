@@ -77,7 +77,7 @@ impl PromisedFileProvider for RemoteDownloadProvider {
                 nyaterm_files::download_path::validate_name(name).map_err(|_| {
                     nyaterm_files::file_browser::FileTransferEntryError::InvalidDestination
                 })?;
-                if matches!(service, nyaterm_files::file_browser::FileBrowserService::Adb(_))
+                if matches!(service, nyaterm_files::file_browser::FileBrowserService::Adb(_) | nyaterm_files::file_browser::FileBrowserService::Ftp(_))
                     && self.entry.is_directory()
                 {
                     // Finder requests the promise on a worker. Validate the same

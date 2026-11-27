@@ -240,18 +240,6 @@ impl NyaTermApp {
             None => Ok(FileBrowserService::local()),
         }
     }
-
-    pub(in crate::features) fn transfer_remote_file_service(
-        &mut self,
-        session_id: Option<&str>,
-        config: SshSessionConfig,
-    ) -> anyhow::Result<RemoteFileService> {
-        let session_id = session_id
-            .or_else(|| self.session.active_id())
-            .ok_or_else(|| anyhow::anyhow!("source SSH session is unavailable"))?
-            .to_string();
-        self.remote_file_service_for_session(&session_id, config, FileAccessPurpose::Interactive)
-    }
 }
 
 pub(in crate::features) use remote_text_editor::RemoteTextEditor;

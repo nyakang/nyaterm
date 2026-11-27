@@ -193,6 +193,16 @@ impl CopyProgress {
         state.emit(false);
     }
 
+    pub(crate) fn replace_file_bytes(&self, previous: u64, current: u64) {
+        let mut state = self.0.lock().expect("copy progress lock");
+        state.value.phase = Some(FileTransferPhase::Transferring);
+        state.value.bytes_transferred = state
+            .value
+            .bytes_transferred
+            .saturating_sub(previous)
+            .saturating_add(current);
+        state.emit(false);
+    }
     pub(crate) fn add_bytes(&self, bytes: u64) {
         let mut state = self.0.lock().expect("copy progress lock");
         state.value.phase = Some(FileTransferPhase::Transferring);

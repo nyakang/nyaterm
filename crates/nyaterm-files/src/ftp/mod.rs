@@ -11,7 +11,9 @@ pub mod encoding;
 pub mod error;
 mod io;
 pub mod list;
+pub mod pool;
 mod replace;
+pub(crate) mod resume;
 pub mod service;
 mod text;
 

@@ -121,6 +121,14 @@ pub(in crate::features) fn format_transfer_progress(progress: &SftpTransferProgr
     if let Some(phase) = progress.phase {
         use nyaterm_files::sftp_transfer_types::FileTransferPhase;
         match phase {
+            FileTransferPhase::WaitingForConnection => {
+                return t!("fileTransfer.ftpWaiting").into_owned();
+            }
+            FileTransferPhase::Reconnecting => {
+                return t!("fileTransfer.ftpReconnecting").into_owned();
+            }
+            FileTransferPhase::Resuming => return t!("fileTransfer.ftpResuming").into_owned(),
+            FileTransferPhase::Restarting => return t!("fileTransfer.ftpRestarting").into_owned(),
             FileTransferPhase::Scanning => return t!("fileTransfer.scanning").into_owned(),
             FileTransferPhase::Committing => return t!("fileTransfer.committing").into_owned(),
             FileTransferPhase::Transferring => {}

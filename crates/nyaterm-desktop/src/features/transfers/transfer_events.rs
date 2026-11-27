@@ -392,7 +392,10 @@ impl NyaTermApp {
                     .android
                     .key_for_file_service(&service)
                     .map(crate::features::file_manager::PaneEndpoint::Adb),
-                Some(nyaterm_files::file_browser::WeakFileBrowserService::Remote(_)) => self
+                Some(
+                    nyaterm_files::file_browser::WeakFileBrowserService::Remote(_)
+                    | nyaterm_files::file_browser::WeakFileBrowserService::Ftp(_),
+                ) => self
                     .transfer
                     .transfer_job(&event.id)
                     .and_then(|job| job.session_id.clone())
@@ -697,6 +700,7 @@ impl NyaTermApp {
                 snapshot
             });
         let mut external_sync_to_start: Option<ExternalEditorSyncStart> = None;
+        let mut external_target_to_store = None;
         let mut external_watch_to_start: Option<ExternalEditorWatchStart> = None;
         let mut external_sync_prompt_to_open: Option<String> = None;
         let mut zmodem_upload_after_probe: Option<(String, Vec<PathBuf>, bool)> = None;
@@ -757,7 +761,8 @@ impl NyaTermApp {
         }
         let cleanup_internal_job = event_finished
             && !job.is_user_transfer()
-            && (!matches!(&job.kind, TransferJobKind::OpenExternal { .. }) || event_failed);
+            && (!matches!(&job.kind, TransferJobKind::OpenExternal { .. })
+                || (event_failed && self.transfer.external_edit_target(&event_id).is_none()));
         match event.event {
             TransferJobEvent::DragExportOpened { .. } => {
                 unreachable!()
@@ -1457,6 +1462,7 @@ impl NyaTermApp {
                     format!("text editor save finished for {remote_path}");
             }
             TransferJobEvent::Finished(Ok(TransferJobOutput::ExternalOpened {
+                target,
                 remote_path,
                 raw_path_token,
                 local_path,
@@ -1478,6 +1484,9 @@ impl NyaTermApp {
                     "remote file opened externally: {}",
                     local_path.display()
                 ));
+                if let Some(target) = target {
+                    external_target_to_store = Some((job.id.clone(), target));
+                }
                 external_watch_to_start = Some((
                     job_session_id.clone(),
                     job.id.clone(),
@@ -1486,6 +1495,27 @@ impl NyaTermApp {
                     local_path,
                     baseline,
                 ));
+            }
+            TransferJobEvent::Finished(Ok(TransferJobOutput::ExternalConflict {
+                remote_path,
+                raw_path_token,
+                local_path,
+            })) => {
+                job.status = TransferJobStatus::Failed;
+                job.detail = rust_i18n::t!("fileTransfer.externalConflict").into_owned();
+                job.control = None;
+                let prompt_id = job.id.clone();
+                self.transfer.insert_external_sync_prompt(
+                    prompt_id.clone(),
+                    TransferExternalSyncPromptState {
+                        session_id: job_session_id.clone(),
+                        job_id: prompt_id.clone(),
+                        remote_path,
+                        raw_path_token,
+                        local_path,
+                    },
+                );
+                external_sync_prompt_to_open = Some(prompt_id);
             }
             TransferJobEvent::Finished(Ok(TransferJobOutput::Summary(summary))) => {
                 job.status = if summary.skipped {
@@ -1709,6 +1739,35 @@ impl NyaTermApp {
             }
         }
         if event_finished {
+            let pending = self.transfer.finish_external_upload(&event_id);
+            if let TransferJobKind::OpenExternal {
+                remote_path,
+                local_path: Some(local_path),
+            } = &job.kind
+                && self.transfer.external_edit_target(&event_id).is_some()
+            {
+                if pending && job.status == TransferJobStatus::Completed {
+                    external_sync_to_start = Some((
+                        job_session_id.clone(),
+                        event_id.clone(),
+                        remote_path.clone(),
+                        None,
+                        local_path.clone(),
+                    ));
+                } else if event_failed && job.status == TransferJobStatus::Failed {
+                    self.transfer.insert_external_sync_prompt(
+                        event_id.clone(),
+                        TransferExternalSyncPromptState {
+                            session_id: job_session_id.clone(),
+                            job_id: event_id.clone(),
+                            remote_path: remote_path.clone(),
+                            raw_path_token: None,
+                            local_path: local_path.clone(),
+                        },
+                    );
+                    external_sync_prompt_to_open = Some(event_id.clone());
+                }
+            }
             job.speed.reset();
             if append_retained_backup_warning(&mut job) {
                 self.shell.set_status(job.detail.clone());
@@ -1744,6 +1803,9 @@ impl NyaTermApp {
                 raw_path_token,
                 local_path,
             );
+        }
+        if let Some((id, target)) = external_target_to_store {
+            self.transfer.register_external_edit_target(id, target);
         }
         if let Some((session_id, job_id, remote_path, raw_path_token, local_path, baseline)) =
             external_watch_to_start
@@ -1939,6 +2001,56 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn external_conflict_keeps_the_job_and_requires_a_new_upload_decision() {
+        let test_dir = TestConfigDir::new("nyaterm-external-conflict");
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let (app, vcx) = hosted(&mut cx, test_dir.path());
+        let local = test_dir.path().join("document.bin");
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let mut job = running_job("external-conflict");
+                job.session_id = Some("closed-source".into());
+                job.kind = TransferJobKind::OpenExternal {
+                    remote_path: "/document.bin".into(),
+                    local_path: Some(local.clone()),
+                };
+                app.transfer.enqueue_transfer_job(job);
+                assert!(app.transfer.begin_external_upload("external-conflict"));
+                assert!(!app.transfer.begin_external_upload("external-conflict"));
+                app.apply_transfer_event(
+                    TransferJobResult {
+                        id: "external-conflict".into(),
+                        event: TransferJobEvent::Finished(Ok(
+                            TransferJobOutput::ExternalConflict {
+                                remote_path: "/document.bin".into(),
+                                raw_path_token: Some("frozen-path".into()),
+                                local_path: local.clone(),
+                            },
+                        )),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    app.transfer
+                        .transfer_job("external-conflict")
+                        .unwrap()
+                        .status,
+                    TransferJobStatus::Failed
+                );
+                let prompt = app
+                    .transfer
+                    .external_sync_prompt("external-conflict")
+                    .unwrap();
+                assert_eq!(prompt.local_path, local);
+                assert_eq!(prompt.raw_path_token.as_deref(), Some("frozen-path"));
+                assert!(!app.transfer.finish_external_upload("external-conflict"));
+            });
+        });
+    }
+
+    #[test]
     fn external_workspace_path_is_unknown_until_prepared_and_finished_path_is_authoritative() {
         let test_dir = TestConfigDir::new("nyaterm-external-prepared-path");
         let mut cx = TestAppContext::single();
@@ -1984,6 +2096,7 @@ mod tests {
                 app.apply_transfer_event(TransferJobResult {
                     id: "external".into(),
                     event: TransferJobEvent::Finished(Ok(TransferJobOutput::ExternalOpened {
+                        target: None,
                         remote_path: "/remote/example.txt".into(),
                         raw_path_token: None,
                         local_path: opened.clone(),
@@ -2049,6 +2162,7 @@ mod tests {
                     TransferJobResult {
                         id: "external-watch".into(),
                         event: TransferJobEvent::Finished(Ok(TransferJobOutput::ExternalOpened {
+                            target: None,
                             remote_path: "/remote/example.txt".into(),
                             raw_path_token: Some("opaque-remote-path".into()),
                             local_path: path.clone(),

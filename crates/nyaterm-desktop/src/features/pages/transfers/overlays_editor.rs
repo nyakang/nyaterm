@@ -103,7 +103,15 @@ impl NyaTermApp {
     ) -> AnyElement {
         let palette = self.theme_palette();
         let title = t!("fileExplorer.fileModified");
-        let prompt_label = t!("fileExplorer.uploadPrompt");
+        let conflict = self
+            .transfer
+            .external_edit_target(&prompt.job_id)
+            .is_some_and(|target| target.has_conflict());
+        let prompt_label = if conflict {
+            t!("fileTransfer.externalConflict")
+        } else {
+            t!("fileExplorer.uploadPrompt")
+        };
         let cancel_label = t!("common.cancel");
         let always_label = t!("fileExplorer.alwaysUpload");
         let upload_once_label = t!("fileExplorer.uploadOnce");

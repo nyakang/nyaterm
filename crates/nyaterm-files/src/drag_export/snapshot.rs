@@ -1,11 +1,10 @@
-//! ADB Sync is sequential. Native random reads share a private disk snapshot.
-use crate::adb::AdbFileService;
+//! Sequential remote protocols share a private disk snapshot for native random reads.
 use crate::drag_export::{EXPORT_READ_CHUNK, ExportObserver, ExportReadEvent, RemoteDragFile};
-use crate::file_browser::{FileBrowserBackendKind, FileTransferEntryError};
+use crate::file_browser::{FileBrowserService, FileTransferEntryError, WeakFileBrowserService};
 use crate::sftp::{SFTP_TRANSFER_CANCELLED, SftpTransferControl};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 
 // TempDir removal may run when a native descriptor is released on the UI thread.
 // Initialize the janitor on the first worker download and only enqueue on release.
@@ -57,34 +56,43 @@ impl Drop for Snapshot {
     }
 }
 
-pub struct AdbReadSource {
-    service: Weak<AdbFileService>,
+pub struct SnapshotReadSource {
+    service: WeakFileBrowserService,
     file: RemoteDragFile,
     observers: Arc<dyn Fn() -> ExportObserver + Send + Sync>,
     control: SftpTransferControl,
     snapshot: Arc<Mutex<Snapshot>>,
     streams: Arc<AtomicUsize>,
+    options: crate::sftp_transfer_types::SftpPathTransferOptions,
 }
 
-impl AdbReadSource {
+impl SnapshotReadSource {
     pub fn new(
-        service: Weak<AdbFileService>,
+        service: impl Into<WeakFileBrowserService>,
         file: RemoteDragFile,
         observers: Arc<dyn Fn() -> ExportObserver + Send + Sync>,
         control: SftpTransferControl,
     ) -> Self {
         Self {
-            service,
+            service: service.into(),
             file,
             observers,
             control: control.child(),
             snapshot: Arc::default(),
             streams: Arc::default(),
+            options: Default::default(),
         }
     }
 
+    pub fn with_path_options(
+        mut self,
+        options: crate::sftp_transfer_types::SftpPathTransferOptions,
+    ) -> Self {
+        self.options = options;
+        self
+    }
     /// Only native workers call open/read_at; no content is fetched during render.
-    pub fn open(&self) -> io::Result<AdbReadStream> {
+    pub fn open(&self) -> io::Result<SnapshotReadStream> {
         let observer = (self.observers)();
         let result = self.control.check_cancelled().and_then(|()| {
             self.streams
@@ -96,14 +104,14 @@ impl AdbReadSource {
         });
         if let Err(error) = result {
             observer(ExportReadEvent::Failed {
-                backend: FileBrowserBackendKind::Adb,
+                backend: self.service.kind(),
                 error,
             });
-            return Err(io::Error::other("Android file export unavailable"));
+            return Err(io::Error::other("Remote file export unavailable"));
         }
         let control = self.control.child();
         observer(ExportReadEvent::Opened(control.clone()));
-        Ok(AdbReadStream {
+        Ok(SnapshotReadStream {
             service: self.service.clone(),
             file: self.file.clone(),
             observer,
@@ -111,6 +119,9 @@ impl AdbReadSource {
             snapshot: self.snapshot.clone(),
             finished: false,
             streams: self.streams.clone(),
+            options: self
+                .options
+                .with_transfer_options(self.options.transfer_options().clone()),
         })
     }
 
@@ -132,23 +143,24 @@ impl AdbReadSource {
     }
 }
 
-impl Drop for AdbReadSource {
+impl Drop for SnapshotReadSource {
     fn drop(&mut self) {
         self.cancel();
     }
 }
 
-pub struct AdbReadStream {
-    service: Weak<AdbFileService>,
+pub struct SnapshotReadStream {
+    service: WeakFileBrowserService,
     file: RemoteDragFile,
     observer: ExportObserver,
     control: SftpTransferControl,
     snapshot: Arc<Mutex<Snapshot>>,
     finished: bool,
     streams: Arc<AtomicUsize>,
+    options: crate::sftp_transfer_types::SftpPathTransferOptions,
 }
 
-impl AdbReadStream {
+impl SnapshotReadStream {
     pub fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
         if buffer.len() > EXPORT_READ_CHUNK {
             return Err(io::ErrorKind::InvalidInput.into());
@@ -171,11 +183,11 @@ impl AdbReadStream {
                 if !self.finished {
                     self.finished = true;
                     (self.observer)(ExportReadEvent::Failed {
-                        backend: FileBrowserBackendKind::Adb,
+                        backend: self.service.kind(),
                         error,
                     });
                 }
-                Err(io::Error::other("Android file export failed"))
+                Err(io::Error::other("Remote file export failed"))
             }
         }
     }
@@ -184,46 +196,75 @@ impl AdbReadStream {
         let service = self
             .service
             .upgrade()
-            .ok_or_else(|| anyhow::Error::new(nyaterm_android::error::AdbError::Offline))?;
-        service.wait_for_transfer(&self.control)?;
+            .ok_or_else(|| anyhow::Error::new(FileTransferEntryError::Unavailable))?;
+        wait_for_source(&service, &self.control)?;
         let mut snapshot = loop {
-            service.wait_for_transfer(&self.control)?;
+            wait_for_source(&service, &self.control)?;
             match self.snapshot.try_lock() {
                 Ok(snapshot) => break snapshot,
                 Err(std::sync::TryLockError::WouldBlock) => {
                     std::thread::sleep(std::time::Duration::from_millis(25))
                 }
-                Err(_) => anyhow::bail!("Android export snapshot unavailable"),
+                Err(_) => anyhow::bail!("Remote export snapshot unavailable"),
             }
         };
-        anyhow::ensure!(!snapshot.failed, "Android export snapshot failed");
+        anyhow::ensure!(!snapshot.failed, "Remote export snapshot failed");
         if snapshot.directory.is_none() {
             let result = (|| {
-                let before = service.stat_with_control(&self.file.remote_path, &self.control)?;
+                let before = service.remote_file_properties(&self.file.remote_path)?;
                 anyhow::ensure!(
-                    self.file.size.is_none_or(|size| size == before.size)
-                        && self.file.modified_at.is_none_or(|mtime| mtime
-                            == std::time::UNIX_EPOCH
-                                + std::time::Duration::from_secs(before.modified)),
+                    self.file.size.is_none_or(|size| Some(size) == before.size)
+                        && self.file.modified_at.is_none_or(|mtime| before
+                            .modified_at
+                            .is_some_and(|value| mtime
+                                == std::time::UNIX_EPOCH
+                                    + std::time::Duration::from_secs(u64::from(value)))),
                     FileTransferEntryError::SourceChanged
                 );
                 cleanup_sender()?;
                 let directory = tempfile::tempdir()?;
                 let target = directory.path().join("content");
+                if matches!(service, FileBrowserService::Ftp(_)) {
+                    self.options.secure_staging_directory(directory.path())?;
+                }
                 let mut transferred = 0u64;
-                let bytes = service.download(
-                    &self.file.remote_path,
-                    &target,
-                    false,
-                    &self.control,
-                    |bytes| {
-                        transferred = transferred.saturating_add(bytes);
-                        (self.observer)(ExportReadEvent::Progress {
-                            bytes: transferred,
-                            total: self.file.size,
-                        });
-                    },
-                )?;
+                let progress = |bytes| {
+                    (self.observer)(ExportReadEvent::Progress {
+                        bytes,
+                        total: self.file.size,
+                    });
+                };
+                let bytes = match &service {
+                    FileBrowserService::Adb(adb) => adb.download(
+                        &self.file.remote_path,
+                        &target,
+                        false,
+                        &self.control,
+                        |bytes| {
+                            transferred += bytes;
+                            progress(transferred);
+                        },
+                    )?,
+                    FileBrowserService::Ftp(ftp) => self.options.ftp_runtime.download(
+                        ftp,
+                        &self.file.remote_path.display_path,
+                        directory.path(),
+                        &target,
+                        false,
+                        &self.control,
+                        self.options.transfer_options(),
+                        true,
+                        |bytes, _| progress(bytes),
+                    )?,
+                    _ => anyhow::bail!(FileTransferEntryError::UnsupportedBackend),
+                };
+                let after = service.remote_file_properties(&self.file.remote_path)?;
+                anyhow::ensure!(
+                    before.size == after.size
+                        && before.modified_at == after.modified_at
+                        && before.file_type == after.file_type,
+                    FileTransferEntryError::SourceChanged
+                );
                 anyhow::ensure!(
                     self.file.size.is_none_or(|size| bytes == size),
                     FileTransferEntryError::SourceChanged
@@ -250,8 +291,7 @@ impl AdbReadStream {
         reader.seek(SeekFrom::Start(offset))?;
         let length = reader.read(buffer)?;
         self.control.check_cancelled()?;
-        service.control.check_cancelled()?;
-        service.runtime.check()?;
+        wait_for_source(&service, &self.control)?;
         Ok((length, total))
     }
 
@@ -260,7 +300,7 @@ impl AdbReadStream {
     }
 }
 
-impl Drop for AdbReadStream {
+impl Drop for SnapshotReadStream {
     fn drop(&mut self) {
         self.streams.fetch_sub(1, Ordering::AcqRel);
         if !self.finished {
@@ -271,6 +311,21 @@ impl Drop for AdbReadStream {
             }));
         }
         self.control.cancel();
+    }
+}
+
+fn wait_for_source(
+    service: &FileBrowserService,
+    control: &SftpTransferControl,
+) -> anyhow::Result<()> {
+    match service {
+        FileBrowserService::Adb(adb) => adb.wait_for_transfer(control),
+        FileBrowserService::Ftp(ftp) => Ok(crate::ftp::resume::wait(
+            ftp,
+            control,
+            std::time::Duration::ZERO,
+        )?),
+        _ => anyhow::bail!(FileTransferEntryError::UnsupportedBackend),
     }
 }
 

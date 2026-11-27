@@ -1,11 +1,11 @@
-//! Leaf transfers for the shared bounded directory-copy engine.
-use std::path::Path;
-
-use crate::download_path::{DownloadTargetAccess, TransferDownload};
+//! FTP leaves share checkpoints only with retries of their owning task.
 use crate::ftp::{FtpError, FtpFileService};
 use crate::remote_file::copy_progress::CopyProgress;
 use crate::sftp::{SFTP_TRANSFER_CANCELLED, SftpTransferControl};
+use crate::sftp_transfer_types::SftpPathTransferOptions;
+use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn download(
     service: &FtpFileService,
     remote: &str,
@@ -13,56 +13,65 @@ pub(crate) fn download(
     local: &Path,
     replace: bool,
     control: &SftpTransferControl,
+    options: &SftpPathTransferOptions,
     progress: &CopyProgress,
 ) -> anyhow::Result<u64> {
-    control.check_cancelled()?;
-    let access = if replace {
-        DownloadTargetAccess::capture(root, local)?
-    } else {
-        DownloadTargetAccess::CreateNew
-    };
-    let (temporary, mut file) = TransferDownload::prepare(root, local, 0, access)?;
-    let bytes = service
-        .retrieve(remote, &mut file, None, control, |bytes| {
-            progress.add_bytes(bytes as u64);
-            Ok(())
-        })
-        .map_err(transfer_error)?;
-    control.wait_if_paused_blocking()?;
-    file.sync_all()?;
-    drop(file);
-    control.check_cancelled()?;
-    temporary.commit(root, local)?;
-    Ok(bytes)
+    let mut previous = 0;
+    options
+        .ftp_runtime
+        .download(
+            service,
+            remote,
+            root,
+            local,
+            replace,
+            control,
+            options.transfer_options(),
+            options.ftp_binary,
+            |bytes, phase| {
+                progress.replace_file_bytes(previous, bytes);
+                previous = bytes;
+                progress.phase(phase);
+            },
+        )
+        .map_err(transfer_error)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn upload(
     service: &FtpFileService,
     local: &Path,
     remote: &str,
     replace: bool,
     control: &SftpTransferControl,
+    options: &SftpPathTransferOptions,
     progress: &CopyProgress,
 ) -> anyhow::Result<crate::ftp::service::FtpWriteOutcome> {
-    control.check_cancelled()?;
-    let mut file = crate::download_path::open_without_following(local, false, false)?;
-    anyhow::ensure!(
-        file.metadata()?.is_file(),
-        crate::file_browser::FileTransferEntryError::UnsupportedFileType
-    );
-    let outcome = service
-        .write_from_reader(remote, replace, &mut file, control, |bytes| {
-            progress.add_bytes(bytes as u64);
-            Ok(())
-        })
-        .map_err(transfer_error)?;
-    Ok(outcome)
+    let mut previous = 0;
+    options
+        .ftp_runtime
+        .upload(
+            service,
+            local,
+            remote,
+            replace,
+            control,
+            options.transfer_options(),
+            options.ftp_binary,
+            None,
+            |bytes, phase| {
+                progress.replace_file_bytes(previous, bytes);
+                previous = bytes;
+                progress.phase(phase);
+            },
+        )
+        .map_err(transfer_error)
 }
 
-fn transfer_error(error: FtpError) -> anyhow::Error {
-    if error == FtpError::Cancelled {
+fn transfer_error(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<FtpError>() == Some(&FtpError::Cancelled) {
         anyhow::anyhow!(SFTP_TRANSFER_CANCELLED)
     } else {
-        anyhow::Error::from(error)
+        error
     }
 }

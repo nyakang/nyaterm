@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -537,10 +537,18 @@ enum FakeNode {
 }
 
 /// Stateful fake FTP server used by the recursive and cancellation tests.
+#[derive(Default)]
+struct TreeFaults {
+    omit_modified: AtomicBool,
+    reject_rest: AtomicBool,
+    drop_download: AtomicUsize,
+    drop_upload: AtomicUsize,
+}
 struct TreeServer {
     port: u16,
     commands: Arc<Mutex<Vec<String>>>,
     tree: Arc<Mutex<HashMap<String, FakeNode>>>,
+    faults: Arc<TreeFaults>,
 }
 
 impl TreeServer {
@@ -569,6 +577,8 @@ impl TreeServer {
         }
         let command_log = Arc::clone(&commands);
         let server_tree = Arc::clone(&tree);
+        let faults = Arc::new(TreeFaults::default());
+        let server_faults = faults.clone();
         thread::spawn(move || {
             for _ in 0..count {
                 let Ok((control, _)) = listener.accept() else {
@@ -576,8 +586,16 @@ impl TreeServer {
                 };
                 let commands = command_log.clone();
                 let tree = server_tree.clone();
+                let faults = server_faults.clone();
                 thread::spawn(move || {
-                    serve_tree(control, commands, tree, refuse_overwrite, fail_cleanup)
+                    serve_tree(
+                        control,
+                        commands,
+                        tree,
+                        refuse_overwrite,
+                        fail_cleanup,
+                        faults,
+                    )
                 });
             }
         });
@@ -585,6 +603,7 @@ impl TreeServer {
             port,
             commands,
             tree,
+            faults,
         }
     }
 
@@ -650,6 +669,7 @@ fn serve_tree(
     tree: Arc<Mutex<HashMap<String, FakeNode>>>,
     refuse_overwrite: bool,
     fail_cleanup: bool,
+    faults: Arc<TreeFaults>,
 ) {
     let _ = control.write_all(b"220 fake FTP ready\r\n");
     let reader_stream = match control.try_clone() {
@@ -660,6 +680,7 @@ fn serve_tree(
     let mut data_listener: Option<TcpListener> = None;
     let mut rename_from: Option<String> = None;
     let mut cwd = "/".to_string();
+    let mut restart = 0usize;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -677,7 +698,18 @@ fn serve_tree(
             .split_once(' ')
             .map(|(_, value)| value)
             .unwrap_or("");
+        if !matches!(verb, "REST" | "RETR" | "STOR") {
+            restart = 0;
+        }
         match verb {
+            "REST" => {
+                if faults.reject_rest.load(Ordering::Acquire) {
+                    let _ = control.write_all(b"502 REST unsupported\r\n");
+                } else {
+                    restart = argument.parse().unwrap();
+                    let _ = control.write_all(b"350 restart accepted\r\n");
+                }
+            }
             "USER" => {
                 let _ = control.write_all(b"331 password required\r\n");
             }
@@ -738,7 +770,16 @@ fn serve_tree(
             "MLSD" | "LIST" => {
                 let path = normalize_tree_path(argument);
                 let machine = verb == "MLSD";
-                let lines = tree_listing(&tree, &path, machine);
+                let lines = tree_listing(&tree, &path, machine)
+                    .into_iter()
+                    .map(|line| {
+                        if faults.omit_modified.load(Ordering::Acquire) {
+                            line.replace("modify=20260101000000;", "")
+                        } else {
+                            line
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let references: Vec<&str> = lines.iter().map(String::as_str).collect();
                 send_listing(
                     &mut control,
@@ -756,6 +797,18 @@ fn serve_tree(
                         continue;
                     }
                 };
+                let offset = std::mem::take(&mut restart).min(bytes.len());
+                let drop_after = faults.drop_download.swap(0, Ordering::AcqRel);
+                if drop_after > 0 {
+                    let _ = control.write_all(b"150 opening data\r\n");
+                    if let Some(listener) = data_listener.take()
+                        && let Ok((mut data, _)) = listener.accept()
+                    {
+                        let _ =
+                            data.write_all(&bytes[offset..(offset + drop_after).min(bytes.len())]);
+                    }
+                    return;
+                }
                 if path == "/stalled" {
                     let _ = control.write_all(b"150 stalled data\r\n");
                     if let Some(listener) = data_listener.take()
@@ -766,15 +819,36 @@ fn serve_tree(
                     }
                     let _ = control.write_all(b"226 finished\r\n");
                 } else {
-                    send_tree_body(&mut control, &mut data_listener, &bytes);
+                    send_tree_body(&mut control, &mut data_listener, &bytes[offset..]);
                 }
             }
             "STOR" => {
                 let path = normalize_tree_path(argument);
-                let bytes = receive_tree_body(&mut control, &mut data_listener);
+                let drop_after = faults.drop_upload.swap(0, Ordering::AcqRel);
+                let bytes = if drop_after > 0 {
+                    let _ = control.write_all(b"150 opening data\r\n");
+                    let mut bytes = vec![0; drop_after];
+                    if let Some(listener) = data_listener.take()
+                        && let Ok((mut data, _)) = listener.accept()
+                    {
+                        let _ = data.read_exact(&mut bytes);
+                    }
+                    bytes
+                } else {
+                    receive_tree_body(&mut control, &mut data_listener)
+                };
+                let offset = std::mem::take(&mut restart);
+                let mut combined = match tree.lock().unwrap().get(&path) {
+                    Some(FakeNode::File(old)) if offset <= old.len() => old[..offset].to_vec(),
+                    _ => Vec::new(),
+                };
+                combined.extend_from_slice(&bytes);
                 tree.lock()
                     .expect("tree state")
-                    .insert(path, FakeNode::File(bytes));
+                    .insert(path, FakeNode::File(combined));
+                if drop_after > 0 {
+                    return;
+                }
                 let _ = control.write_all(b"226 transfer complete\r\n");
             }
             "RNFR" => {
@@ -878,7 +952,10 @@ fn tree_listing(
             }
             FakeNode::File(bytes) => {
                 if machine {
-                    format!("type=file;size={}; {name}", bytes.len())
+                    format!(
+                        "type=file;size={};modify=20260101000000; {name}",
+                        bytes.len()
+                    )
                 } else {
                     format!("-rw-r--r-- 1 user group {} Jan 1 2026 {name}", bytes.len())
                 }
@@ -1765,3 +1842,5 @@ fn encoded_ftp_document_round_trips_and_refuses_unrepresentable_output() {
     );
     assert!(ftp.temporary_paths().is_empty());
 }
+
+mod runtime;

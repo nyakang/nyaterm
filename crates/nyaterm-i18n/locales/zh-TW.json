@@ -1892,6 +1892,12 @@
     "goForward": "下一頁"
   },
   "fileTransfer": {
+    "externalConflict": "遠端檔案已被修改。上傳將覆寫其目前內容，本機修改已保留。",
+    "ftpWaiting": "正在等待 FTP 連線…",
+    "ftpReconnecting": "正在重新連線 FTP…",
+    "ftpResuming": "正在從中斷處繼續傳輸…",
+    "ftpRestarting": "正在從頭重新傳輸…",
+    "ftpTlsError": "FTPS 憑證驗證或 TLS 協商失敗。",
     "scanning": "正在掃描檔案…",
     "committing": "正在儲存傳輸檔案…",
     "cancel": "取消",

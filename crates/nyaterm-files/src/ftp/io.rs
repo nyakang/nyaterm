@@ -6,7 +6,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::ftp::error::FtpError;
-use crate::sftp::SftpTransferControl;
 
 pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(25);
@@ -217,18 +216,6 @@ impl Operation {
             state,
             worker: Some(worker),
         })
-    }
-
-    pub(super) fn for_transfer(
-        io: Arc<SessionIo>,
-        control: SftpTransferControl,
-    ) -> Result<Self, FtpError> {
-        let pause = control.clone();
-        Self::start(
-            io,
-            move || control.is_cancelled(),
-            move || pause.is_paused(),
-        )
     }
 
     pub(super) fn check(&self) -> Result<(), FtpError> {

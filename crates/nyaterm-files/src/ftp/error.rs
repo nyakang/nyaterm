@@ -1,5 +1,16 @@
 #[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FtpError {
+    #[error("Remote file changed; confirm replacement before uploading")]
+    Conflict,
+    #[error("FTP transfer paused")]
+    Paused,
+    #[error("FTP server does not support restarting this transfer")]
+    RestartUnsupported,
+    #[error("FTP source changed during transfer")]
+    SourceChanged,
+    #[error("FTP TLS negotiation or certificate validation failed")]
+    Tls,
+
     #[error("FTP connection failed")]
     Connection,
     #[error("FTP authentication failed")]
@@ -41,8 +52,16 @@ impl std::fmt::Debug for FtpError {
 }
 
 impl FtpError {
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Connection | Self::Timeout | Self::Unavailable)
+    }
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Conflict => "FtpEditConflict",
+            Self::Paused => "FtpPaused",
+            Self::RestartUnsupported => "FtpRestartUnsupported",
+            Self::SourceChanged => "FtpSourceChanged",
+            Self::Tls => "FtpTlsFailed",
             Self::Connection => "FtpConnectionFailed",
             Self::AuthenticationFailed => "FtpAuthenticationFailed",
             Self::AnonymousLoginRejected => "FtpAnonymousLoginRejected",
@@ -75,9 +94,8 @@ impl From<suppaftp::FtpError> for FtpError {
             suppaftp::FtpError::UnexpectedResponse(response) if response.status as u32 == 421 => {
                 Self::Connection
             }
-            suppaftp::FtpError::BadResponse | suppaftp::FtpError::SecureError(_) => {
-                Self::Connection
-            }
+            suppaftp::FtpError::SecureError(_) => Self::Tls,
+            suppaftp::FtpError::BadResponse => Self::Connection,
             suppaftp::FtpError::UnexpectedResponse(response) => {
                 Self::Protocol(format!("unexpected response {}", response.status as u32))
             }

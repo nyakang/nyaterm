@@ -1892,6 +1892,12 @@
     "goForward": "進む"
   },
   "fileTransfer": {
+    "externalConflict": "リモートファイルが変更されています。アップロードすると現在の内容を上書きします。ローカルの変更は保持されています。",
+    "ftpWaiting": "FTP 接続を待機中…",
+    "ftpReconnecting": "FTP に再接続中…",
+    "ftpResuming": "転送を再開中…",
+    "ftpRestarting": "最初から転送をやり直しています…",
+    "ftpTlsError": "FTPS 証明書の検証または TLS ネゴシエーションに失敗しました。",
     "scanning": "ファイルをスキャン中…",
     "committing": "転送したファイルを保存中…",
     "cancel": "キャンセル",

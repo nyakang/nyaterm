@@ -1063,8 +1063,10 @@ impl NyaTermApp {
                 };
                 // Register the FTP service before the tab activates so its first
                 // file-browser refresh can list the remote directory.
-                if let Some(service) = ftp_service {
-                    self.ftp.insert_service(session_id.clone(), service);
+                if let Some(service) = ftp_service
+                    && let SessionLaunchConfig::Ftp(config) = &metadata.launch_config
+                {
+                    self.register_ftp_service(session_id.clone(), service, config, cx);
                 }
                 let rekey_queued = if let Some(old_id) = reconnect_session_id.as_deref()
                     && old_id != session_id

@@ -9,7 +9,18 @@ use nyaterm_files::ftp::FtpFileService;
 /// dropped by background workers and only shared with file-browser jobs.
 #[derive(Default)]
 pub(in crate::features) struct FtpFeatureState {
-    services: HashMap<String, Arc<FtpFileService>>,
+    services: HashMap<String, FtpSession>,
+}
+
+struct FtpSession {
+    service: Arc<FtpFileService>,
+    _factory: Arc<nyaterm_files::ftp::pool::ConnectionFactory>,
+    _maintenance: gpui::Task<()>,
+}
+impl Drop for FtpSession {
+    fn drop(&mut self) {
+        self.service.disconnect();
+    }
 }
 
 impl FtpFeatureState {
@@ -17,14 +28,25 @@ impl FtpFeatureState {
         &mut self,
         session_id: String,
         service: Arc<FtpFileService>,
+        factory: Arc<nyaterm_files::ftp::pool::ConnectionFactory>,
+        maintenance: gpui::Task<()>,
     ) {
-        if let Some(previous) = self.services.insert(session_id, service) {
-            previous.disconnect();
+        if let Some(previous) = self.services.insert(
+            session_id,
+            FtpSession {
+                service,
+                _factory: factory,
+                _maintenance: maintenance,
+            },
+        ) {
+            previous.service.disconnect();
         }
     }
 
     pub(in crate::features) fn service(&self, session_id: &str) -> Option<Arc<FtpFileService>> {
-        self.services.get(session_id).cloned()
+        self.services
+            .get(session_id)
+            .map(|entry| entry.service.clone())
     }
 
     pub(in crate::features) fn remove_session(
@@ -32,7 +54,7 @@ impl FtpFeatureState {
         session_id: &str,
     ) -> Option<Arc<FtpFileService>> {
         let service = self.services.remove(session_id)?;
-        service.disconnect();
-        Some(service)
+        service.service.disconnect();
+        Some(service.service.clone())
     }
 }

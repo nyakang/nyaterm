@@ -650,10 +650,17 @@ pub(crate) enum TransferJobOutput {
         result: RemoteTextWriteResult,
     },
     ExternalOpened {
+        target:
+            Option<std::sync::Arc<nyaterm_files::file_browser::external_edit::ExternalEditTarget>>,
         remote_path: String,
         raw_path_token: Option<String>,
         local_path: PathBuf,
         baseline: nyaterm_files::local_revision::LocalFileVersion,
+    },
+    ExternalConflict {
+        remote_path: String,
+        raw_path_token: Option<String>,
+        local_path: PathBuf,
     },
     AiFileActionLoaded {
         remote_path: String,

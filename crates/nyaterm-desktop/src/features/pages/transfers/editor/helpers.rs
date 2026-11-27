@@ -1,5 +1,5 @@
 use crate::models::{TransferJobEvent, TransferJobOutput, TransferJobResult};
-use nyaterm_files::remote_file::RemoteFileService;
+use nyaterm_files::file_browser::external_edit::ExternalEditTarget;
 use nyaterm_files::sftp::{RemoteFilePath, SftpTransferControl};
 use nyaterm_files::sftp_transfer_types::SftpTransferOptions;
 use std::path::Path;
@@ -314,7 +314,7 @@ pub(super) fn external_editor_watch_key(remote_path: &str, local_path: &Path) ->
 }
 
 pub(super) fn upload_external_editor_file(
-    service: RemoteFileService,
+    service: std::sync::Arc<ExternalEditTarget>,
     job_id: &str,
     remote_file_path: RemoteFilePath,
     local_path: &Path,
@@ -331,20 +331,26 @@ pub(super) fn upload_external_editor_file(
     let progress_id = job_id.to_string();
     let progress_tx = transfer_tx.clone();
     let result = service
-        .upload_remote_edit_with_progress_and_control_options(
-            local_path.to_path_buf(),
-            &remote_file_path,
-            control,
-            transfer_options,
-            move |progress| {
-                let _ = progress_tx.unbounded_send(TransferJobResult {
-                    id: progress_id.clone(),
-                    event: TransferJobEvent::Progress(progress),
-                });
-            },
-        )
+        .upload(local_path, control, transfer_options, move |progress| {
+            let _ = progress_tx.unbounded_send(TransferJobResult {
+                id: progress_id.clone(),
+                event: TransferJobEvent::Progress(progress),
+            });
+        })
         .map(TransferJobOutput::Summary)
-        .map_err(|error| error.to_string());
+        .or_else(|error| {
+            if error.downcast_ref::<nyaterm_files::ftp::FtpError>()
+                == Some(&nyaterm_files::ftp::FtpError::Conflict)
+            {
+                Ok(TransferJobOutput::ExternalConflict {
+                    remote_path: remote_file_path.display_path.clone(),
+                    raw_path_token: remote_file_path.raw_path_token.clone(),
+                    local_path: local_path.to_path_buf(),
+                })
+            } else {
+                Err(error.to_string())
+            }
+        });
     let _ = transfer_tx.unbounded_send(TransferJobResult {
         id: job_id.to_string(),
         event: TransferJobEvent::Finished(result),

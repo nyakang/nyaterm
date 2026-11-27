@@ -7,20 +7,28 @@ use std::time::{Duration, SystemTime};
 
 use nyaterm_core::character_encoding::CharacterEncoding;
 use sha2::{Digest, Sha256};
-use suppaftp::{NativeTlsFtpStream, Status};
+use suppaftp::Status;
 
 use crate::ftp::config::{FtpConfig, FtpLogin};
 use crate::ftp::connection::Lease;
 use crate::ftp::encoding::system_filename_encoding;
 use crate::ftp::error::FtpError;
-use crate::ftp::io::SessionIo;
 use crate::ftp::list::{
     FtpEntry, FtpEntryKind, entries_from_lines, entry_from_mlst_line, parent_and_name,
 };
+use crate::ftp::pool::Pool;
 use crate::ftp::replace::{self, Replacement};
 use crate::ftp::text::{LocalDecoder, NvtEncoder};
 use crate::remote_file::{RemoteTextMetadata, RemoteTextRevision, RemoteTextWriteResult};
 use crate::sftp::SftpTransferControl;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TransferMode {
+    pub offset: u64,
+    pub binary: bool,
+    pub checkpoint_pause: bool,
+    pub range: bool,
+}
 
 const CHUNK_BYTES: usize = 32 * 1024;
 const MAX_LIST_BYTES: usize = 32 * 1024 * 1024;
@@ -40,8 +48,7 @@ pub struct FtpFileService {
     pub(super) home: String,
     pub(super) peer: SocketAddr,
     pub(super) username: String,
-    pub(super) io: Arc<SessionIo>,
-    pub(super) stream: Mutex<NativeTlsFtpStream>,
+    pub(super) pool: Arc<Pool>,
     pub(super) mutations: Mutex<()>,
 }
 
@@ -56,7 +63,7 @@ impl fmt::Debug for FtpFileService {
 
 impl Drop for FtpFileService {
     fn drop(&mut self) {
-        self.io.close();
+        self.pool.close();
     }
 }
 
@@ -85,11 +92,39 @@ impl FtpFileService {
         &self.home
     }
     pub fn is_available(&self) -> bool {
-        self.io.valid()
+        self.pool.available()
     }
     /// Closing is independent of the control mutex, including blocked workers.
     pub fn disconnect(&self) {
-        self.io.close();
+        self.pool.close();
+    }
+    pub fn configure_connections(
+        &self,
+        factory: std::sync::Weak<crate::ftp::pool::ConnectionFactory>,
+        limit: usize,
+        retries: u32,
+    ) {
+        self.pool.configure(factory, limit, retries);
+    }
+    /// Caller schedules this on a blocking worker. Active transfers are never probed.
+    pub fn keep_alive(&self) {
+        for connection in self.pool.idle(Duration::from_secs(30)) {
+            if let Ok(mut lease) = Lease::new(
+                connection,
+                &SftpTransferControl::new(),
+                Some(std::time::Instant::now() + Duration::from_secs(2)),
+            ) && matches!(lease.command(|stream| stream.noop()), Err(FtpError::Tls))
+            {
+                self.pool.stop_maintenance();
+                return;
+            }
+        }
+        if self.pool.metadata_needs_reconnect() {
+            let control = SftpTransferControl::new();
+            let _ = self.retry_metadata(&control, || {
+                self.lock_stream(&control)?.command(|stream| stream.noop())
+            });
+        }
     }
     pub(crate) fn ascii_mode(&self) -> bool {
         self.config.ascii_mode
@@ -121,6 +156,42 @@ impl FtpFileService {
         }
     }
     pub(crate) fn list_dir_with_control(
+        &self,
+        path: &str,
+        control: &SftpTransferControl,
+    ) -> Result<Vec<FtpEntry>, FtpError> {
+        self.retry_metadata(control, || self.list_dir_once(path, control))
+    }
+    fn retry_metadata<T>(
+        &self,
+        control: &SftpTransferControl,
+        mut read: impl FnMut() -> Result<T, FtpError>,
+    ) -> Result<T, FtpError> {
+        for attempt in 0..=self.pool.max_retries() {
+            match read() {
+                Err(
+                    error @ (FtpError::AuthenticationFailed
+                    | FtpError::AnonymousLoginRejected
+                    | FtpError::Tls),
+                ) => {
+                    // A future timer tick must not restart a rejected login or TLS
+                    // handshake. Explicit operations may still report/recover it.
+                    self.pool.stop_maintenance();
+                    return Err(error);
+                }
+                Err(error) if error.is_retryable() && attempt < self.pool.max_retries() => {
+                    crate::ftp::resume::wait(
+                        self,
+                        control,
+                        Duration::from_secs((1u64 << attempt.min(5)).min(30)),
+                    )?;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("bounded metadata retry")
+    }
+    fn list_dir_once(
         &self,
         path: &str,
         control: &SftpTransferControl,
@@ -185,6 +256,13 @@ impl FtpFileService {
         path: &str,
         control: &SftpTransferControl,
     ) -> Result<FtpEntry, FtpError> {
+        self.retry_metadata(control, || self.stat_once(path, control))
+    }
+    pub(super) fn stat_once(
+        &self,
+        path: &str,
+        control: &SftpTransferControl,
+    ) -> Result<FtpEntry, FtpError> {
         self.ensure_available()?;
         validate_path(path)?;
         if path == "/" {
@@ -209,7 +287,7 @@ impl FtpFileService {
             }
         }
         let (parent, name) = parent_and_name(path);
-        self.list_dir_with_control(&parent, control)?
+        self.list_dir_once(&parent, control)?
             .into_iter()
             .find(|entry| entry.name == name)
             .ok_or(FtpError::NotFound)
@@ -264,7 +342,7 @@ impl FtpFileService {
         let _mutation = self.lock_mutations(&control)?;
         self.remove_unlocked(&path)
     }
-    fn remove_unlocked(&self, path: &str) -> Result<(), FtpError> {
+    pub(super) fn remove_unlocked(&self, path: &str) -> Result<(), FtpError> {
         let directory = self.stat(path)?.is_directory();
         self.lock_stream(&SftpTransferControl::new())?
             .command(|stream| {
@@ -323,6 +401,17 @@ impl FtpFileService {
         directory: bool,
         control: &SftpTransferControl,
     ) -> Result<String, FtpError> {
+        self.retry_metadata(control, || {
+            self.canonical_target_once(path, directory, control)
+        })
+    }
+
+    fn canonical_target_once(
+        &self,
+        path: &str,
+        directory: bool,
+        control: &SftpTransferControl,
+    ) -> Result<String, FtpError> {
         let path = normalized_path(&self.home, path)?;
         let (parent, name) = parent_and_name(&path);
         let directory_path = if directory { &path } else { &parent };
@@ -333,7 +422,8 @@ impl FtpFileService {
             lease.command(|stream| stream.pwd())
         })();
         if lease.command(|stream| stream.cwd(&original)).is_err() {
-            self.disconnect();
+            // An unknown CWD invalidates this connection, not the whole session.
+            lease.invalidate();
             return Err(if control.is_cancelled() {
                 FtpError::Cancelled
             } else {
@@ -347,16 +437,49 @@ impl FtpFileService {
             normalized_path(&resolved, &name)
         }
     }
+    pub(crate) fn binary_revision(
+        &self,
+        path: &str,
+        control: &SftpTransferControl,
+    ) -> Result<RemoteTextRevision, FtpError> {
+        let before = self.stat_with_control(path, control)?;
+        let mut hash = HashWriter(Sha256::new());
+        let size = self.retrieve_mode(
+            path,
+            &mut hash,
+            Some(before.size),
+            control,
+            TransferMode {
+                binary: true,
+                ..Default::default()
+            },
+            |_| Ok(()),
+        )?;
+        if self.stat_with_control(path, control)? != before || size != before.size {
+            return Err(FtpError::SourceChanged);
+        }
+        Ok(RemoteTextRevision {
+            metadata: RemoteTextMetadata {
+                size,
+                modified_at: modified_secs(before.modified),
+            },
+            content_sha256: hash.0.finalize().into(),
+        })
+    }
     pub fn read_file_bytes(&self, path: &str) -> Result<Vec<u8>, FtpError> {
         self.read_file_bytes_limited(path, MAX_READ_BYTES)
     }
     pub fn read_file_bytes_limited(&self, path: &str, limit: u64) -> Result<Vec<u8>, FtpError> {
         let mut bytes = Vec::new();
-        self.retrieve(
+        self.retrieve_mode(
             path,
             &mut bytes,
             Some(limit),
             &SftpTransferControl::new(),
+            TransferMode {
+                binary: true,
+                ..Default::default()
+            },
             |_| Ok(()),
         )?;
         Ok(bytes)
@@ -402,11 +525,15 @@ impl FtpFileService {
                 Err(error) => return Err(error),
             };
             let mut hash = HashWriter(Sha256::new());
-            let size = match self.retrieve(
+            let size = match self.retrieve_mode(
                 path,
                 &mut hash,
                 Some(expected.metadata.size),
                 &control,
+                TransferMode {
+                    binary: true,
+                    ..Default::default()
+                },
                 |_| Ok(()),
             ) {
                 Ok(size) => size,
@@ -424,7 +551,16 @@ impl FtpFileService {
         }
         let temporary = temporary_path(path);
         let result = (|| {
-            self.store(&temporary, &mut Cursor::new(content), &control, |_| Ok(()))?;
+            self.store_mode(
+                &temporary,
+                &mut Cursor::new(content),
+                &control,
+                TransferMode {
+                    binary: true,
+                    ..Default::default()
+                },
+                |_| Ok(()),
+            )?;
             if !force && !matches()? {
                 return Ok(RemoteTextWriteResult::Conflict);
             }
@@ -485,24 +621,67 @@ impl FtpFileService {
     ) -> Result<u64, FtpError> {
         self.retrieve(path, writer, None, &SftpTransferControl::new(), on_chunk)
     }
+    fn transfer_lease(
+        &self,
+        control: &SftpTransferControl,
+        mode: TransferMode,
+    ) -> Result<Lease<'_>, FtpError> {
+        let mut lease = self.lock_transfer(control)?;
+        lease.command(|stream| {
+            stream.transfer_type(if self.config.ascii_mode && !mode.binary {
+                suppaftp::types::FileType::Ascii(suppaftp::types::FormatControl::Default)
+            } else {
+                suppaftp::types::FileType::Binary
+            })
+        })?;
+        let offset = usize::try_from(mode.offset).map_err(|_| FtpError::UnsupportedSettings)?;
+        lease.command(|stream| stream.resume_transfer(offset))?;
+        Ok(lease)
+    }
     pub(crate) fn retrieve<W: Write + ?Sized>(
         &self,
         path: &str,
         writer: &mut W,
         limit: Option<u64>,
         control: &SftpTransferControl,
+        on_chunk: impl FnMut(usize) -> Result<(), FtpError>,
+    ) -> Result<u64, FtpError> {
+        self.retrieve_mode(
+            path,
+            writer,
+            limit,
+            control,
+            TransferMode::default(),
+            on_chunk,
+        )
+    }
+    pub(crate) fn retrieve_mode<W: Write + ?Sized>(
+        &self,
+        path: &str,
+        writer: &mut W,
+        limit: Option<u64>,
+        control: &SftpTransferControl,
+        mode: TransferMode,
         mut on_chunk: impl FnMut(usize) -> Result<(), FtpError>,
     ) -> Result<u64, FtpError> {
         validate_path(path)?;
-        let mut lease = self.lock_stream(control)?;
-        let mut data = lease.command(|stream| stream.retr_as_stream(path))?;
+        let mut lease = self.transfer_lease(control, mode)?;
+        let mut data = lease
+            .command(|stream| stream.retr_as_stream(path))
+            .map_err(|e| restart_error(e, mode.offset))?;
         let mut buffer = vec![0; CHUNK_BYTES];
         let mut converted = Vec::with_capacity(CHUNK_BYTES * 2);
-        let mut decoder = self.config.ascii_mode.then(LocalDecoder::default);
+        let mut decoder = (self.config.ascii_mode && !mode.binary).then(LocalDecoder::default);
         let mut total = 0u64;
         let result = (|| {
             loop {
+                if mode.range && limit.is_some_and(|limit| total >= limit) {
+                    return Err(FtpError::LimitExceeded);
+                }
                 while control.is_paused() {
+                    if mode.checkpoint_pause {
+                        return Err(FtpError::Paused);
+                    }
                     lease.watch.check()?;
                     if control.is_cancelled() {
                         return Err(FtpError::Cancelled);
@@ -516,7 +695,7 @@ impl FtpFileService {
                 let room = limit.map_or(CHUNK_BYTES, |limit| {
                     limit
                         .saturating_sub(total)
-                        .saturating_add(1)
+                        .saturating_add(u64::from(!mode.range))
                         .min(CHUNK_BYTES as u64) as usize
                 });
                 let read = data.read(&mut buffer[..room]).map_err(io_error)?;
@@ -555,17 +734,32 @@ impl FtpFileService {
         path: &str,
         reader: &mut R,
         control: &SftpTransferControl,
+        on_chunk: impl FnMut(usize) -> Result<(), FtpError>,
+    ) -> Result<u64, FtpError> {
+        self.store_mode(path, reader, control, TransferMode::default(), on_chunk)
+    }
+    pub(crate) fn store_mode<R: Read + ?Sized>(
+        &self,
+        path: &str,
+        reader: &mut R,
+        control: &SftpTransferControl,
+        mode: TransferMode,
         mut on_chunk: impl FnMut(usize) -> Result<(), FtpError>,
     ) -> Result<u64, FtpError> {
-        let mut lease = self.lock_stream(control)?;
-        let mut data = lease.command(|stream| stream.put_with_stream(path))?;
+        let mut lease = self.transfer_lease(control, mode)?;
+        let mut data = lease
+            .command(|stream| stream.put_with_stream(path))
+            .map_err(|e| restart_error(e, mode.offset))?;
         let mut buffer = vec![0; CHUNK_BYTES];
         let mut converted = Vec::with_capacity(CHUNK_BYTES * 2);
-        let mut encoder = self.config.ascii_mode.then(NvtEncoder::default);
+        let mut encoder = (self.config.ascii_mode && !mode.binary).then(NvtEncoder::default);
         let result = (|| {
             let mut total = 0u64;
             loop {
                 while control.is_paused() {
+                    if mode.checkpoint_pause {
+                        return Err(FtpError::Paused);
+                    }
                     lease.watch.check()?;
                     if control.is_cancelled() {
                         return Err(FtpError::Cancelled);
@@ -598,7 +792,7 @@ impl FtpFileService {
     }
 }
 
-struct RemoteReplacement<'a>(&'a FtpFileService);
+pub(super) struct RemoteReplacement<'a>(pub(super) &'a FtpFileService);
 impl Replacement for RemoteReplacement<'_> {
     fn stat(&self, path: &str) -> Result<FtpEntry, FtpError> {
         self.0.stat(path)
@@ -626,7 +820,7 @@ fn modified_secs(value: Option<SystemTime>) -> Option<u64> {
         .ok()
         .map(|value| value.as_secs())
 }
-fn temporary_path(path: &str) -> String {
+pub(super) fn temporary_path(path: &str) -> String {
     format!("{path}.nyaterm-part-{}", nyaterm_core::uuid())
 }
 pub(super) fn io_error(error: std::io::Error) -> FtpError {
@@ -787,4 +981,14 @@ fn completion_list(
         }
     }
     Ok((entries, complete))
+}
+
+fn restart_error(error: FtpError, offset: u64) -> FtpError {
+    if offset > 0
+        && matches!(&error, FtpError::Protocol(message) if matches!(message.as_str(), "unexpected response 500" | "unexpected response 501" | "unexpected response 502" | "unexpected response 504"))
+    {
+        FtpError::RestartUnsupported
+    } else {
+        error
+    }
 }

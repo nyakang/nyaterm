@@ -1,9 +1,11 @@
 //! Deferred drag sources and the bounded synchronous-consumer/SFTP bridge.
 //! Source metadata never contains a local destination or saved credentials.
 
-mod adb;
 mod lifetime;
-pub use adb::{AdbReadSource, AdbReadStream};
+mod snapshot;
+pub use snapshot::{SnapshotReadSource, SnapshotReadStream};
+pub use snapshot::{SnapshotReadSource as AdbReadSource, SnapshotReadStream as AdbReadStream};
+pub use snapshot::{SnapshotReadSource as FtpReadSource, SnapshotReadStream as FtpReadStream};
 pub mod tree;
 pub use lifetime::DragSourceLifetime;
 

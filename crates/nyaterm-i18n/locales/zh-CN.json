@@ -1892,6 +1892,12 @@
     "goForward": "前进"
   },
   "fileTransfer": {
+    "externalConflict": "远端文件已被修改。上传将覆盖其当前内容，本地修改已保留。",
+    "ftpWaiting": "正在等待 FTP 连接…",
+    "ftpReconnecting": "正在重新连接 FTP…",
+    "ftpResuming": "正在从断点继续传输…",
+    "ftpRestarting": "正在从头重新传输…",
+    "ftpTlsError": "FTPS 证书验证或 TLS 协商失败。",
     "scanning": "正在扫描文件…",
     "committing": "正在保存传输文件…",
     "cancel": "取消",

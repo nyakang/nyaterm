@@ -1,4 +1,5 @@
 pub mod completion;
+pub mod external_edit;
 pub mod lightweight;
 pub mod listing;
 pub mod navigation;
@@ -26,6 +27,7 @@ use std::sync::{Arc, Weak};
 
 #[derive(Clone)]
 pub enum WeakFileBrowserService {
+    Ftp(Weak<FtpFileService>),
     Remote(Weak<RemoteFileService>),
     Adb(Weak<crate::adb::AdbFileService>),
 }
@@ -45,16 +47,30 @@ impl From<Weak<RemoteFileService>> for WeakFileBrowserService {
     }
 }
 
+impl From<Weak<crate::adb::AdbFileService>> for WeakFileBrowserService {
+    fn from(service: Weak<crate::adb::AdbFileService>) -> Self {
+        Self::Adb(service)
+    }
+}
+impl From<Weak<FtpFileService>> for WeakFileBrowserService {
+    fn from(service: Weak<FtpFileService>) -> Self {
+        Self::Ftp(service)
+    }
+}
 impl WeakFileBrowserService {
     pub fn kind(&self) -> FileBrowserBackendKind {
         match self {
-            Self::Remote(_) => FileBrowserBackendKind::Remote,
+            Self::Remote(_) | Self::Ftp(_) => FileBrowserBackendKind::Remote,
             Self::Adb(_) => FileBrowserBackendKind::Adb,
         }
     }
     pub fn upgrade(&self) -> Option<FileBrowserService> {
         match self {
             Self::Remote(service) => service.upgrade().map(FileBrowserService::Remote),
+            Self::Ftp(service) => service
+                .upgrade()
+                .filter(|s| s.is_available())
+                .map(FileBrowserService::Ftp),
             Self::Adb(service) => service
                 .upgrade()
                 .filter(|s| !s.control.is_cancelled() && s.runtime.is_valid())
@@ -173,7 +189,8 @@ impl FileBrowserService {
     }
     pub fn downgrade(&self) -> Option<WeakFileBrowserService> {
         match self {
-            Self::Local(_) | Self::Ftp(_) => None,
+            Self::Local(_) => None,
+            Self::Ftp(service) => Some(WeakFileBrowserService::Ftp(Arc::downgrade(service))),
             Self::Remote(service) => Some(WeakFileBrowserService::Remote(Arc::downgrade(service))),
             Self::Adb(service) => Some(WeakFileBrowserService::Adb(Arc::downgrade(service))),
         }

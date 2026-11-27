@@ -43,7 +43,7 @@ impl DragSourceLifetime {
             let stop = stopped.clone();
             let pending_cleanups = cleanups.clone();
             std::thread::Builder::new()
-                .name("adb-drag-lifetime".into())
+                .name("file-drag-lifetime".into())
                 .spawn(move || {
                     while !stop.load(Ordering::Acquire) {
                         if source.upgrade().is_none_or(|service| {

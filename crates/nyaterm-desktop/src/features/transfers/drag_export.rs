@@ -6,7 +6,8 @@ use gpui::{
     VirtualFileProvider, VirtualFileStream, VirtualFileTreeProvider,
 };
 use nyaterm_files::drag_export::{
-    AdbReadSource, AdbReadStream, DragExportSource, RemoteDragFile, SftpReadSource, SftpReadStream,
+    DragExportSource, RemoteDragFile, SftpReadSource, SftpReadStream, SnapshotReadSource,
+    SnapshotReadStream,
 };
 use nyaterm_files::file_browser::{
     FileBrowserBackendKind, FileBrowserService, WeakFileBrowserService,
@@ -249,11 +250,23 @@ impl TransferDragExportService {
                             .with_transfer_options(selection.transfer_options.clone())
                             .with_parent_control(parent),
                     ),
-                    WeakFileBrowserService::Adb(service) => {
-                        let source = AdbReadSource::new(service, file, factory, parent);
+                    WeakFileBrowserService::Ftp(service) => {
+                        let options = super::transfer_options::path_options(
+                            nyaterm_files::sftp_transfer_types::SftpDuplicatePolicy::Skip,
+                            None,
+                            selection.transfer_options.clone(),
+                        );
+                        let source = SnapshotReadSource::new(service, file, factory, parent)
+                            .with_path_options(options);
                         let (control, cleanup) = source.cancellation_cleanup();
                         lifetime.register_cleanup(control, cleanup);
-                        ReadSource::Adb(source)
+                        ReadSource::Snapshot(source)
+                    }
+                    WeakFileBrowserService::Adb(service) => {
+                        let source = SnapshotReadSource::new(service, file, factory, parent);
+                        let (control, cleanup) = source.cancellation_cleanup();
+                        lifetime.register_cleanup(control, cleanup);
+                        ReadSource::Snapshot(source)
                     }
                 },
                 _lifetime: lifetime,
@@ -326,7 +339,7 @@ impl RemoteTreeProvider {
 
 enum ReadSource {
     Sftp(SftpReadSource),
-    Adb(AdbReadSource),
+    Snapshot(SnapshotReadSource),
 }
 struct RemoteProvider {
     source: ReadSource,
@@ -336,13 +349,13 @@ impl VirtualFileProvider for RemoteProvider {
     fn open(&self) -> std::io::Result<Box<dyn VirtualFileStream>> {
         match &self.source {
             ReadSource::Sftp(source) => Ok(Box::new(RemoteStream(source.open()?))),
-            ReadSource::Adb(source) => Ok(Box::new(AndroidStream(source.open()?))),
+            ReadSource::Snapshot(source) => Ok(Box::new(SnapshotStream(source.open()?))),
         }
     }
     fn cancel(&self) {
         match &self.source {
             ReadSource::Sftp(source) => source.cancel(),
-            ReadSource::Adb(source) => source.cancel(),
+            ReadSource::Snapshot(source) => source.cancel(),
         }
     }
 }
@@ -416,7 +429,9 @@ impl NyaTermApp {
         };
         let _ = drag.selection.set(TransferSelection {
             access_generation: self.file_access_generation(&session_id),
-            source_service: if backend == FileBrowserBackendKind::Remote {
+            source_service: if let Some(service) = self.ftp.service(&session_id) {
+                Some(WeakFileBrowserService::Ftp(Arc::downgrade(&service)))
+            } else if backend == FileBrowserBackendKind::Remote {
                 self.session
                     .weak_remote_file_service(&self.ssh_scoped_session_id(&session_id))
                     .map(Into::into)
@@ -445,7 +460,7 @@ impl NyaTermApp {
         // Remote FileBrowserService values wrap a temporary service snapshot.
         // Deferred reads must follow the session's authoritative Arc instead:
         // the snapshot is dropped when this copy command returns.
-        let source_service = if service.kind() == FileBrowserBackendKind::Remote {
+        let source_service = if matches!(service, FileBrowserService::Remote(_)) {
             endpoint.session_id().and_then(|id| {
                 self.session
                     .weak_remote_file_service(&self.ssh_scoped_session_id(id))
@@ -533,11 +548,9 @@ impl NyaTermApp {
                 );
                 return None;
             };
-            let FileBrowserService::Remote(service) = service else {
-                return None;
-            };
-            if service.selected_backend()
-                != Some(nyaterm_files::remote_file::RemoteFileBackendKind::Sftp)
+            if let FileBrowserService::Remote(service) = service
+                && service.selected_backend()
+                    != Some(nyaterm_files::remote_file::RemoteFileBackendKind::Sftp)
             {
                 self.report_transfer_entry_error(
                     "drag-export",
@@ -564,8 +577,8 @@ impl NyaTermApp {
     }
 }
 
-struct AndroidStream(AdbReadStream);
-impl VirtualFileStream for AndroidStream {
+struct SnapshotStream(SnapshotReadStream);
+impl VirtualFileStream for SnapshotStream {
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.0.read_at(offset, buffer)
     }

@@ -107,9 +107,8 @@ pub(crate) fn execute(
     if has_ftp {
         let options = request.options.transfer_options();
         anyhow::ensure!(
-            !options.resume_broken_transfer
-                && !(matches!(request.destination, FileTransferEndpoint::Ftp { .. })
-                    && options.default_file_mode.is_some())
+            !(matches!(request.destination, FileTransferEndpoint::Ftp { .. })
+                && options.default_file_mode.is_some())
                 && !(options.preserve_timestamps
                     && matches!(request.destination, FileTransferEndpoint::Ftp { .. })),
             crate::ftp::FtpError::UnsupportedSettings
@@ -129,7 +128,7 @@ pub(crate) fn execute(
         super::copy_inventory::MAX_ENTRIES,
         |_| wait_request(&request),
     )?;
-    let ascii = [&request.source, &request.destination].iter().any(|endpoint| matches!(endpoint, FileTransferEndpoint::Ftp { service, .. } if service.ascii_mode()));
+    let ascii = !request.options.ftp_binary && [&request.source, &request.destination].iter().any(|endpoint| matches!(endpoint, FileTransferEndpoint::Ftp { service, .. } if service.ascii_mode()));
     progress.set_inventory(
         if ascii { None } else { inventory.bytes },
         inventory.len() as u64,
@@ -474,6 +473,7 @@ fn node(
                 local,
                 replace,
                 &request.control,
+                &request.options,
                 progress,
             )?
         }
@@ -484,6 +484,7 @@ fn node(
                 &path.display_path,
                 replace,
                 &request.control,
+                &request.options,
                 progress,
             )?;
             retained_backups.extend(outcome.backup_path);

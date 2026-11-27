@@ -1892,6 +1892,12 @@
     "goForward": "앞으로"
   },
   "fileTransfer": {
+    "externalConflict": "원격 파일이 변경되었습니다. 업로드하면 현재 내용을 덮어씁니다. 로컬 변경 사항은 보존되었습니다.",
+    "ftpWaiting": "FTP 연결 대기 중…",
+    "ftpReconnecting": "FTP에 다시 연결 중…",
+    "ftpResuming": "전송 재개 중…",
+    "ftpRestarting": "처음부터 다시 전송 중…",
+    "ftpTlsError": "FTPS 인증서 검증 또는 TLS 협상에 실패했습니다.",
     "scanning": "파일 검색 중…",
     "committing": "전송한 파일 저장 중…",
     "cancel": "취소",

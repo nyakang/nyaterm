@@ -321,6 +321,7 @@ impl NyaTermApp {
             resolver,
             self.sftp_transfer_options(),
         );
+        let options = self.transfer.transfer_job_retry_path_options(&id, options);
         let tx = self.transfer.transfer_event_sender();
         self.submit_bulk_transfer_job("file-operation", id.clone(), tx.clone(), move || {
             let mut progress = TransferProgressEventSender::new(id.clone(), tx.clone());
@@ -377,7 +378,13 @@ impl NyaTermApp {
                     .map(|result| file_operation_output(result, target_session_id))
                 })
                 .map_err(|error| {
-                    if cancelled.is_cancelled() {
+                    // Cancellation must not hide paths that need manual recovery.
+                    if matches!(
+                        error.downcast_ref::<nyaterm_files::ftp::FtpError>(),
+                        Some(nyaterm_files::ftp::FtpError::RecoveryRequired { .. })
+                    ) {
+                        error
+                    } else if cancelled.is_cancelled() {
                         anyhow::Error::new(nyaterm_android::error::AdbError::Cancelled)
                     } else if android {
                         error.context(nyaterm_files::adb::AdbFileError)

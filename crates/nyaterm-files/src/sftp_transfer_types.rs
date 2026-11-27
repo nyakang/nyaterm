@@ -15,6 +15,10 @@ pub struct SftpTransferSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileTransferPhase {
+    WaitingForConnection,
+    Reconnecting,
+    Resuming,
+    Restarting,
     Scanning,
     Transferring,
     Committing,
@@ -253,6 +257,8 @@ pub struct SftpPathTransferOptions {
     download_runtime: Arc<Mutex<download_targets::DownloadRuntime>>,
     upload_runtime: crate::sftp::upload_runtime::UploadRuntime,
     staging_permissions: Option<StagingPermissions>,
+    pub(crate) ftp_binary: bool,
+    pub(crate) ftp_runtime: crate::ftp::resume::ResumeRuntime,
 }
 
 impl std::fmt::Debug for SftpPathTransferOptions {
@@ -274,6 +280,7 @@ impl Clone for SftpPathTransferOptions {
             self.transfer.clone(),
         );
         cloned.promised_type = self.promised_type;
+        cloned.ftp_binary = self.ftp_binary;
         cloned.staging_permissions = self.staging_permissions.clone();
         cloned
     }
@@ -292,6 +299,8 @@ impl Default for SftpPathTransferOptions {
             download_runtime: Arc::default(),
             upload_runtime: Default::default(),
             staging_permissions: None,
+            ftp_binary: false,
+            ftp_runtime: Default::default(),
         }
     }
 }
@@ -322,7 +331,6 @@ impl SftpPathTransferOptions {
     /// Adapt application-wide SFTP preferences to the portable FTP capabilities.
     pub fn with_ftp_capabilities(&self, upload: bool) -> Self {
         let mut transfer = self.transfer.clone();
-        transfer.resume_broken_transfer = false;
         transfer.preserve_timestamps = false;
         if upload {
             transfer.default_file_mode = None;
@@ -346,6 +354,8 @@ impl SftpPathTransferOptions {
             download_runtime: Arc::default(),
             upload_runtime: Default::default(),
             staging_permissions: None,
+            ftp_binary: false,
+            ftp_runtime: Default::default(),
         }
     }
 
@@ -360,6 +370,7 @@ impl SftpPathTransferOptions {
     ) -> Self {
         let mut options = Self::new(SftpDuplicatePolicy::Skip, None, transfer);
         options.promised_type = Some(source_type);
+        options.ftp_binary = true;
         options
     }
 
@@ -432,6 +443,8 @@ impl SftpPathTransferOptions {
             download_runtime: Arc::clone(&self.download_runtime),
             upload_runtime: self.upload_runtime.clone(),
             staging_permissions: self.staging_permissions.clone(),
+            ftp_binary: self.ftp_binary,
+            ftp_runtime: self.ftp_runtime.clone(),
         }
     }
 
