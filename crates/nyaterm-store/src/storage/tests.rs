@@ -1,4 +1,5 @@
 mod startup;
+mod terminal_bell;
 
 use aes_gcm::{Aes256Gcm, Key, KeyInit, aead::Aead};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};

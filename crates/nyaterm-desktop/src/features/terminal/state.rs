@@ -15,6 +15,7 @@ use nyaterm_terminal::{TerminalOutputDecoder, TerminalScreen};
 use nyaterm_ui::NyaDocumentEditorState;
 
 use super::assist_state::TerminalAssistState;
+use super::bell::TerminalBellState;
 use super::command_suggestions::paste::SuggestionPasteContext;
 use super::editing_state::TerminalEditingState;
 use super::ime_state::TerminalImeState;
@@ -29,6 +30,7 @@ use crate::models::{
 };
 
 pub(in crate::features) struct TerminalFeatureState {
+    pub(super) bell: TerminalBellState,
     pub(super) search: TerminalSearchState,
     pub(super) view: TerminalViewRuntimeState,
     pub(super) input: TerminalInputState,
@@ -465,6 +467,7 @@ impl TerminalFeatureState {
         focus: TerminalFeatureFocus,
     ) -> Self {
         Self {
+            bell: TerminalBellState::default(),
             search: TerminalSearchState {
                 open: false,
                 query: String::new(),

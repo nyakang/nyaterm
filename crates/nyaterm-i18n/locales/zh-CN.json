@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "虚拟主机风格",
     "s3VirtualHostStyleDesc": "当你的 S3 兼容服务要求 virtual-hosted-style 请求时启用它。",
     "saveSuccess": "设置已保存。",
+    "terminalBell": "终端响铃",
+    "terminalBellDesc": "终端中的程序发出响铃信号时播放系统提示音，包括后台标签页。应用锁屏期间静音。",
     "scrollbackLines": "回滚缓冲区 (行)",
     "scrollbackLinesDesc": "保留在内存中以供向上滚动的行数。",
     "search": "搜索",

@@ -1131,6 +1131,20 @@ fn visual_bell_on_bel() {
 }
 
 #[test]
+fn bell_effect_coalesces_bursts_and_does_not_ring_for_osc_terminators() {
+    let mut screen = TerminalScreen::new(20, 5);
+    screen.advance(b"plain output");
+    assert!(!screen.take_effects().bell);
+    screen.advance(b"\x07\x07\x07");
+    assert!(screen.take_effects().bell);
+    assert!(!screen.take_effects().bell);
+    screen.advance(b"\x1b]2;title\x07\x1b]8;;https://example.com\x07");
+    let effects = screen.take_effects();
+    assert_eq!(effects.title.as_deref(), Some("title"));
+    assert!(!effects.bell);
+}
+
+#[test]
 fn device_status_query_emits_pty_write_response() {
     let mut screen = TerminalScreen::new(20, 5);
     screen.advance(b"\x1b[5n");

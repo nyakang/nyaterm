@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "가상 호스트 스타일",
     "s3VirtualHostStyleDesc": "S3 호환 공급자가 요구하는 경우 가상 호스팅 스타일 요청을 활성화합니다.",
     "saveSuccess": "설정이 저장되었습니다.",
+    "terminalBell": "터미널 벨",
+    "terminalBellDesc": "백그라운드 탭을 포함한 터미널의 프로그램이 벨 신호를 보내면 시스템 알림음을 재생합니다. 앱이 잠겨 있는 동안에는 소리가 나지 않습니다.",
     "scrollbackLines": "스크롤백(줄 수)",
     "scrollbackLinesDesc": "위로 스크롤하기 위해 메모리에 유지되는 줄 수입니다.",
     "search": "검색",

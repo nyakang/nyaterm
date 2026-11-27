@@ -1256,6 +1256,36 @@ mod tests {
     }
 
     #[test]
+    fn terminal_bell_draft_cancel_and_apply_preserve_committed_preferences() {
+        let mut cx = TestAppContext::single();
+        let _cleanup = crate::test_support::TestAppCleanup::new(&cx);
+        let app = app(&mut cx);
+        app.update(&mut cx, |app, cx| {
+            app.begin_settings_draft(cx);
+            app.toggle_terminal_bell(cx);
+            assert!(!app.settings.summary().terminal_bell_enabled);
+            assert!(app.settings_draft_dirty());
+            app.cancel_settings(cx);
+            assert!(app.settings.summary().terminal_bell_enabled);
+            app.begin_settings_draft(cx);
+            app.toggle_terminal_bell(cx);
+        });
+        let load = |cx: &mut TestAppContext| {
+            app.update(cx, |app, _| {
+                app.store_blocking_client()
+                    .request_fn(nyaterm_store::StoreDomain::Settings, |store| {
+                        store.load_app_settings_summary()
+                    })
+                    .unwrap()
+            })
+        };
+        assert!(load(&mut cx).terminal_bell_enabled);
+        app.update(&mut cx, |app, cx| app.apply_settings_draft(false, cx));
+        cx.run_until_parked();
+        assert!(!load(&mut cx).terminal_bell_enabled);
+    }
+
+    #[test]
     fn row_stripes_draft_cancel_and_apply_preserve_committed_preferences() {
         let mut cx = TestAppContext::single();
         let _cleanup = crate::test_support::TestAppCleanup::new(&cx);

@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "Estilo de host virtual",
     "s3VirtualHostStyleDesc": "Habilite solicitações de estilo hospedado virtual quando exigido pelo seu provedor compatível com S3.",
     "saveSuccess": "Configurações salvas.",
+    "terminalBell": "Campainha do terminal",
+    "terminalBellDesc": "Reproduzir o alerta sonoro do sistema quando um programa em qualquer terminal, incluindo abas em segundo plano, emitir uma campainha. Silenciado enquanto o aplicativo estiver bloqueado.",
     "scrollbackLines": "Rolagem (linhas)",
     "scrollbackLinesDesc": "Número de linhas mantidas na memória para rolagem para cima.",
     "search": "Pesquisar",

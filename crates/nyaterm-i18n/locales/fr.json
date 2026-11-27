@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "Style d'hôte virtuel",
     "s3VirtualHostStyleDesc": "Activer les requêtes de style hôte virtuel lorsque votre fournisseur compatible S3 l'exige.",
     "saveSuccess": "Paramètres enregistrés.",
+    "terminalBell": "Sonnerie du terminal",
+    "terminalBellDesc": "Jouer le son système lorsqu’un programme dans un terminal, y compris un onglet en arrière-plan, émet une sonnerie. Aucun son lorsque l’application est verrouillée.",
     "scrollbackLines": "Historique de défilement (lignes)",
     "scrollbackLinesDesc": "Nombre de lignes conservées en mémoire pour le défilement vers le haut.",
     "search": "Rechercher",

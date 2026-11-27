@@ -239,6 +239,7 @@ impl ConnectionStore {
             x11_clipboard: json_bool(&value, &["terminal", "x11_clipboard"], false),
             terminal_scrollback_lines: json_u32(&value, &["terminal", "scrollback_lines"], 5000)
                 .clamp(100, 100_000),
+            terminal_bell_enabled: json_bool(&value, &["terminal", "bell_enabled"], true),
             terminal_keep_alive_mode: normalize_keep_alive_mode(&json_string(
                 &value,
                 &["terminal", "keep_alive_mode"],
@@ -1509,6 +1510,16 @@ impl ConnectionStore {
         settings: &AppSettingsSummary,
     ) -> Result<AppSettingsSummary, StorageError> {
         let mut value = self.load_settings_value()?;
+        // An unsupported future value must survive unrelated terminal edits.
+        let unsupported_bell =
+            json_path(&value, &["terminal", "bell_enabled"]).is_some_and(|raw| !raw.is_boolean());
+        if !unsupported_bell || !settings.terminal_bell_enabled {
+            set_nested_json_bool(
+                &mut value,
+                &["terminal", "bell_enabled"],
+                settings.terminal_bell_enabled,
+            );
+        }
         set_nested_json_string(
             &mut value,
             &["terminal", "x11_display"],

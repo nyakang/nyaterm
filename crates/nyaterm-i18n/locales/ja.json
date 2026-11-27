@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "仮想ホストスタイル",
     "s3VirtualHostStyleDesc": "S3 互換プロバイダーで必要な場合に、仮想ホスト形式のリクエストを有効にします。",
     "saveSuccess": "設定を保存しました。",
+    "terminalBell": "端末のベル",
+    "terminalBellDesc": "バックグラウンドのタブを含む端末内のプログラムがベルを鳴らすと、システムの通知音を再生します。アプリのロック中は鳴りません。",
     "scrollbackLines": "スクロールバック（行）",
     "scrollbackLinesDesc": "上にスクロールするためにメモリに保持する行数。",
     "search": "検索",

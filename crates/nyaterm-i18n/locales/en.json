@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "Virtual Host Style",
     "s3VirtualHostStyleDesc": "Enable virtual-hosted-style requests when required by your S3-compatible provider.",
     "saveSuccess": "Settings saved.",
+    "terminalBell": "Terminal bell",
+    "terminalBellDesc": "Play the system alert sound when a program in any terminal, including background tabs, rings the bell. Silent while the application is locked.",
     "scrollbackLines": "Scrollback (lines)",
     "scrollbackLinesDesc": "Number of lines kept in memory for scrolling up.",
     "search": "Search",

@@ -1720,6 +1720,9 @@ impl NyaTermApp {
         command_running: bool,
         cx: &mut Context<Self>,
     ) {
+        if effects.bell {
+            self.request_terminal_bell(session_id, cx);
+        }
         let mut pending_pty_writes = effects.pty_write;
         let mut clipboard_store = effects.clipboard_store;
         let mut clipboard_loads = effects.clipboard_loads;

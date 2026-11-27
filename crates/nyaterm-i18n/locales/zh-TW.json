@@ -3860,6 +3860,8 @@
     "s3VirtualHostStyle": "虛擬主機風格",
     "s3VirtualHostStyleDesc": "當你的 S3 相容服務要求 virtual-hosted-style 請求時啟用它。",
     "saveSuccess": "設定已儲存。",
+    "terminalBell": "終端機響鈴",
+    "terminalBellDesc": "終端機中的程式發出響鈴訊號時播放系統提示音，包含背景分頁。應用程式鎖定期間靜音。",
     "scrollbackLines": "捲動緩衝區 (行)",
     "scrollbackLinesDesc": "保留在記憶體中以供向上滾動的行數。",
     "search": "搜尋",

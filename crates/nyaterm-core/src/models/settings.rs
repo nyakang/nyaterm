@@ -474,6 +474,8 @@ pub struct AppSettingsSummary {
     #[serde(default)]
     pub x11_clipboard: bool,
     pub terminal_scrollback_lines: u32,
+    #[serde(default = "default_true")]
+    pub terminal_bell_enabled: bool,
     #[serde(default = "default_terminal_keep_alive_mode")]
     pub terminal_keep_alive_mode: String,
     pub terminal_keep_alive_interval: u32,
@@ -849,6 +851,7 @@ impl Default for AppSettingsSummary {
             x11_mode: Default::default(),
             x11_clipboard: false,
             terminal_scrollback_lines: 5000,
+            terminal_bell_enabled: true,
             terminal_keep_alive_mode: default_terminal_keep_alive_mode(),
             terminal_keep_alive_interval: 30,
             terminal_timestamp_format: default_terminal_timestamp_format(),
@@ -1377,6 +1380,8 @@ mod tests {
 
         let summary: AppSettingsSummary =
             serde_json::from_str(json).expect("legacy summary deserializes");
+        assert!(summary.terminal_bell_enabled);
+        assert!(AppSettingsSummary::default().terminal_bell_enabled);
         assert!(summary.terminal_show_command_blocks);
         assert!(AppSettingsSummary::default().terminal_show_command_blocks);
         assert_eq!(
@@ -1409,6 +1414,22 @@ mod tests {
             crate::diagnostics::DEFAULT_LOG_SHARD_BYTES,
             "legacy documents without a shard size must log into 10 MiB files"
         );
+    }
+
+    #[test]
+    fn terminal_bell_summary_defaults_on_and_round_trips_disabled() {
+        let mut value = serde_json::to_value(AppSettingsSummary::default()).unwrap();
+        assert_eq!(value["terminal_bell_enabled"], true);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("terminal_bell_enabled");
+        let mut settings: AppSettingsSummary = serde_json::from_value(value).unwrap();
+        assert!(settings.terminal_bell_enabled);
+        settings.terminal_bell_enabled = false;
+        let restored: AppSettingsSummary =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert!(!restored.terminal_bell_enabled);
     }
 
     #[test]

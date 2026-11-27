@@ -45,6 +45,12 @@ impl NyaTermApp {
         cx.notify();
     }
 
+    pub(in crate::features) fn toggle_terminal_bell(&mut self, cx: &mut Context<Self>) {
+        self.settings.toggle_terminal_bell();
+        self.save_terminal_settings(cx);
+        cx.notify();
+    }
+
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self, cx: &mut Context<Self>) {
         self.settings.toggle_terminal_zebra_stripes();
         self.save_terminal_settings(cx);

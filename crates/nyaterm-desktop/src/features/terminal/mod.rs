@@ -4,6 +4,7 @@ use gpui::{App, KeyBinding, actions};
 
 pub(in crate::features) mod ai_execution;
 mod assist_state;
+mod bell;
 mod command_suggestions;
 mod credential_autofill;
 mod editing_payload;

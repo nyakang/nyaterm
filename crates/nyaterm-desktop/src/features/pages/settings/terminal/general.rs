@@ -59,6 +59,17 @@ impl SettingsPanel {
                     ))
                     .child(settings_form_row(
                         palette,
+                        t!("settings.terminalBell"),
+                        Some(SharedString::from(t!("settings.terminalBellDesc"))),
+                        settings_switch(
+                            palette,
+                            "terminal-bell",
+                            self.settings.summary().terminal_bell_enabled,
+                            cx.listener(|this, _, _, cx| this.toggle_terminal_bell(cx)),
+                        ),
+                    ))
+                    .child(settings_form_row(
+                        palette,
                         t!("settings.keepAliveMode"),
                         Some(SharedString::from(keep_alive_description)),
                         self.settings_select_control(

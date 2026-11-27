@@ -227,6 +227,10 @@ impl SettingsFeatureState {
     pub(in crate::features) fn set_terminal_x11_display(&mut self, text: String) {
         self.summary.x11_display = text;
     }
+    pub(in crate::features) fn toggle_terminal_bell(&mut self) {
+        self.summary.terminal_bell_enabled = !self.summary.terminal_bell_enabled;
+    }
+
     pub(in crate::features) fn toggle_terminal_zebra_stripes(&mut self) {
         self.summary.terminal_zebra_stripes_enabled = !self.summary.terminal_zebra_stripes_enabled;
     }
