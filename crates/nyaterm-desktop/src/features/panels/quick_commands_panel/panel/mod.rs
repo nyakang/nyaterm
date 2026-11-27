@@ -675,7 +675,6 @@ fn quick_command_view_menu_button(
     NyaDropdownMenu::new(id)
         .icon(icon_path)
         .icon_size(px(14.))
-        .selected(true)
         .tooltip(format!(
             "{} · {}",
             view_label,

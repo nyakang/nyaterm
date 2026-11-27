@@ -14,7 +14,7 @@ use rust_i18n::t;
 
 use super::super::super::{
     filtered_quick_commands, quick_command_category_options, quick_command_icon_mark,
-    quick_command_pin_mark, quick_command_single_line,
+    quick_command_pin_mark,
 };
 use super::super::detail_card::{QuickCommandCardExecutionMode, quick_command_hover_card};
 use super::rows::{QUICK_COMMAND_MENU_WIDTH, quick_command_icon_slot};
@@ -31,36 +31,52 @@ use crate::features::{
 };
 
 pub(super) const COMMAND_BAR_HEIGHT_PX: f32 = 36.;
-pub(super) const COMMAND_BAR_CHIP_MAX_WIDTH_PX: f32 = 164.;
-const COMMAND_BAR_CHIP_MIN_WIDTH_PX: f32 = 52.;
+pub(super) const COMMAND_BAR_CHIP_MAX_WIDTH_PX: f32 = 168.;
+const COMMAND_BAR_CHIP_MIN_WIDTH_PX: f32 = 48.;
+const COMMAND_BAR_TRAILING_FIT_MIN_PX: f32 = 86.;
 const COMMAND_BAR_CHIP_GAP_PX: f32 = 4.;
-const COMMAND_BAR_SAFETY_MARGIN_PX: f32 = 10.;
+const COMMAND_BAR_SAFETY_MARGIN_PX: f32 = 6.;
+/// 8 rows × 30px + 7 gaps × 2px + 8px vertical padding = 262px exact row boundary.
+const COMMAND_BAR_POPUP_LIST_MAX_HEIGHT_PX: f32 = 262.;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CommandBarLayoutPlan {
+    pub visible_count: usize,
+    /// Optional width cap applied to the last visible chip when it is squeezed
+    /// into the remaining trailing space rather than leaving a wide gap.
+    pub trailing_max_width: Option<f32>,
+}
 
 /// Estimates the rendered pixel width of a single command chip on the Command Bar.
 pub(super) fn estimate_command_bar_chip_width(command: &QuickCommand) -> f32 {
     // px_2 (16px) + icon slot (14px) + gap (5px) = 35px base chrome.
-    let mut fixed = 35.0;
-    if command.pinned.unwrap_or_default() {
-        // pin glyph (10px) + gap (5px)
-        fixed += 15.0;
-    }
+    let fixed = 35.0;
     let text_width: f32 = command
         .label
         .chars()
-        .map(|ch| if ch.is_ascii() { 6.8 } else { 11.5 })
+        .map(|ch| match ch {
+            ' ' => 3.6,
+            'i' | 'l' | '1' | '.' | ',' | ':' | ';' | '/' | '-' | '_' | '|' | 'I' => 4.6,
+            ch if ch.is_ascii() => 6.2,
+            _ => 11.0,
+        })
         .sum();
-    (fixed + text_width.max(24.0))
+    (fixed + text_width.max(18.0))
         .clamp(COMMAND_BAR_CHIP_MIN_WIDTH_PX, COMMAND_BAR_CHIP_MAX_WIDTH_PX)
 }
 
-/// Returns how many leading commands fit on the single-line Command Bar for
-/// `available_width_px`; the remaining tail goes into the `» N` overflow popup.
-pub(super) fn partition_command_bar_commands(
+/// Computes how many leading commands fit on the single-line Command Bar for
+/// `available_width_px`, capping the trailing chip when enough space remains to
+/// show a meaningful truncated label instead of leaving an empty gap.
+pub(super) fn plan_command_bar_layout(
     commands: &[QuickCommand],
     available_width_px: f32,
-) -> usize {
+) -> CommandBarLayoutPlan {
     if commands.is_empty() || !available_width_px.is_finite() || available_width_px <= 0.0 {
-        return 0;
+        return CommandBarLayoutPlan {
+            visible_count: 0,
+            trailing_max_width: None,
+        };
     }
     let budget = (available_width_px - COMMAND_BAR_SAFETY_MARGIN_PX).max(0.0);
     let mut used = 0.0_f32;
@@ -76,13 +92,50 @@ pub(super) fn partition_command_bar_commands(
             used += needed;
             count += 1;
         } else {
+            let remaining = if count == 0 {
+                budget
+            } else {
+                budget - used - COMMAND_BAR_CHIP_GAP_PX
+            };
+            if remaining >= COMMAND_BAR_TRAILING_FIT_MIN_PX {
+                return CommandBarLayoutPlan {
+                    visible_count: count + 1,
+                    trailing_max_width: Some(remaining.min(COMMAND_BAR_CHIP_MAX_WIDTH_PX)),
+                };
+            }
             break;
         }
     }
     if count == 0 && available_width_px >= 64.0 {
-        1
+        CommandBarLayoutPlan {
+            visible_count: 1,
+            trailing_max_width: Some(budget.max(COMMAND_BAR_CHIP_MIN_WIDTH_PX)),
+        }
     } else {
-        count
+        CommandBarLayoutPlan {
+            visible_count: count,
+            trailing_max_width: None,
+        }
+    }
+}
+
+fn command_execution_badge_mode(command: &QuickCommand) -> QuickCommandCardExecutionMode {
+    let execution_mode = if command.segmented_send.is_some() {
+        "segmented"
+    } else if command.execution_mode.as_deref() == Some("append") {
+        "append"
+    } else {
+        "execute"
+    };
+    let badge_label = match execution_mode {
+        "segmented" => t!("quickCommands.segmentedSendBadge"),
+        "append" => t!("quickCommands.appendOnlyBadge"),
+        _ => t!("quickCommands.executeImmediately"),
+    };
+    QuickCommandCardExecutionMode {
+        append: execution_mode == "append",
+        segmented: execution_mode == "segmented",
+        label: badge_label,
     }
 }
 
@@ -128,7 +181,7 @@ impl NyaTermApp {
             } else {
                 0.0
             };
-            (viewport_width - left_w - right_w - 300.0).max(120.0)
+            (viewport_width - left_w - right_w - 260.0).max(120.0)
         };
         let available_strip_width = self
             .commands
@@ -137,16 +190,52 @@ impl NyaTermApp {
             .filter(|width| *width > 0.0)
             .unwrap_or(fallback_strip_width);
 
-        let visible_count = partition_command_bar_commands(&bar_commands, available_strip_width);
+        let plan = plan_command_bar_layout(&bar_commands, available_strip_width);
+        let visible_count = plan.visible_count;
         let overflow_count = bar_commands.len().saturating_sub(visible_count);
 
         let category_app = cx.entity().downgrade();
-        let category_dropdown = div().w(px(132.)).flex_none().child(
+        let category_filtered = selected_category_id != "all";
+        let category_trigger_content = div()
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .child(
+                svg()
+                    .size(px(12.5))
+                    .flex_none()
+                    .path("icons/conn/folder.svg")
+                    .text_color(if category_filtered {
+                        rgb(palette.link)
+                    } else {
+                        rgb(palette.text_muted)
+                    }),
+            )
+            .child(
+                div()
+                    .max_w(px(108.))
+                    .text_size(px(11.))
+                    .font_weight(FontWeight(500.))
+                    .text_color(if category_filtered {
+                        rgb(palette.link)
+                    } else {
+                        rgb(palette.text)
+                    })
+                    .truncate()
+                    .child(selected_category_label.clone()),
+            )
+            .child(
+                svg()
+                    .size(px(11.))
+                    .flex_none()
+                    .path("icons/chevron-down.svg")
+                    .text_color(rgb(palette.text_dimmed)),
+            );
+
+        let category_dropdown = div().flex_none().child(
             NyaDropdownMenu::new("quick-command-bar-category")
-                .select_trigger()
-                .icon("icons/conn/folder.svg")
-                .icon_size(px(13.))
-                .label(selected_category_label.clone())
+                .content(category_trigger_content)
+                .selected(category_filtered)
                 .tooltip(selected_category_label)
                 .min_width(px(200.))
                 .max_height(px(320.))
@@ -188,6 +277,7 @@ impl NyaTermApp {
 
         let chips = self.quick_command_bar_chips(
             &bar_commands[..visible_count],
+            plan.trailing_max_width,
             palette,
             card_surface,
             &context_target_for_chips,
@@ -239,12 +329,12 @@ impl NyaTermApp {
                 .border_color(if popup_open {
                     rgb(palette.link)
                 } else {
-                    rgba((palette.border << 8) | 0x73)
+                    rgba((palette.border << 8) | 0x66)
                 })
                 .bg(if popup_open {
                     rgba((palette.primary << 8) | 0x24)
                 } else {
-                    rgba((palette.surface_elevated << 8) | 0x59)
+                    rgba((palette.surface_elevated << 8) | 0x4d)
                 })
                 .text_size(px(11.))
                 .font_weight(FontWeight(600.))
@@ -296,7 +386,7 @@ impl NyaTermApp {
             .bg(self.shell_surface_color(palette.section_header))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(4.))
             .child(category_dropdown)
             .child(quick_command_toolbar_divider(palette))
             .child(
@@ -399,32 +489,24 @@ impl NyaTermApp {
     fn quick_command_bar_chips(
         &mut self,
         commands: &[QuickCommand],
+        trailing_max_width: Option<f32>,
         palette: crate::theme::ThemePalette,
         card_surface: gpui::Rgba,
         context_target: &Rc<RefCell<Option<String>>>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let mut items = Vec::with_capacity(commands.len());
-        for command in commands.iter().cloned() {
+        let total = commands.len();
+        let mut items = Vec::with_capacity(total);
+        for (index, command) in commands.iter().cloned().enumerate() {
+            let is_last = index + 1 == total;
+            let chip_max_width = if is_last {
+                trailing_max_width.unwrap_or(COMMAND_BAR_CHIP_MAX_WIDTH_PX)
+            } else {
+                COMMAND_BAR_CHIP_MAX_WIDTH_PX
+            };
             let command_id = command.id.clone();
             let run_command_id = command.id.clone();
-            let execution_mode = if command.segmented_send.is_some() {
-                "segmented"
-            } else if command.execution_mode.as_deref() == Some("append") {
-                "append"
-            } else {
-                "execute"
-            };
-            let badge_label = match execution_mode {
-                "segmented" => t!("quickCommands.segmentedSendBadge"),
-                "append" => t!("quickCommands.appendOnlyBadge"),
-                _ => t!("quickCommands.executeImmediately"),
-            };
-            let badge_mode = QuickCommandCardExecutionMode {
-                append: execution_mode == "append",
-                segmented: execution_mode == "segmented",
-                label: badge_label,
-            };
+            let badge_mode = command_execution_badge_mode(&command);
 
             let drop_pos = self
                 .commands
@@ -432,13 +514,15 @@ impl NyaTermApp {
                 .filter(|target| cx.has_active_drag() && target.id == command_id)
                 .map(|target| target.position);
 
+            // Omit the pin glyph on bar chips: pinned items already lead the bar,
+            // and keeping one icon per chip saves ~15px each while staying clean.
             let chip_trigger = div()
                 .id(SharedString::from(format!(
                     "quick-command-bar-chip-{command_id}"
                 )))
                 .relative()
                 .h(px(26.))
-                .max_w(px(COMMAND_BAR_CHIP_MAX_WIDTH_PX))
+                .max_w(px(chip_max_width))
                 .flex_none()
                 .rounded_md()
                 .border_1()
@@ -476,9 +560,6 @@ impl NyaTermApp {
                         12.,
                     ),
                 ))
-                .when(command.pinned.unwrap_or_default(), |this| {
-                    this.child(quick_command_pin_mark(palette, 10.))
-                })
                 .child(
                     div()
                         .min_w_0()
@@ -520,7 +601,7 @@ impl NyaTermApp {
                     .debug_selector(move || selector.clone())
                     .flex_none()
                     .min_w_0()
-                    .max_w(px(COMMAND_BAR_CHIP_MAX_WIDTH_PX))
+                    .max_w(px(chip_max_width))
                     .relative()
                     .capture_any_mouse_down(move |event, _, _| {
                         if event.button == MouseButton::Right {
@@ -695,15 +776,24 @@ impl NyaTermApp {
                 .into_any_element()
         });
 
+        let popup_context_target = Rc::new(RefCell::new(None::<String>));
+        let popup_context_for_rows = popup_context_target.clone();
+        let popup_context_for_reset = popup_context_target.clone();
+        let popup_menu_app = cx.entity().downgrade();
+
         let mut list_rows = Vec::with_capacity(popup_len);
         for (index, command) in popup_commands.into_iter().enumerate() {
             let command_id = command.id.clone();
             let run_id = command.id.clone();
+            let row_context_id = command.id.clone();
+            let row_context_target = popup_context_for_rows.clone();
             let is_highlighted = index == highlight;
-            let preview = quick_command_single_line(&command.command);
-            let menu_items = self.quick_command_extended_menu_items(command_id.clone(), cx);
+            let badge_mode = command_execution_badge_mode(&command);
 
-            let row = div()
+            // Keep every icon and label strictly left-aligned on the same vertical
+            // column; pinned status sits quietly at the trailing edge, and full
+            // script preview opens on hover rather than crowding the label.
+            let row_trigger = div()
                 .id(SharedString::from(format!(
                     "quick-command-bar-popup-row-{command_id}"
                 )))
@@ -723,6 +813,11 @@ impl NyaTermApp {
                     rgb(palette.hover)
                 } else {
                     rgba(0x00000000)
+                })
+                .capture_any_mouse_down(move |event, _, _| {
+                    if event.button == MouseButton::Right {
+                        *row_context_target.borrow_mut() = Some(row_context_id.clone());
+                    }
                 })
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered
@@ -748,9 +843,6 @@ impl NyaTermApp {
                         12.5,
                     ),
                 ))
-                .when(command.pinned.unwrap_or_default(), |this| {
-                    this.child(quick_command_pin_mark(palette, 10.))
-                })
                 .child(
                     div()
                         .min_w_0()
@@ -759,23 +851,28 @@ impl NyaTermApp {
                         .font_weight(FontWeight(500.))
                         .text_color(rgb(palette.text))
                         .truncate()
-                        .child(command.label),
+                        .child(command.label.clone()),
                 )
-                .child(
-                    div()
-                        .max_w(px(110.))
-                        .font_family(crate::features::shell::gpui_code_font_family())
-                        .text_size(px(10.))
-                        .text_color(rgb(palette.text_dimmed))
-                        .truncate()
-                        .child(preview),
-                );
+                .when(command.pinned.unwrap_or_default(), |this| {
+                    this.child(quick_command_pin_mark(palette, 10.))
+                });
 
-            list_rows.push(
-                NyaContextMenu::new(row, menu_items)
-                    .min_width(px(QUICK_COMMAND_MENU_WIDTH))
-                    .into_any_element(),
-            );
+            let hover_row = NyaHoverCard::new(
+                format!("quick-command-bar-popup-hover-{command_id}"),
+                row_trigger,
+                quick_command_hover_card(
+                    palette,
+                    popover_bg,
+                    &command,
+                    badge_mode,
+                    cx.entity().downgrade(),
+                ),
+            )
+            .placement(NyaPopoverPlacement::Left)
+            .appearance(false)
+            .into_any_element();
+
+            list_rows.push(div().w_full().child(hover_row).into_any_element());
         }
 
         let search_header = div()
@@ -812,17 +909,65 @@ impl NyaTermApp {
                     ),
             );
 
+        let popup_list_area = NyaContextMenu::new_dynamic(
+            div()
+                .id("quick-command-bar-popup-list-pane")
+                .capture_any_mouse_down(move |event, _, _| {
+                    if event.button == MouseButton::Right {
+                        *popup_context_for_reset.borrow_mut() = None;
+                    }
+                })
+                .relative()
+                .min_h_0()
+                .vertical_scrollbar(&popup_scroll)
+                .child(
+                    div()
+                        .id("quick-command-bar-popup-list")
+                        .max_h(px(COMMAND_BAR_POPUP_LIST_MAX_HEIGHT_PX))
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&popup_scroll)
+                        .px(px(6.))
+                        .py(px(4.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .when(popup_len == 0, |list| {
+                            list.child(
+                                div()
+                                    .py_4()
+                                    .text_center()
+                                    .text_xs()
+                                    .text_color(rgb(palette.text_dimmed))
+                                    .child(t!("quickCommands.noCommandsFound")),
+                            )
+                        })
+                        .children(list_rows),
+                ),
+            move |_, cx| {
+                popup_menu_app
+                    .update(cx, |app, cx| {
+                        app.quick_command_extended_context_menu_items(
+                            popup_context_target.borrow().clone(),
+                            cx,
+                        )
+                    })
+                    .unwrap_or_default()
+            },
+        )
+        .min_width(px(QUICK_COMMAND_MENU_WIDTH));
+
         deferred(
             anchored()
                 .anchor(Anchor::BottomRight)
-                .offset(point(px(0.), px(-20.)))
+                .offset(point(px(0.), px(-18.)))
                 .snap_to_window_with_margin(px(8.))
                 .child(
                     div()
                         .id("quick-command-bar-popup")
                         .debug_selector(|| "quick-command-bar-popup".to_string())
                         .occlude()
-                        .w(px(336.))
+                        .w(px(312.))
                         .rounded_lg()
                         .border_1()
                         .border_color(rgb(palette.border))
@@ -843,42 +988,14 @@ impl NyaTermApp {
                         .child(
                             div()
                                 .px_3()
-                                .py(px(5.))
+                                .pt(px(6.))
+                                .pb(px(2.))
                                 .text_size(px(10.))
                                 .font_weight(FontWeight(600.))
                                 .text_color(rgb(palette.text_dimmed))
                                 .child(section_title),
                         )
-                        .child(
-                            div()
-                                .relative()
-                                .min_h_0()
-                                .vertical_scrollbar(&popup_scroll)
-                                .child(
-                                    div()
-                                        .id("quick-command-bar-popup-list")
-                                        .max_h(px(264.))
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .track_scroll(&popup_scroll)
-                                        .px(px(6.))
-                                        .pb(px(6.))
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.))
-                                        .when(popup_len == 0, |list| {
-                                            list.child(
-                                                div()
-                                                    .py_4()
-                                                    .text_center()
-                                                    .text_xs()
-                                                    .text_color(rgb(palette.text_dimmed))
-                                                    .child(t!("quickCommands.noCommandsFound")),
-                                            )
-                                        })
-                                        .children(list_rows),
-                                ),
-                        )
+                        .child(popup_list_area)
                         .child(
                             div()
                                 .border_t_1()
@@ -907,7 +1024,7 @@ impl NyaTermApp {
                                             svg()
                                                 .size(px(13.))
                                                 .flex_none()
-                                                .path("icons/commands.svg")
+                                                .path("icons/view-grid.svg")
                                                 .text_color(rgb(palette.text_muted)),
                                         )
                                         .child(t!("quickCommands.manageCommands"))
@@ -977,7 +1094,7 @@ impl NyaTermApp {
 mod tests {
     use nyaterm_core::QuickCommand;
 
-    use super::{estimate_command_bar_chip_width, partition_command_bar_commands};
+    use super::{estimate_command_bar_chip_width, plan_command_bar_layout};
 
     fn sample_command(id: &str, label: &str, pinned: bool) -> QuickCommand {
         QuickCommand {
@@ -1003,31 +1120,51 @@ mod tests {
     }
 
     #[test]
-    fn command_bar_partition_fits_leading_chips_and_rolls_remainder_into_overflow() {
+    fn command_bar_plan_fits_exact_chips_and_squeezes_trailing_chip_when_space_permits() {
         let commands: Vec<QuickCommand> = (0..10)
-            .map(|index| sample_command(&format!("c-{index}"), &format!("命令-{index}"), index < 2))
+            .map(|index| {
+                sample_command(
+                    &format!("c-{index}"),
+                    &format!("查看集群节点状态-{index}"),
+                    index < 2,
+                )
+            })
             .collect();
 
-        assert_eq!(partition_command_bar_commands(&[], 500.0), 0);
-        assert_eq!(partition_command_bar_commands(&commands, 0.0), 0);
+        assert_eq!(plan_command_bar_layout(&[], 500.0).visible_count, 0);
+        assert_eq!(plan_command_bar_layout(&commands, 0.0).visible_count, 0);
 
-        // Wide enough for 3 chips, not all 10.
         let w0 = estimate_command_bar_chip_width(&commands[0]);
         let w1 = estimate_command_bar_chip_width(&commands[1]);
         let w2 = estimate_command_bar_chip_width(&commands[2]);
-        let three_budget = w0 + 4.0 + w1 + 4.0 + w2 + 12.0;
-        assert_eq!(partition_command_bar_commands(&commands, three_budget), 3);
+
+        // Exact budget for 3 full chips + small remainder (< 86px): keeps 3 without trailing cap.
+        let exact_three = w0 + 4.0 + w1 + 4.0 + w2 + 20.0;
+        let plan_three = plan_command_bar_layout(&commands, exact_three);
+        assert_eq!(plan_three.visible_count, 3);
+        assert!(plan_three.trailing_max_width.is_none());
+
+        // Budget with ~100px left after 3 chips (< full w3, >= 86px): fits a 4th capped chip
+        // instead of leaving a 100px blank gap before `» N`.
+        let with_trailing = w0 + 4.0 + w1 + 4.0 + w2 + 4.0 + 100.0 + 6.0;
+        let plan_four = plan_command_bar_layout(&commands, with_trailing);
+        assert_eq!(plan_four.visible_count, 4);
+        assert_eq!(plan_four.trailing_max_width, Some(100.0));
 
         // Large width fits all 10 with zero overflow.
-        assert_eq!(partition_command_bar_commands(&commands, 2400.0), 10);
+        let plan_all = plan_command_bar_layout(&commands, 2400.0);
+        assert_eq!(plan_all.visible_count, 10);
+        assert!(plan_all.trailing_max_width.is_none());
     }
 
     #[test]
-    fn command_bar_partition_keeps_one_truncated_chip_in_narrow_non_zero_strip() {
+    fn command_bar_plan_keeps_one_truncated_chip_in_narrow_non_zero_strip() {
         let long = vec![
             sample_command("long-1", "列出全部工作负载与容器镜像仓库标签详情", true),
             sample_command("long-2", "扫描默认网关", false),
         ];
-        assert_eq!(partition_command_bar_commands(&long, 96.0), 1);
+        let plan = plan_command_bar_layout(&long, 96.0);
+        assert_eq!(plan.visible_count, 1);
+        assert!(plan.trailing_max_width.is_some());
     }
 }
