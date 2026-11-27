@@ -20,6 +20,8 @@
     {"path": "crates/nyaterm-desktop/src/features/session/xymodem_runtime.rs", "max_count": 1, "reason": "Per-session X/YMODEM state owns, stops, and joins its upload worker."}
   ],
   "raw_scroll_container": [
+    {"path": "crates/nyaterm-desktop/src/features/panels/quick_commands_panel/panel/command_bar.rs", "max_count": 1, "reason": "The command-bar popup tracks the command feature's ScrollHandle for keyboard highlight reveal; the non-scrolling parent attaches vertical_scrollbar to the same handle inside the positioned popup shell."},
+    {"path": "crates/nyaterm-desktop/src/features/panels/quick_commands_panel/panel/sidebar_tree.rs", "max_count": 1, "reason": "The sidebar tree tracks the command feature's ScrollHandle to preserve scroll position and anchor hover cards to its viewport; the non-scrolling parent attaches vertical_scrollbar to the same handle."},
     {"path": "crates/nyaterm-desktop/src/features/panels/send_command_bar/tabs.rs", "max_count": 1, "reason": "Command tabs track a caller-owned ScrollHandle for active-tab reveal and wheel input; the non-scrolling parent attaches horizontal_scrollbar to the same handle."},
     {"path": "crates/nyaterm-file-browser-gpui/src/completion.rs", "max_count": 1, "reason": "Path candidates track the editor-owned ScrollHandle for keyboard reveal and attach vertical_scrollbar to their non-scrolling parent inside a positioned popup shell."},
     {"path": "crates/nyaterm-desktop/src/features/terminal/keyword_highlight_popup.rs", "max_count": 1, "reason": "The keyword editor owns its detail ScrollHandle to reveal the pattern field after validation errors; the in-flow form tracks it and the non-scrolling parent attaches vertical_scrollbar."},
