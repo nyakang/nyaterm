@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 use crate::network_cli_prompt::{
     PromptLine, looks_like_cli_input_wait, looks_like_network_cli_prompt_line,
 };
+use crate::sql_cli_prompt::{SqlClient, classify_sql_prompt_line, sql_prompt};
+use crate::terminal::shell_prompt::classify_shell_prompt;
 
 // A command exceeding this budget is explicitly incomplete, never successful.
 const OUTPUT_LIMIT: usize = 1024 * 1024;
@@ -40,10 +42,16 @@ impl RawCliEnd {
 }
 
 #[derive(Debug)]
+enum ExpectedPrompt {
+    Network(String),
+    Sql(SqlClient),
+}
+
+#[derive(Debug)]
 pub struct RawCliCapture {
     output: String,
     line: PromptLine,
-    expected: Option<String>,
+    expected: Option<ExpectedPrompt>,
     last_output: Instant,
     received: bool,
     truncated: bool,
@@ -58,7 +66,12 @@ impl RawCliCapture {
         Self {
             output: String::new(),
             line: PromptLine::default(),
-            expected: looks_like_network_cli_prompt_line(&prompt).then_some(prompt),
+            expected: sql_prompt(initial_output)
+                .map(|prompt| ExpectedPrompt::Sql(prompt.client))
+                .or_else(|| {
+                    looks_like_network_cli_prompt_line(&prompt)
+                        .then_some(ExpectedPrompt::Network(prompt))
+                }),
             last_output: now,
             received: false,
             truncated: false,
@@ -96,17 +109,27 @@ impl RawCliCapture {
         if !self.received || now.duration_since(self.last_output) < PROMPT_SETTLE {
             return None;
         }
-        let line = self.line.text();
-        let line = line.trim();
+        let observed = self.line.text();
+        let line = observed.trim();
         if looks_like_cli_input_wait(line) {
             return Some(RawCliEnd::Interaction);
         }
-        if looks_like_network_cli_prompt_line(line)
-            && self
-                .expected
-                .as_deref()
-                .is_some_and(|expected| same_device_prompt(expected, line))
-        {
+        let returned = match &self.expected {
+            Some(ExpectedPrompt::Sql(client)) => {
+                if client.is_continuation(&self.line.current_text()) {
+                    return Some(RawCliEnd::Interaction);
+                }
+                classify_sql_prompt_line(line)
+                    .is_some_and(|prompt| prompt.client == *client && !prompt.continuation)
+                    // An exit command returns control to the outer shell.
+                    || classify_shell_prompt(line).is_some()
+            }
+            Some(ExpectedPrompt::Network(expected)) => {
+                looks_like_network_cli_prompt_line(line) && same_device_prompt(expected, line)
+            }
+            None => false,
+        };
+        if returned {
             return Some(RawCliEnd::Prompt);
         }
         // Without a pre-command prompt to compare, even a prompt-shaped output
@@ -158,6 +181,96 @@ fn same_device_prompt(expected: &str, actual: &str) -> bool {
 mod tests {
     use super::{OUTPUT_LIMIT, RawCliCapture, RawCliEnd};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn sql_capture_accepts_ready_prompts_and_database_or_transaction_changes() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(60);
+        for (initial, returned) in [
+            ("SQL>", "SQL>"),
+            ("sqlplus>", "sqlplus>"),
+            ("RMAN>", "RMAN>"),
+            ("mysql>", "mysql>"),
+            ("sqlite>", "sqlite>"),
+            ("postgres=#", "other_db=*>"),
+            ("app_db=*>", "app_db=!>"),
+            ("MariaDB [(none)]>", "MariaDB [app_db]>"),
+            ("app_db->", "app_db=>"),
+            ("mysql> select\r\n    -> ", "mysql>"),
+        ] {
+            let mut capture = RawCliCapture::new(initial, now);
+            capture.feed("select 1;\r\n", now);
+            assert_eq!(
+                capture.poll(now + Duration::from_secs(9), deadline),
+                None,
+                "{initial}"
+            );
+            capture.feed("  1  \r\n", now + Duration::from_secs(10));
+            assert_eq!(
+                capture.poll(now + Duration::from_secs(11), deadline),
+                None,
+                "{initial}"
+            );
+            capture.feed("\x1b[3", now + Duration::from_secs(12));
+            capture.feed(
+                &format!("2m{returned}\x1b[0m "),
+                now + Duration::from_secs(12),
+            );
+            assert_eq!(
+                capture.poll(now + Duration::from_secs(13), deadline),
+                Some(RawCliEnd::Prompt),
+                "{initial}"
+            );
+            assert!(capture.into_output().contains("select 1;"));
+        }
+    }
+
+    #[test]
+    fn sql_continuations_need_input_and_are_not_successful_completion() {
+        let now = Instant::now();
+        for (initial, continuation) in [
+            ("SQL>", "  2  "),
+            ("RMAN>", "  2  "),
+            ("mysql>", "    -> "),
+            ("mysql>", "    '> "),
+            ("MariaDB [app_db]>", "    /*> "),
+            ("sqlite>", "   ...> "),
+            ("app_db=>", "app_db->"),
+            ("app_db=*>", "app_db'*>"),
+            ("app_db=>", "app_db*>"),
+        ] {
+            let mut capture = RawCliCapture::new(initial, now);
+            capture.feed(continuation, now);
+            assert_eq!(
+                capture.poll(now + Duration::from_secs(1), now + Duration::from_secs(30)),
+                Some(RawCliEnd::Interaction),
+                "{continuation}"
+            );
+        }
+    }
+
+    #[test]
+    fn sql_exit_returns_to_shell_but_unrelated_prompts_and_echo_do_not_complete() {
+        let now = Instant::now();
+        for shell in ["user@host:~$ ", "PS C:\\Users> ", "C:\\Users>"] {
+            let mut capture = RawCliCapture::new("postgres=#", now);
+            capture.feed(&format!("\\q\r\n{shell}"), now);
+            assert_eq!(
+                capture.poll(now + Duration::from_secs(1), now + Duration::from_secs(30)),
+                Some(RawCliEnd::Prompt),
+                "{shell}"
+            );
+        }
+        for output in ["SQL> select 1;", "Router#", "postgres=#", "SQL>\rworking"] {
+            let mut capture = RawCliCapture::new("SQL>", now);
+            capture.feed(output, now);
+            assert_eq!(
+                capture.poll(now + Duration::from_secs(9), now + Duration::from_secs(30)),
+                None,
+                "{output}"
+            );
+        }
+    }
 
     #[test]
     fn pauses_and_echo_do_not_complete_known_cli() {

@@ -1191,6 +1191,164 @@ fn raw_session_events_survive_full_degraded_ui_tail(cx: &mut gpui::TestAppContex
 }
 
 #[gpui::test]
+fn sql_session_profile_tracks_entry_and_exit_and_blocks_background(cx: &mut gpui::TestAppContext) {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::TestConfigDir;
+    use nyaterm_core::models::connection::AiExecutionProfile;
+    use nyaterm_transport::{LocalSessionConfig, SshSessionConfig, TelnetSessionConfig};
+
+    let directory = TestConfigDir::new("nyaterm-sql-policy");
+    let app = app_with_visible_local_session(cx, directory.path(), "sql");
+    cx.update_entity(&app, |app, cx| {
+        for launch in [
+            SessionLaunchConfig::Local(LocalSessionConfig::default()),
+            SessionLaunchConfig::Ssh(Box::new(SshSessionConfig::default())),
+            SessionLaunchConfig::Telnet(TelnetSessionConfig::default()),
+        ] {
+            app.session.metadata_mut("sql").unwrap().launch_config = launch;
+            for profile in [
+                AiExecutionProfile::Auto,
+                AiExecutionProfile::Posix,
+                AiExecutionProfile::Powershell,
+                AiExecutionProfile::Cmd,
+                AiExecutionProfile::Disabled,
+            ] {
+                app.session
+                    .metadata_mut("sql")
+                    .unwrap()
+                    .ai_execution_profile = profile;
+                for prompt in ["SQL>", "postgres=#", "app_db=!>", "MariaDB [app_db]>"] {
+                    app.terminal
+                        .seed_session_view("sql".into(), prompt.into(), "UTF-8");
+                    let expected = if profile == AiExecutionProfile::Disabled {
+                        profile
+                    } else {
+                        AiExecutionProfile::SendOnly
+                    };
+                    assert_eq!(app.ai_execution_profile_for_session("sql"), expected);
+                    assert!(app.validate_ai_background_execution("sql").is_err());
+                    let (request, mut receiver) =
+                        execution_request("sql-background", "native", "sql", true);
+                    app.start_terminal_execution(request, cx);
+                    assert_eq!(
+                        receiver.try_recv().unwrap().unwrap_err().code,
+                        "permission_denied"
+                    );
+                    assert!(!app.mcp.capabilities.terminal_executions.busy("sql"));
+                }
+                app.terminal.seed_session_view(
+                    "sql".into(),
+                    "SQL> exit\r\nuser@host:~$ ".into(),
+                    "UTF-8",
+                );
+                assert_eq!(
+                    app.ai_execution_profile_for_session("sql"),
+                    if profile == AiExecutionProfile::Auto {
+                        AiExecutionProfile::Posix
+                    } else {
+                        profile
+                    }
+                );
+                assert_eq!(
+                    app.validate_ai_background_execution("sql").is_ok(),
+                    profile != AiExecutionProfile::Disabled
+                );
+                assert_eq!(
+                    app.session.metadata("sql").unwrap().ai_execution_profile,
+                    profile
+                );
+            }
+        }
+    });
+}
+
+#[gpui::test]
+fn sql_execution_sends_bare_query_and_collects_output_without_exit_code(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::SessionLaunchConfig;
+    use crate::test_support::TestConfigDir;
+    use nyaterm_core::models::connection::AiExecutionProfile;
+    use nyaterm_core::raw_cli_capture::RawCliEnd;
+    use nyaterm_transport::TelnetSessionConfig;
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    cx.executor().allow_parking();
+    let directory = TestConfigDir::new("nyaterm-sql-wire");
+    let app = app_with_visible_local_session(cx, directory.path(), "fixture");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let config = TelnetSessionConfig {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        raw_tcp: true,
+        ..Default::default()
+    };
+    let (manager, id) = cx.update_entity(&app, |app, _| {
+        let manager = app.session.manager_handle();
+        let info = manager.create_telnet_session(config.clone()).unwrap();
+        let mut metadata = app.session.metadata("fixture").unwrap().clone();
+        metadata.launch_config = SessionLaunchConfig::Telnet(config);
+        metadata.ai_execution_profile = AiExecutionProfile::Auto;
+        app.session.register_session_metadata(&info.id, metadata);
+        app.terminal
+            .seed_session_view(info.id.clone(), "app_db=> ".into(), "UTF-8");
+        (manager, info.id)
+    });
+    let (mut stream, _) = listener.accept().unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut receiver = cx.update_entity(&app, |app, cx| {
+        let (mut request, receiver) = execution_request("sql-query", "native", &id, false);
+        request.command = "select 1;".into();
+        app.start_terminal_execution(request, cx);
+        let state = &mut app.mcp.capabilities.terminal_executions;
+        let task = &state.tasks[&id];
+        assert!(task.capture.is_none());
+        assert!(task.raw_capture.is_some());
+        let marker = task.capture_marker_id.clone();
+        state.begin_capture(&id, &marker).unwrap();
+        state.process_output(&id, "select 1;\r\n 1\r\n(1 row)\r\napp_db=> ");
+        let task = &state.tasks[&id];
+        assert_eq!(
+            task.raw_capture.as_ref().unwrap().poll(
+                Instant::now() + Duration::from_secs(1),
+                task.started + task.request.timeout
+            ),
+            Some(RawCliEnd::Prompt)
+        );
+        app.finish_terminal_execution(
+            &id,
+            &marker,
+            Ok(TerminalExecuteResult {
+                job_id: None,
+                output: RawCliEnd::Prompt.description().into(),
+                exit_code: None,
+                duration_ms: 0,
+                timed_out: false,
+                source_truncated: false,
+            }),
+            TerminalExecutionStatus::Completed,
+            cx,
+        );
+        receiver
+    });
+    let mut sent = [0; 10];
+    stream.read_exact(&mut sent).unwrap();
+    assert_eq!(&sent, b"select 1;\r");
+    let reply = receiver.try_recv().unwrap().unwrap();
+    assert!(reply["exitCode"].is_null());
+    assert_eq!(reply["timedOut"], false);
+    assert!(reply["output"].as_str().unwrap().contains("(1 row)"));
+    assert!(!reply["output"].as_str().unwrap().contains("__DF_CMD_"));
+    manager.close(&id).unwrap();
+}
+
+#[gpui::test]
 fn network_session_profile_and_background_policy_are_shared(cx: &mut gpui::TestAppContext) {
     use crate::features::test_support::app_with_visible_local_session;
     use crate::models::SessionLaunchConfig;

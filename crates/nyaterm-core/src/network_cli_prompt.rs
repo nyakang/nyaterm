@@ -1,13 +1,15 @@
-//! Lightweight CLI prompt hints. Explicit session configuration takes precedence.
+//! Lightweight CLI prompt hints. Nested SQL clients cannot run shell wrappers.
 
 use crate::AiExecutionProfile;
+use crate::sql_cli_prompt::{looks_like_sql_prompt, resolve_sql_execution_profile};
 
-/// Only Auto may be overridden by SSH configuration or a passive prompt hint.
+/// Device hints override Auto; SQL clients suspend even an explicit shell dialect.
 pub fn resolve_ssh_execution_profile(
     configured: AiExecutionProfile,
     network_device: bool,
     output: &str,
 ) -> AiExecutionProfile {
+    let configured = resolve_sql_execution_profile(configured, output);
     if configured != AiExecutionProfile::Auto {
         configured
     } else if network_device || looks_like_network_cli_prompt(output) {
@@ -25,6 +27,7 @@ pub fn ssh_allows_background_execution(
 ) -> bool {
     !network_device
         && !looks_like_network_cli_prompt(output)
+        && !looks_like_sql_prompt(output)
         && !matches!(
             configured,
             AiExecutionProfile::SendOnly | AiExecutionProfile::Disabled
@@ -204,6 +207,14 @@ impl PromptLine {
             self.previous.clone()
         } else {
             self.line.iter().collect()
+        }
+    }
+
+    pub(super) fn current_text(&self) -> String {
+        if self.line.is_empty() {
+            String::new()
+        } else {
+            self.text()
         }
     }
 }

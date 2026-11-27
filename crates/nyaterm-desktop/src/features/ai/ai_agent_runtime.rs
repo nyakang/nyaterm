@@ -4,6 +4,7 @@ use gpui::Context;
 use nyaterm_core::network_cli_prompt::{
     resolve_ssh_execution_profile, ssh_allows_background_execution,
 };
+use nyaterm_core::sql_cli_prompt::resolve_sql_execution_profile;
 use nyaterm_core::{
     AgentApprovalOutcome, AiAction, AiChatRequest, AiCommandCard, AiExecutionProfile, AiMode,
     AppendAiAuditRequest, CommandObservation, build_observation_message, uuid,
@@ -233,6 +234,28 @@ impl NyaTermApp {
                 .metadata(session_id)
                 .map(|metadata| metadata.ai_execution_profile)
                 .unwrap_or(AiExecutionProfile::SendOnly)
+        };
+        let configured = if self
+            .session
+            .session_info(session_id)
+            .is_some_and(|session| {
+                matches!(
+                    session.kind,
+                    SessionKind::Ssh
+                        | SessionKind::Mosh
+                        | SessionKind::LocalPty
+                        | SessionKind::Telnet
+                        | SessionKind::RawTcp
+                        | SessionKind::AdbShell
+                        | SessionKind::Serial
+                )
+            }) {
+            resolve_sql_execution_profile(
+                configured,
+                self.terminal_buffer_tail_for_session(session_id),
+            )
+        } else {
+            configured
         };
         if configured != AiExecutionProfile::Auto {
             return configured;

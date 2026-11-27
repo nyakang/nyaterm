@@ -42,6 +42,7 @@ pub mod secret;
 pub mod send_command;
 pub mod session_import;
 pub mod spice;
+pub mod sql_cli_prompt;
 pub mod ssh_keys;
 pub mod sync_schema;
 pub mod temporary_connection;
